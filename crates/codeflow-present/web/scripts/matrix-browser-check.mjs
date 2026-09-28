@@ -5,9 +5,10 @@
 // a mouse selection for text, a click for an element, a drag for an area.
 // `codeflow present feedback` must return each note with its kind and
 // selector, a text note its quote with prefix and suffix, and every element
-// and area note a JPEG crop the size of what it anchors (within 2 px at the
-// capture scale) that is not one colour. A cell that fails names its block,
-// its gesture and the step.
+// and area note a JPEG crop of what it anchors: the size of the rectangle the
+// note reloads (within 2 px at the capture scale), not one colour, and more
+// like the page inside that rectangle than the same-size rectangle just
+// outside it. A cell that fails names its block, its gesture and the step.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -35,7 +36,7 @@ const RECIPES = {
   comparison: { block: "options", text: { in: "li", words: "smaller reviews" }, element: { click: "article:nth-of-type(2) h2", label: "Switch to PNG" } },
   decision: { block: "choice", text: { in: "p", words: "element and area crops" }, element: { click: "h2", label: "Which crop format ships?" } },
   table: { block: "limits", text: { in: "td", words: "256 KiB" }, element: { click: "tbody tr:nth-of-type(3) td:nth-of-type(1)", label: "Quote length" } },
-  status: { block: "checks", text: { in: "li span", words: "one crop was a sliver" }, element: { click: "li:nth-of-type(2)", label: "Linux Chrome run" } },
+  status: { block: "checks", text: { in: "li span", words: "one crop was a sliver" }, element: { click: "li:nth-of-type(2)", label: "Linux Chrome run · no Linux host" } },
   code: { block: "snippet", text: { in: "code", words: "256 * 1024" }, element: { click: ".cf-line:nth-of-type(2)", label: "let limit = 256 * 1024;" } },
   diff: { block: "change", text: { in: "del", words: "128 * 1024" }, element: { click: "ins", label: "let limit = 256 * 1024;" } },
   tree: { block: "files", text: { in: "li", words: "state.rs" }, element: { click: "li li li:nth-of-type(2) > span", label: "limits.rs" } },
@@ -114,7 +115,7 @@ try {
   for (const hidden of ["more-text", "plan-text", "risk-text"]) assert.ok(!listed.includes(`#${hidden}`), `the sections list names the hidden block ${hidden}`);
   for (const shown of ["prose", "more", "views"]) assert.ok(listed.includes(`#${shown}`), `the sections list lacks ${shown}: ${listed.join(" ")}`);
   await phoneWidth(page);
-  process.stdout.write("sections and phone width passed: no hidden block in the sections list; at 375 px the sheet stays closed on arming, a gesture, a save and a pin, the float keeps ESC on screen, Comment opens the sheet and Done leaves\n");
+  process.stdout.write("sections and phone width passed: no hidden block in the sections list; at 375 px the sheet stays closed on arming, a gesture, a save and a pin, the float keeps ESC on screen, markers stay off the heading and the selected line, Comment opens the sheet and dismisses the save hint, and Done leaves\n");
 
   const expected = [];
   for (const cell of cells) {
@@ -130,7 +131,62 @@ try {
     await step("reveal the block", () => reveal(page, cell.block));
     const pinned = await step("gesture", () => gesture(page, cell));
     await step("save the note", () => saveNote(page, `matrix: ${where}`));
-    expected.push({ ...cell, where, ...pinned });
+    const reloaded = cell.gesture === "text" ? {} : await step("read the anchored page", () => anchoredPage(page, sessionId));
+    expected.push({ ...cell, where, ...pinned, ...reloaded });
+  }
+  // A plain drag (no Shift) over the blank ends of diff lines selects those
+  // lines as text; it never pins the whole diff as one element (QA defect 6).
+  {
+    await armComment(page);
+    await reveal(page, "change");
+    const drag = await page.evaluate(() => {
+      const lines = [...document.querySelectorAll("[data-cf-block-id='change'] pre .cf-line")];
+      const text = (line) => {
+        const range = document.createRange();
+        range.selectNodeContents(line);
+        return range.getBoundingClientRect();
+      };
+      const [first, last] = [lines[4], lines[6]].map((line) => ({ line: line.getBoundingClientRect(), text: text(line) }));
+      return {
+        from: { x: first.text.right + 24, y: first.line.top + first.line.height / 2 },
+        to: { x: Math.min(last.line.right - 8, last.text.right + 160), y: last.line.top + last.line.height / 2 },
+        blank: first.line.right - first.text.right,
+      };
+    });
+    assert.ok(drag.blank > 60, `diff whitespace: the line has no blank end to drag from: ${JSON.stringify(drag)}`);
+    await page.mouse.move(drag.from.x, drag.from.y);
+    await page.mouse.down();
+    await page.mouse.move(drag.to.x, drag.to.y, { steps: 12 });
+    await page.mouse.up();
+    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText({ timeout: 10_000 })).trim();
+    const quote = await page.evaluate(() => String(getSelection()));
+    assert.equal(kind, "Text", `diff whitespace: a plain drag pinned ${kind}`);
+    assert.ok(quote.includes("256 * 1024") && quote.includes("bytes <= limit"), `diff whitespace: the drag selected ${JSON.stringify(quote)}`);
+    await page.getByTestId("float-esc").click();
+    await page.getByTestId("float-chip").waitFor({ state: "detached" });
+    process.stdout.write(`diff whitespace passed: a plain drag over the blank ends of three diff lines selects them as text (${JSON.stringify(quote)}), not the whole diff\n`);
+  }
+  // Markers park beside what they mark, and a saved area keeps a faint
+  // outline while Comment is on (P2-2): no area marker sits on its area.
+  {
+    const layout = await page.evaluate(() => {
+      const box = (element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+      };
+      return {
+        areas: [...document.querySelectorAll("[data-testid=note-marker]")].filter((marker) => /, Area: /u.test(marker.getAttribute("aria-label") ?? "")).map(box),
+        outlines: [...document.querySelectorAll("[data-testid=saved-area]")].map(box),
+      };
+    });
+    const areaCells = expected.filter((cell) => cell.gesture === "area").length;
+    assert.equal(layout.outlines.length, areaCells, `saved areas: ${layout.outlines.length} outlines for ${areaCells} area notes`);
+    assert.equal(layout.areas.length, areaCells, "saved areas: a marker is missing");
+    for (const [index, marker] of layout.areas.entries()) {
+      const area = layout.outlines[index];
+      const overlaps = marker.left < area.right && area.left < marker.right && marker.top < area.bottom && area.top < marker.bottom;
+      assert.ok(!overlaps, `saved areas: marker ${index + 1} ${JSON.stringify(marker)} sits on its area ${JSON.stringify(area)}`);
+    }
   }
   // A whole-document note crops what is on screen, not the whole page
   // squeezed into a sliver (QA defect 8).
@@ -143,7 +199,7 @@ try {
   await page.evaluate(() => { document.querySelector("details.cf-tools").open = true; });
   await page.getByTestId("tool-whole-doc").click();
   await saveNote(page, "matrix: whole document");
-  expected.push({ where: "whole document", gesture: "document", box: onScreen, summary: `Region: the ${Math.round(onScreen.width)}×${Math.round(onScreen.height)} px on screen` });
+  expected.push({ where: "whole document", gesture: "document", box: onScreen, summary: `Area: the whole document, ${Math.round(onScreen.width)}×${Math.round(onScreen.height)} px on screen` });
 
   await page.getByLabel("Verdict").selectOption("approve_with_notes");
   await page.getByRole("button", { name: "Submit review" }).click();
@@ -162,6 +218,11 @@ try {
   for (const cell of expected) {
     const note = envelope.notes.find((candidate) => candidate.body === `matrix: ${cell.where}`);
     assert.ok(note, `${cell.where}, delivery: no note in the envelope`);
+    assert.equal(note.kind, "comment", `${cell.where}, delivery: kind`);
+    // One selector, of the gesture's own kind.
+    const selectors = ["selector", "element_selector", "region_selector"].filter((key) => note[key]);
+    const own = { text: "selector", element: "element_selector", area: "region_selector", document: "region_selector" }[cell.gesture];
+    assert.deepEqual(selectors, [own], `${cell.where}, delivery: selectors`);
     if (cell.gesture !== "document") assert.equal(note.block_id, cell.expectBlock ?? cell.block, `${cell.where}, delivery: block`);
     if (cell.gesture === "text") {
       assert.equal(note.selector?.exact, cell.recipe.words, `${cell.where}, delivery: quote`);
@@ -180,31 +241,90 @@ try {
       assert.equal(note.region_selector.scope, cell.gesture === "document" ? "document" : "block", `${cell.where}, delivery: region scope`);
     }
     assert.equal(note.excerpt?.image?.media_type, "image/jpeg", `${cell.where}, delivery: crop format`);
-    images.push({ where: cell.where, data: note.excerpt.image.data_base64, box: cell.box });
+    images.push({ where: cell.where, data: note.excerpt.image.data_base64, box: cell.box, inside: cell.inside, outside: cell.outside });
   }
-  // Decode each crop in the browser: its size against the anchored bounds at
-  // the capture scale, and more than one colour.
-  const decoded = await page.evaluate(async (items) => Promise.all(items.map(async ({ where, data }) => {
-    const image = new Image();
-    image.src = `data:image/jpeg;base64,${data}`;
-    await image.decode();
-    const canvas = document.createElement("canvas");
-    canvas.width = image.width;
-    canvas.height = image.height;
-    const context = canvas.getContext("2d");
-    context.drawImage(image, 0, 0);
-    const pixels = context.getImageData(0, 0, image.width, image.height).data;
-    const colours = new Set();
-    for (let index = 0; index < pixels.length && colours.size < 3; index += 16) {
-      colours.add(`${pixels[index] >> 4},${pixels[index + 1] >> 4},${pixels[index + 2] >> 4}`);
-    }
-    return { where, width: image.width, height: image.height, colours: colours.size };
-  })), images.map(({ where, data }) => ({ where, data })));
+  // Decode each crop in the browser: its size against the rectangle the note
+  // reloads at the capture scale, more than one colour, and its picture
+  // against the page inside that rectangle and just outside it.
+  const decoded = await page.evaluate(async (items) => {
+    const load = async (type, data) => {
+      const image = new Image();
+      image.src = `data:${type};base64,${data}`;
+      await image.decode();
+      return image;
+    };
+    // Where the ink is: each pixel that stands apart from the picture's own
+    // ground (its median brightness), counted into a grid of cells. The
+    // runtime paints its own crop, so the pictures are compared by where the
+    // words, lines and shapes fall, not pixel for pixel.
+    const grid = (image, columns, rows) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(0, 0, image.width, image.height).data;
+      const light = new Float32Array(image.width * image.height);
+      for (let index = 0; index < light.length; index += 1) light[index] = 0.2126 * pixels[index * 4] + 0.7152 * pixels[index * 4 + 1] + 0.0722 * pixels[index * 4 + 2];
+      const ground = [...light].sort((left, right) => left - right)[light.length >> 1];
+      const ink = new Float32Array(columns * rows);
+      const count = new Float32Array(columns * rows);
+      for (let y = 0; y < image.height; y += 1) {
+        for (let x = 0; x < image.width; x += 1) {
+          const cell = Math.min(rows - 1, Math.floor(y * rows / image.height)) * columns + Math.min(columns - 1, Math.floor(x * columns / image.width));
+          count[cell] += 1;
+          if (Math.abs(light[y * image.width + x] - ground) > 48) ink[cell] += 1;
+        }
+      }
+      return [...ink].map((value, cell) => value / Math.max(1, count[cell]));
+    };
+    // Likeness: the correlation of two ink grids, so a line drawn across both
+    // (an underline the runtime does not paint) shifts neither; 0 for a
+    // picture with no ink structure at all.
+    const likeness = (left, right) => {
+      const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
+      const [a, b] = [mean(left), mean(right)];
+      let product = 0;
+      let first = 0;
+      let second = 0;
+      for (const [index, value] of left.entries()) {
+        product += (value - a) * (right[index] - b);
+        first += (value - a) ** 2;
+        second += (right[index] - b) ** 2;
+      }
+      return first > 1e-9 && second > 1e-9 ? product / Math.sqrt(first * second) : 0;
+    };
+    return Promise.all(items.map(async ({ where, data, inside, outside }) => {
+      const image = await load("image/jpeg", data);
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(0, 0, image.width, image.height).data;
+      const colours = new Set();
+      for (let index = 0; index < pixels.length && colours.size < 3; index += 16) {
+        colours.add(`${pixels[index] >> 4},${pixels[index + 1] >> 4},${pixels[index + 2] >> 4}`);
+      }
+      const result = { where, width: image.width, height: image.height, colours: colours.size };
+      if (!inside) return result;
+      const columns = 48;
+      const rows = Math.min(32, Math.max(4, Math.round(columns * image.height / image.width)));
+      const crop = grid(image, columns, rows);
+      result.inside = likeness(crop, grid(await load("image/png", inside), columns, rows));
+      result.outside = likeness(crop, grid(await load("image/png", outside), columns, rows));
+      return result;
+    }));
+  }, images.map(({ where, data, inside, outside }) => ({ where, data, inside, outside })));
   // One saved crop per cell for the verification record, on request.
   if (process.env.CF_PRESENT_EVIDENCE_DIR) {
     await mkdir(process.env.CF_PRESENT_EVIDENCE_DIR, { recursive: true });
-    for (const { where, data } of images) {
-      await writeFile(join(process.env.CF_PRESENT_EVIDENCE_DIR, `${where.replace(/\s+/gu, "-")}.jpg`), Buffer.from(data, "base64"));
+    for (const { where, data, inside, outside } of images) {
+      const name = where.replace(/\s+/gu, "-");
+      await writeFile(join(process.env.CF_PRESENT_EVIDENCE_DIR, `${name}.jpg`), Buffer.from(data, "base64"));
+      // The page inside the rectangle the note reloads, and just outside it.
+      if (inside) await writeFile(join(process.env.CF_PRESENT_EVIDENCE_DIR, `${name}.page.png`), Buffer.from(inside, "base64"));
+      if (outside) await writeFile(join(process.env.CF_PRESENT_EVIDENCE_DIR, `${name}.outside.png`), Buffer.from(outside, "base64"));
     }
   }
   for (const [index, crop] of decoded.entries()) {
@@ -213,6 +333,12 @@ try {
     assert.ok(Math.abs(crop.width - box.width * scale) <= 2 && Math.abs(crop.height - box.height * scale) <= 2,
       `${crop.where}, crop: ${crop.width} x ${crop.height} px for bounds ${box.width.toFixed(1)} x ${box.height.toFixed(1)} at scale ${scale.toFixed(3)}`);
     assert.ok(crop.colours > 1, `${crop.where}, crop: one colour`);
+  }
+  // Every crop's picture against the page, all listed before any failure.
+  const misplaced = decoded.filter((crop) => crop.inside !== undefined && !(crop.inside > crop.outside));
+  if (misplaced.length) {
+    for (const crop of decoded.filter((item) => item.inside !== undefined)) process.stderr.write(`  ${crop.where}: ${crop.inside.toFixed(3)} inside, ${crop.outside.toFixed(3)} outside\n`);
+    assert.fail(misplaced.map((crop) => `${crop.where}, crop: the picture is no more like the page inside its rectangle (${crop.inside.toFixed(3)}) than just outside it (${crop.outside.toFixed(3)})`).join("; "));
   }
   // Lifecycle on the same session (TSK-071 criterion 4).
   // An approval with no notes can be sent (QA defect 9). Submitting turned
@@ -287,8 +413,12 @@ try {
   const cleared = sessionId;
   sessionId = null;
   process.stdout.write(`lifecycle passed: an approval with no notes, an unsent note kept across update and reload, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, close and clear of ${cleared}\n`);
-  process.stdout.write(`cf-present annotation matrix passed: ${cells.length} cells and a whole-document note over ${matrix.size} block types (${cells.filter((cell) => cell.gesture === "text").length} text, ${cells.filter((cell) => cell.gesture === "element").length} element, ${cells.filter((cell) => cell.gesture === "area").length} area), each delivered with its selector; ${decoded.length} JPEG crops sized to their anchors and not one colour\n`);
-  for (const cell of expected) process.stdout.write(`  ${cell.where}: ${cell.summary}\n`);
+  process.stdout.write(`cf-present annotation matrix passed: ${cells.length} cells and a whole-document note over ${matrix.size} block types (${cells.filter((cell) => cell.gesture === "text").length} text, ${cells.filter((cell) => cell.gesture === "element").length} element, ${cells.filter((cell) => cell.gesture === "area").length} area), each delivered with its kind and selector; ${decoded.length} JPEG crops sized to the rectangle each note reloads, not one colour, and ${decoded.filter((crop) => crop.inside !== undefined).length} of them more like the page inside that rectangle than just outside it\n`);
+  for (const cell of expected) {
+    const crop = decoded.find((item) => item.where === cell.where);
+    const fit = crop?.inside !== undefined ? ` (likeness ${crop.inside.toFixed(2)} inside, ${crop.outside.toFixed(2)} outside)` : "";
+    process.stdout.write(`  ${cell.where}: ${cell.summary}${fit}\n`);
+  }
 } finally {
   if (context) await context.close().catch(() => undefined);
   if (sessionId) {
@@ -392,12 +522,7 @@ async function gesture(page, cell) {
     await page.mouse.click(box.x + Math.min(box.width / 2, 40), box.y + box.height / 2);
     const summary = await chip(page, "Element");
     if (!summary.includes(cell.recipe.label.slice(0, 40))) throw new Error(`the chip names ${JSON.stringify(summary)}`);
-    const pinned = await page.evaluate(() => {
-      const rect = document.querySelector(".cf-hot-sel")?.getBoundingClientRect();
-      return rect ? { width: rect.width, height: rect.height } : null;
-    });
-    if (!pinned) throw new Error("no pinned element is marked");
-    return { summary, box: pinned };
+    return { summary };
   }
   // Area: a drag inside the block, or inside a named part of it. A block
   // that hides others is dragged over while they are hidden (QA defect 2).
@@ -425,8 +550,71 @@ async function gesture(page, cell) {
   await page.mouse.up();
   if (!plain) await page.keyboard.up("Shift");
   if (!draft) throw new Error(`the ${plain ? "plain" : "Shift"} drag drew no box`);
-  const summary = await chip(page, "Region");
-  return { summary, box: { width: to.x - from.x, height: to.y - from.y } };
+  const summary = await chip(page, "Area");
+  return { summary };
+}
+
+/**
+ * The rectangle the note just saved reloads, resolved from its saved selector
+ * as the runtime resolves it (resolveElement, resolveRegion in selection.ts),
+ * and screenshots of the page inside it and of the same-size rectangle just
+ * outside it, with the markers and outlines hidden.
+ */
+async function anchoredPage(page, session) {
+  await page.mouse.move(2, 2);
+  const target = await page.evaluate((session) => {
+    const notes = JSON.parse(sessionStorage.getItem(`cf-present-draft:${session}`) ?? "null")?.notes ?? [];
+    const note = notes.at(-1);
+    const root = document.getElementById("cf-present-document");
+    const block = root.querySelector(`[data-cf-block-id="${CSS.escape(note.block_id)}"]`);
+    let element = null;
+    if (note.region_selector) {
+      element = note.region_selector.scope === "document" ? root : root.querySelector(`[data-cf-block-id="${CSS.escape(note.region_selector.anchor_id)}"]`);
+    } else if (block?.dataset.cfBlockDigest === note.element_selector.block_digest) {
+      const found = note.element_selector.element_path === ":scope" ? block : block.querySelector(`:scope > ${note.element_selector.element_path}`);
+      element = found?.localName === note.element_selector.tag_name ? found : null;
+    }
+    if (!element) return null;
+    element.scrollIntoView({ block: "center", behavior: "instant" });
+    const selector = note.region_selector;
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      return selector ? {
+        x: rect.left + rect.width * selector.x_ppm / 1e6,
+        y: rect.top + rect.height * selector.y_ppm / 1e6,
+        width: rect.width * selector.width_ppm / 1e6,
+        height: rect.height * selector.height_ppm / 1e6,
+      } : { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+    };
+    let box = measure();
+    // Room for the rectangle just below it, under the fixed chrome.
+    const chrome = Math.max(...[...document.querySelectorAll(".cf-topbar, .cf-hint.on")].map((bar) => bar.getBoundingClientRect().bottom), 0);
+    if (box.y + 2 * box.height + 2 > innerHeight) {
+      scrollBy({ top: Math.floor(box.y - chrome - 4), behavior: "instant" });
+      box = measure();
+    }
+    // The same-size rectangle just below (or above) it; a box too tall for
+    // that moves as far as the screen allows, at least a quarter of its height.
+    const room = Math.max(innerHeight - (box.y + box.height), box.y - chrome);
+    const shift = Math.min(box.height + 1, room) * (innerHeight - (box.y + box.height) >= box.y - chrome ? 1 : -1);
+    const outside = { ...box, y: box.y + shift };
+    const fits = Math.abs(shift) >= box.height / 4 && Math.min(box.y, outside.y) >= chrome - 0.5 && Math.max(box.y, outside.y) + box.height <= innerHeight + 0.5;
+    return { box, outside, fits };
+  }, session);
+  if (!target) throw new Error("the saved selector resolves to nothing");
+  const style = await page.addStyleTag({ content: ".cf-marker-layer, .cf-toast { visibility: hidden !important; } .cf-hot, .cf-hot-sel { outline: none !important; background: none !important; }" });
+  try {
+    if (!target.fits) throw new Error(`the rectangle and its neighbour do not fit on screen: ${JSON.stringify(target)}`);
+    const viewport = page.viewportSize();
+    const shot = async ({ x, y, width, height }) => {
+      const clip = { x: Math.max(0, x), y: Math.max(0, y) };
+      Object.assign(clip, { width: Math.min(width, viewport.width - clip.x), height: Math.min(height, viewport.height - clip.y) });
+      return (await page.screenshot({ clip, animations: "disabled", caret: "hide" })).toString("base64");
+    };
+    return { box: { width: target.box.width, height: target.box.height }, inside: await shot(target.box), outside: await shot(target.outside) };
+  } finally {
+    await style.evaluate((element) => element.remove());
+  }
 }
 
 async function chip(page, kind) {
@@ -446,7 +634,9 @@ async function chip(page, kind) {
 
 // At phone width the rail is a bottom sheet (QA defect 7): taking, saving and
 // reopening a note leave it closed so the target stays in view; the float keeps
-// ESC on screen; the Comment button opens the sheet and Done leaves Comment.
+// ESC on screen; the Comment button opens the sheet, and the save hint goes
+// with it; Done leaves Comment. With no gutter beside a full-width block, a
+// marker sits above the line it marks, never on its words (P2-3).
 async function phoneWidth(page) {
   const step = async (name, action) => {
     try {
@@ -456,6 +646,12 @@ async function phoneWidth(page) {
     }
   };
   const sheetOpen = async () => (await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true";
+  const markerClear = async (rect, what) => {
+    const marker = await page.getByTestId("note-marker").first().boundingBox();
+    const overlaps = marker.x < rect.x + rect.width && rect.x < marker.x + marker.width && marker.y < rect.y + rect.height && rect.y < marker.y + marker.height;
+    assert.ok(!overlaps, `the marker ${JSON.stringify(marker)} sits on ${what} ${JSON.stringify(rect)}`);
+    assert.ok(marker.x >= 0 && marker.x + marker.width <= 375, `the marker is off screen: ${JSON.stringify(marker)}`);
+  };
   await page.setViewportSize({ width: 375, height: 812 });
   await page.emulateMedia({ colorScheme: "dark" });
   try {
@@ -465,8 +661,8 @@ async function phoneWidth(page) {
       assert.equal(await sheetOpen(), false, "the sheet opened on arming");
     });
     await reveal(page, "prose");
+    const heading = await page.locator("[data-cf-block-id='prose'] h2").boundingBox();
     await step("float", async () => {
-      const heading = await page.locator("[data-cf-block-id='prose'] h2").boundingBox();
       await page.mouse.click(heading.x + heading.width - 4, heading.y + heading.height / 2);
       const escape = await page.getByTestId("float-esc").boundingBox();
       assert.ok(escape.x >= 0 && escape.x + escape.width <= 375, `ESC at ${escape.x}..${escape.x + escape.width} of 375`);
@@ -477,6 +673,14 @@ async function phoneWidth(page) {
       await saveNote(page, "phone: kept in view");
       assert.equal(await sheetOpen(), false, "the sheet opened on save");
       await page.getByTestId("toast").getByText(/The Comment button opens your notes and Submit\./u).waitFor();
+      await markerClear(await page.locator("[data-cf-block-id='prose'] h2").boundingBox(), "the heading");
+    });
+    await step("Comment opens the sheet", async () => {
+      await page.locator("#cf-comment-toggle").click();
+      await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "true");
+      // Well inside the hint's own 3.4 s: opening the sheet dismissed it.
+      await page.getByTestId("toast").waitFor({ state: "detached", timeout: 1000 });
+      await page.locator(".cf-feedback-close").click();
     });
     await step("reopen from the pin", async () => {
       await page.getByTestId("note-marker").first().click();
@@ -486,10 +690,24 @@ async function phoneWidth(page) {
       await page.getByTestId("composer").waitFor({ state: "detached" });
       assert.equal(await page.getByTestId("note-marker").count(), 0, "the phone note was not removed");
     });
-    await step("Comment opens the sheet", async () => {
-      await page.locator("#cf-comment-toggle").click();
-      await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "true");
-      await page.locator(".cf-feedback-close").click();
+    await step("text marker", async () => {
+      await reveal(page, "prose");
+      await gesture(page, { type: "narrative", gesture: "text", block: "prose", recipe: RECIPES.narrative.text });
+      await saveNote(page, "phone: a marker beside the words");
+      const line = await page.evaluate((words) => {
+        const paragraph = document.querySelector("[data-cf-block-id='prose'] p");
+        const node = [...paragraph.childNodes].find((child) => child.nodeType === Node.TEXT_NODE && child.data.includes(words));
+        const range = document.createRange();
+        const at = node.data.indexOf(words);
+        range.setStart(node, at);
+        range.setEnd(node, at + words.length);
+        const rect = range.getClientRects()[0];
+        return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+      }, RECIPES.narrative.text.words);
+      await markerClear(line, "the selected line");
+      await page.getByTestId("note-marker").first().click();
+      await page.getByTestId("composer-delete").click();
+      await page.getByTestId("composer").waitFor({ state: "detached" });
     });
     await step("Done leaves", async () => {
       await page.getByTestId("comment-leave").click();

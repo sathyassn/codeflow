@@ -53,14 +53,19 @@ export async function checkDocumentExcerpts(browser) {
         canvas.height = image.height;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(image, 0, 0);
-        return points.map(([x, y]) => [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3));
+        const colours = points.map(([x, y]) => [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3));
+        return { colours, size: { width: image.width, height: image.height }, box: { width: rect.width, height: rect.height } };
       }
       return {
         whole: await sample(box, [[200, 150], [200, 250]]),
         crossBlock: await sample(new DOMRect(box.left, box.top + 100, 400, 200), [[200, 50], [200, 150]]),
       };
     });
-    for (const [label, [green, blue]] of Object.entries(pixels)) {
+    for (const [label, { colours: [green, blue], size, box }] of Object.entries(pixels)) {
+      // The decoded size is the box at the capture scale (480 by 360 at most), within 2 px.
+      const scale = Math.min(480 / box.width, 360 / box.height, 1);
+      assert.ok(Math.abs(size.width - box.width * scale) <= 2 && Math.abs(size.height - box.height * scale) <= 2,
+        `${label}: ${size.width} x ${size.height} px for a ${box.width} x ${box.height} box at scale ${scale}`);
       assert.ok(green[1] > 130 && green[0] < 30 && green[2] < 30, `${label} lost the middle SVG surface: ${green}`);
       assert.ok(blue[2] > 190 && blue[0] < 30 && blue[1] < 30, `${label} lost the last block: ${blue}`);
     }
@@ -106,7 +111,7 @@ export async function checkEntityCrops(browser) {
     const cells = await page.evaluate(async () => {
       const root = document.getElementById("document");
       const h = cropHarness;
-      async function crop(svg, element, sampleCentre = false) {
+      async function crop(svg, element) {
         const rect = element.getBoundingClientRect();
         const padding = h.entityCropPadding(svg, 6);
         const box = h.paddedRect(rect, padding);
@@ -115,17 +120,16 @@ export async function checkEntityCrops(browser) {
         const decoded = new Image();
         decoded.src = `data:${image.media_type};base64,${image.data_base64}`;
         await decoded.decode();
-        let centre = null;
-        if (sampleCentre) {
-          const canvas = document.createElement("canvas");
-          canvas.width = decoded.width;
-          canvas.height = decoded.height;
-          const context = canvas.getContext("2d");
-          context.drawImage(decoded, 0, 0);
-          centre = [...context.getImageData(Math.floor(decoded.width / 2), Math.floor(decoded.height / 2), 1, 1).data.slice(0, 3)];
-        }
+        // The centre is the part; the corner is the padding around it, which is ground.
+        const canvas = document.createElement("canvas");
+        canvas.width = decoded.width;
+        canvas.height = decoded.height;
+        const context = canvas.getContext("2d");
+        context.drawImage(decoded, 0, 0);
+        const at = (x, y) => [...context.getImageData(x, y, 1, 1).data.slice(0, 3)];
         return {
-          centre,
+          centre: at(Math.floor(decoded.width / 2), Math.floor(decoded.height / 2)),
+          corner: at(0, 0),
           image: { media_type: image.media_type, width: decoded.width, height: decoded.height },
           expected: { width: rect.width + 2 * padding.x, height: rect.height + 2 * padding.y },
           userBox: h.userSpaceBox(svg, box),
@@ -138,7 +142,7 @@ export async function checkEntityCrops(browser) {
       }
       for (const id of ["placed", "stretched"]) {
         const svg = document.getElementById(id);
-        out[id] = { node: await crop(svg, svg.querySelector(".node"), true) };
+        out[id] = { node: await crop(svg, svg.querySelector(".node")) };
       }
       // Controls: the whole drawing is the wrong size for the node; empty ground is one colour.
       const one = document.getElementById("one");
@@ -156,6 +160,13 @@ export async function checkEntityCrops(browser) {
         assert.ok(cell.image, `${label}: no crop`);
         assert.equal(cell.image.media_type, "image/png", label);
         assert.ok(sizeMatches(cell), `${label}: ${JSON.stringify(cell)}`);
+        // A same-size crop of other pixels fails here: the node's crop carries
+        // the node at its centre and the ground in its padded corner.
+        if (part === "node") {
+          const [red, green, blue] = cell.centre;
+          assert.ok(blue > 140 && red < 80 && green < 140, `${label}: the crop carries ${cell.centre} at its centre, not the node`);
+          assert.ok(cell.corner.every((value) => value > 215), `${label}: the crop carries ${cell.corner} in its corner, not the ground`);
+        }
         const entity = bounds[part];
         const box = cell.userBox;
         assert.ok(box.x >= entity.x - 8 && box.y >= entity.y - 8
@@ -177,7 +188,7 @@ export async function checkEntityCrops(browser) {
     }
     assert.ok(cells.wrong.image && !sizeMatches({ ...cells.wrong, expected: cells.one.node.expected }), "the wrong-element control passed the size rule");
     assert.equal(cells.blank, null, "a crop of empty ground was not refused");
-    process.stdout.write("entity crops passed: PNG at 1, 0.5 and 2 px per unit within 2 px, inside the 8 unit tolerance, the right pixels under an offset letterboxed viewBox and an uneven stretch, wrong-size and blank controls\n");
+    process.stdout.write("entity crops passed: PNG at 1, 0.5 and 2 px per unit within 2 px, the node and the ground at each scale, inside the 8 unit tolerance, the right pixels under an offset letterboxed viewBox and an uneven stretch, wrong-size and blank controls\n");
   } finally {
     await context.close();
   }
