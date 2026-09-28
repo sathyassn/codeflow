@@ -50,7 +50,9 @@ publication date._
   journey, and a leaf serving it links the evidence that ran or names its
   narrower path. A criterion tagged `(after release)` is `deferred` with an
   owner, a window and a listed follow-up, never verified at build time.
-  `git.work_records` sets the binding and journey rules to block or warn;
+  A tag opens or closes its criterion, and a period, comma, semicolon or
+  colon after a closing tag still reads as the tag; a tag inside the text
+  does not count. `git.work_records` sets the binding and journey rules to block or warn;
   frozen criteria always block. The output states that the check proves
   structure and binding only. An open task that changes product paths
   without a journey criterion gains one by a planning pull request, or the

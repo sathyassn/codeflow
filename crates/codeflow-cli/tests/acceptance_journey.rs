@@ -357,3 +357,141 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
         "TSK-002 changes the adopter-facing path set but has no `(journey)` criterion",
     );
 }
+
+/// TSK-152 AC-4 as its record lists it: the tag closes the sentence, so a
+/// period follows it.
+const TSK152_AC4: &str = "- AC-4 When a fresh repository is scaffolded with the built binary, a
+  minimal-tier `AGENTS.md` names the `.codex/` starter as for interactive
+  Codex and `.grok/hooks/` as for Grok Build, and a standard-tier install
+  carries the restored present method byte for byte; evidence: the scaffold
+  run's output files compared with their sources, or the `init_e2e` case
+  that renders them (journey).
+";
+
+/// Journey (TSK-155 AC-5): on a fresh `codeflow init --full` project, a
+/// task whose journey criterion is TSK-152's real AC-4 text, tag then
+/// period, completes and passes `codeflow ci` on an adopter-facing range; a
+/// tag followed by a comma passes too, and a tag inside the text is still
+/// refused as no journey.
+#[test]
+fn a_journey_tag_reads_with_sentence_punctuation_on_a_fresh_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    git(&root, &["switch", "-q", "-c", LINE]);
+    git(&root, &["switch", "-q", "-c", "plan/tags"]);
+    ok(&codeflow(&root, &["epic", "new", "outcome"]), "epic new");
+    for title in ["period", "comma", "inside"] {
+        let args = ["task", "new", "--epic", "EPC-001", "--into", LINE, title];
+        ok(&codeflow(&root, &args), "task new");
+    }
+    edit(
+        &root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 When used, the system shall work.\n",
+    );
+    let first = format!("- AC-1 When run, the system shall work.\n{TSK152_AC4}");
+    edit(&root, TASK, "- AC-1\n", &first);
+    edit(
+        &root,
+        SECOND,
+        "- AC-1\n",
+        "- AC-1 On a fresh project, the command shall succeed (journey),\n",
+    );
+    edit(
+        &root,
+        "project-management/tasks/TSK-003.md",
+        "- AC-1\n",
+        "- AC-1 When run, the (journey) path shall pass.\n",
+    );
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
+    policy["git"]["product_paths"] = serde_json::json!(["src/**"]);
+    std::fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).unwrap() + "\n",
+    )
+    .unwrap();
+    commit(&root, "chore: plan the tag journey");
+    git(&root, &["switch", "-q", LINE]);
+    git(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "plan/tags",
+            "-m",
+            "chore: land the plan",
+        ],
+    );
+
+    // TSK-152's AC-4 text: built, completed with its journey verified, and
+    // judged on an adopter-facing range.
+    let branch = "task/TSK-001-period";
+    git(&root, &["switch", "-q", "-c", branch]);
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start",
+    );
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn first() {}\n").unwrap();
+    let reviewed = commit(&root, "feat: add the first function");
+    let block = format!(
+        "acceptance:\n  reviewed: {reviewed}\n  review: session:journey@sha256:00\n  criteria:\n    AC-1: verified | the journey ran\n    AC-4: verified | the journey ran\n  journey: verified | crates/codeflow-cli/tests/acceptance_journey.rs\n  not_verified: none\n  follow_ups: none: journey fixture\n  verdict: approved\n"
+    );
+    let block_path = dir.path().join("acceptance.yaml");
+    std::fs::write(&block_path, block).unwrap();
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "status",
+                "TSK-001",
+                "complete",
+                "--acceptance",
+                &block_path.to_string_lossy(),
+            ],
+        ),
+        "task status complete for TSK-152's AC-4 text",
+    );
+    commit(&root, "chore: complete TSK-001");
+    let passed = ok(&ci(&root, branch, "TSK-001"), "ci with `(journey).`");
+    assert!(!passed.contains("work.journey_criterion"), "{passed}");
+
+    // A comma after the tag reads the same.
+    let branch = "task/TSK-002-comma";
+    git(&root, &["switch", "-q", "-c", branch, LINE]);
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-002"]),
+        "work start",
+    );
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/second.rs"), "pub fn second() {}\n").unwrap();
+    commit(&root, "feat: add the second function");
+    let passed = ok(&ci(&root, branch, "TSK-002"), "ci with `(journey),`");
+    assert!(!passed.contains("work.journey_criterion"), "{passed}");
+
+    // A tag inside the text is not a tag.
+    let branch = "task/TSK-003-inside";
+    git(&root, &["switch", "-q", "-c", branch, LINE]);
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-003"]),
+        "work start",
+    );
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/third.rs"), "pub fn third() {}\n").unwrap();
+    commit(&root, "feat: add the third function");
+    fails(
+        &ci(&root, branch, "TSK-003"),
+        "a tag inside the criterion text",
+        "TSK-003 changes the adopter-facing path set but has no `(journey)` criterion",
+    );
+}

@@ -35,9 +35,13 @@ impl Criterion {
         self.has_tag("(after release)")
     }
 
+    /// A tag opens or closes the criterion (R-50). Sentence punctuation
+    /// after a closing tag (`... (journey).`) does not hide it; a tag
+    /// inside the text is not a tag.
     fn has_tag(&self, tag: &str) -> bool {
         let text = self.text.trim();
-        text.starts_with(tag) || text.ends_with(tag)
+        let closing = text.trim_end_matches(['.', ',', ';', ':']);
+        text.starts_with(tag) || closing.ends_with(tag)
     }
 
     /// The epic criterion this one serves, from `(serves EPC-NNN AC-m)`.
@@ -1087,6 +1091,53 @@ mod tests {
             Some(("EPC-001".to_string(), "AC-2".to_string()))
         );
         assert!(!list.uses_checkboxes());
+    }
+
+    fn criterion(text: &str) -> Criterion {
+        Criterion {
+            id: "AC-1".into(),
+            text: text.into(),
+            checkbox: None,
+        }
+    }
+
+    #[test]
+    fn a_tag_reads_with_sentence_punctuation_only_at_either_end() {
+        for text in [
+            "When run on a fresh init, the system shall work (journey)",
+            "When run on a fresh init, the system shall work (journey).",
+            "When run on a fresh init, the system shall work (journey),",
+            "When run on a fresh init, the system shall work (journey);",
+            "When run on a fresh init, the system shall work (journey):",
+            "(journey) On a fresh project, the command shall succeed.",
+            "(journey): the seed and both runs are recorded.",
+        ] {
+            assert!(criterion(text).is_journey(), "{text}");
+        }
+        // TSK-152 AC-4 as the parser collapses it: the tag, then a period.
+        let tsk152 = "When a fresh repository is scaffolded with the built binary, a \
+minimal-tier `AGENTS.md` names the `.codex/` starter as for interactive Codex and \
+`.grok/hooks/` as for Grok Build, and a standard-tier install carries the restored \
+present method byte for byte; evidence: the scaffold run's output files compared with \
+their sources, or the `init_e2e` case that renders them (journey).";
+        assert!(criterion(tsk152).is_journey());
+        for text in [
+            "When run, the (journey) path shall pass.",
+            "When run, the system shall work (journey). Then it shall stop.",
+            "When run, the system shall work (journey)!",
+            "When run, the system shall work (journeys).",
+        ] {
+            assert!(!criterion(text).is_journey(), "{text}");
+        }
+        assert!(
+            criterion("Adopters shall report fewer failed installs (after release).")
+                .is_after_release()
+        );
+        assert!(!criterion("The (after release) window shall be a month.").is_after_release());
+        assert_eq!(
+            criterion("When served, the system shall serve (serves EPC-001 AC-2).").serves(),
+            Some(("EPC-001".to_string(), "AC-2".to_string()))
+        );
     }
 
     #[test]

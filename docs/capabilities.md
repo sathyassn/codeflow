@@ -593,7 +593,8 @@ the pull request's class decides it, not the branch prefix. A range touching the
 adopter-facing path set needs a `(journey)` criterion or one serving the
 epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a
-listed follow-up. `git.work_records` sets the binding and journey rules;
+listed follow-up. A tag opens or closes its criterion, trailing sentence
+punctuation included; a tag inside the text does not count. `git.work_records` sets the binding and journey rules;
 frozen criteria always block. The check states that it proves structure and
 binding only, and cf-reviewer, cf-consult and cf-ship ask whether each
 criterion is supported on this source and achieves the outcome.
