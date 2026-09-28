@@ -88,7 +88,7 @@ policy key or machine-readable format is added.
    check and its default level are a separate decision. Owners: both
    contract templates, the lifecycle reply rule and `editorial-smells.md`.
 
-Evaluation: requirement CF-OUT-006 and an amended CF-OUT-002 carry cases
+Evaluation: requirement CF-OUT-007 and an amended CF-OUT-002 carry cases
 with paired controls graded on substance, never on the presence of a label.
 
 ## Consequences
@@ -142,6 +142,6 @@ orchestrator's joint closeout, and rule 7 is reconciled here by the
 ADR-0067 note of 2026-09-25 and the removal of the pull request Summary
 warnings for a code span, a path or more than three sentences.
 
-On this line the requirement named CF-OUT-006 above is CF-OUT-007:
-TSK-130 had already landed a different CF-OUT-006, on naming each item by
-its outcome, and evaluation surfaces are append-only (R-118).
+The requirement is CF-OUT-007 here, where the source branch named it
+CF-OUT-006: TSK-130 had already landed a different CF-OUT-006, on naming
+each item by its outcome, and evaluation surfaces are append-only (R-118).
