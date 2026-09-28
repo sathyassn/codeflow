@@ -534,6 +534,18 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       throw new Error(`${label} has no live capture: ${JSON.stringify({ live, chips })}`);
     }
   }
+  // The rail names no pin once the pin is gone.
+  async function expectNoPinnedStatus(label) {
+    const status = await page.waitForFunction(
+      () => {
+        const text = document.querySelector(".cf-status")?.textContent?.trim() ?? "";
+        return text.startsWith("Pinned:") ? false : text || "(empty)";
+      },
+      undefined,
+      { timeout: 2000 },
+    ).catch(async () => (await page.locator(".cf-status").first().textContent())?.trim());
+    if (typeof status === "string") throw new Error(`${label} left the status naming a dropped pin: ${JSON.stringify(status)}`);
+  }
   async function expectReleased(label) {
     const kept = await page.evaluate(() => String(getSelection()));
     if (kept) throw new Error(`${label} kept the discarded capture highlighted: ${JSON.stringify(kept)}`);
@@ -569,6 +581,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     await reselect("Prose drag before Escape");
     await dismissChip();
     await expectReleased("Escape");
+    await expectNoPinnedStatus("Escape");
     await proseDrag("Held press after Escape", { from: glyph, to: 9, hold: 200, quote: "eview me" });
     await dismissChip();
 
@@ -585,6 +598,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       const kind = (await chip.locator(".lab").innerText()).trim();
       throw new Error(`A click on the captured highlight opened ${kind}, expected no chip`);
     }
+    await expectNoPinnedStatus("A click on the captured highlight");
 
     // TSK-096 edge rule: the painted highlight decides. A click just past
     // its last glyph, in the same line box, is a click on the paragraph:
@@ -617,6 +631,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     await page.getByTestId("float-esc").click();
     await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
     await expectReleased("The chip esc button");
+    await expectNoPinnedStatus("The chip esc button");
   }
 
   // Words on an authored SVG stage must pin as Text (same as HTML prose).

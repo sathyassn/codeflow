@@ -812,6 +812,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (composerOpen) requestAnimationFrame(() => composerTextRef.current?.focus());
   }, [composerOpen]);
 
+  // A pin that is dropped without a note (Escape, the chip's esc, a click on
+  // its own highlight) takes its "Pinned:" status with it, so the rail never
+  // names a pin that is gone. Before paint, so the two never show together.
+  useLayoutEffect(() => {
+    if (pendingPin) return;
+    setStatus((current) => (current.startsWith("Pinned: ") ? (commentModeRef.current ? COMMENT_INSTRUCTION : "Ready for review.") : current));
+  }, [pendingPin]);
+
   /* ─── Pin → float → composer (qualified Comment flow) ─── */
   function pinCapture(captured: CapturedTarget, clientX: number, clientY: number, opts?: PinOptions): void {
     if (submittingRef.current) {
