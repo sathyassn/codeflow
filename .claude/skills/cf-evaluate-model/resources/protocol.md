@@ -193,7 +193,8 @@ plan in the evaluator-side trial record, and writes no `TASK.md`.
 
 Before the matrix, run one after-compaction smoke session and read its JSONL:
 it must hold the automatic compact boundary, the `SessionStart:compact` hook
-record and each entry's `uuid` and `parentUuid`. Accept workspace trust for
+record, each entry's `uuid` and `parentUuid`, and each finished turn's
+`end_turn` stop reason. Accept workspace trust for
 the fixture first; Claude Code runs no hooks in an untrusted folder.
 
 Grade deterministically first. `check-session --record <trial record>
@@ -201,9 +202,12 @@ Grade deterministically first. `check-session --record <trial record>
 own plan, by the `session_digest` the materializer wrote. It then checks
 that the transcript is one native session whose typed turns are exactly the
 plan, that each turn finished before the next was typed (every reply is
-bound to its turn by `parentUuid`, not by position), that the fresh arm
-never compacted, and that the after-compaction arm compacted automatically
-inside the warm-up with a re-injection hook record after every compaction.
+bound to its turn by `parentUuid`, each parent earlier in the file, and a
+turn ends with a finishing stop reason and no tool call left without its
+result), that the fresh arm never compacted, and that the after-compaction
+arm compacted automatically inside the warm-up, with a re-injection hook
+record after every compaction before work resumed, and not during the
+probe.
 A failed check names its validity flag (`reused_session`,
 `retry_contamination`, `broken_fixture`, `harness_context_mismatch` or
 `missing_trace`) and leaves the trial invalid, never a model failure. It
@@ -218,9 +222,10 @@ graded.
 of the `guidance-retention` pack: every hard probe passes every trial, at
 least three, in both arms; its adherence after compaction is no lower than
 fresh; every paired negative passes every trial, at least one, in both
-arms. Original trials 1 to 3 (1 for a negative) must all be present; a
-retry takes the next number and adds to the record, never replacing an
-earlier result, and each trial is its own native session. Each completed
+arms. Original trials 1 to 3 (1 for a negative) must all be present and
+numbers run without gaps; a retry takes the next number and adds to the
+record, never replacing an earlier result, and each trial is its own
+native session, by the session id `check-session` extracted. Each completed
 trial carries its `check-session` output as `session_check`, cited by a
 session evidence digest and with every flag the check raised. A line whose
 probe turn got a prompt reminder is labelled reminder-assisted, since it

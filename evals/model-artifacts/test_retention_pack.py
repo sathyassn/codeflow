@@ -106,24 +106,33 @@ class Transcript:
         self.add({"type": "user", "message": {"role": "user", "content": text}})
         return self.hook("UserPromptSubmit", "codeflow hook rule-reminder", reminder)
 
-    def reply(self, text: str, *tools: dict, parent: str | None = None) -> "Transcript":
-        content = [{"type": "tool_use", "id": f"t{len(self.entries)}", **tool} for tool in tools]
-        content.append({"type": "text", "text": text})
-        entry = {"type": "assistant", "message": {"role": "assistant", "content": content}}
+    def assistant(self, content: list[dict], stop_reason: str | None,
+                  parent: str | None = None) -> "Transcript":
+        entry = {"type": "assistant",
+                 "message": {"role": "assistant", "content": content, "stop_reason": stop_reason}}
         if parent is not None:
             entry["parentUuid"] = parent
-        self.add(entry)
-        for block in content[:-1]:
-            self.add(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "tool_result", "tool_use_id": block["id"], "content": "ok"}],
-                    },
-                }
-            )
-        return self
+        return self.add(entry)
+
+    def reply(self, text: str, *tools: dict, parent: str | None = None) -> "Transcript":
+        """A finished turn: any tool calls and their results, then the final
+        text with the native `end_turn` stop reason."""
+        if tools:
+            calls = [{"type": "tool_use", "id": f"t{len(self.entries)}-{n}", **tool}
+                     for n, tool in enumerate(tools)]
+            self.assistant(calls, "tool_use", parent)
+            parent = None
+            for call in calls:
+                self.add(
+                    {
+                        "type": "user",
+                        "message": {
+                            "role": "user",
+                            "content": [{"type": "tool_result", "tool_use_id": call["id"], "content": "ok"}],
+                        },
+                    }
+                )
+        return self.assistant([{"type": "text", "text": text}], "end_turn", parent)
 
     def compact(self, trigger: str = "auto", hook: bool = True) -> "Transcript":
         self.add(
@@ -208,6 +217,7 @@ def session_check(case: dict, number: int, reminders: tuple[str, ...] = ()) -> d
     return {
         "valid": True,
         "validity_flags": [],
+        "session_ids": [f"native/{case['id']}/{number}"],
         "session_digest": eval_kit.canonical_digest(plan),
         "probe_excerpt": excerpt,
         "probe_excerpt_digest": eval_kit.canonical_digest(excerpt),
@@ -492,8 +502,8 @@ class CheckSessionTests(unittest.TestCase):
     def test_warmup_tool_events_never_reach_the_detectors(self) -> None:
         case = case_for("simple-question-stays-in-chat", "after-compaction")
         transcript = full_session(case, "Run `sh scripts/check-release-notes.sh`.")
-        transcript.entries[3]["message"]["content"].insert(
-            0, {"type": "tool_use", "id": "w", "name": "Skill", "input": {"skill": "cf-present"}}
+        transcript.entries[3]["message"]["content"][0].update(
+            name="Skill", input={"skill": "cf-present"}
         )
         checked = self.check(case, transcript)
         self.assertTrue(checked["valid"], checked["problems"])
@@ -612,6 +622,82 @@ class CheckSessionTests(unittest.TestCase):
         unbound.entries[-1]["parentUuid"] = None
         checked = self.check(case, unbound)
         self.assertIn("missing_trace", checked["validity_flags"])
+
+    def test_a_turn_finishes_only_by_its_native_stop_reason(self) -> None:
+        # R2-3: text beside an unanswered tool call is progress, not completion.
+        case = case_for("complex-explanation-spontaneous-present", "after-compaction")
+        plan = plan_for(case)
+        unfinished_probe = warmup(case).typed(plan["probe_prompt"]).assistant(
+            [{"type": "text", "text": "I will open the page."},
+             {"type": "tool_use", "id": "open", "name": "Skill", "input": {"skill": "cf-present"}}],
+            "tool_use",
+        )
+        checked = self.check(case, unfinished_probe)
+        self.assertFalse(checked["valid"])
+        self.assertIn("the probe turn has no finished reply", checked["problems"])
+
+        unfinished_warmup = warmup(case, answered=len(plan["warmup"]) - 1)
+        unfinished_warmup.assistant(
+            [{"type": "text", "text": "Reading it now."},
+             {"type": "tool_use", "id": "read", "name": "Read", "input": {"file_path": "x"}}],
+            "tool_use",
+        )
+        unfinished_warmup.typed(plan["probe_prompt"]).reply("ok")
+        checked = self.check(case, unfinished_warmup)
+        self.assertIn("retry_contamination", checked["validity_flags"])
+        self.assertIn(f"turn {len(plan['warmup'])} had not finished when the next was typed",
+                      checked["problems"])
+
+        no_marker = full_session(case, "ok")
+        no_marker.entries[-1]["message"]["stop_reason"] = None
+        self.assertIn("the probe turn has no finished reply", self.check(case, no_marker)["problems"])
+
+    def test_events_are_bound_in_their_native_order(self) -> None:
+        # R2-3: a parent that comes later, or a repeated identity, is corrupt.
+        case = case_for("complex-explanation-spontaneous-present", "after-compaction")
+        plan = plan_for(case)
+        forward = warmup(case)
+        probe_uuid = f"u{len(forward.entries) + 1}"
+        forward.assistant(
+            [{"type": "tool_use", "id": "early", "name": "Skill", "input": {"skill": "cf-present"}}],
+            "tool_use", parent=probe_uuid,
+        )
+        forward.typed(plan["probe_prompt"]).reply("Here is the flow.")
+        self.assertEqual(probe_uuid, forward.prompt_uuid(plan["probe_prompt"]))
+        checked = self.check(case, forward)
+        self.assertFalse(checked["valid"])
+        self.assertIn("an entry comes before its parent", checked["problems"])
+        self.assertEqual([], checked["probe_excerpt"]["tool_uses"])
+        self.assertEqual([], checked["detected_signals"])
+
+        duplicate = full_session(case, "Here is the flow.")
+        duplicate.entries.append(copy.deepcopy(duplicate.entries[-1]))
+        checked = self.check(case, duplicate)
+        self.assertFalse(checked["valid"])
+        self.assertIn("two entries share one native identity", checked["problems"])
+
+    def test_a_compaction_during_the_probe_is_a_broken_fixture(self) -> None:
+        # R2-4: the probe must answer from the context the warm-up left.
+        case = case_for("estimate-volunteered-in-plan", "after-compaction")
+        plan = plan_for(case)
+        for hook in (False, True):
+            with self.subTest(hook=hook):
+                transcript = warmup(case).typed(plan["probe_prompt"])
+                transcript.compact(hook=hook)
+                transcript.reply("ok")
+                checked = self.check(case, transcript)
+                self.assertFalse(checked["valid"])
+                self.assertIn("broken_fixture", checked["validity_flags"])
+                self.assertIn("the probe turn compacted", checked["problems"])
+
+    def test_the_reinjection_hook_runs_before_work_resumes(self) -> None:
+        # R2-4: a hook record after later warm-up turns is not re-injection.
+        case = case_for("estimate-volunteered-in-plan", "after-compaction")
+        late = warmup(case, hook=False)
+        late.hook("SessionStart:compact")
+        late.typed(plan_for(case)["probe_prompt"]).reply("ok")
+        checked = self.check(case, late)
+        self.assertIn("harness_context_mismatch", checked["validity_flags"])
 
     def test_one_native_session_identity_is_required(self) -> None:
         # R130-3: no session identity is not one session.
@@ -768,7 +854,7 @@ class RetentionReportTests(unittest.TestCase):
             eval_kit.retention_report({"trials": trials}, PACK)
         trials = passing_trials()
         shared = [trial for trial in trials if trial["case_id"] == target]
-        shared[1]["evidence"] = copy.deepcopy(shared[0]["evidence"])
+        shared[1]["evidence"][0]["ref"] = shared[0]["evidence"][0]["ref"]
         with self.assertRaisesRegex(eval_kit.EvalError, "reuses the native session"):
             eval_kit.retention_report({"trials": trials}, PACK)
 
@@ -789,7 +875,7 @@ class RetentionReportTests(unittest.TestCase):
             case_for("status-outcomes-first", "fresh"), 1)), "another case or plan")
         refused(lambda trial: trial["evidence"][0].update(digest="sha256:" + "c" * 64),
                 "no session evidence cites")
-        refused(lambda trial: trial["session_check"].update(validity_flags=["broken_fixture"]),
+        refused(lambda trial: trial["session_check"].update(valid=False, validity_flags=["broken_fixture"]),
                 "drops the check-session validity flags: broken_fixture")
         errored = passing_trials()
         errored[0].update(outcome="error", error_message="seat unavailable")
@@ -826,6 +912,41 @@ class RetentionReportTests(unittest.TestCase):
                       report)
         self.assertIn("estimate-volunteered-in-plan (hard), after-compaction: 3 of 3 passed\n", report)
         self.assertIn("Reminder-assisted: a prompt hook added guidance on the probe turn itself", report)
+
+    def test_one_native_session_counts_once_whatever_its_file_references(self) -> None:
+        # R2-1: the native session id, not the path, identifies a trial.
+        target = case_for("status-outcomes-first", "fresh")
+        trials = passing_trials()
+        rows = [trial for trial in trials if trial["case_id"] == target["id"]]
+        for row in rows[1:]:
+            row["session_check"] = copy.deepcopy(rows[0]["session_check"])
+            row["evidence"][0]["digest"] = rows[0]["session_check"]["probe_excerpt_digest"]
+        with self.assertRaisesRegex(eval_kit.EvalError, "reuses the native session"):
+            eval_kit.retention_report({"trials": trials}, PACK)
+
+    def test_a_check_session_output_must_be_consistent(self) -> None:
+        # R2-1 hardening: an edited or incomplete check output is refused.
+        for label, change in [
+            ("invalid without flags", {"valid": False}),
+            ("no session id", {"session_ids": []}),
+            ("two session ids", {"session_ids": ["a", "b"]}),
+        ]:
+            with self.subTest(label):
+                trials = passing_trials()
+                trials[0]["session_check"].update(change)
+                with self.assertRaisesRegex(eval_kit.EvalError, "check-session output"):
+                    eval_kit.retention_report({"trials": trials}, PACK)
+
+    def test_a_retry_cannot_vanish_through_a_gap(self) -> None:
+        # R2-2: trial numbers run without gaps, so every started trial stays.
+        target = case_for("estimate-volunteered-in-plan", "fresh")
+        failed = scripted_trial(target, [], 4)
+        passed = scripted_trial(target, target["expected"]["signals"], 5)
+        report, met = eval_kit.retention_report({"trials": passing_trials() + [failed, passed]}, PACK)
+        self.assertFalse(met, report)
+        report, met = eval_kit.retention_report({"trials": passing_trials() + [passed]}, PACK)
+        self.assertFalse(met, report)
+        self.assertIn(f"- {target['id']}: trial 4 is missing", report)
 
     def test_trial_numbers_are_positive_integers(self) -> None:
         for number in ["1", 0, True, 1.0]:

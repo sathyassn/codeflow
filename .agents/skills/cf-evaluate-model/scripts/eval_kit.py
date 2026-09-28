@@ -633,26 +633,76 @@ def turn_owners(entries: list[dict], prompts: list[int]) -> list[int | None]:
 
     Claude Code links each entry to its parent by `parentUuid`; a compact
     boundary starts a new chain and keeps `logicalParentUuid`. An entry
-    belongs to the typed prompt it descends from, whatever its position.
+    belongs to the typed prompt it descends from through parents that each
+    come earlier in the file; a later parent binds it to nothing.
     """
 
-    by_uuid = {
-        entry["uuid"]: index
-        for index, entry in enumerate(entries)
-        if isinstance(entry.get("uuid"), str) and entry["uuid"]
-    }
+    by_uuid = native_index(entries)
     turn_at = {index: number for number, index in enumerate(prompts)}
     owners: list[int | None] = [None] * len(entries)
     for start in range(len(entries)):
         index: int | None = start
-        seen: set[int] = set()
-        while index is not None and index not in turn_at and index not in seen:
-            seen.add(index)
-            entry = entries[index]
-            parent = entry.get("parentUuid") or entry.get("logicalParentUuid")
-            index = by_uuid.get(parent) if isinstance(parent, str) else None
+        while index is not None and index not in turn_at:
+            parent = by_uuid.get(parent_uuid(entries[index]))
+            index = parent if parent is not None and parent < index else None
         owners[start] = turn_at.get(index) if index is not None else None
     return owners
+
+
+def native_index(entries: list[dict]) -> dict[str, int]:
+    """Each native identity (`uuid`) and the first entry that carries it."""
+
+    by_uuid: dict[str, int] = {}
+    for index, entry in enumerate(entries):
+        if isinstance(entry.get("uuid"), str) and entry["uuid"]:
+            by_uuid.setdefault(entry["uuid"], index)
+    return by_uuid
+
+
+def parent_uuid(entry: dict) -> Any:
+    return entry.get("parentUuid") or entry.get("logicalParentUuid")
+
+
+def order_problems(entries: list[dict]) -> list[tuple[str, str]]:
+    """Native identities are unique and every parent comes before its child."""
+
+    problems: list[tuple[str, str]] = []
+    identities = [entry["uuid"] for entry in entries if isinstance(entry.get("uuid"), str)]
+    if len(identities) != len(set(identities)):
+        problems.append(("missing_trace", "two entries share one native identity"))
+    by_uuid = native_index(entries)
+    if any(
+        by_uuid.get(parent_uuid(entry), -1) >= index
+        for index, entry in enumerate(entries)
+    ):
+        problems.append(("missing_trace", "an entry comes before its parent"))
+    return problems
+
+
+# Native stop reasons that end an assistant turn.
+FINISHED_STOP_REASONS = frozenset({"end_turn", "stop_sequence"})
+
+
+def turn_finished(window: list[dict]) -> bool:
+    """A turn's own entries end with a native finishing stop reason and leave
+    no tool call without its result."""
+
+    replies = [entry for entry in window if entry.get("type") == "assistant"]
+    if not replies or (replies[-1].get("message") or {}).get("stop_reason") not in (
+        FINISHED_STOP_REASONS
+    ):
+        return False
+    calls: set[Any] = set()
+    results: set[Any] = set()
+    for entry in window:
+        for block in (entry.get("message") or {}).get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                calls.add(block.get("id"))
+            elif block.get("type") == "tool_result":
+                results.add(block.get("tool_use_id"))
+    return calls <= results
 
 
 def turn_problems(
@@ -664,14 +714,8 @@ def turn_problems(
     problems: list[tuple[str, str]] = []
     for number, prompt in enumerate(prompts):
         following = prompts[number + 1] if number + 1 < len(prompts) else len(entries)
-        replies = [
-            entries[index]
-            for index in range(prompt + 1, following)
-            if entries[index].get("type") == "assistant" and owners[index] == number
-        ]
-        finished = bool(replies) and any(
-            isinstance(block, dict) and block.get("type") == "text"
-            for block in (replies[-1].get("message") or {}).get("content") or []
+        finished = turn_finished(
+            [entries[index] for index in range(prompt + 1, following) if owners[index] == number]
         )
         if number + 1 == len(prompts):
             if not finished:
@@ -711,10 +755,14 @@ def session_identity_problems(entries: list[dict]) -> list[tuple[str, str]]:
 
 
 def compaction_problems(
-    entries: list[dict], plan: dict, first_index: int, probe_index: int
+    entries: list[dict], plan: dict, prompts: list[int]
 ) -> tuple[dict, list[tuple[str, str]]]:
     """Compaction must match the arm; after-compaction needs an automatic
-    compaction inside the warm-up and the re-injection hook after each one."""
+    compaction inside the warm-up, the re-injection hook after each one
+    before work resumes, and no compaction during the probe turn."""
+
+    first_index = prompts[0] if prompts else 0
+    probe_index = prompts[-1] if prompts else len(entries)
 
     boundaries = [
         (index, entry.get("compactMetadata") or {})
@@ -728,6 +776,8 @@ def compaction_problems(
         problems.append(("broken_fixture", "the fresh arm compacted"))
     if plan["arm"] != COMPACTION_ARM or not entries:
         return compaction, problems
+    if prompts and any(index > probe_index for index, _ in boundaries):
+        problems.append(("broken_fixture", "the probe turn compacted"))
     auto = [
         item for item in before_probe
         if item[0] > first_index and item[1].get("trigger") == "auto"
@@ -738,14 +788,26 @@ def compaction_problems(
         )
         return compaction, problems
     compaction.update(trigger="auto", boundaries=len(auto), pre_tokens=auto[-1][1].get("preTokens"))
-    ends = [index for index, _ in auto[1:]] + [probe_index]
-    for number, ((start, _), end) in enumerate(zip(auto, ends), 1):
+    typed = set(prompts)
+    for number, (start, _) in enumerate(auto, 1):
+        # The hook must come before the model works again: before the next
+        # reply, typed turn or compaction.
+        resumed = next(
+            (
+                index
+                for index in range(start + 1, len(entries))
+                if index in typed
+                or entries[index].get("type") == "assistant"
+                or entries[index].get("subtype") == "compact_boundary"
+            ),
+            len(entries),
+        )
         if not any(
             entry.get("type") == "attachment"
             and (entry.get("attachment") or {}).get("type") == "hook_success"
             and (entry.get("attachment") or {}).get("hookName") == "SessionStart:compact"
             and GUIDANCE_HOOK in str((entry.get("attachment") or {}).get("command", ""))
-            for entry in entries[start:end]
+            for entry in entries[start + 1:resumed]
         ):
             problems.append(
                 (
@@ -777,6 +839,7 @@ def check_session(record: dict, transcript: Path) -> dict:
         problems.append(("missing_trace", "the transcript is empty"))
     if entries:
         problems.extend(session_identity_problems(entries))
+        problems.extend(order_problems(entries))
     expected = [*plan["warmup"], plan["probe_prompt"]]
     turns = human_turns(entries)
     typed = [normalized(text) for _, text in turns]
@@ -793,9 +856,7 @@ def check_session(record: dict, transcript: Path) -> dict:
     if prompts:
         problems.extend(turn_problems(entries, prompts, owners))
     probe_index = prompts[-1] if prompts else len(entries)
-    compaction, compaction_issues = compaction_problems(
-        entries, plan, prompts[0] if prompts else 0, probe_index
-    )
+    compaction, compaction_issues = compaction_problems(entries, plan, prompts)
     problems.extend(compaction_issues)
     own = [
         entry
@@ -875,6 +936,19 @@ def bound_session_check(trial: dict, case: dict, label: str) -> dict:
     check = trial.get("session_check")
     if not isinstance(check, dict) or not isinstance(check.get("probe_excerpt"), dict):
         raise EvalError(f"{label} carries no check-session output (session_check)")
+    sessions = check.get("session_ids")
+    flags_checked = check.get("validity_flags")
+    if (
+        not isinstance(flags_checked, list)
+        or check.get("valid") is not (not flags_checked)
+        or not isinstance(sessions, list)
+        or len(sessions) != 1
+        or not isinstance(sessions[0], str)
+        or not sessions[0]
+    ):
+        raise EvalError(
+            f"{label}: the check-session output is inconsistent or lacks one native session id"
+        )
     excerpt = check["probe_excerpt"]
     digest = check.get("probe_excerpt_digest")
     if canonical_digest(excerpt) != digest:
@@ -933,29 +1007,34 @@ def retention_report(document: Any, pack_id: str) -> tuple[str, bool]:
             raise EvalError(f"trials[{index}] repeats {case_id} trial {number}")
         numbers[case_id].add(number)
         label = f"{case_id} trial {number}"
-        for ref in native_session_refs(trial):
+        case = cases[case_id]
+        line = (case["session"]["probe"], case["session"]["arm"])
+        refs = native_session_refs(trial)
+        if trial.get("outcome") == "completed":
+            check = bound_session_check(trial, case, label)
+            # The native session id is the identity; file references are aliases.
+            refs.add(f"native:{check['session_ids'][0]}")
+            if check["probe_excerpt"].get("prompt_reminders"):
+                assisted.add(line)
+        for ref in refs:
             if ref in sessions:
                 raise EvalError(
                     f"{label} reuses the native session of {sessions[ref]}: "
                     "one session is one trial"
                 )
             sessions[ref] = label
-        case = cases[case_id]
-        line = (case["session"]["probe"], case["session"]["arm"])
-        if trial.get("outcome") == "completed":
-            check = bound_session_check(trial, case, label)
-            if check["probe_excerpt"].get("prompt_reminders"):
-                assisted.add(line)
         status = computed_trial_status(trial, case)
         tally[line].append(status)
         if status != "pass" and case["session"]["gate"] == "hard":
             failures.append(f"{label}: {status}")
-    missing = [
-        f"{case_id}: original trial {number} is missing"
-        for case_id in pack_cases
-        for number in range(1, (3 if cases[case_id]["session"]["gate"] == "hard" else 1) + 1)
-        if number not in numbers[case_id]
-    ]
+    missing = []
+    for case_id in pack_cases:
+        originals = 3 if cases[case_id]["session"]["gate"] == "hard" else 1
+        # Numbers run without gaps, so no started trial can drop out.
+        for number in range(1, max(originals, *numbers[case_id], 0) + 1):
+            if number not in numbers[case_id]:
+                kind = "original trial" if number <= originals else "trial"
+                missing.append(f"{case_id}: {kind} {number} is missing")
     probes = {
         cases[case_id]["session"]["probe"]: cases[case_id]["session"]["gate"]
         for case_id in pack_cases
@@ -987,7 +1066,7 @@ def retention_report(document: Any, pack_id: str) -> tuple[str, bool]:
         )
         lines.append("")
     if missing:
-        lines.append("Missing original trials:")
+        lines.append("Missing trials:")
         lines.extend(f"- {item}" for item in missing)
         lines.append("")
     if failures:
