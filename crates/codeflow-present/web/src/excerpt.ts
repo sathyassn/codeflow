@@ -313,9 +313,20 @@ async function paintElementTree(
     if (parent.closest("svg") && !parent.closest("foreignObject")) continue;
     const style = getComputedStyle(parent);
     if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
+    if (clippedAway(parent, source)) continue;
     painted += paintTextNode(ctx, node, style, box, scale);
   }
   return painted;
+}
+
+// Text a clipping box hides from sight, such as a screen-reader label (a
+// diff line's "Added:"), is not painted over the words that show.
+function clippedAway(element: Element, source: Element): boolean {
+  for (let node: Element | null = element; node && node !== source.parentElement; node = node.parentElement) {
+    const rect = node.getBoundingClientRect();
+    if ((rect.width <= 1 || rect.height <= 1) && getComputedStyle(node).overflow !== "visible") return true;
+  }
+  return false;
 }
 
 function paintTextNode(
