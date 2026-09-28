@@ -2746,6 +2746,24 @@ print(json.dumps(seen, sort_keys=True))
                 eval_kit.evaluator_key(create=True)
         self.assertFalse((ROOT / "evals" / ".codeflow").exists())
 
+    @unittest.skipIf(sys.platform == "win32", "POSIX ownership and permission bits")
+    def test_an_existing_key_is_refused_from_a_folder_others_can_change(self) -> None:
+        key = eval_kit.evaluator_key(create=True)
+        folder = eval_kit.evaluator_key_path().parent
+        try:
+            for mode in (0o777, 0o770, 0o702):
+                with self.subTest(mode=oct(mode)):
+                    os.chmod(folder, mode)
+                    with self.assertRaisesRegex(eval_kit.EvalError, "writable by others"):
+                        eval_kit.evaluator_key()
+            os.chmod(folder, 0o755)
+            self.assertEqual(key, eval_kit.evaluator_key())
+            with patch.object(eval_kit.os, "geteuid", return_value=os.geteuid() + 1):
+                with self.assertRaisesRegex(eval_kit.EvalError, "owned by another user"):
+                    eval_kit.evaluator_key()
+        finally:
+            os.chmod(folder, 0o700)
+
     def test_an_ineligible_grade_never_counts_as_a_pass(self) -> None:
         with dev_suite():
             result = valid_result("full")

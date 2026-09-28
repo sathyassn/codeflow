@@ -3042,7 +3042,9 @@ def evaluator_key_path() -> Path:
 
 def evaluator_key(*, create: bool = False) -> bytes | None:
     """The evaluator's signing key, made owner-only on first use when
-    `create`; None when there is none."""
+    `create`; None when there is none. Refused when the key or its folder
+    belongs to another user, others can write the folder, or others can read
+    the key."""
 
     path = evaluator_key_path()
     try:
@@ -3060,7 +3062,12 @@ def evaluator_key(*, create: bool = False) -> bytes | None:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(secrets.token_hex(32) + "\n")
-    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+    folder, key = path.parent.stat(), path.stat()
+    if hasattr(os, "geteuid") and {folder.st_uid, key.st_uid} != {os.geteuid()}:
+        raise EvalError(f"the evaluator key or its folder is owned by another user: {path}")
+    if stat.S_IMODE(folder.st_mode) & 0o022:
+        raise EvalError(f"the evaluator key's folder is writable by others; make it owner-only: {path.parent}")
+    if stat.S_IMODE(key.st_mode) & 0o077:
         raise EvalError(f"the evaluator key is readable by others; make it owner-only: {path}")
     return bytes.fromhex(path.read_text(encoding="utf-8").strip())
 

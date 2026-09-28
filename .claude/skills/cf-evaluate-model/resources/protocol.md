@@ -419,9 +419,11 @@ fails its assertion as not gradable, never passes it.
   HMAC under an evaluator key, made owner-only on first use in the
   evaluator's CodeFlow home (the judgement key under its eval folder), outside
   the repository and every trial tree; subject code run while grading
-  cannot read it. Grading and every consumer verify the signature; a
-  judgement that is unsigned, changed, relabelled or signed under another
-  key counts as no judge's, so its assertion is `ungraded`. Calibration
+  cannot read it. The key is refused when it or its folder belongs to another
+  user, others can write the folder or others can read the key. Grading and
+  every consumer verify the signature; a judgement that is unsigned,
+  changed, relabelled or signed under another key counts as no judge's, so
+  its assertion is `ungraded`. Calibration
   judgements are signed the same way. This is the trust boundary: whoever
   holds the evaluator key is trusted, and the kit detects a judgement
   written or changed by anyone without it, no more.
