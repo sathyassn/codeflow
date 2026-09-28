@@ -90,11 +90,12 @@ pub struct CiArgs {
     pub run_level: Option<PolicyLevel>,
 
     /// Read PR bodies for `scripts/release.py`, the one reader both use:
-    /// a JSON array of body strings on stdin, and on stdout a JSON array of
-    /// readings, each the Release impact fields (`null` without exactly one
-    /// section), the Breaking change sections' visible text, and this
-    /// check's Release impact findings under the default policy. Reads no
-    /// repository and no range.
+    /// a JSON array of body strings on stdin, and on stdout
+    /// `{"protocol": READ_PROTOCOL, "readings": [...]}`, each reading the
+    /// Release impact fields (`null` without exactly one section), the
+    /// Breaking change sections' visible text, and this check's Release
+    /// impact findings under the default policy. Reads no repository and no
+    /// range.
     #[arg(long, hide = true, exclusive = true)]
     pub read_release_impact: bool,
 }
@@ -1635,6 +1636,12 @@ fn short(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
+/// The version of the `--read-release-impact` answer. Raise it whenever a
+/// reading's shape or meaning changes: `scripts/release.py` refuses any
+/// other version (its `READER_PROTOCOL`), so a stale binary cannot answer
+/// with older semantics in the same shape.
+const READ_PROTOCOL: u32 = 1;
+
 /// `codeflow ci --read-release-impact`: the PR-body reading `release.py`
 /// takes from this binary, so the release calculator and this check read a
 /// body with one parser (TSK-147 F4). Exit 2 on input that is not a JSON
@@ -1656,7 +1663,8 @@ fn read_release_impact() -> i32 {
     };
     let readings: Vec<serde_json::Value> =
         bodies.iter().map(|body| pr_body::reading(body)).collect();
-    match serde_json::to_writer(std::io::stdout().lock(), &readings) {
+    let answer = serde_json::json!({ "protocol": READ_PROTOCOL, "readings": readings });
+    match serde_json::to_writer(std::io::stdout().lock(), &answer) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("codeflow ci --read-release-impact: cannot write stdout: {error}");
@@ -1667,6 +1675,17 @@ fn read_release_impact() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// The reader protocol `release.py` reads is the one this binary
+    /// answers; raising one without the other fails here.
+    #[test]
+    fn release_py_reads_the_protocol_this_binary_answers() {
+        let script = include_str!("../../../../scripts/release.py");
+        assert!(
+            script.contains(&format!("\nREADER_PROTOCOL = {}\n", super::READ_PROTOCOL)),
+            "scripts/release.py READER_PROTOCOL differs from READ_PROTOCOL"
+        );
+    }
+
     use super::*;
     use codeflow_core::workgraph::classify::ProjectPaths;
 

@@ -1,14 +1,21 @@
-//! Every catalogued remedy clears its own finding (TSK-147 AC-1, review
-//! finding F5).
+//! Every catalogued remedy is proven by the step it prints (TSK-147 AC-1,
+//! review finding F5).
 //!
 //! The inventory in `warning_inventory.rs` proves that each remedy names a
-//! command that exists. This file proves the stronger claim: for each row of
-//! the remedy catalogue, a test raises the finding, runs the step exactly as
-//! the output prints it, and sees the finding gone on the next run. A row
-//! whose step acts outside this machine names that boundary in [`ROWS`],
-//! from a closed set ([`Boundary`]); the coverage test fails on a row that
-//! is neither proven nor excluded, and on an exclusion whose remedy does
-//! not name the party beyond the boundary.
+//! command that exists. This file proves the stronger claim, for each row
+//! of the remedy catalogue in one of three ways, recorded in [`ROWS`]:
+//!
+//! - [`Proof::Runs`]: a test raises the finding, runs the step exactly as
+//!   the output prints it, and sees the finding gone on the next run.
+//! - [`Proof::Confirms`]: the finding is a note naming an event that
+//!   confirms what doctor cannot read, and stays a note, since doctor keeps
+//!   no record of runs. A test runs the printed event and shows that it
+//!   tells the states apart; it does not see the note gone.
+//! - [`Proof::Excluded`]: the step acts outside this machine, at a boundary
+//!   from a closed set ([`Boundary`]).
+//!
+//! The coverage test fails on a row with none of these, and on an exclusion
+//! whose remedy does not name the party beyond the boundary.
 //!
 //! A proof takes the command it runs from the printed remedy, so a remedy
 //! that names a real command which does not clear its finding fails here.
@@ -25,8 +32,12 @@ mod records;
 
 /// How a catalogue row is covered.
 enum Proof {
-    /// A `clears_<row>` test runs the printed step.
+    /// A `clears_<row>` test runs the printed step and sees the finding go.
     Runs,
+    /// A `confirms_<row>` test runs the printed confirmation event and shows
+    /// that its outcome differs between the states the note cannot tell
+    /// apart; the note itself stays.
+    Confirms,
     /// The step acts beyond this boundary, so no test can take it.
     Excluded(Boundary),
 }
@@ -62,7 +73,7 @@ impl Boundary {
 }
 
 use Boundary::{HarnessApproval, HostingRemote, HumanAuthority, Network};
-use Proof::{Excluded, Runs};
+use Proof::{Confirms, Excluded, Runs};
 
 /// Every catalogue row and how it is covered.
 const ROWS: &[(&str, Proof)] = &[
@@ -153,7 +164,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_INIT", Runs),
     ("DOCTOR_TOOL_MISSING", Runs),
     ("DOCTOR_HOOK_MANAGER", Runs),
-    ("DOCTOR_HOOK_WIRING_UNSEEN", Runs),
+    ("DOCTOR_HOOK_WIRING_UNSEEN", Confirms),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
@@ -212,6 +223,13 @@ fn every_catalogued_row_is_proven_or_excluded_at_a_boundary() {
                 assert!(
                     source.contains(&test),
                     "{name} is marked Runs but has no `{test}` test"
+                );
+            }
+            Confirms => {
+                let test = format!("fn confirms_{}()", name.to_ascii_lowercase());
+                assert!(
+                    source.contains(&test),
+                    "{name} is marked Confirms but has no `{test}` test"
                 );
             }
             Excluded(boundary) => {
@@ -2074,7 +2092,7 @@ fn clears_doctor_delegates() {
 /// apart from it (the reviewer's probes).
 #[cfg(unix)]
 #[test]
-fn clears_doctor_hook_wiring_unseen() {
+fn confirms_doctor_hook_wiring_unseen() {
     // (label, the hook each shim gets, whether it runs the shim)
     type Form<'a> = (&'a str, &'a dyn Fn(&str) -> String, bool);
     use std::os::unix::fs::PermissionsExt;

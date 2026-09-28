@@ -198,8 +198,14 @@ fn ci_readings(bodies: &[String]) -> Vec<Reading> {
         output.status.success(),
         "codeflow ci --read-release-impact failed"
     );
-    let readings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    readings
+    let answer: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        answer["protocol"], 1,
+        "the reader protocol release.py reads"
+    );
+    answer["readings"]
+        .as_array()
+        .unwrap()
         .iter()
         .map(|reading| {
             let fields = corpus_fields(&reading["release_impact"]);
@@ -308,7 +314,21 @@ fn minimize(mut bodies: Vec<String>) -> Vec<String> {
 fn release_py_and_codeflow_ci_agree_on_a_generated_corpus() {
     use std::fmt::Write as _;
     let mut rng = Corpus(CORPUS_SEED);
-    let bodies: Vec<String> = (0..CORPUS_SIZE).map(|_| corpus_body(&mut rng)).collect();
+    let mut bodies: Vec<String> = (0..CORPUS_SIZE).map(|_| corpus_body(&mut rng)).collect();
+    // Every hand-picked shared case rides along, so a class found in review
+    // (TSK-147 round 5: Breaking change sections holding only a template
+    // alternative or a self-reference, a Kelvin-sign key) stays compared.
+    let shared: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../scripts/fixtures/release_impact_cases.json"
+    ))
+    .unwrap();
+    bodies.extend(
+        shared["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|case| case["body"].as_str().unwrap().to_string()),
+    );
     let ci = ci_readings(&bodies);
     let python = release_py_readings(&bodies);
     let accepted = ci.iter().filter(|reading| reading.valid).count();
@@ -316,7 +336,7 @@ fn release_py_and_codeflow_ci_agree_on_a_generated_corpus() {
         accepted * 20 >= CORPUS_SIZE && accepted * 20 <= CORPUS_SIZE * 19,
         "the corpus mixes valid and invalid bodies: {accepted} valid"
     );
-    let disagreeing: Vec<usize> = (0..CORPUS_SIZE)
+    let disagreeing: Vec<usize> = (0..bodies.len())
         .filter(|index| ci[*index] != python[*index])
         .collect();
     eprintln!("{CORPUS_SIZE} bodies (seed {CORPUS_SEED:#x}): {accepted} valid");
@@ -326,8 +346,9 @@ fn release_py_and_codeflow_ci_agree_on_a_generated_corpus() {
     let shown: Vec<usize> = disagreeing.iter().copied().take(12).collect();
     let minimized = minimize(shown.iter().map(|index| bodies[*index].clone()).collect());
     let mut report = format!(
-        "{} of {CORPUS_SIZE} bodies (seed {CORPUS_SEED:#x}) are judged differently; first {} minimized:\n",
+        "{} of {} bodies (seed {CORPUS_SEED:#x} and the shared cases) are judged differently; first {} minimized:\n",
         disagreeing.len(),
+        bodies.len(),
         shown.len()
     );
     let (ci, python) = (ci_readings(&minimized), release_py_readings(&minimized));

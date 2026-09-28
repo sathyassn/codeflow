@@ -235,6 +235,31 @@
       "name": "valid_breaking_migration_with_linked_steps",
       "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Adds a function preserving all callers.\nMigration: follow [the upgrade steps](https://example.test)\nEvidence: cargo test passed.\n",
       "valid": true
+    },
+    {
+      "name": "invalid_breaking_change_section_is_the_steps_alternative",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Remove the old command.\nMigration: see Breaking change\nEvidence: cargo test passed.\n\n## Breaking change\n\nsteps\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_breaking_change_section_refers_to_itself",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Remove the old command.\nMigration: see Breaking change\nEvidence: cargo test passed.\n\n## Breaking change\n\nsee Breaking change\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_breaking_change_section_keeps_the_template_alternatives",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Remove the old command.\nMigration: see Breaking change\nEvidence: cargo test passed.\n\n## Breaking change\n\nnone, steps, or see breaking change\n",
+      "valid": false
+    },
+    {
+      "name": "valid_breaking_change_section_gives_steps",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Remove the old command.\nMigration: see Breaking change\nEvidence: cargo test passed.\n\n## Breaking change\n\nRename old to new.\n",
+      "valid": true
+    },
+    {
+      "name": "invalid_breaking_key_spelled_with_a_kelvin_sign",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nBreaKing: no\nRationale: Remove the old command.\nMigration: none\nEvidence: cargo test passed.\n",
+      "valid": false
     }
   ]
 }

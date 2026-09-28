@@ -1460,20 +1460,78 @@ class PrBodyReaderTests(unittest.TestCase):
     def test_the_named_binary_wins_over_the_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             other = self.stub(Path(temp), "other", "exit 3")
-            self.assertEqual(release.codeflow_bin(argparse.Namespace(codeflow_bin=str(other))), other)
-            self.assertEqual(release.codeflow_bin(argparse.Namespace(codeflow_bin=None)), CODEFLOW)
+            self.assertEqual(
+                release.codeflow_bin(argparse.Namespace(codeflow_bin=str(other))), other.resolve()
+            )
+            self.assertEqual(release.codeflow_bin(argparse.Namespace(codeflow_bin=None)), CODEFLOW.resolve())
 
     def test_a_binary_that_cannot_read_bodies_fails_by_name(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             old = self.stub(Path(temp), "codeflow", "echo 'unexpected argument' >&2; exit 2")
             with self.assertRaisesRegex(release.ReleaseError, f"{re.escape(str(old))} ci --read-release-impact failed"):
                 release.parse_release_impact(filled_template("minor", "no", "none"), old)
-            short = self.stub(Path(temp), "short", "cat >/dev/null; echo '[]'")
+            short = self.stub(Path(temp), "short", "cat >/dev/null; echo '{\"protocol\": 1, \"readings\": []}'")
             with self.assertRaisesRegex(release.ReleaseError, "unexpected reading"):
                 release.parse_release_impact(filled_template("minor", "no", "none"), short)
             missing = Path(temp) / "missing"
             with self.assertRaisesRegex(release.ReleaseError, "not an executable file"):
                 release.codeflow_bin(argparse.Namespace(codeflow_bin=str(missing)))
+
+    def reader(self, path: Path, marker: Path, protocol: object = None) -> Path:
+        """A stand-in reader that records it ran and answers every body."""
+        protocol = release.READER_PROTOCOL if protocol is None else protocol
+        reading = {"release_impact": [], "breaking_change": [], "findings": []}
+        path.write_text(
+            f"#!{sys.executable}\n"
+            "import json, sys\n"
+            f"open({str(marker)!r}, 'w').write('ran')\n"
+            "bodies = json.load(sys.stdin)\n"
+            f"print(json.dumps({{'protocol': {protocol!r}, 'readings': [{reading!r} for _ in bodies]}}))\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+        return path
+
+    def test_a_relative_reader_is_the_file_named_never_one_on_path(self) -> None:
+        # TSK-147 round 5 F7: `Path("./reader")` prints as `reader`, which
+        # a subprocess would look up on PATH.
+        with tempfile.TemporaryDirectory() as temp:
+            here, elsewhere = Path(temp) / "here", Path(temp) / "on-path"
+            here.mkdir()
+            elsewhere.mkdir()
+            local, path_hit = Path(temp) / "local-ran", Path(temp) / "path-ran"
+            self.reader(here / "reader", local)
+            self.reader(elsewhere / "reader", path_hit)
+            env = dict(os.environ, PATH=f"{elsewhere}{os.pathsep}{os.environ.get('PATH', '')}")
+            cases = [
+                ("--codeflow-bin ./reader", "./reader", None),
+                ("--codeflow-bin reader", "reader", None),
+                ("CODEFLOW_BIN=./reader", None, "./reader"),
+            ]
+            with contextlib.chdir(here), mock.patch.dict(os.environ, env, clear=True):
+                for label, argument, variable in cases:
+                    with self.subTest(label):
+                        local.unlink(missing_ok=True)
+                        path_hit.unlink(missing_ok=True)
+                        if variable:
+                            os.environ[release.CODEFLOW_BIN] = variable
+                        binary = release.codeflow_bin(argparse.Namespace(codeflow_bin=argument))
+                        self.assertTrue(binary.is_absolute(), binary)
+                        release.read_pr_bodies(["## Release impact\n"], binary)
+                        self.assertTrue(local.exists(), label)
+                        self.assertFalse(path_hit.exists(), label)
+
+    def test_a_reader_of_another_protocol_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / "ran"
+            for protocol in [release.READER_PROTOCOL + 1, "1", 0]:
+                with self.subTest(protocol=protocol):
+                    other = self.reader(Path(temp) / "reader", marker, protocol)
+                    with self.assertRaisesRegex(release.ReleaseError, "reader protocol"):
+                        release.read_pr_bodies(["## Release impact\n"], other)
+            bare = self.stub(Path(temp), "bare", "cat >/dev/null; echo '[{\"release_impact\": null, \"breaking_change\": [], \"findings\": []}]'")
+            with self.assertRaisesRegex(release.ReleaseError, "reader protocol"):
+                release.read_pr_bodies(["x"], bare)
 
     def test_release_py_and_codeflow_ci_agree_on_every_shared_case(self) -> None:
         cases = json.loads(IMPACT_CASES.read_text(encoding="utf-8"))["cases"]

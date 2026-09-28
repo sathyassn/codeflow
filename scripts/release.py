@@ -103,9 +103,15 @@ def is_placeholder(value: str) -> bool:
     return not substantive_text(value, [])
 
 
+# ASCII-only lower case, as `codeflow ci` compares: a Unicode case fold
+# would read `\u212a` (Kelvin) as `k`.
+ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
 def guidance_text(value: str) -> str:
-    """Casefolded text with Markdown quoting and repeated whitespace removed."""
-    return " ".join(re.sub(r"[`\"']", "", value).split()).casefold()
+    """Text lower-cased in ASCII, with Markdown quoting and repeated
+    whitespace removed, as `codeflow ci` compares guidance."""
+    return " ".join(re.sub(r"[`\"']", "", value).split()).translate(ASCII_LOWER)
 
 
 def is_unresolved_alternative(value: str) -> bool:
@@ -146,6 +152,10 @@ RELEASE_FIELDS = {
 # hook, CI the one it built from this tree. release.py never searches PATH,
 # where an older codeflow could read differently from the enforcer.
 CODEFLOW_BIN = "CODEFLOW_BIN"
+# The reader's JSON contract (`crates/codeflow-cli/src/cmd/ci.rs`,
+# READ_PROTOCOL). A binary answering another version reads with other
+# semantics, so it is refused rather than trusted by shape.
+READER_PROTOCOL = 1
 
 
 def codeflow_bin(args: argparse.Namespace | None = None) -> Path:
@@ -158,7 +168,10 @@ def codeflow_bin(args: argparse.Namespace | None = None) -> Path:
     path = Path(named)
     if not path.is_file() or not os.access(path, os.X_OK):
         fail(f"the codeflow binary {path} is not an executable file")
-    return path
+    # Absolute, so the file just checked is the one that runs: a relative
+    # name such as `./codeflow` prints as `codeflow`, which a subprocess
+    # would look up on PATH (TSK-147 round 5 F7).
+    return path.resolve()
 
 
 def read_pr_bodies(bodies: list[str], binary: Path | None = None) -> list[dict[str, Any]]:
@@ -181,13 +194,22 @@ def read_pr_bodies(bodies: list[str], binary: Path | None = None) -> list[dict[s
             f"{done.stderr.strip() or done.stdout.strip()}; a codeflow built from this tree reads PR bodies"
         )
     try:
-        readings = json.loads(done.stdout)
+        answer = json.loads(done.stdout)
     except json.JSONDecodeError as error:
         fail(f"{binary} ci --read-release-impact printed no JSON: {error}")
+    protocol = answer.get("protocol") if isinstance(answer, dict) else None
+    if type(protocol) is not int or protocol != READER_PROTOCOL:
+        fail(
+            f"{binary} answers reader protocol {protocol!r}; this release.py reads protocol "
+            f"{READER_PROTOCOL}: use a codeflow built from this tree"
+        )
+    readings = answer.get("readings")
     if not isinstance(readings, list) or len(readings) != len(bodies) or not all(
         isinstance(reading, dict)
         and (reading.get("release_impact") is None or isinstance(reading["release_impact"], list))
         and isinstance(reading.get("breaking_change"), list)
+        and isinstance(reading.get("findings"), list)
+        and all(isinstance(finding, str) for finding in reading["findings"])
         for reading in readings
     ):
         fail(f"{binary} ci --read-release-impact printed an unexpected reading")
@@ -198,7 +220,9 @@ def release_impact_fields(reading: dict[str, Any]) -> list[tuple[str, str]] | No
     pairs = reading["release_impact"]
     if pairs is None:
         return None
-    return [(str(key).casefold().replace(" ", "_"), str(value)) for key, value in pairs]
+    # Keys as the reader gives them, lower-cased in ASCII only: a key that
+    # `codeflow ci` does not read as a field is not one here either.
+    return [(str(key), str(value)) for key, value in pairs]
 
 
 def parse_release_impact(
@@ -208,6 +232,7 @@ def parse_release_impact(
     pairs = release_impact_fields(reading)
     if pairs is None:
         fail("PR body must contain exactly one '## Release impact' section")
+    declared = {key for key, _ in pairs}
     fields: dict[str, str] = {}
     for key, value in pairs:
         if key in fields:
@@ -217,7 +242,7 @@ def parse_release_impact(
         fields[key] = value
     for key in ["impact", "breaking"]:
         if key in fields:
-            fields[key] = fields[key].casefold()
+            fields[key] = fields[key].translate(ASCII_LOWER)
     for key in ["unit", "impact", "rationale", "evidence"]:
         if key not in fields or (
             key in {"rationale", "evidence"} and is_placeholder(fields[key])
@@ -247,6 +272,12 @@ def parse_release_impact(
         fail("breaking must be yes if and only if impact is major")
     if fields["breaking"] == "yes" and fields[MIGRATION_GUIDANCE] != "yes":
         fail("a breaking change requires migration guidance")
+    # The rules `codeflow ci` applies are this check's too, whatever this
+    # file adds (TSK-147 round 5): a finding it reports rejects the block.
+    # A legacy block that states only Contract is the one exception; its
+    # transition rules are this file's alone.
+    if "breaking" in declared and reading["findings"]:
+        fail("codeflow ci rejects the Release impact block: " + "; ".join(reading["findings"]))
     return fields
 
 
@@ -258,7 +289,7 @@ MIGRATION_GUIDANCE = "_migration_guidance"
 def migration_guidance(reading: dict[str, Any], migration: str) -> bool:
     if guidance_text(migration) == "see breaking change":
         sections = reading["breaking_change"]
-        return len(sections) == 1 and substantive_text(sections[0], [])
+        return len(sections) == 1 and not lacks_migration_guidance(sections[0])
     return not lacks_migration_guidance(migration)
 
 
