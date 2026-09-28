@@ -878,6 +878,61 @@ pub const PACKAGE_RUNNER_PAIRS: &[(&str, &str)] = &[
         "claude -p -- --help",
         "yarn dlx @anthropic-ai/claude-code -p -- --help",
     ),
+    // Round 2 (Codex F7): a runner option that takes a value, the inline
+    // call form, `npm exec`, `npm x`, `bun x`, a local binary through
+    // `pnpm exec`, and an option the runner grammar does not know.
+    ("codex exec x", "npx --cache /tmp @openai/codex exec x"),
+    ("codex exec x", "npx --workspace app @openai/codex exec x"),
+    (
+        "codex exec x",
+        "npx --package=@openai/codex --call='codex exec x'",
+    ),
+    ("codex exec x", "npx -c='codex exec x'"),
+    ("codex exec x", "npm exec -- @openai/codex exec x"),
+    ("codex exec x", "npm x -- @openai/codex exec x"),
+    (
+        "codex exec x",
+        "npm exec --package=@openai/codex -- codex exec x",
+    ),
+    (
+        "codex exec x",
+        "npm exec --package=@openai/codex -c 'codex exec x'",
+    ),
+    (
+        "codex exec x",
+        "npm x --package=@openai/codex -c 'codex exec x'",
+    ),
+    ("codex exec x", "npm --prefix app exec @openai/codex exec x"),
+    ("codex exec x", "bun x @openai/codex exec x"),
+    ("codex exec x", "bun x @openai/codex@0.157.1 exec x"),
+    ("codex exec x", "bun x --package @openai/codex codex exec x"),
+    ("codex exec x", "pnpm exec codex exec x"),
+    ("codex exec x", "yarn codex exec x"),
+    (
+        "codex exec x",
+        "npx --unknown-option value @openai/codex exec x",
+    ),
+    // The runner's own help or version exits before any package runs.
+    ("codex --help exec x", "npx --help @openai/codex exec x"),
+    ("codex --help exec x", "npx --version @openai/codex exec x"),
+    ("codex --help exec x", "bunx --help @openai/codex exec x"),
+    (
+        "codex --help exec x",
+        "pnpm --help dlx @openai/codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "pnpm --version dlx @openai/codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "yarn --help dlx @openai/codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "npm exec --help @openai/codex exec x",
+    ),
+    ("codex --help exec x", "npx prettier codex exec x"),
 ];
 
 /// The control structures and sequences a form is nested in: each `{}` is

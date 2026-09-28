@@ -160,54 +160,204 @@ fn classify(argv: &[String], depth: usize) -> Found {
             ),
             "find" => return find_exec(rest, depth),
             // A package runner starts the package's binary (TSK-141 AC-6).
-            "npx" | "bunx" => return package_run(rest, depth),
-            "pnpm" | "yarn" => {
-                let after = skip_options(rest, &["-C", "--dir", "--cwd", "-F", "--filter"]);
-                return match after.split_first() {
-                    Some((sub, tail)) if sub == "dlx" => package_run(tail, depth),
-                    _ => Found::Nothing,
-                };
-            }
+            "npx" | "bunx" | "pnpx" => return package_run(rest, depth),
+            "npm" | "pnpm" | "yarn" | "bun" => return runner(&name, rest, depth),
             _ => return Found::Nothing,
         };
     }
     Found::Unresolved
 }
 
-/// A package runner's command (`npx`, `bunx`, `pnpm dlx`, `yarn dlx`):
-/// after its options, the package's binary, or with `--package` the
-/// command named after it; `-c` runs a shell string.
+/// Options package runners take without a value.
+const RUNNER_FLAGS: &[&str] = &[
+    "-y",
+    "--yes",
+    "--no",
+    "-q",
+    "--quiet",
+    "-s",
+    "--silent",
+    "--bun",
+    "--ignore-existing",
+    "--prefer-offline",
+    "--prefer-online",
+    "--offline",
+    "--no-install",
+    "--workspaces",
+    "--ws",
+    "--include-workspace-root",
+    "--legacy-peer-deps",
+    "--foreground-scripts",
+    "--verbose",
+    "--stream",
+];
+
+/// Options package runners take with a value in the next word.
+const RUNNER_VALUES: &[&str] = &[
+    "--cache",
+    "--cache-folder",
+    "--workspace",
+    "--prefix",
+    "--userconfig",
+    "--globalconfig",
+    "--registry",
+    "--node-options",
+    "--script-shell",
+    "--loglevel",
+    "--cwd",
+    "--dir",
+    "-C",
+    "--filter",
+    "-F",
+    "--reporter",
+];
+
+/// The runner's own help or version: it prints and exits.
+fn runner_exits(arg: &str) -> bool {
+    matches!(arg, "-h" | "--help" | "-v" | "--version")
+}
+
+/// Where the first word after a runner's options may be. An option the
+/// grammar does not know may or may not take the next word, so both are
+/// kept; a help or version option ends the run.
+fn after_runner_options(args: &[String]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut stack = vec![0];
+    let mut steps = 0;
+    while let Some(at) = stack.pop() {
+        steps += 1;
+        if steps > 64 {
+            break;
+        }
+        match args.get(at) {
+            None => {}
+            Some(arg) if arg == "--" => out.push(at + 1),
+            Some(arg) if !arg.starts_with('-') || arg == "-" => out.push(at),
+            Some(arg) if runner_exits(arg) => {}
+            Some(arg) if arg.contains('=') || RUNNER_FLAGS.contains(&arg.as_str()) => {
+                stack.push(at + 1);
+            }
+            Some(arg) if RUNNER_VALUES.contains(&arg.as_str()) => stack.push(at + 2),
+            Some(_) => {
+                stack.push(at + 1);
+                stack.push(at + 2);
+            }
+        }
+    }
+    out
+}
+
+/// `npm`, `pnpm`, `yarn` or `bun` with a subcommand that runs a package or
+/// a local binary: `npm exec`/`npm x`, `pnpm dlx`/`yarn dlx`, `bun x`, and
+/// `pnpm exec`/`yarn exec` or `pnpm BIN`/`yarn BIN` for an installed peer.
+fn runner(name: &str, args: &[String], depth: usize) -> Found {
+    let mut found = Found::Nothing;
+    for at in after_runner_options(args) {
+        let Some((sub, tail)) = args.get(at..).and_then(<[String]>::split_first) else {
+            continue;
+        };
+        let next = match (name, sub.as_str()) {
+            ("npm", "exec" | "x") | ("pnpm" | "yarn", "dlx") | ("bun", "x") => {
+                package_run(tail, depth)
+            }
+            ("pnpm" | "yarn", "exec") => after_runner_options(tail)
+                .into_iter()
+                .map(|start| classify(tail.get(start..).unwrap_or_default(), depth + 1))
+                .fold(Found::Nothing, strongest),
+            ("pnpm" | "yarn", "claude" | "codex" | "grok") => classify(&args[at..], depth + 1),
+            _ => Found::Nothing,
+        };
+        found = strongest(found, next);
+        if matches!(found, Found::Run(_)) {
+            break;
+        }
+    }
+    found
+}
+
+/// A run over an unresolved command over nothing.
+fn strongest(a: Found, b: Found) -> Found {
+    match (a, b) {
+        (Found::Run(run), _) | (_, Found::Run(run)) => Found::Run(run),
+        (Found::Unresolved, _) | (_, Found::Unresolved) => Found::Unresolved,
+        _ => Found::Nothing,
+    }
+}
+
+/// A package runner's command (`npx`, `bunx`, `npm exec`, `pnpm dlx`,
+/// `yarn dlx`, `bun x`): after its options, the package's binary, or with
+/// `--package` the command named after it; `-c` or `--call` runs a shell
+/// string. An option the grammar does not know is read both with and
+/// without a value, and the runner's help or version runs nothing.
 fn package_run(args: &[String], depth: usize) -> Found {
     if depth > 4 {
         return Found::Unresolved;
     }
-    let mut at = 0;
-    let mut package_given = false;
-    while let Some(arg) = args.get(at) {
-        if arg == "--" {
-            at += 1;
-            break;
+    let call = |script: &str| find(script, depth + 1).map_or(Found::Nothing, Found::Run);
+    let mut found = Found::Nothing;
+    let mut stack = vec![(0usize, false)];
+    let mut steps = 0;
+    while let Some((at, package_given)) = stack.pop() {
+        steps += 1;
+        if steps > 64 {
+            return strongest(found, Found::Unresolved);
         }
-        if !arg.starts_with('-') {
-            break;
-        }
-        match arg.as_str() {
-            "-p" | "--package" => {
-                package_given = true;
-                at += 2;
+        let Some(arg) = args.get(at) else {
+            continue;
+        };
+        let next = if arg == "--" {
+            launch(args, at + 1, package_given, depth)
+        } else if !arg.starts_with('-') || arg == "-" {
+            launch(args, at, package_given, depth)
+        } else if let Some((option, value)) = arg.split_once('=') {
+            match option {
+                "-c" | "--call" => call(value),
+                "-p" | "--package" => {
+                    stack.push((at + 1, true));
+                    continue;
+                }
+                _ => {
+                    stack.push((at + 1, package_given));
+                    continue;
+                }
             }
-            "-c" | "--call" => {
-                return match args.get(at + 1) {
-                    Some(script) => find(script, depth + 1).map_or(Found::Nothing, Found::Run),
-                    None => Found::Nothing,
-                };
+        } else {
+            match arg.as_str() {
+                "-c" | "--call" => match args.get(at + 1) {
+                    Some(script) => call(script),
+                    None => continue,
+                },
+                "-p" | "--package" => {
+                    stack.push((at + 2, true));
+                    continue;
+                }
+                flag if runner_exits(flag) => continue,
+                flag if RUNNER_FLAGS.contains(&flag) => {
+                    stack.push((at + 1, package_given));
+                    continue;
+                }
+                option if RUNNER_VALUES.contains(&option) => {
+                    stack.push((at + 2, package_given));
+                    continue;
+                }
+                _ => {
+                    stack.push((at + 1, package_given));
+                    stack.push((at + 2, package_given));
+                    continue;
+                }
             }
-            _ => {
-                package_given |= arg.starts_with("--package=");
-                at += 1;
-            }
+        };
+        found = strongest(found, next);
+        if matches!(found, Found::Run(_)) {
+            return found;
         }
     }
+    found
+}
+
+/// The package (or, with `--package`, the command) at `args[at]`, run with
+/// the words after it.
+fn launch(args: &[String], at: usize, package_given: bool, depth: usize) -> Found {
     let Some((spec, rest)) = args.get(at..).and_then(<[String]>::split_first) else {
         return Found::Nothing;
     };
