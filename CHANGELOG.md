@@ -621,12 +621,16 @@ publication date._
   whose consumers are all accepted, its healthy derived `implemented` state,
   and prints no note for a layer the project's tier does not install.
   `doctor` reads Codex hook trust from `~/.codex/config.toml` (or
-  `$CODEX_HOME`) and Grok folder trust from `~/.grok/trusted_folders.toml`,
-  so each passes once trusted; where the state cannot be read it prints a
-  note naming the manual step and saying doctor cannot verify it. A commit on
-  a `git.breaking_watch_paths` surface now prints a note, not a warning,
-  pointing at the pull request's Release impact, and `codeflow ci` given a
-  body that states `Breaking: no` with a `Rationale` reports nothing for it.
+  `$CODEX_HOME`) and Grok folder trust from `~/.grok/trusted_folders.toml`
+  (or `$GROK_HOME`) with each harness's own rules: a Codex hook counts only
+  when its record is valid, its hash matches and it is enabled, and Grok's
+  gate follows `GROK_FOLDER_TRUST`, then its config files. A record the
+  harness would reject is not trust; a Grok store it cannot read is a
+  warning, and where the state cannot be read at all doctor prints a note
+  saying it cannot verify it. A commit on a `git.breaking_watch_paths`
+  surface now prints a note, not a warning, pointing at the pull request's
+  Release impact, and `codeflow ci` given a body that states `Breaking: no`
+  with a `Rationale`, outside code and quotes, reports nothing for it.
 
 <!-- codeflow:release-impact minor -->
 - **One full gate at a time, running the suite once.** Public behaviour
