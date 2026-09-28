@@ -182,6 +182,26 @@ mod tests {
         assert!(evaluate("codex --version", &block).is_empty());
     }
 
+    /// A help or version invocation raises nothing at `warn` or `block`; the
+    /// same tokens given as data still raise the headless rule (TSK-141 AC-3).
+    #[test]
+    fn a_help_invocation_passes_and_its_data_twin_is_reported_at_every_level() {
+        for level in [PolicyLevel::Warn, PolicyLevel::Block] {
+            let section = SecuritySection {
+                headless_peer_runs: level,
+                ..SecuritySection::default()
+            };
+            for (help, twin) in crate::security::headless::HELP_PAIRS {
+                assert!(evaluate(help, &section).is_empty(), "{level:?}: {help}");
+                let v = evaluate(twin, &section);
+                assert_eq!(v.len(), 1, "{level:?}: {twin}");
+                assert_eq!(v[0].rule, "security.headless_peer_runs", "{twin}");
+                assert_eq!(v[0].level, level, "{twin}");
+                assert_eq!(any_blocking(&v), level == PolicyLevel::Block, "{twin}");
+            }
+        }
+    }
+
     #[test]
     fn test_default_levels_are_block_and_warn() {
         let s = SecuritySection::default();

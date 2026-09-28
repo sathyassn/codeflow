@@ -19,7 +19,10 @@
 //! wrappers are unwrapped (`nice`, `timeout`, `nohup`, `sudo`, `xargs`,
 //! `find -exec`, a nested shell `-c`, `grok wrap`, …), and the peer's own
 //! arguments are parsed by role: an option's value and anything after `--`
-//! are never read as the headless flag. A line whose commands cannot be
+//! are never read as the headless flag. A help or version flag in an option
+//! position (`claude --help -p`, `codex exec --help`) is no run, since the
+//! CLI prints and exits (TSK-141); the same word as a value, a prompt or
+//! after `--` is data. A line whose commands cannot be
 //! resolved (a here-string, a substitution or variable as the program, an
 //! alias, a shell reading its script from stdin) is judged on its raw text:
 //! a peer name followed by one of its headless markers is flagged. That can
@@ -249,8 +252,13 @@ fn shell_command_string(args: &[String]) -> Option<&str> {
 /// How a peer CLI reads its arguments, from its `--help`.
 struct Cli {
     peer: &'static str,
-    /// Boolean short flags that mean a headless run.
+    /// Short flags that mean a headless run.
     headless_short: &'static str,
+    /// Whether the headless short flag takes a value (`grok -p <PROMPT>`).
+    headless_short_value: bool,
+    /// Short flags that print help or the version and exit, as
+    /// `--help` and `--version` do.
+    help_short: &'static str,
     /// Long flags (boolean or taking a value) that mean a headless run, with
     /// the form reported.
     headless_long: &'static [(&'static str, &'static str)],
@@ -275,6 +283,8 @@ struct Cli {
 const CLAUDE: Cli = Cli {
     peer: "claude",
     headless_short: "p",
+    headless_short_value: false,
+    help_short: "hv",
     headless_long: &[("--print", "claude -p")],
     short_value: "n",
     short_optional: "drw",
@@ -357,8 +367,10 @@ const CLAUDE: Cli = Cli {
 const CODEX: Cli = Cli {
     peer: "codex",
     headless_short: "",
+    headless_short_value: false,
+    help_short: "hV",
     headless_long: &[],
-    short_value: "cimpsCa",
+    short_value: "cimpsCao",
     short_optional: "",
     long_value: &[
         "--config",
@@ -374,6 +386,14 @@ const CODEX: Cli = Cli {
         "--cd",
         "--add-dir",
         "--ask-for-approval",
+        // `codex exec` and `codex review` options.
+        "--output-schema",
+        "--color",
+        "--output-last-message",
+        "--thread-source",
+        "--base",
+        "--commit",
+        "--title",
     ],
     long_optional: &[],
     long_variadic: &[],
@@ -416,6 +436,8 @@ const CODEX: Cli = Cli {
 const GROK: Cli = Cli {
     peer: "grok",
     headless_short: "p",
+    headless_short_value: true,
+    help_short: "hv",
     headless_long: &[
         ("--single", "grok -p"),
         ("--prompt-file", "grok --prompt-file"),
@@ -424,6 +446,9 @@ const GROK: Cli = Cli {
     short_value: "ms",
     short_optional: "rw",
     long_value: &[
+        "--single",
+        "--prompt-file",
+        "--prompt-json",
         "--agent",
         "--agents",
         "--allow",
@@ -483,55 +508,63 @@ const GROK: Cli = Cli {
     ],
 };
 
+/// Long flags that print help or the version and exit, in every peer CLI.
+const HELP_LONG: &[&str] = &["--help", "--version"];
+
+/// Judge a peer's arguments by role (TSK-136, TSK-141 AC-3). A headless
+/// flag or subcommand makes a run, unless the line also asks for help or
+/// the version in an option position: each CLI's parser (commander for
+/// Claude Code, clap for Codex and Grok) then prints and exits before any
+/// session starts. An option's value, anything after `--`, and a prompt are
+/// data, never help.
 fn peer_run(name: &str, args: &[String], depth: usize) -> Found {
     let cli = match name {
         "claude" => &CLAUDE,
         "codex" => &CODEX,
         _ => &GROK,
     };
-    let run = |form| {
-        Found::Run(HeadlessRun {
-            peer: cli.peer,
-            form,
-            parsed: true,
-        })
-    };
     let short_form = cli.headless_long.first().map_or("", |(_, form)| *form);
+    let mut headless: Option<&'static str> = None;
+    let mut help = false;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         at += 1;
         if arg == "--" {
-            return Found::Nothing; // the rest is positional
+            break; // the rest is positional
         }
-        if let Some(long) = arg.strip_prefix("--").map(|_| arg.as_str()) {
-            let (flag, inline) = long
+        if arg.starts_with("--") {
+            let (flag, inline) = arg
                 .split_once('=')
-                .map_or((long, None), |(flag, value)| (flag, Some(value)));
-            if let Some((_, form)) = cli.headless_long.iter().find(|(f, _)| *f == flag) {
-                return run(form);
-            }
-            if inline.is_some() {
+                .map_or((arg.as_str(), None), |(flag, value)| (flag, Some(value)));
+            if HELP_LONG.contains(&flag) && inline.is_none() {
+                help = true;
                 continue;
             }
-            if cli.long_value.contains(&flag) {
-                at += 1;
-            } else if cli.long_optional.contains(&flag) {
-                if args.get(at).is_some_and(|next| !next.starts_with('-')) {
-                    at += 1;
-                }
-            } else if cli.long_variadic.contains(&flag) {
-                while args.get(at).is_some_and(|next| !next.starts_with('-')) {
-                    at += 1;
-                }
+            if let Some((_, form)) = cli.headless_long.iter().find(|(f, _)| *f == flag) {
+                headless = headless.or(Some(form));
+            }
+            if inline.is_none() {
+                at = after_long_value(cli, flag, args, at);
             }
             continue;
         }
         if let Some(cluster) = arg.strip_prefix('-').filter(|c| !c.is_empty()) {
             for (index, flag) in cluster.char_indices() {
-                if cli.headless_short.contains(flag) {
-                    return run(short_form);
-                }
                 let rest = &cluster[index + flag.len_utf8()..];
+                if cli.help_short.contains(flag) {
+                    help = true;
+                    continue;
+                }
+                if cli.headless_short.contains(flag) {
+                    headless = headless.or(Some(short_form));
+                    if cli.headless_short_value {
+                        if rest.is_empty() {
+                            at += 1;
+                        }
+                        break;
+                    }
+                    continue;
+                }
                 if cli.short_value.contains(flag) {
                     if rest.is_empty() {
                         at += 1;
@@ -542,7 +575,7 @@ fn peer_run(name: &str, args: &[String], depth: usize) -> Found {
                     // An attached value could as well be more flags to
                     // another parser: judge it conservatively.
                     if rest.chars().any(|c| cli.headless_short.contains(c)) {
-                        return run(short_form);
+                        headless = headless.or(Some(short_form));
                     }
                     if rest.is_empty() && args.get(at).is_some_and(|n| !n.starts_with('-')) {
                         at += 1;
@@ -552,19 +585,52 @@ fn peer_run(name: &str, args: &[String], depth: usize) -> Found {
             }
             continue;
         }
-        // A positional: a subcommand, or the prompt.
+        // A positional: a subcommand, or the prompt. Options after it are
+        // still parsed, so a later `--help` still prints help.
         let word = arg.as_str();
+        if headless.is_some() {
+            continue;
+        }
         if let Some((_, form)) = cli.headless_subcommands.iter().find(|(s, _)| *s == word) {
-            return run(form);
+            headless = Some(form);
+            continue;
         }
         if cli.wrap_subcommands.contains(&word) {
-            return classify(&args[at..], depth);
+            return if help {
+                Found::Nothing
+            } else {
+                classify(&args[at..], depth)
+            };
         }
         if cli.subcommands.contains(&word) {
             return Found::Nothing;
         }
     }
-    Found::Nothing
+    match headless {
+        Some(form) if !help => Found::Run(HeadlessRun {
+            peer: cli.peer,
+            form,
+            parsed: true,
+        }),
+        _ => Found::Nothing,
+    }
+}
+
+/// Where the arguments resume after long option `flag`, whose value (if it
+/// takes one) starts at `at`.
+fn after_long_value(cli: &Cli, flag: &str, args: &[String], mut at: usize) -> usize {
+    if cli.long_value.contains(&flag) {
+        at += 1;
+    } else if cli.long_optional.contains(&flag) {
+        if args.get(at).is_some_and(|next| !next.starts_with('-')) {
+            at += 1;
+        }
+    } else if cli.long_variadic.contains(&flag) {
+        while args.get(at).is_some_and(|next| !next.starts_with('-')) {
+            at += 1;
+        }
+    }
+    at
 }
 
 /// The raw-text judgement for a line that could not be resolved: a peer
@@ -622,6 +688,47 @@ fn is_assignment(token: &str) -> bool {
     })
 }
 
+/// Each help or version invocation beside the same tokens given as a
+/// prompt, after `--`, or as an option's value (TSK-141 AC-3, seeded
+/// from the plan review's `followups-help-probe.log`).
+#[cfg(test)]
+pub(crate) const HELP_PAIRS: &[(&str, &str)] = &[
+    ("claude --help -p", "claude -p -- --help"),
+    ("claude -p --help", "claude -p -- help"),
+    ("claude -p hi --help", "claude -p hi"),
+    ("claude -h -p", "claude -p -- -h"),
+    ("claude -ph", "claude --model help -p x"),
+    (
+        "claude --version --print",
+        "claude --print --name version x",
+    ),
+    ("claude -v -p", "claude -p x -- -v"),
+    ("codex exec --help", "codex exec -- --help"),
+    ("codex exec -h", "codex exec -m help x"),
+    ("codex exec --version", "codex exec --color help x"),
+    ("codex exec -V", "codex exec -- -V"),
+    ("codex --help exec x", "codex -m help exec x"),
+    ("codex exec x --help", "codex exec x"),
+    ("codex review --help", "codex review --title help"),
+    ("codex e -h", "codex e -o help x"),
+    ("grok --help -p x", "grok -p help"),
+    ("grok -h --single x", "grok --single help"),
+    ("grok --version agent", "grok agent -- --version"),
+    ("grok -v -p x", "grok -m help -p x"),
+    (
+        "grok wrap claude --help -p",
+        "grok wrap claude -p -- --help",
+    ),
+    (
+        "timeout 5 codex exec --help",
+        "timeout 5 codex exec -- --help",
+    ),
+    (
+        "codex exec --help; echo done",
+        "codex exec --help; claude -p hi",
+    ),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,7 +780,6 @@ mod tests {
             "codex --model demo exec x",
             "codex --model=demo exec x",
             "codex -c model=\"demo\" exec x",
-            "claude --help -p",
             // Beyond the probes: further wrappers and documented forms.
             "! claude -p x",
             "sudo -u me claude --print x",
@@ -728,6 +834,14 @@ mod tests {
             "nice -n 5 cargo build",
         ] {
             assert_eq!(found(command), None, "{command}");
+        }
+    }
+
+    #[test]
+    fn a_help_or_version_invocation_is_not_a_run_and_its_data_twin_is() {
+        for (help, twin) in HELP_PAIRS {
+            assert_eq!(found(help), None, "{help}");
+            assert!(found(twin).is_some(), "{twin}");
         }
     }
 
