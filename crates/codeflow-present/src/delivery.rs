@@ -544,22 +544,23 @@ mod tests {
     }
 
     /// A review with no notes, on the current revision.
-    fn review(session: &FormsSession) -> Uuid {
+    fn try_review(session: &FormsSession) -> Result<Uuid> {
         let event_id = Uuid::new_v4();
-        session
-            .store
-            .append_feedback(FeedbackEnvelope {
-                event_id,
-                session_id: session.id,
-                revision: current_revision(session),
-                actor: "operator".to_string(),
-                verdict: FeedbackVerdict::Approve,
-                instruction: None,
-                notes: Vec::new(),
-                created_at_unix: 0,
-            })
-            .unwrap();
-        event_id
+        session.store.append_feedback(FeedbackEnvelope {
+            event_id,
+            session_id: session.id,
+            revision: current_revision(session),
+            actor: "operator".to_string(),
+            verdict: FeedbackVerdict::Approve,
+            instruction: None,
+            notes: Vec::new(),
+            created_at_unix: 0,
+        })?;
+        Ok(event_id)
+    }
+
+    fn review(session: &FormsSession) -> Uuid {
+        try_review(session).unwrap()
     }
 
     /// The valid submit fixture as a new request on the current revision.
@@ -581,12 +582,13 @@ mod tests {
         try_answer(session, None).unwrap().answer_id
     }
 
-    /// R120-1: an answer is admitted only with room for its delivered and
-    /// acknowledged lines under both bounds. A ledger at a bound still
-    /// delivers and acknowledges the answer it holds; a correction sent
-    /// while that answer is pending, delivered or acknowledged is refused
-    /// as the store at its capacity, and a review's acknowledgment cannot
-    /// take the room kept for the answer.
+    /// R120-1 and C120-2: an answer is admitted only with room for its
+    /// delivered and acknowledged lines under both bounds, and a review only
+    /// with room for its acknowledgment. At a bound, and with the bound kept,
+    /// the ledger still delivers and acknowledges the answer it holds and
+    /// acknowledges the delivered review; a correction sent while the answer
+    /// is pending, delivered or acknowledged, and a new review, are refused
+    /// as the store at its capacity. Neither kind takes the other's room.
     #[test]
     fn a_full_ledger_still_delivers_and_acknowledges_its_answers() {
         use crate::responses::{fault::lower_bounds, STATE_LINE_BYTES};
@@ -596,20 +598,27 @@ mod tests {
             let reviewed = review(&session);
             session.store.deliver(session.id, &[reviewed]).unwrap();
             let first = answer(&session);
+            // Full: the answer line, plus room for its two state lines and
+            // the review's acknowledgment.
             let line = session.ledger_bytes().unwrap().len() as u64;
             if bound == "lines" {
-                lower_bounds(Some(3), None);
+                lower_bounds(Some(4), None);
             } else {
-                lower_bounds(None, Some(line + 2 * STATE_LINE_BYTES));
+                lower_bounds(None, Some(line + 3 * STATE_LINE_BYTES));
             }
+            let full = |outcome: Result<()>, what: &str| match outcome {
+                Err(PresentError::ServiceUnavailable(message)) => {
+                    assert!(message.contains("room kept"), "{bound}, {what}: {message}");
+                }
+                other => panic!("{bound}, {what}: not refused: {other:?}"),
+            };
             let refused = |when: &str| {
                 let before = session.ledger_bytes();
-                match try_answer(&session, Some(first)) {
-                    Err(PresentError::ServiceUnavailable(message)) => {
-                        assert!(message.contains("room kept"), "{bound}, {when}: {message}");
-                    }
-                    other => panic!("{bound}, {when}: a correction was not refused: {other:?}"),
-                }
+                full(try_answer(&session, Some(first)).map(|_| ()), when);
+                full(
+                    try_review(&session).map(|_| ()),
+                    &format!("a review, {when}"),
+                );
                 assert_eq!(
                     session.ledger_bytes(),
                     before,
@@ -617,12 +626,6 @@ mod tests {
                 );
             };
             refused("pending");
-            match session.store.acknowledge(session.id, reviewed) {
-                Err(PresentError::ServiceUnavailable(message)) => {
-                    assert!(message.contains("room kept"), "{bound}: {message}");
-                }
-                other => panic!("{bound}: a review ack took the kept room: {other:?}"),
-            }
             session.store.deliver(session.id, &[first]).unwrap();
             refused("delivered");
             assert!(
@@ -630,15 +633,21 @@ mod tests {
                 "{bound}"
             );
             refused("acknowledged");
-            lower_bounds(None, None);
+            // The review's own room is still there after the answer's.
+            assert!(
+                session.store.acknowledge(session.id, reviewed).unwrap(),
+                "{bound}"
+            );
+            refused("the review acknowledged");
             assert_eq!(
                 statuses(&session.store, session.id),
                 vec![
-                    (reviewed, DeliveryStatus::Delivered),
+                    (reviewed, DeliveryStatus::Acknowledged),
                     (first, DeliveryStatus::Acknowledged)
                 ],
                 "{bound}"
             );
+            lower_bounds(None, None);
         }
     }
 

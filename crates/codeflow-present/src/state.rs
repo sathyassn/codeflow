@@ -1546,6 +1546,10 @@ impl SessionStore {
         validate_feedback(&envelope, &session, &revision.content)?;
         mark_unverified_crops(&mut envelope, &revision.content)?;
         envelope.created_at_unix = now_unix()?;
+        // The review keeps room for its acknowledgment in the answer ledger
+        // (C120-2): it is stored only when that room is free.
+        crate::responses::Ledger::open(self.responses_path(id)?, id)?
+            .admit_review(&crate::responses::reviews_of(&events))?;
         let ledger = FeedbackLedger::replay(&events)?;
         let sequence = ledger.next_sequence;
         let event = FeedbackEvent::Received { sequence, envelope };

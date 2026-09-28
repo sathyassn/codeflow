@@ -710,6 +710,14 @@ async fn submit_review(
             message,
             details,
         }) => typed_error(review_status(code), code, &message, &details),
+        // No room to acknowledge the review later: it is not stored, and
+        // sending it again with the same event id is safe.
+        Err(PresentError::ServiceUnavailable(reason)) => typed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            &format!("the review store is out of capacity: {reason}; the review was not stored, and sending it again is safe"),
+            &serde_json::json!({}),
+        ),
         Err(error) => plain(StatusCode::BAD_REQUEST, &error.to_string()),
     }
 }
@@ -2057,6 +2065,26 @@ mod tests {
             at_bound,
             "byte bound: the ledger changed"
         );
+        // A review keeps room for its acknowledgment too: at the bound it is
+        // refused as the store at its capacity, and nothing is stored.
+        let review = serde_json::from_value::<ReviewRequest>(serde_json::json!({
+            "event_id": Uuid::new_v4().to_string(),
+            "session_id": state.session_id.to_string(),
+            "revision": 1,
+            "verdict": "approve",
+            "notes": [],
+        }))
+        .unwrap();
+        let response = submit_review(State(state.clone()), headers.clone(), Json(review)).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["error"], "store_unavailable", "{body}");
+        assert!(state.store.events(state.session_id).unwrap().is_empty());
         assert_eq!(lines(&state), 3);
         lower_bounds(None, None);
     }

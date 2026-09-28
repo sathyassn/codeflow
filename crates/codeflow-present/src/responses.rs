@@ -152,6 +152,7 @@ impl AnswerReceipt {
 /// The ledger of one session, read under the caller's session lock.
 pub(crate) struct Ledger {
     path: PathBuf,
+    session_id: Uuid,
     pub(crate) events: Vec<ResponseEvent>,
     length: u64,
     /// Whether the file exists; a failed first append removes the file it
@@ -167,6 +168,7 @@ impl Ledger {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self {
                     path,
+                    session_id,
                     events: Vec::new(),
                     length: 0,
                     exists: false,
@@ -207,6 +209,7 @@ impl Ledger {
         validate_ledger(&path, &events, session_id)?;
         Ok(Self {
             path,
+            session_id,
             events,
             length: keep,
             exists: true,
@@ -227,36 +230,17 @@ impl Ledger {
             .map_err(|error| PresentError::io(&self.path, error))
     }
 
-    /// How many of the delivered and acknowledged lines an answer or
-    /// amendment will need are not written yet: two, one or none.
-    fn open_transitions(&self, answer_id: Uuid) -> usize {
-        let mut open = 0_usize;
-        for event in &self.events {
-            match event {
-                ResponseEvent::Answer(record) | ResponseEvent::Amendment(record)
-                    if record.answer_id == answer_id =>
-                {
-                    open = 2;
-                }
-                ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state)
-                    if state.target == answer_id =>
-                {
-                    open = open.saturating_sub(1);
-                }
-                _ => {}
-            }
-        }
-        open
-    }
-
-    /// The lines every stored answer still needs for its delivery and
-    /// acknowledgment, kept free under both ledger bounds.
-    fn reserved_lines(&self) -> usize {
-        let mut open = HashMap::new();
+    /// The state lines each stored event still needs and has not written:
+    /// an answer or amendment its delivered and acknowledged lines (two, one
+    /// or none), a review of `reviews` its acknowledged line (one or none; a
+    /// review's delivery is kept in `events.jsonl`). The ledger keeps this
+    /// room free under both bounds, so no stored event is stranded.
+    fn open_reservations(&self, reviews: &[Uuid]) -> HashMap<Uuid, usize> {
+        let mut open: HashMap<Uuid, usize> = reviews.iter().map(|review| (*review, 1)).collect();
         for event in &self.events {
             match event {
                 ResponseEvent::Answer(record) | ResponseEvent::Amendment(record) => {
-                    open.insert(record.answer_id, 2_usize);
+                    open.insert(record.answer_id, 2);
                 }
                 ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state) => {
                     if let Some(left) = open.get_mut(&state.target) {
@@ -265,7 +249,36 @@ impl Ledger {
                 }
             }
         }
-        open.values().sum()
+        open
+    }
+
+    /// Whether a line of `line_bytes` (none for `None`) fits with `kept`
+    /// state lines of room left free under both bounds.
+    fn fits(&self, line_bytes: Option<u64>, kept: usize) -> Result<()> {
+        let lines = self.events.len() + usize::from(line_bytes.is_some()) + kept;
+        let room = if kept > 0 { KEPT_ROOM } else { "" };
+        if lines > max_events() {
+            return Err(PresentError::ServiceUnavailable(format!(
+                "the answer ledger holds at most {} lines{room}",
+                max_events()
+            )));
+        }
+        if self.length + line_bytes.unwrap_or(0) + kept as u64 * STATE_LINE_BYTES > max_log_bytes()
+        {
+            return Err(PresentError::ServiceUnavailable(format!(
+                "the answer ledger reached its {} byte bound{room}",
+                max_log_bytes()
+            )));
+        }
+        Ok(())
+    }
+
+    /// A new review is admitted only when the room for its acknowledgment
+    /// is free besides the room every stored answer and review keeps. The
+    /// caller holds the session lock and passes the reviews already stored.
+    pub(crate) fn admit_review(&self, reviews: &[Uuid]) -> Result<()> {
+        let reserved: usize = self.open_reservations(reviews).values().sum();
+        self.fits(None, reserved + 1)
     }
 
     pub(crate) fn next_sequence(&self) -> u64 {
@@ -330,26 +343,23 @@ impl Ledger {
     /// replays a whole one, so a resend is always safe.
     ///
     /// Each stored answer keeps room for its delivered and acknowledged
-    /// lines: an answer or amendment is admitted only when those fit too,
-    /// and a line that draws on that room needs only the bounds themselves,
-    /// so capacity never strands an accepted answer (R120-1).
+    /// lines, and each stored review for its acknowledged line: an answer or
+    /// amendment is admitted only when its own room fits too, and a state
+    /// line that draws on its event's room needs only the bounds themselves,
+    /// so capacity never strands an accepted answer or review (R120-1,
+    /// C120-2). A review's room is kept when the review is stored.
     pub(crate) fn append(&mut self, store: &SessionStore, event: ResponseEvent) -> Result<()> {
+        let open = self.open_reservations(&review_ids(store, self.session_id)?);
+        let reserved: usize = open.values().sum();
         let kept = match &event {
-            ResponseEvent::Answer(_) | ResponseEvent::Amendment(_) => self.reserved_lines() + 2,
+            ResponseEvent::Answer(_) | ResponseEvent::Amendment(_) => reserved + 2,
             ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state)
-                if self.open_transitions(state.target) > 0 =>
+                if open.get(&state.target).copied().unwrap_or(0) > 0 =>
             {
                 0
             }
-            ResponseEvent::Delivered(_) | ResponseEvent::Acknowledged(_) => self.reserved_lines(),
+            ResponseEvent::Delivered(_) | ResponseEvent::Acknowledged(_) => reserved,
         };
-        if self.events.len() + 1 + kept > max_events() {
-            return Err(PresentError::ServiceUnavailable(format!(
-                "the answer ledger holds at most {} lines{}",
-                max_events(),
-                if kept > 0 { KEPT_ROOM } else { "" }
-            )));
-        }
         let mut line = serde_json::to_vec(&event)?;
         if line.len() as u64 > limits::MAX_RESPONSE_RECORD_BYTES {
             return Err(PresentError::InvalidDocument(format!(
@@ -358,14 +368,8 @@ impl Ledger {
             )));
         }
         line.push(b'\n');
+        self.fits(Some(line.len() as u64), kept)?;
         let grown = self.length + line.len() as u64;
-        if grown + kept as u64 * STATE_LINE_BYTES > max_log_bytes() {
-            return Err(PresentError::ServiceUnavailable(format!(
-                "the answer ledger reached its {} byte bound{}",
-                max_log_bytes(),
-                if kept > 0 { KEPT_ROOM } else { "" }
-            )));
-        }
         store.enforce_retention_unlocked()?;
         // A project bound too small for this line and the control reserve is
         // capacity too, whatever the shared check calls it.
@@ -393,12 +397,28 @@ impl Ledger {
 
 /// The most bytes a `delivered` or `acknowledged` line takes with its
 /// newline: its largest sequence and time come to 136. Each stored answer
-/// keeps this much room twice under the byte bound.
+/// keeps this much room twice under the byte bound, each review once.
 pub(crate) const STATE_LINE_BYTES: u64 = 136;
 
 /// Why a bound refuses a line while the ledger may still have room: that
 /// room is kept for the answers it already holds.
-const KEPT_ROOM: &str = ", with room kept to deliver and acknowledge each stored answer";
+const KEPT_ROOM: &str = ", with room kept to deliver and acknowledge each stored answer and review";
+
+/// The event ids of the session's reviews, read under the caller's lock.
+fn review_ids(store: &SessionStore, session_id: Uuid) -> Result<Vec<Uuid>> {
+    Ok(reviews_of(&store.read_events_unlocked(session_id)?))
+}
+
+/// The event ids of the reviews among `events.jsonl` events.
+pub(crate) fn reviews_of(events: &[crate::state::FeedbackEvent]) -> Vec<Uuid> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            crate::state::FeedbackEvent::Received { envelope, .. } => Some(envelope.event_id),
+            _ => None,
+        })
+        .collect()
+}
 
 /// The ledger's line bound. Only a test can lower it, on its own thread:
 /// the override lives in the test-only `fault` module.
