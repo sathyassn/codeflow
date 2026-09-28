@@ -457,6 +457,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/references/feedback-loop.md"
+dest = ".claude/skills/cf-present/references/feedback-loop.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/references/visual-craft.md"
 dest = ".claude/skills/cf-present/references/visual-craft.md"
 ownership = "managed"
@@ -1008,6 +1014,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-present/references/document-authoring.md"
 dest = ".agents/skills/cf-present/references/document-authoring.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/references/feedback-loop.md"
+dest = ".agents/skills/cf-present/references/feedback-loop.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

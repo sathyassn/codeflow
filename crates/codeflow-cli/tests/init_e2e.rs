@@ -13,6 +13,7 @@ use std::process::{Command, Output};
 const PRESENT_SKILL_FILES: &[&str] = &[
     "SKILL.md",
     "references/document-authoring.md",
+    "references/feedback-loop.md",
     "references/visual-craft.md",
     "resources/explanation-method.md",
     "resources/how-presentation-works.md",

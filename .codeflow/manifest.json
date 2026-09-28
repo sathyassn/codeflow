@@ -443,7 +443,7 @@
     ".agents/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "8bf9808046727027f8b89b30e46d8ee88b0f0384bafeada2bfd3dde123e49c01",
+      "sha256": "e3ebdaf58b0aafec93a8d9b617f6bb359f666c2b2e4b726e603987eba562210f",
       "exec": false
     },
     ".agents/skills/cf-present/agents/openai.yaml": {
@@ -476,10 +476,16 @@
       "sha256": "09a09ba1c99f2ddfa02914e322789f7cd2e567efcf8f8d1b2a61988abb9f1381",
       "exec": false
     },
+    ".agents/skills/cf-present/references/feedback-loop.md": {
+      "src": "agents/skills/cf-present/references/feedback-loop.md",
+      "ownership": "managed",
+      "sha256": "f3fac3fffd4ff200d10117de565e6f7b2b0d30b1978c83a66d211e29c35840e7",
+      "exec": false
+    },
     ".agents/skills/cf-present/references/visual-craft.md": {
       "src": "agents/skills/cf-present/references/visual-craft.md",
       "ownership": "managed",
-      "sha256": "abfa45dfdadda76273c54bf77d5db72c18f1599220a21161b0dfff1e1e2f9b3b",
+      "sha256": "4980a48eeaee6ea032208385b3196562d8e42ca3bf793c44968a81134c96195d",
       "exec": false
     },
     ".agents/skills/cf-present/resources/design-system/README.md": {
@@ -1049,7 +1055,7 @@
     ".claude/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "8bf9808046727027f8b89b30e46d8ee88b0f0384bafeada2bfd3dde123e49c01",
+      "sha256": "e3ebdaf58b0aafec93a8d9b617f6bb359f666c2b2e4b726e603987eba562210f",
       "exec": false
     },
     ".claude/skills/cf-present/agents/openai.yaml": {
@@ -1082,10 +1088,16 @@
       "sha256": "09a09ba1c99f2ddfa02914e322789f7cd2e567efcf8f8d1b2a61988abb9f1381",
       "exec": false
     },
+    ".claude/skills/cf-present/references/feedback-loop.md": {
+      "src": "agents/skills/cf-present/references/feedback-loop.md",
+      "ownership": "managed",
+      "sha256": "f3fac3fffd4ff200d10117de565e6f7b2b0d30b1978c83a66d211e29c35840e7",
+      "exec": false
+    },
     ".claude/skills/cf-present/references/visual-craft.md": {
       "src": "agents/skills/cf-present/references/visual-craft.md",
       "ownership": "managed",
-      "sha256": "abfa45dfdadda76273c54bf77d5db72c18f1599220a21161b0dfff1e1e2f9b3b",
+      "sha256": "4980a48eeaee6ea032208385b3196562d8e42ca3bf793c44968a81134c96195d",
       "exec": false
     },
     ".claude/skills/cf-present/resources/design-system/README.md": {
