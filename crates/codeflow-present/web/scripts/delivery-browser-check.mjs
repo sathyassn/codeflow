@@ -8,6 +8,8 @@
 //   `present ack` makes it "Acknowledged by agent", a separate state;
 // - a wait already running is woken by an answer the page sends;
 // - a reload after each of those states shows the same state and words;
+// - a second tab loaded before the first answer cannot store a second
+//   original answer: it is refused (answer_exists) and shows the stored one;
 // - the rail shows a review's delivery and its acknowledgment apart;
 // - after the service is killed and restarted, a pending answer is
 //   delivered once and a later wait finds nothing.
@@ -157,7 +159,12 @@ try {
     passed.push("reload: after each of stored, delivered and acknowledged, a reload shows the same state and words");
   }
 
-  // A wait already running is woken by an answer sent from the page.
+  // A wait already running is woken by an answer sent from the page. A
+  // second tab loaded before that answer is checked after it.
+  const other = await context.newPage();
+  other.on("pageerror", (error) => errors.push(error.message));
+  await other.goto(page.url(), { waitUntil: "domcontentloaded" });
+  await other.locator("#cf-comment-toggle").waitFor({ state: "visible" });
   {
     const waiting = start(["present", "feedback", sessionId, "--wait", "--timeout", "30", "--format", "v2"]);
     await delay(1_000);
@@ -173,6 +180,31 @@ try {
     assert.equal(delivered.says, "Delivered to agent");
     assert.equal((await stateOf(form)).state, "acknowledged", "running wait: the other form changed");
     passed.push("running wait: an answer sent from the page wakes the wait, which prints it, and the form shows the delivery");
+  }
+
+  // The second tab still shows the question unanswered. Its answer is a
+  // second original answer: refused, nothing stored, and the tab shows the
+  // stored answer with its state and offers a correction (SPC-014 B6).
+  {
+    const late = other.locator("article[data-cf-form='d-scope']");
+    assert.equal(await late.getAttribute("data-cf-form-state"), "editing", "second tab: the form was not open");
+    const before = lines(run(["present", "responses", "list", sessionId, "--form", "d-scope"]));
+    await late.locator("input[value='b']").check();
+    const refusal = other.waitForResponse((response) => new URL(response.url()).pathname === "/app/api/answers");
+    await late.locator("[data-cf-form-action='submit']").click();
+    const response = await refusal;
+    assert.equal(response.status(), 409);
+    const body = await response.json();
+    assert.equal(body.error, "answer_exists");
+    assert.deepEqual(body.details, { answer_id: before[0].event_id, state: "delivered" });
+    await other.waitForFunction(() => document.querySelector("article[data-cf-form='d-scope']")?.getAttribute("data-cf-form-state") === "delivered", null, { timeout: 20_000 });
+    const says = (await late.locator("[data-cf-form-state]").innerText()).trim();
+    assert.equal(says, "Delivered to agent. This question was answered on another page; your draft was not sent.");
+    assert.ok(await late.locator("[data-cf-form-action='amend']").isVisible(), "second tab: no correction offered");
+    assert.ok(await late.locator("input[value='b']").isChecked(), "second tab: the draft was lost");
+    assert.deepEqual(lines(run(["present", "responses", "list", sessionId, "--form", "d-scope"])), before, "second tab: something was stored");
+    await other.close();
+    passed.push(`second tab: a tab loaded before the first answer gets answer_exists (409) for its own, stores nothing, and says "${says}" with a correction offered`);
   }
 
   // Reviews: delivery and acknowledgment are shown apart in the rail.

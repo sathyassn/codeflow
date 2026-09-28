@@ -804,11 +804,7 @@ fn render_form(
         output.push_str("\" data-cf-latest-answer-id=\"");
         output.push_str(&answer.latest.to_string());
         output.push_str("\" data-cf-answer-state=\"");
-        output.push_str(match answer.status {
-            crate::delivery::DeliveryStatus::Pending => "stored",
-            crate::delivery::DeliveryStatus::Delivered => "delivered",
-            crate::delivery::DeliveryStatus::Acknowledged => "acknowledged",
-        });
+        output.push_str(answer.status.page_state());
     }
     output.push_str("\" role=\"group\" aria-labelledby=\"");
     escape_attr_to(&title_id, output);

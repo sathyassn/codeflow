@@ -34,6 +34,19 @@ pub enum DeliveryStatus {
     Acknowledged,
 }
 
+impl DeliveryStatus {
+    /// The word the page uses for an answer in this state: a pending answer
+    /// is stored, waiting for the agent.
+    #[must_use]
+    pub const fn page_state(self) -> &'static str {
+        match self {
+            Self::Pending => "stored",
+            Self::Delivered => "delivered",
+            Self::Acknowledged => "acknowledged",
+        }
+    }
+}
+
 /// The kinds of v2 event the store holds today (I4). Reopen and tombstone
 /// events come with threads (TSK-121).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +173,23 @@ pub struct FormAnswer {
 /// answer was given against, so an answer to a question that has since
 /// changed is not shown on the new question.
 pub type FormAnswers = HashMap<(String, String), FormAnswer>;
+
+/// Each form's latest answer in a ledger and its state.
+pub(crate) fn form_answers_of(ledger: &[ResponseEvent]) -> FormAnswers {
+    let states = States::of(&[], ledger);
+    let mut answers = FormAnswers::new();
+    for record in ledger.iter().filter_map(ResponseEvent::answer) {
+        answers.insert(
+            (record.form_id.clone(), record.form_digest.clone()),
+            FormAnswer {
+                latest: record.answer_id,
+                original: record.amends.unwrap_or(record.answer_id),
+                status: states.status(record.answer_id),
+            },
+        );
+    }
+    answers
+}
 
 /// Delivery and acknowledgment, replayed from both ledgers.
 struct States {
@@ -356,19 +386,7 @@ impl SessionStore {
             self.load(id)?;
             Ledger::open(self.responses_path(id)?, id)?.events
         };
-        let states = States::of(&[], &ledger);
-        let mut answers = FormAnswers::new();
-        for record in ledger.iter().filter_map(ResponseEvent::answer) {
-            answers.insert(
-                (record.form_id.clone(), record.form_digest.clone()),
-                FormAnswer {
-                    latest: record.answer_id,
-                    original: record.amends.unwrap_or(record.answer_id),
-                    status: states.status(record.answer_id),
-                },
-            );
-        }
-        Ok(answers)
+        Ok(form_answers_of(&ledger))
     }
 
     /// How many pending events only the v2 stream carries (answers and
@@ -545,20 +563,27 @@ mod tests {
     }
 
     /// The valid submit fixture as a new request on the current revision.
-    fn try_answer(session: &FormsSession) -> Result<crate::responses::AnswerReceipt> {
+    /// With `amends`, a correction of that answer.
+    fn try_answer(
+        session: &FormsSession,
+        amends: Option<Uuid>,
+    ) -> Result<crate::responses::AnswerReceipt> {
         let mut request = fixture_json("answers/submit-valid.json");
         request["request_id"] = json!(Uuid::new_v4());
         request["revision"] = json!(current_revision(session));
+        if let Some(amends) = amends {
+            request["amends"] = json!(amends);
+        }
         session.submit(&session.body(&request, &[]))
     }
 
     fn answer(session: &FormsSession) -> Uuid {
-        try_answer(session).unwrap().answer_id
+        try_answer(session, None).unwrap().answer_id
     }
 
     /// R120-1: an answer is admitted only with room for its delivered and
     /// acknowledged lines under both bounds. A ledger at a bound still
-    /// delivers and acknowledges the answer it holds; a new answer sent
+    /// delivers and acknowledges the answer it holds; a correction sent
     /// while that answer is pending, delivered or acknowledged is refused
     /// as the store at its capacity, and a review's acknowledgment cannot
     /// take the room kept for the answer.
@@ -579,11 +604,11 @@ mod tests {
             }
             let refused = |when: &str| {
                 let before = session.ledger_bytes();
-                match try_answer(&session) {
+                match try_answer(&session, Some(first)) {
                     Err(PresentError::ServiceUnavailable(message)) => {
                         assert!(message.contains("room kept"), "{bound}, {when}: {message}");
                     }
-                    other => panic!("{bound}, {when}: a new answer was not refused: {other:?}"),
+                    other => panic!("{bound}, {when}: a correction was not refused: {other:?}"),
                 }
                 assert_eq!(
                     session.ledger_bytes(),
@@ -615,6 +640,40 @@ mod tests {
                 "{bound}"
             );
         }
+    }
+
+    /// PR 713 (B6): a second original answer to an answered form is
+    /// refused with the stored answer and the state a reload shows, and
+    /// nothing is appended; a correction of it is still stored.
+    #[test]
+    fn a_second_original_answer_names_the_stored_one_and_its_state() {
+        let session = FormsSession::open();
+        let first = answer(&session);
+        let exists = |state: &str| {
+            let before = session.ledger_bytes();
+            match try_answer(&session, None) {
+                Err(PresentError::Review {
+                    code: "answer_exists",
+                    details,
+                    ..
+                }) => assert_eq!(details, json!({ "answer_id": first, "state": state })),
+                other => panic!("{state}: {other:?}"),
+            }
+            assert_eq!(
+                session.ledger_bytes(),
+                before,
+                "{state}: the ledger changed"
+            );
+        };
+        exists("stored");
+        session.store.deliver(session.id, &[first]).unwrap();
+        exists("delivered");
+        assert!(session.store.acknowledge(session.id, first).unwrap());
+        exists("acknowledged");
+        let correction = try_answer(&session, Some(first)).unwrap();
+        // The correction is the answer a reload shows, and it is pending.
+        exists("stored");
+        assert_ne!(correction.answer_id, first);
     }
 
     fn pending() -> EventFilter {

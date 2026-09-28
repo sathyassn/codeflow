@@ -803,7 +803,7 @@ fn answer_too_large() -> Response<Body> {
 /// The HTTP status of a typed refusal (SPC-014 I3).
 fn review_status(code: &str) -> StatusCode {
     match code {
-        "stale_revision" | "request_id_conflict" => StatusCode::CONFLICT,
+        "stale_revision" | "request_id_conflict" | "answer_exists" => StatusCode::CONFLICT,
         "session_closed" => StatusCode::GONE,
         "answer_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
         _ => StatusCode::UNPROCESSABLE_ENTITY,
@@ -1476,6 +1476,23 @@ mod tests {
 
     /// The answer as the page sends it for `store-choice` of the forms
     /// fixture, with a body change applied.
+    /// A new request for the form: its original answer while it has none,
+    /// then a correction of that original, as one form holds one original.
+    fn fresh_answer(state: &AppState) -> Vec<u8> {
+        let original = ledger_bytes(state).and_then(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .find(|line| line["event"] == "answer" && line["form_id"] == "store-choice")
+                .map(|line| line["answer_id"].clone())
+        });
+        answer_body(state, |body| {
+            if let Some(original) = original {
+                body["amends"] = original;
+            }
+        })
+    }
+
     fn answer_body(state: &AppState, change: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
         let crate::state::RevisionContent::Supported { document } = state
             .store
@@ -1560,6 +1577,7 @@ mod tests {
         assert_eq!(ledger_bytes(&state).unwrap(), stored);
 
         let request_id = receipt["request_id"].clone();
+        let original = receipt["answer_id"].clone();
         let reused = answer_body(&state, |body| {
             body["request_id"] = request_id;
             body["values"]["keep-days"] = 7.into();
@@ -1595,8 +1613,15 @@ mod tests {
                 "invalid_answer",
             ),
             (
-                "a missing required field",
+                "a second original answer",
+                answer_body(&state, |_| {}),
+                StatusCode::CONFLICT,
+                "answer_exists",
+            ),
+            (
+                "a correction missing a required field",
                 answer_body(&state, |body| {
+                    body["amends"] = original.clone();
                     body["values"].as_object_mut().unwrap().remove("keep-days");
                 }),
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -1652,9 +1677,16 @@ mod tests {
                 "{name}: ledger changed"
             );
         }
+        // A second original answer names the stored one and its state, so
+        // the page can show it and offer a correction (answer_exists).
+        let (_, exists) = post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        assert_eq!(
+            exists["details"],
+            serde_json::json!({ "answer_id": original, "state": "stored" })
+        );
         // Exactly 64 KiB is inside the bound: trailing whitespace keeps the
-        // JSON valid and the answer stores.
-        let mut at_limit = answer_body(&state, |_| {});
+        // JSON valid and the correction stores.
+        let mut at_limit = answer_body(&state, |body| body["amends"] = original.clone());
         at_limit.resize(limits::MAX_ANSWER_REQUEST_BYTES, b' ');
         let (status, at_limit_receipt) = post_answer(&state, headers.clone(), at_limit).await;
         assert_eq!(status, StatusCode::OK, "{at_limit_receipt}");
@@ -1664,6 +1696,7 @@ mod tests {
             &state,
             headers.clone(),
             answer_body(&state, |body| {
+                body["amends"] = original.clone();
                 body["values"].as_object_mut().unwrap().remove("keep-days");
             }),
         )
@@ -1785,7 +1818,7 @@ mod tests {
             ("lock fails", session_dir.join(".lock")),
         ] {
             let before = ledger_bytes(&state);
-            let body = answer_body(&state, |_| {});
+            let body = fresh_answer(&state);
             chmod(&path, 0o400);
             let (status, refused) = post_answer(&state, headers.clone(), body.clone()).await;
             chmod(&path, 0o600);
@@ -1809,7 +1842,7 @@ mod tests {
         // succeeds (I4). While syncs keep failing, a resend is refused;
         // once one succeeds, the resend is its receipt.
         let count = lines(&state);
-        let late = answer_body(&state, |_| {});
+        let late = fresh_answer(&state);
         inject(Fault::SyncFailsLineStays);
         let (status, body) = post_answer(&state, headers.clone(), late.clone()).await;
         unavailable(status, &body, "sync fails");
@@ -1892,7 +1925,7 @@ mod tests {
 
         // A project bound that holds the project as it is, but is below one
         // line and the control reserve (the shared check's other refusal).
-        let small = answer_body(&state, |_| {});
+        let small = fresh_answer(&state);
         let before = ledger_bytes(&state);
         let held = crate::state::directory_size_bounded(state.store.root(), u64::MAX).unwrap();
         assert!(
@@ -1956,16 +1989,20 @@ mod tests {
             assert!(message.contains("no receipt was given"), "{message}");
         };
 
-        // The line bound, lowered to 6: two answers and the four lines kept
-        // for them reach it; the third is refused and the ledger is unchanged.
+        // One form holds one original answer; the later requests are
+        // corrections of it, every one the same length.
+        let (status, receipt) = post_answer(&state, headers.clone(), fresh_answer(&state)).await;
+        stored(status, &receipt, 1);
+        let original = length(&state);
+
+        // The line bound, lowered to 6: the original, one correction and the
+        // four lines kept for them reach it; the next is refused and the
+        // ledger is unchanged.
         lower_bounds(Some(6), None);
-        for sequence in 1..=2 {
-            let (status, receipt) =
-                post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
-            stored(status, &receipt, sequence);
-        }
+        let (status, receipt) = post_answer(&state, headers.clone(), fresh_answer(&state)).await;
+        stored(status, &receipt, 2);
         let full = ledger_bytes(&state);
-        let third = answer_body(&state, |_| {});
+        let third = fresh_answer(&state);
         let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
         refused(
             status,
@@ -1975,44 +2012,41 @@ mod tests {
         assert_eq!(ledger_bytes(&state), full, "line bound: the ledger changed");
         assert_eq!(lines(&state), 2);
 
-        // The byte bound. Every line here has the same length, and each
-        // answer keeps room for two state lines, so one byte short of three
-        // answers and their room refuses the third, exactly that stores it,
-        // and the fourth is refused.
-        let bytes = full.unwrap();
-        let line = bytes.len() / 2;
-        assert_eq!(
-            bytes.iter().position(|byte| *byte == b'\n'),
-            Some(line - 1),
-            "the lines differ in length"
-        );
-        let bound = |answers: usize| {
-            u64::try_from(answers * line).unwrap()
-                + u64::try_from(answers).unwrap() * 2 * crate::responses::STATE_LINE_BYTES
+        // The byte bound. Each answer keeps room for two state lines, so one
+        // byte short of the original, two corrections and their room refuses
+        // the second correction, exactly that stores it, and the next is
+        // refused.
+        let line = length(&state) - original;
+        let bound = |corrections: usize| {
+            u64::try_from(original + corrections * line).unwrap()
+                + u64::try_from(1 + corrections).unwrap() * 2 * crate::responses::STATE_LINE_BYTES
         };
-        lower_bounds(None, Some(bound(3) - 1));
+        lower_bounds(None, Some(bound(2) - 1));
         let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
         refused(
             status,
             &body,
-            &format!("the answer ledger reached its {} byte bound", bound(3) - 1),
+            &format!("the answer ledger reached its {} byte bound", bound(2) - 1),
         );
-        assert_eq!(length(&state), 2 * line, "byte bound: the ledger changed");
-        lower_bounds(None, Some(bound(3)));
+        assert_eq!(
+            length(&state),
+            original + line,
+            "byte bound: the ledger changed"
+        );
+        lower_bounds(None, Some(bound(2)));
         let (status, receipt) = post_answer(&state, headers.clone(), third).await;
         stored(status, &receipt, 3);
         assert_eq!(
             length(&state),
-            3 * line,
-            "the ledger does not end at its bound"
+            original + 2 * line,
+            "the correction is not stored"
         );
         let at_bound = ledger_bytes(&state);
-        let (status, body) =
-            post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        let (status, body) = post_answer(&state, headers.clone(), fresh_answer(&state)).await;
         refused(
             status,
             &body,
-            &format!("the answer ledger reached its {} byte bound", bound(3)),
+            &format!("the answer ledger reached its {} byte bound", bound(2)),
         );
         assert_eq!(
             ledger_bytes(&state),
@@ -2089,19 +2123,24 @@ mod tests {
         submit["rationales"][id(0)] = serde_json::json!("x".repeat(short + 1));
         let submit = serde_json::to_vec(&submit).unwrap();
         assert_eq!(submit.len(), limits::MAX_ANSWER_REQUEST_BYTES);
-        // Decline with the longest reason; dismiss with nothing.
+        // Then, as corrections of that answer (one form holds one original),
+        // decline with the longest reason and dismiss with nothing.
+        let (status, receipt) = post_answer(&state, headers.clone(), submit).await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
         let mut decline = request("decline");
         decline["reason"] = serde_json::json!(wide(limits::MAX_DECLINE_REASON_BYTES / 4));
-        let cancel = request("cancel");
+        decline["amends"] = receipt["answer_id"].clone();
+        let mut cancel = request("cancel");
+        cancel["amends"] = receipt["answer_id"].clone();
 
         for (sequence, body) in [
-            submit,
             serde_json::to_vec(&decline).unwrap(),
             serde_json::to_vec(&cancel).unwrap(),
         ]
         .into_iter()
         .enumerate()
         {
+            let sequence = sequence + 1;
             let (status, receipt) = post_answer(&state, headers.clone(), body).await;
             assert_eq!(
                 (

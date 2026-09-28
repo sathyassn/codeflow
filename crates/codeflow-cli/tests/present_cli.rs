@@ -2110,13 +2110,14 @@ fn feedback_wait_exits_with_the_spc014_statuses() {
     assert!(v2.stderr.is_empty());
 
     // Closed with an event pending, the wait still delivers it; closed with
-    // nothing pending, it exits 7 at once, in either format.
+    // nothing pending, it exits 7 at once, in either format. The form holds
+    // its original answer, so the pending event is a correction.
     let third = service.answer(
         1,
         "store-choice",
         3,
         r#"{"home":"repo","keep-days":7}"#,
-        None,
+        Some(&first),
     );
     require_success(&codeflow(
         &fixture.project,
@@ -2215,7 +2216,18 @@ fn responses_list_filters_never_consume_and_ack_is_recorded_once() {
         assert_eq!(refused.status.code(), Some(2), "{unknown}");
     }
 
-    let document = fixture.project.join("forms.json");
+    // Revision 2 retitles both forms: a changed question takes a new
+    // original answer, as one form digest holds one (SPC-014 B6).
+    let mut second: serde_json::Value =
+        serde_json::from_str(&contract_fixture("documents/v2-forms.json")).unwrap();
+    for block in second["blocks"].as_array_mut().unwrap() {
+        if block["type"] == "form" || block["type"] == "decision" {
+            let title = format!("{}, revised", block["title"].as_str().unwrap());
+            block["title"] = serde_json::json!(title);
+        }
+    }
+    let document = fixture.project.join("forms-2.json");
+    fs::write(&document, serde_json::to_vec_pretty(&second).unwrap()).unwrap();
     require_success(&run(&[
         "present",
         "update",

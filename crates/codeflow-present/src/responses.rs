@@ -279,6 +279,27 @@ impl Ledger {
             .find(|record| record.request_id == request_id)
     }
 
+    /// One form digest holds at most one original answer (B6): a second is
+    /// refused with the stored answer and the state a reload shows, so the
+    /// page can show it and offer a correction.
+    fn check_no_answer(&self, form_id: &str, form_digest: &str) -> Result<()> {
+        let answers = crate::delivery::form_answers_of(&self.events);
+        match answers.get(&(form_id.to_string(), form_digest.to_string())) {
+            None => Ok(()),
+            Some(stored) => Err(PresentError::review(
+                "answer_exists",
+                format!(
+                    "form {form_id} already has an answer; send a correction with amends naming {}",
+                    stored.original
+                ),
+                serde_json::json!({
+                    "answer_id": stored.original,
+                    "state": stored.status.page_state(),
+                }),
+            )),
+        }
+    }
+
     /// An amendment names an original answer of the same form (B6).
     fn check_amendment(&self, amends: Uuid, form_id: &str) -> Result<()> {
         let refuse = |message: &str| {
@@ -527,7 +548,8 @@ impl SessionStore {
     ///
     /// Order: body, session, request id (so a retry whose first response
     /// was lost replays even after a newer revision), session state,
-    /// revision, form, form digest, amendment, values.
+    /// revision, form, form digest, an existing original answer, amendment,
+    /// values.
     pub fn submit_answer(&self, session_id: Uuid, body: &[u8]) -> Result<AnswerReceipt> {
         let submission = AnswerSubmission::parse(body)?;
         let request = &submission.request;
@@ -563,8 +585,9 @@ impl SessionStore {
         let current = self.revision(session_id, session.current_revision)?;
         let form = current_form(&current.content, session.current_revision, request)?;
         let form_digest = form.digest();
-        if let Some(amends) = request.amends {
-            ledger.check_amendment(amends, &request.form_id)?;
+        match request.amends {
+            Some(amends) => ledger.check_amendment(amends, &request.form_id)?,
+            None => ledger.check_no_answer(&request.form_id, &form_digest)?,
         }
         form.validate_answer(request)?;
         let record = AnswerRecord {
@@ -976,18 +999,26 @@ mod tests {
         let session = FormsSession::open();
         let first = crate::contract_tests::fixture_json("answers/submit-valid.json");
         let stored = session.submit(&session.body(&first, &[])).unwrap();
+        // A correction: one form holds one original answer.
         let mut second = first.clone();
         second["request_id"] = serde_json::json!(Uuid::from_u128(0x00c0_ffee));
         second["values"]["keep-days"] = serde_json::json!(90);
-        let body = session.body(&second, &[]);
+        let correct = |request: &serde_json::Value, original: Uuid| {
+            let mut request = request.clone();
+            request["amends"] = serde_json::json!(original);
+            request
+        };
+        let body = session.body(&correct(&second, stored.answer_id), &[]);
         let body_path = session.store.root().with_file_name("crash-body.json");
         std::fs::write(&body_path, &body).unwrap();
         let before = session.ledger_bytes().unwrap();
         let line_len = {
             // The line the child writes has the length of an equal record.
             let probe = FormsSession::open();
-            probe.submit(&probe.body(&first, &[])).unwrap();
-            probe.submit(&probe.body(&second, &[])).unwrap();
+            let original = probe.submit(&probe.body(&first, &[])).unwrap().answer_id;
+            probe
+                .submit(&probe.body(&correct(&second, original), &[]))
+                .unwrap();
             let bytes = probe.ledger_bytes().unwrap();
             bytes.len() - (bytes.iter().position(|byte| *byte == b'\n').unwrap() + 1)
         };
@@ -1029,7 +1060,9 @@ mod tests {
         // when it was cut, and the next answer takes the next sequence.
         let mut third = first.clone();
         third["request_id"] = serde_json::json!(Uuid::from_u128(0x00c0_ffef));
-        let receipt = session.submit(&session.body(&third, &[])).unwrap();
+        let receipt = session
+            .submit(&session.body(&correct(&third, stored.answer_id), &[]))
+            .unwrap();
         assert_eq!((receipt.sequence, receipt.replayed), (3, false));
         assert_eq!(session.store.responses(session.id).unwrap().len(), 3);
     }
@@ -1140,19 +1173,42 @@ mod tests {
                 } else {
                     "d-scope"
                 };
+                // The form's original answer: the one digest never changes
+                // here, so a form holds at most one.
+                let original = sent
+                    .iter()
+                    .find(|earlier| earlier.form == form && !earlier.amendment)
+                    .map(|earlier| earlier.receipt.answer_id);
                 match next(7) {
-                    // A new answer.
+                    // A new answer: stored, or refused when the form has one.
                     0 | 1 => {
                         let body = valid(form, fresh(), None, next(1000));
-                        let receipt = session.submit(&body).unwrap();
-                        assert_eq!(receipt.sequence, sent.len() as u64 + 1, "{context}");
-                        assert!(!receipt.replayed, "{context}");
-                        sent.push(Sent {
-                            body,
-                            receipt,
-                            amendment: false,
-                            form,
-                        });
+                        let result = session.submit(&body);
+                        if let Some(original) = original {
+                            match result {
+                                Err(PresentError::Review {
+                                    code: "answer_exists",
+                                    details,
+                                    ..
+                                }) => assert_eq!(
+                                    details,
+                                    serde_json::json!({ "answer_id": original, "state": "stored" }),
+                                    "{context}"
+                                ),
+                                other => panic!("{context}: {other:?}"),
+                            }
+                            assert_eq!(session.ledger_bytes(), before, "{context}");
+                        } else {
+                            let receipt = result.unwrap();
+                            assert_eq!(receipt.sequence, sent.len() as u64 + 1, "{context}");
+                            assert!(!receipt.replayed, "{context}");
+                            sent.push(Sent {
+                                body,
+                                receipt,
+                                amendment: false,
+                                form,
+                            });
+                        }
                     }
                     // A retry of an earlier request, even after an update.
                     2 if !sent.is_empty() => {
@@ -1239,6 +1295,8 @@ mod tests {
                         let result = session.submit(&serde_json::to_vec(&body).unwrap());
                         let expected = if stale {
                             "stale_revision"
+                        } else if original.is_some() {
+                            "answer_exists"
                         } else {
                             "invalid_answer"
                         };
