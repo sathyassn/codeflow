@@ -501,7 +501,7 @@ fn update_export_close_and_clear(
             fixture.second.to_str().unwrap(),
         ],
     ));
-    let poll_body = r#"{"cursor":"1:0"}"#;
+    let poll_body = r#"{"cursor":"1:0:0"}"#;
     let wrong_origin = http(
         running.port,
         &format!(
@@ -524,7 +524,7 @@ fn update_export_close_and_clear(
     );
     assert!(poll.starts_with("HTTP/1.1 200 "));
     assert!(poll.contains("\"kind\":\"revision\""));
-    assert!(poll.contains("\"cursor\":\"2:3\""));
+    assert!(poll.contains("\"cursor\":\"2:3:0\""));
 
     let exported_path = fixture.project.join("review.html");
     require_success(&codeflow(

@@ -6,7 +6,7 @@
 // is never written to any browser storage. Annotating a form never changes a
 // value and never sends.
 
-import { parseServiceError, REQUEST_HEADER, type ChromeConfig } from "./contracts";
+import { parseServiceError, REQUEST_HEADER, type AnswerDelivery, type AnswerStateEntry, type ChromeConfig } from "./contracts";
 import {
   MAX_ANSWER_REQUEST_BYTES,
   MAX_DECLINE_REASON_BYTES,
@@ -24,8 +24,18 @@ import {
 /** The chrome forwards session events to the document root under this name. */
 export const SESSION_EVENT = "cf-present:session-event";
 export type SessionEventDetail = "revision" | "session_closed";
+/** The chrome forwards the poll's answer states under this name (SPC-014 B8). */
+export const ANSWER_STATE_EVENT = "cf-present:answer-state";
+export type AnswerStateDetail = readonly AnswerStateEntry[];
 
-type FormState = "editing" | "submitting" | "stored" | "failed" | "stale" | "changed" | "closed";
+type FormState = "editing" | "submitting" | "stored" | "delivered" | "acknowledged" | "failed" | "stale" | "changed" | "closed";
+
+// After "stored": the agent's read delivers the answer, then it acknowledges it.
+const DELIVERY_TEXT: Readonly<Record<Exclude<AnswerDelivery, "pending">, string>> = {
+  delivered: "Delivered to agent",
+  acknowledged: "Acknowledged by agent",
+};
+const DELIVERY_ORDER: Readonly<Record<AnswerDelivery, number>> = { pending: 0, delivered: 1, acknowledged: 2 };
 type Action = "submit" | "decline" | "cancel" | "resend" | "confirm" | "amend";
 
 const ANSWERS_PATH = "/app/api/answers";
@@ -54,11 +64,21 @@ interface StaleTarget {
 }
 
 export function enhanceForms(root: HTMLElement, config: ChromeConfig): void {
+  // Every answer state the poll reported, never moving back: a state may
+  // arrive before the receipt of the answer it names.
+  const delivery = new Map<string, AnswerDelivery>();
   const forms = [...root.querySelectorAll<HTMLElement>("article[data-cf-form]")]
     .filter((article) => article.querySelector("[data-cf-form-action]"))
-    .map((article) => new FormController(article, config, root));
+    .map((article) => new FormController(article, config, root, delivery));
   if (forms.length === 0) return;
   guardAnnotation(root);
+  root.addEventListener(ANSWER_STATE_EVENT, (event) => {
+    for (const entry of (event as CustomEvent<AnswerStateDetail>).detail) {
+      const known = delivery.get(entry.answer_id) ?? "pending";
+      if (DELIVERY_ORDER[entry.status] > DELIVERY_ORDER[known]) delivery.set(entry.answer_id, entry.status);
+    }
+    for (const form of forms) form.showDelivery();
+  });
   // The chrome forwards the poll's events here; a form refused with
   // session_closed reports it here too, so every form and the chrome close.
   root.addEventListener(SESSION_EVENT, (event) => {
@@ -101,6 +121,8 @@ class FormController {
   private revision: number;
   private digest: string;
   private original: string | null = null;
+  // The answer or correction this form stored last: its delivery is shown.
+  private latest: string | null = null;
   private amending = false;
   private declining = false;
   private sent: Sent | null = null;
@@ -111,7 +133,12 @@ class FormController {
   private closed = false;
   private kept: HTMLElement | null = null;
 
-  public constructor(private readonly article: HTMLElement, private readonly config: ChromeConfig, private readonly root: HTMLElement) {
+  public constructor(
+    private readonly article: HTMLElement,
+    private readonly config: ChromeConfig,
+    private readonly root: HTMLElement,
+    private readonly delivery: ReadonlyMap<string, AnswerDelivery>,
+  ) {
     this.id = article.dataset.cfForm ?? "";
     this.digest = article.dataset.cfFormDigest ?? "";
     this.revision = config.revision;
@@ -133,6 +160,17 @@ class FormController {
         ? "A newer revision exists. Your answer is kept; send it again, and the service checks it against the current revision."
         : "A newer revision exists. Your draft is kept; sending it checks it against the current revision.", this.state === "failed" ? "failed" : "stale");
     }
+  }
+
+  // Stored, then delivered, then acknowledged: only a stored answer moves on,
+  // and never back.
+  public showDelivery(): void {
+    if (this.latest === null || this.closed) return;
+    const status = this.delivery.get(this.latest) ?? "pending";
+    if (status === "pending") return;
+    const shown = this.state === "stored" ? 0 : this.state === "delivered" ? 1 : this.state === "acknowledged" ? 2 : -1;
+    if (shown < 0 || DELIVERY_ORDER[status] <= shown) return;
+    this.render(DELIVERY_TEXT[status], status);
   }
 
   public close(): void {
@@ -256,11 +294,13 @@ class FormController {
     }
     if (!this.amending || !this.original) this.original = receipt.answer_id;
     this.article.dataset.cfAnswerId = this.original;
+    this.latest = receipt.answer_id;
     this.sent = null;
     this.stale = null;
     this.amending = false;
     this.declining = false;
     this.render("Stored, waiting for agent", "stored");
+    this.showDelivery();
   }
 
   private refused(status: number, text: string, target: StaleTarget | null): void {
@@ -458,7 +498,7 @@ class FormController {
       cancel: editable && !this.stale && !this.declining,
       resend: state === "failed" && this.sent !== null,
       confirm: state === "stale" && this.stale !== null,
-      amend: state === "stored",
+      amend: state === "stored" || state === "delivered" || state === "acknowledged",
     };
     this.buttons.forEach((button, action) => {
       button.hidden = !show[action];

@@ -22,7 +22,7 @@ import type {
 import { parseServiceError } from "./contracts";
 import type { EntitySelector } from "./contracts";
 import { followSessionEvents } from "./events";
-import { SESSION_EVENT, type SessionEventDetail } from "./forms";
+import { ANSWER_STATE_EVENT, SESSION_EVENT, type AnswerStateDetail, type SessionEventDetail } from "./forms";
 import { postJson, PresentRequestError } from "./http";
 import {
   annotatableAncestor,
@@ -365,8 +365,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     return () => documentRoot.removeEventListener(SESSION_EVENT, onSessionEvent);
   }, [documentRoot]);
   useEffect(
-    () => followSessionEvents(`${config.revision}:${config.event_sequence}`, handleEvent, setEventMessage),
-    [config.session_id, config.revision, config.event_sequence],
+    () => followSessionEvents(`${config.revision}:${config.event_sequence}:${config.response_sequence}`, handleEvent, setEventMessage),
+    [config.session_id, config.revision, config.event_sequence, config.response_sequence],
   );
 
   useEffect(() => {
@@ -1180,6 +1180,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       showToast(notice, { sticky: true });
     } else if (event.kind === "session_closed") {
       closeSession(true);
+    } else if (event.kind === "answer_state" && event.answers?.length) {
+      // Each form shows its own answer's delivery and acknowledgment.
+      documentRoot.dispatchEvent(new CustomEvent<AnswerStateDetail>(ANSWER_STATE_EVENT, { detail: event.answers }));
     }
   }
 
@@ -1580,6 +1583,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                   <div class="cf-history-meta">
                     <strong>{item.verdict.replaceAll("_", " ")}</strong>
                     <span>{item.lifecycle}</span>
+                    {item.acknowledged ? <span data-testid="feedback-acknowledged">acknowledged</span> : null}
                     <span>Revision {item.source_revision}</span>
                     <span>Version {item.event_version}</span>
                   </div>

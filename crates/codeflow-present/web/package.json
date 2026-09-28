@@ -15,6 +15,7 @@
     "check:entities": "node scripts/entity-browser-check.mjs",
     "check:matrix": "node scripts/matrix-browser-check.mjs",
     "check:forms": "node scripts/form-browser-check.mjs",
+    "check:delivery": "node scripts/delivery-browser-check.mjs",
     "check:figures": "node scripts/figure-browser-check.mjs",
     "check:real-browser-cleanup": "node scripts/real-browser-cleanup-check.mjs",
     "check:real-browser": "node scripts/real-browser-check.mjs",

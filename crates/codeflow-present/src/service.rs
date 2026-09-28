@@ -32,6 +32,7 @@ use uuid::Uuid;
 
 use crate::{
     config::UtilityTokens,
+    delivery::{AnswerState, AnswerStates},
     error::{PresentError, Result},
     limits,
     platform::is_link_like,
@@ -162,6 +163,10 @@ struct SessionEvent {
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    /// For `answer_state`: each answer whose state changed, with its state
+    /// now (stored and pending, delivered, acknowledged).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    answers: Vec<AnswerState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -491,6 +496,10 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
         Ok(sequence) => sequence,
         Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
+    let response_sequence = match state.store.latest_response_sequence(state.session_id) {
+        Ok(sequence) => sequence,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
     let manifest = &state.assets.service;
     let style = manifest
         .entrypoints
@@ -521,6 +530,7 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
                 session_id: &state.session_id.to_string(),
                 revision: revision.revision,
                 event_sequence,
+                response_sequence,
                 script_path: script,
                 style_path: style,
                 prepaint_source: prepaint.map(|asset| asset.source.as_str()),
@@ -832,8 +842,16 @@ async fn poll_events(
         Ok(sequence) => sequence,
         Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
-    let (after_revision, after_sequence) = match request.cursor.as_deref() {
-        None => (initial_session.current_revision, initial_sequence),
+    let initial_responses = match state.store.latest_response_sequence(state.session_id) {
+        Ok(sequence) => sequence,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
+    let (after_revision, after_sequence, after_responses) = match request.cursor.as_deref() {
+        None => (
+            initial_session.current_revision,
+            initial_sequence,
+            initial_responses,
+        ),
         Some(cursor) => match parse_event_cursor(cursor) {
             Some(cursor) => cursor,
             None => return plain(StatusCode::BAD_REQUEST, "event cursor is invalid"),
@@ -850,28 +868,21 @@ async fn poll_events(
             Ok(latest) => latest,
             Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
         };
-        let terminal = session.status == SessionStatus::Closed;
-        let revised = session.current_revision > after_revision;
-        if revised || latest > after_sequence || terminal || tokio::time::Instant::now() >= deadline
-        {
-            let response = SessionEvent {
-                cursor: format!("{}:{latest}", session.current_revision),
-                kind: if terminal {
-                    "session_closed"
-                } else if revised {
-                    "revision"
-                } else {
-                    "feedback_state"
-                },
-                message: if revised {
-                    Some(format!(
-                        "Revision {} is available.",
-                        session.current_revision
-                    ))
-                } else {
-                    (latest > after_sequence).then(|| "Review state changed.".to_string())
-                },
-            };
+        let answers = match state.store.answer_states_since(
+            state.session_id,
+            after_responses,
+            limits::MAX_EVENTS_PER_RESPONSE,
+        ) {
+            Ok(answers) => answers,
+            Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+        };
+        if let Some(response) = session_event(
+            &session,
+            latest,
+            (after_revision, after_sequence, after_responses),
+            answers,
+            tokio::time::Instant::now() >= deadline,
+        ) {
             let body = match serde_json::to_vec(&response) {
                 Ok(body) if body.len() <= limits::MAX_EVENT_RESPONSE_BYTES => body,
                 Ok(_) => {
@@ -895,9 +906,60 @@ async fn poll_events(
     }
 }
 
-fn parse_event_cursor(cursor: &str) -> Option<(u64, u64)> {
-    let (revision, sequence) = cursor.split_once(':')?;
-    Some((revision.parse().ok()?, sequence.parse().ok()?))
+/// What the poll answers, if anything changed after its cursor or it timed
+/// out: closure, then a revision, then answer states, then review state.
+fn session_event(
+    session: &crate::state::SessionRecord,
+    latest: u64,
+    (after_revision, after_sequence, after_responses): (u64, u64, u64),
+    answers: AnswerStates,
+    timed_out: bool,
+) -> Option<SessionEvent> {
+    let terminal = session.status == SessionStatus::Closed;
+    let revised = session.current_revision > after_revision;
+    // The answer ledger's cursor moves only with an answer_state event, so a
+    // revision or a closure never hides a delivery from the forms.
+    let answered = !terminal && !revised && answers.through > after_responses;
+    if !(revised || answered || latest > after_sequence || terminal || timed_out) {
+        return None;
+    }
+    let responses = if answered {
+        answers.through
+    } else {
+        after_responses
+    };
+    Some(SessionEvent {
+        cursor: format!("{}:{latest}:{responses}", session.current_revision),
+        kind: if terminal {
+            "session_closed"
+        } else if revised {
+            "revision"
+        } else if answered {
+            "answer_state"
+        } else {
+            "feedback_state"
+        },
+        message: if revised {
+            Some(format!(
+                "Revision {} is available.",
+                session.current_revision
+            ))
+        } else {
+            (!answered && latest > after_sequence).then(|| "Review state changed.".to_string())
+        },
+        answers: if answered { answers.states } else { Vec::new() },
+    })
+}
+
+/// The poll cursor `revision:event_sequence:response_sequence`.
+fn parse_event_cursor(cursor: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = cursor.split(':');
+    let cursor = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(cursor)
 }
 
 async fn not_found() -> Response<Body> {
@@ -2260,7 +2322,7 @@ mod tests {
             State(state.clone()),
             application_headers(&state, true),
             Json(PollRequest {
-                cursor: Some("1:0".to_string()),
+                cursor: Some("1:0:0".to_string()),
             }),
         )
         .await;
@@ -2270,7 +2332,91 @@ mod tests {
             .unwrap();
         let event: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(event["kind"], "revision");
-        assert_eq!(event["cursor"], "2:0");
+        assert_eq!(event["cursor"], "2:0:0");
+    }
+
+    /// TSK-120: the page's poll reports each answer's state after "stored"
+    /// as `answer_state`, with a cursor into the answer ledger, so a form
+    /// shows its delivery and acknowledgment; a revision does not move that
+    /// cursor, so no state is skipped.
+    #[tokio::test]
+    async fn the_poll_reports_answer_states_after_stored() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let poll = |cursor: &str| {
+            let state = state.clone();
+            let cursor = cursor.to_string();
+            async move {
+                let response = poll_events(
+                    State(state.clone()),
+                    application_headers(&state, true),
+                    Json(PollRequest {
+                        cursor: Some(cursor),
+                    }),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let body =
+                    axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+                        .await
+                        .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+            }
+        };
+        let (status, receipt) = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |_| {}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        let answer: Uuid = serde_json::from_value(receipt["answer_id"].clone()).unwrap();
+        let event = poll("1:0:0").await;
+        assert_eq!(event["kind"], "answer_state");
+        assert_eq!(event["cursor"], "1:0:1");
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": answer, "status": "pending" }])
+        );
+
+        state.store.deliver(state.session_id, &[answer]).unwrap();
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(&forms).unwrap(),
+            )
+            .unwrap();
+        let event = poll("1:0:1").await;
+        assert_eq!(event["kind"], "revision");
+        assert_eq!(
+            event["cursor"], "2:0:1",
+            "a revision keeps the answer cursor"
+        );
+        let event = poll("2:0:1").await;
+        assert_eq!(event["kind"], "answer_state");
+        assert_eq!(event["cursor"], "2:0:2");
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": answer, "status": "delivered" }])
+        );
+        state.store.acknowledge(state.session_id, answer).unwrap();
+        let event = poll("2:0:2").await;
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": answer, "status": "acknowledged" }])
+        );
+        for cursor in ["2:0", "2:0:2:1", "2:x:2"] {
+            let response = poll_events(
+                State(state.clone()),
+                application_headers(&state, true),
+                Json(PollRequest {
+                    cursor: Some(cursor.to_string()),
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{cursor}");
+        }
     }
 
     #[test]

@@ -46,6 +46,8 @@ export interface FeedbackHistoryItem {
   readonly source_revision: number;
   readonly event_version: number;
   readonly lifecycle: FeedbackLifecycle;
+  /** The agent acknowledged the review (SPC-014 B8), apart from delivery. */
+  readonly acknowledged?: boolean;
   readonly verdict: ReviewVerdict;
   readonly instruction?: string;
   readonly notes: readonly FeedbackHistoryNote[];
@@ -61,6 +63,7 @@ export interface ChromeConfig {
   readonly session_id: string;
   readonly revision: number;
   readonly event_sequence: number;
+  readonly response_sequence: number;
   readonly title: string;
   readonly shortcuts_enabled: boolean;
   readonly review_limits: Readonly<{
@@ -175,10 +178,19 @@ export interface ReviewResponse {
   readonly state: "received" | "duplicate";
 }
 
+/** Where an answer is on its way to the agent (SPC-014 B8). */
+export type AnswerDelivery = "pending" | "delivered" | "acknowledged";
+
+export interface AnswerStateEntry {
+  readonly answer_id: string;
+  readonly status: AnswerDelivery;
+}
+
 export interface SessionEvent {
   readonly cursor: string;
-  readonly kind: "feedback_state" | "revision" | "session_closed";
+  readonly kind: "feedback_state" | "revision" | "session_closed" | "answer_state";
   readonly message?: string;
+  readonly answers?: readonly AnswerStateEntry[];
 }
 
 export function readChromeConfig(root: HTMLElement): ChromeConfig {
@@ -199,6 +211,9 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
     typeof value.event_sequence !== "number" ||
     !Number.isSafeInteger(value.event_sequence) ||
     value.event_sequence < 0 ||
+    typeof value.response_sequence !== "number" ||
+    !Number.isSafeInteger(value.response_sequence) ||
+    value.response_sequence < 0 ||
     typeof value.title !== "string" ||
     typeof value.shortcuts_enabled !== "boolean"
   ) {
@@ -232,6 +247,7 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
     session_id: value.session_id,
     revision: value.revision,
     event_sequence: value.event_sequence,
+    response_sequence: value.response_sequence,
     title: value.title,
     shortcuts_enabled: value.shortcuts_enabled,
     review_limits: value.review_limits,
@@ -270,6 +286,7 @@ function isFeedbackSnapshot(
       item.event_version < 1 ||
       (item.instruction !== undefined && typeof item.instruction !== "string") ||
       !["received", "delivered", "addressed", "dismissed"].includes(String(item.lifecycle)) ||
+      (item.acknowledged !== undefined && typeof item.acknowledged !== "boolean") ||
       !["approve", "approve_with_notes", "request_changes"].includes(String(item.verdict))
     ) return false;
     return item.notes.every((note) =>
