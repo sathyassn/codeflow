@@ -196,3 +196,32 @@ first decided.
   equal their `assets/base/` sources and are skipped, while the sources
   themselves are not scaffold destinations, so a new dash in a skill is
   still caught at its source.
+
+## Note (2026-09-25): summaries anchor the reader; dashes are a guideline
+
+On 2026-09-25 the operator clarified the summary rule and the dash rule. The
+text above stays unchanged as the record of what was first decided; ADR-0071
+records the decision this note applies. TSK-108 carried this note to the
+3.0.0 source on 2026-09-28 (SPC-013 R-117).
+
+- A summary anchors the reader: just enough context to get their bearings,
+  what this is, why it matters and where it stands, in a few lines.
+- It is judgment, not a line count or a list of banned items. A key number,
+  file name, data point or caveat belongs there when it is part of that
+  context; detail that does not help the reader orient comes after.
+- This replaces the "two to four sentences of plain prose" smell above and,
+  where it has landed, the context-only wording of the 2026-09-24 note on
+  `main`.
+- The smell is a summary that buries the anchor in detail, so the reader
+  cannot tell what this is or where it stands. A summary that names a key
+  file or number to anchor the reader passes.
+- Em and en dashes are avoided in prose (content and copy): use a comma,
+  colon, full stop or hyphen, and keep a dash only where it is really
+  needed, such as a quoted title or a numeric range in data. This is a
+  writing guideline judged in review and evaluation, not an absolute rule.
+  The mechanical check and its default level are unchanged by this note;
+  the note above sets that default.
+- Owners: `cf-method/references/workflow-lifecycle.md` for replies,
+  `cf-ship/references/pr-evidence.md` for the pull request body, and
+  `cf-editorial-review/references/editorial-smells.md` for the smell. The
+  evaluation kit grades it on CF-OUT-002 with a paired control.
