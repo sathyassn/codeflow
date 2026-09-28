@@ -784,6 +784,7 @@ fn schema_registry() -> json_schema::Registry {
             "document-v2.schema.json",
             "session-history-v1.schema.json",
             "session-history-v2.schema.json",
+            "session-responses-v1.schema.json",
         ]
         .map(|name| {
             serde_json::from_slice::<serde_json::Value>(&fs::read(schemas.join(name)).unwrap())
@@ -1311,6 +1312,209 @@ fn schema_v2_fixtures_match_the_v2_schemas_and_v1_stays_on_v1() {
     assert!(!registry.errors(document_v2, &v1).is_empty());
 }
 
+/// TSK-119: the form and v2 decision fixtures match the v2 document schema,
+/// a v2 decision with a status and a field with a default do not, and an
+/// answer line of the ledger fixture matches the responses schema. Required
+/// ids and a single recommended option are runtime rules.
+#[test]
+fn form_fixtures_and_answer_lines_match_their_schemas() {
+    let registry = schema_registry();
+    let document_v2 = "urn:codeflow:schema:present:document:2";
+    for valid in [
+        "documents/v2-forms.json",
+        "documents/delivery-v2.json",
+        "documents/v2-form-required-unknown.json",
+        "documents/v2-form-two-recommended.json",
+    ] {
+        let value: serde_json::Value = serde_json::from_str(&contract_fixture(valid)).unwrap();
+        assert_eq!(
+            registry.errors(document_v2, &value),
+            Vec::<String>::new(),
+            "{valid}"
+        );
+    }
+    let every_block: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../codeflow-present/tests/fixtures/annotation/every-block.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        registry.errors(document_v2, &every_block),
+        Vec::<String>::new()
+    );
+    for invalid in [
+        "documents/v2-decision-with-status.json",
+        "documents/v2-form-default-value.json",
+    ] {
+        let value: serde_json::Value = serde_json::from_str(&contract_fixture(invalid)).unwrap();
+        assert!(
+            !registry.errors(document_v2, &value).is_empty(),
+            "{invalid}"
+        );
+    }
+    let responses = "urn:codeflow:schema:present:session-responses:1";
+    let ledger = contract_fixture("ledger/torn-tail.jsonl");
+    let line: serde_json::Value = serde_json::from_str(ledger.lines().next().unwrap()).unwrap();
+    assert_eq!(registry.errors(responses, &line), Vec::<String>::new());
+    let mut amendment = line.clone();
+    amendment["event"] = "amendment".into();
+    assert!(
+        !registry.errors(responses, &amendment).is_empty(),
+        "amends is required"
+    );
+    amendment["amends"] = line["answer_id"].clone();
+    assert_eq!(registry.errors(responses, &amendment), Vec::<String>::new());
+    let mut delivered = line;
+    delivered["event"] = "delivered".into();
+    assert!(
+        !registry.errors(responses, &delivered).is_empty(),
+        "responses v1 describes answer and amendment lines only"
+    );
+}
+
+/// The form and v2 decision examples in the authoring reference are blocks
+/// the runtime accepts and the v2 schema describes.
+#[test]
+fn the_reference_form_examples_are_valid_v2_blocks() {
+    let text = skill_file("references/document-authoring.md");
+    let section = between(&text, "\n### Forms and decisions\n", "\n## ");
+    let blocks: Vec<serde_json::Value> = section
+        .split("```json\n")
+        .skip(1)
+        .map(|fence| serde_json::from_str(fence.split("```").next().unwrap()).unwrap())
+        .collect();
+    assert_eq!(
+        blocks
+            .iter()
+            .map(|block| block["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["form", "decision"]
+    );
+    let document =
+        serde_json::json!({ "schema_version": 2, "title": "Examples", "blocks": blocks });
+    assert!(matches!(
+        codeflow_present::document::parse_document(document.to_string().as_bytes()).unwrap(),
+        codeflow_present::document::ParsedDocument::Supported(_)
+    ));
+    assert_eq!(
+        schema_registry().errors("urn:codeflow:schema:present:document:2", &document),
+        Vec::<String>::new()
+    );
+}
+
+fn post_answer(port: u16, authority: &str, cookie: &str, answer: &str) -> String {
+    http(
+        port,
+        &format!(
+            "POST /app/api/answers HTTP/1.1\r\nHost: {authority}\r\nOrigin: http://{authority}\r\nCookie: {cookie}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+            answer.len()
+        ),
+    )
+}
+
+fn response_json(response: &str) -> serde_json::Value {
+    serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+}
+
+/// TSK-119 end to end: the page the service renders carries each form's
+/// digest; answers posted to the real service are stored in the session's
+/// `responses.jsonl`, whose lines match the responses schema, and the v1
+/// `events.jsonl` and `feedback` stream stay as they were.
+#[test]
+fn answers_posted_to_the_service_are_stored_as_schema_lines() {
+    let fixture = setup_project();
+    let document = fixture.project.join("forms.json");
+    fs::write(&document, contract_fixture("documents/v2-forms.json")).unwrap();
+    let (session_id, opened) = open_no_launch(&fixture, &document);
+    let (port, authority, cookie) = bootstrap_cookie(&opened);
+    let page = application_page(port, &authority, &cookie);
+    let digest = |form: &str| {
+        let at = page
+            .find(&format!("data-cf-form=\"{form}\""))
+            .unwrap_or_else(|| panic!("no form {form} on the page"));
+        between(&page[at..], "data-cf-form-digest=\"", "\"").to_string()
+    };
+    let events_before = fs::read(session_dir(&fixture, &session_id).join("events.jsonl")).unwrap();
+    let answer = format!(
+        r#"{{"request_id":"3f2a0c11-0000-4000-8000-0000000000c1","session_id":"{session_id}","revision":1,"form_id":"store-choice","form_digest":"{}","outcome":"submit","values":{{"home":"local","keep-days":30,"channels":["rail"],"share":false}},"rationales":{{"home":"Answers can hold private text."}}}}"#,
+        digest("store-choice")
+    );
+    let stored = post_answer(port, &authority, &cookie, &answer);
+    assert!(stored.starts_with("HTTP/1.1 200 "), "{stored}");
+    let receipt = response_json(&stored);
+    assert_eq!(receipt["state"], "stored");
+    let amendment = format!(
+        r#"{{"request_id":"3f2a0c11-0000-4000-8000-0000000000c2","session_id":"{session_id}","revision":1,"form_id":"store-choice","form_digest":"{}","outcome":"submit","values":{{"home":"repo","keep-days":7}},"rationales":{{}},"amends":"{}"}}"#,
+        digest("store-choice"),
+        receipt["answer_id"].as_str().unwrap()
+    );
+    assert!(post_answer(port, &authority, &cookie, &amendment).starts_with("HTTP/1.1 200 "));
+    let decision = format!(
+        r#"{{"request_id":"3f2a0c11-0000-4000-8000-0000000000c3","session_id":"{session_id}","revision":1,"form_id":"d-scope","form_digest":"{}","outcome":"decline","values":{{}},"rationales":{{}},"reason":"Not my call."}}"#,
+        digest("d-scope")
+    );
+    assert!(post_answer(port, &authority, &cookie, &decision).starts_with("HTTP/1.1 200 "));
+    let refused = post_answer(
+        port,
+        &authority,
+        &cookie,
+        &answer.replace("\"keep-days\":30", "\"keep-days\":0"),
+    );
+    assert!(
+        refused.starts_with("HTTP/1.1 409 "),
+        "the reused request id: {refused}"
+    );
+
+    let directory = session_dir(&fixture, &session_id);
+    let ledger = fs::read_to_string(directory.join("responses.jsonl")).unwrap();
+    let registry = schema_registry();
+    let lines: Vec<serde_json::Value> = ledger
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 3);
+    for line in &lines {
+        assert_eq!(
+            registry.errors("urn:codeflow:schema:present:session-responses:1", line),
+            Vec::<String>::new(),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["answer", "amendment", "answer"]
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(directory.join("responses.jsonl"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    assert_eq!(
+        fs::read(directory.join("events.jsonl")).unwrap(),
+        events_before
+    );
+    let feedback = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "feedback", &session_id],
+    ));
+    assert!(
+        feedback.trim().is_empty(),
+        "answers are not v1 feedback: {feedback}"
+    );
+    close_and_clear(&fixture, &session_id);
+}
+
 #[test]
 fn a_v2_session_opens_renders_framing_and_prints_history_v2() {
     let fixture = setup_project();
@@ -1395,6 +1599,7 @@ fn the_annotation_matrix_names_every_block_type() {
         "\n## ",
     );
     let mut rows: Vec<&str> = Vec::new();
+    let mut legacy: Vec<&str> = Vec::new();
     for line in section.lines().filter(|line| line.starts_with("| `")) {
         let cells: Vec<&str> = line.trim_matches('|').split(" | ").map(str::trim).collect();
         assert_eq!(cells.len(), 4, "{line}");
@@ -1404,12 +1609,38 @@ fn the_annotation_matrix_names_every_block_type() {
                 "{line}: a cell is yes or no with a reason"
             );
         }
-        rows.push(cells[0].trim_matches('`'));
+        // TSK-119: the schema_version 1 decision keeps its own row.
+        match cells[0].strip_suffix(" (v1)") {
+            Some(name) => legacy.push(name.trim_matches('`')),
+            None => rows.push(cells[0].trim_matches('`')),
+        }
     }
     rows.sort_unstable();
     assert_eq!(
         rows, variants,
         "the matrix has one row for every block type"
+    );
+    assert_eq!(
+        legacy,
+        ["decision"],
+        "the matrix keeps one legacy row, the v1 decision"
+    );
+    let legacy_fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../codeflow-present/tests/fixtures/annotation/legacy-decision.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(legacy_fixture["schema_version"], 1);
+    assert!(
+        legacy_fixture["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|block| block["type"] == "decision" && block["status"].is_string()),
+        "the legacy fixture holds a v1 decision with a status"
     );
 }
 
@@ -1452,5 +1683,58 @@ fn cli_input_errors_and_empty_clears_are_named() {
         &["present", "clear", "--dry-run"],
     ));
     assert!(empty.contains("nothing to clear"), "{empty}");
+    close_and_clear(&fixture, &session_id);
+}
+
+/// TSK-119, SPC-014 I5: `present update --expected-revision N` applies only
+/// while N is current; otherwise it exits 8 with the exact conflict line on
+/// stderr and writes no revision. Without the flag, update is unchanged.
+#[test]
+fn update_with_an_expected_revision_refuses_a_stale_base() {
+    let fixture = setup_project();
+    let document = fixture.project.join("forms.json");
+    fs::write(&document, contract_fixture("documents/v2-forms.json")).unwrap();
+    let (session_id, _) = open_no_launch(&fixture, &document);
+    let revisions = || {
+        fs::read_dir(session_dir(&fixture, &session_id).join("revisions"))
+            .unwrap()
+            .count()
+    };
+    let update = |expected: Option<&str>| {
+        let mut args = vec!["present", "update", &session_id, document.to_str().unwrap()];
+        if let Some(expected) = expected {
+            args.extend(["--expected-revision", expected]);
+        }
+        codeflow(&fixture.project, &fixture.home, &args)
+    };
+
+    let applied = update(Some("1"));
+    assert_eq!(
+        require_success(&applied).trim(),
+        format!("updated {session_id} to revision 2")
+    );
+    assert_eq!(revisions(), 2);
+
+    for stale in ["1", "3", "0"] {
+        let refused = update(Some(stale));
+        assert_eq!(
+            refused.status.code(),
+            Some(8),
+            "--expected-revision {stale}"
+        );
+        assert_eq!(
+            String::from_utf8(refused.stderr).unwrap(),
+            format!("{{\"error\":\"revision_conflict\",\"expected\":{stale},\"current\":2}}\n")
+        );
+        assert!(refused.stdout.is_empty());
+        assert_eq!(revisions(), 2, "no revision is written");
+    }
+
+    let not_a_number = update(Some("two"));
+    assert_eq!(not_a_number.status.code(), Some(2), "usage error");
+    assert_eq!(revisions(), 2);
+
+    require_success(&update(None));
+    assert_eq!(revisions(), 3);
     close_and_clear(&fixture, &session_id);
 }

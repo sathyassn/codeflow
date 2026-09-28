@@ -473,7 +473,7 @@
     ".agents/skills/cf-present/references/document-authoring.md": {
       "src": "agents/skills/cf-present/references/document-authoring.md",
       "ownership": "managed",
-      "sha256": "22ff7213cd27f564c502b9f8ba310bc49370886a7e4d751ca46a78880b2157b9",
+      "sha256": "09a09ba1c99f2ddfa02914e322789f7cd2e567efcf8f8d1b2a61988abb9f1381",
       "exec": false
     },
     ".agents/skills/cf-present/references/visual-craft.md": {
@@ -1079,7 +1079,7 @@
     ".claude/skills/cf-present/references/document-authoring.md": {
       "src": "agents/skills/cf-present/references/document-authoring.md",
       "ownership": "managed",
-      "sha256": "22ff7213cd27f564c502b9f8ba310bc49370886a7e4d751ca46a78880b2157b9",
+      "sha256": "09a09ba1c99f2ddfa02914e322789f7cd2e567efcf8f8d1b2a61988abb9f1381",
       "exec": false
     },
     ".claude/skills/cf-present/references/visual-craft.md": {
@@ -1253,7 +1253,7 @@
     ".codeflow/schemas/present/document-v2.schema.json": {
       "src": "present/schemas/document-v2.schema.json",
       "ownership": "managed",
-      "sha256": "36dbeb9f13923adb108d1a74292955db14b5d0387146cff9dc62020676e2a1bc",
+      "sha256": "e77f7bf7c59ada46ccb79cf0b8bb8b38191b214546e2e2322d13c0438edec551",
       "exec": false
     },
     ".codeflow/schemas/present/session-history-v1.schema.json": {
@@ -1266,6 +1266,12 @@
       "src": "present/schemas/session-history-v2.schema.json",
       "ownership": "managed",
       "sha256": "6ad84cfe23761d8de3662e5448587fd56dcbfe461e6e15939d3085ae4ceb0a5a",
+      "exec": false
+    },
+    ".codeflow/schemas/present/session-responses-v1.schema.json": {
+      "src": "present/schemas/session-responses-v1.schema.json",
+      "ownership": "managed",
+      "sha256": "368d5cf6d1d75a537219a490425fc7053927f9ebd3bb33cea87764c1ad8387f6",
       "exec": false
     },
     ".codeflow/schemas/present/utility-tokens-v1.schema.json": {

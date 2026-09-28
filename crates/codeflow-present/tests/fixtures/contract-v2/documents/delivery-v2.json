@@ -927,15 +927,39 @@
       "type": "decision",
       "id": "d1",
       "title": "1. How should numbers stay unique?",
-      "status": "open",
-      "markdown": "- **(a) The registry branch** (recommended). Readable numbers, unique the moment they are issued when the agent is online. Two tasks on the longest chain; depends on the host proof.\n- **(b) Scan all branches, catch clashes in CI.** Smallest; two machines can still pick one number, and one record is renumbered before merge. This is the fallback if the proof fails.\n- **(c) Random ids for everything.** No coordination; long ids, and every branch name, link and habit changes."
+      "markdown": "- **(a) The registry branch** (recommended). Readable numbers, unique the moment they are issued when the agent is online. Two tasks on the longest chain; depends on the host proof.\n- **(b) Scan all branches, catch clashes in CI.** Smallest; two machines can still pick one number, and one record is renumbered before merge. This is the fallback if the proof fails.\n- **(c) Random ids for everything.** No coordination; long ids, and every branch name, link and habit changes.",
+      "options": [
+        {
+          "value": "a",
+          "label": "The registry branch",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "Scan all branches, catch clashes in CI"
+        },
+        {
+          "value": "c",
+          "label": "Random ids for everything"
+        }
+      ]
     },
     {
       "type": "decision",
       "id": "d2",
       "title": "2. Should claiming a task lock it?",
-      "status": "open",
-      "markdown": "- **(a) No lock in 3.0.0; visible claims** (recommended). The orchestrator assigns parallel work, as today; a pushed task branch shows the task is taken; conflicts are reported. One small command.\n- **(b) Exclusive locks now.** Needs renewal, hand-over and a way to stop a stalled agent that wakes up: a large task and a new way to fail, with no case yet that needs it."
+      "markdown": "- **(a) No lock in 3.0.0; visible claims** (recommended). The orchestrator assigns parallel work, as today; a pushed task branch shows the task is taken; conflicts are reported. One small command.\n- **(b) Exclusive locks now.** Needs renewal, hand-over and a way to stop a stalled agent that wakes up: a large task and a new way to fail, with no case yet that needs it.",
+      "options": [
+        {
+          "value": "a",
+          "label": "No lock in 3.0.0; visible claims",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "Exclusive locks now"
+        }
+      ]
     },
     {
       "type": "table",
@@ -976,29 +1000,85 @@
       "type": "decision",
       "id": "d3",
       "title": "3. What goes into 3.0.0?",
-      "status": "open",
-      "markdown": "On 25 September you kept the docs line (EPC-016) and the autonomy line (EPC-018) in 3.0.0; on 26 September you moved them out to ship quickly. This gate removes that reason. The release candidate still accepts the presentation `diagram` block, which EPC-016 removes; publishing it makes the later removal a breaking change.\n\n- **(a) Keep the split, retire the diagram input first** (recommended). Smallest release that never publishes something it plans to remove; one medium task.\n- **(b) Fold the docs line into 3.0.0.** Waits for its open tasks (TSK-061 to TSK-063) and their reviews.\n- **(c) Keep the split and publish the diagram block.** No work now; a breaking change in 3.1."
+      "markdown": "On 25 September you kept the docs line (EPC-016) and the autonomy line (EPC-018) in 3.0.0; on 26 September you moved them out to ship quickly. This gate removes that reason. The release candidate still accepts the presentation `diagram` block, which EPC-016 removes; publishing it makes the later removal a breaking change.\n\n- **(a) Keep the split, retire the diagram input first** (recommended). Smallest release that never publishes something it plans to remove; one medium task.\n- **(b) Fold the docs line into 3.0.0.** Waits for its open tasks (TSK-061 to TSK-063) and their reviews.\n- **(c) Keep the split and publish the diagram block.** No work now; a breaking change in 3.1.",
+      "options": [
+        {
+          "value": "a",
+          "label": "Keep the split, retire the diagram input first",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "Fold the docs line into 3.0.0"
+        },
+        {
+          "value": "c",
+          "label": "Keep the split and publish the diagram block"
+        }
+      ]
     },
     {
       "type": "decision",
       "id": "d4",
       "title": "4. When should the changelog move to one file per change?",
-      "status": "open",
-      "markdown": "- **(a) In 3.1, through a new ADR** (recommended). 3.0.0 keeps the hardened single changelog; parallel lines keep conflicting on it until then.\n- **(b) Now.** Ends the conflicts sooner, but reworks the release script while the release waits.\n- **(c) Never.** The merge conflicts stay."
+      "markdown": "- **(a) In 3.1, through a new ADR** (recommended). 3.0.0 keeps the hardened single changelog; parallel lines keep conflicting on it until then.\n- **(b) Now.** Ends the conflicts sooner, but reworks the release script while the release waits.\n- **(c) Never.** The merge conflicts stay.",
+      "options": [
+        {
+          "value": "a",
+          "label": "In 3.1, through a new ADR",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "Now"
+        },
+        {
+          "value": "c",
+          "label": "Never"
+        }
+      ]
     },
     {
       "type": "decision",
       "id": "d5",
       "title": "5. How much live agent testing before release?",
-      "status": "open",
-      "markdown": "- **(a) Six situations, three runs each, Claude and Codex: 36 sessions** (recommended). The strongest focused evidence of steady behaviour; failures are fixed and rerun. The most time; runs after the skills are rewritten.\n- **(b) One run each: 12 sessions.** Quicker, but cannot tell steady behaviour from a lucky run; the release notes claim less."
+      "markdown": "- **(a) Six situations, three runs each, Claude and Codex: 36 sessions** (recommended). The strongest focused evidence of steady behaviour; failures are fixed and rerun. The most time; runs after the skills are rewritten.\n- **(b) One run each: 12 sessions.** Quicker, but cannot tell steady behaviour from a lucky run; the release notes claim less.",
+      "options": [
+        {
+          "value": "a",
+          "label": "Six situations, three runs each, Claude and Codex: 36 sessions",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "One run each: 12 sessions"
+        }
+      ]
     },
     {
       "type": "decision",
       "id": "d6",
       "title": "6. What happens to the EPC-015 line?",
-      "status": "open",
-      "markdown": "The engineering-bar line (EPC-015, SPC-011, SPC-012) is merged nowhere, and no record says what happens to it.\n\n- **Decide after the overlap list** (recommended): I bring what EPC-015 still holds and what this epic already covers, with the planning PR.\n- Fold the overlap into EPC-020 and archive the rest.\n- Land it separately after 3.0.0.\n- Archive it."
+      "markdown": "The engineering-bar line (EPC-015, SPC-011, SPC-012) is merged nowhere, and no record says what happens to it.\n\n- **Decide after the overlap list** (recommended): I bring what EPC-015 still holds and what this epic already covers, with the planning PR.\n- Fold the overlap into EPC-020 and archive the rest.\n- Land it separately after 3.0.0.\n- Archive it.",
+      "options": [
+        {
+          "value": "decide-later",
+          "label": "Decide after the overlap list",
+          "recommended": true
+        },
+        {
+          "value": "fold",
+          "label": "Fold the overlap into EPC-020 and archive the rest"
+        },
+        {
+          "value": "land",
+          "label": "Land it separately after 3.0.0"
+        },
+        {
+          "value": "archive",
+          "label": "Archive it"
+        }
+      ]
     },
     {
       "type": "callout",

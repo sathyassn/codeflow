@@ -2,6 +2,7 @@ import { render } from "preact";
 import { Chrome } from "./chrome";
 import { CHROME_ROOT_ID, DOCUMENT_ROOT_ID, readChromeConfig } from "./contracts";
 import { enhanceDocument } from "./enhance";
+import { enhanceForms } from "./forms";
 import "./styles.css";
 import "./figure.css";
 
@@ -16,4 +17,5 @@ if (!(chromeRoot instanceof HTMLElement) || !(documentRoot instanceof HTMLElemen
 
 const config = readChromeConfig(chromeRoot);
 enhanceDocument(documentRoot);
+enhanceForms(documentRoot, config);
 render(<Chrome config={config} documentRoot={documentRoot} />, chromeRoot);

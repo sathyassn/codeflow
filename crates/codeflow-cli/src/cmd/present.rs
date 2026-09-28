@@ -53,6 +53,10 @@ enum PresentCommand {
     Update {
         session_id: String,
         document: PathBuf,
+        /// Apply the update only while revision N is current; otherwise
+        /// exit 8 and write nothing.
+        #[arg(long, value_name = "N")]
+        expected_revision: Option<u64>,
     },
     /// Print the append-only feedback history as JSON.
     History { session_id: String },
@@ -100,6 +104,13 @@ enum PresentCommand {
 pub fn run(args: &PresentArgs) -> i32 {
     match run_inner(&args.command) {
         Ok(()) => 0,
+        Err(PresentError::RevisionConflict { expected, current }) => {
+            // The exact line of SPC-014 I5, for an agent to parse.
+            eprintln!(
+                r#"{{"error":"revision_conflict","expected":{expected},"current":{current}}}"#
+            );
+            8
+        }
         Err(error) => {
             eprintln!("present: {error}");
             exit_code(&error)
@@ -126,9 +137,14 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<()> {
         PresentCommand::Update {
             session_id,
             document,
+            expected_revision,
         } => {
             let bytes = read_document(document)?;
-            let revision = store.update_document(parse_id(session_id)?, parse_document(&bytes)?)?;
+            let revision = store.update_document_expecting(
+                parse_id(session_id)?,
+                parse_document(&bytes)?,
+                *expected_revision,
+            )?;
             println!("updated {session_id} to revision {revision}");
             Ok(())
         }
@@ -703,6 +719,7 @@ fn exit_code(error: &PresentError) -> i32 {
         PresentError::SessionNotFound(_) => 3,
         PresentError::BrowserUnavailable(_) | PresentError::ServiceUnavailable(_) => 4,
         PresentError::UnsafePath(_) | PresentError::CorruptState(_) => 5,
+        PresentError::RevisionConflict { .. } => 8,
         PresentError::SessionClosed(_)
         | PresentError::PartialCleanup { .. }
         | PresentError::Io { .. } => 1,

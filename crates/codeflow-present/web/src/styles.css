@@ -642,6 +642,36 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .decision { padding-block: var(--cf-space-4); border-block: var(--cf-line) solid var(--cf-border); }
 .decision > header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--cf-space-4); }
 .decision__status { color: var(--cf-accent-strong); font-size: 0.75rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+/* Forms and v2 decisions (SPC-014 B6): the runtime renders the controls. */
+.cf-form { display: grid; gap: var(--cf-space-4); padding-block: var(--cf-space-4); border-block: var(--cf-line) solid var(--cf-border); }
+.cf-form__title { margin: 0; font-size: 1.15rem; }
+.cf-form__fields { display: grid; gap: var(--cf-space-5); }
+.cf-field { display: grid; gap: var(--cf-space-2); min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+.cf-field__label { padding: 0; font-weight: 650; }
+.cf-field__flag, .cf-field__hint, .cf-field__description { color: var(--cf-text-muted); font-size: var(--cf-fs-caption); font-weight: 400; }
+.cf-field__hint, .cf-field__description { margin: 0; }
+.cf-field .cf-input { inline-size: 100%; max-inline-size: 36rem; min-block-size: 2.25rem; padding: var(--cf-space-2); border: var(--cf-line) solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); background: var(--cf-surface); color: var(--cf-text); }
+.cf-field .cf-input:focus-visible, .cf-option input:focus-visible { outline: 2px solid var(--cf-focus); outline-offset: 1px; }
+.cf-field .cf-input:disabled, .cf-option input:disabled { cursor: not-allowed; opacity: 0.7; }
+.cf-option { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cf-space-2); min-block-size: 2rem; }
+.cf-option input { inline-size: 1.05rem; block-size: 1.05rem; margin: 0; accent-color: var(--cf-accent); }
+.cf-recommended { padding: 0.05rem var(--cf-space-2); border-radius: var(--cf-radius-pill); background: var(--cf-accent-soft); color: var(--cf-accent-strong); font-size: var(--cf-fs-micro); font-weight: 650; }
+.cf-field__rationale { display: grid; gap: var(--cf-space-1); max-inline-size: 36rem; color: var(--cf-text-muted); font-size: var(--cf-fs-caption); }
+.cf-field__error { margin: 0; color: var(--cf-danger); font-size: var(--cf-fs-caption); font-weight: 600; }
+.cf-field .cf-input[aria-invalid="true"] { border-color: var(--cf-danger); }
+.cf-form__decline { display: grid; gap: var(--cf-space-1); max-inline-size: 36rem; }
+/* A display rule above would beat the user agent's [hidden]; hidden wins here. */
+.cf-form [hidden] { display: none; }
+.cf-form__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cf-space-2); }
+.cf-form__actions button { padding-inline: var(--cf-space-3); border: var(--cf-line) solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); background: var(--cf-surface); color: var(--cf-text); }
+.cf-form__actions .cf-form__submit, .cf-form__actions [data-cf-form-action="confirm"], .cf-form__actions [data-cf-form-action="resend"] { border-color: var(--cf-accent); background: var(--cf-accent); color: var(--cf-on-accent); }
+.cf-form__state { flex-basis: 100%; margin: 0; color: var(--cf-text-muted); font-size: var(--cf-fs-caption); }
+.cf-form__state:empty { display: none; }
+.cf-form__state[data-cf-form-state="stored"], .cf-form__state-stored { color: var(--cf-positive); font-weight: 650; }
+.cf-form__state[data-cf-form-state="failed"], .cf-form__state[data-cf-form-state="closed"] { color: var(--cf-danger); }
+.cf-form__state[data-cf-form-state="stale"], .cf-form__state[data-cf-form-state="changed"] { color: var(--cf-warning); }
+.cf-form__kept { display: grid; gap: var(--cf-space-1); max-inline-size: 36rem; margin: 0; padding-inline-start: var(--cf-space-5); font-size: var(--cf-fs-caption); overflow-wrap: anywhere; }
+[data-cf-commenting="true"] .cf-form input, [data-cf-commenting="true"] .cf-form textarea, [data-cf-commenting="true"] .cf-form button { cursor: inherit; }
 table { inline-size: 100%; border-collapse: collapse; }
 th, td { padding: var(--cf-space-3); border-block-end: var(--cf-line) solid var(--cf-border); text-align: start; vertical-align: top; }
 th { color: var(--cf-text-muted); font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; }

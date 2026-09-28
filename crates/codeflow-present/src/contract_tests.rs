@@ -1,6 +1,8 @@
 //! The SPC-014 contract fixtures whose first passing task is TSK-118:
 //! documents, entity anchors and re-anchoring. Fixtures live under
-//! `tests/fixtures/contract-v2/` and are indexed by its `index.json`.
+//! `tests/fixtures/contract-v2/` and are indexed by its `index.json`. The
+//! TSK-119 fixtures (forms and answers) run in `answer_contract_tests.rs`
+//! with the helpers below.
 
 use std::path::PathBuf;
 
@@ -17,19 +19,19 @@ use crate::{
     PresentError,
 };
 
-fn fixture_root() -> PathBuf {
+pub(crate) fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/contract-v2")
 }
 
-fn fixture_bytes(name: &str) -> Vec<u8> {
+pub(crate) fn fixture_bytes(name: &str) -> Vec<u8> {
     std::fs::read(fixture_root().join(name)).unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
-fn fixture_json(name: &str) -> Value {
+pub(crate) fn fixture_json(name: &str) -> Value {
     serde_json::from_slice(&fixture_bytes(name)).unwrap()
 }
 
-fn index_entries(task: &str) -> Vec<Value> {
+pub(crate) fn index_entries(task: &str) -> Vec<Value> {
     let index = fixture_json("index.json");
     index["fixtures"]
         .as_array()
@@ -40,14 +42,14 @@ fn index_entries(task: &str) -> Vec<Value> {
         .collect()
 }
 
-fn supported(name: &str) -> PresentationDocument {
+pub(crate) fn supported(name: &str) -> PresentationDocument {
     match parse_document(&fixture_bytes(name)).unwrap() {
         ParsedDocument::Supported(document) => document,
         ParsedDocument::Unsupported { .. } => panic!("{name} parsed as unsupported"),
     }
 }
 
-fn find<'a>(document: &'a PresentationDocument, id: &str) -> &'a Block {
+pub(crate) fn find<'a>(document: &'a PresentationDocument, id: &str) -> &'a Block {
     document
         .walk()
         .into_iter()
@@ -55,7 +57,7 @@ fn find<'a>(document: &'a PresentationDocument, id: &str) -> &'a Block {
         .unwrap_or_else(|| panic!("no block {id}"))
 }
 
-fn render(document: &PresentationDocument, interactive: bool) -> String {
+pub(crate) fn render(document: &PresentationDocument, interactive: bool) -> String {
     render_document(
         document,
         &RenderOptions {
@@ -177,7 +179,7 @@ fn a_v1_html_title_is_visible_and_v1_references_stay_literal() {
     assert!(html.contains("See [fig:stage] literally."));
 }
 
-fn store() -> (tempfile::TempDir, SessionStore) {
+pub(crate) fn store() -> (tempfile::TempDir, SessionStore) {
     let temp = tempfile::tempdir().unwrap();
     let store = SessionStore::at_root(temp.path().join("project"), "key".to_string()).unwrap();
     (temp, store)

@@ -62,6 +62,11 @@ export async function fitCrops<N extends WithExcerpt>(
   return { notes: fittedNotes, reduced, dropped };
 }
 
+/** The note without its picture; an excerpt left empty goes too. */
+export function withoutPicture<N extends WithExcerpt>(note: N): N {
+  return withImage(note, undefined);
+}
+
 function withImage<N extends WithExcerpt>(note: N, image: Crop | undefined): N {
   if (!note.excerpt?.image) return note;
   const { image: _old, ...rest } = note.excerpt;

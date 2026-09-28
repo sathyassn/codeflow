@@ -8,6 +8,7 @@ use crate::{
         reference_segments, Block, EvidenceState, FrameKind, Framing, PresentationDocument,
         TextSegment, TreeNode,
     },
+    form::{FieldKind, FormField, FormView, RationaleMode, TextFormat},
     limits,
     state::FeedbackSnapshot,
 };
@@ -302,7 +303,7 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
         }
         Block::Decision {
             title,
-            status,
+            status: Some(status),
             markdown,
             ..
         } => {
@@ -313,6 +314,11 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
             output.push_str("</span></header>");
             render_markdown(framing, markdown, output);
             output.push_str("</article>");
+        }
+        Block::Decision { .. } | Block::Form { .. } => {
+            if let Some(view) = crate::form::FormView::of(block) {
+                render_form(&view, framing, options.interactive, output);
+            }
         }
         Block::Table { columns, rows, .. } => {
             output.push_str("<div class=\"cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable table\"><table><thead><tr>");
@@ -636,6 +642,7 @@ fn block_kind(block: &Block) -> &'static str {
         Block::Callout { .. } => "callout",
         Block::Comparison { .. } => "comparison",
         Block::Decision { .. } => "decision",
+        Block::Form { .. } => "form",
         Block::Table { .. } => "table",
         Block::Status { .. } => "status",
         Block::Code { .. } => "code",
@@ -752,6 +759,438 @@ fn safe_markdown_destination(destination: &str) -> bool {
         || lower.starts_with("https://")
         || lower.starts_with("http://")
         || lower.starts_with("mailto:")
+}
+
+/// A form or a v2 decision (SPC-014 B6): the runtime renders its fields,
+/// with no value set and nothing preselected, and the page's own script
+/// submits it through `POST /app/api/answers` (there is no `<form>` element,
+/// so the page policy keeps `form-action 'none'`). The title, prompt, labels,
+/// descriptions and option labels are the block's review text; every word
+/// the runtime adds (flags, hints, "Recommended", the actions) is marked
+/// `data-cf-review-skip`. An export shows the question with its controls
+/// disabled and no actions.
+fn render_form(view: &FormView<'_>, framing: &Framing, interactive: bool, output: &mut String) {
+    let decision = matches!(view.block, Block::Decision { .. });
+    let base = format!("cf-form-{}", view.id);
+    let title_id = format!("{base}-title");
+    output.push_str("<article class=\"cf-form");
+    if decision {
+        output.push_str(" decision");
+    }
+    output.push_str("\" data-cf-form=\"");
+    escape_attr_to(view.id, output);
+    output.push_str("\" data-cf-form-kind=\"");
+    output.push_str(if decision { "decision" } else { "form" });
+    output.push_str("\" data-cf-form-digest=\"");
+    output.push_str(&view.digest());
+    output.push_str("\" role=\"group\" aria-labelledby=\"");
+    escape_attr_to(&title_id, output);
+    output.push_str("\"><header><h2 class=\"cf-form__title\" id=\"");
+    escape_attr_to(&title_id, output);
+    output.push_str("\">");
+    escape_html_to(view.title, output);
+    output.push_str("</h2></header>");
+    match view.block {
+        Block::Decision { markdown, .. }
+        | Block::Form {
+            markdown: Some(markdown),
+            ..
+        } => render_markdown(framing, markdown, output),
+        _ => {}
+    }
+    output.push_str("<div class=\"cf-form__fields\">");
+    for field in view.fields.iter() {
+        render_field(
+            view,
+            field,
+            &base,
+            decision.then_some(title_id.as_str()),
+            interactive,
+            output,
+        );
+    }
+    output.push_str("</div>");
+    if interactive {
+        render_form_actions(&base, output);
+    }
+    output.push_str("</article>");
+}
+
+/// The ids and flags one field's markup shares.
+struct FieldMarkup {
+    input_id: String,
+    described: String,
+    grouped: bool,
+    required: bool,
+    disabled: &'static str,
+}
+
+fn render_field(
+    view: &FormView<'_>,
+    field: &FormField,
+    base: &str,
+    labelled_by: Option<&str>,
+    interactive: bool,
+    output: &mut String,
+) {
+    let input_id = format!("{base}-{}", field.id);
+    let hint = field_hint(field);
+    let mut described = Vec::new();
+    if field.description.is_some() {
+        described.push(format!("{input_id}-description"));
+    }
+    if hint.is_some() {
+        described.push(format!("{input_id}-hint"));
+    }
+    described.push(format!("{input_id}-error"));
+    let markup = FieldMarkup {
+        described: described.join(" "),
+        input_id,
+        grouped: matches!(
+            field.kind,
+            FieldKind::Boolean | FieldKind::Choice | FieldKind::Choices
+        ),
+        required: view.is_required(&field.id),
+        disabled: if interactive { "" } else { " disabled" },
+    };
+    open_field(field, &markup, labelled_by, output);
+    // A decision's one field is labelled by the decision's title.
+    if labelled_by.is_none() {
+        output.push_str(if markup.grouped {
+            "<legend class=\"cf-field__label\">"
+        } else {
+            "<label class=\"cf-field__label\" for=\""
+        });
+        if !markup.grouped {
+            escape_attr_to(&markup.input_id, output);
+            output.push_str("\">");
+        }
+        escape_html_to(&field.label, output);
+        if markup.required {
+            output
+                .push_str("<span class=\"cf-field__flag\" data-cf-review-skip> (required)</span>");
+        }
+        output.push_str(if markup.grouped {
+            "</legend>"
+        } else {
+            "</label>"
+        });
+    }
+    if let Some(description) = &field.description {
+        output.push_str("<p class=\"cf-field__description\" id=\"");
+        escape_attr_to(&markup.input_id, output);
+        output.push_str("-description\">");
+        escape_html_to(description, output);
+        output.push_str("</p>");
+    }
+    if let Some(hint) = &hint {
+        output.push_str("<p class=\"cf-field__hint\" data-cf-review-skip id=\"");
+        escape_attr_to(&markup.input_id, output);
+        output.push_str("-hint\">");
+        escape_html_to(hint, output);
+        output.push_str("</p>");
+    }
+    render_control(field, &markup, output);
+    // The error sits with the control it most often concerns, above the
+    // rationale; the page marks whichever of the two is wrong.
+    output.push_str("<p class=\"cf-field__error\" data-cf-review-skip role=\"alert\" id=\"");
+    escape_attr_to(&markup.input_id, output);
+    output.push_str("-error\" hidden></p>");
+    let mode = field.rationale_mode();
+    if mode != RationaleMode::None {
+        output.push_str("<div class=\"cf-field__rationale\" data-cf-review-skip><label for=\"");
+        escape_attr_to(&markup.input_id, output);
+        output.push_str("-rationale\">");
+        output.push_str(if mode == RationaleMode::Required {
+            "Why? (required)"
+        } else {
+            "Why? (optional)"
+        });
+        output.push_str("</label><textarea class=\"cf-input\" rows=\"2\" id=\"");
+        escape_attr_to(&markup.input_id, output);
+        output.push_str(
+            "-rationale\" data-cf-rationale-input autocomplete=\"off\" aria-describedby=\"",
+        );
+        escape_attr_to(&markup.input_id, output);
+        output.push_str("-error\"");
+        output.push_str(markup.disabled);
+        output.push_str("></textarea></div>");
+    }
+    output.push_str(if markup.grouped {
+        "</fieldset>"
+    } else {
+        "</div>"
+    });
+}
+
+/// The field's container, carrying the rules the page validates against.
+fn open_field(
+    field: &FormField,
+    markup: &FieldMarkup,
+    labelled_by: Option<&str>,
+    output: &mut String,
+) {
+    output.push_str(if markup.grouped { "<fieldset" } else { "<div" });
+    output.push_str(" class=\"cf-field\" data-cf-field=\"");
+    escape_attr_to(&field.id, output);
+    output.push_str("\" data-cf-field-kind=\"");
+    output.push_str(field_kind_name(field.kind));
+    output.push('"');
+    if markup.required {
+        output.push_str(" data-cf-required");
+    }
+    match field.rationale_mode() {
+        RationaleMode::None => {}
+        RationaleMode::Optional => output.push_str(" data-cf-rationale=\"optional\""),
+        RationaleMode::Required => output.push_str(" data-cf-rationale=\"required\""),
+    }
+    if let Some(format) = field.format {
+        output.push_str(" data-cf-format=\"");
+        output.push_str(text_format_name(format));
+        output.push('"');
+    }
+    if field.kind == FieldKind::Text {
+        let _ = write!(
+            output,
+            " data-cf-min-length=\"{}\" data-cf-max-length=\"{}\"",
+            field.min_length.unwrap_or(0),
+            field.text_max()
+        );
+    }
+    for (name, bound) in [("minimum", &field.minimum), ("maximum", &field.maximum)] {
+        if let Some(bound) = bound {
+            let _ = write!(output, " data-cf-{name}=\"{bound}\"");
+        }
+    }
+    for (name, count) in [
+        ("min-items", field.min_items),
+        ("max-items", field.max_items),
+    ] {
+        if let Some(count) = count {
+            let _ = write!(output, " data-cf-{name}=\"{count}\"");
+        }
+    }
+    if markup.grouped {
+        output.push_str(" aria-describedby=\"");
+        escape_attr_to(&markup.described, output);
+        output.push('"');
+        if let Some(labelled_by) = labelled_by {
+            output.push_str(" aria-labelledby=\"");
+            escape_attr_to(labelled_by, output);
+            output.push('"');
+        }
+    }
+    output.push('>');
+}
+
+/// The field's input: no value, nothing checked (B6).
+fn render_control(field: &FormField, markup: &FieldMarkup, output: &mut String) {
+    match field.kind {
+        FieldKind::Text | FieldKind::Number | FieldKind::Integer => {
+            let multiline = field.format == Some(TextFormat::Multiline);
+            if multiline {
+                output.push_str("<textarea class=\"cf-input\" rows=\"4\"");
+            } else {
+                output.push_str("<input class=\"cf-input\" type=\"");
+                output.push_str(if field.format == Some(TextFormat::Date) {
+                    "date\""
+                } else {
+                    "text\""
+                });
+                let mode = match (field.kind, field.format) {
+                    (FieldKind::Number, _) => Some("decimal"),
+                    (FieldKind::Integer, _) => Some("numeric"),
+                    (_, Some(TextFormat::Email)) => Some("email"),
+                    (_, Some(TextFormat::Uri)) => Some("url"),
+                    _ => None,
+                };
+                if let Some(mode) = mode {
+                    output.push_str(" inputmode=\"");
+                    output.push_str(mode);
+                    output.push('"');
+                }
+            }
+            output.push_str(" id=\"");
+            escape_attr_to(&markup.input_id, output);
+            output.push_str("\" data-cf-value autocomplete=\"off\" aria-describedby=\"");
+            escape_attr_to(&markup.described, output);
+            output.push('"');
+            if markup.required {
+                output.push_str(" aria-required=\"true\"");
+            }
+            output.push_str(markup.disabled);
+            output.push_str(if multiline { "></textarea>" } else { ">" });
+        }
+        FieldKind::Boolean => {
+            for (index, (value, label)) in
+                [("true", "Yes"), ("false", "No")].into_iter().enumerate()
+            {
+                render_option(markup, index, "radio", value, label, false, true, output);
+            }
+        }
+        FieldKind::Choice | FieldKind::Choices => {
+            let control = if field.kind == FieldKind::Choice {
+                "radio"
+            } else {
+                "checkbox"
+            };
+            for (index, option) in field.options.iter().flatten().enumerate() {
+                render_option(
+                    markup,
+                    index,
+                    control,
+                    &option.value,
+                    &option.label,
+                    option.recommended,
+                    false,
+                    output,
+                );
+            }
+        }
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one option's markup from its parts"
+)]
+fn render_option(
+    markup: &FieldMarkup,
+    index: usize,
+    control: &str,
+    value: &str,
+    label: &str,
+    recommended: bool,
+    runtime_label: bool,
+    output: &mut String,
+) {
+    let input_id = markup.input_id.as_str();
+    output.push_str("<label class=\"cf-option\"><input type=\"");
+    output.push_str(control);
+    output.push_str("\" name=\"");
+    escape_attr_to(input_id, output);
+    output.push_str("\" id=\"");
+    escape_attr_to(input_id, output);
+    let _ = write!(output, "-{index}");
+    output.push_str("\" value=\"");
+    escape_attr_to(value, output);
+    output.push_str("\" data-cf-value");
+    output.push_str(markup.disabled);
+    output.push_str("><span class=\"cf-option__label\"");
+    // Yes and No are the runtime's words, not the author's.
+    if runtime_label {
+        output.push_str(" data-cf-review-skip");
+    }
+    output.push('>');
+    escape_html_to(label, output);
+    output.push_str("</span>");
+    if recommended {
+        output.push_str("<span class=\"cf-recommended\" data-cf-review-skip>Recommended</span>");
+    }
+    output.push_str("</label>");
+}
+
+fn render_form_actions(base: &str, output: &mut String) {
+    output.push_str("<div class=\"cf-form__decline\" data-cf-review-skip hidden><label for=\"");
+    escape_attr_to(base, output);
+    output.push_str("-reason\">Reason for declining (optional)</label><textarea class=\"cf-input\" rows=\"2\" id=\"");
+    escape_attr_to(base, output);
+    output.push_str(
+        "-reason\" data-cf-decline-reason autocomplete=\"off\"></textarea></div>\
+         <div class=\"cf-form__actions\" data-cf-review-skip>\
+         <button type=\"button\" class=\"cf-form__submit\" data-cf-form-action=\"submit\">Submit answer</button>\
+         <button type=\"button\" data-cf-form-action=\"decline\">Decline to answer</button>\
+         <button type=\"button\" data-cf-form-action=\"cancel\">Dismiss for now</button>\
+         <button type=\"button\" data-cf-form-action=\"resend\" hidden>Resend</button>\
+         <button type=\"button\" data-cf-form-action=\"confirm\" hidden>Confirm against the current revision</button>\
+         <button type=\"button\" data-cf-form-action=\"amend\" hidden>Correct this answer</button>\
+         <p class=\"cf-form__state\" role=\"status\" aria-live=\"polite\" data-cf-form-state=\"editing\"></p></div>",
+    );
+}
+
+/// The constraint line the page shows under a field.
+fn field_hint(field: &FormField) -> Option<String> {
+    let range = |low: Option<String>, high: Option<String>, unit: &str| match (low, high) {
+        (Some(low), Some(high)) => Some(format!("{low} to {high}{unit}.")),
+        (Some(low), None) => Some(format!("At least {low}{unit}.")),
+        (None, Some(high)) => Some(format!("At most {high}{unit}.")),
+        (None, None) => None,
+    };
+    match field.kind {
+        FieldKind::Text => {
+            let format = match field.format {
+                Some(TextFormat::Email) => Some("An email address."),
+                Some(TextFormat::Uri) => Some("An absolute address, such as https://example.org."),
+                Some(TextFormat::Date) => Some("A date, such as 2026-09-28."),
+                Some(TextFormat::DateTime) => {
+                    Some("A date and time, such as 2026-09-28T14:30:00Z.")
+                }
+                Some(TextFormat::Multiline) | None => None,
+            };
+            let length = range(
+                field
+                    .min_length
+                    .filter(|min| *min > 0)
+                    .map(|min| min.to_string()),
+                Some(field.text_max().to_string()),
+                " characters",
+            );
+            Some(
+                [format.map(str::to_string), length]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+        }
+        FieldKind::Number | FieldKind::Integer => {
+            let kind = if field.kind == FieldKind::Integer {
+                "A whole number"
+            } else {
+                "A number"
+            };
+            let bounds = match (&field.minimum, &field.maximum) {
+                (Some(low), Some(high)) => format!(" from {low} to {high}"),
+                (Some(low), None) => format!(" of at least {low}"),
+                (None, Some(high)) => format!(" of at most {high}"),
+                (None, None) => String::new(),
+            };
+            Some(format!("{kind}{bounds}."))
+        }
+        // Worded like the page's too_few and too_many errors.
+        FieldKind::Choices => match (field.min_items.filter(|min| *min > 0), field.max_items) {
+            (Some(low), Some(high)) if low == high => Some(format!("Choose exactly {low}.")),
+            (Some(low), Some(high)) if high.checked_sub(low) == Some(1) => {
+                Some(format!("Choose {low} or {high}."))
+            }
+            (Some(low), Some(high)) => Some(format!("Choose between {low} and {high}.")),
+            (Some(low), None) => Some(format!("Choose at least {low}.")),
+            (None, Some(high)) => Some(format!("Choose at most {high}.")),
+            (None, None) => None,
+        },
+        FieldKind::Boolean | FieldKind::Choice => None,
+    }
+}
+
+const fn field_kind_name(kind: FieldKind) -> &'static str {
+    match kind {
+        FieldKind::Text => "text",
+        FieldKind::Number => "number",
+        FieldKind::Integer => "integer",
+        FieldKind::Boolean => "boolean",
+        FieldKind::Choice => "choice",
+        FieldKind::Choices => "choices",
+    }
+}
+
+const fn text_format_name(format: TextFormat) -> &'static str {
+    match format {
+        TextFormat::Email => "email",
+        TextFormat::Uri => "uri",
+        TextFormat::Date => "date",
+        TextFormat::DateTime => "date-time",
+        TextFormat::Multiline => "multiline",
+    }
 }
 
 fn render_tree(nodes: &[TreeNode], output: &mut String) {

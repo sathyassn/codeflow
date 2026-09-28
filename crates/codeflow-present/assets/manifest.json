@@ -14,8 +14,8 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-M7YRAJ2K.js",
-      "present.style": "/app/assets/app-NMEWHKHF.css"
+      "present.app": "/app/assets/app-K5CHWLN6.js",
+      "present.style": "/app/assets/app-I2KEQRCI.css"
     },
     "inline": {
       "present.prepaint": {
@@ -26,14 +26,30 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-M7YRAJ2K.js",
-        "stored_path": "service/app-M7YRAJ2K.js.br",
+        "request_path": "/app/assets/app-I2KEQRCI.css",
+        "stored_path": "service/app-I2KEQRCI.css.br",
+        "media_type": "text/css; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 57501,
+        "encoded_bytes": 10024,
+        "sha256": "fbac3e0b2bf0eac5b09ed45779a160c6c3eea06c7fdfd55960ea7b8316435053",
+        "etag": "\"sha256-+6w+Cyvw6sWwntRXeaFgxsPuoGx/39VZYOp7gxZDUFM=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/svg%3E",
+            "kind": "url-token"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/app-K5CHWLN6.js",
+        "stored_path": "service/app-K5CHWLN6.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 89902,
-        "encoded_bytes": 27505,
-        "sha256": "4f62a3b85b9dcde7182e731a4a08e1fb6e4b6c82855ed7abd6a5e4a847df8ff8",
-        "etag": "\"sha256-T2KjuFudzecYLnMaSgjh+25LbIKFXter1qXkqEffj/g=\"",
+        "raw_bytes": 106686,
+        "encoded_bytes": 32049,
+        "sha256": "36ed4260609863d6fbb9245da05666bdb209aae47c0fd2e00a87ea381b1eb151",
+        "etag": "\"sha256-Nu1CYGCYY9b7uSRdoFZmvbIJquR8D9LgCofqOBsesVE=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -54,22 +70,6 @@
           {
             "request_path": "/app/assets/chunk-syntax-64CEMTPY.js",
             "kind": "dynamic-import"
-          }
-        ]
-      },
-      {
-        "request_path": "/app/assets/app-NMEWHKHF.css",
-        "stored_path": "service/app-NMEWHKHF.css.br",
-        "media_type": "text/css; charset=utf-8",
-        "content_encoding": "br",
-        "raw_bytes": 54453,
-        "encoded_bytes": 9649,
-        "sha256": "ee6f5092f6ea70016fe49d2f3e244dfe9d68dfb1a99ec18884a6a882e341836b",
-        "etag": "\"sha256-7m9QkvbqcAFv5J0vPiRN/p1o37GpnsGIhKaoguNBg2s=\"",
-        "imports": [
-          {
-            "request_path": "/app/assets/svg%3E",
-            "kind": "url-token"
           }
         ]
       },
@@ -315,20 +315,20 @@
     ],
     "metrics": {
       "asset_count": 15,
-      "raw_corpus_bytes": 1036919,
-      "brotli_corpus_bytes": 272272,
+      "raw_corpus_bytes": 1056751,
+      "brotli_corpus_bytes": 277191,
       "largest_raw_chunk_bytes": 186275,
       "largest_brotli_chunk_bytes": 131206
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-e4aa085c27004a1b.js.gz",
+      "stored_path": "export/renderer-1c76a211d66dc05c.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 963447,
-      "encoded_bytes": 269472,
-      "sha256": "e4aa085c27004a1b87e48907b8fb9bb110932677557cb93284ec157aa63fc782"
+      "raw_bytes": 966983,
+      "encoded_bytes": 269987,
+      "sha256": "1c76a211d66dc05ce0337957d34294d5b947a450f6d2a9b1cb66660f74dd756d"
     }
   },
   "budgets": {
@@ -338,5 +338,5 @@
     "largest_brotli_chunk_bytes": 145000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "85a4cc12e358e80cc069511af9daca3ac2a860f1e15e85143f0c6e3623217bfa"
+  "corpus_sha256": "82fd429c6d05ccd4daf5ce7c4bcb1a6dde35d4d395e966eb44115af6221313bc"
 }

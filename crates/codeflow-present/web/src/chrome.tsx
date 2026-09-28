@@ -22,6 +22,7 @@ import type {
 import { parseServiceError } from "./contracts";
 import type { EntitySelector } from "./contracts";
 import { followSessionEvents } from "./events";
+import { SESSION_EVENT, type SessionEventDetail } from "./forms";
 import { postJson, PresentRequestError } from "./http";
 import {
   annotatableAncestor,
@@ -40,7 +41,7 @@ import {
   STROKE_PADDING_PX,
 } from "./selection";
 import type { CapturedTarget, Point } from "./selection";
-import { fitCrops } from "./budget";
+import { fitCrops, withoutPicture } from "./budget";
 import { captureRectJpeg, entityCropPadding, paddedRect, userSpaceBox } from "./excerpt";
 import {
   applyAppearance,
@@ -142,8 +143,25 @@ const SPEECH_PATH =
 export function Chrome({ config, documentRoot }: ChromeProps) {
   const [appearance, setAppearance] = useState(initialAppearance);
   // Unsent notes survive a reload of this tab (QA defect 4), until a submit
-  // succeeds. They stay in this browser's session storage for this session.
+  // succeeds. They stay in this browser's session storage for this session,
+  // and are dropped once the service reports the session closed (B6).
   const [draft] = useState(() => readDraft(config.session_id));
+  const closedRef = useRef(false);
+  // Closure is latched once any route reports it: the poll, a refused review
+  // or a refused answer. The draft goes, and every form learns of it once.
+  const closeSession = (announce: boolean): void => {
+    if (closedRef.current) return;
+    closedRef.current = true;
+    clearDraft(config.session_id);
+    documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: "session_closed" }));
+    if (announce) {
+      const notice = "This review session is closed.";
+      setStatus(notice);
+      showToast(notice, { sticky: true });
+    }
+  };
+  const closeSessionRef = useRef(closeSession);
+  closeSessionRef.current = closeSession;
   const [notes, setNotes] = useState<readonly PendingFeedback[]>(draft?.notes ?? []);
   const [verdict, setVerdict] = useState<ReviewVerdict>(draft?.verdict ?? "approve_with_notes");
   const [instruction, setInstruction] = useState(draft?.instruction ?? "");
@@ -327,12 +345,22 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     return undefined;
   }, [appearance, settingsOpen]);
 
-  useEffect(() => writeDraft(config.session_id, config.revision, notes, verdict, instruction), [notes, verdict, instruction]);
+  useEffect(() => {
+    if (!closedRef.current) writeDraft(config.session_id, config.revision, notes, verdict, instruction);
+  }, [notes, verdict, instruction]);
   useEffect(() => {
     const notice = draftNotice(draft, config.revision);
     if (notice) showToast(notice, { sticky: true });
   }, []);
   useEffect(() => observeSections(documentRoot, setActiveSection), [documentRoot, config.revision]);
+  // A form refused with session_closed reports it on the document root.
+  useEffect(() => {
+    const onSessionEvent = (event: Event): void => {
+      if ((event as CustomEvent<SessionEventDetail>).detail === "session_closed") closeSessionRef.current(true);
+    };
+    documentRoot.addEventListener(SESSION_EVENT, onSessionEvent);
+    return () => documentRoot.removeEventListener(SESSION_EVENT, onSessionEvent);
+  }, [documentRoot]);
   useEffect(
     () => followSessionEvents(`${config.revision}:${config.event_sequence}`, handleEvent, setEventMessage),
     [config.session_id, config.revision, config.event_sequence],
@@ -591,7 +619,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (event.button !== 0 || !(event.target instanceof Element)) return;
       if (!documentRoot.contains(event.target)) return;
       if (event.target.closest(".cf-marker, .cf-marker-layer")) return;
-      if (event.target.closest("button, a, input, textarea, select")) return;
+      // A form's controls are review targets while commenting; the form
+      // runtime keeps the gesture from changing them (SPC-014 B6).
+      if (event.target.closest("button, a, input, textarea, select") && !event.target.closest("[data-cf-form]")) return;
       let releasedText = false;
       if (pendingPinRef.current) {
         releasedText = capturedSelectionCovers(pendingPinRef.current, event.clientX, event.clientY);
@@ -1059,6 +1089,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       // SPC-014 I3: a refused review names its reason; the pending notes stay
       // for every refusal, so the reviewer can correct and resend them.
       const refusal = error instanceof PresentRequestError ? parseServiceError(error.message) : null;
+      if (refusal?.error === "session_closed") closeSession(false);
       const reason = refusal?.message ?? (error instanceof Error ? error.message : String(error));
       const notice = `Review was not submitted: ${reason} Your pending notes are unchanged.`;
       setStatus(notice);
@@ -1138,14 +1169,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   function handleEvent(event: SessionEvent): void {
     setEventMessage(event.message ?? null);
+    // Forms keep their drafts in the page and show the notice themselves.
     if (event.kind === "revision") {
+      documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: event.kind }));
       const notice = "A newer document revision is available. Finish or discard this review before reloading.";
       setStatus(notice);
       showToast(notice, { sticky: true });
     } else if (event.kind === "session_closed") {
-      const notice = "This review session is closed.";
-      setStatus(notice);
-      showToast(notice, { sticky: true });
+      closeSession(true);
     }
   }
 
@@ -1941,20 +1972,17 @@ function readDraft(sessionId: string): Draft | null {
   }
 }
 
-// A draft too large for the storage keeps its notes without their pictures.
+// The stored draft keeps the reviewer's words and anchors, never a picture of
+// the page: a note restored after a reload is sent without its picture.
 function writeDraft(sessionId: string, revision: number, notes: readonly PendingFeedback[], verdict: ReviewVerdict, instruction: string): void {
   if (notes.length === 0) {
     clearDraft(sessionId);
     return;
   }
-  const withoutPictures = notes.map((note) => (note.excerpt?.image ? { ...note, excerpt: { ...(note.excerpt.text ? { text: note.excerpt.text } : {}) } } : note));
-  for (const kept of [notes, withoutPictures]) {
-    try {
-      sessionStorage.setItem(draftKey(sessionId), JSON.stringify({ revision, notes: kept, verdict, instruction }));
-      return;
-    } catch {
-      // Try the smaller draft, then give up quietly: the notes stay on screen.
-    }
+  try {
+    sessionStorage.setItem(draftKey(sessionId), JSON.stringify({ revision, notes: notes.map(withoutPicture), verdict, instruction }));
+  } catch {
+    // Storage full or unavailable: give up quietly, the notes stay on screen.
   }
 }
 

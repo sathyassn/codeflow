@@ -38,6 +38,7 @@ const PRESENT_SCHEMAS: &[&str] = &[
     "document-v2.schema.json",
     "session-history-v1.schema.json",
     "session-history-v2.schema.json",
+    "session-responses-v1.schema.json",
     "utility-tokens-v1.schema.json",
 ];
 

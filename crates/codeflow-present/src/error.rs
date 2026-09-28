@@ -19,6 +19,10 @@ pub enum PresentError {
     SessionNotFound(String),
     #[error("presentation session is closed: {0}")]
     SessionClosed(String),
+    /// `present update --expected-revision N` found another revision
+    /// current (SPC-014 I5); nothing was written.
+    #[error("expected revision {expected}, but revision {current} is current")]
+    RevisionConflict { expected: u64, current: u64 },
     #[error("unsafe presentation state path: {0}")]
     UnsafePath(PathBuf),
     #[error("presentation state is corrupt: {0}")]

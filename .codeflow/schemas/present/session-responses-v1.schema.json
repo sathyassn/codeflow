@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codeflow:schema:present:session-responses:1",
+  "title": "CodeFlow presentation session responses v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event",
+    "sequence",
+    "answer_id",
+    "request_id",
+    "payload_digest",
+    "session_id",
+    "revision",
+    "form_id",
+    "form_digest",
+    "outcome",
+    "values",
+    "rationales",
+    "question",
+    "actor",
+    "created_at_unix"
+  ],
+  "properties": {
+    "event": {
+      "enum": [
+        "answer",
+        "amendment"
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "answer_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "request_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "payload_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "session_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "form_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "form_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "outcome": {
+      "enum": [
+        "submit",
+        "decline",
+        "cancel"
+      ]
+    },
+    "values": {
+      "type": "object",
+      "$comment": "Field id to value: a string for text and choice, a number for number and integer, a boolean for boolean, an array of option values for choices. A field left unanswered is absent. decline and cancel carry an empty object."
+    },
+    "rationales": {
+      "type": "object",
+      "$comment": "Field id to the reviewer's rationale string. decline and cancel carry an empty object."
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 4096,
+      "$comment": "A decline's reason; at most 4096 bytes. Only a decline carries it."
+    },
+    "question": {
+      "$ref": "#/$defs/question"
+    },
+    "actor": {
+      "const": "operator"
+    },
+    "created_at_unix": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "amends": {
+      "$ref": "#/$defs/uuid",
+      "$comment": "The answer_id of an earlier answer (never an amendment) to the same form."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "amendment"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "amends"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "answer"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "amends"
+          ]
+        }
+      }
+    }
+  ],
+  "$comment": "One line of responses.jsonl in the private local session store (SPC-014 I4): an answer to a form or v2 decision, or an amendment of one. Each line is written with its newline in one write and synced before the receipt is returned. The store also checks that sequences count from 1, that each answer_id and request_id is used once, and that an amendment names an earlier answer of its form. An amendment carries amends; an answer never does.",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "fields"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/question_field"
+          }
+        }
+      },
+      "$comment": "The question as the reviewer saw it: the form title and each field's id, label, kind and options. A v2 decision is one choice field with the id choice."
+    },
+    "question_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "kind": {
+          "enum": [
+            "text",
+            "number",
+            "integer",
+            "boolean",
+            "choice",
+            "choices"
+          ]
+        },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 24,
+          "items": {
+            "$ref": "#/$defs/question_option"
+          }
+        }
+      }
+    },
+    "question_option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "label"
+      ],
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    }
+  }
+}

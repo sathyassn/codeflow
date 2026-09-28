@@ -1447,6 +1447,12 @@ dest = ".codeflow/schemas/present/session-history-v2.schema.json"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "present/schemas/session-responses-v1.schema.json"
+dest = ".codeflow/schemas/present/session-responses-v1.schema.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # --- CI (fully-managed — charter §4.3: unmodified → replaced on update; ------
 #     user-modified → 3-way merged, never clobbered) --------------------------
 

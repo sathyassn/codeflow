@@ -24,6 +24,7 @@ const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
 const codeflow = resolve(process.env.CF_PRESENT_CODEFLOW ?? join(repoRoot, "target/debug/codeflow"));
 const fixture = join(webRoot, "../tests/fixtures/annotation/every-block.json");
+const legacyFixture = join(webRoot, "../tests/fixtures/annotation/legacy-decision.json");
 const reference = join(repoRoot, "assets/base/agents/skills/cf-present/references/document-authoring.md");
 const MAX_CROP = { width: 480, height: 360 };
 
@@ -49,11 +50,16 @@ const RECIPES = {
   tabs: { block: "views", text: { in: ".tabs__labels", words: "Risks" }, element: { click: "details:nth-of-type(2) > summary", label: "Risks" }, area: { closed: "details" } },
   feedback_prompt: { block: "ask", text: { in: "p", words: "Mark anything" }, element: { click: "p", label: "Mark anything that is wrong, then submit the review." } },
   html: { block: "stage", text: { in: "svg text", words: "Service" }, element: { entities: true } },
+  // TSK-119: a form's option label is its words; a click on a field's input
+  // pins the field. The v1 decision keeps its row, on its own v1 document.
+  form: { block: "survey", text: { in: ".cf-option__label", words: "Private local store" }, element: { click: "[data-cf-field='keep-days'] input", label: "Days to keep" }, area: { box: "[data-cf-field='store']" } },
+  decision_v1: { block: "legacy", document: "legacy", text: { in: "p", words: "element and area notes" }, element: { click: "h2", label: "Which crop format shipped?" } },
 };
 
 const matrix = readMatrix(await readFile(reference, "utf8"));
 assert.deepEqual(Object.keys(RECIPES).sort(), [...matrix.keys()].sort(), "the suite and the matrix name different block types");
 const cells = [];
+const legacyCells = [];
 for (const [type, row] of matrix) {
   for (const gesture of ["text", "element", "area"]) {
     const recipe = RECIPES[type];
@@ -61,7 +67,7 @@ for (const [type, row] of matrix) {
     assert.equal(has, row[gesture], `${type} ${gesture}: the matrix says ${row[gesture] ? "yes" : "no"}, the suite ${has ? "has" : "lacks"} a recipe`);
     if (!row[gesture]) continue;
     if (recipe[gesture]?.entities) continue;
-    cells.push({ type, gesture, block: recipe.block, recipe: recipe[gesture] ?? {} });
+    (recipe.document === "legacy" ? legacyCells : cells).push({ type, gesture, block: recipe.block, recipe: recipe[gesture] ?? {} });
   }
 }
 
@@ -104,6 +110,10 @@ try {
   const page = context.pages()[0] ?? await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  const answerRequests = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/app/api/answers") answerRequests.push(request.url());
+  });
   await page.goto(pathToFileURL(bootstrap).href, { waitUntil: "commit", timeout: 120_000 });
   await page.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"), { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
@@ -133,11 +143,91 @@ try {
       }
     };
     await step("arm Comment", () => armComment(page));
-    await step("reveal the block", () => reveal(page, cell.block));
+    await step("reveal the block", () => reveal(page, cell.block, cell.recipe.box ?? cell.recipe.in));
     const pinned = await step("gesture", () => gesture(page, cell));
     await step("save the note", () => saveNote(page, `matrix: ${where}`));
     const reloaded = cell.gesture === "text" ? {} : await step("read the anchored page", () => anchoredPage(page, sessionId));
     expected.push({ ...cell, where, ...pinned, ...reloaded });
+  }
+  // Marking a form never answers it (SPC-014 B6): after the form cells
+  // above, a click on an option, on a text field and on Submit answer, a
+  // drag across option labels and a box over the form each pin a note and
+  // leave every control, the draft and the store as they were; nothing is
+  // sent. The draft is a populated one: values, a rationale, and a decline
+  // reason with the decision's decline box open.
+  {
+    const controls = () => page.evaluate(() => [...document.querySelectorAll("[data-cf-form] [data-cf-value], [data-cf-form] [data-cf-rationale-input], [data-cf-form] [data-cf-decline-reason]")]
+      .map((control) => (control.type === "radio" || control.type === "checkbox" ? `${control.id}:${control.checked}` : `${control.id}=${control.value}`)));
+    const blank = await controls();
+    assert.ok(blank.length > 10 && blank.every((state) => state.endsWith(":false") || state.endsWith("=")), `form control: the form cells changed a control: ${blank.join(" ")}`);
+    if (await page.locator(".cf-hint.on").count() > 0) {
+      await page.locator("#cf-comment-toggle").click();
+      await page.waitForFunction(() => !document.querySelector(".cf-hint.on"));
+    }
+    const survey = page.locator("[data-cf-block-id='survey']");
+    await survey.locator("[data-cf-field='store'] input[value='local']").check();
+    await survey.locator("[data-cf-field='store'] [data-cf-rationale-input]").fill("Kept through the annotation gestures");
+    await survey.locator("[data-cf-field='keep-days'] input").fill("30");
+    await survey.locator("[data-cf-field='channels'] input[value='rail']").check();
+    await survey.locator("[data-cf-field='notify'] input[value='false']").check();
+    await survey.locator("[data-cf-field='contact'] input").fill("reviewer@example.org");
+    const choice = page.locator("[data-cf-block-id='choice']");
+    await choice.locator("input[value='jpeg']").check();
+    await choice.locator("[data-cf-form-action='decline']").click();
+    await choice.locator("[data-cf-decline-reason]").fill("A reason typed before commenting");
+    const pristine = await controls();
+    for (const expected of [
+      "cf-form-survey-store-0:true",
+      "cf-form-survey-store-rationale=Kept through the annotation gestures",
+      "cf-form-survey-keep-days=30",
+      "cf-form-survey-channels-0:true",
+      "cf-form-survey-notify-1:true",
+      "cf-form-survey-contact=reviewer@example.org",
+      "cf-form-choice-choice-0:true",
+      "cf-form-choice-reason=A reason typed before commenting",
+    ]) {
+      assert.ok(pristine.includes(expected), `form control: the populated draft lacks ${expected}: ${pristine.join(" ")}`);
+    }
+    assert.ok(await choice.locator("[data-cf-decline-reason]").isVisible(), "form control: the decline box is closed");
+    const discard = async (what) => {
+      await page.getByTestId("float-chip").waitFor({ timeout: 10_000 }).catch((error) => {
+        throw new Error(`form control, ${what}: no note was pinned`, { cause: error });
+      });
+      await page.keyboard.press("Escape");
+      await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 10_000 });
+      assert.deepEqual(await controls(), pristine, `form control, ${what}: a control changed`);
+      assert.deepEqual(answerRequests, [], `form control, ${what}: an answer was sent`);
+    };
+    for (const [what, target] of [
+      ["a click on an option", "[data-cf-block-id='survey'] input[value='repo']"],
+      ["a click on an option's label", "[data-cf-block-id='survey'] [data-cf-field='notify'] .cf-option__label"],
+      ["a click on a text field", "[data-cf-block-id='survey'] [data-cf-field='contact'] input"],
+      ["a click on a decision's option", "[data-cf-block-id='choice'] input[value='png']"],
+      ["a click on Submit answer", "[data-cf-block-id='survey'] [data-cf-form-action='submit']"],
+    ]) {
+      await armComment(page);
+      await page.locator(target).first().evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+      const box = await page.locator(target).first().boundingBox();
+      assert.ok(box, `form control, ${what}: no box`);
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await discard(what);
+    }
+    await armComment(page);
+    await reveal(page, "survey", "[data-cf-field='store']");
+    await gesture(page, { type: "form", gesture: "text", block: "survey", recipe: { in: ".cf-option__label", words: "Committed JSON Lines" } });
+    await page.keyboard.press("Escape");
+    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10_000 }).catch(() => undefined);
+    assert.deepEqual(await controls(), pristine, "form control, a text selection: a control changed");
+    await armComment(page);
+    await reveal(page, "survey", "[data-cf-field='channels']");
+    await gesture(page, { type: "form", gesture: "area", block: "survey", recipe: { box: "[data-cf-field='channels']" } });
+    await page.keyboard.press("Escape");
+    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10_000 }).catch(() => undefined);
+    assert.deepEqual(await controls(), pristine, "form control, an area: a control changed");
+    assert.ok(await choice.locator("[data-cf-decline-reason]").isVisible(), "form control: the decline box closed");
+    assert.deepEqual(answerRequests, [], "form control: an answer was sent");
+    assert.equal(await findFile(root, "responses.jsonl"), null, "form control: the answer store was written");
+    process.stdout.write("form control passed: on a populated draft (values, a rationale, a decline reason in an open decline box), clicks on options, a label, a text field, a decision option and Submit answer, a text selection across option labels and an area over the form pin notes and leave every control, the draft and the store unchanged; no answer is sent\n");
   }
   // A plain drag (no Shift) over the blank ends of diff lines selects those
   // lines as text; it never pins the whole diff as one element (QA defect 6).
@@ -329,6 +419,52 @@ try {
     for (const crop of decoded.filter((item) => item.inside !== undefined)) process.stderr.write(`  ${crop.where}: likeness ${fitOf(crop)}\n`);
     assert.fail(misplaced.map((crop) => `${crop.where}, crop: likeness ${fitOf(crop)}; it needs at least ${LIKENESS_FLOOR} inside, more than outside, and no less than ${REGISTRATION_SLACK} below the best nearby`).join("; "));
   }
+  // The v1 decision row, on a schema_version 1 document of its own: each
+  // cell pins a note of its gesture's kind on the decision, delivered with
+  // its selector, and each element and area note with a JPEG crop.
+  {
+    const document = join(project, "legacy-decision.json");
+    await writeFile(document, await readFile(legacyFixture, "utf8"));
+    const legacyOpened = run(["present", "open", document, "--no-launch"]);
+    const legacyId = legacyOpened.match(/session ([0-9a-f-]+) ready/u)?.[1];
+    const legacyBootstrap = legacyOpened.match(/owner-private bootstrap file (.+?) in a qualified/u)?.[1];
+    assert.ok(legacyId && legacyBootstrap, `legacy decision: could not parse ${legacyOpened}`);
+    const legacyPage = await context.newPage();
+    await legacyPage.goto(pathToFileURL(legacyBootstrap).href, { waitUntil: "commit", timeout: 120_000 });
+    await legacyPage.waitForURL(/^http:\/\/127\.0\.0\.1:\d+\/app\//u, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await legacyPage.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    assert.equal(await legacyPage.locator("[data-cf-block-id='legacy'] .decision__status").textContent(), "Accepted", "legacy decision: its status");
+    for (const cell of legacyCells) {
+      await armComment(legacyPage);
+      await reveal(legacyPage, cell.block);
+      await gesture(legacyPage, cell);
+      await saveNote(legacyPage, `legacy: ${cell.gesture}`);
+    }
+    await legacyPage.getByLabel("Verdict").selectOption("approve_with_notes");
+    await legacyPage.getByRole("button", { name: "Submit review" }).click();
+    await legacyPage.getByRole("status").getByText(/Review received/u).waitFor({ timeout: 60_000 });
+    let line = "";
+    for (let attempt = 0; attempt < 120 && !line; attempt += 1) {
+      line = run(["present", "feedback", legacyId]).trim();
+      if (!line) await new Promise((done) => setTimeout(done, 250));
+    }
+    const legacyEnvelope = JSON.parse(line);
+    assert.equal(legacyEnvelope.notes.length, legacyCells.length, "legacy decision: notes");
+    for (const cell of legacyCells) {
+      const note = legacyEnvelope.notes.find((candidate) => candidate.body === `legacy: ${cell.gesture}`);
+      assert.ok(note, `legacy decision ${cell.gesture}: no note`);
+      assert.equal(note.block_id, "legacy", `legacy decision ${cell.gesture}: block`);
+      const own = { text: "selector", element: "element_selector", area: "region_selector" }[cell.gesture];
+      assert.deepEqual(["selector", "element_selector", "region_selector"].filter((key) => note[key]), [own], `legacy decision ${cell.gesture}: selectors`);
+      if (cell.gesture === "text") assert.equal(note.selector.exact, cell.recipe.words);
+      else assert.equal(note.excerpt?.image?.media_type, "image/jpeg", `legacy decision ${cell.gesture}: crop`);
+      if (cell.gesture === "element") assert.ok(note.element_selector.label.includes(cell.recipe.label), `legacy decision: label ${note.element_selector.label}`);
+    }
+    await legacyPage.close();
+    run(["present", "close", legacyId]);
+    run(["present", "clear", legacyId, "--older-than", "0d"]);
+    process.stdout.write(`legacy decision passed: on a schema_version 1 document, the v1 decision renders its status and takes ${legacyCells.map((cell) => cell.gesture).join(", ")} notes, each delivered with its own selector (element and area with a JPEG crop)\n`);
+  }
   // Lifecycle on the same session (TSK-071 criterion 4).
   // An approval with no notes can be sent (QA defect 9). Submitting turned
   // Comment off, which closes the rail.
@@ -346,6 +482,26 @@ try {
   await reveal(page, "points");
   await gesture(page, draftCell);
   await saveNote(page, "draft: kept across the reload");
+  // The stored draft keeps words and anchors, never a picture of the page.
+  const pictureCell = { type: "bullets", gesture: "element", block: "points", recipe: RECIPES.bullets.element };
+  await armComment(page);
+  await reveal(page, "points");
+  await gesture(page, pictureCell);
+  await saveNote(page, "draft: an element note loses its picture");
+  // An area over the screenshot has no words: its only excerpt is a picture.
+  await armComment(page);
+  await reveal(page, "screenshot", RECIPES.media.area.box);
+  await gesture(page, { type: "media", gesture: "area", block: "screenshot", recipe: RECIPES.media.area });
+  await saveNote(page, "draft: a picture-only area note");
+  const storedDraft = await page.waitForFunction((key) => {
+    const kept = sessionStorage.getItem(key);
+    return kept?.includes("a picture-only area note") ? kept : null;
+  }, `cf-present-draft:${sessionId}`, { timeout: 10_000 }).then((handle) => handle.jsonValue());
+  assert.doesNotMatch(storedDraft, /data_base64|"image"/u, "lifecycle, draft: the stored draft holds a picture");
+  assert.ok(JSON.parse(storedDraft).notes.every((note) => !note.excerpt || Object.keys(note.excerpt).length > 0), "lifecycle, draft: an empty excerpt is stored");
+  const storedArea = JSON.parse(storedDraft).notes.find((note) => note.body === "draft: a picture-only area note");
+  assert.ok(storedArea.region_selector, "lifecycle, draft: the area note is not an area");
+  assert.equal(storedArea.excerpt, undefined, "lifecycle, draft: the area note kept an excerpt, so it had words");
   // update: a revision that keeps the prose and drops the decision re-anchors
   // the prose note and orphans the decision notes with their reason.
   const revised = JSON.parse(await readFile(fixture, "utf8"));
@@ -357,14 +513,28 @@ try {
   await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
   await armComment(page);
   const restored = await page.getByTestId("toast").innerText();
-  assert.match(restored, /Restored 1 unsent note from revision 1\./u, "lifecycle, draft: no restore notice");
+  assert.match(restored, /Restored 3 unsent notes from revision 1\./u, "lifecycle, draft: no restore notice");
   await armComment(page);
-  assert.equal(await page.getByTestId("note-row").count(), 1, "lifecycle, draft: the unsent note is gone");
+  assert.equal(await page.getByTestId("note-row").count(), 3, "lifecycle, draft: an unsent note is gone");
   await page.getByLabel("Verdict").selectOption("approve_with_notes");
   await page.getByTestId("submit-all").click();
   const kept = await nextEnvelope();
   assert.equal(kept.revision, 2);
-  assert.deepEqual(kept.notes.map((note) => note.body), ["draft: kept across the reload"], "lifecycle, draft: delivered notes");
+  assert.deepEqual(kept.notes.map((note) => note.body), ["draft: kept across the reload", "draft: an element note loses its picture", "draft: a picture-only area note"], "lifecycle, draft: delivered notes");
+  // A restored element note is sent without a picture and accepted: its
+  // label excerpt and selector stay; nothing re-captures it.
+  const restoredElement = kept.notes[1];
+  assert.ok(restoredElement.element_selector, "lifecycle, draft: the element note lost its selector");
+  assert.equal(restoredElement.excerpt?.image, undefined, "lifecycle, draft: the restored element note carries a picture");
+  assert.ok(restoredElement.excerpt?.text, "lifecycle, draft: the restored element note lost its text excerpt");
+  // A restored picture-only area note is sent with its selector and block
+  // label and no excerpt at all, and the service accepts it. (The rail's
+  // target summary is the page's own; a review request never carries it.)
+  const restoredArea = kept.notes[2];
+  assert.ok(restoredArea.region_selector, "lifecycle, draft: the area note lost its region selector");
+  assert.equal(restoredArea.block_id, "screenshot", "lifecycle, draft: the area note lost its block");
+  assert.ok(restoredArea.block_label, "lifecycle, draft: the area note lost its block label");
+  assert.equal(restoredArea.excerpt, undefined, "lifecycle, draft: the restored area note carries an excerpt");
   assert.equal(await page.evaluate((id) => sessionStorage.getItem(`cf-present-draft:${id}`), sessionId), null, "lifecycle, draft: kept after submit");
   await armComment(page);
   const earlier = page.getByTestId("feedback-history");
@@ -390,10 +560,29 @@ try {
     assert.doesNotMatch(html, chrome, `lifecycle, export: carries ${chrome}`);
   }
   assert.ok(html.includes("data-cf-block-id=\"prose\""), "lifecycle, export: lost the document");
+  // An unsent note is kept in this tab's session storage until the service
+  // reports the session closed; then the draft is dropped (B6 as amended).
+  // close stops the service, so no page of the closed session can load again;
+  // the dropped key is what a reload would read.
+  await page.bringToFront();
+  await armComment(page);
+  await reveal(page, "points");
+  await gesture(page, { type: "bullets", gesture: "text", block: "points", recipe: RECIPES.bullets.text });
+  await saveNote(page, "draft: dropped when the session closes");
+  const draftKey = `cf-present-draft:${sessionId}`;
+  // The draft is written after the note renders.
+  await page.waitForFunction((key) => sessionStorage.getItem(key)?.includes("draft: dropped when the session closes"), draftKey, { timeout: 10_000 })
+    .catch(async (error) => {
+      const kept = await page.evaluate((key) => sessionStorage.getItem(key), draftKey);
+      throw new Error(`lifecycle, close: the unsent note is not in session storage: ${String(kept).slice(0, 300)}`, { cause: error });
+    });
   // close then clear leave no session state behind.
+  run(["present", "close", sessionId]);
+  await page.getByTestId("toast").getByText(/This review session is closed\./u).waitFor({ timeout: 30_000 });
+  assert.equal(await page.evaluate((key) => sessionStorage.getItem(key), draftKey), null, "lifecycle, close: the draft outlived the session");
+  assert.deepEqual(await page.evaluate(() => Object.keys(sessionStorage)), [], "lifecycle, close: session storage still holds a draft");
   await context.close();
   context = null;
-  run(["present", "close", sessionId]);
   // close returns only once the service has exited, so clear right after it
   // finds nothing running.
   run(["present", "clear", sessionId, "--older-than", "0d"]);
@@ -401,7 +590,7 @@ try {
   assert.throws(() => run(["present", "history", sessionId]), "lifecycle, clear: history still readable");
   const cleared = sessionId;
   sessionId = null;
-  process.stdout.write(`lifecycle passed: an approval with no notes, an unsent note kept across update and reload, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, close and clear of ${cleared}\n`);
+  process.stdout.write(`lifecycle passed: an approval with no notes, unsent text, element and picture-only area notes kept across update and reload with no picture in storage, the element note sent without its picture and the area note with no excerpt, both accepted, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, an unsent note dropped from session storage when the session closes, close and clear of ${cleared}\n`);
   process.stdout.write(`cf-present annotation matrix passed: ${cells.length} cells and a whole-document note over ${matrix.size} block types (${cells.filter((cell) => cell.gesture === "text").length} text, ${cells.filter((cell) => cell.gesture === "element").length} element, ${cells.filter((cell) => cell.gesture === "area").length} area), each delivered with its kind and selector; ${decoded.length} JPEG crops sized to the rectangle each note reloads, not one colour, and ${decoded.filter((crop) => crop.inside !== undefined).length} of them at least ${LIKENESS_FLOOR} like the page inside that rectangle, more like it than just outside, and in register with the same rectangle moved 4 or 12 px\n`);
   for (const cell of expected) {
     const crop = decoded.find((item) => item.where === cell.where);
@@ -432,9 +621,11 @@ function readMatrix(markdown) {
   assert.ok(section, "the authoring reference has no annotation matrix");
   const rows = new Map();
   for (const line of section.split("\n")) {
-    const match = line.match(/^\| `([a-z_]+)` \| (.+) \| (.+) \| (.+) \|$/u);
+    const match = line.match(/^\| `([a-z_]+)`( \(v1\))? \| (.+) \| (.+) \| (.+) \|$/u);
     if (!match) continue;
-    const [, type, ...rest] = match;
+    // The schema_version 1 decision keeps its own row, `decision_v1` here.
+    const [, name, legacy, ...rest] = match;
+    const type = legacy ? `${name}_v1` : name;
     const [text, element, area] = rest.map((cell) => {
       assert.match(cell, /^(yes\b|no: \S)/u, `${type}: a cell must start "yes" or "no: <reason>": ${cell}`);
       return cell.startsWith("yes");
@@ -456,8 +647,13 @@ async function armComment(page) {
   }
 }
 
-async function reveal(page, blockId) {
-  await page.locator(`[data-cf-block-id='${blockId}']`).first().evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+// A block taller than the window (the form) is revealed at the part the
+// gesture uses.
+async function reveal(page, blockId, inner) {
+  await page.locator(`[data-cf-block-id='${blockId}']`).first().evaluate((element, inner) => {
+    const part = inner && element.getBoundingClientRect().height > innerHeight * 0.8 ? element.querySelector(inner) : null;
+    (part ?? element).scrollIntoView({ block: "center", behavior: "instant" });
+  }, inner ?? null);
 }
 
 // One gesture; returns what the pinned target should crop and how the chip named it.
@@ -916,6 +1112,19 @@ async function saveNote(page, body) {
   await page.getByTestId("composer-text").fill(body);
   await page.getByTestId("composer-save").click();
   await composer.waitFor({ state: "detached" });
+}
+
+async function findFile(directory, name) {
+  const { readdir } = await import("node:fs/promises");
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isFile() && entry.name === name) return path;
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      const found = await findFile(path, name).catch(() => null);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 async function findBrowser() {

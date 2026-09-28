@@ -43,8 +43,19 @@
       "type": "decision",
       "id": "choice",
       "title": "Which crop format ships?",
-      "status": "open",
-      "markdown": "Choose the format element and area crops use."
+      "markdown": "Choose the format element and area crops use.",
+      "options": [
+        {
+          "value": "jpeg",
+          "label": "JPEG crops",
+          "recommended": true
+        },
+        {
+          "value": "png",
+          "label": "PNG crops"
+        }
+      ],
+      "rationale": "optional"
     },
     {
       "type": "table",
@@ -678,6 +689,73 @@
       "type": "feedback_prompt",
       "id": "ask",
       "prompt": "Mark anything that is wrong, then submit the review."
+    },
+    {
+      "type": "form",
+      "id": "survey",
+      "title": "How should answers reach the agent?",
+      "markdown": "Answer what you can; the agent reads each answer with the revision it was given on.",
+      "fields": [
+        {
+          "id": "store",
+          "label": "Where answers live",
+          "kind": "choice",
+          "rationale": "optional",
+          "options": [
+            {
+              "value": "local",
+              "label": "Private local store",
+              "recommended": true
+            },
+            {
+              "value": "repo",
+              "label": "Committed JSON Lines"
+            }
+          ]
+        },
+        {
+          "id": "keep-days",
+          "label": "Days to keep",
+          "kind": "integer",
+          "minimum": 1,
+          "maximum": 365
+        },
+        {
+          "id": "channels",
+          "label": "Where to show state",
+          "kind": "choices",
+          "max_items": 2,
+          "options": [
+            {
+              "value": "rail",
+              "label": "Rail"
+            },
+            {
+              "value": "form",
+              "label": "Form"
+            },
+            {
+              "value": "toast",
+              "label": "Toast"
+            }
+          ]
+        },
+        {
+          "id": "notify",
+          "label": "Notify the agent at once",
+          "kind": "boolean"
+        },
+        {
+          "id": "contact",
+          "label": "Follow-up address",
+          "kind": "text",
+          "format": "email",
+          "max_length": 200
+        }
+      ],
+      "required": [
+        "store"
+      ]
     }
   ]
 }
