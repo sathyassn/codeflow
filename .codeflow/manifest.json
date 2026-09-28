@@ -1535,7 +1535,7 @@
     "project-management/templates/task.md": {
       "src": "pm/task.md.tmpl",
       "ownership": "managed",
-      "sha256": "852afcbd85b0f737787a7710ff7dd68d3b936669b6da64f7b0877625f277956c",
+      "sha256": "5686c45858d9a0ff526479ecac4dedbe18eef1bf00fe80c8525137b7e81444db",
       "exec": false
     }
   }

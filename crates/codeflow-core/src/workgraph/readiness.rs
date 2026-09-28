@@ -1042,7 +1042,7 @@ mod tests {
             let dep = if pin.is_empty() {
                 "[{id: TSK-001, kind: research}]".to_string()
             } else {
-                format!("[{{id: TSK-001, kind: research, pin: {pin}}}]")
+                format!("[{{id: TSK-001, kind: research, pin: \"{pin}\"}}]")
             };
             task(root, "TSK-002", "todo", &dep, "");
             // The same predecessor may be a code dependency of another task.
@@ -1264,7 +1264,10 @@ mod tests {
         run(root, &["rev-parse", "HEAD"])
     }
 
-    /// T103-1: a tag or branch named like a pin cannot redirect it.
+    /// T103-1: a tag or branch named like a pin cannot redirect it. The pin
+    /// is `open`'s full object id and each ref is named exactly that, so no
+    /// part of the case depends on how a prefix happens to look (TSK-156
+    /// review T156-2).
     #[test]
     fn a_pin_is_an_object_id_never_a_ref_name() {
         let dir = repo();
@@ -1273,23 +1276,92 @@ mod tests {
         let open = commit(root, "plan");
         task(root, "TSK-001", "complete", "[]", "");
         let done = commit(root, "findings");
-        let pin = &open[..8];
-        task(
-            root,
-            "TSK-002",
-            "todo",
-            &format!("[{{id: TSK-001, kind: research, pin: {pin}}}]"),
-            "",
-        );
-        commit(root, "consumer");
-        run(root, &["tag", pin, &done]);
-        run(root, &["branch", pin, &done]);
+        pinned_consumer(root, &open);
+        run(root, &["tag", &open, &done]);
+        run(root, &["branch", &open, &done]);
         let error = verdict(root, "TSK-002").unwrap_err();
         assert!(error.to_string().contains("'todo'"), "{error}");
         assert_eq!(
             entry(&backlog(root).unwrap(), "TSK-002").state,
             State::Waiting
         );
+    }
+
+    /// An abbreviated pin resolves as the object it abbreviates, never as a
+    /// ref of the same name. The abbreviation is the one git reports as
+    /// unambiguous in this repository (`rev-parse --short=12`), so it cannot
+    /// collide with another object, and it is quoted.
+    #[test]
+    fn an_abbreviated_pin_resolves_as_its_object_never_a_ref_name() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        let open = commit(root, "plan");
+        task(root, "TSK-001", "complete", "[]", "");
+        let done = commit(root, "findings");
+        let short = run(root, &["rev-parse", "--short=12", &open]);
+        assert!(open.starts_with(&short) && short.len() >= 12, "{short}");
+        pinned_consumer(root, &short);
+        run(root, &["tag", &short, &done]);
+        run(root, &["branch", &short, &done]);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(error.to_string().contains("'todo'"), "{error}");
+        // The same abbreviation of the completing commit is met.
+        let met = run(root, &["rev-parse", "--short=12", &done]);
+        pinned_consumer(root, &met);
+        assert!(verdict(root, "TSK-002").is_ok());
+    }
+
+    /// TSK-002 depends on TSK-001's research at the quoted `pin`.
+    fn pinned_consumer(root: &Path, pin: &str) {
+        task(
+            root,
+            "TSK-002",
+            "todo",
+            &format!("[{{id: TSK-001, kind: research, pin: \"{pin}\"}}]"),
+            "",
+        );
+        commit(root, "consumer");
+    }
+
+    /// TSK-156 AC-3: fixed pins, never a random commit prefix. Unquoted, a
+    /// digit or exponent pin leaves the graph unreadable with the quote
+    /// remedy; quoted, each is read as an object id and judged as one.
+    #[test]
+    fn a_pin_is_judged_the_same_for_fixed_digit_exponent_and_letter_cases() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "complete", "[]", "");
+        commit(root, "findings");
+        let graph = |pin: &str| {
+            task(
+                root,
+                "TSK-002",
+                "todo",
+                &format!("[{{id: TSK-001, kind: research, pin: {pin}}}]"),
+                "",
+            );
+            commit(root, "consumer");
+            let repo = Repository::open(root).unwrap();
+            let tree = repo.head().unwrap().peel_to_tree().unwrap();
+            records_from_tree(&repo, &tree).map(|_| ())
+        };
+        for pin in ["70283613", "949894e0"] {
+            let error = graph(pin).unwrap_err().to_string();
+            assert!(
+                error.contains("pin reads as a YAML number"),
+                "{pin}: {error}"
+            );
+            assert!(error.contains("quote it"), "{pin}: {error}");
+        }
+        for pin in ["\"70283613\"", "\"949894e0\"", "0123abcd", "\"0123abcd\""] {
+            graph(pin).unwrap();
+            let error = verdict(root, "TSK-002").unwrap_err().to_string();
+            assert!(
+                error.contains("not an object in this repository"),
+                "{pin}: {error}"
+            );
+        }
     }
 
     /// T103-2: a target on another remote is read there, never from origin.
