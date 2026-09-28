@@ -24,9 +24,7 @@ pub mod work;
 
 use std::path::PathBuf;
 
-use codeflow_core::hooks::{
-    any_blocking, PolicyLevel, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV,
-};
+use codeflow_core::hooks::{any_blocking, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use codeflow_core::registry;
 
 /// `true` when the `codeflow integrate` gate-context token is present in the
@@ -60,19 +58,66 @@ pub fn render_outcome(
     notes: &[codeflow_core::remedy::Finding],
     block_code: i32,
 ) -> i32 {
+    render_findings(plane, &[], violations, notes, block_code)
+}
+
+/// Render a git hook stage: the findings another plane printed for it, its
+/// progress lines, then its own notes and violations and the closing line.
+pub fn render_stage(
+    plane: &str,
+    report: &codeflow_core::hooks::git_hook::StageReport,
+    block_code: i32,
+) -> i32 {
+    for status in &report.status {
+        eprintln!("codeflow {plane}: {status}");
+    }
+    render_findings(
+        plane,
+        &report.relayed,
+        &report.violations,
+        &report.notes,
+        block_code,
+    )
+}
+
+fn render_findings(
+    plane: &str,
+    relayed: &[String],
+    violations: &[Violation],
+    notes: &[codeflow_core::remedy::Finding],
+    block_code: i32,
+) -> i32 {
+    for finding in relayed {
+        eprintln!("codeflow {plane}: {finding}");
+    }
     for note in notes {
         eprintln!("{}", note.line(&format!("codeflow {plane}"), "note"));
     }
     for v in violations {
         eprintln!("{}", v.render(plane));
     }
-    if any_blocking(violations) {
+    let stopped = any_blocking(violations);
+    // The closing line says whether the operation was stopped (R-80).
+    if !relayed.is_empty() || !violations.is_empty() || !notes.is_empty() {
+        let operation = operation_of(plane);
+        let verdict = if stopped { "stopped" } else { "not stopped" };
+        eprintln!("codeflow {plane}: {operation} {verdict}");
+    }
+    if stopped {
         block_code
     } else {
-        if violations.iter().any(|v| v.level == PolicyLevel::Warn) {
-            eprintln!("codeflow {plane}: warnings only — proceeding");
-        }
         0
+    }
+}
+
+/// The operation a plane's verdict stops or lets through.
+fn operation_of(plane: &str) -> &'static str {
+    match plane {
+        "pre-push" => "push",
+        "pre-commit" | "commit-msg" => "commit",
+        "pre-merge-commit" => "merge",
+        "reference-transaction" => "ref update",
+        _ => "command",
     }
 }
 

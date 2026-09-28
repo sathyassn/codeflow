@@ -79,6 +79,8 @@ pub struct Violation {
     /// The sanctioned path: what to do instead. A violation that can print
     /// at warn names the step that clears it (R-80).
     pub remedy: Remedy,
+    /// An always-blocking rule: it has no level to lower (R-80).
+    pub level_fixed: bool,
 }
 
 impl Violation {
@@ -90,6 +92,7 @@ impl Violation {
             level,
             message,
             remedy,
+            level_fixed: false,
         }
     }
 
@@ -97,12 +100,45 @@ impl Violation {
     /// as a warning, so its sanctioned path may be any text.
     #[must_use]
     pub fn always_blocking(rule: &str, message: String, sanctioned: &str) -> Self {
-        Self::new(
-            rule,
-            PolicyLevel::Block,
-            message,
-            Remedy::sanctioned(sanctioned),
-        )
+        Self {
+            level_fixed: true,
+            ..Self::new(
+                rule,
+                PolicyLevel::Block,
+                message,
+                Remedy::sanctioned(sanctioned),
+            )
+        }
+    }
+
+    /// The level this finding prints at when a plane whose own rule is
+    /// `running` runs its check (R-80): the lower of the two where the
+    /// finding's rule permits a downgrade. An always-blocking rule, a rule
+    /// an adopter cannot adjust, and a `block` the project configured in
+    /// `raw` (the policy file as JSON; unreadable counts as configured) keep
+    /// their level.
+    #[must_use]
+    pub fn level_under(
+        &self,
+        running: PolicyLevel,
+        raw: &Result<Option<serde_json::Value>, String>,
+    ) -> PolicyLevel {
+        if self.level_fixed {
+            return self.level;
+        }
+        let Some(key) = adjustable_key(&self.rule) else {
+            return self.level;
+        };
+        let configured = match raw {
+            Ok(Some(value)) => adoption::git_key_present(value, key),
+            Ok(None) => false,
+            Err(_) => true,
+        };
+        if configured && self.level == PolicyLevel::Block {
+            self.level
+        } else {
+            self.level.lower(running)
+        }
     }
 
     /// Render the violation for stderr, prefixed with the emitting plane
@@ -139,6 +175,34 @@ impl Violation {
             msg = self.message,
             remedy = self.remedy,
         )
+    }
+}
+
+/// The always-blocking `git` rules (R-80): secret scan, protected branches
+/// and hook integrity. They have no level to lower.
+const ALWAYS_BLOCKING_GIT: &[&str] = &[
+    "secret_scan",
+    "commit_to_protected",
+    "push_to_protected",
+    "merge_to_protected",
+    "force_push_protected",
+    "delete_protected",
+    "local_ref_protection",
+    "hook_integrity",
+];
+
+/// The `git` policy key that sets `rule`'s level, when an adopter may adjust
+/// it (the Adjustable column of R-80); `None` for a rule with a fixed level.
+#[must_use]
+pub fn adjustable_key(rule: &str) -> Option<&str> {
+    match rule {
+        "work.acceptance_binding" | "work.journey_criterion" => Some("work_records"),
+        "work.valid_graph" | "work.stable_planning_anchor" | "work.task_record" => {
+            Some("work_planning")
+        }
+        _ => rule
+            .strip_prefix("git.")
+            .filter(|key| !ALWAYS_BLOCKING_GIT.contains(key)),
     }
 }
 
@@ -190,6 +254,78 @@ pub fn rfc3339_from_unix(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finding(rule: &str, level: PolicyLevel) -> Violation {
+        Violation::new(
+            rule,
+            level,
+            "m".into(),
+            crate::remedy::COMMIT_BLANK_LINE.remedy(),
+        )
+    }
+
+    #[test]
+    fn a_running_plane_lowers_only_an_adjustable_unconfigured_block() {
+        // SPC-013 R-80, TSK-147 AC-2.
+        let none: Result<Option<serde_json::Value>, String> = Ok(None);
+        let emoji_block = Ok(Some(serde_json::json!({"git": {"commit_emoji": "block"}})));
+        let format = finding("git.commit_format", PolicyLevel::Block);
+        assert_eq!(
+            format.level_under(PolicyLevel::Warn, &none),
+            PolicyLevel::Warn
+        );
+        assert_eq!(
+            format.level_under(PolicyLevel::Block, &none),
+            PolicyLevel::Block
+        );
+        // A warning never rises to the running plane's block.
+        let warned = finding("git.commit_format", PolicyLevel::Warn);
+        assert_eq!(
+            warned.level_under(PolicyLevel::Block, &none),
+            PolicyLevel::Warn
+        );
+        // A block the project configured keeps its level.
+        let emoji = finding("git.commit_emoji", PolicyLevel::Block);
+        assert_eq!(
+            emoji.level_under(PolicyLevel::Warn, &emoji_block),
+            PolicyLevel::Block
+        );
+        assert_eq!(
+            emoji.level_under(PolicyLevel::Warn, &none),
+            PolicyLevel::Warn
+        );
+        // Unreadable provenance counts as configured.
+        let unreadable = Err("bad json".to_string());
+        assert_eq!(
+            emoji.level_under(PolicyLevel::Warn, &unreadable),
+            PolicyLevel::Block
+        );
+        // Always-blocking and non-adjustable rules keep their level.
+        for rule in [
+            "git.secret_scan",
+            "git.push_to_protected",
+            "work.id_registry",
+        ] {
+            let kept = finding(rule, PolicyLevel::Block);
+            assert_eq!(
+                kept.level_under(PolicyLevel::Warn, &none),
+                PolicyLevel::Block,
+                "{rule}"
+            );
+        }
+        let fixed = Violation::always_blocking("work.records", "m".into(), "s");
+        assert_eq!(
+            fixed.level_under(PolicyLevel::Warn, &none),
+            PolicyLevel::Block
+        );
+        // The work levels are adjustable through their own keys.
+        assert_eq!(
+            adjustable_key("work.journey_criterion"),
+            Some("work_records")
+        );
+        assert_eq!(adjustable_key("work.valid_graph"), Some("work_planning"));
+        assert_eq!(adjustable_key("work.classification"), None);
+    }
 
     #[test]
     fn test_rfc3339_epoch() {

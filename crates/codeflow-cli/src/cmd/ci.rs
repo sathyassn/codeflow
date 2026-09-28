@@ -81,6 +81,13 @@ pub struct CiArgs {
     /// branch's current tip, since its base bounds every destination tip.
     #[arg(long, value_name = "REF", hide = true)]
     pub baseline_from: Option<String>,
+
+    /// The level of the rule of a plane that runs this check (pre-push
+    /// passes `git.test_gate_on_push`): each finding prints at the lower of
+    /// its own level and this one where its rule permits a downgrade
+    /// (SPC-013 R-80).
+    #[arg(long, value_name = "LEVEL", hide = true, value_parser = parse_level)]
+    pub run_level: Option<PolicyLevel>,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -322,7 +329,36 @@ pub fn run(args: &CiArgs) -> i32 {
         ran.push("PR-body");
     }
 
+    if let Some(running) = args.run_level {
+        run_under(&root, running, &mut tagged);
+    }
     report(&tagged, &ran, &skipped)
+}
+
+/// Lower each finding to its effective level under the running plane's
+/// rule, and say so on the finding (R-80).
+fn run_under(root: &Path, running: PolicyLevel, tagged: &mut [TaggedViolation]) {
+    let raw = codeflow_core::hooks::adoption::raw_policy(root);
+    for t in tagged {
+        let level = t.violation.level_under(running, &raw);
+        if level != t.violation.level {
+            t.violation.message = format!(
+                "{} (printed at {level}: the running plane's rule is {running}; CI applies {})",
+                t.violation.message, t.violation.level
+            );
+            t.violation.level = level;
+        }
+    }
+}
+
+fn parse_level(text: &str) -> Result<PolicyLevel, String> {
+    match text {
+        "block" => Ok(PolicyLevel::Block),
+        "warn" => Ok(PolicyLevel::Warn),
+        "allow" => Ok(PolicyLevel::Allow),
+        "off" => Ok(PolicyLevel::Off),
+        other => Err(format!("unknown level '{other}' (block, warn, allow, off)")),
+    }
 }
 
 /// Pull request classification (TSK-104), which needs the body, and

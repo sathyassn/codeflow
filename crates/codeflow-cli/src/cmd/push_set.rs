@@ -32,6 +32,7 @@
 //! level, with the check's own output printed above it.
 
 use std::cell::OnceCell;
+use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -192,6 +193,7 @@ fn run_ci_ranges(
         let branch = r.remote_branch().unwrap_or_default();
         if let Some(RangeBase { base, note }) = range_base(root, r, destination) {
             report.notes.extend(note);
+            let running = policy.test_gate_on_push.to_string();
             let mut args = vec![
                 "ci",
                 "--base",
@@ -200,6 +202,8 @@ fn run_ci_ranges(
                 &r.local_sha,
                 "--branch",
                 branch,
+                "--run-level",
+                &running,
             ];
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
@@ -285,7 +289,17 @@ fn run_check(
     report: &mut StageReport,
     steps: &mut Vec<PushStep>,
 ) {
-    let shown = format!("codeflow {}", args.join(" "));
+    // The command a person reruns: the check at its own levels, as CI runs
+    // it, without the push gate's level.
+    let rerun: Vec<&str> = match args.iter().position(|arg| *arg == "--run-level") {
+        Some(at) => args[..at]
+            .iter()
+            .chain(args.iter().skip(at + 2))
+            .copied()
+            .collect(),
+        None => args.to_vec(),
+    };
+    let shown = format!("codeflow {}", rerun.join(" "));
     let started = Instant::now();
     let output = Command::new(exe)
         .args(args)
@@ -311,16 +325,29 @@ fn run_check(
         Ok(out) => {
             eprint!("{}", String::from_utf8_lossy(&out.stdout));
             eprint!("{}", String::from_utf8_lossy(&out.stderr));
-            report.violations.push(violation(
+            // A check run at the push gate's level (R-80) that still fails
+            // holds a finding that keeps its block: it stops the push.
+            let kept_block = rerun.len() < args.len() && out.status.code() == Some(1);
+            let mut failed = violation(
                 policy,
                 format!("push set check failed: `{shown}` (output above)"),
-                check_remedy(args),
-            ));
+                check_remedy(&rerun),
+            );
+            if kept_block && policy.test_gate_on_push != codeflow_core::hooks::PolicyLevel::Block {
+                failed.level = codeflow_core::hooks::PolicyLevel::Block;
+                let _ = write!(
+                    failed.message,
+                    "; a finding there keeps its block level, so the push stops although \
+                     git.test_gate_on_push is {}",
+                    policy.test_gate_on_push
+                );
+            }
+            report.violations.push(failed);
         }
         Err(error) => report.violations.push(violation(
             policy,
             format!("push set check could not run: `{shown}`: {error}"),
-            check_remedy(args),
+            check_remedy(&rerun),
         )),
     }
 }
