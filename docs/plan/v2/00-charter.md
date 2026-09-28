@@ -189,7 +189,7 @@ so every host reports the same number; line counts are not measured.
 | `cf-develop` | 5 KiB | `cf-present` | 8 KiB |
 | `cf-docs-portal` | 9 KiB | `cf-ship` | 6 KiB + 896 B |
 | `cf-editorial-review` | 6 KiB | `cf-stack` | 4 KiB |
-| `cf-estimate` | 6 KiB | `cf-evaluate-model` | 9 KiB + 256 B |
+| `cf-estimate` | 6 KiB | `cf-evaluate-model` | 9 KiB + 512 B |
 
 The numbers live in `codeflow_core::reading` and
 `codeflow_core::scaffold::rule_map`. Every shipped file sits within its
