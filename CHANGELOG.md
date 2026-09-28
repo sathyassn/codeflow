@@ -797,9 +797,10 @@ publication date._
   copy, synced and renamed into place; on macOS the sync is a write barrier
   that keeps the data ahead of the rename, so an interrupted run or a power
   cut leaves every file whole. A directory is synced before any baseline,
-  manifest or project state that records its files, so a record never
-  survives a crash ahead of them, and macOS gets one full disk flush per
-  disk the run touched instead of about four per file. A standard init made
+  manifest or project state that records its files, and when those files
+  sit on another disk than the record, that disk is flushed first, so a
+  record never survives a crash ahead of them. macOS gets one full disk
+  flush per disk the run touched instead of about four per file. A standard init made
   about 1,000 such flushes, most of its wall time. The installed files are
   unchanged.
 

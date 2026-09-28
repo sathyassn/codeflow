@@ -363,10 +363,11 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
 /// that says earlier writes are in place.
 ///
 /// Inside a batch, every directory an earlier write renamed into is synced
-/// first, so the record never reaches the disk ahead of the files it
-/// describes: after a crash, a record that survived means those files did.
+/// first, and any other device holding those files is flushed, so the
+/// record never reaches the disk ahead of the files it describes: after a
+/// crash, a record that survived means those files did.
 pub(crate) fn write_record(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
-    sync::settle()?;
+    sync::settle_before(path)?;
     write_file(path, bytes)
 }
 
@@ -473,7 +474,8 @@ mod sync {
     use super::{ScaffoldError, SyncCounts};
 
     /// The open batch: directories renamed into since the last settle, and
-    /// one directory per device a settle has synced.
+    /// one directory per device a settle has synced since that device's
+    /// last flush.
     struct Batch {
         pending: BTreeSet<PathBuf>,
         devices: BTreeMap<u64, PathBuf>,
@@ -579,8 +581,47 @@ mod sync {
         Ok(())
     }
 
+    /// Settles before a state record at `record`. On macOS it then flushes
+    /// each other device with syncs since its last flush: a barrier orders
+    /// writes on its own device only, so it cannot keep a record on another
+    /// device from reaching the disk first. The record's own device keeps
+    /// the barrier alone.
+    pub(super) fn settle_before(record: &Path) -> Result<(), ScaffoldError> {
+        settle()?;
+        #[cfg(target_vendor = "apple")]
+        {
+            let touched: Vec<(u64, PathBuf)> = BATCH.with(|batch| {
+                batch.borrow().as_ref().map_or_else(Vec::new, |batch| {
+                    batch
+                        .devices
+                        .iter()
+                        .map(|(device, dir)| (*device, dir.clone()))
+                        .collect()
+                })
+            });
+            if touched.is_empty() {
+                return Ok(());
+            }
+            let own = device_at(record).map_err(|e| ScaffoldError::io(record, e))?;
+            for (device, dir) in touched {
+                if device == own {
+                    continue;
+                }
+                device_flush(&dir)?;
+                BATCH.with(|batch| {
+                    if let Some(batch) = batch.borrow_mut().as_mut() {
+                        batch.devices.remove(&device);
+                    }
+                });
+            }
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        let _ = record;
+        Ok(())
+    }
+
     /// Closes the batch: settles what is pending, then flushes the cache of
-    /// each device the batch touched.
+    /// each device with syncs since its last flush.
     pub(super) fn finish_batch() -> Result<(), ScaffoldError> {
         let settled = settle();
         let devices = BATCH
@@ -589,8 +630,7 @@ mod sync {
             .unwrap_or_default();
         settled?;
         for dir in devices.values() {
-            let handle = File::open(dir).map_err(|e| ScaffoldError::io(dir, e))?;
-            device_flush(&handle).map_err(|e| ScaffoldError::io(dir, e))?;
+            device_flush(dir)?;
         }
         Ok(())
     }
@@ -605,7 +645,10 @@ mod sync {
             full_flush(&handle).map_err(|e| ScaffoldError::io(dir, e))?;
             bump(|c| c.directory_syncs += 1);
             #[cfg(test)]
-            interruption::synced(dir);
+            {
+                interruption::synced(dir);
+                interruption::flushed(dir);
+            }
         }
         #[cfg(not(unix))]
         let _ = dir;
@@ -621,6 +664,19 @@ mod sync {
         }
         let _ = dir;
         Ok(handle.metadata()?.dev())
+    }
+
+    /// The device `path` is on, or will be on once written: that of its
+    /// nearest existing ancestor.
+    #[cfg(target_vendor = "apple")]
+    fn device_at(path: &Path) -> std::io::Result<u64> {
+        use std::os::unix::fs::MetadataExt;
+        #[cfg(test)]
+        if let Some(device) = interruption::device(path) {
+            return Ok(device);
+        }
+        let existing = path.ancestors().find(|dir| dir.exists()).unwrap_or(path);
+        Ok(std::fs::metadata(existing)?.dev())
     }
 
     /// The ordered sync: `F_BARRIERFSYNC`, or `F_FULLFSYNC` where the file
@@ -653,16 +709,20 @@ mod sync {
         Ok(())
     }
 
-    /// One device cache flush on macOS; nothing where `fsync` already
-    /// flushes the device.
+    /// Flushes the cache of the device holding `dir` on macOS; nothing
+    /// where `fsync` already flushes the device.
     #[cfg(target_vendor = "apple")]
-    fn device_flush(file: &File) -> std::io::Result<()> {
-        full_flush(file)
+    fn device_flush(dir: &Path) -> Result<(), ScaffoldError> {
+        let handle = File::open(dir).map_err(|e| ScaffoldError::io(dir, e))?;
+        full_flush(&handle).map_err(|e| ScaffoldError::io(dir, e))?;
+        #[cfg(test)]
+        interruption::flushed(dir);
+        Ok(())
     }
 
     #[cfg(not(target_vendor = "apple"))]
     #[allow(clippy::unnecessary_wraps)]
-    fn device_flush(_file: &File) -> std::io::Result<()> {
+    fn device_flush(_dir: &Path) -> Result<(), ScaffoldError> {
         Ok(())
     }
 
@@ -730,11 +790,13 @@ pub(crate) mod interruption {
         SyncAll,
     }
 
-    /// A rename or a directory sync, in the order they happened.
+    /// A rename, a directory sync or a full flush of the device holding a
+    /// directory, in the order they happened.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(crate) enum Event {
         Renamed(PathBuf, Vec<u8>),
         Synced(PathBuf),
+        Flushed(PathBuf),
     }
 
     thread_local! {
@@ -773,7 +835,7 @@ pub(crate) mod interruption {
             .into_iter()
             .filter_map(|event| match event {
                 Event::Renamed(path, bytes) => Some((path, bytes)),
-                Event::Synced(_) => None,
+                Event::Synced(_) | Event::Flushed(_) => None,
             })
             .collect()
     }
@@ -788,6 +850,7 @@ pub(crate) mod interruption {
 
     /// Makes the kernel refuse `command` (as an unsupported file system
     /// would), or stops refusing with `None`.
+    #[cfg(target_vendor = "apple")]
     pub(crate) fn refuse(command: Option<i32>) {
         REFUSE.with(|refuse| refuse.set(command));
     }
@@ -837,6 +900,11 @@ pub(crate) mod interruption {
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(super) fn synced(dir: &Path) {
         EVENTS.with(|log| log.borrow_mut().push(Event::Synced(dir.to_path_buf())));
+    }
+
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(super) fn flushed(dir: &Path) {
+        EVENTS.with(|log| log.borrow_mut().push(Event::Flushed(dir.to_path_buf())));
     }
 
     pub(super) fn op(op: Op) {
@@ -1309,9 +1377,10 @@ mod tests {
     /// replaces existing content rather than only adding files.
     fn edit_managed_skills(root: &Path) -> usize {
         let mut edited = 0;
+        let skills = Path::new(".agents").join("skills");
         for (rel, bytes) in snapshot(root) {
-            let text = rel.to_string_lossy();
-            if text.starts_with(".agents/skills/") && text.ends_with("SKILL.md") {
+            // By component, so Windows `\` separators match too.
+            if rel.starts_with(&skills) && rel.file_name() == Some("SKILL.md".as_ref()) {
                 let mut bytes = bytes;
                 bytes.extend_from_slice(b"\nlocal edit\n");
                 std::fs::write(root.join(&rel), bytes).unwrap();
@@ -1556,15 +1625,36 @@ mod tests {
     }
 
     #[cfg(unix)]
+    /// Whether a device keeps its own write cache, so an ordered sync
+    /// orders writes on that device only: true for the macOS barrier; a
+    /// Linux `fsync` is durable when it returns.
+    const INDEPENDENT_CACHES: bool = cfg!(target_vendor = "apple");
+
+    #[cfg(unix)]
     /// Every rename a state record follows has its directory synced before
-    /// the record's rename.
-    fn assert_records_follow_durable_files(root: &Path) {
+    /// the record's rename, and, where devices cache independently, a
+    /// rename on another device than the record's also has its device
+    /// flushed first.
+    fn assert_records_follow_durable_files(root: &Path, device: &dyn Fn(&Path) -> u64) {
         // Renames whose directory has not been synced since, in order.
         let mut unsynced: Vec<PathBuf> = Vec::new();
+        // Per device, a synced rename whose device has not been flushed since.
+        let mut unflushed = std::collections::BTreeMap::new();
         for event in interruption::events() {
             match event {
                 interruption::Event::Synced(dir) => {
-                    unsynced.retain(|file| file.parent() != Some(dir.as_path()));
+                    let (now, rest) = std::mem::take(&mut unsynced)
+                        .into_iter()
+                        .partition::<Vec<_>, _>(|file| file.parent() == Some(dir.as_path()));
+                    unsynced = rest;
+                    if INDEPENDENT_CACHES {
+                        for file in now {
+                            unflushed.entry(device(&file)).or_insert(file);
+                        }
+                    }
+                }
+                interruption::Event::Flushed(dir) => {
+                    unflushed.remove(&device(&dir));
                 }
                 interruption::Event::Renamed(file, _) => {
                     if is_record(root, &file) {
@@ -1574,10 +1664,27 @@ mod tests {
                             file.display(),
                             unsynced[0].display()
                         );
+                        let own = device(&file);
+                        if let Some((_, ahead)) = unflushed.iter().find(|(d, _)| **d != own) {
+                            panic!(
+                                "{} reached its device ahead of {}'s device flush",
+                                file.display(),
+                                ahead.display()
+                            );
+                        }
                     }
                     unsynced.push(file);
                 }
             }
+        }
+    }
+
+    #[cfg(unix)]
+    /// A device map with `second`, when given, on device 2 and all else on 1.
+    fn two_devices(second: Option<PathBuf>) -> impl Fn(&Path) -> u64 {
+        move |path| match &second {
+            Some(second) if path.starts_with(second) => 2,
+            _ => 1,
         }
     }
 
@@ -1589,11 +1696,31 @@ mod tests {
         let root = dir.path().join("project");
         interruption::arm(None);
         crate::scaffold::init(&shipped_assets(), &root, &init_opts(Tier::Standard)).unwrap();
-        assert_records_follow_durable_files(&root);
+        assert_records_follow_durable_files(&root, &two_devices(None));
         assert!(edit_managed_skills(&root) > 5);
         interruption::arm(None);
         crate::scaffold::update(&shipped_assets(), &root, &force_update()).unwrap();
-        assert_records_follow_durable_files(&root);
+        assert_records_follow_durable_files(&root, &two_devices(None));
+        interruption::arm(None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_never_reaches_its_drive_ahead_of_files_on_another() {
+        // T153-R2-1: a barrier on one drive orders nothing on another.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let skills = root.join(".agents");
+        let device = two_devices(Some(skills.clone()));
+        interruption::fake_devices(vec![(root.clone(), 1), (skills, 2)]);
+        interruption::arm(None);
+        crate::scaffold::init(&shipped_assets(), &root, &init_opts(Tier::Standard)).unwrap();
+        assert_records_follow_durable_files(&root, &device);
+        assert!(edit_managed_skills(&root) > 5);
+        interruption::arm(None);
+        crate::scaffold::update(&shipped_assets(), &root, &force_update()).unwrap();
+        assert_records_follow_durable_files(&root, &device);
+        interruption::fake_devices(Vec::new());
         interruption::arm(None);
     }
 
@@ -1615,22 +1742,41 @@ mod tests {
     }
 
     #[cfg(unix)]
-    /// The worst state a crash after `events` may leave: every rename whose
-    /// directory was synced, every state record, and no other rename.
+    /// The worst state a crash after `events` may leave: every state record,
+    /// every rename whose directory was synced durably, and no other
+    /// rename. Where devices cache independently, a sync is durable only once
+    /// its device is flushed or a kept record on the same device follows it,
+    /// since the barrier orders that device's writes.
     fn crash_state(
         root: &Path,
         before: &std::collections::BTreeMap<PathBuf, Vec<u8>>,
         events: &[interruption::Event],
+        device: &dyn Fn(&Path) -> u64,
     ) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
-        let mut synced_later = std::collections::BTreeSet::new();
+        // Scanning backwards: what happens after the current event.
+        let mut durable_dirs = std::collections::BTreeSet::new();
+        let mut flushed_later = std::collections::BTreeSet::new();
+        let mut record_later = std::collections::BTreeSet::new();
         let mut kept = Vec::new();
         for event in events.iter().rev() {
             match event {
+                interruption::Event::Flushed(dir) => {
+                    flushed_later.insert(device(dir));
+                }
                 interruption::Event::Synced(dir) => {
-                    synced_later.insert(dir.clone());
+                    let on = device(dir);
+                    if !INDEPENDENT_CACHES
+                        || flushed_later.contains(&on)
+                        || record_later.contains(&on)
+                    {
+                        durable_dirs.insert(dir.clone());
+                    }
                 }
                 interruption::Event::Renamed(path, bytes) => {
-                    if synced_later.contains(path.parent().unwrap()) || is_record(root, path) {
+                    if is_record(root, path) {
+                        record_later.insert(device(path));
+                        kept.push((path, bytes));
+                    } else if durable_dirs.contains(path.parent().unwrap()) {
                         kept.push((path, bytes));
                     }
                 }
@@ -1651,6 +1797,22 @@ mod tests {
     fn an_update_after_a_crash_at_any_point_installs_the_new_version() {
         // T153-1: a record ahead of its file made the next update keep the
         // old shipped file as a user edit.
+        assert_update_recovers_from_any_crash(false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_crash_with_the_file_on_another_drive_still_installs_the_new_version() {
+        // T153-R2-1: the payload's drive caches apart from its records'.
+        assert_update_recovers_from_any_crash(true);
+    }
+
+    #[cfg(unix)]
+    /// Crashes an upgrade just before and after each write that concerns
+    /// `zzz/payload.txt`, and each device flush, and checks that the next
+    /// update installs the new version. With `second_drive`, `zzz/` is on a
+    /// device of its own.
+    fn assert_update_recovers_from_any_crash(second_drive: bool) {
         let dir = tempfile::tempdir().unwrap();
         let old = assets_with_payload(&dir.path().join("old"), "old shipped data\n");
         let new = assets_with_payload(&dir.path().join("new"), "new shipped data\n");
@@ -1664,29 +1826,33 @@ mod tests {
         let before = snapshot(&base);
         let probe = dir.path().join("probe");
         copy_tree(&base, &probe);
+        if second_drive {
+            interruption::fake_devices(vec![(probe.clone(), 1), (probe.join("zzz"), 2)]);
+        }
         interruption::arm(None);
         crate::scaffold::update(&new, &probe, &upgrade).unwrap();
+        interruption::fake_devices(Vec::new());
+        let rebase = |path: PathBuf| base.join(path.strip_prefix(&probe).unwrap());
         let events: Vec<_> = interruption::events()
             .into_iter()
             .map(|event| match event {
-                interruption::Event::Renamed(path, bytes) => interruption::Event::Renamed(
-                    base.join(path.strip_prefix(&probe).unwrap()),
-                    bytes,
-                ),
-                interruption::Event::Synced(path) => {
-                    interruption::Event::Synced(base.join(path.strip_prefix(&probe).unwrap()))
+                interruption::Event::Renamed(path, bytes) => {
+                    interruption::Event::Renamed(rebase(path), bytes)
                 }
+                interruption::Event::Synced(path) => interruption::Event::Synced(rebase(path)),
+                interruption::Event::Flushed(path) => interruption::Event::Flushed(rebase(path)),
             })
             .collect();
         interruption::arm(None);
+        let device = two_devices(second_drive.then(|| base.join("zzz")));
         let expected = snapshot(&probe);
         assert_eq!(
             expected[Path::new("zzz/payload.txt")],
             b"new shipped data\n".to_vec()
         );
         // The update rewrites every managed file; crash just before and just
-        // after each write that concerns the payload: the file, its baseline,
-        // the manifest and the project state.
+        // after each write that concerns the payload (the file, its baseline,
+        // the manifest and the project state) and each device flush.
         let watched = [
             base.join("zzz/payload.txt"),
             Baseline::path(&base, "zzz/payload.txt"),
@@ -1695,7 +1861,12 @@ mod tests {
         ];
         let mut points = std::collections::BTreeSet::from([0, events.len()]);
         for (at, event) in events.iter().enumerate() {
-            if matches!(event, interruption::Event::Renamed(path, _) if watched.contains(path)) {
+            let concerns = match event {
+                interruption::Event::Renamed(path, _) => watched.contains(path),
+                interruption::Event::Flushed(_) => true,
+                interruption::Event::Synced(_) => false,
+            };
+            if concerns {
                 points.extend([at, at + 1]);
             }
         }
@@ -1703,7 +1874,7 @@ mod tests {
         for point in points {
             let root = dir.path().join(format!("crash-{point}"));
             copy_tree(&base, &root);
-            for (rel, bytes) in crash_state(&base, &before, &events[..point]) {
+            for (rel, bytes) in crash_state(&base, &before, &events[..point], &device) {
                 std::fs::write(root.join(rel), bytes).unwrap();
             }
             crate::scaffold::update(&new, &root, &upgrade).unwrap();
