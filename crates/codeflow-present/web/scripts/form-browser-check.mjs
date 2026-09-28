@@ -398,7 +398,7 @@ try {
     const kept = await draftOf();
     await form.locator("[data-cf-form-action='submit']").click();
     const changed = await waitState(form, "changed");
-    assert.match(changed.says, /This question changed in revision 4\. Reload the page to answer it/u, changed.says);
+    assert.equal(changed.says, "This question changed in revision 4. Copy your draft from the list below, then reload the page to answer the current question.");
     assert.equal(await form.locator("[data-cf-form-action]:visible").count(), 0, "changed: an action is offered");
     assert.deepEqual(await draftOf(), kept, "changed: the draft changed");
     assert.ok(await field("keep-days").locator("input").isDisabled(), "changed: the draft is editable");
@@ -486,12 +486,26 @@ try {
     assert.equal(storedLate.state, "closed", "late receipt: the form reopened");
     assert.equal(failedLate.state, "closed", "late failure: the form reopened");
     assert.match(failedLate.says, /session is closed/u);
+    // The late receipt reads as stored first, in the stored colour, inside
+    // the one status region; the closed sentence follows it.
+    const colours = await form.locator("[data-cf-form-state]").evaluate((line) => {
+      const stored = line.querySelector(".cf-form__state-stored");
+      return {
+        role: line.getAttribute("role"),
+        first: stored === line.firstChild,
+        stored: stored ? getComputedStyle(stored).color : null,
+        closed: getComputedStyle(line).color,
+      };
+    });
+    assert.equal(colours.role, "status");
+    assert.ok(colours.first, "late receipt: the stored part is not first");
+    assert.ok(colours.stored && colours.stored !== colours.closed, `late receipt: the stored part is in the closed colour ${JSON.stringify(colours)}`);
     assert.equal(await page.locator("[data-cf-form] [data-cf-form-action]:visible").count(), 0, "after closure: an action is offered");
     assert.ok(await field("keep-days").locator("input").isDisabled(), "late receipt: the draft is editable");
     assert.ok(await decision.locator("input[value='a']").isDisabled(), "late failure: the draft is editable");
     assert.deepEqual(await draftOf(), kept, "closed: the draft changed");
     assert.equal((await ledger()).length, before + 1, "in flight: the store holds the answer once");
-    passed.push(`closed in flight: a receipt that lands after closure says "${storedLate.says}" and a failure says "${failedLate.says}"; neither form reopens, and the draft stays read only`);
+    passed.push(`closed in flight: a receipt that lands after closure says "${storedLate.says}", its stored part first in the stored colour, and a failure says "${failedLate.says}"; neither form reopens, and the draft stays read only`);
   }
   // The page never sends null: an unanswered field is absent. (The one
   // malformed body above was sent by the test, not the page.)

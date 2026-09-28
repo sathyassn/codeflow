@@ -347,7 +347,8 @@ class FormController {
       item.textContent = line;
       return item;
     }));
-    this.render(`This question changed in revision ${revision}. Reload the page to answer it; your draft is listed below so you can enter it again.`, "changed");
+    // A reload empties page memory, so the list is gone after it: copy first.
+    this.render(`This question changed in revision ${revision}. Copy your draft from the list below, then reload the page to answer the current question.`, "changed");
   }
 
   // The draft as the reviewer entered it, one line per value or reason.
@@ -422,17 +423,32 @@ class FormController {
   }
 
   private render(message: string, state: FormState = this.state): void {
+    let storedLate: string | null = null;
     if (this.closed && state !== "closed") {
       // A reply that lands after closure may still confirm a receipt, but
-      // the form stays closed.
-      message = state === "stored" ? "Stored, waiting for agent. This session is now closed; nothing more can be sent." : CLOSED_TEXT;
+      // the form stays closed. The receipt reads first, as stored.
+      if (state === "stored") {
+        storedLate = "Stored, waiting for agent.";
+        message = "This session is now closed; nothing more can be sent.";
+      } else {
+        message = CLOSED_TEXT;
+      }
       state = "closed";
     }
     if (state === "editing" && this.newer && !this.amending && this.original === null) state = "stale";
     this.state = state;
     this.article.dataset.cfFormState = state;
     this.stateLine.dataset.cfFormState = state;
-    this.stateLine.textContent = message;
+    if (storedLate) {
+      // One status region: the stored part in the stored colour, then the
+      // closed sentence.
+      const stored = document.createElement("span");
+      stored.className = "cf-form__state-stored";
+      stored.textContent = storedLate;
+      this.stateLine.replaceChildren(stored, ` ${message}`);
+    } else {
+      this.stateLine.textContent = message;
+    }
     const editable = (state === "editing" || state === "stale") && !this.gone;
     this.article.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-cf-value], [data-cf-rationale-input], [data-cf-decline-reason]")
       .forEach((control) => { control.disabled = !editable; });
