@@ -225,7 +225,8 @@ the service check each answer against the same rules.
   `options`; `choices` takes `min_items` and `max_items`). Each field has a
   kebab-case `id` unique in the form, a `label` of 1 to 200 characters, an
   optional `description`, and `rationale` `none` (the default), `optional` or
-  `required`. `required` lists field ids.
+  `required`. `required` lists field ids. A rationale has no length bound of
+  its own: the 64 KiB limit on the answer request body is its only bound.
 - **No defaults.** At most one option of a field is `recommended`; the page
   labels it and never preselects it. A field takes no default value.
 - **Decisions.** A version 2 `decision` has `title`, `markdown`, 2 to 8
