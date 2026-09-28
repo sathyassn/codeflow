@@ -30,6 +30,7 @@ export type AnswerStateDetail = readonly AnswerStateEntry[];
 
 type FormState = "editing" | "submitting" | "stored" | "delivered" | "acknowledged" | "failed" | "stale" | "changed" | "closed";
 
+const STORED_TEXT = "Stored, waiting for agent";
 // After "stored": the agent's read delivers the answer, then it acknowledges it.
 const DELIVERY_TEXT: Readonly<Record<Exclude<AnswerDelivery, "pending">, string>> = {
   delivered: "Delivered to agent",
@@ -150,7 +151,18 @@ class FormController {
     );
     this.buttons.forEach((button, action) => button.addEventListener("click", () => this.act(action)));
     this.article.addEventListener("input", () => this.clearFieldError());
-    this.render("");
+    // An answer stored before this page loaded: the service renders it with
+    // its state, so a reload keeps showing stored, delivered or acknowledged.
+    const answered = article.dataset.cfAnswerState;
+    const original = article.dataset.cfAnswerId;
+    const latest = article.dataset.cfLatestAnswerId;
+    if (original && latest && (answered === "stored" || answered === "delivered" || answered === "acknowledged")) {
+      this.original = original;
+      this.latest = latest;
+      this.render(answered === "stored" ? STORED_TEXT : DELIVERY_TEXT[answered], answered);
+    } else {
+      this.render("");
+    }
   }
 
   public newerRevision(): void {
@@ -299,7 +311,7 @@ class FormController {
     this.stale = null;
     this.amending = false;
     this.declining = false;
-    this.render("Stored, waiting for agent", "stored");
+    this.render(STORED_TEXT, "stored");
     this.showDelivery();
   }
 

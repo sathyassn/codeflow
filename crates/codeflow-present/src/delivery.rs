@@ -9,7 +9,7 @@
 //! acknowledgment are lines of `responses.jsonl`. Listing never changes a
 //! state.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -144,6 +144,22 @@ pub struct AnswerStates {
     pub through: u64,
     pub states: Vec<AnswerState>,
 }
+
+/// The latest answer to a form, as the page shows it when it loads: the
+/// states after "stored" survive a reload (B6, B8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormAnswer {
+    /// The latest answer or amendment to the form.
+    pub latest: Uuid,
+    /// The original answer a correction names (the latest when it is one).
+    pub original: Uuid,
+    pub status: DeliveryStatus,
+}
+
+/// Each form's latest answer, keyed by form id and the form digest the
+/// answer was given against, so an answer to a question that has since
+/// changed is not shown on the new question.
+pub type FormAnswers = HashMap<(String, String), FormAnswer>;
 
 /// Delivery and acknowledgment, replayed from both ledgers.
 struct States {
@@ -331,6 +347,28 @@ impl SessionStore {
                 Ok(true)
             }
         }
+    }
+
+    /// Each form's latest answer and its state, for the page as it loads.
+    pub fn form_answers(&self, id: Uuid) -> Result<FormAnswers> {
+        let ledger = {
+            let _lock = self.lock_session(id)?;
+            self.load(id)?;
+            Ledger::open(self.responses_path(id)?, id)?.events
+        };
+        let states = States::of(&[], &ledger);
+        let mut answers = FormAnswers::new();
+        for record in ledger.iter().filter_map(ResponseEvent::answer) {
+            answers.insert(
+                (record.form_id.clone(), record.form_digest.clone()),
+                FormAnswer {
+                    latest: record.answer_id,
+                    original: record.amends.unwrap_or(record.answer_id),
+                    status: states.status(record.answer_id),
+                },
+            );
+        }
+        Ok(answers)
     }
 
     /// How many pending events only the v2 stream carries (answers and

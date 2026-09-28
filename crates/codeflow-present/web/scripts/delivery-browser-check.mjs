@@ -7,6 +7,7 @@
 // - the next wait delivers it and the form shows "Delivered to agent";
 //   `present ack` makes it "Acknowledged by agent", a separate state;
 // - a wait already running is woken by an answer the page sends;
+// - a reload after each of those states shows the same state and words;
 // - the rail shows a review's delivery and its acknowledgment apart;
 // - after the service is killed and restarted, a pending answer is
 //   delivered once and a later wait finds nothing.
@@ -113,6 +114,12 @@ try {
     return waitState(form, "stored");
   };
   const pending = () => lines(run(["present", "responses", "list", sessionId, "--status", "pending"]));
+  // The state the service renders with the page: a reload loses nothing.
+  const afterReload = async (article, state) => {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    return waitState(article, state);
+  };
   const waitV2 = (seconds) => cli(["present", "feedback", sessionId, "--wait", "--timeout", String(seconds), "--format", "v2"]);
 
   // No listener: the answer is stored and waits in the store.
@@ -125,6 +132,7 @@ try {
     assert.equal(waiting.length, 1, "no listener: pending events");
     assert.equal(waiting[0].kind, "answer");
     assert.equal(waiting[0].form_id, "store-choice");
+    assert.deepEqual(await afterReload(form, "stored"), stored, "reload: stored");
     passed.push(`no listener: the form says "${stored.says}" and the answer stays pending in the store`);
   }
 
@@ -138,11 +146,15 @@ try {
     const delivered = await waitState(form, "delivered");
     assert.equal(delivered.says, "Delivered to agent");
     assert.deepEqual(pending(), [], "delivered: still pending");
+    assert.deepEqual(await afterReload(form, "delivered"), delivered, "reload: delivered");
     assert.equal(run(["present", "ack", sessionId, line.event_id]).trim(), `acknowledged ${line.event_id}`);
     const acknowledged = await waitState(form, "acknowledged");
     assert.equal(acknowledged.says, "Acknowledged by agent");
     assert.ok(await form.locator("[data-cf-form-action='amend']").isVisible(), "acknowledged: no correction offered");
+    assert.deepEqual(await afterReload(form, "acknowledged"), acknowledged, "reload: acknowledged");
+    assert.ok(await form.locator("[data-cf-form-action='amend']").isVisible(), "reload: no correction offered");
     passed.push(`delivery: the next wait prints the answer and the form says "${delivered.says}"; present ack makes it "${acknowledged.says}"`);
+    passed.push("reload: after each of stored, delivered and acknowledged, a reload shows the same state and words");
   }
 
   // A wait already running is woken by an answer sent from the page.
@@ -192,7 +204,9 @@ try {
   }
 
   // A service restart: the pending answer is delivered once, none is lost.
+  // The form already holds an acknowledged answer, so this is a correction.
   {
+    await form.locator("[data-cf-form-action='amend']").click();
     const stored = await answerStore();
     assert.equal(stored.says, "Stored, waiting for agent");
     const [answer] = pending();
@@ -214,7 +228,7 @@ try {
     assert.deepEqual(pending().map((line) => line.event_id), [answer.event_id], "restart: the pending answer");
     const first = waitV2(10);
     assert.equal(first.status, 0, first.stderr);
-    assert.deepEqual(lines(first.stdout).map((line) => line.event_id), [answer.event_id], "restart: delivered once");
+    assert.deepEqual(lines(first.stdout).map((line) => [line.kind, line.event_id]), [["amendment", answer.event_id]], "restart: delivered once");
     const second = waitV2(1);
     assert.equal(second.status, 6, "restart: a later wait found an event");
     assert.equal(second.stdout, "");

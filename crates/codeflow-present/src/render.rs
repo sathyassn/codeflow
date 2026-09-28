@@ -19,6 +19,8 @@ pub struct RenderOptions<'a> {
     pub event_sequence: u64,
     /// The page's cursor into the answer ledger (`responses.jsonl`).
     pub response_sequence: u64,
+    /// Each form's latest answer and its state, shown as the page loads.
+    pub answers: Option<&'a crate::delivery::FormAnswers>,
     pub script_path: Option<&'a str>,
     pub style_path: Option<&'a str>,
     pub prepaint_source: Option<&'a str>,
@@ -320,7 +322,10 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
         }
         Block::Decision { .. } | Block::Form { .. } => {
             if let Some(view) = crate::form::FormView::of(block) {
-                render_form(&view, framing, options.interactive, output);
+                let answer = options
+                    .answers
+                    .and_then(|answers| answers.get(&(view.id.to_string(), view.digest())));
+                render_form(&view, framing, options.interactive, answer, output);
             }
         }
         Block::Table { columns, rows, .. } => {
@@ -771,8 +776,15 @@ fn safe_markdown_destination(destination: &str) -> bool {
 /// descriptions and option labels are the block's review text; every word
 /// the runtime adds (flags, hints, "Recommended", the actions) is marked
 /// `data-cf-review-skip`. An export shows the question with its controls
-/// disabled and no actions.
-fn render_form(view: &FormView<'_>, framing: &Framing, interactive: bool, output: &mut String) {
+/// disabled and no actions. A form already answered carries its latest
+/// answer and that answer's state (TSK-120), which the page shows on load.
+fn render_form(
+    view: &FormView<'_>,
+    framing: &Framing,
+    interactive: bool,
+    answer: Option<&crate::delivery::FormAnswer>,
+    output: &mut String,
+) {
     let decision = matches!(view.block, Block::Decision { .. });
     let base = format!("cf-form-{}", view.id);
     let title_id = format!("{base}-title");
@@ -786,6 +798,18 @@ fn render_form(view: &FormView<'_>, framing: &Framing, interactive: bool, output
     output.push_str(if decision { "decision" } else { "form" });
     output.push_str("\" data-cf-form-digest=\"");
     output.push_str(&view.digest());
+    if let Some(answer) = answer.filter(|_| interactive) {
+        output.push_str("\" data-cf-answer-id=\"");
+        output.push_str(&answer.original.to_string());
+        output.push_str("\" data-cf-latest-answer-id=\"");
+        output.push_str(&answer.latest.to_string());
+        output.push_str("\" data-cf-answer-state=\"");
+        output.push_str(match answer.status {
+            crate::delivery::DeliveryStatus::Pending => "stored",
+            crate::delivery::DeliveryStatus::Delivered => "delivered",
+            crate::delivery::DeliveryStatus::Acknowledged => "acknowledged",
+        });
+    }
     output.push_str("\" role=\"group\" aria-labelledby=\"");
     escape_attr_to(&title_id, output);
     output.push_str("\"><header><h2 class=\"cf-form__title\" id=\"");
@@ -1338,6 +1362,7 @@ pub(crate) mod tests {
                 revision: 1,
                 event_sequence: 0,
                 response_sequence: 0,
+                answers: None,
                 script_path: None,
                 style_path: None,
                 prepaint_source: None,
@@ -1436,6 +1461,7 @@ pub(crate) mod tests {
                 revision: 1,
                 event_sequence: 0,
                 response_sequence: 0,
+                answers: None,
                 script_path: None,
                 style_path: None,
                 prepaint_source: None,
@@ -1526,6 +1552,7 @@ pub(crate) mod tests {
                 revision: 1,
                 event_sequence: 0,
                 response_sequence: 0,
+                answers: None,
                 script_path: None,
                 style_path: None,
                 prepaint_source: None,

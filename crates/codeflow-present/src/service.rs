@@ -500,6 +500,12 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
         Ok(sequence) => sequence,
         Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
+    // Read after the cursor: a state change between the two reads is then
+    // both shown and reported again by the poll, never missed.
+    let answers = match state.store.form_answers(state.session_id) {
+        Ok(answers) => answers,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
     let manifest = &state.assets.service;
     let style = manifest
         .entrypoints
@@ -531,6 +537,7 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
                 revision: revision.revision,
                 event_sequence,
                 response_sequence,
+                answers: Some(&answers),
                 script_path: script,
                 style_path: style,
                 prepaint_source: prepaint.map(|asset| asset.source.as_str()),
@@ -2417,6 +2424,87 @@ mod tests {
             .await;
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{cursor}");
         }
+    }
+
+    /// TSK-120: the page shows each form's latest answer and its state as it
+    /// loads, so a reload keeps stored, delivered and acknowledged; a
+    /// correction names its original; an answer to a question that has since
+    /// changed is not shown on the new question.
+    #[tokio::test]
+    async fn the_page_renders_each_forms_latest_answer_state() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let page = || {
+            let state = state.clone();
+            async move {
+                let response =
+                    application(State(state.clone()), application_headers(&state, false)).await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let html = String::from_utf8(body.to_vec()).unwrap();
+                let at = html.find("data-cf-form=\"store-choice\"").unwrap();
+                let tag = &html[at..at + html[at..].find('>').unwrap()];
+                let attribute = |name: &str| {
+                    tag.split_once(&format!("{name}=\""))
+                        .map(|(_, rest)| rest.split('"').next().unwrap().to_string())
+                };
+                (
+                    attribute("data-cf-answer-id"),
+                    attribute("data-cf-latest-answer-id"),
+                    attribute("data-cf-answer-state"),
+                )
+            }
+        };
+        assert_eq!(page().await, (None, None, None), "an unanswered form");
+        let (_, receipt) = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |_| {}),
+        )
+        .await;
+        let answer = receipt["answer_id"].as_str().unwrap().to_string();
+        let shown = |original: &str, latest: &str, status: &str| {
+            (
+                Some(original.to_string()),
+                Some(latest.to_string()),
+                Some(status.to_string()),
+            )
+        };
+        assert_eq!(page().await, shown(&answer, &answer, "stored"));
+        let id: Uuid = answer.parse().unwrap();
+        state.store.deliver(state.session_id, &[id]).unwrap();
+        assert_eq!(page().await, shown(&answer, &answer, "delivered"));
+        state.store.acknowledge(state.session_id, id).unwrap();
+        assert_eq!(page().await, shown(&answer, &answer, "acknowledged"));
+        let (_, correction) = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |body| {
+                body["request_id"] = serde_json::json!(Uuid::new_v4());
+                body["amends"] = serde_json::json!(answer);
+            }),
+        )
+        .await;
+        let latest = correction["answer_id"].as_str().unwrap().to_string();
+        assert_eq!(page().await, shown(&answer, &latest, "stored"));
+
+        let mut changed: serde_json::Value = serde_json::from_slice(&forms).unwrap();
+        changed["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|block| block["id"] == "store-choice")
+            .unwrap()["title"] = serde_json::json!("A changed question");
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(&serde_json::to_vec(&changed).unwrap()).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(page().await, (None, None, None), "a changed question");
     }
 
     #[test]
