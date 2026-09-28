@@ -2496,6 +2496,13 @@ print(json.dumps(seen, sort_keys=True))
         control = {"label": "a coherent rejection", "assertion": "rejects", "rubric": eval_kit.REVIEW_COHERENCE_RUBRIC,
                    "excerpt": REVIEW, "expected": "pass"}
         eval_kit.write_json(suite / "judge-controls.json", {"schema_version": 1, "controls": [control]})
+        # The dev case gains one judged assertion, so a saved pass rests on a
+        # judgement whose author the consumer must find qualified.
+        cases_doc = json.loads((suite / "cases.json").read_text())
+        cases_doc["cases"][0]["expected"]["files"].append(
+            {"id": "review_is_coherent", "path": "REVIEW.md", "judged": {"rubric": "the review means what its verdict says"}}
+        )
+        eval_kit.write_json(suite / "cases.json", cases_doc)
         judge, other = ["model: m", "prompt p1"], ["model: n", "prompt p1"]
 
         def calibration(name: str, who: list[str], verdict: str = "pass") -> Path:
@@ -2513,18 +2520,31 @@ print(json.dumps(seen, sort_keys=True))
             pack = eval_kit.resolve_pack(DEV_PACK)
             result.update(suite="pack", pack=DEV_PACK)
             result["trials"] = [trial for trial in result["trials"] if trial["case_id"] in pack]
+            mine, theirs = calibration("mine.json", judge), calibration("theirs.json", other)
+            judgements = Path(self.temp.name) / "judgements.json"
+            eval_kit.write_json(judgements, {"schema_version": 1, "judgements": [
+                {"assertion": "review_is_coherent", "excerpt_digest": eval_kit.excerpt_digest(REVIEW), "verdict": "pass",
+                 "judge": judge[0], "judge_config": judge[1], "rationale": "synthetic"}]})
             for each in result["trials"]:
-                each["grade"]["controls_digest"] = eval_kit.suite_judge_controls()[1]
+                each["grade"].update(
+                    controls_digest=eval_kit.suite_judge_controls()[1],
+                    judgements_digest=eval_kit.raw_file_digest(judgements),
+                    calibration_digests=[eval_kit.raw_file_digest(theirs), eval_kit.raw_file_digest(mine)],
+                    calibration_judges=[other, judge],
+                    counted_judges=[judge],
+                )
+                # Trial 1 cites these files; the others keep copies, so a
+                # change below reaches trial 1 alone.
+                for path in (theirs, mine, judgements):
+                    kept = path
+                    if each is not result["trials"][0]:
+                        kept = Path(self.temp.name) / "kept" / f"{each['trial']}-{path.name}"
+                        kept.parent.mkdir(exist_ok=True)
+                        shutil.copyfile(path, kept)
+                    each["evidence"].append({"kind": "file", "ref": str(kept), "digest": eval_kit.raw_file_digest(path)})
             trial = result["trials"][0]
             case = cases[trial["case_id"]]
-            mine, theirs = calibration("mine.json", judge), calibration("theirs.json", other)
-            trial["grade"].update(
-                calibration_digests=[eval_kit.raw_file_digest(theirs), eval_kit.raw_file_digest(mine)],
-                calibration_judges=[other, judge],
-                counted_judges=[judge],
-            )
-            for path in (theirs, mine):
-                trial["evidence"].append({"kind": "file", "ref": str(path), "digest": eval_kit.raw_file_digest(path)})
+            self.assertIn("review_is_coherent", [item["id"] for item in trial["grade"]["assertions"]])
             self.assertEqual([], eval_kit.grade_errors(trial["grade"], case, trial))
             self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
 
@@ -2532,12 +2552,12 @@ print(json.dumps(seen, sort_keys=True))
                 """The status, the calibration faults and the passes that
                 scoring counts after `change`, with the files restored."""
 
-                saved = {path: path.read_bytes() for path in (mine, theirs)}
+                saved = {path: path.read_bytes() for path in (mine, theirs, judgements)}
                 changed = copy.deepcopy(result)
                 change(changed["trials"][0])
                 try:
                     status = eval_kit.computed_trial_status(changed["trials"][0], case)
-                    faults = eval_kit.calibration_evidence_errors(changed["trials"][0]["grade"], changed["trials"][0])
+                    faults = eval_kit.calibration_evidence_errors(changed["trials"][0]["grade"], changed["trials"][0], case)
                     try:
                         counted = eval_kit.score_result(changed)["summary"]["pass"]
                     except eval_kit.EvalError as error:
@@ -2570,7 +2590,28 @@ print(json.dumps(seen, sort_keys=True))
                     self.assertEqual(passes - 1, counted)
             # The other judge's calibration still verifies, but cannot stand
             # for the edited one.
-            self.assertEqual(1, len(consumed(edited)[1]))
+            self.assertTrue(any("judged by model: m" in fault for fault in consumed(edited)[1]))
+
+            def substituted(trial: dict) -> None:
+                # A self-consistent rewrite: the counted list names the other
+                # qualified judge and only the author's calibration goes;
+                # assertions and judgements are untouched.
+                trial["grade"].update(
+                    calibration_digests=[eval_kit.raw_file_digest(theirs)], calibration_judges=[other], counted_judges=[other]
+                )
+                trial["evidence"] = [item for item in trial["evidence"] if item["ref"] != str(mine)]
+                mine.unlink()
+            status, faults, counted = consumed(substituted)
+            self.assertEqual(("error", passes - 1), (status, counted))
+            self.assertEqual(["review_is_coherent was judged by model: m (prompt p1), whom no retained calibration qualifies"], faults)
+
+            def judgements_changed(trial: dict) -> None:
+                judgements.write_text(judgements.read_text().replace('"pass"', '"fail"'))
+            def judgements_removed(trial: dict) -> None:
+                judgements.unlink()
+            for label, change in (("judgements changed", judgements_changed), ("judgements removed", judgements_removed)):
+                with self.subTest(label):
+                    self.assertEqual(("error", passes - 1), consumed(change)[::2])
             # A grade rewritten to name another judge, or graded against
             # other controls, is refused outright.
             status, _, refused = consumed(rewritten_as_another_judge)

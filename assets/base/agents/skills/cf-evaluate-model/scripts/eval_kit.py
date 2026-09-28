@@ -4387,34 +4387,73 @@ def is_judge(value: Any) -> bool:
     return isinstance(value, list) and len(value) == 2 and all(isinstance(part, str) and part.strip() for part in value)
 
 
-def calibration_evidence_errors(grade: dict, trial: dict) -> list[str]:
-    """Why a grade's calibrations cannot be verified now. Each is retained
-    in the trial's evidence as a file named by absolute path, whose bytes
-    still hash to the recorded digest and which, against the suite's current
-    controls, still qualifies the judge the grade recorded. A grade is only
-    as good as the calibration it cites, so an edited, moved or removed file
-    leaves the trial not measured."""
+def retained_file(trial: dict, digest: Any) -> Path | None:
+    """The file a trial retains in its evidence under `digest`: named by an
+    absolute path and still holding those bytes."""
+
+    evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
+    for item in evidence:
+        if (
+            isinstance(item, dict)
+            and item.get("digest") == digest
+            and isinstance(item.get("ref"), str)
+            and os.path.isabs(item["ref"])
+            and Path(item["ref"]).is_file()
+            and raw_file_digest(Path(item["ref"])) == digest
+        ):
+            return Path(item["ref"])
+    return None
+
+
+def calibration_evidence_errors(grade: dict, trial: dict, case: dict) -> list[str]:
+    """Why a grade's judged results cannot be verified now. Every judge that
+    wrote a judgement of a graded judged assertion, read from the retained
+    judgements file itself, must be qualified by a calibration the trial
+    retains: a file named by absolute path whose bytes still hash to the
+    recorded digest and which, against the suite's current controls, still
+    qualifies that judge with its exact configuration. The grade's own list
+    of counted judges is never trusted for this. An edited, moved or removed
+    file, or a judge no retained calibration qualifies, leaves the trial not
+    measured."""
 
     controls = suite_judge_controls()
-    evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
     errors: list[str] = []
+    qualified: set[Judge] = set()
     for digest, judge in zip(grade.get("calibration_digests", []), grade.get("calibration_judges", [])):
-        paths = [
-            Path(item["ref"])
-            for item in evidence
-            if isinstance(item, dict) and item.get("digest") == digest and isinstance(item.get("ref"), str) and os.path.isabs(item["ref"])
-        ]
-        path = next((path for path in paths if path.is_file() and raw_file_digest(path) == digest), None)
+        path = retained_file(trial, digest)
         if path is None:
             errors.append(f"calibration {digest} is not retained as a file with those bytes at an absolute evidence path")
             continue
         try:
-            qualified = judge_qualification(controls[0], path)[0] if controls is not None else None
+            found = judge_qualification(controls[0], path)[0] if controls is not None else None
         except EvalError as error:
             errors.append(f"calibration {digest} does not read: {error}")
             continue
-        if (list(qualified) if qualified is not None else None) != judge:
+        if (list(found) if found is not None else None) != judge:
             errors.append(f"calibration {digest} does not qualify the judge the grade recorded")
+        elif found is not None:
+            qualified.add(found)
+    judged = {
+        item["id"]: result["result"]
+        for item, result in zip(case_assertions(case), grade.get("assertions", []))
+        if assertion_rubric(item) is not None and isinstance(result, dict) and result.get("result") in {"pass", "fail"}
+    }
+    if not judged:
+        return errors
+    path = retained_file(trial, grade.get("judgements_digest"))
+    if path is None:
+        return [*errors, "the judgements file is not retained as a file with those bytes at an absolute evidence path"]
+    try:
+        entries = read_judgements(path)[0]
+    except EvalError as error:
+        return [*errors, f"the judgements file does not read: {error}"]
+    for assertion, result in judged.items():
+        authors = {judge for (name, _), (_, judge) in entries.items() if name == assertion}
+        if result == "pass" and not authors:
+            errors.append(f"{assertion} passes with no judgement of it in the judgements file")
+        for judge in sorted(authors):
+            if judge not in qualified:
+                errors.append(f"{assertion} was judged by {judge[0]} ({judge[1]}), whom no retained calibration qualifies")
     return errors
 
 
@@ -4437,7 +4476,7 @@ def computed_trial_status(trial: dict, case: dict) -> str:
             result["result"] == "fail" for result in grade["assertions"]
         ):
             return "fail"
-        if calibration_evidence_errors(grade, trial):
+        if calibration_evidence_errors(grade, trial, case):
             # The calibration the grade cites no longer verifies: not measured.
             return "error"
         if not grade["qualification"]["eligible"]:
