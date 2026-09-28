@@ -136,7 +136,10 @@ publication date._
   before the cutoff of the line the task targets, on that line's
   first-parent chain, recorded in the
   `release_rule_baseline` table of project config on the default branch,
-  which lists it as information. Everything else, including a
+  which lists it as information. The adoption marker `release_rules = 1`
+  in project config never decides whether these rules apply; once the
+  default branch carries it, removing it or changing its value makes
+  every release check refuse. Everything else, including a
   merge resolution, is direct work: it may not change criteria (removing
   or re-creating a task record counts as a change), and code
   needs the one open task marked `role: release-integration`, completed at

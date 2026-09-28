@@ -624,7 +624,10 @@ a brought criteria change is judged again where it landed on its line,
 unless that landing is at or before the cutoff of the line the task
 targets, on that line's first-parent chain, in the project-config table
 `release_rule_baseline` read at the default target, which lists it as
-information.
+information. The adoption marker `release_rules = 1` in project config
+never decides whether these rules apply; once the default target carries
+it, removing it or changing its value, there or in the judged range,
+makes every release check refuse.
 Anything else is direct work: it freezes criteria, and beyond planning
 records it belongs to the one open task with `role: release-integration`,
 whose completion binds to the release head. Pre-push judges a push to a

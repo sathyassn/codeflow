@@ -57,6 +57,12 @@ pub const NO_OWNER: &str = "no release-integration task to own it";
 /// The project-config table mapping each epic line to its release-rule
 /// cutoff commit (SPC-013 R-120, planning resolution 22).
 pub const BASELINE_KEY: &str = "release_rule_baseline";
+/// The project-config key marking where a project adopted R-120, with its
+/// one value `1` (SPC-013 R-120, planning resolution 23). It fixes only the
+/// point the transition tables stop at; R-120 is enforced whatever it says
+/// or whether it is there. Once the default target carries it, removing it
+/// or changing its value refuses every release check.
+pub const MARKER_KEY: &str = "release_rules";
 /// Every epic line's name starts with this.
 const EPIC_PREFIX: &str = "integration/EPC-";
 
@@ -959,6 +965,9 @@ pub fn release_findings(
         .collect::<Result<_, _>>()
         .map_err(|error| error.to_string())?;
     path.reverse();
+    if let Some((name, tip)) = &destination.default {
+        marker_holds(&repo, name, *tip, &path)?;
+    }
     let Some(oldest) = path.first() else {
         return Ok(Judgement::default());
     };
@@ -1425,6 +1434,123 @@ fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid)
             ),
         )),
     }
+}
+
+/// What a commit's project config says of [`MARKER_KEY`].
+#[derive(Clone, PartialEq, Eq)]
+enum Marker {
+    Absent,
+    Adopted,
+    Changed(String),
+    Unreadable(String),
+}
+
+impl Marker {
+    fn describe(&self) -> String {
+        match self {
+            Self::Absent => "removed".to_string(),
+            Self::Adopted => format!("{MARKER_KEY} = 1"),
+            Self::Changed(value) => format!("changed to `{MARKER_KEY} = {value}`"),
+            Self::Unreadable(why) => format!("unreadable ({why})"),
+        }
+    }
+}
+
+/// The marker a commit's project config carries, memoized by blob.
+fn marker_at(
+    repo: &Repository,
+    commit: Oid,
+    blobs: &mut HashMap<Oid, Marker>,
+) -> Result<Marker, String> {
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.message().to_string())?;
+    let Ok(entry) = tree.get_path(Path::new(".codeflow/project.toml")) else {
+        return Ok(Marker::Absent);
+    };
+    if let Some(known) = blobs.get(&entry.id()) {
+        return Ok(known.clone());
+    }
+    let marker = match repo.find_blob(entry.id()) {
+        Err(error) => Marker::Unreadable(error.message().to_string()),
+        Ok(blob) => match String::from_utf8_lossy(blob.content()).parse::<toml::Value>() {
+            Err(error) => Marker::Unreadable(format!("not valid TOML: {error}")),
+            Ok(config) => match config.get(MARKER_KEY) {
+                None => Marker::Absent,
+                Some(toml::Value::Integer(1)) => Marker::Adopted,
+                Some(value) => Marker::Changed(value.to_string()),
+            },
+        },
+    };
+    blobs.insert(entry.id(), marker.clone());
+    Ok(marker)
+}
+
+/// [`MARKER_KEY`] is written once: from the first commit on the default
+/// target's first-parent chain whose project config names it, every later
+/// commit on that chain carries it as `1`, and so does every commit of the
+/// judged `path` whose first parent does. The key's first appearance must
+/// be `1` as well. The marker never decides whether R-120 applies; this
+/// only keeps the adoption point it fixes from being moved.
+///
+/// # Errors
+///
+/// Returns a message naming the commit that removed, changed or broke the
+/// marker, so every release check refuses.
+fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Result<(), String> {
+    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
+    walk.push(tip)
+        .and_then(|()| walk.simplify_first_parent())
+        .map_err(|error| error.to_string())?;
+    let mut chain: Vec<Oid> = walk
+        .collect::<Result<_, _>>()
+        .map_err(|error| error.to_string())?;
+    chain.reverse();
+    let mut blobs = HashMap::new();
+    let refuse = |adopted: Oid, at: Oid, marker: &Marker, place: &str| {
+        format!(
+            "the adoption marker `{MARKER_KEY} = 1` set on {default} at {} is {} at {} {place}; it is written once and never changed, so every release check refuses (SPC-013 R-120)",
+            short(adopted),
+            marker.describe(),
+            short(at)
+        )
+    };
+    let mut adopted = None;
+    for commit in chain {
+        let marker = marker_at(repo, commit, &mut blobs)?;
+        match (adopted, &marker) {
+            (None, Marker::Absent | Marker::Unreadable(_)) => {}
+            (None, Marker::Adopted) => adopted = Some(commit),
+            (None, Marker::Changed(value)) => {
+                return Err(format!(
+                    "the adoption marker on {default} first appears at {} as `{MARKER_KEY} = {value}`; its one value is 1, so every release check refuses (SPC-013 R-120)",
+                    short(commit)
+                ))
+            }
+            (Some(_), Marker::Adopted) => {}
+            (Some(first), _) => return Err(refuse(first, commit, &marker, &format!("on {default}"))),
+        }
+    }
+    let Some(first) = adopted else {
+        return Ok(());
+    };
+    for commit in path {
+        let parent = repo
+            .find_commit(*commit)
+            .map_err(|error| error.message().to_string())?
+            .parent_id(0)
+            .ok();
+        let Some(parent) = parent else { continue };
+        if marker_at(repo, parent, &mut blobs)? != Marker::Adopted {
+            continue;
+        }
+        let marker = marker_at(repo, *commit, &mut blobs)?;
+        if marker != Marker::Adopted {
+            return Err(refuse(first, *commit, &marker, "in the judged range"));
+        }
+    }
+    Ok(())
 }
 
 /// The release-rule cutoffs recorded in `.codeflow/project.toml` at `tip`,

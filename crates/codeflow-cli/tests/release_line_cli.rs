@@ -804,6 +804,99 @@ fn a_moved_or_malformed_cutoff_covers_nothing() {
     );
 }
 
+/// Write main's project config with `marker` (a `release_rules` line, or
+/// nothing) and publish main; returns main's new tip.
+fn set_marker(fx: &Fx, marker: &str) -> String {
+    fx.git(&["switch", "-q", "main"]);
+    fx.write(".codeflow/project.toml", &format!("{PROJECT}{marker}"));
+    let tip = fx.commit("chore: write the project config");
+    fx.git(&["push", "-q", "origin", "main"]);
+    tip
+}
+
+/// AC-13, first condition: the adoption marker never decides whether
+/// R-120 applies. The same criteria change landed with code is refused
+/// the same way with no marker and with `release_rules = 1`.
+#[test]
+fn the_adoption_marker_never_decides_enforcement() {
+    for marker in ["", "release_rules = 1\n"] {
+        let fx = Fx::new(false);
+        let landing = land_mixed(&fx, "src/mixed.rs");
+        set_marker(&fx, marker);
+        fx.cut_release();
+        fx.import(LINE_A);
+        blocks(
+            &agree(&fx, "marker and enforcement"),
+            &format!("marker `{}`", marker.trim()),
+            &["work.criteria_frozen", &frozen_at(&landing)],
+        );
+    }
+}
+
+/// AC-13, second condition: once the default target carries
+/// `release_rules = 1`, removing it, changing its value, removing and
+/// re-adding it, or removing it on the judged range refuses every release
+/// check, as a table edit does; so does a first appearance other than 1.
+/// A marker kept as written passes.
+#[test]
+fn the_adoption_marker_is_written_once() {
+    let judged = |changes: &[&str], on_release: bool| {
+        let fx = Fx::new(false);
+        fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+        fx.land(LINE_A, "task/TSK-001-work");
+        let mut tips = Vec::new();
+        for marker in changes {
+            tips.push(set_marker(&fx, marker));
+        }
+        fx.cut_release();
+        fx.import(LINE_A);
+        if on_release {
+            fx.write(".codeflow/project.toml", PROJECT);
+            tips.push(fx.commit("chore: drop the marker on the release line"));
+        }
+        (agree(&fx, "the adoption marker"), tips)
+    };
+    let one = "release_rules = 1\n";
+
+    let (kept, _) = judged(&[one], false);
+    passes(&kept, "a marker kept as written");
+
+    let (result, tips) = judged(&[one, ""], false);
+    let needle = format!(
+        "set on main at {} is removed at {} on main",
+        &tips[0][..9],
+        &tips[1][..9]
+    );
+    blocks(
+        &result,
+        "the marker removed",
+        &[&needle, "every release check refuses"],
+    );
+
+    let (result, tips) = judged(&[one, "release_rules = 2\n"], false);
+    let needle = format!(
+        "is changed to `release_rules = 2` at {} on main",
+        &tips[1][..9]
+    );
+    blocks(&result, "the marker changed", &[&needle]);
+
+    let (result, tips) = judged(&[one, "", one], false);
+    let needle = format!("is removed at {} on main", &tips[1][..9]);
+    blocks(&result, "the marker removed and re-added", &[&needle]);
+
+    let (result, tips) = judged(&["release_rules = 0\n"], false);
+    let needle = format!("first appears at {} as `release_rules = 0`", &tips[0][..9]);
+    blocks(&result, "a first value other than 1", &[&needle]);
+
+    let (result, tips) = judged(&[one], true);
+    let needle = format!("is removed at {} in the judged range", &tips[1][..9]);
+    blocks(
+        &result,
+        "the marker removed on the release line",
+        &[&needle],
+    );
+}
+
 /// AC-3 (Codex R145-1): the freeze follows the record's identity, so
 /// deleting a task record and re-creating it with looser criteria in a
 /// later commit is refused, and so is the deletion alone.
