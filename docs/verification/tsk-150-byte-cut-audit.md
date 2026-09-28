@@ -4,8 +4,8 @@ This is the read-only audit TSK-150 restores from: which shipped passages
 were removed or reworded to fit a byte budget, and whether each duty still has
 a home that is read when it is needed. It was produced on a Codex seat on
 2026-09-27, pinned for this line at `17a18529e`, and is committed here
-unchanged except for two things: this header and disposition section, and the
-dash characters, which ADR-0067 keeps out of `docs/` (an en dash in a line
+unchanged except for three things: this header, the disposition and
+scanner-switch sections, and the dash characters, which ADR-0067 keeps out of `docs/` (an en dash in a line
 range became a hyphen, an em dash became a comma). The scratchpad original
 had SHA-256 `e0eeb3af1d8851ea8790edad68ebbb4888a5d02b046f086124ba5c472b0acf11`.
 
@@ -71,6 +71,101 @@ example and is retired.
 | `cf-estimate/examples/brief.md`, `profile.md` | Pointer added: the fixture's inputs are linked where the worked example names them | `cf-estimate/references/worked-example.md` |
 | `cf-present/assets/primitive-tokens.example.json` (with `config.example.toml`) | Pointer restored with the rule `eb3718896` removed: use only during an explicit `cf-customize` opt-in; examples, not files to copy | `cf-present/references/document-authoring.md`, Utility tokens |
 | `cf-present/assets/review-document.example.json` | Retired: `present-document.example.json` replaced it as the starting shape in `1d7c52b23`, and it leads with a Mermaid diagram the current guidance rejects as a primary carrier. `codeflow update` removes an unmodified copy and keeps a modified one | removed |
+
+## Scanner switch: the shipped reading graph is unchanged
+
+Review round two (T150-R2) moved the reading scanner from a hand-written line
+scanner to the Markdown parser `pulldown_cmark`. This is the one-time proof
+that the switch changed no shipped reading. The permanent test
+`the_parser_reads_the_frozen_corpus_as_the_line_scanner_did` keeps a frozen
+sample; the whole tree is recorded here as evidence, not pinned in a test, so
+a skill edit that adds a pointer never has to update a number.
+
+Both dumps read the same live skill trees (`assets/base/agents/skills`,
+`assets/base/claude/skills`) and the five instruction templates. The assets
+are identical at both revisions (`git diff --quiet 2d26381a2 HEAD -- assets/`).
+
+| Measure | Line scanner (`2d26381a2`) | Parser (TSK-150 head) |
+|---|---|---|
+| Edges: file, target, resolution, trigger sentence | 260 | 260 |
+| Index rows: file, target, classification | 25 | 25 |
+| Kernel entries: 19, 19, 0, 6 and 1 across the templates | 45 | 45 |
+| Reading chain | 28 files, 131,832 bytes | 28 files, 131,832 bytes |
+| Structure faults and orphans | none | none |
+
+The sorted dumps are byte-identical, SHA-256
+`762bf6f4859903846e70491dc9822a638ba9d92aaeebbc4496c0f0d411113bad`. Unsorted,
+one line moves: in the sentence of `cf-model-orchestrator/SKILL.md` that names
+both `.codeflow/model-selection.json` and `references/model-overrides.md`, the
+line scanner listed the link before the code span and the parser lists them by
+position. Order carries no meaning. Codex reproduced the same comparison
+independently in review round three.
+
+To reproduce, add this helper and test to the `tests` module of
+`crates/codeflow-core/src/reading.rs`, once in the file as of `2d26381a2` with
+the first helper and once at the head with the second, then run
+`DUMP_OUT=<file> cargo test -p codeflow-core --lib -- --ignored zz_dump_shipped_scan`
+and compare the two outputs with `sort`.
+
+```rust
+// Line scanner (2d26381a2)
+    fn dump_rows(text: &str) -> Vec<(String, String)> {
+        active_markdown(text).iter().filter_map(|l| index_row(l)).collect()
+    }
+
+// Parser (head)
+    fn dump_rows(text: &str) -> Vec<(String, String)> {
+        scan(text)
+            .rows
+            .into_iter()
+            .map(|row| match row {
+                IndexRow::Row { target, classification } => (target, classification),
+                IndexRow::Malformed(row) => ("MALFORMED".into(), row),
+            })
+            .collect()
+    }
+
+    #[test]
+    #[ignore = "one-time scanner comparison dump"]
+    fn zz_dump_shipped_scan() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base");
+        let mut files = SkillFiles::new();
+        for tree in ["agents/skills", "claude/skills"] {
+            load_skill_tree(&base.join(tree), &mut files);
+        }
+        let mut out = String::new();
+        for (path, text) in &files {
+            if !has_extension(path, "md") {
+                continue;
+            }
+            for (sentence, target) in edges(text) {
+                let resolved = resolve_reference(&files, path, &target);
+                out.push_str(&format!("EDGE\t{path}\t{target}\t{resolved:?}\t{sentence}\n"));
+            }
+            for (target, classification) in dump_rows(text) {
+                out.push_str(&format!("ROW\t{path}\t{target}\t{classification}\n"));
+            }
+        }
+        for kernel in ["AGENTS.md.tmpl", "AGENTS.full.md.tmpl", "AGENTS.minimal.md.tmpl", "CLAUDE.md.tmpl", "CLAUDE.minimal.md.tmpl"] {
+            let text = std::fs::read_to_string(base.join(kernel)).unwrap();
+            for entry in kernel_entries(&text) {
+                out.push_str(&format!("KERNEL\t{kernel}\t{entry}\n"));
+            }
+        }
+        let chain = reading_chain(&files, &Inventory::SHIPPED);
+        for file in &chain.files {
+            out.push_str(&format!("CHAIN\t{}\t{}\t{}\n", file.stage, file.path, file.bytes));
+        }
+        out.push_str(&format!("CHAINTOTAL\t{}\n", chain.total));
+        for fault in structure_faults(&files, &Inventory::SHIPPED) {
+            out.push_str(&format!("FAULT\t{fault}\n"));
+        }
+        for orphan in orphans(&files) {
+            out.push_str(&format!("ORPHAN\t{orphan}\n"));
+        }
+        std::fs::write(std::env::var("DUMP_OUT").unwrap(), out).unwrap();
+    }
+```
 
 ## The audit, as returned
 

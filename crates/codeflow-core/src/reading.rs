@@ -1726,8 +1726,9 @@ mod tests {
     /// the standard kernel template it finds every edge with the sentence
     /// that holds it, every index row and every kernel entry that the line
     /// scanner it replaced found (`expected.tsv`, recorded from that
-    /// scanner). The whole-tree counts are pinned by
-    /// `the_whole_shipped_tree_keeps_its_graph_counts`.
+    /// scanner). Its inputs are frozen, so it never needs updating; the
+    /// whole-tree comparison at the switch is recorded as evidence in
+    /// `docs/verification/tsk-150-byte-cut-audit.md`.
     #[test]
     fn the_parser_reads_the_frozen_corpus_as_the_line_scanner_did() {
         let kernel = include_str!("../tests/fixtures/reading-corpus/AGENTS.md.tmpl");
@@ -1758,61 +1759,5 @@ mod tests {
         let mut expected: Vec<&str> = expected.lines().collect();
         expected.sort_unstable();
         assert_eq!(found, expected);
-    }
-
-    /// The whole shipped tree's reading graph, computed from the live skill
-    /// trees and instruction templates, keeps the counts both scanners found
-    /// at the switch to the parser (TSK-150): 260 edges, 25 index rows and 45
-    /// kernel entries. A change that adds or removes a pointer, an index row
-    /// or a kernel entry updates the number here in the same change, once
-    /// the difference is shown to be intended.
-    #[test]
-    fn the_whole_shipped_tree_keeps_its_graph_counts() {
-        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base");
-        let mut files = SkillFiles::new();
-        for tree in ["agents/skills", "claude/skills"] {
-            load_skill_tree(&base.join(tree), &mut files);
-        }
-        let (mut edges_found, mut rows, mut malformed) = (0, 0, Vec::new());
-        for (path, text) in &files {
-            if !has_extension(path, "md") {
-                continue;
-            }
-            let scanned = scan(text);
-            edges_found += scanned.pointers.len();
-            for row in scanned.rows {
-                match row {
-                    IndexRow::Row { .. } => rows += 1,
-                    IndexRow::Malformed(row) => malformed.push(format!("{path}: {row}")),
-                }
-            }
-        }
-        let kernels: Vec<(&str, usize)> = [
-            "AGENTS.md.tmpl",
-            "AGENTS.full.md.tmpl",
-            "AGENTS.minimal.md.tmpl",
-            "CLAUDE.md.tmpl",
-            "CLAUDE.minimal.md.tmpl",
-        ]
-        .into_iter()
-        .map(|template| {
-            let text = std::fs::read_to_string(base.join(template)).expect(template);
-            (template, kernel_entries(&text).len())
-        })
-        .collect();
-        assert_eq!(edges_found, 260, "edges in the shipped skill trees");
-        assert_eq!(rows, 25, "index rows in the shipped skill trees");
-        assert!(malformed.is_empty(), "{malformed:?}");
-        assert_eq!(
-            kernels,
-            [
-                ("AGENTS.md.tmpl", 19),
-                ("AGENTS.full.md.tmpl", 19),
-                ("AGENTS.minimal.md.tmpl", 0),
-                ("CLAUDE.md.tmpl", 6),
-                ("CLAUDE.minimal.md.tmpl", 1),
-            ]
-        );
-        assert_eq!(kernels.iter().map(|(_, n)| n).sum::<usize>(), 45);
     }
 }
