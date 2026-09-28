@@ -532,7 +532,8 @@ fn expected_import(
     repo: &Repository,
     merge: &git2::Commit<'_>,
 ) -> Result<BTreeMap<String, Entry>, String> {
-    let error = |error: git2::Error| format!("{}: {}", merge.id(), error.message());
+    let error =
+        |error: git2::Error| history_error(repo, &format!("{}: {}", merge.id(), error.message()));
     let all: Vec<git2::Commit<'_>> = merge.parents().collect();
     let first = &all[0];
     let parents: Vec<&git2::Commit<'_>> = all.iter().skip(1).collect();
@@ -948,10 +949,15 @@ pub fn release_findings(
             .map(|commit| commit.id())
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
+    if let Some(overlay) = history_overlay(&repo)? {
+        return Err(format!(
+            "this clone overlays its recorded history with {overlay}, so the commits a release check walks are not the ones the destination holds; remove it, or judge from a clone without it, then retry (SPC-013 R-120)"
+        ));
+    }
     let head_oid = oid(head)?;
     let anchor = repo
         .merge_base(oid(base)?, head_oid)
-        .map_err(|error| error.message().to_string())?;
+        .map_err(|error| history_error(&repo, error.message()))?;
     let default_tip = destination.default.as_ref().map(|(_, tip)| *tip);
     // The first-parent path, oldest first. History the default target
     // holds was judged there.
@@ -1472,17 +1478,19 @@ fn marker_at(
     commit: Oid,
     blobs: &mut HashMap<Oid, Marker>,
 ) -> Result<Marker, String> {
-    let unavailable = |what: &str, error: &git2::Error| {
+    let unavailable = |what: &str, id: Oid, error: &git2::Error| {
         format!(
-            "{what} at {} is not in this clone ({}), so whether it carries {MARKER_KEY} cannot be read; fetch the default target's full history, then retry (SPC-013 R-120)",
+            "{what} at {} (object {id}) is not in this clone ({}), so whether it carries {MARKER_KEY} cannot be read; fetch it (`git fetch --unshallow` for a shallow clone, `git cat-file -p {id}` for a partial one), then retry (SPC-013 R-120)",
             short(commit),
             error.message()
         )
     };
-    let tree = repo
+    let found = repo
         .find_commit(commit)
-        .and_then(|commit| commit.tree())
-        .map_err(|error| unavailable("the commit's tree", &error))?;
+        .map_err(|error| unavailable("the commit", commit, &error))?;
+    let tree = found
+        .tree()
+        .map_err(|error| unavailable("the commit's tree", found.tree_id(), &error))?;
     let Some(folder) = tree.get_name(".codeflow") else {
         return Ok(Marker::Absent);
     };
@@ -1491,7 +1499,7 @@ fn marker_at(
     }
     let folder = repo
         .find_tree(folder.id())
-        .map_err(|error| unavailable(".codeflow", &error))?;
+        .map_err(|error| unavailable(".codeflow", folder.id(), &error))?;
     let Some(entry) = folder.get_name("project.toml") else {
         return Ok(Marker::Absent);
     };
@@ -1503,7 +1511,7 @@ fn marker_at(
     }
     let blob = repo
         .find_blob(entry.id())
-        .map_err(|error| unavailable(".codeflow/project.toml", &error))?;
+        .map_err(|error| unavailable(".codeflow/project.toml", entry.id(), &error))?;
     let marker = match String::from_utf8_lossy(blob.content()).parse::<toml::Value>() {
         Err(error) => Marker::Invalid(format!("not valid TOML: {error}")),
         Ok(config) => match config.get(MARKER_KEY) {
@@ -1514,6 +1522,108 @@ fn marker_at(
     };
     blobs.insert(entry.id(), marker.clone());
     Ok(marker)
+}
+
+/// `why` a walk of the release range failed, saying so when this clone's
+/// history is shallow: the range may reach past its boundary.
+fn history_error(repo: &Repository, why: &str) -> String {
+    if repo.is_shallow() {
+        format!(
+            "this clone's history is shallow, so the release range's history cannot be read ({why}); run `git fetch --unshallow`, then retry (SPC-013 R-120)"
+        )
+    } else {
+        why.to_string()
+    }
+}
+
+/// A commit's first parent as its object records it, read from the object
+/// database: grafts, replace refs and shallow boundaries never apply.
+///
+/// # Errors
+///
+/// Returns a message when the object is missing or is not a commit.
+fn recorded_first_parent(odb: &git2::Odb<'_>, commit: Oid) -> Result<Option<Oid>, String> {
+    let object = odb.read(commit).map_err(|error| {
+        format!(
+            "commit {commit} is not in this clone ({}); fetch the default target's full history, then retry (SPC-013 R-120)",
+            error.message()
+        )
+    })?;
+    if object.kind() != git2::ObjectType::Commit {
+        return Err(format!("{commit} is not a commit"));
+    }
+    for line in object.data().split(|byte| *byte == b'\n') {
+        if line.is_empty() {
+            break;
+        }
+        if let Some(parent) = line.strip_prefix(b"parent ") {
+            let parent = std::str::from_utf8(parent)
+                .ok()
+                .and_then(|hex| Oid::from_str(hex.trim()).ok())
+                .ok_or_else(|| format!("commit {commit} records a malformed parent"))?;
+            return Ok(Some(parent));
+        }
+    }
+    Ok(None)
+}
+
+/// A local overlay that makes git or libgit2 read commits' parents or
+/// objects as something other than what they record: a non-empty graft
+/// file, or a replace ref under `refs/replace/` or `GIT_REPLACE_REF_BASE`.
+/// The release walks go through libgit2, which follows grafts, and the
+/// push set through git, which follows both.
+///
+/// # Errors
+///
+/// Returns a message when a graft file or the refs cannot be read.
+fn history_overlay(repo: &Repository) -> Result<Option<String>, String> {
+    let mut grafts = vec![
+        repo.commondir().join("info").join("grafts"),
+        repo.path().join("info").join("grafts"),
+    ];
+    if let Some(file) = std::env::var_os("GIT_GRAFT_FILE") {
+        grafts.push(std::path::PathBuf::from(file));
+    }
+    for file in grafts {
+        match std::fs::read_to_string(&file) {
+            Ok(text) if text.lines().any(|line| !line.trim().is_empty()) => {
+                return Ok(Some(format!("the graft file {}", file.display())));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "the graft file {} cannot be read: {error}",
+                    file.display()
+                ))
+            }
+        }
+    }
+    let mut bases = vec!["refs/replace/".to_string()];
+    if let Ok(base) = std::env::var("GIT_REPLACE_REF_BASE") {
+        if !base.trim().is_empty() {
+            let base = base.trim().to_string();
+            bases.push(if base.ends_with('/') {
+                base
+            } else {
+                format!("{base}/")
+            });
+        }
+    }
+    let references = repo
+        .references()
+        .map_err(|error| error.message().to_string())?;
+    for reference in references {
+        let reference = reference.map_err(|error| error.message().to_string())?;
+        let name = reference.name_bytes();
+        if bases.iter().any(|base| name.starts_with(base.as_bytes())) {
+            return Ok(Some(format!(
+                "the replace ref {} (`git replace -d` removes it)",
+                String::from_utf8_lossy(name)
+            )));
+        }
+    }
+    Ok(None)
 }
 
 /// The commits this clone's history is cut at (`.git/shallow`): each looks
@@ -1561,13 +1671,29 @@ fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Res
             )
         })
     };
-    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
-    walk.push(tip)
-        .and_then(|()| walk.simplify_first_parent())
-        .map_err(|error| error.to_string())?;
-    let mut chain: Vec<Oid> = walk
-        .collect::<Result<_, _>>()
-        .map_err(|error| error.to_string())?;
+    // Parents as each commit records them, so no graft, replacement or
+    // shallow boundary stands in for the chain the destination holds.
+    let odb = repo.odb().map_err(|error| error.message().to_string())?;
+    let parent_of = |commit: Oid| -> Result<Option<Oid>, String> {
+        let Some(parent) = recorded_first_parent(&odb, commit)? else {
+            return Ok(None);
+        };
+        if odb.exists(parent) {
+            return Ok(Some(parent));
+        }
+        Err(truncated(commit).unwrap_or_else(|| {
+            format!(
+                "{} records the parent {parent}, which is not in this clone, so whether {default} adopted {MARKER_KEY} cannot be read; fetch the default target's full history, then retry (SPC-013 R-120)",
+                short(commit)
+            )
+        }))
+    };
+    let mut chain = Vec::new();
+    let mut next = Some(tip);
+    while let Some(commit) = next {
+        chain.push(commit);
+        next = parent_of(commit)?;
+    }
     chain.reverse();
     let mut blobs = HashMap::new();
     let refuse = |adopted: Oid, at: Oid, marker: &Marker, place: &str| {
@@ -1578,9 +1704,6 @@ fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Res
             short(at)
         )
     };
-    if let Some(why) = chain.first().copied().and_then(truncated) {
-        return Err(why);
-    }
     let mut adopted = None;
     for commit in chain {
         let marker = marker_at(repo, commit, &mut blobs)?;
@@ -1604,15 +1727,7 @@ fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Res
         return Ok(());
     };
     for commit in path {
-        let parent = repo
-            .find_commit(*commit)
-            .map_err(|error| error.message().to_string())?
-            .parent_id(0)
-            .ok();
-        let Some(parent) = parent else {
-            if let Some(why) = truncated(*commit) {
-                return Err(why);
-            }
+        let Some(parent) = parent_of(*commit)? else {
             continue;
         };
         if marker_at(repo, parent, &mut blobs)? != Marker::Adopted {

@@ -139,8 +139,11 @@ publication date._
   which lists it as information. The adoption marker `release_rules = 1`
   in project config never decides whether these rules apply; once the
   default branch carries it, removing it or changing its value makes
-  every release check refuse. A shallow clone or a missing config object
-  on that history refuses too, since adoption cannot be read from it.
+  every release check refuse. The marker's history is read from the
+  parents each commit records. History the check needs that is cut short
+  by a shallow boundary, or a config object missing from the clone, makes
+  it refuse, since adoption cannot be read; so does a graft file or a
+  replace ref, which would change the commits a release check walks.
   Everything else, including a
   merge resolution, is direct work: it may not change criteria (removing
   or re-creating a task record counts as a change), and code

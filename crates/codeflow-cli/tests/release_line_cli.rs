@@ -899,9 +899,15 @@ fn the_adoption_marker_is_written_once() {
 
 /// `codeflow ci` on an empty release range at `dir`'s HEAD, asking `url`.
 fn ci_empty_at(dir: &Path, url: &str) -> (i32, String) {
+    ci_empty_with(dir, url, &[])
+}
+
+/// As [`ci_empty_at`], with `env` set for the run.
+fn ci_empty_with(dir: &Path, url: &str, env: &[(&str, &str)]) -> (i32, String) {
     let tip = run_git(dir, &["rev-parse", "HEAD"]);
     output(
         &clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+            .envs(env.iter().copied())
             .args([
                 "ci",
                 "--base",
@@ -957,6 +963,43 @@ fn a_shallow_default_history_is_never_read_as_unadopted() {
     );
 }
 
+/// Codex R145-R6 reach: a shallow boundary inside the judged range, with
+/// the default target's history whole and never adopted, refuses and says
+/// the clone is shallow, not that criteria changed.
+#[test]
+fn a_shallow_boundary_in_the_range_is_named() {
+    let fx = Fx::new(false);
+    set_marker(&fx, "");
+    fx.git(&["switch", "-q", "-c", RELEASE]);
+    fx.write("project-management/notes.md", "release work\n");
+    let boundary = fx.commit("docs: change release state");
+    let tree = fx.git(&["rev-parse", "HEAD^{tree}"]);
+    fx.git(&["switch", "-q", "main"]);
+    fx.write("project-management/main-notes.md", "main progresses\n");
+    let default = fx.commit("docs: progress main");
+    fx.git(&["push", "-q", "origin", "main"]);
+    let head = fx.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &boundary,
+        "-p",
+        &default,
+        "-m",
+        "docs: merge default",
+    ]);
+    fx.git(&["switch", "-q", "--detach", &head]);
+    fx.write(".git/shallow", &format!("{boundary}\n"));
+    blocks(
+        &fx.ci(&default, &head, RELEASE, None),
+        "a boundary inside the range",
+        &[
+            "this clone's history is shallow, so the release range's history cannot be read",
+            "git fetch --unshallow",
+        ],
+    );
+}
+
 /// AC-13, Codex R145-R5b-1: a config object on the default target's
 /// history that this clone lacks is never read as no marker. With the
 /// adoption blob gone CI refuses as unreadable; with the exact bytes back
@@ -980,10 +1023,10 @@ fn a_missing_config_object_is_never_read_as_absent() {
         "a missing adoption blob",
         &[
             &format!(
-                ".codeflow/project.toml at {} is not in this clone",
+                ".codeflow/project.toml at {} (object {blob}) is not in this clone",
                 &adopted[..9]
             ),
-            "cannot be read",
+            &format!("`git cat-file -p {blob}` for a partial one"),
         ],
     );
     std::fs::write(&object, saved).unwrap();
@@ -991,6 +1034,82 @@ fn a_missing_config_object_is_never_read_as_absent() {
         &ci_empty_at(&fx.root, &url),
         "the adoption blob restored",
         &[&format!("is removed at {} on main", &removal[..9])],
+    );
+}
+
+/// AC-13, Codex R145-R6-1: a local graft that makes the default tip
+/// parentless, or points it past adoption, changes what libgit2 walks
+/// while the destination holds the same commits. Every release check
+/// refuses and names the graft file, in CI and pre-push; with the graft
+/// gone the removal is named again.
+#[test]
+fn a_graft_never_stands_in_for_recorded_history() {
+    let fx = Fx::new(false);
+    let before = fx.head();
+    set_marker(&fx, "release_rules = 1\n");
+    let removal = set_marker(&fx, "");
+    let url = fx.origin.to_str().unwrap().to_string();
+    let grafts = fx.root.join(".git/info/grafts");
+    std::fs::create_dir_all(grafts.parent().unwrap()).unwrap();
+    for graft in [format!("{removal}\n"), format!("{removal} {before}\n")] {
+        std::fs::write(&grafts, &graft).unwrap();
+        let needle = ["overlays its recorded history with the graft file"];
+        blocks(&ci_empty_at(&fx.root, &url), "grafted CI", &needle);
+        fx.git(&["switch", "-q", LINE_A]);
+        blocks(
+            &pre_push_new(&fx.root, &url, RELEASE, &removal),
+            "grafted pre-push",
+            &needle,
+        );
+        fx.git(&["switch", "-q", "main"]);
+    }
+    std::fs::remove_file(&grafts).unwrap();
+    blocks(
+        &ci_empty_at(&fx.root, &url),
+        "the graft removed",
+        &[&format!("is removed at {} on main", &removal[..9])],
+    );
+}
+
+/// AC-13, Codex R145-R6-1: a replace ref, under `refs/replace/` or the
+/// base `GIT_REPLACE_REF_BASE` names, is a local overlay git follows, so
+/// every release check refuses and names it, even over a valid history.
+/// Without it the same history passes.
+#[test]
+fn a_replace_ref_never_stands_in_for_recorded_history() {
+    let fx = Fx::new(false);
+    set_marker(&fx, "release_rules = 1\n");
+    let tip = set_marker(&fx, "release_rules = 1\nstack_note = \"kept\"\n");
+    let url = fx.origin.to_str().unwrap().to_string();
+    passes(&ci_empty_at(&fx.root, &url), "a kept marker, no overlay");
+    fx.git(&["replace", "--graft", &tip]);
+    let replacement = fx.git(&["rev-parse", &format!("refs/replace/{tip}")]);
+    blocks(
+        &ci_empty_at(&fx.root, &url),
+        "a replace ref",
+        &[&format!("the replace ref refs/replace/{tip}")],
+    );
+    fx.git(&["switch", "-q", LINE_A]);
+    blocks(
+        &pre_push_new(&fx.root, &url, RELEASE, &tip),
+        "a replace ref at pre-push",
+        &["the replace ref refs/replace/"],
+    );
+    fx.git(&["switch", "-q", "main"]);
+    fx.git(&["replace", "-d", &tip]);
+    fx.git(&[
+        "update-ref",
+        &format!("refs/other-replace/{tip}"),
+        &replacement,
+    ]);
+    blocks(
+        &ci_empty_with(
+            &fx.root,
+            &url,
+            &[("GIT_REPLACE_REF_BASE", "refs/other-replace/")],
+        ),
+        "a replace ref under GIT_REPLACE_REF_BASE",
+        &[&format!("the replace ref refs/other-replace/{tip}")],
     );
 }
 
