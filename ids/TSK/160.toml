@@ -1,0 +1,11 @@
+id = "TSK-160"
+uid = "b45bf2da-3091-4e40-a0a6-5ef1a6bcafd5"
+kind = "TSK"
+title = "keep a held drag from pinning mid-gesture"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T17:23:08Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
