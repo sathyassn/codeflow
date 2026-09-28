@@ -1,7 +1,7 @@
 //! Dependency edges of a task (SPC-013 R-26, R-112).
 //!
 //! A `depends_on` entry is a bare task id, which is a code dependency, or an
-//! object `{id: TSK-NNN, kind: research | decision, pin: <commit>}`. A code
+//! object `{id: TSK-NNN, kind: research | decision, pin: "<commit>"}`. A code
 //! dependency is met when the predecessor's accepted change is in the
 //! execution base; a research or decision dependency is met at its pinned
 //! commit. The kind is never inferred from the predecessor's `work_type`.
@@ -96,7 +96,19 @@ pub fn parse_dependency(value: &Value) -> Result<Dependency, String> {
     let pin = match field("pin") {
         None | Some(Value::Null) => None,
         Some(Value::String(pin)) if is_commit_id(pin) => Some(pin.clone()),
-        Some(_) => return Err(format!("dependency {id} pin must be a commit id")),
+        // YAML may have dropped the text (`949894e0` is 949894.0, a 40-digit
+        // id is a rounded float, `+1234567` loses its sign), so a number is
+        // never read back (R-112).
+        Some(Value::Number(_)) => {
+            return Err(format!(
+                "dependency {id} pin reads as a YAML number, not a commit id; quote it: pin: \"<commit sha>\""
+            ))
+        }
+        Some(_) => {
+            return Err(format!(
+                "dependency {id} pin must be a commit id, written quoted: pin: \"<commit sha>\""
+            ))
+        }
     };
     Ok(Dependency {
         id: id.to_string(),
@@ -157,5 +169,38 @@ mod tests {
             let error = parse_dependencies(Some(&yaml(text))).unwrap_err();
             assert!(error.contains(needle), "{text}: {error}");
         }
+    }
+
+    /// R-112: a pin that YAML reads as a number (digits, the shape of an
+    /// exponent, or a full id of digits) is refused with the quote remedy;
+    /// quoted, the same text is a commit id, and a pin YAML keeps as text
+    /// (a letter, or a leading zero) reads either way.
+    #[test]
+    fn a_number_shaped_pin_is_refused_unquoted_and_read_quoted() {
+        let full_digits = "1234567890123456789012345678901234567890";
+        for pin in ["70283613", "949894e0", full_digits] {
+            let unquoted = format!("[{{id: TSK-001, kind: research, pin: {pin}}}]");
+            let error = parse_dependencies(Some(&yaml(&unquoted))).unwrap_err();
+            assert!(
+                error.contains("TSK-001 pin reads as a YAML number")
+                    && error.contains("quote it: pin: \"<commit sha>\""),
+                "{pin}: {error}"
+            );
+            let quoted = format!("[{{id: TSK-001, kind: research, pin: \"{pin}\"}}]");
+            let deps = parse_dependencies(Some(&yaml(&quoted))).unwrap();
+            assert_eq!(deps[0].pin.as_deref(), Some(pin), "{pin}");
+        }
+        for pin in ["0123abcd", "\"0123abcd\"", "07028361"] {
+            let text = format!("[{{id: TSK-001, kind: research, pin: {pin}}}]");
+            let deps = parse_dependencies(Some(&yaml(&text))).unwrap();
+            assert_eq!(
+                deps[0].pin.as_deref(),
+                Some(pin.trim_matches('"')),
+                "{text}"
+            );
+        }
+        let error = parse_dependencies(Some(&yaml("[{id: TSK-001, kind: research, pin: main}]")))
+            .unwrap_err();
+        assert!(error.contains("written quoted"), "{error}");
     }
 }

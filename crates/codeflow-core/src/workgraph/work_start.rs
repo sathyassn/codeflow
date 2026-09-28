@@ -100,7 +100,7 @@ pub enum WorkStartError {
         dependency: String,
         line: String,
     },
-    #[error("task {task_id} has a {kind} dependency on {dependency} with no pin; the planner writes the pin")]
+    #[error("task {task_id} has a {kind} dependency on {dependency} with no pin; the planner writes the pin, quoted: pin: \"<commit sha>\"")]
     DependencyUnpinned {
         task_id: String,
         dependency: String,
