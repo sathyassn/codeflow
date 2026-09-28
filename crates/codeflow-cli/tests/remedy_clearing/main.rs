@@ -155,7 +155,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_HOOK_MANAGER", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_NETWORK", Excluded(Network)),
-    ("DOCTOR_DELEGATES", Excluded(HumanAuthority)),
+    ("DOCTOR_DELEGATES", Runs),
+    ("DOCTOR_DELEGATES_SIGN_IN", Excluded(HumanAuthority)),
     ("DOCTOR_REQUALIFY", Excluded(HumanAuthority)),
     ("DOCTOR_UNSEEN", Excluded(HarnessApproval)),
     ("DOCTOR_CANARY", Excluded(Network)),
@@ -176,6 +177,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("HEADLESS_PEER_RUN", Runs),
     ("HOOK_UNEVALUATED", Runs),
     ("HOOK_STDIN_UNREAD", Runs),
+    ("GUARD_PAYLOAD_MALFORMED", Runs),
     ("GUARD_PAYLOAD_UNREAD", Excluded(Network)),
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
     ("REGISTRY_UNWRITTEN", Runs),
@@ -2016,6 +2018,55 @@ fn clears_doctor_tool_missing() {
 }
 
 #[test]
+fn clears_doctor_delegates() {
+    // TSK-147 round 3 F5: the gaps this machine closes are proven here;
+    // only the sign-in, the operator's own account, is excluded.
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    // PATH holds only this directory, so doctor finds exactly what is here:
+    // a signed-in codex, and a claude whose Codex plugin is not enabled.
+    let bin = tempfile::tempdir().unwrap();
+    let stand_in = |name: &str, script: &str| {
+        let path = bin.path().join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{script}")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    };
+    let plugin = |enabled: bool| {
+        format!(
+            "if [ \"$1\" = plugin ]; then echo '[{{\"id\":\"codex@openai-codex\",\"enabled\":{enabled}}}]'; fi\nexit 0\n"
+        )
+    };
+    stand_in("codex", "exit 0\n");
+    stand_in("claude", &plugin(false));
+    let check = || {
+        text(
+            &command(exe().to_str().unwrap(), &root)
+                .env("PATH", bin.path())
+                .args(["doctor", "--check", "delegates"])
+                .output()
+                .unwrap(),
+        )
+    };
+    prove(
+        "DOCTOR_DELEGATES",
+        "cross-vendor delegation is partially unavailable",
+        check,
+        |printed| {
+            assert!(printed.contains("tmux missing from PATH"), "{printed}");
+            assert!(printed.contains("plugin not enabled"), "{printed}");
+            // Install tmux and enable the plugin: stand-ins are what doctor
+            // can see of both.
+            stand_in("tmux", "exit 0\n");
+            stand_in("claude", &plugin(true));
+        },
+    );
+}
+
+#[test]
 fn clears_doctor_hook_manager() {
     // A project whose git hooks another manager owned before `codeflow init`,
     // which records them as unwired and leaves them alone.
@@ -2034,13 +2085,36 @@ fn clears_doctor_hook_manager() {
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    // A real git event: a commit with a bad subject. While the manager's
+    // hooks do not call the shims, git lets it through.
+    let bad_commit = || {
+        command("git", &root)
+            .args(["commit", "-q", "--allow-empty", "-m", "Bad subject."])
+            .output()
+            .unwrap()
+    };
+    assert!(bad_commit().status.success(), "no shim runs yet");
+    git(&root, &["reset", "-q", "--soft", "HEAD~1"]);
+    let exec = |path: &Path| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+    };
     prove(
         "DOCTOR_HOOK_MANAGER",
         "another hook manager owns",
         || doctor(&root, "hooks"),
         |printed| {
-            assert!(printed.contains("in .husky"), "{printed}");
-            // Each manager hook calls its codeflow shim, as the text says.
+            assert!(printed.contains("in .husky executable"), "{printed}");
+            // Each manager hook calls its codeflow shim on a live line. The
+            // call alone is not enough: TSK-147 round 3 F6 found a hook git
+            // skips (not executable) passing on its text, so doctor must
+            // still warn until the file is executable.
             for name in &shims {
                 assert!(
                     printed.contains(name.as_str()),
@@ -2052,6 +2126,23 @@ fn clears_doctor_hook_manager() {
                     &format!("#!/bin/sh\ntrue\n.codeflow/git-hooks/{name} \"$@\"\n"),
                 );
             }
+            #[cfg(unix)]
+            {
+                let still = doctor(&root, "hooks");
+                assert!(still.contains("not executable"), "{still}");
+                assert!(
+                    bad_commit().status.success(),
+                    "git skips a hook that is not executable"
+                );
+                git(&root, &["reset", "-q", "--soft", "HEAD~1"]);
+            }
+            for name in &shims {
+                exec(&root.join(".husky").join(name));
+            }
         },
     );
+    // The same real git event is now refused by the codeflow shim.
+    let refused = bad_commit();
+    assert!(!refused.status.success(), "{}", text(&refused));
+    assert!(text(&refused).contains("commit"), "{}", text(&refused));
 }

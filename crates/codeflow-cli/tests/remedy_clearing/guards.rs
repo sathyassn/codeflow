@@ -338,28 +338,113 @@ fn clears_headless_peer_run() {
 
 #[test]
 fn clears_session_summary_unwritten() {
-    let dir = ci_repo(DEFAULTS);
-    let root = dir.path();
-    std::fs::write(root.join(".git/codeflow"), "not a directory\n").unwrap();
-    prove(
-        "SESSION_SUMMARY_UNWRITTEN",
-        "session ledger not written",
-        || hook_with_stdin(root, &["hook", "session-summary"], b"{}"),
-        |printed| {
-            // The path the remedy names, made a writable directory.
-            let named = printed
-                .split("make ")
-                .nth(1)
-                .and_then(|rest| rest.split(" a writable directory").next())
-                .unwrap_or_else(|| panic!("no path named:\n{printed}"));
-            let named = Path::new(named);
-            assert!(named.ends_with(".git/codeflow"), "{printed}");
-            std::fs::remove_file(named).unwrap();
-            std::fs::create_dir(named).unwrap();
-        },
-    );
-    let after = hook_with_stdin(root, &["hook", "session-summary"], b"{}");
-    assert!(after.contains("recorded to"), "{after}");
+    // A file where the ledger needs a directory, and (the reviewer's round
+    // 3 case) a directory where it writes its data file: each names the
+    // path that failed and the repair its kind needs.
+    for (blocker, is_dir, repair) in [
+        (
+            ".git/codeflow",
+            false,
+            "remove or rename the file that stands where the ledger needs a directory: ",
+        ),
+        (
+            ".git/codeflow/ledger/sessions/sessions.jsonl",
+            true,
+            "remove the directory that stands where the ledger writes a file: ",
+        ),
+    ] {
+        let dir = ci_repo(DEFAULTS);
+        let root = dir.path();
+        if is_dir {
+            std::fs::create_dir_all(root.join(blocker)).unwrap();
+        } else {
+            std::fs::write(root.join(blocker), "not a directory\n").unwrap();
+        }
+        prove(
+            "SESSION_SUMMARY_UNWRITTEN",
+            "session ledger not written",
+            || hook_with_stdin(root, &["hook", "session-summary"], b"{}"),
+            |printed| {
+                let named = printed
+                    .split(repair)
+                    .nth(1)
+                    .and_then(|rest| rest.split("; the session ledger").next())
+                    .unwrap_or_else(|| panic!("{blocker}: no repair named:\n{printed}"));
+                let named = Path::new(named);
+                assert!(named.ends_with(blocker), "{blocker}: {printed}");
+                if is_dir {
+                    std::fs::remove_dir(named).unwrap();
+                } else {
+                    std::fs::remove_file(named).unwrap();
+                }
+            },
+        );
+        let after = hook_with_stdin(root, &["hook", "session-summary"], b"{}");
+        assert!(after.contains("recorded to"), "{blocker}: {after}");
+    }
+}
+
+/// Run the `.claude/settings.json` entry that wires `hook <guard>` the way
+/// Claude Code does: its command in a shell, the tool payload on stdin.
+fn wired_guard(root: &Path, guard: &str, payload: &str) -> String {
+    let settings: serde_json::Value =
+        serde_json::from_str(&read(root, ".claude/settings.json")).unwrap();
+    let wired = settings["hooks"]["PreToolUse"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["hooks"].as_array().unwrap().iter())
+        .filter_map(|hook| hook["command"].as_str())
+        .find(|command| command.contains(&format!("hook {guard}")))
+        .unwrap_or_else(|| panic!("no {guard} entry"))
+        .to_string();
+    let mut child = command("sh", root)
+        .args(["-c", &wired])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), payload.as_bytes()).unwrap();
+    drop(child.stdin.take());
+    text(&child.wait_with_output().unwrap())
+}
+
+#[test]
+fn clears_guard_payload_malformed() {
+    // TSK-147 round 3 F5: a hook entry that does not pass the harness
+    // payload through (here it pipes other text into the guard) is a local
+    // repair, not a release to install.
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let payload = r#"{"tool_name":"Bash","tool_input":{"command":"git status"}}"#;
+    for guard in ["git-guard", "exec-guard"] {
+        let settings = read(&root, ".claude/settings.json");
+        let shipped = format!("\"codeflow hook {guard}\"");
+        assert!(settings.contains(&shipped), "{guard}");
+        write(
+            &root,
+            ".claude/settings.json",
+            &settings.replace(
+                &shipped,
+                &format!("\"printf not-json | codeflow hook {guard}\""),
+            ),
+        );
+        prove(
+            "GUARD_PAYLOAD_MALFORMED",
+            "unreadable hook payload",
+            || wired_guard(&root, guard, payload),
+            |printed| {
+                assert!(
+                    printed.contains(&format!("`codeflow hook {guard}`")),
+                    "{printed}"
+                );
+                assert!(printed.contains("`.claude/settings.json`"), "{printed}");
+                // The entry passes the payload through unchanged again.
+                write(&root, ".claude/settings.json", &settings);
+            },
+        );
+    }
 }
 
 #[test]

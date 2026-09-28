@@ -457,16 +457,20 @@ catalog! {
     /// Git hooks another hook manager owns, whose stages do not call the
     /// codeflow shims.
     DOCTOR_HOOK_MANAGER = Step::Edit("{path}"),
-        "call each codeflow shim from the matching hook in {path} (its pre-commit hook runs `.codeflow/git-hooks/pre-commit \"$@\"`, and so on for {hooks}), then `codeflow doctor --check hooks` confirms it";
+        "make each hook named in {path} executable, calling its codeflow shim on a live line (its pre-commit hook runs `.codeflow/git-hooks/pre-commit \"$@\"`, and so on for {hooks}), then `codeflow doctor --check hooks` confirms it; a manager that calls the shims from its own configuration is confirmed by a commit with a bad subject being refused";
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";
-    /// Delegation prerequisites missing or signed out.
+    /// Delegation prerequisites missing on this machine: a tool, the Codex
+    /// plugin in Claude Code, or an MCP inventory that does not answer.
     DOCTOR_DELEGATES = Step::Codeflow("codeflow doctor"),
-        "install or sign in to each missing piece named (a sign-in uses the operator's own account), then `codeflow doctor --check delegates` confirms it";
+        "install, enable or repair each missing piece named, then `codeflow doctor --check delegates` confirms it";
+    /// A delegate CLI that is not signed in.
+    DOCTOR_DELEGATES_SIGN_IN = Step::Codeflow("codeflow doctor"),
+        "sign in with `codex login` (the operator's own account), then `codeflow doctor --check delegates` confirms it";
     /// A model binding whose harness or settings changed since it qualified.
     DOCTOR_REQUALIFY = Step::Codeflow("codeflow doctor"),
         "requalify each binding named with the /cf-evaluate-model skill, whose promotion needs a human's explicit approval, then `codeflow doctor --check model-bindings` confirms it";
@@ -530,12 +534,16 @@ catalog! {
     /// A git hook that could not read its input from git.
     HOOK_STDIN_UNREAD = Step::Git("git push"),
         "rerun `git push` so git hands the hook its refs on stdin: a hook manager must pass its stdin through to the codeflow shim, and a branch whose name is not UTF-8 is pushed under a UTF-8 name (`git branch <new> <old>`, then push <new>); server-side CI stays authoritative meanwhile";
-    /// A session guard payload that did not parse.
+    /// A session guard input that is not a JSON hook payload: the harness
+    /// entry that runs the guard does not pass the payload through.
+    GUARD_PAYLOAD_MALFORMED = Step::Edit("{path}"),
+        "make the hook entry that runs `codeflow hook {guard}` pass the harness payload on stdin unchanged, in {path}; the next tool call is then read";
+    /// A session guard payload whose fields this build does not read.
     GUARD_PAYLOAD_UNREAD = Step::Codeflow("codeflow doctor"),
         "this codeflow build cannot read the payload the harness sent (the error names the field): install a codeflow release build that reads it, then `codeflow doctor --check hooks` confirms the hooks answer";
     /// A session summary that could not be written.
     SESSION_SUMMARY_UNWRITTEN = Step::Edit("{path}"),
-        "make {path} a writable directory: the session ledger lives there, under git's common directory, and the next session end writes it";
+        "{repair}: {path}; the session ledger lives under git's common directory, and the next session end writes it";
     /// The per-user project registry that could not be written.
     REGISTRY_UNWRITTEN = Step::Edit("{path}"),
         "repair or delete {path}, the per-user project registry; the next codeflow command writes it again";

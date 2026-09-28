@@ -43,7 +43,7 @@ impl JsonlWriter {
     ///
     /// # Errors
     ///
-    /// Returns `LedgerError::Io` if the directory cannot be created.
+    /// Returns `LedgerError::IoAt` naming the directory if it cannot be created.
     pub fn new(ledger_dir: impl Into<PathBuf>) -> Result<Self, LedgerError> {
         Self::new_with_session(ledger_dir, None)
     }
@@ -56,13 +56,13 @@ impl JsonlWriter {
     ///
     /// # Errors
     ///
-    /// Returns `LedgerError::Io` if the directory cannot be created.
+    /// Returns `LedgerError::IoAt` naming the directory if it cannot be created.
     pub fn new_with_session(
         ledger_dir: impl Into<PathBuf>,
         session_id: Option<String>,
     ) -> Result<Self, LedgerError> {
         let ledger_dir = ledger_dir.into();
-        fs::create_dir_all(&ledger_dir)?;
+        fs::create_dir_all(&ledger_dir).map_err(at(&ledger_dir))?;
         Ok(Self {
             ledger_dir,
             session_id,
@@ -90,7 +90,7 @@ impl JsonlWriter {
 
         // Ensure the subdirectory exists.
         if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(at(parent))?;
         }
 
         let lock_path = file_path.with_extension("jsonl.lock");
@@ -100,7 +100,8 @@ impl JsonlWriter {
             .create(true)
             .write(true)
             .truncate(false)
-            .open(&lock_path)?;
+            .open(&lock_path)
+            .map_err(at(&lock_path))?;
 
         // Acquire exclusive lock.
         lock_file.lock_exclusive().map_err(|e| {
@@ -115,15 +116,24 @@ impl JsonlWriter {
         let mut data_file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(&file_path)?;
+            .open(&file_path)
+            .map_err(at(&file_path))?;
 
         // Write the full line in a single call.
-        data_file.write_all(&line)?;
+        data_file.write_all(&line).map_err(at(&file_path))?;
 
         // Lock is released on drop of lock_file.
         drop(lock_file);
 
         Ok(())
+    }
+}
+
+/// Name the path an I/O error happened on.
+fn at(path: &Path) -> impl FnOnce(std::io::Error) -> LedgerError + '_ {
+    move |source| LedgerError::IoAt {
+        path: path.to_path_buf(),
+        source,
     }
 }
 

@@ -454,15 +454,21 @@ fn hooks_wiring_warning(root: &Path) -> Option<Finding> {
         )
     } else {
         Finding::new(
-            "hook subcommands respond, but the codeflow shims are not git's active hooks (fresh clone?)",
+            format!(
+                "hook subcommands respond, but the codeflow shims are not git's active hooks (fresh clone?), and the hooks git runs do not call: {}",
+                uncalled.join(", ")
+            ),
             remedy::DOCTOR_HOOKS_PATH.with(&[("hooks", CODEFLOW_HOOKS_PATH)]),
         )
     })
 }
 
-/// The shims in `shims` that git's active hooks in `active` do not call:
-/// a hook calls its shim when the hook of the same name names
-/// `.codeflow/git-hooks/<name>`.
+/// The shims in `shims` that git's active hooks in `active` do not call,
+/// each with why. A hook calls its shim when git runs it, which needs the
+/// file to be executable (githooks(5): a hook that is not executable is
+/// ignored), and a live line of it, not a comment, names
+/// `.codeflow/git-hooks/<name>`. A manager that calls the shims from its
+/// own configuration is not read here; its remedy says how to confirm it.
 fn shims_not_called(active: &Path, shims: &Path) -> Vec<String> {
     use crate::scaffold::detect::CODEFLOW_HOOKS_PATH;
     let mut names: Vec<String> = std::fs::read_dir(shims)
@@ -475,12 +481,47 @@ fn shims_not_called(active: &Path, shims: &Path) -> Vec<String> {
     names.sort();
     names
         .into_iter()
-        .filter(|name| {
-            std::fs::read_to_string(active.join(name)).map_or(true, |hook| {
-                !hook.contains(&format!("{CODEFLOW_HOOKS_PATH}/{name}"))
-            })
+        .filter_map(|name| {
+            let hook = active.join(&name);
+            let why = match std::fs::read_to_string(&hook) {
+                Err(_) => "no hook",
+                Ok(_) if !is_executable(&hook) => "not executable",
+                Ok(text) => {
+                    let call = format!("{CODEFLOW_HOOKS_PATH}/{name}");
+                    if text.lines().any(|line| shell_code(line).contains(&call)) {
+                        return None;
+                    }
+                    "no live call"
+                }
+            };
+            Some(format!("{name} ({why})"))
         })
         .collect()
+}
+
+/// A shell line without its comment: from a `#` that starts a word.
+fn shell_code(line: &str) -> &str {
+    let mut previous = ' ';
+    for (at, c) in line.char_indices() {
+        if c == '#' && previous.is_whitespace() {
+            return &line[..at];
+        }
+        previous = c;
+    }
+    line
+}
+
+/// Whether git would run `path` as a hook.
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
+}
+
+/// Git for Windows runs a hook without an executable bit.
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn check_claude(opts: &Options) -> CheckResult {
@@ -509,12 +550,16 @@ fn check_claude(opts: &Options) -> CheckResult {
 
 /// Codex harness wiring (ADR-0008). `.codex/hooks.json` binds the same
 /// `codeflow hook` guards to an interactive codex session that
-/// `.claude/settings.json` binds to Claude Code — but only after a one-time
-/// trust step (`/hooks` inside codex). Trust state lives in codex's own
-/// state and is not inspectable from outside codex, so this check never
-/// claims the guards are live: it reports "wired structurally" at Warn with
-/// the one-time step. Warn, not fail: git hooks + CI bind a codex session
-/// regardless (charter section 9) — the in-session layer is fast feedback,
+/// `.claude/settings.json` binds to Claude Code, but only after a one-time
+/// trust step (`/hooks` inside codex). Doctor reads Codex's recorded trust
+/// statically, and a static reading proves only that a hook does NOT run:
+/// an untrusted, changed or disabled hook is a Warn with the one-time step.
+/// A configuration that matches is a Note, "configured; runtime not
+/// verified", naming the real hook event that verifies it; doctor never
+/// passes it without an observed run (TSK-147 round 3). A linked worktree,
+/// whose hooks Codex takes from the main checkout, is a note that doctor
+/// cannot verify it. Warn, not fail: git hooks + CI bind a codex session
+/// regardless (charter section 9); the in-session layer is fast feedback,
 /// not the boundary.
 fn check_codex(opts: &Options) -> CheckResult {
     let start = Instant::now();
@@ -538,11 +583,18 @@ fn check_codex(opts: &Options) -> CheckResult {
     };
     let approve =
         "run `/hooks` inside interactive codex once and approve and enable the CodeFlow hooks";
-    let (status, message) = match codex_hook_trust(&hooks_json, &opts.codex_home()) {
+    let observe = "start codex in this project and confirm a real hook event ran, such as the CodeFlow session-orient context at session start";
+    let root = Path::new(&opts.project_dir);
+    let trust = if crate::hooks::RepoInfo::discover(root).is_some_and(|info| info.is_worktree) {
+        Err("a linked worktree, whose project hooks codex takes from the main checkout".to_string())
+    } else {
+        codex_hook_trust(&hooks_json, &opts.codex_home())
+    };
+    let (status, message) = match trust {
         Ok((trusted, total)) if trusted == total => (
-            Status::Pass,
+            Status::Note(remedy::DOCTOR_UNSEEN.with(&[("step", observe)])),
             format!(
-                ".codex/hooks.json present, {presence}: codex runs {trusted} of {total} hooks (trusted and enabled)"
+                ".codex/hooks.json present, {presence}: codex has {trusted} of {total} hooks trusted and enabled (configured; runtime not verified)"
             ),
         ),
         Ok((trusted, total)) => (
@@ -822,8 +874,11 @@ fn snake_case(name: &str) -> String {
 /// Grok Build in-session wiring. Project hooks live in `.grok/hooks/*.json`
 /// (Grok also scans `.claude/settings.json` when compat is on) and load
 /// only in a trusted folder: `/hooks-trust` (or `--trust`) records it in
-/// `~/.grok/trusted_folders.toml`, which this check reads. Warn, not fail:
-/// git hooks + CI bind a Grok session regardless.
+/// `~/.grok/trusted_folders.toml`, which this check reads. An untrusted
+/// folder is a Warn; a trusted or ungated one is a Note, "configured;
+/// runtime not verified", since a static reading never proves a hook runs
+/// (TSK-147 round 3). Warn, not fail: git hooks + CI bind a Grok session
+/// regardless.
 fn check_grok(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = Path::new(&opts.project_dir);
@@ -854,15 +909,16 @@ fn check_grok(opts: &Options) -> CheckResult {
     };
     let trust =
         "run `/hooks-trust` in grok inside this project once (or start grok with `--trust`)";
+    let observe = "start grok in this project and confirm a real hook event ran, such as the CodeFlow guard answering a shell command";
     let env = opts.env("GROK_FOLDER_TRUST");
     let (status, message) = match grok_folder_trust(root, &opts.grok_home(), env.as_deref()) {
         GrokTrust::Trusted => (
-            Status::Pass,
-            format!(".grok/hooks present, {presence}: grok trusts this folder, so project hooks load"),
+            Status::Note(remedy::DOCTOR_UNSEEN.with(&[("step", observe)])),
+            format!(".grok/hooks present, {presence}: grok trusts this folder, so project hooks should load (configured; runtime not verified)"),
         ),
         GrokTrust::Ungated => (
-            Status::Pass,
-            format!(".grok/hooks present, {presence}: grok folder trust is turned off, so project hooks load ungated"),
+            Status::Note(remedy::DOCTOR_UNSEEN.with(&[("step", observe)])),
+            format!(".grok/hooks present, {presence}: grok folder trust is turned off, so project hooks should load ungated (configured; runtime not verified)"),
         ),
         GrokTrust::Untrusted => (
             Status::Warn(remedy::DOCTOR_HARNESS_APPROVAL.with(&[("step", trust), ("check", "grok")])),
@@ -1668,12 +1724,15 @@ fn check_delegates(opts: &Options) -> CheckResult {
         ""
     };
 
+    // Gaps this machine can close on its own, and a sign-in, which only
+    // the operator's own account can close.
     let mut gaps = Vec::new();
+    let mut signed_out = false;
 
     match opts.do_look_path("codex") {
         Ok(codex_bin) => {
             if opts.do_exec(&codex_bin, &["login", "status"]).is_err() {
-                gaps.push("Codex auth unavailable (run `codex login`)".to_string());
+                signed_out = true;
             }
             if opts.do_exec(&codex_bin, &["mcp", "list"]).is_err() {
                 gaps.push("Codex MCP inventory unavailable (run `codex mcp list`)".to_string());
@@ -1707,7 +1766,7 @@ fn check_delegates(opts: &Options) -> CheckResult {
         gaps.push("tmux missing from PATH".to_string());
     }
 
-    if gaps.is_empty() {
+    if gaps.is_empty() && !signed_out {
         CheckResult {
             name: "delegates".into(),
             status: Status::Pass,
@@ -1717,9 +1776,17 @@ fn check_delegates(opts: &Options) -> CheckResult {
             duration: start.elapsed(),
         }
     } else {
+        let remedy = if gaps.is_empty() {
+            remedy::DOCTOR_DELEGATES_SIGN_IN.remedy()
+        } else {
+            remedy::DOCTOR_DELEGATES.remedy()
+        };
+        if signed_out {
+            gaps.push("Codex auth unavailable (run `codex login`)".to_string());
+        }
         CheckResult {
             name: "delegates".into(),
-            status: Status::Warn(remedy::DOCTOR_DELEGATES.remedy()),
+            status: Status::Warn(remedy),
             message: format!(
                 "cross-vendor delegation is partially unavailable (optional): {}. Verify Claude auth with an interactive TTY canary; status output alone is not authoritative{agy_note}",
                 gaps.join("; ")
@@ -3181,12 +3248,12 @@ mod tests {
     }
 
     #[test]
-    fn codex_trust_recorded_for_every_hook_passes() {
+    fn codex_trust_recorded_for_every_hook_is_configured_not_run() {
         // TSK-147: doctor reads the trust Codex records instead of warning
         // that it cannot; the hashes are Codex's own.
         let (_dir, opts) = codex_project(OBSERVED_CODEX_HOOKS, &CODEX_TRUSTED);
         let r = check_codex(&opts);
-        assert_eq!(r.status, Status::Pass, "{}", r.message);
+        assert!(is_configured(&r), "{:?} {}", r.status, r.message);
         assert!(r.message.contains("3 of 3"), "{}", r.message);
     }
 
@@ -3349,12 +3416,12 @@ mod tests {
     }
 
     #[test]
-    fn a_grok_folder_trusted_in_the_store_passes() {
+    fn a_grok_folder_trusted_in_the_store_is_configured_not_run() {
         let (_dir, opts, _) = grok_project(Some(
             "[folders.\"<root>\"]\ntrusted = true\ndecided_at = 1\n",
         ));
         let r = check_grok(&opts);
-        assert_eq!(r.status, Status::Pass, "{}", r.message);
+        assert!(is_configured(&r), "{:?} {}", r.status, r.message);
     }
 
     #[test]
@@ -3377,7 +3444,7 @@ mod tests {
     }
 
     #[test]
-    fn grok_folder_trust_turned_off_passes() {
+    fn grok_folder_trust_turned_off_is_configured_not_run() {
         let (_dir, opts, home) = grok_project(None);
         std::fs::write(
             home.join(".grok/config.toml"),
@@ -3385,7 +3452,7 @@ mod tests {
         )
         .unwrap();
         let r = check_grok(&opts);
-        assert_eq!(r.status, Status::Pass, "{}", r.message);
+        assert!(is_configured(&r), "{:?} {}", r.status, r.message);
     }
 
     fn grok_env_on(name: &str) -> Option<String> {
@@ -3410,7 +3477,7 @@ mod tests {
         // The environment turning it off, in any spelling grok reads.
         let (_dir, mut opts, _) = grok_project(None);
         opts.env_var = Some(grok_env_off);
-        assert_eq!(check_grok(&opts).status, Status::Pass);
+        assert!(is_configured(&check_grok(&opts)));
         // The user config wins over the managed config.
         let (_dir, opts, home) = grok_project(None);
         std::fs::write(home.join(".grok/config.toml"), on).unwrap();
@@ -3419,7 +3486,7 @@ mod tests {
         // The managed config applies when the user config is silent.
         let (_dir, opts, home) = grok_project(None);
         std::fs::write(home.join(".grok/managed_config.toml"), off).unwrap();
-        assert_eq!(check_grok(&opts).status, Status::Pass);
+        assert!(is_configured(&check_grok(&opts)));
     }
 
     #[test]
@@ -3487,6 +3554,13 @@ mod tests {
         );
     }
 
+    /// A trust configuration doctor finds matching: a note that the
+    /// runtime is not verified (TSK-147 round 3 F2), never a pass.
+    fn is_configured(result: &CheckResult) -> bool {
+        matches!(result.status, Status::Note(_))
+            && result.message.contains("configured; runtime not verified")
+    }
+
     fn is_note(result: &CheckResult) -> bool {
         matches!(&result.status, Status::Note(remedy) if remedy.contains("cannot verify"))
     }
@@ -3513,12 +3587,12 @@ mod tests {
         )
         .unwrap();
         std::fs::write(home.join(".grok/managed_config.toml"), patched).unwrap();
-        assert_eq!(check_grok(&opts).status, Status::Pass);
+        assert!(is_configured(&check_grok(&opts)));
         // The environment outranks every config layer.
         let (_dir, mut opts, home) = grok_project(None);
         std::fs::write(home.join(".grok/config.toml"), patched).unwrap();
         opts.env_var = Some(grok_env_off);
-        assert_eq!(check_grok(&opts).status, Status::Pass);
+        assert!(is_configured(&check_grok(&opts)));
     }
 
     #[test]
@@ -3592,7 +3666,7 @@ mod tests {
         assert!(r.status.is_warn(), "{:?} {}", r.status, r.message);
         grant(&main);
         let r = check_grok(&opts);
-        assert_eq!(r.status, Status::Pass, "{}", r.message);
+        assert!(is_configured(&r), "{:?} {}", r.status, r.message);
     }
 
     #[test]
@@ -4155,6 +4229,58 @@ mod tests {
         );
     }
 
+    /// A repo whose hooks another manager owns in `.husky`, each hook
+    /// written by `hook` from its name, with the given mode.
+    #[cfg(unix)]
+    fn managed_hooks(dir: &Path, hook: impl Fn(&str) -> String, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        git(dir, &["init", "-b", "main"]);
+        write_shims(dir);
+        let husky = dir.join(".husky");
+        std::fs::create_dir_all(&husky).unwrap();
+        for entry in std::fs::read_dir(dir.join(".codeflow/git-hooks")).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            let path = husky.join(&name);
+            std::fs::write(&path, hook(&name)).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        git(dir, &["config", "core.hooksPath", ".husky"]);
+    }
+
+    /// TSK-147 round 3 F6: a manager hook calls its shim only when git runs
+    /// it (the file is executable) and the call is on a live line. The
+    /// reviewer's fixtures: hooks that name the shim but are not
+    /// executable, and executable hooks whose call is commented out.
+    #[cfg(unix)]
+    #[test]
+    fn a_manager_hook_that_git_skips_or_that_comments_the_call_warns() {
+        let live = |name: &str| format!("#!/bin/sh\n.codeflow/git-hooks/{name} \"$@\"\n");
+        let commented =
+            |name: &str| format!("#!/bin/sh\n# .codeflow/git-hooks/{name} \"$@\"\nexit 0\n");
+        let trailing =
+            |name: &str| format!("#!/bin/sh\nexit 0 # .codeflow/git-hooks/{name} \"$@\"\n");
+        for (label, hook, mode, why) in [
+            (
+                "not executable",
+                &live as &dyn Fn(&str) -> String,
+                0o644,
+                "not executable",
+            ),
+            ("commented", &commented, 0o755, "no live call"),
+            ("trailing comment", &trailing, 0o755, "no live call"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            managed_hooks(dir.path(), hook, mode);
+            let r = check_hooks(&hooks_opts(dir.path()));
+            assert!(r.status.is_warn(), "{label}: {}", r.message);
+            assert!(r.message.contains(why), "{label}: {}", r.message);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        managed_hooks(dir.path(), live, 0o755);
+        let r = check_hooks(&hooks_opts(dir.path()));
+        assert_eq!(r.status, Status::Pass, "live calls: {}", r.message);
+    }
+
     #[test]
     fn test_check_hooks_no_shims_skips_wiring_probe() {
         // A repo without scaffolded shims has nothing to wire — flag, never
@@ -4358,6 +4484,60 @@ mod tests {
         assert!(
             result.message.contains("interactive TTY"),
             "got: {}",
+            result.message
+        );
+    }
+
+    /// TSK-147 round 3 F5: a gap this machine closes gets the local
+    /// remedy; only a sign-in, alone, gets the operator's account remedy.
+    #[test]
+    fn delegate_gaps_split_local_repair_from_the_sign_in() {
+        let mut opts = test_opts();
+        opts.look_path = Some(|name| match name {
+            "codex" => Ok("/usr/local/bin/codex".into()),
+            "claude" => Ok("/usr/local/bin/claude".into()),
+            "tmux" => Ok("/usr/local/bin/tmux".into()),
+            _ => Err("not found".into()),
+        });
+        opts.exec_command = Some(|_, args| match args {
+            ["login", "status"] => Err("signed out".into()),
+            ["plugin", "list", "--json"] => {
+                Ok(r#"[{"id":"codex@openai-codex","enabled":true}]"#.into())
+            }
+            _ => Ok("ready".into()),
+        });
+        let result = check_delegates(&opts);
+        assert_eq!(
+            result.status,
+            Status::Warn(remedy::DOCTOR_DELEGATES_SIGN_IN.remedy()),
+            "{}",
+            result.message
+        );
+        assert!(result.message.contains("codex login"), "{}", result.message);
+
+        let mut opts = test_opts();
+        opts.look_path = Some(|name| match name {
+            "codex" => Ok("/usr/local/bin/codex".into()),
+            "claude" => Ok("/usr/local/bin/claude".into()),
+            _ => Err("not found".into()),
+        });
+        opts.exec_command = Some(|_, args| match args {
+            ["login", "status"] => Err("signed out".into()),
+            ["plugin", "list", "--json"] => {
+                Ok(r#"[{"id":"codex@openai-codex","enabled":true}]"#.into())
+            }
+            _ => Ok("ready".into()),
+        });
+        let result = check_delegates(&opts);
+        assert_eq!(
+            result.status,
+            Status::Warn(remedy::DOCTOR_DELEGATES.remedy()),
+            "{}",
+            result.message
+        );
+        assert!(
+            result.message.contains("tmux missing"),
+            "{}",
             result.message
         );
     }

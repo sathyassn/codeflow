@@ -55,6 +55,14 @@ pub enum LedgerError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// An I/O error on a named path: the directory or file the writer was
+    /// creating or opening when it failed.
+    #[error("{}: {source}", .path.display())]
+    IoAt {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
+
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 }

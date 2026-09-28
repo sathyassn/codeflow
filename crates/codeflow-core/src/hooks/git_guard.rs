@@ -207,14 +207,44 @@ pub struct ToolInput {
     pub command: Option<String>,
 }
 
+/// Why a hook payload was not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PayloadError {
+    /// The input is not a JSON object: the harness entry that runs the
+    /// guard did not pass the payload through unchanged.
+    Malformed(String),
+    /// A JSON object with a field this build does not read, such as a
+    /// newer harness schema.
+    Unread(String),
+}
+
+impl std::fmt::Display for PayloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Malformed(why) => write!(f, "not a JSON hook payload: {why}"),
+            Self::Unread(why) => write!(f, "{why}"),
+        }
+    }
+}
+
 impl HookPayload {
     /// Parse the hook JSON from stdin.
     ///
     /// # Errors
     ///
-    /// Returns the serde error message when the payload is not valid JSON.
-    pub fn parse(json: &str) -> Result<Self, String> {
-        serde_json::from_str(json).map_err(|e| e.to_string())
+    /// [`PayloadError::Malformed`] when the input is not a JSON object,
+    /// [`PayloadError::Unread`] when a field has a shape this build does
+    /// not read.
+    pub fn parse(json: &str) -> Result<Self, PayloadError> {
+        let value: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| PayloadError::Malformed(e.to_string()))?;
+        if !value.is_object() {
+            return Err(PayloadError::Malformed(format!(
+                "a JSON {} where an object belongs",
+                json_kind(&value)
+            )));
+        }
+        serde_json::from_value(value).map_err(|e| PayloadError::Unread(e.to_string()))
     }
 
     /// The command to evaluate when this is a shell tool call.
@@ -231,6 +261,17 @@ impl HookPayload {
         } else {
             None
         }
+    }
+}
+
+fn json_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
     }
 }
 
@@ -4368,6 +4409,29 @@ mod tests {
     #[test]
     fn test_payload_malformed_json_is_error() {
         assert!(HookPayload::parse("{ nope").is_err());
+    }
+
+    /// TSK-147 round 3 F5: input that is not a JSON object is a harness
+    /// entry that does not pass the payload through, which a local edit
+    /// clears; a JSON object whose fields this build does not read is a
+    /// version gap, which a release build clears.
+    #[test]
+    fn a_payload_that_is_not_a_json_object_is_malformed_not_unread() {
+        for input in ["", "not json", "{ nope", "[]", "\"x\"", "42"] {
+            assert!(
+                matches!(HookPayload::parse(input), Err(PayloadError::Malformed(_))),
+                "{input:?}"
+            );
+        }
+        for input in [
+            r#"{"tool_name": 5}"#,
+            r#"{"tool_input": {"command": ["git"]}}"#,
+        ] {
+            assert!(
+                matches!(HookPayload::parse(input), Err(PayloadError::Unread(_))),
+                "{input:?}"
+            );
+        }
     }
 
     // -- commit on protected --

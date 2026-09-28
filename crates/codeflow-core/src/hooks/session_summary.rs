@@ -7,11 +7,12 @@
 //! callers map every error to a warning + exit 0.
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use git2::Repository;
 
-use crate::ledger::{files, Event, JsonlWriter, LedgerWriter};
+use crate::ledger::{files, Event, JsonlWriter, LedgerError, LedgerWriter};
 
 use super::policy::Policy;
 use super::repo::RepoInfo;
@@ -32,12 +33,42 @@ pub struct SessionRecord {
 /// The session ledger could not be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LedgerUnwritten {
-    /// What keeps the ledger from being written: the first part of the
-    /// ledger directory that exists and is not a directory, else the ledger
-    /// directory itself.
+    /// What keeps the ledger from being written, from the path the write
+    /// failed on: a file in the way of a directory, a directory in the way
+    /// of a file, or the nearest existing part of that path this user
+    /// cannot write.
     pub path: PathBuf,
     /// The error the write gave.
     pub cause: String,
+    /// What clears it.
+    pub repair: Repair,
+}
+
+/// The repair a ledger path needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repair {
+    /// A file stands where the ledger needs a directory.
+    RemoveFile,
+    /// A directory stands where the ledger writes a file.
+    RemoveDirectory,
+    /// The path exists but this user cannot write it.
+    MakeWritable,
+}
+
+impl Repair {
+    /// The remedy's words for this repair.
+    #[must_use]
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::RemoveFile => {
+                "remove or rename the file that stands where the ledger needs a directory"
+            }
+            Self::RemoveDirectory => {
+                "remove the directory that stands where the ledger writes a file"
+            }
+            Self::MakeWritable => "give this user write access",
+        }
+    }
 }
 
 /// Build and append the session record for the repo containing `root`.
@@ -133,14 +164,7 @@ fn diff_stats(root: &Path, base: Option<&str>) -> (Option<String>, usize, usize)
 /// Append the record to the sessions ledger under the shared state dir.
 fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnwritten> {
     let ledger_dir = info.ledger_dir();
-    let unwritten = |cause: String| LedgerUnwritten {
-        path: ledger_dir
-            .ancestors()
-            .find(|part| part.exists())
-            .filter(|part| !part.is_dir())
-            .map_or_else(|| ledger_dir.clone(), Path::to_path_buf),
-        cause,
-    };
+    let unwritten = |error: LedgerError| unwritten(&ledger_dir, error);
     let session_id = summary
         .session_id
         .as_ref()
@@ -171,17 +195,50 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
         data,
     };
 
-    let writer = JsonlWriter::new_with_session(&ledger_dir, session_id.clone())
-        .map_err(|e| unwritten(e.to_string()))?;
-    writer
-        .append_event(event)
-        .map_err(|e| unwritten(e.to_string()))?;
+    let writer =
+        JsonlWriter::new_with_session(&ledger_dir, session_id.clone()).map_err(unwritten)?;
+    writer.append_event(event).map_err(unwritten)?;
 
     let file = match &session_id {
         Some(sid) => format!("{t}/{t}-{sid}.jsonl", t = files::SESSIONS),
         None => format!("{t}/{t}.jsonl", t = files::SESSIONS),
     };
     Ok(ledger_dir.join(file))
+}
+
+/// What keeps the ledger from being written, from the path the writer
+/// failed on: a file in the way of a directory it creates, a directory in
+/// the way of a file it opens, or else the nearest existing part of that
+/// path, which this user cannot write.
+fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
+    let cause = error.to_string();
+    let LedgerError::IoAt { path, source } = error else {
+        return LedgerUnwritten {
+            path: ledger_dir.to_path_buf(),
+            cause,
+            repair: Repair::MakeWritable,
+        };
+    };
+    let existing = |path: &Path| {
+        path.ancestors()
+            .find(|part| part.exists())
+            .map_or_else(|| path.to_path_buf(), Path::to_path_buf)
+    };
+    let (path, repair) = match source.kind() {
+        ErrorKind::NotADirectory | ErrorKind::AlreadyExists => (
+            path.ancestors()
+                .find(|part| part.exists() && !part.is_dir())
+                .map_or_else(|| existing(&path), Path::to_path_buf),
+            Repair::RemoveFile,
+        ),
+        ErrorKind::IsADirectory => (path, Repair::RemoveDirectory),
+        _ => (existing(&path), Repair::MakeWritable),
+    };
+    LedgerUnwritten {
+        path,
+        cause,
+        repair,
+    }
 }
 
 /// Session fragment files follow the `…-ses-{id}.jsonl` convention the
@@ -304,6 +361,53 @@ mod tests {
             err.path.canonicalize().unwrap(),
             blocker.canonicalize().unwrap()
         );
+        assert_eq!(err.repair, Repair::RemoveFile);
+    }
+
+    /// TSK-147 round 3 F5: the failed path itself, not an ancestor, with
+    /// the repair its kind needs: a directory where the data file or its
+    /// lock goes is removed.
+    #[test]
+    fn a_ledger_file_that_is_a_directory_names_that_directory() {
+        for (payload, name) in [
+            ("{}", "sessions.jsonl"),
+            (r#"{"session_id":"s1"}"#, "sessions-ses-s1.jsonl"),
+            ("{}", "sessions.jsonl.lock"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            repo_with_branch_work(dir.path());
+            let sessions = dir.path().join(".git/codeflow/ledger/sessions");
+            let blocker = sessions.join(name);
+            std::fs::create_dir_all(&blocker).unwrap();
+            let err = record(dir.path(), payload).unwrap_err();
+            assert_eq!(
+                err.path.canonicalize().unwrap(),
+                blocker.canonicalize().unwrap(),
+                "{name}: {err:?}"
+            );
+            assert_eq!(err.repair, Repair::RemoveDirectory, "{name}");
+            assert!(!err.cause.is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_ledger_directory_without_write_access_names_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_branch_work(dir.path());
+        let sessions = dir.path().join(".git/codeflow/ledger/sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let err = record(dir.path(), "{}");
+        std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = err.unwrap_err();
+        assert_eq!(
+            err.path.canonicalize().unwrap(),
+            sessions.canonicalize().unwrap(),
+            "{err:?}"
+        );
+        assert_eq!(err.repair, Repair::MakeWritable);
     }
 
     #[test]

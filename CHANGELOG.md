@@ -612,8 +612,10 @@ publication date._
   with `git.test_gate_on_push` at `warn`, a push whose `codeflow ci` finds an
   always-blocking rule (such as the id registry) or a rule the project set
   to `block` is now stopped; before, the hook printed `BLOCKED` and let the
-  push through. Other findings print at the push gate's level, and the
-  closing line of each hook says whether the commit or push was stopped.
+  push through. To let such a push through again, set that rule to `warn`
+  in `.codeflow/policy.json`; an always-blocking rule stays blocking. Other
+  findings print at the push gate's level, and the closing line of each
+  hook says whether the commit or push was stopped.
   Each warning and note from `codeflow ci`, `validate --docs`, `doctor`, the
   git hooks and the session guards now names the step that clears it: a
   `codeflow` command, a named `git` command or a file edit; a test fails on
@@ -622,17 +624,23 @@ publication date._
   and prints no note for a layer the project's tier does not install.
   `doctor` reads Codex hook trust from `~/.codex/config.toml` (or
   `$CODEX_HOME`) and Grok folder trust from `~/.grok/trusted_folders.toml`
-  (or `$GROK_HOME`) with each harness's own rules: a Codex hook counts only
-  when its record is valid, it is enabled and its hash matches the hook as
-  Codex normalizes it, and a linked worktree takes Grok's trust from its
-  main checkout. A record the harness would reject is not trust; a Grok
-  store it cannot read is a warning. Where doctor cannot reproduce the
-  harness's decision (a matcher Codex rejects, an empty command, Grok
-  `version_overrides`, a relative `GROK_HOME`, a Grok-managed worktree) it
-  prints a note saying it cannot verify it. `doctor --check hooks` passes
-  when another hook manager's hooks call each codeflow shim. The session
-  summary names the path that keeps its ledger from being written, and
-  outside a git repository records nothing instead of warning. A commit on
+  (or `$GROK_HOME`). A static reading proves only that a hook does not run:
+  a Codex hook that is untrusted, disabled or changed (hashed as Codex
+  normalizes it), a folder Grok does not trust, or a Grok store it cannot
+  read is a warning. A configuration that matches is a note, "configured;
+  runtime not verified", naming the real hook event that verifies it;
+  doctor never reports these hooks as running. Where doctor cannot
+  reproduce the harness's decision (a matcher Codex rejects, an empty
+  command, a linked worktree whose hooks Codex takes from the main
+  checkout, Grok `version_overrides`, a relative `GROK_HOME`, a
+  Grok-managed worktree) the note says it cannot verify it.
+  `doctor --check hooks` passes when another hook manager's hooks are
+  executable and call each codeflow shim on a live line, not a comment.
+  `doctor --check delegates` gives what this machine installs its own step,
+  apart from the Codex sign-in. The session summary names the path its
+  ledger write failed on and the repair that path needs, and outside a git
+  repository records nothing instead of warning. A guard input that is not
+  a JSON hook payload names the harness hook entry to repair. A commit on
   a `git.breaking_watch_paths` surface now prints a note, not a warning,
   pointing at the pull request's Release impact, and `codeflow ci` and
   `scripts/release.py` given a body that states `Breaking: no` with a
