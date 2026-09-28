@@ -237,6 +237,11 @@ async function checkSubmitRace(browser, origin, reviewPosts) {
         },
       });
     });
+    // This session stays open, so its draft must survive: end the poll
+    // quietly instead of taking the fixture's session_closed reply.
+    await page.route("**/app/api/events/poll", (route) =>
+      route.fulfill({ status: 410, contentType: "application/json", body: "{}" }),
+    );
     await page.goto(`${origin}/app?case=race`, { waitUntil: "networkidle" });
     await page.getByTestId("comment-btn").click();
     await page.locator("#cf-feedback-panel[data-open='true']").waitFor();

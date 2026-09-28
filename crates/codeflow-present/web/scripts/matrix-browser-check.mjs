@@ -505,8 +505,12 @@ try {
   await gesture(page, { type: "bullets", gesture: "text", block: "points", recipe: RECIPES.bullets.text });
   await saveNote(page, "draft: dropped when the session closes");
   const draftKey = `cf-present-draft:${sessionId}`;
-  const keptDraft = await page.evaluate((key) => sessionStorage.getItem(key), draftKey);
-  assert.ok(keptDraft?.includes("draft: dropped when the session closes"), "lifecycle, close: the unsent note is not in session storage");
+  // The draft is written after the note renders.
+  await page.waitForFunction((key) => sessionStorage.getItem(key)?.includes("draft: dropped when the session closes"), draftKey, { timeout: 10_000 })
+    .catch(async (error) => {
+      const kept = await page.evaluate((key) => sessionStorage.getItem(key), draftKey);
+      throw new Error(`lifecycle, close: the unsent note is not in session storage: ${String(kept).slice(0, 300)}`, { cause: error });
+    });
   // close then clear leave no session state behind.
   run(["present", "close", sessionId]);
   await page.getByTestId("toast").getByText(/This review session is closed\./u).waitFor({ timeout: 30_000 });
