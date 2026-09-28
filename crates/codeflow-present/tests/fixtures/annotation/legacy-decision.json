@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "title": "Legacy decision",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "context",
+      "markdown": "## Before forms\n\nA schema_version 1 decision records a choice the author already made."
+    },
+    {
+      "type": "decision",
+      "id": "legacy",
+      "title": "Which crop format shipped?",
+      "status": "accepted",
+      "markdown": "JPEG crops shipped for element and area notes.\n\nPNG stays for figure parts."
+    }
+  ]
+}

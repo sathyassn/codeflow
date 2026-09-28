@@ -266,7 +266,8 @@ surface that takes no note.
 | `bullets` | yes: an item's words | yes: an item | yes |
 | `callout` | yes: its title and words | yes: the title or a paragraph | yes |
 | `comparison` | yes: a column's words | yes: a column title or item | yes |
-| `decision` | yes: its title and words | yes: the title or a paragraph | yes |
+| `decision` | yes: its title, prompt and option labels | yes: the title, the prompt or its choice | yes |
+| `decision` (v1) | yes: its title and words | yes: the title or a paragraph | yes |
 | `table` | yes: a cell's words | yes: a cell or header | yes |
 | `status` | yes: a row's label and detail | yes: a row | yes |
 | `code` | yes: its code | yes: one line | yes |
@@ -278,9 +279,16 @@ surface that takes no note.
 | `tabs` | yes: the tab labels, and the words of an opened tab | yes: a tab label, and the parts of an opened tab | yes, on what shows |
 | `feedback_prompt` | yes: the prompt | yes: the prompt | yes |
 | `html` | yes: a stage's visible words | yes: a stage entity, else the shape or element clicked | yes |
+| `form` | yes: its title, prompt, field labels and option labels | yes: a field, the title or the prompt | yes |
 
 An area over a closed disclosure or an unopened tab belongs to that block,
 never to the blocks it hides.
+
+A `decision` row is the schema_version 2 decision, which is a form; the
+`decision` (v1) row is the schema_version 1 decision with a `status`, which
+renders as before. Marking a form or a decision never answers it: with
+Comment on, a click on a field pins a note on the field and leaves its value,
+the draft and the stored answers as they were, and nothing is sent.
 
 Revision updates change document content only. Feedback lifecycle changes
 through review events. Accepted decisions are summarized to their canonical

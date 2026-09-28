@@ -1569,6 +1569,7 @@ fn the_annotation_matrix_names_every_block_type() {
         "\n## ",
     );
     let mut rows: Vec<&str> = Vec::new();
+    let mut legacy: Vec<&str> = Vec::new();
     for line in section.lines().filter(|line| line.starts_with("| `")) {
         let cells: Vec<&str> = line.trim_matches('|').split(" | ").map(str::trim).collect();
         assert_eq!(cells.len(), 4, "{line}");
@@ -1578,12 +1579,38 @@ fn the_annotation_matrix_names_every_block_type() {
                 "{line}: a cell is yes or no with a reason"
             );
         }
-        rows.push(cells[0].trim_matches('`'));
+        // TSK-119: the schema_version 1 decision keeps its own row.
+        match cells[0].strip_suffix(" (v1)") {
+            Some(name) => legacy.push(name.trim_matches('`')),
+            None => rows.push(cells[0].trim_matches('`')),
+        }
     }
     rows.sort_unstable();
     assert_eq!(
         rows, variants,
         "the matrix has one row for every block type"
+    );
+    assert_eq!(
+        legacy,
+        ["decision"],
+        "the matrix keeps one legacy row, the v1 decision"
+    );
+    let legacy_fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../codeflow-present/tests/fixtures/annotation/legacy-decision.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(legacy_fixture["schema_version"], 1);
+    assert!(
+        legacy_fixture["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|block| block["type"] == "decision" && block["status"].is_string()),
+        "the legacy fixture holds a v1 decision with a status"
     );
 }
 
