@@ -457,7 +457,10 @@ catalog! {
     /// Git hooks another hook manager owns, whose stages do not call the
     /// codeflow shims.
     DOCTOR_HOOK_MANAGER = Step::Edit("{path}"),
-        "make each hook named in {path} executable, calling its codeflow shim on a live line (its pre-commit hook runs `.codeflow/git-hooks/pre-commit \"$@\"`, and so on for {hooks}), then `codeflow doctor --check hooks` confirms it; a manager that calls the shims from its own configuration is confirmed by a commit with a bad subject being refused";
+        "make each hook named in {path} executable, calling its codeflow shim on a live line (its pre-commit hook runs `.codeflow/git-hooks/pre-commit \"$@\"`, and so on for {hooks}); `codeflow doctor --check hooks` then stops warning, and a commit with a bad subject being refused confirms the calls run";
+    /// Manager hooks that name every shim: reading cannot show they run it.
+    DOCTOR_HOOK_WIRING_UNSEEN = Step::Git("git commit"),
+        "confirm the hooks in {path} run the codeflow shims with a real git event: on a scratch branch, `git commit --allow-empty -m \"Bad subject.\"` must be refused under git.commit_format; `codeflow doctor` reads the hook files and cannot verify that they run";
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";

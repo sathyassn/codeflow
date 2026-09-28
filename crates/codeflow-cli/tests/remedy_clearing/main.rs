@@ -153,6 +153,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_INIT", Runs),
     ("DOCTOR_TOOL_MISSING", Runs),
     ("DOCTOR_HOOK_MANAGER", Runs),
+    ("DOCTOR_HOOK_WIRING_UNSEEN", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
@@ -2063,6 +2064,108 @@ fn clears_doctor_delegates() {
             stand_in("claude", &plugin(true));
         },
     );
+}
+
+/// TSK-147 round 4 F6: manager hooks that name every shim are a note,
+/// never a pass, because reading cannot show that a hook runs its shim. A
+/// note is not cleared by reading, so this proof shows the printed step is
+/// the confirmation: the same real git event is refused by a hook that
+/// runs its shim and accepted by each inactive form doctor cannot tell
+/// apart from it (the reviewer's probes).
+#[cfg(unix)]
+#[test]
+fn clears_doctor_hook_wiring_unseen() {
+    // (label, the hook each shim gets, whether it runs the shim)
+    type Form<'a> = (&'a str, &'a dyn Fn(&str) -> String, bool);
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    write(&root, ".husky/pre-commit", "#!/bin/sh\ntrue\n");
+    git(&root, &["config", "core.hooksPath", ".husky"]);
+    codeflow(&root, &["init", "--yes", "--standard"]);
+    let shims: Vec<String> = std::fs::read_dir(root.join(".codeflow/git-hooks"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    let call = |name: &str| format!(".codeflow/git-hooks/{name} \"$@\"");
+    let forms: [Form; 8] = [
+        (
+            "after exit",
+            &|n| format!("#!/bin/sh\nexit 0\n{}\n", call(n)),
+            false,
+        ),
+        (
+            "false branch",
+            &|n| format!("#!/bin/sh\nif false; then\n  {}\nfi\nexit 0\n", call(n)),
+            false,
+        ),
+        (
+            "unused function",
+            &|n| format!("#!/bin/sh\nunused() {{\n  {}\n}}\nexit 0\n", call(n)),
+            false,
+        ),
+        (
+            "echo only",
+            &|n| format!("#!/bin/sh\nprintf '%s\\n' '.codeflow/git-hooks/{n}'\nexit 0\n"),
+            false,
+        ),
+        (
+            "colon data",
+            &|n| format!("#!/bin/sh\n: '.codeflow/git-hooks/{n}'\nexit 0\n"),
+            false,
+        ),
+        (
+            "here document",
+            &|n| {
+                format!(
+                    "#!/bin/sh\ncat >/dev/null <<'EOF'\n{}\nEOF\nexit 0\n",
+                    call(n)
+                )
+            },
+            false,
+        ),
+        (
+            "masked failure",
+            &|n| format!("#!/bin/sh\n{} || true\n", call(n)),
+            false,
+        ),
+        ("live call", &|n| format!("#!/bin/sh\n{}\n", call(n)), true),
+    ];
+    for (label, hook, runs) in forms {
+        for name in &shims {
+            let path = root.join(".husky").join(name);
+            std::fs::write(&path, hook(name)).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let out = doctor(&root, "hooks");
+        let printed = block(&out, "wiring not verified").to_string();
+        assert_prints_row(&printed, "DOCTOR_HOOK_WIRING_UNSEEN");
+        assert!(
+            out.lines()
+                .any(|line| line.starts_with("note") && line.contains("hooks")),
+            "{label}: a note, never a pass:\n{out}"
+        );
+        let step = printed_command(&printed, "DOCTOR_HOOK_WIRING_UNSEEN", None);
+        let parts = words(&step);
+        let event = command(&parts[0], &root)
+            .args(&parts[1..])
+            .output()
+            .unwrap();
+        if runs {
+            assert!(!event.status.success(), "{label}: {}", text(&event));
+            assert!(
+                text(&event).contains("git.commit_format"),
+                "{label}: {}",
+                text(&event)
+            );
+        } else {
+            assert!(event.status.success(), "{label}: {}", text(&event));
+            git(&root, &["reset", "-q", "--soft", "HEAD~1"]);
+        }
+    }
 }
 
 #[test]

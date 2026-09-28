@@ -377,13 +377,24 @@ fn check_hooks(opts: &Options) -> CheckResult {
     // `core.hooksPath` wiring, leaving zero local git gates behind a green
     // doctor. Resolve the ACTIVE hooks dir the same way orient's gates line
     // does and warn when the shims are not what git runs.
-    if let Some(warning) = hooks_wiring_warning(Path::new(&opts.project_dir)) {
-        return CheckResult {
-            name: "hooks".into(),
-            status: Status::Warn(warning.remedy),
-            message: warning.text,
-            duration: start.elapsed(),
-        };
+    match hooks_wiring(Path::new(&opts.project_dir)) {
+        Wiring::Read => {}
+        Wiring::Broken(warning) => {
+            return CheckResult {
+                name: "hooks".into(),
+                status: Status::Warn(warning.remedy),
+                message: warning.text,
+                duration: start.elapsed(),
+            };
+        }
+        Wiring::Unverified(note) => {
+            return CheckResult {
+                name: "hooks".into(),
+                status: Status::Note(note.remedy),
+                message: note.text,
+                duration: start.elapsed(),
+            };
+        }
     }
 
     CheckResult {
@@ -394,29 +405,42 @@ fn check_hooks(opts: &Options) -> CheckResult {
     }
 }
 
-/// `Some(warning)` when the repo ships the codeflow git-hook shims but git's
-/// active hooks dir (resolved like `orient`: `core.hooksPath`, else the
-/// common dir's `hooks/`) is not the shims dir. `None` when there is nothing
-/// to verify — no shims on disk, or not a git repo: this flags, it never
-/// guesses. A recorded `git_hooks = "unwired"` (another hook manager owned
-/// the hooks at init, deliberately not clobbered) gets its own remedy text.
-fn hooks_wiring_warning(root: &Path) -> Option<Finding> {
+/// What reading the hook files shows about git calling the codeflow shims.
+enum Wiring {
+    /// Nothing to verify (no shims, not a git repository), or git's active
+    /// hooks dir is the shims dir itself.
+    Read,
+    /// A hook git runs cannot call its shim: missing, not executable, or no
+    /// shim named outside a comment. Reading proves this negative.
+    Broken(Finding),
+    /// Another manager's hooks are executable and name every shim. Reading
+    /// cannot prove they run it (TSK-147 round 4 F6), so this is a note
+    /// that names the git event which confirms it.
+    Unverified(Finding),
+}
+
+/// Whether git's active hooks dir (resolved like `orient`: `core.hooksPath`,
+/// else the common dir's `hooks/`) runs the codeflow shims the repo ships.
+/// It flags, it never guesses: a recorded `git_hooks = "unwired"` (another
+/// hook manager owned the hooks at init, deliberately not clobbered) gets
+/// its own remedy text.
+fn hooks_wiring(root: &Path) -> Wiring {
     use crate::scaffold::detect::CODEFLOW_HOOKS_PATH;
     use crate::scaffold::state::{ProjectState, GIT_HOOKS_UNWIRED};
 
     let shims = root.join(CODEFLOW_HOOKS_PATH);
     if !shims.join("pre-commit").exists() {
-        return None; // no scaffolded shims — nothing to wire
+        return Wiring::Read; // no scaffolded shims — nothing to wire
     }
     // Prefer the configured string: relative `.codeflow/git-hooks` is the
     // contract so each worktree uses its own shims. An absolute path (often
     // the main checkout) is a Warn even if the files happen to exist.
     if let Some(configured) = crate::scaffold::detect::configured_hooks_path(root) {
         if configured == CODEFLOW_HOOKS_PATH {
-            return None;
+            return Wiring::Read;
         }
         if std::path::Path::new(&configured).is_absolute() {
-            return Some(Finding::new(
+            return Wiring::Broken(Finding::new(
                 format!(
                     "core.hooksPath is absolute ({configured}); the project-relative `{CODEFLOW_HOOKS_PATH}` lets each worktree use its own shims"
                 ),
@@ -424,27 +448,34 @@ fn hooks_wiring_warning(root: &Path) -> Option<Finding> {
             ));
         }
     }
-    let active = crate::hooks::orient::git_hooks_dir(root)?;
+    let Some(active) = crate::hooks::orient::git_hooks_dir(root) else {
+        return Wiring::Read;
+    };
     let wired = match (active.canonicalize(), shims.canonicalize()) {
         (Ok(a), Ok(s)) => a == s,
         _ => active == shims,
     };
     if wired {
-        return None;
+        return Wiring::Read;
     }
+    let path = active
+        .strip_prefix(root)
+        .unwrap_or(&active)
+        .display()
+        .to_string();
     let uncalled = shims_not_called(&active, &shims);
     if uncalled.is_empty() {
-        return None; // another hook manager's stages call every shim
+        return Wiring::Unverified(Finding::new(
+            format!(
+                "the hooks git runs in {path} are executable and name every codeflow shim (wiring not verified: reading a hook cannot show that it runs the shim)"
+            ),
+            remedy::DOCTOR_HOOK_WIRING_UNSEEN.with(&[("path", &path)]),
+        ));
     }
 
     let recorded_unwired = ProjectState::exists(root)
         && ProjectState::load(root).is_ok_and(|s| s.git_hooks == GIT_HOOKS_UNWIRED);
-    Some(if recorded_unwired {
-        let path = active
-            .strip_prefix(root)
-            .unwrap_or(&active)
-            .display()
-            .to_string();
+    Wiring::Broken(if recorded_unwired {
         Finding::new(
             format!(
                 "codeflow shims are not git's active hooks (recorded git_hooks = \"unwired\": another hook manager owns {path}), and its hooks do not call: {}",
@@ -467,8 +498,8 @@ fn hooks_wiring_warning(root: &Path) -> Option<Finding> {
 /// each with why. A hook calls its shim when git runs it, which needs the
 /// file to be executable (githooks(5): a hook that is not executable is
 /// ignored), and a live line of it, not a comment, names
-/// `.codeflow/git-hooks/<name>`. A manager that calls the shims from its
-/// own configuration is not read here; its remedy says how to confirm it.
+/// `.codeflow/git-hooks/<name>`. An empty result proves nothing more: a
+/// named shim may still never run, which only a git event shows.
 fn shims_not_called(active: &Path, shims: &Path) -> Vec<String> {
     use crate::scaffold::detect::CODEFLOW_HOOKS_PATH;
     let mut names: Vec<String> = std::fs::read_dir(shims)
@@ -4275,10 +4306,64 @@ mod tests {
             assert!(r.status.is_warn(), "{label}: {}", r.message);
             assert!(r.message.contains(why), "{label}: {}", r.message);
         }
-        let dir = tempfile::tempdir().unwrap();
-        managed_hooks(dir.path(), live, 0o755);
-        let r = check_hooks(&hooks_opts(dir.path()));
-        assert_eq!(r.status, Status::Pass, "live calls: {}", r.message);
+    }
+
+    /// TSK-147 round 4 F6: reading a manager's hook proves only the
+    /// negative. An executable hook that names every shim may still never
+    /// run it, so it is a note, "wiring not verified", naming the real git
+    /// event that confirms it, and never a pass. The reviewer's probes: a
+    /// call after `exit`, in a false branch, in an unused function, printed,
+    /// passed as data, inside a here-document, a masked failure, and the
+    /// straight-line control, which reading cannot tell apart from them.
+    #[cfg(unix)]
+    #[test]
+    fn a_manager_hook_that_names_its_shim_is_a_note_never_a_pass() {
+        type Probe<'a> = (&'a str, &'a dyn Fn(&str) -> String);
+        let call = |name: &str| format!(".codeflow/git-hooks/{name} \"$@\"");
+        let probes: [Probe; 8] = [
+            ("after exit", &|n| {
+                format!("#!/bin/sh\nexit 0\n{}\n", call(n))
+            }),
+            ("false branch", &|n| {
+                format!("#!/bin/sh\nif false; then\n  {}\nfi\nexit 0\n", call(n))
+            }),
+            ("unused function", &|n| {
+                format!("#!/bin/sh\nunused() {{\n  {}\n}}\nexit 0\n", call(n))
+            }),
+            ("echo only", &|n| {
+                format!("#!/bin/sh\nprintf '%s\\n' '.codeflow/git-hooks/{n}'\nexit 0\n")
+            }),
+            ("colon data", &|n| {
+                format!("#!/bin/sh\n: '.codeflow/git-hooks/{n}'\nexit 0\n")
+            }),
+            ("here document", &|n| {
+                format!(
+                    "#!/bin/sh\ncat >/dev/null <<'EOF'\n{}\nEOF\nexit 0\n",
+                    call(n)
+                )
+            }),
+            ("masked failure", &|n| {
+                format!("#!/bin/sh\n{} || true\n", call(n))
+            }),
+            ("live control", &|n| format!("#!/bin/sh\n{}\n", call(n))),
+        ];
+        for (label, hook) in probes {
+            let dir = tempfile::tempdir().unwrap();
+            managed_hooks(dir.path(), hook, 0o755);
+            let r = check_hooks(&hooks_opts(dir.path()));
+            let Status::Note(remedy) = &r.status else {
+                panic!("{label}: {:?} {}", r.status, r.message);
+            };
+            assert!(
+                r.message.contains("wiring not verified"),
+                "{label}: {}",
+                r.message
+            );
+            assert!(r.message.contains(".husky"), "{label}: {}", r.message);
+            let text = remedy.to_string();
+            assert!(text.contains("git commit --allow-empty"), "{label}: {text}");
+            assert!(text.contains("git.commit_format"), "{label}: {text}");
+        }
     }
 
     #[test]

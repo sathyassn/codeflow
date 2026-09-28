@@ -634,8 +634,11 @@ publication date._
   command, a linked worktree whose hooks Codex takes from the main
   checkout, Grok `version_overrides`, a relative `GROK_HOME`, a
   Grok-managed worktree) the note says it cannot verify it.
-  `doctor --check hooks` passes when another hook manager's hooks are
-  executable and call each codeflow shim on a live line, not a comment.
+  `doctor --check hooks` warns when another hook manager's hook is missing,
+  not executable or names no codeflow shim outside a comment; when every
+  hook is executable and names its shim, it prints a note, "wiring not
+  verified", naming the commit with a bad subject that confirms the calls
+  run, since reading a hook cannot show that it runs the shim.
   `doctor --check delegates` gives what this machine installs its own step,
   apart from the Codex sign-in. The session summary names the path its
   ledger write failed on and the repair that path needs, and outside a git
