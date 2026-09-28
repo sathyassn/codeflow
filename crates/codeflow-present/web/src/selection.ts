@@ -71,7 +71,7 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
   if (!startElement || startElement !== endElement || !documentRoot.contains(startElement)) return null;
   const block = startElement.closest<HTMLElement>("[data-cf-block-id]");
   const blockId = block?.dataset.cfBlockId;
-  if (!block || !blockId || block.matches(".block--diagram")) return null;
+  if (!block || !blockId) return null;
 
   const exact = quoteFromRange(range);
   if (!exact.trim()) return null;
