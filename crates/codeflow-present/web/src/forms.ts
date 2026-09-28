@@ -326,7 +326,9 @@ class FormController {
       line.textContent = errorText(error.code, rules);
       line.hidden = false;
       field.dataset.cfInvalid = "true";
-      field.querySelectorAll<HTMLElement>("[data-cf-value], [data-cf-rationale-input]").forEach((control) => control.setAttribute("aria-invalid", "true"));
+      // Mark only the control the error is about: the reason or the answer.
+      const concerned = error.code.startsWith("rationale_") ? "[data-cf-rationale-input]" : "[data-cf-value]";
+      field.querySelectorAll<HTMLElement>(concerned).forEach((control) => control.setAttribute("aria-invalid", "true"));
     }
   }
 

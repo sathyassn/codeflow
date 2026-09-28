@@ -192,6 +192,10 @@ try {
     const said = await stateOf(decision);
     assert.equal(said.state, "stale", "page check: state");
     assert.match(await decision.locator(".cf-field__error").innerText(), /Answer this question\./u);
+    // The error marks the unanswered choice, not the optional rationale.
+    const marked = await decision.locator("[aria-invalid='true']").evaluateAll((controls) => controls.map((control) => control.type));
+    assert.ok(marked.length > 0 && marked.every((type) => type === "radio"), `page check: the error marks ${JSON.stringify(marked)}`);
+    assert.equal(await decision.locator("[data-cf-rationale-input]").getAttribute("aria-invalid"), null, "page check: the rationale is marked");
     await decision.locator("input[value='b']").check();
     await form.locator("[data-cf-form-action='amend']").click();
     await field("contact").locator("input").fill("not-an-address");
@@ -202,7 +206,7 @@ try {
     assert.match(await field("keep-days").locator(".cf-field__error").innerText(), /whole number/u);
     assert.equal(sent.length, before, "page check: a request was sent");
     assert.equal((await ledger()).length, 2);
-    passed.push("page checks: a missing required choice, a bad email and a fraction are refused on the page with the field's message, and nothing is sent");
+    passed.push("page checks: a missing required choice, a bad email and a fraction are refused on the page with the field's message marking only the answer, and nothing is sent");
   }
 
   // Server refusals reach the page as typed errors; the draft is kept and

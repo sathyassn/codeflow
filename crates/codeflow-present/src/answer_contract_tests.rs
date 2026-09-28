@@ -120,6 +120,29 @@ fn a_form_renders_its_fields_in_order_with_nothing_preselected() {
             })
             .collect::<Vec<_>>();
         assert_eq!(recommended, ["local"]);
+        // A count hint reads as a count once, like the page's errors.
+        assert_eq!(
+            select_in(
+                select(&html, "[data-cf-field='channels']")[0],
+                ".cf-field__hint"
+            )
+            .text()
+            .collect::<String>(),
+            "Choose 1 or 2."
+        );
+        // The error line comes before the rationale, which names it too.
+        let home = select(&html, "[data-cf-field='home']")[0];
+        let parts = home
+            .children()
+            .filter_map(ElementRef::wrap)
+            .map(|part| part.value().classes().next().unwrap_or("").to_string())
+            .filter(|class| class == "cf-field__error" || class == "cf-field__rationale")
+            .collect::<Vec<_>>();
+        assert_eq!(parts, ["cf-field__error", "cf-field__rationale"]);
+        assert_eq!(
+            select_in(home, "[data-cf-rationale-input]").attr("aria-describedby"),
+            Some("cf-form-store-choice-home-error")
+        );
         assert!(select(&html, "[checked], [selected]").is_empty());
         for control in select(&html, "[data-cf-form] input") {
             let kind = control.attr("type").unwrap();

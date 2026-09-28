@@ -891,6 +891,11 @@ fn render_field(
         output.push_str("</p>");
     }
     render_control(field, &markup, output);
+    // The error sits with the control it most often concerns, above the
+    // rationale; the page marks whichever of the two is wrong.
+    output.push_str("<p class=\"cf-field__error\" data-cf-review-skip role=\"alert\" id=\"");
+    escape_attr_to(&markup.input_id, output);
+    output.push_str("-error\" hidden></p>");
     let mode = field.rationale_mode();
     if mode != RationaleMode::None {
         output.push_str("<div class=\"cf-field__rationale\" data-cf-review-skip><label for=\"");
@@ -903,13 +908,14 @@ fn render_field(
         });
         output.push_str("</label><textarea class=\"cf-input\" rows=\"2\" id=\"");
         escape_attr_to(&markup.input_id, output);
-        output.push_str("-rationale\" data-cf-rationale-input autocomplete=\"off\"");
+        output.push_str(
+            "-rationale\" data-cf-rationale-input autocomplete=\"off\" aria-describedby=\"",
+        );
+        escape_attr_to(&markup.input_id, output);
+        output.push_str("-error\"");
         output.push_str(markup.disabled);
         output.push_str("></textarea></div>");
     }
-    output.push_str("<p class=\"cf-field__error\" data-cf-review-skip role=\"alert\" id=\"");
-    escape_attr_to(&markup.input_id, output);
-    output.push_str("-error\" hidden></p>");
     output.push_str(if markup.grouped {
         "</fieldset>"
     } else {
@@ -1151,15 +1157,17 @@ fn field_hint(field: &FormField) -> Option<String> {
             };
             Some(format!("{kind}{bounds}."))
         }
-        FieldKind::Choices => range(
-            field
-                .min_items
-                .filter(|min| *min > 0)
-                .map(|min| min.to_string()),
-            field.max_items.map(|max| max.to_string()),
-            " choices",
-        )
-        .map(|text| format!("Choose {}", text.to_lowercase())),
+        // Worded like the page's too_few and too_many errors.
+        FieldKind::Choices => match (field.min_items.filter(|min| *min > 0), field.max_items) {
+            (Some(low), Some(high)) if low == high => Some(format!("Choose exactly {low}.")),
+            (Some(low), Some(high)) if high.checked_sub(low) == Some(1) => {
+                Some(format!("Choose {low} or {high}."))
+            }
+            (Some(low), Some(high)) => Some(format!("Choose between {low} and {high}.")),
+            (Some(low), None) => Some(format!("Choose at least {low}.")),
+            (None, Some(high)) => Some(format!("Choose at most {high}.")),
+            (None, None) => None,
+        },
         FieldKind::Boolean | FieldKind::Choice => None,
     }
 }
