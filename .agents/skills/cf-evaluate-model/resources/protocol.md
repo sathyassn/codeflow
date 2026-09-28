@@ -324,13 +324,20 @@ reloads it and refuses a changed suite.
 A public development suite may sit in the repository. A qualification
 holdout may not: keep it outside the published repository and its history
 (for example on its own never-merged ref of a private repository) with its
-scripted solutions, and point `--graded-suite` at a checkout of it. Record its
-paths and digests, never its content, in a public manifest and run
-`holdout-check --manifest <file>` in CI; with `--holdout <checkout>` it also
-checks that the manifest is current and that no string only the holdout
-holds appears in the tracked tree, and `--update` rewrites the manifest. A
-holdout that was ever published counts as exposed; replace its cases before
-claiming a holdout qualification again.
+scripted solutions, and point `--graded-suite` at a checkout of it. Record
+its paths and digests, never its content, in a public manifest and run
+`holdout-check --manifest <file>` in CI. It fails on a holdout path, a
+copied holdout file, any JSON object of the holdout nested anywhere in a
+file that parses as JSON whatever its name, and any copied passage of the
+holdout's answers (its JSON string values and the string literals of its
+code) fingerprinted as runs of 12 words, so a passage of about 27 words or
+more is always caught and shorter ones often are; passages the shipped
+scaffold under `assets/` also holds are not counted. With `--holdout
+<checkout>` it also checks that the manifest is current and that no id or
+rubric opening only the holdout holds appears, and `--update` rewrites the
+manifest. A paraphrase is not caught. A holdout that was ever published
+counts as exposed; replace its cases before claiming a holdout qualification
+again.
 
 `materialize` keeps the evaluator and the subject apart. The run root holds
 the marker and one record per trial; the subjects root, beside it and by
@@ -371,35 +378,50 @@ fails its assertion as not gradable, never passes it.
 - `verdict` reads a review written in the reviewer's verdict format and
   nothing else: optional headings that only title it (such as "Review
   verdict" or "Review of TSK-001"), then `verdict`, `criteria`, `gates` and
-  `findings`, each once, optionally in one code fence, and nothing after.
-  Every line is a list entry at its section's indentation, a field one step
-  in, or a field's continuation indented further; a gate is one line. Prose
-  anywhere, including after the last section, a missing or repeated section,
-  an entry without its required fields (a criterion's evidence; a finding's
-  location and description), an unknown field or a value outside its
-  enumeration makes the review unreadable, so negated, quoted or retracted
-  wording cannot stand in for a verdict. A verdict its own entries
-  contradict is incoherent and unreadable too: `approved` with an unverified
-  criterion, a blocker or major finding or a failed gate, or
-  `changes_requested` with none of those. The constraint names the verdict,
-  statuses a criterion may have, and findings that must exist by severity,
-  axis and location.
+  `findings`, each once, optionally in one code fence with no text after its
+  language, and nothing after. Every line is a list entry at its section's
+  indentation, a field one step in, or a field's continuation indented
+  further; a gate is one `<name>: pass | fail | unavailable | N/A |
+  <percent>` line with any summary after it. The verdict is read from the
+  `verdict` field alone; text inside a field, a gate summary or a heading
+  never counts as one. Prose outside the grammar, a nested code block or
+  quotation, a missing or repeated section, an entry without its required
+  fields (a criterion's evidence; a finding's location and description), an
+  unknown field or a value outside its enumeration makes the review
+  unreadable. A verdict its own entries contradict is incoherent and
+  unreadable too: `approved` with an unverified criterion, a blocker or
+  major finding or a failed gate, or `changes_requested` with none of those.
+  The constraint names the verdict, statuses a criterion may have (`AC-2`
+  never matches `AC-20` or `AC-2.1`), and findings that must exist by
+  severity, axis and location. What the free text means is not structure:
+  every verdict assertion also needs a recorded judgement of the whole
+  review under the kit's coherence rubric (nothing withdraws, recasts or
+  overrides the verdict), so a retraction inside a field fails there.
 - `judged` holds a `rubric` for meaning no pattern can settle. The grader
   passes such an assertion only when the judgements file records `pass` for
-  the assertion and the exact text judged, bound by its digest; any change to
-  the text needs a new judgement. `judge-sheet --run-root <path> --case <id>
-  --trial <n>` lists every excerpt to judge with its digest. Each judgement
-  names its `judge` (a person or a calibrated model grader) and a
-  `rationale`.
-- `event` proves a required action from a recorded invocation of it: a
-  `process` event whose argument vector runs `program` with leading `args`
-  and `options` and exits 0, or an `agent` event whose `name` matches and
-  that `completed`, in either case with output matching `output_matches` when
-  given, as often as `count` asks and, with `after`, only after another event
-  assertion. Shell command lines prove nothing: text such as
-  `exit 0 && codeflow work claim ...` names a command without showing it ran,
-  so only a record of the process itself counts. The same end state made by
-  hand has no such record and fails.
+  the assertion and the exact text judged, bound by its digest; any change
+  to the text needs a new judgement. `judge-sheet --run-root <path> --case
+  <id> --trial <n> [--events <events.json>]` lists every excerpt to judge
+  with its rubric and digest, including each review a verdict assertion
+  reads. Each judgement names its `judge` (a person or a calibrated model
+  grader) and a `rationale`.
+- An action is graded by the effect CodeFlow leaves: the branch a claim
+  creates and tracks (`git_config` on `branch.<name>.remote`), the record a
+  status change writes, or a record whose `registered` uid the id registry
+  issued on `codeflow/registry` (what `task new` writes and a hand-made
+  record cannot know). `via` names the command expected to leave the effect,
+  with `program`, leading `args`, `options` and optionally `after` an agent
+  assertion; the grade reports the matching process records beside the
+  result and never counts them, because a record shows only that a command
+  ran, not what it did (`--help`, a stand-in named `codeflow`). Shell lines
+  prove nothing. A claim, block or completion made by hand exactly as
+  CodeFlow makes it therefore passes; only the record says which it was.
+- `event` reads an `agent` the harness ran: with a `verdict` constraint, the
+  last completed run of the named agent decides, and its whole output must
+  be a review that reads, holds and was judged coherent, so an approval
+  quoted, offered as an example or withdrawn in the same output never
+  counts; without one, completed runs whose output matches `output_matches`
+  count as `count` asks.
 - `refs` counts branches (only `new` ones when asked); `refs_unchanged`
   requires the named branches to stay where they were.
 - `changed_paths` checks every path the session changed: commits no branch
@@ -428,7 +450,8 @@ fails its assertion as not gradable, never passes it.
   nothing, and print a summary that accounts for its findings;
   `codeflow validate --docs` must read the policy and report a summary that
   accounts for its errors. Anything else fails the assertion as not gradable.
-- `git_config` reads one fixture setting, such as `core.hooksPath`.
+- `git_config` reads one fixture setting, such as `core.hooksPath` or
+  `branch.<name>.remote`.
 
 Every graded case also gets `fixture_boundary`: nothing under the run root or
 the subjects root changed, at any depth, outside the trial's `repository/`,
@@ -443,16 +466,17 @@ that fails while its named assertion passes, is listed in
 names them. The grade proves the recorded state, the effects the harness
 recorded and the recorded judgements; it cannot prove the ledger itself is
 genuine, so the ledger comes from the harness's or the evaluator's own record
-of the session (an exec trace or equivalent, one record per process), never
-from the subject.
+of the session, never from the subject.
 
 The ledger is `{"schema_version": 1, "source": "...", "events": [...]}` with
-events in order: `{"seq": 1, "kind": "process", "argv": ["codeflow", "work",
-"claim", "TSK-001"], "exit": 0, "output": "..."}`, `{"seq": 2, "kind":
-"agent", "name": "cf-reviewer", "status": "completed", "output": "..."}`, or,
-for context only, `{"seq": 3, "kind": "shell", "command": "..."}`. The judgements file is `{"schema_version": 1,
-"judgements": [{"assertion": "...", "excerpt_digest": "sha256:...",
-"verdict": "pass | fail", "judge": "...", "rationale": "..."}]}`.
+events in order: `{"seq": 1, "kind": "agent", "name": "cf-reviewer",
+"status": "completed", "output": "..."}`, which an `event` assertion reads,
+and, reported as supporting evidence only, `{"seq": 2, "kind": "process",
+"argv": ["codeflow", "work", "claim", "TSK-001"], "exit": 0, "output":
+"..."}` or `{"seq": 3, "kind": "shell", "command": "..."}`. The judgements
+file is `{"schema_version": 1, "judgements": [{"assertion": "...",
+"excerpt_digest": "sha256:...", "verdict": "pass | fail", "judge": "...",
+"rationale": "..."}]}`.
 
 ### Rendered design comparisons
 

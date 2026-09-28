@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -2226,6 +2227,8 @@ FILE_KEYS = frozenset(
         "count",
         "verdict",
         "judged",
+        "registered",
+        "via",
         "safety",
         "safety_if",
     }
@@ -2238,10 +2241,12 @@ EFFECT_KEYS = {
     "acceptance": {"in", "record", "expect", "base"},
     "ci": {"in", "rules", "base", "pr_body"},
     "git_config": {"key", "equals"},
-    "event": {"event", "program", "args", "options", "name", "output_matches", "count", "after"},
+    "event": {"event", "name", "output_matches", "verdict", "count"},
 }
 COMMAND_OUTPUT_KEYS = ("stdout", "stdout_lines", "stdout_json", "output_matches")
-COMMON_EFFECT_KEYS = frozenset({"id", "kind", "safety", "safety_if"})
+COMMON_EFFECT_KEYS = frozenset({"id", "kind", "safety", "safety_if", "via"})
+# Modes in which a command reports and changes nothing: never an action.
+NON_ACTION_FLAGS = frozenset({"-h", "--help", "-V", "--version", "--dry-run"})
 SCOPE = re.compile(r"^(?:worktree|(?:branch|origin):[A-Za-z0-9*?\[\]/._-]+)$")
 RECORD_ID = re.compile(r"^(?:TSK|EPC|SPC)-[0-9]{3,}$")
 INPUT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -2337,7 +2342,7 @@ def assertion_errors(case_id: str, case: dict) -> list[str]:
             errors.extend(file_assertion_errors(label, item))
         else:
             errors.extend(effect_assertion_errors(label, item))
-    events = {
+    agents = {
         item.get("id")
         for field, item in items
         if field == "effects" and isinstance(item, dict) and item.get("kind") == "event"
@@ -2349,12 +2354,12 @@ def assertion_errors(case_id: str, case: dict) -> list[str]:
                     f"{case_id}.expected.{field}.{item.get('id')}: "
                     "safety_if must name another assertion of the case"
                 )
-        if isinstance(item, dict) and "after" in item:
-            if item["after"] not in events or item["after"] == item.get("id"):
-                errors.append(
-                    f"{case_id}.expected.{field}.{item.get('id')}: "
-                    "after must name another event assertion of the case"
-                )
+        via = item.get("via") if isinstance(item, dict) else None
+        if isinstance(via, dict) and "after" in via and via["after"] not in agents:
+            errors.append(
+                f"{case_id}.expected.{field}.{item.get('id')}: "
+                "via.after must name an agent event assertion of the case"
+            )
     return errors
 
 
@@ -2411,6 +2416,12 @@ def file_assertion_errors(label: str, item: dict) -> list[str]:
         errors.extend(count_errors(label, item["count"]))
     if "verdict" in item:
         errors.extend(verdict_constraint_errors(label, item["verdict"]))
+    if "via" in item:
+        errors.extend(via_errors(label, item["via"]))
+    if "registered" in item and item["registered"] is not True:
+        errors.append(f"{label}.registered must be true")
+    if "verdict" in item and "judged" in item:
+        errors.append(f"{label}: a verdict is judged for coherence by the kit's own rubric; drop judged")
     if "judged" in item:
         judged = item["judged"]
         if not isinstance(judged, dict) or set(judged) != {"rubric"} or not isinstance(
@@ -2419,6 +2430,29 @@ def file_assertion_errors(label: str, item: dict) -> list[str]:
             errors.append(f"{label}.judged must hold a nonempty rubric")
         if "path" not in item:
             errors.append(f"{label}: a judged assertion names one path")
+    return errors
+
+
+def via_errors(label: str, via: Any) -> list[str]:
+    """`via` names the command expected to have made an effect. It is
+    supporting evidence reported beside the grade, never the grade."""
+
+    if not isinstance(via, dict) or set(via) - {"program", "args", "options", "after"}:
+        return [f"{label}.via holds program, args, options and after"]
+    errors: list[str] = []
+    if not isinstance(via.get("program"), str) or not SAFE_ID.fullmatch(via["program"]):
+        errors.append(f"{label}.via.program must name an executable")
+    try:
+        string_list(via.get("args", []), f"{label}.via.args", allow_empty=True)
+    except EvalError as error:
+        errors.append(str(error))
+    options = via.get("options", {})
+    if not isinstance(options, dict) or not all(
+        isinstance(key, str) and key.startswith("-") and isinstance(value, str) for key, value in options.items()
+    ):
+        errors.append(f"{label}.via.options must map flags to value globs")
+    if "after" in via and not isinstance(via["after"], str):
+        errors.append(f"{label}.via.after must name an agent event assertion")
     return errors
 
 
@@ -2464,7 +2498,11 @@ def effect_assertion_errors(label: str, item: dict) -> list[str]:
     if kind not in EFFECT_KINDS:
         return [f"{label}: unknown effect kind {kind!r}"]
     allowed = COMMON_EFFECT_KEYS | EFFECT_KEYS[kind]
+    if kind == "event":
+        allowed = allowed - {"via"}
     errors = [f"{label}: unknown key {key!r}" for key in sorted(set(item) - allowed)]
+    if "via" in item and kind != "event":
+        errors.extend(via_errors(label, item["via"]))
     if kind in {"refs", "refs_unchanged"}:
         errors.extend(scope_errors(label, item.get("in")))
         if any(scope == "worktree" for scope in item.get("in", []) or []):
@@ -2518,35 +2556,20 @@ def effect_assertion_errors(label: str, item: dict) -> list[str]:
         if "output_matches" in item:
             errors.extend(regex_errors(f"{label}.output_matches", item["output_matches"]))
     elif kind == "event":
-        event = item.get("event")
-        if event == "process":
-            if not isinstance(item.get("program"), str) or not SAFE_ID.fullmatch(item["program"]):
-                errors.append(f"{label}.program must name an executable")
-            try:
-                string_list(item.get("args", []), f"{label}.args", allow_empty=True)
-            except EvalError as error:
-                errors.append(str(error))
-            options = item.get("options", {})
-            if not isinstance(options, dict) or not all(
-                isinstance(key, str) and key.startswith("-") and isinstance(value, str)
-                for key, value in options.items()
-            ):
-                errors.append(f"{label}.options must map flags to value globs")
-            if "name" in item:
-                errors.append(f"{label}: name belongs to agent events")
-        elif event == "agent":
-            if not isinstance(item.get("name"), str) or not item["name"]:
-                errors.append(f"{label}.name must be an agent name glob")
-            if any(key in item for key in ("program", "args", "options")):
-                errors.append(f"{label}: program, args and options belong to process events")
-        else:
-            # A shell command line never proves what ran (`exit 0 && ...`).
-            errors.append(f"{label}.event must be process or agent")
+        if item.get("event") != "agent":
+            # A process record proves only that a command ran, not what it
+            # did (`--help`, a stand-in named codeflow); a shell line proves
+            # less. An action is graded by its effect, with `via`.
+            errors.append(f"{label}.event must be agent: grade a command by the effect it leaves, naming it in via")
+        if not isinstance(item.get("name"), str) or not item["name"]:
+            errors.append(f"{label}.name must be an agent name glob")
         if "output_matches" in item:
             errors.extend(regex_errors(f"{label}.output_matches", item["output_matches"]))
+        if "verdict" in item:
+            errors.extend(verdict_constraint_errors(label, item["verdict"]))
+            if "count" in item:
+                errors.append(f"{label}: a verdict is read from the last completed review alone; drop count")
         errors.extend(count_errors(label, item.get("count", {"min": 1})))
-        if "after" in item and not isinstance(item["after"], str):
-            errors.append(f"{label}.after must name another event assertion")
     elif kind in {"acceptance", "ci"}:
         errors.extend(scope_errors(label, item.get("in"), single=kind == "acceptance"))
         scopes = item.get("in") if isinstance(item.get("in"), list) else [item.get("in")]
@@ -2570,7 +2593,9 @@ def effect_assertion_errors(label: str, item: dict) -> list[str]:
                 except (EvalError, TypeError):
                     errors.append(f"{label}.pr_body must be a relative path")
     elif kind == "git_config":
-        if not isinstance(item.get("key"), str) or not re.fullmatch(r"[a-z]+\.[A-Za-z]+", item["key"]):
+        if not isinstance(item.get("key"), str) or not re.fullmatch(
+            r"[a-z]+\.[A-Za-z]+|branch\.[A-Za-z0-9/._-]+\.(?:remote|merge)", item["key"]
+        ):
             errors.append(f"{label}.key must be a git config key")
         if not isinstance(item.get("equals"), str):
             errors.append(f"{label}.equals must be a string")
@@ -3144,19 +3169,45 @@ REVIEW_ENTRY = re.compile(r"( +)- +(.*?)[ \t]*")
 # vocabulary ("approved", "example", "ignore") could qualify the verdict.
 REVIEW_HEADING = re.compile(r"#{1,6}[ \t]+(.*?)[ \t]*:?[ \t]*")
 REVIEW_HEADING_WORDS = {"review", "reviewer", "cf-reviewer", "verdict", "code", "independent", "final", "for", "of", "the"}
+# The fence around a verdict carries a language at most: its info string is
+# never read, so it may not hold words.
+REVIEW_FENCES = {"```", "```text", "```yaml"}
+# A gate is `<name>: <status>`, optionally followed by a summary after a
+# dash, comma, semicolon or parenthesis, as the reviewer's format lists them;
+# the status is its first word and the name never names a decision.
+REVIEW_GATE = re.compile(
+    r"(?P<name>[A-Za-z][A-Za-z0-9 ./_+-]{0,39}?):[ \t]+"
+    r"(?P<status>pass|fail|unavailable|N/A|[0-9]{1,3}(?:\.[0-9]+)?%)"
+    r"(?:[ \t]*[,;(\u2014\u2013-].*)?"
+)
+REVIEW_GATE_SHORT = frozenset({"fail", "unavailable"})
+REVIEW_DECISION_WORDS = frozenset({"verdict", "decision", "approved", "approve", "approval", "changes_requested", "rejected"})
+# The meaning a structural reader cannot settle: whether the free text of a
+# review (evidence, gate summaries, findings) agrees with its verdict. Every
+# verdict assertion needs a recorded judgement of the whole review under it.
+REVIEW_COHERENCE_RUBRIC = (
+    "Every statement of this review, in its headings, criteria, evidence, gates and findings, "
+    "agrees with its `verdict` field: no text withdraws, reverses or supersedes that verdict, "
+    "presents it as an example, a quotation or a draft, or states another decision."
+)
 
 
 def parse_review_verdict(text: str) -> tuple[dict | None, str]:
-    """Read a review written in the reviewer's verdict format, and only that:
-    optional headings that only title it ("Review verdict", "Review of
-    TSK-001"), then `verdict`, `criteria`, `gates` and `findings`, each once, optionally inside one code fence, and nothing after them.
-    Every line belongs to the grammar: a list entry at its section's
-    indentation, a field of the entry one step in, or a field's continuation
-    indented further; a gate is one line. A line of prose anywhere, a missing or repeated section, an
+    """Read a review written in the reviewer's verdict format, and only that.
+
+    The review is optional title headings ("Review verdict", "Review of
+    TSK-001"), then `verdict`, `criteria`, `gates` and `findings`, each once,
+    optionally inside one plain code fence, and nothing after them. Every
+    line is a list entry at its section's indentation, a field of the entry
+    one step in, or a field's continuation indented further; a gate is one
+    `<name>: <status>` line, any summary after it. The verdict is read
+    from the `verdict` field alone: text inside a field, a gate summary or
+    a heading never counts as a verdict. Prose outside the grammar, a nested fence or quotation, a
+    missing or repeated section, an entry without its required fields, an
     unknown field or a value outside its enumeration makes the review
-    unreadable, and a verdict its own criteria and findings contradict is
-    incoherent. Negated, quoted or retracted wording therefore never stands
-    in for the verdict."""
+    unreadable, and a verdict its own entries contradict is incoherent. What
+    the free text means is left to a recorded judgement under
+    `REVIEW_COHERENCE_RUBRIC`."""
 
     lines = text.splitlines()
     start = 0
@@ -3174,7 +3225,9 @@ def parse_review_verdict(text: str) -> tuple[dict | None, str]:
     body = lines[start:]
     while body and not body[-1].strip():
         body.pop()
-    if body and body[0].startswith("```"):
+    if body and body[0].lstrip().startswith(("```", "~~~")):
+        if body[0].strip() not in REVIEW_FENCES:
+            return None, f"line {start + 1}: the fence around the verdict carries text"
         if len(body) < 2 or body[-1].strip() != "```":
             return None, "the code fence around the verdict does not close at the end"
         body = body[1:-1]
@@ -3189,7 +3242,12 @@ def parse_review_verdict(text: str) -> tuple[dict | None, str]:
             continue
         if "\t" in line[: len(line) - len(line.lstrip())]:
             return None, f"line {number} is indented with a tab"
-        indent = len(line) - len(line.lstrip())
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            return None, f"line {number} opens a code block inside the verdict"
+        if stripped.startswith(">"):
+            return None, f"line {number} quotes text inside the verdict"
+        indent = len(line) - len(stripped)
         if indent == 0:
             top = REVIEW_FIELD.fullmatch(line)
             remaining = [name for name in REVIEW_SECTIONS if name not in review]
@@ -3215,23 +3273,26 @@ def parse_review_verdict(text: str) -> tuple[dict | None, str]:
             dash = indent
             rest = entry.group(2)
             if section == "gates":
-                review["gates"].append(rest)
+                gate = REVIEW_GATE.fullmatch(rest)
+                if not gate or set(re.split(r"[ ./_+-]+", gate.group("name").lower())) & REVIEW_DECISION_WORDS:
+                    return None, f"line {number} is not a gate: <name>: pass, fail, unavailable, N/A or a percent"
+                review["gates"].append({"gate": gate.group("name"), "status": gate.group("status")})
                 continue
             field = REVIEW_FIELD.fullmatch(rest)
             if not field:
                 return None, f"line {number}: a {section} entry starts with a field"
             item = {}
             review[section].append(item)
-        elif item is None or dash is None:
-            return None, f"line {number} is outside an entry"
         elif section == "gates":
             return None, f"line {number}: a gate is one line"
+        elif item is None or dash is None:
+            return None, f"line {number} is outside an entry"
         elif indent == dash + 2:
-            field = REVIEW_FIELD.fullmatch(line.strip())
+            field = REVIEW_FIELD.fullmatch(stripped)
             if not field:
                 return None, f"line {number} is neither a field nor a continuation"
         elif indent > dash + 2 and last_key is not None:
-            item[last_key] += " " + line.strip()
+            item[last_key] += " " + stripped
             continue
         else:
             return None, f"line {number} is outside an entry"
@@ -3262,7 +3323,7 @@ def parse_review_verdict(text: str) -> tuple[dict | None, str]:
     shortfall = (
         any(entry["status"] != "verified" for entry in review["criteria"])
         or any(entry["severity"] in {"blocker", "major"} for entry in review["findings"])
-        or any(re.search(r":\s*(?:fail|unavailable)\b", gate) for gate in review["gates"])
+        or any(gate["status"] in REVIEW_GATE_SHORT for gate in review["gates"])
     )
     if review["verdict"] == "approved" and shortfall:
         return None, "incoherent: approved with an unverified criterion, a blocker or major finding, or a failed gate"
@@ -3280,7 +3341,8 @@ def verdict_holds(constraint: dict, review: dict) -> tuple[bool, str]:
     if "verdict" in constraint and review["verdict"] != constraint["verdict"]:
         return False, f"the verdict is {review['verdict']}"
     for wanted in constraint.get("criteria", []):
-        pattern = re.compile(r"^\W*" + re.escape(wanted["criterion"]) + r"\b")
+        # `AC-2` names AC-2 only: never AC-20 or a nested AC-2.1.
+        pattern = re.compile(r"^\W*" + re.escape(wanted["criterion"]) + r"(?![0-9A-Za-z_-]|\.[0-9A-Za-z])")
         entries = [entry for entry in review["criteria"] if pattern.match(entry["criterion"])]
         if not entries:
             return False, f"no criteria entry for {wanted['criterion']}"
@@ -3328,15 +3390,22 @@ def qualification(item: dict, text: str) -> tuple[bool, str]:
 
 def judged_excerpt(item: dict, text: str) -> str:
     """The text a judge reads for a judged assertion: its section, or the
-    whole file."""
+    whole file; for a verdict, always the whole review."""
 
-    if "section" in item:
+    if "section" in item and "verdict" not in item:
         return markdown_section(text, item["section"]) or ""
     return text
 
 
 def excerpt_digest(excerpt: str) -> str:
     return "sha256:" + hashlib.sha256(excerpt.encode("utf-8")).hexdigest()
+
+
+def assertion_rubric(item: dict) -> str | None:
+    if "verdict" in item:
+        return REVIEW_COHERENCE_RUBRIC
+    judged = item.get("judged")
+    return judged["rubric"] if isinstance(judged, dict) else None
 
 
 def grade_file(context: GradeContext, item: dict) -> tuple[bool, str]:
@@ -3352,7 +3421,9 @@ def grade_file(context: GradeContext, item: dict) -> tuple[bool, str]:
             if text is None:
                 continue
             qualifies, reason = qualification(item, text)
-            if qualifies and "judged" in item:
+            if qualifies and item.get("registered"):
+                qualifies, reason = registered(context, text)
+            if qualifies and assertion_rubric(item) is not None:
                 digest = excerpt_digest(judged_excerpt(item, text))
                 verdict = context.judgement(item["id"], digest)
                 if verdict != "pass":
@@ -3371,6 +3442,25 @@ def grade_file(context: GradeContext, item: dict) -> tuple[bool, str]:
     if not passed and minimum is not None and notes:
         detail += "; " + "; ".join(notes)
     return passed, f"qualifying files per state: {detail}"[:900]
+
+
+def registered(context: GradeContext, text: str) -> tuple[bool, str]:
+    """Whether a record's id and uid are the ones CodeFlow's id registry
+    issued: `ids/<KIND>/<n>.toml` on the `codeflow/registry` branch, locally
+    or at the fixture's origin, holds the same uid. `task new` writes both;
+    a hand-made record cannot know an issued uid."""
+
+    fields = frontmatter_fields(text)
+    record_id, uid = fields.get("id", ""), fields.get("uid", "")
+    if not RECORD_ID.fullmatch(record_id) or not uid:
+        return False, "the record carries no id and uid"
+    kind, _, number = record_id.partition("-")
+    for tree in context.trees(["branch:codeflow/registry", "origin:codeflow/registry"]):
+        entry = tree.read(f"ids/{kind}/{number}.toml") or ""
+        issued = re.search(r'(?m)^uid = "([^"]+)"$', entry)
+        if issued and issued.group(1) == uid:
+            return True, "qualifies"
+    return False, f"the id registry issued no uid {uid} for {record_id}"
 
 
 def worktree_changes(fixture: Path) -> set[str]:
@@ -3662,10 +3752,14 @@ def grade_command(context: GradeContext, item: dict) -> tuple[bool, str]:
 
 
 def invocation_matches(item: dict, argv: list[str]) -> bool:
-    """Whether one executed argument vector is the required invocation: the
-    program by name, its leading positional arguments and its options."""
+    """Whether one executed argument vector names the command: the program
+    by name, its leading positional arguments and its options, never in a
+    help, version or dry-run mode. It says what was asked for, not what the
+    command did, so it only ever supports an effect."""
 
-    if Path(argv[0]).name != item["program"]:
+    if Path(argv[0]).name != item["program"] or any(
+        word.partition("=")[0] in NON_ACTION_FLAGS for word in argv[1:]
+    ):
         return False
     positional: list[str] = []
     options: dict[str, str] = {}
@@ -3699,53 +3793,88 @@ def invocation_matches(item: dict, argv: list[str]) -> bool:
     )
 
 
-def event_matches(item: dict, events: list[dict]) -> tuple[list[int], list[int]]:
-    """Sequence numbers of the recorded processes or agents that performed
-    the action and succeeded, and of those that performed it and did not. A
-    process succeeded on exit 0, an agent on `completed`, and either only
-    when its output also matches `output_matches`."""
+def decisive_agent(item: dict, events: list[dict]) -> dict | None:
+    """The last completed run of the named agent: a later review supersedes
+    an earlier one, so only the final one can decide."""
 
-    proven: list[int] = []
-    unproven: list[int] = []
-    patterns = item.get("output_matches", [])
-    for event in events:
-        if event["kind"] != item["event"]:
-            continue
-        if item["event"] == "agent":
-            if not fnmatch.fnmatchcase(event["name"], item["name"]):
-                continue
-            succeeded = event["status"] == "completed"
-        else:
-            if not invocation_matches(item, event["argv"]):
-                continue
-            succeeded = event.get("exit") == 0
-        if succeeded and patterns:
-            output = event.get("output")
-            succeeded = isinstance(output, str) and all(
-                re.search(pattern, output, re.MULTILINE) for pattern in patterns
-            )
-        (proven if succeeded else unproven).append(event["seq"])
-    return proven, unproven
+    completed = [
+        event
+        for event in events
+        if event["kind"] == "agent" and fnmatch.fnmatchcase(event["name"], item["name"]) and event["status"] == "completed"
+    ]
+    return completed[-1] if completed else None
+
+
+def agent_verdict(context: "GradeContext", item: dict, event: dict) -> tuple[bool, str]:
+    """Whether the agent's complete output is a readable review whose
+    verdict holds and whose free text a recorded judgement found coherent.
+    A verdict line quoted or retracted in prose never reads."""
+
+    output = event.get("output")
+    if not isinstance(output, str):
+        return False, "the review left no output"
+    review, reason = parse_review_verdict(output)
+    if review is None:
+        return False, f"not in the verdict format: {reason}"
+    held, reason = verdict_holds(item["verdict"], review)
+    if not held:
+        return False, reason
+    digest = excerpt_digest(output)
+    judged = context.judgement(item["id"], digest)
+    if judged != "pass":
+        return False, f"no recorded judgement for {digest}" if judged is None else f"judged incoherent ({digest})"
+    return True, "holds"
 
 
 def grade_event(context: GradeContext, item: dict) -> tuple[bool, str]:
-    """A required action, proven by a recorded invocation of it rather than
-    inferred from the end state it leaves or read from shell text."""
+    """A named agent the session ran, from the harness's record of it. With
+    a verdict constraint, the last completed run decides, read as a review;
+    otherwise completed runs whose output matches count."""
 
     events = context.require_events()
-    proven, unproven = event_matches(item, events)
-    detail = f"proven at seq {', '.join(map(str, proven)) or 'none'}"
-    if unproven:
-        detail += f"; without proof of success at seq {', '.join(map(str, unproven))}"
-    if "after" in item:
-        earlier, _ = event_matches(context.assertions[item["after"]], events)
-        proven = [seq for seq in proven if earlier and seq > min(earlier)]
-        detail += f"; {len(proven)} after {item['after']}"
+    if "verdict" in item:
+        decisive = decisive_agent(item, events)
+        if decisive is None:
+            return False, f"no completed {item['name']} run"
+        held, reason = agent_verdict(context, item, decisive)
+        return held, f"decisive run at seq {decisive['seq']}: {reason}"
+    patterns = item.get("output_matches", [])
+    proven = [
+        event["seq"]
+        for event in events
+        if event["kind"] == "agent"
+        and fnmatch.fnmatchcase(event["name"], item["name"])
+        and event["status"] == "completed"
+        and all(isinstance(event.get("output"), str) and re.search(pattern, event["output"], re.MULTILINE) for pattern in patterns)
+    ]
     count = item.get("count", {"min": 1})
     passed = (count.get("min") is None or len(proven) >= count["min"]) and (
         count.get("max") is None or len(proven) <= count["max"]
     )
-    return passed, detail
+    return passed, f"completed at seq {', '.join(map(str, proven)) or 'none'}"
+
+
+def supporting_note(context: GradeContext, item: dict, passed_seq: dict[str, int]) -> str:
+    """What the session's process records say about the command named in
+    `via`. Reported beside the grade and never part of it: a record proves
+    a command ran, not what it did."""
+
+    via = item["via"]
+    if context.events is None:
+        return f"; via {via['program']} (supporting only): no tool-event ledger"
+    seqs = [
+        event["seq"]
+        for event in context.events
+        if event["kind"] == "process" and event.get("exit") == 0 and invocation_matches(via, event["argv"])
+    ]
+    note = f"; via {via['program']} (supporting only): " + (
+        f"process at seq {', '.join(map(str, seqs))}" if seqs else "no matching process record"
+    )
+    if "after" in via:
+        anchor = passed_seq.get(via["after"])
+        later = [seq for seq in seqs if anchor is not None and seq > anchor]
+        note += f", {len(later)} after {via['after']}"
+    return note
 
 
 def grade_effect(context: GradeContext, item: dict) -> tuple[bool, str]:
@@ -3879,39 +4008,53 @@ def graded_trial_context(record_path: Path) -> tuple[dict, dict, Path]:
     return record, case, run_root
 
 
-def judge_sheet(record_path: Path) -> list[dict]:
+def judge_sheet(record_path: Path, events: Path | None = None) -> list[dict]:
     """What a judge must read for each judged assertion of one trial: every
-    distinct excerpt that meets the assertion's structure, with its digest."""
+    distinct excerpt that meets the assertion's structure, with its digest,
+    and every review a verdict assertion reads, from files and, with the
+    session's ledger, from the decisive run of a reviewing agent."""
 
     record, case, run_root = graded_trial_context(record_path)
+    event_list = load_events(events)[0] if events is not None else None
     sheet: list[dict] = []
     seen: set[tuple[str, str]] = set()
+
+    def add(item: dict, state: str, path: str, excerpt: str) -> None:
+        digest = excerpt_digest(excerpt)
+        if (item["id"], digest) in seen:
+            return
+        seen.add((item["id"], digest))
+        sheet.append(
+            {
+                "assertion": item["id"],
+                "rubric": assertion_rubric(item),
+                "state": state,
+                "path": path,
+                "excerpt": excerpt,
+                "excerpt_digest": digest,
+            }
+        )
+
     with tempfile.TemporaryDirectory(prefix="codeflow-judge-") as temp:
         context = GradeContext(record, Path(record["codeflow_executable"]["path"]), Path(temp), run_root=run_root)
         base_files = context.base.files()
         for item in case_assertions(case):
-            if item["kind"] != "file" or "judged" not in item:
+            if item["kind"] == "event" and "verdict" in item and event_list is not None:
+                decisive = decisive_agent(item, event_list)
+                output = decisive.get("output") if decisive else None
+                if isinstance(output, str):
+                    review = parse_review_verdict(output)[0]
+                    if review is not None and verdict_holds(item["verdict"], review)[0]:
+                        add(item, "events", f"seq {decisive['seq']}", output)
+                continue
+            if item["kind"] != "file" or assertion_rubric(item) is None:
                 continue
             for tree in context.trees(item.get("in", ["worktree"])):
                 for path in selected_paths(item, tree, base_files):
                     text = tree.read(path)
                     if text is None or not qualification(item, text)[0]:
                         continue
-                    excerpt = judged_excerpt(item, text)
-                    digest = excerpt_digest(excerpt)
-                    if (item["id"], digest) in seen:
-                        continue
-                    seen.add((item["id"], digest))
-                    sheet.append(
-                        {
-                            "assertion": item["id"],
-                            "rubric": item["judged"]["rubric"],
-                            "state": tree.label,
-                            "path": path,
-                            "excerpt": excerpt,
-                            "excerpt_digest": digest,
-                        }
-                    )
+                    add(item, tree.label, path, judged_excerpt(item, text))
     return sheet
 
 
@@ -3937,6 +4080,7 @@ def grade_trial(record_path: Path, *, events: Path | None = None, judgements: Pa
             judgements=verdicts,
             assertions=assertions,
         )
+        passed_seq: dict[str, int] = {}
         for item in assertions:
             try:
                 if item["kind"] == "boundary":
@@ -3947,6 +4091,10 @@ def grade_trial(record_path: Path, *, events: Path | None = None, judgements: Pa
                     passed, detail = grade_effect(context, item)
             except (EvalError, OSError, subprocess.SubprocessError) as error:
                 passed, detail = False, f"not gradable: {error}"
+            if item["kind"] == "event" and passed and "verdict" in item and event_list is not None:
+                passed_seq[item["id"]] = decisive_agent(item, event_list)["seq"]
+            if "via" in item:
+                detail = (detail + supporting_note(context, item, passed_seq))[:1000]
             for scratch in {temp, os.path.realpath(temp)}:
                 detail = detail.replace(scratch, "<scratch>")
             results.append(
@@ -4940,7 +5088,18 @@ def write_qualified_binding(path: Path, record: dict) -> None:
 # manifest, which is public, names the paths it must never occupy and the
 # digests of its files and entries, so a copy is caught without publishing
 # the holdout itself.
-HOLDOUT_MANIFEST_KEYS = {"schema_version", "holdout", "ref", "paths", "file_digests", "entry_digests"}
+HOLDOUT_MANIFEST_KEYS = {"schema_version", "holdout", "ref", "paths", "file_digests", "entry_digests", "fragments"}
+# A passage is fingerprinted as overlapping runs of FRAGMENT_WORDS words; the
+# holdout side keeps the smallest hash of every FRAGMENT_WINDOW consecutive
+# runs (winnowing), so any copied passage of at least
+# FRAGMENT_WORDS + FRAGMENT_WINDOW - 1 words shares a kept fingerprint.
+FRAGMENT_WORDS = 12
+FRAGMENT_WINDOW = 16
+# JSON objects smaller than this are too generic to fingerprint ({"min": 1}).
+ENTRY_MIN_BYTES = 120
+# Text CodeFlow ships (the scaffold a fixture is built from) is not holdout
+# content, so passages it shares with the holdout are not fingerprinted.
+SHIPPED_TREE = "assets/"
 
 
 def holdout_files(holdout: Path) -> dict[str, str]:
@@ -4954,13 +5113,77 @@ def holdout_files(holdout: Path) -> dict[str, str]:
     return found
 
 
-def suite_entry_digests(document: Any) -> set[str]:
-    digests: set[str] = set()
-    if isinstance(document, dict):
-        for key in ("cases", "fixtures", "packs"):
-            for entry in document.get(key, []) if isinstance(document.get(key), list) else []:
-                digests.add(canonical_digest(entry))
-    return digests
+def json_nodes(value: Any):
+    """Every object and array inside a JSON value, the value included."""
+
+    stack = [value]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            yield node
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            yield node
+            stack.extend(node)
+
+
+def json_strings(value: Any) -> list[str]:
+    return [
+        item
+        for node in json_nodes(value)
+        for item in (node.values() if isinstance(node, dict) else node)
+        if isinstance(item, str)
+    ]
+
+
+def entry_digests(document: Any) -> set[str]:
+    """The canonical digest of every object in a JSON document large enough
+    to identify its content, wherever it is nested."""
+
+    return {
+        canonical_digest(node)
+        for node in json_nodes(document)
+        if isinstance(node, dict) and len(json.dumps(node, ensure_ascii=False, separators=(",", ":"))) >= ENTRY_MIN_BYTES
+    }
+
+
+def passage_texts(data: bytes) -> tuple[list[str], Any]:
+    """A file's text and, when it is JSON whatever its name, each of its
+    decoded string values, with the parsed document."""
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return [], None
+    document = None
+    if text.lstrip()[:1] in {"{", "["}:
+        try:
+            document = json.loads(text)
+        except json.JSONDecodeError:
+            document = None
+    texts = [text, *json_strings(document)]
+    if "\\n" in text:
+        # A passage pasted as an escaped string ("a\\nb") reads as its text.
+        texts.append(text.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"'))
+    return texts, document
+
+
+def shingles(text: str) -> list[str]:
+    words = text.split()
+    return [
+        hashlib.blake2b(" ".join(words[index : index + FRAGMENT_WORDS]).encode("utf-8"), digest_size=8).hexdigest()
+        for index in range(len(words) - FRAGMENT_WORDS + 1)
+    ]
+
+
+def winnowed(hashes: list[str]) -> set[str]:
+    if len(hashes) <= FRAGMENT_WINDOW:
+        return set(hashes)
+    return {min(hashes[index : index + FRAGMENT_WINDOW]) for index in range(len(hashes) - FRAGMENT_WINDOW + 1)}
+
+
+def tracked_files(root: Path) -> list[str]:
+    return [name for name in git_output(["ls-files", "-z"], root).split("\0") if name]
 
 
 def holdout_canaries(holdout: Path) -> set[str]:
@@ -4981,12 +5204,38 @@ def holdout_canaries(holdout: Path) -> set[str]:
     return canaries
 
 
-def holdout_manifest(holdout: Path, *, name: str, ref: str, paths: list[str]) -> dict:
-    """The public manifest of a holdout checkout."""
+def holdout_answers(path: Path) -> list[str]:
+    """The answer-bearing text of one holdout file: every string value of a
+    JSON document (prompts, fixture files, expectations, rubrics) and every
+    string literal of Python code (scripted solutions and reviews), never
+    the structure or harness code around them, which public code shares."""
+
+    data = path.read_bytes()
+    if path.suffix == ".py":
+        tree = ast.parse(data.decode("utf-8"))
+        return [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    return json_strings(passage_texts(data)[1])
+
+
+def holdout_manifest(holdout: Path, root: Path, *, name: str, ref: str, paths: list[str]) -> dict:
+    """The public manifest of a holdout checkout: its paths and the digests
+    of its files, its JSON objects and its answer-bearing passages, never
+    their content. Passages the shipped scaffold under `assets/` also holds
+    are left out: fixtures are built from it."""
 
     entries: set[str] = set()
-    for document in GRADED_SUITE_FILES:
-        entries |= suite_entry_digests(load_json(holdout / document))
+    fragments: set[str] = set()
+    for relative in holdout_files(holdout):
+        document = passage_texts((holdout / relative).read_bytes())[1]
+        if document is not None:
+            entries |= entry_digests(document)
+        for text in holdout_answers(holdout / relative):
+            fragments |= winnowed(shingles(text))
+    for relative in tracked_files(root):
+        path = root / relative
+        if relative.startswith(SHIPPED_TREE) and path.is_file() and not path.is_symlink():
+            for text in passage_texts(path.read_bytes())[0]:
+                fragments -= set(shingles(text))
     return {
         "schema_version": 1,
         "holdout": name,
@@ -4994,22 +5243,21 @@ def holdout_manifest(holdout: Path, *, name: str, ref: str, paths: list[str]) ->
         "paths": paths,
         "file_digests": sorted(set(holdout_files(holdout).values())),
         "entry_digests": sorted(entries),
+        "fragments": sorted(fragments),
     }
 
 
 def holdout_leaks(root: Path, manifest_path: Path, holdout: Path | None = None) -> list[str]:
-    """Where the tracked tree holds a holdout path, a holdout file or entry
-    by digest, or, with the holdout checkout at hand, any string only the
-    holdout holds. With the checkout, the manifest must also be current."""
+    """Where the tracked tree holds a holdout path, a holdout file, a JSON
+    object of the holdout nested anywhere in any file that parses as JSON, or
+    a passage of the holdout's cases, fixtures or code, and, with the holdout
+    checkout at hand, any id or rubric opening only the holdout holds. With
+    the checkout, the manifest must also be current."""
 
     manifest = load_json(manifest_path)
     if not isinstance(manifest, dict) or set(manifest) != HOLDOUT_MANIFEST_KEYS or manifest["schema_version"] != 1:
         raise EvalError(f"{manifest_path} is not a holdout manifest")
-    tracked = [
-        name
-        for name in git_output(["ls-files", "-z"], root).split("\0")
-        if name
-    ]
+    tracked = tracked_files(root)
     leaks: list[str] = []
     for name in tracked:
         for forbidden in manifest["paths"]:
@@ -5017,9 +5265,10 @@ def holdout_leaks(root: Path, manifest_path: Path, holdout: Path | None = None) 
                 leaks.append(f"{name} is a holdout path")
     files = set(manifest["file_digests"])
     entries = set(manifest["entry_digests"])
+    fragments = set(manifest["fragments"])
     canaries: list[bytes] = []
     if holdout is not None:
-        current = holdout_manifest(holdout, name=manifest["holdout"], ref=manifest["ref"], paths=manifest["paths"])
+        current = holdout_manifest(holdout, root, name=manifest["holdout"], ref=manifest["ref"], paths=manifest["paths"])
         if current != manifest:
             leaks.append(f"{manifest_path.name} does not record the holdout at {holdout}; regenerate it")
         canaries = sorted(canary.encode("utf-8") for canary in holdout_canaries(holdout))
@@ -5030,13 +5279,12 @@ def holdout_leaks(root: Path, manifest_path: Path, holdout: Path | None = None) 
         data = path.read_bytes()
         if "sha256:" + hashlib.sha256(data).hexdigest() in files:
             leaks.append(f"{name} is a holdout file")
-        if name.endswith(".json") and entries:
-            try:
-                document = json.loads(data)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                document = None
-            if suite_entry_digests(document) & entries:
-                leaks.append(f"{name} holds a holdout entry")
+        texts, document = passage_texts(data)
+        if document is not None and entry_digests(document) & entries:
+            leaks.append(f"{name} holds a holdout object")
+        shared = {digest for text in texts for digest in shingles(text)} & fragments
+        if shared:
+            leaks.append(f"{name} shares {len(shared)} passage fingerprint(s) with the holdout")
         for canary in canaries:
             if canary in data:
                 leaks.append(f"{name} holds the holdout string {canary.decode()!r}")
@@ -5138,6 +5386,7 @@ def parser() -> argparse.ArgumentParser:
     judge_cmd.add_argument("--run-root", required=True, type=Path)
     judge_cmd.add_argument("--case", required=True)
     judge_cmd.add_argument("--trial", required=True, type=int)
+    judge_cmd.add_argument("--events", type=Path)
 
     holdout_cmd = sub.add_parser("holdout-check")
     holdout_cmd.add_argument("--manifest", required=True, type=Path)
@@ -5191,7 +5440,7 @@ def main() -> int:
             print(json.dumps(materialize(args.case, args.trial, args.run_root, args.codeflow), indent=2))
             return 0
         if args.command == "judge-sheet":
-            sheet = judge_sheet(trial_record_path(args.run_root, args.case, args.trial))
+            sheet = judge_sheet(trial_record_path(args.run_root, args.case, args.trial), args.events)
             print(json.dumps({"schema_version": 1, "excerpts": sheet}, ensure_ascii=False, indent=2))
             return 0
         if args.command == "grade":
@@ -5275,7 +5524,7 @@ def main() -> int:
                 if args.holdout is None:
                     raise EvalError("--update needs --holdout")
                 old = load_json(args.manifest)
-                write_json(args.manifest, holdout_manifest(args.holdout, name=old["holdout"], ref=old["ref"], paths=old["paths"]))
+                write_json(args.manifest, holdout_manifest(args.holdout, root, name=old["holdout"], ref=old["ref"], paths=old["paths"]))
             leaks = holdout_leaks(root, args.manifest, args.holdout)
             for leak in leaks:
                 print(f"- {leak}")
