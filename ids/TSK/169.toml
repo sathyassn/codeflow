@@ -1,0 +1,11 @@
+id = "TSK-169"
+uid = "6e33ef37-8ce1-4717-a2bf-da936fb58d3b"
+kind = "TSK"
+title = "an approved spec amended before it ships, frozen after"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T22:55:33Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
