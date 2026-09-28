@@ -1264,7 +1264,10 @@ mod tests {
         run(root, &["rev-parse", "HEAD"])
     }
 
-    /// T103-1: a tag or branch named like a pin cannot redirect it.
+    /// T103-1: a tag or branch named like a pin cannot redirect it. The pin
+    /// is `open`'s full object id and each ref is named exactly that, so no
+    /// part of the case depends on how a prefix happens to look (TSK-156
+    /// review T156-2).
     #[test]
     fn a_pin_is_an_object_id_never_a_ref_name() {
         let dir = repo();
@@ -1273,7 +1276,44 @@ mod tests {
         let open = commit(root, "plan");
         task(root, "TSK-001", "complete", "[]", "");
         let done = commit(root, "findings");
-        let pin = &open[..8];
+        pinned_consumer(root, &open);
+        run(root, &["tag", &open, &done]);
+        run(root, &["branch", &open, &done]);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(error.to_string().contains("'todo'"), "{error}");
+        assert_eq!(
+            entry(&backlog(root).unwrap(), "TSK-002").state,
+            State::Waiting
+        );
+    }
+
+    /// An abbreviated pin resolves as the object it abbreviates, never as a
+    /// ref of the same name. The abbreviation is the one git reports as
+    /// unambiguous in this repository (`rev-parse --short=12`), so it cannot
+    /// collide with another object, and it is quoted.
+    #[test]
+    fn an_abbreviated_pin_resolves_as_its_object_never_a_ref_name() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        let open = commit(root, "plan");
+        task(root, "TSK-001", "complete", "[]", "");
+        let done = commit(root, "findings");
+        let short = run(root, &["rev-parse", "--short=12", &open]);
+        assert!(open.starts_with(&short) && short.len() >= 12, "{short}");
+        pinned_consumer(root, &short);
+        run(root, &["tag", &short, &done]);
+        run(root, &["branch", &short, &done]);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(error.to_string().contains("'todo'"), "{error}");
+        // The same abbreviation of the completing commit is met.
+        let met = run(root, &["rev-parse", "--short=12", &done]);
+        pinned_consumer(root, &met);
+        assert!(verdict(root, "TSK-002").is_ok());
+    }
+
+    /// TSK-002 depends on TSK-001's research at the quoted `pin`.
+    fn pinned_consumer(root: &Path, pin: &str) {
         task(
             root,
             "TSK-002",
@@ -1282,14 +1322,6 @@ mod tests {
             "",
         );
         commit(root, "consumer");
-        run(root, &["tag", pin, &done]);
-        run(root, &["branch", pin, &done]);
-        let error = verdict(root, "TSK-002").unwrap_err();
-        assert!(error.to_string().contains("'todo'"), "{error}");
-        assert_eq!(
-            entry(&backlog(root).unwrap(), "TSK-002").state,
-            State::Waiting
-        );
     }
 
     /// TSK-156 AC-3: fixed pins, never a random commit prefix. Unquoted, a
