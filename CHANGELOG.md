@@ -828,6 +828,16 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The writing reference carries every reply duty.** The rule map sends an
+  agent about to report to `.codeflow/rules/writing.md`, the only reply
+  guidance a minimal-tier project installs. It now states each duty of the
+  lifecycle reply rule: the running report on long work, labels forced onto
+  a short answer, a summary that buries its anchor, a hard gate that waits
+  on the operator while other work keeps moving, and no manufactured ask.
+  A contract test fails when the two drift apart. `codeflow update` brings
+  the reference at every tier.
+
+<!-- codeflow:release-impact patch -->
 - **Work reads survive a partial clone and refuse an oversized record.**
   `work next`, `work claim`, `work start`, `status` and `codeflow ci` read
   the records on a branch tip from `project-management/` only, so a clone
