@@ -352,6 +352,156 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
     );
 }
 
+/// Run the in-session guard on a harness payload for `command`.
+fn guard(root: &Path, command: &str) -> Output {
+    use std::io::Write as _;
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": root.to_string_lossy(),
+    })
+    .to_string();
+    let mut child = with_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .args(["hook", "git-guard"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("guard runs");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// A fresh checkout of the remote, set up the way the registry workflow
+/// fetches it, and its `codeflow ids check` verdict.
+fn ci_check(dir: &Path, bare: &Path, name: &str) -> Output {
+    git(
+        dir,
+        &["clone", "-q", "-b", LINE, bare.to_str().unwrap(), name],
+    );
+    let checkout = dir.join(name);
+    git(
+        &checkout,
+        &[
+            "fetch",
+            "-q",
+            "--no-tags",
+            "origin",
+            "refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry",
+        ],
+    );
+    codeflow(&checkout, &["ids", "check"])
+}
+
+/// SPC-013 R-104, R-108: a restore that binds a number to another uid is
+/// refused by the pre-push hook, the guard refuses the push that would skip
+/// that hook, and CI names the damage when a host without prevention takes
+/// it; the typed restore then repairs it.
+#[test]
+fn a_rebinding_restore_is_refused_by_pre_push_the_guard_and_ci() {
+    let (dir, root, bare) = project_with_remote();
+    ok(&codeflow(&root, &["epic", "new", "outcome"]), "epic new");
+    ok(
+        &codeflow(
+            &root,
+            &["task", "new", "--epic", "EPC-001", "--into", LINE, "first"],
+        ),
+        "task new",
+    );
+    commit(&root, "chore: plan the first task");
+    git(&root, &["push", "-q", "origin", LINE]);
+
+    // A host without prevention takes a deletion from a clone without hooks.
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "codeflow/registry",
+            bare.to_str().unwrap(),
+            "plain",
+        ],
+    );
+    let plain = dir.path().join("plain");
+    let bound = std::fs::read_to_string(plain.join("ids/TSK/001.toml")).unwrap();
+    git(&plain, &["rm", "-q", "ids/TSK/001.toml"]);
+    git(&plain, &["commit", "-q", "-m", "remove"]);
+    git(&plain, &["push", "-q", "origin", "HEAD:codeflow/registry"]);
+
+    // A hand-made "restore" puts TSK-001 back bound to another uid.
+    let uid_line = bound
+        .lines()
+        .find(|line| line.starts_with("uid = "))
+        .expect("the entry binds a uid");
+    let forged = bound.replace(uid_line, "uid = \"0b9c7e5a-3f1d-4c2e-9a8b-7d6e5f4a3b21\"");
+    assert_ne!(forged, bound);
+    std::fs::create_dir_all(plain.join("ids/TSK")).unwrap();
+    std::fs::write(plain.join("ids/TSK/001.toml"), forged).unwrap();
+    git(&plain, &["add", "ids/TSK/001.toml"]);
+    git(&plain, &["commit", "-q", "-m", "restore: TSK-001"]);
+    let rebinding = git(&plain, &["rev-parse", "HEAD"]);
+    git(&root, &["fetch", "-q", plain.to_str().unwrap(), "HEAD"]);
+    let target = format!("{rebinding}:refs/heads/codeflow/registry");
+
+    // Pre-push: the project's hook refuses it and names the rebinding.
+    let refused = run_git(&root, &["push", "origin", &target]);
+    assert!(!refused.status.success(), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("restore would bind TSK-001 to another uid"),
+        "{}",
+        text(&refused)
+    );
+    // Guard: the push that would skip that hook is refused before it runs,
+    // and the ordinary push is left to the hook.
+    let skipped = guard(&root, &format!("git push --no-verify origin {target}"));
+    assert_eq!(skipped.status.code(), Some(2), "{}", text(&skipped));
+    assert!(
+        text(&skipped).contains("registry.append_only"),
+        "{}",
+        text(&skipped)
+    );
+    let plain_push = guard(&root, &format!("git push origin {target}"));
+    assert_eq!(plain_push.status.code(), Some(0), "{}", text(&plain_push));
+
+    // CI: a host without prevention takes it from the clone without hooks;
+    // the registry check names it as current damage.
+    git(&plain, &["push", "-q", "origin", "HEAD:codeflow/registry"]);
+    let red = ci_check(dir.path(), &bare, "ci-red");
+    assert_eq!(red.status.code(), Some(1), "{}", text(&red));
+    assert!(
+        text(&red).contains("current damage")
+            && text(&red).contains("restore would bind TSK-001 to another uid"),
+        "{}",
+        text(&red)
+    );
+
+    // Control: the typed restore returns the first binding and passes the
+    // hook; CI is green with the rebinding kept as repaired history.
+    git(&root, &["fetch", "-q", "origin"]);
+    ok(
+        &codeflow(&root, &["ids", "restore", "TSK-001"]),
+        "ids restore",
+    );
+    assert_eq!(
+        git(&bare, &["show", "codeflow/registry:ids/TSK/001.toml"]),
+        bound.trim_end()
+    );
+    let green = ci_check(dir.path(), &bare, "ci-green");
+    assert!(green.status.success(), "{}", text(&green));
+    assert!(
+        text(&green).contains("history (repaired)"),
+        "{}",
+        text(&green)
+    );
+}
+
 #[test]
 fn a_project_without_a_remote_issues_from_its_own_registry() {
     let dir = tempfile::tempdir().unwrap();

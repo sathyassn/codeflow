@@ -700,3 +700,33 @@ fn a_number_shaped_pin_is_refused_with_the_quote_remedy_on_a_fresh_project() {
         "validate with the pin left out",
     );
 }
+
+#[test]
+fn a_join_awaiting_selection_validates_and_cannot_start() {
+    // TSK-110 (SPC-013 R-104, R-43): the join held by its selection is a
+    // valid plan, and no branch can start it until the selection lands.
+    let (_dir, root) = planned_project();
+    // Control: the plan holding the join validates, and a ready task on the
+    // same line starts.
+    ok(
+        &codeflow(&root, &["validate", "--docs"]),
+        "validate with a held join",
+    );
+    git(&root, &["switch", "-q", "-c", "task/TSK-001-root", LINE]);
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start TSK-001",
+    );
+
+    // Fault: the join refuses to start and names why.
+    git(&root, &["switch", "-q", "-c", "task/TSK-004-join", LINE]);
+    let out = codeflow(&root, &["work", "start", "TSK-004"]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.status.success(), "the join started:\n{text}");
+    assert!(text.contains("TSK-004"), "{text}");
+    assert!(text.contains("awaiting selection"), "{text}");
+}
