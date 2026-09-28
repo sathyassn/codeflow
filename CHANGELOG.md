@@ -160,7 +160,10 @@ publication date._
   push is refused when it does not, when its default branch has no
   readable policy or project state, or when its HEAD names no branch it
   has, in every project, tracked or not. The hook asks the destination
-  once per push and passes the answer to each check it runs. `task status
+  once per push and passes the answer to each check it runs. A task
+  branch that merged its own line is judged from the newest line commit
+  the destination holds, as its pull request is, so what the merge brought
+  stays the line's. `task status
   complete` judges a completion whose task targets a release branch as CI
   judges that pull request. `codeflow ci` gains `--into`.
 

@@ -133,6 +133,33 @@ record:
 - An earlier brought completion that a valid re-completion from the task's
   own line had replaced still refused (the TSK-101 waiver above).
 
+### Push-set cost on the release-sized range
+
+The pre-push push set on this reconstruction (1,164 commits and 220
+merges from `main`, head `89f3f8581`) took over its 60 s guideline. A
+sampling profile of `codeflow ci` placed about 94% of its time outside
+the release-line judge, in work repeated per commit or per record:
+
+| Cost | Share of samples | Fix |
+|---|---|---|
+| The id registry's merge rule ran a full-history `git log` for each record it asked about, and one `git show` per record | about 36% | one add log per revision, one batched read of the record texts |
+| The shipped-asset check read and decompressed the embedded asset once per added line | about 17% | decided once per file |
+| One `git diff-tree` process per commit for the contract-surface tripwire | most of the commit checks' 19% subprocess wait | one batched `diff-tree --stdin` |
+| The reopen scan parsed each candidate record at every commit | about 13% | parsed once per blob |
+| The release-line judge (imports, line positions) | about 6% | line positions remembered |
+
+Measured on the same reconstruction, release builds, the pre-push hook
+alone, back to back at the same load (load averages 20 to 40):
+
+| Build | Push set | Hook wall | User / system CPU |
+|---|---|---|---|
+| `cea4586ae` | 69.3 s, 71.0 s | 69.4 s, 71.0 s | 39.5 / 24.1 s |
+| This head | 4.8 s, 4.7 s | 4.8 s, 5.4 s | 3.5 / 1.1 s |
+
+The verdicts are identical: the same seven notices and the same two
+findings, and the same refusal. A real `git push` of the release branch
+through the hook then took 5.9 s. No budget change is proposed.
+
 ## Cutoffs to record
 
 The cutoffs are each line's tip when this record was written (advertised
