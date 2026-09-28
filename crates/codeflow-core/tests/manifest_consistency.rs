@@ -3005,21 +3005,37 @@ fn pr_template_summary_block_is_identical_across_its_three_copies() {
             "a gutted Release impact section must fail on {lost}: {gutted_problems:?}"
         );
     }
+    // Negative control (Codex confirm, finding 1): a sibling heading right
+    // under the Release impact heading moves every field out of the section
+    // the release script reads, so the fields count as missing.
+    let split = live.replacen("## Release impact\n", "## Release impact\n\n## Other\n", 1);
+    let split_problems = release_impact_problems(&split);
+    assert!(
+        split_problems.iter().any(|problem| problem.contains("- Impact:")),
+        "a heading inside Release impact must hide its fields: {split_problems:?}"
+    );
 }
 
 /// The Release impact contract of this repository's live PR template:
 /// every field line `scripts/release.py` reads and the instructions around
 /// them, each inside the Release impact section (from its heading to the
-/// conditional-sections comment), not anywhere in the file.
+/// next level-two heading or the conditional-sections comment, whichever
+/// comes first), not anywhere in the file.
 fn release_impact_problems(template: &str) -> Vec<String> {
     let Some(start) = template.find("## Release impact\n") else {
         return vec!["no ## Release impact section".to_string()];
     };
     let rest = &template[start..];
-    let end = rest
-        .find("<!-- Conditional sections")
-        .or_else(|| rest[1..].find("\n## ").map(|offset| offset + 1))
-        .unwrap_or(rest.len());
+    // The section ends at whichever comes first, as `scripts/release.py`
+    // stops at the next level-two heading.
+    let end = [
+        rest.find("<!-- Conditional sections"),
+        rest[1..].find("\n## ").map(|offset| offset + 1),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(rest.len());
     let section = &rest[..end];
     let lines: BTreeSet<&str> = section.lines().map(str::trim_end).collect();
     let prose = normalized_whitespace(section);
