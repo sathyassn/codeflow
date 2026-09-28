@@ -7,6 +7,7 @@ mod prompts;
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Parser, Subcommand};
+use codeflow_core::root_checkout;
 use codeflow_core::scaffold;
 
 const BINARY_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -38,6 +39,11 @@ enum Command {
         /// Overwrite existing files (never the default).
         #[arg(long)]
         force: bool,
+        /// Set up an umbrella workspace: put the root checkout on its root branch
+        /// (created from the default branch if missing), write `git.root_branch`,
+        /// and ignore every nested git repository. Refuses over uncommitted changes.
+        #[arg(long)]
+        workspace: bool,
     },
     /// Refresh managed scaffold files (3-way merge; never clobbers).
     Update {
@@ -133,6 +139,40 @@ fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> 
     Ok(())
 }
 
+/// Plain `init` and `update` switch nothing in a folder that holds nested
+/// repositories; they name `codeflow init --workspace` instead.
+fn print_workspace_hint(root: &std::path::Path) {
+    let policy = codeflow_core::hooks::policy::Policy::load(root).git;
+    if let Some(hint) = root_checkout::workspace_hint(root, &policy) {
+        println!("{hint}");
+    }
+}
+
+/// `init --workspace` switches the root checkout before anything is
+/// written, so a refusal over uncommitted changes leaves the folder untouched.
+fn prepare_workspace(
+    root: &std::path::Path,
+    workspace: bool,
+) -> anyhow::Result<Option<root_checkout::BranchStep>> {
+    if !workspace {
+        return Ok(None);
+    }
+    let policy = codeflow_core::hooks::policy::Policy::load(root).git;
+    Ok(Some(root_checkout::prepare_branch(root, &policy)?))
+}
+
+/// After `init`: what `--workspace` set up, or the hint for plain `init`.
+fn report_workspace(
+    root: &std::path::Path,
+    step: Option<root_checkout::BranchStep>,
+) -> anyhow::Result<()> {
+    match step {
+        Some(step) => println!("{}", root_checkout::finish(root, step)?),
+        None => print_workspace_hint(root),
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
@@ -160,7 +200,9 @@ fn main() -> anyhow::Result<()> {
             full,
             yes,
             force,
+            workspace,
         } => {
+            let workspace_step = prepare_workspace(&cwd, workspace)?;
             let tier = if minimal {
                 Some(scaffold::Tier::Minimal)
             } else if full {
@@ -187,6 +229,7 @@ fn main() -> anyhow::Result<()> {
             }
             print!("{report}");
             cmd::present::provision_state_root_or_warn();
+            report_workspace(&cwd, workspace_step)?;
         }
         Command::Update { diff, force } => {
             let options = scaffold::UpdateOptions {
@@ -200,6 +243,7 @@ fn main() -> anyhow::Result<()> {
             }
             print!("{report}");
             cmd::present::provision_state_root_or_warn();
+            print_workspace_hint(&cwd);
             let portal_report = scaffold::portal::update_adopted_portal(&assets, &cwd)?;
             if let Some(portal_report) = &portal_report {
                 print!("{portal_report}");
