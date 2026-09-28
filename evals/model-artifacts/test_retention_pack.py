@@ -652,6 +652,39 @@ class CheckSessionTests(unittest.TestCase):
         no_marker.entries[-1]["message"]["stop_reason"] = None
         self.assertIn("the probe turn has no finished reply", self.check(case, no_marker)["problems"])
 
+    def test_each_tool_result_answers_its_own_earlier_call(self) -> None:
+        # R3-1: results match calls by id, in order, each call exactly once.
+        case = case_for("complex-explanation-spontaneous-present", "fresh")
+        skill = {"type": "tool_use", "name": "Skill", "input": {"skill": "cf-present"}}
+
+        def result(call_id: str) -> dict:
+            return {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": call_id, "content": "ok"}]}}
+
+        early = Transcript().typed(case["prompt"]).add(result("open"))
+        early.assistant([{**skill, "id": "open"}], "tool_use").reply("Here is the page.")
+        reused = Transcript().typed(case["prompt"])
+        reused.assistant([{"type": "tool_use", "id": "shared", "name": "Read",
+                           "input": {"file_path": "api/RELEASE.md"}}], "tool_use")
+        reused.add(result("shared"))
+        reused.assistant([{**skill, "id": "shared"}], "tool_use").reply("Here is the page.")
+        for label, transcript in [("result before its call", early), ("reused call id", reused)]:
+            with self.subTest(label):
+                checked = self.check(case, transcript)
+                self.assertFalse(checked["valid"])
+                self.assertIn("the probe turn has no finished reply", checked["problems"])
+                self.assertIn("turn 1: a tool result or call breaks the call order",
+                              checked["problems"])
+
+        several = Transcript().typed(case["prompt"]).reply(
+            "Here is the page.",
+            {"name": "Read", "input": {"file_path": "api/RELEASE.md"}},
+            {"name": "Skill", "input": {"skill": "cf-present"}},
+        )
+        checked = self.check(case, several)
+        self.assertTrue(checked["valid"], checked["problems"])
+        self.assertEqual(["cf_present_opened"], checked["detected_signals"])
+
     def test_events_are_bound_in_their_native_order(self) -> None:
         # R2-3: a parent that comes later, or a repeated identity, is corrupt.
         case = case_for("complex-explanation-spontaneous-present", "after-compaction")

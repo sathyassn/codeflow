@@ -683,26 +683,44 @@ def order_problems(entries: list[dict]) -> list[tuple[str, str]]:
 FINISHED_STOP_REASONS = frozenset({"end_turn", "stop_sequence"})
 
 
+def tool_calls_in_order(window: list[dict]) -> tuple[bool, set[Any]]:
+    """Walks a turn's tool events in order: each call has a new identity and
+    each result answers a call still outstanding. Returns whether the order
+    held and the calls left without a result."""
+
+    outstanding: set[Any] = set()
+    seen: set[Any] = set()
+    ordered = True
+    for entry in window:
+        for block in (entry.get("message") or {}).get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                call = block.get("id")
+                if not isinstance(call, str) or not call or call in seen:
+                    ordered = False
+                seen.add(call)
+                outstanding.add(call)
+            elif block.get("type") == "tool_result":
+                call = block.get("tool_use_id")
+                if call in outstanding:
+                    outstanding.discard(call)
+                else:
+                    ordered = False
+    return ordered, outstanding
+
+
 def turn_finished(window: list[dict]) -> bool:
-    """A turn's own entries end with a native finishing stop reason and leave
-    no tool call without its result."""
+    """A turn's own entries end with a native finishing stop reason, with
+    every tool call answered, in order, exactly once."""
 
     replies = [entry for entry in window if entry.get("type") == "assistant"]
     if not replies or (replies[-1].get("message") or {}).get("stop_reason") not in (
         FINISHED_STOP_REASONS
     ):
         return False
-    calls: set[Any] = set()
-    results: set[Any] = set()
-    for entry in window:
-        for block in (entry.get("message") or {}).get("content") or []:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "tool_use":
-                calls.add(block.get("id"))
-            elif block.get("type") == "tool_result":
-                results.add(block.get("tool_use_id"))
-    return calls <= results
+    ordered, outstanding = tool_calls_in_order(window)
+    return ordered and not outstanding
 
 
 def turn_problems(
@@ -714,9 +732,14 @@ def turn_problems(
     problems: list[tuple[str, str]] = []
     for number, prompt in enumerate(prompts):
         following = prompts[number + 1] if number + 1 < len(prompts) else len(entries)
-        finished = turn_finished(
-            [entries[index] for index in range(prompt + 1, following) if owners[index] == number]
-        )
+        window = [
+            entries[index] for index in range(prompt + 1, following) if owners[index] == number
+        ]
+        finished = turn_finished(window)
+        if not tool_calls_in_order(window)[0]:
+            problems.append(
+                ("missing_trace", f"turn {number + 1}: a tool result or call breaks the call order")
+            )
         if number + 1 == len(prompts):
             if not finished:
                 problems.append(("missing_trace", "the probe turn has no finished reply"))
