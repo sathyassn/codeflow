@@ -426,6 +426,9 @@ try {
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
     await page.getByTestId("toast").getByText(/Restored 1 unsent note/u).waitFor({ timeout: 20_000 });
+    // The reload shows the stored decline; a new choice starts from Amend.
+    assert.equal((await stateOf(decision)).state, "stored", "reload: the stored decline is not shown");
+    await decision.locator("[data-cf-form-action='amend']").click();
     await decision.locator("input[value='a']").check();
     await page.route(`**${ANSWERS}`, (route) => route.fulfill({
       status: 410,
@@ -450,6 +453,7 @@ try {
     await field("keep-days").locator("input").fill("5");
     await field("channels").locator("input[value='rail']").check();
     await field("contact").locator("input").fill("reviewer@example.org");
+    await decision.locator("[data-cf-form-action='amend']").click();
     await decision.locator("input[value='a']").check();
     const before = (await ledger()).length;
     let release;
