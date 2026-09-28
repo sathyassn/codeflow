@@ -186,6 +186,20 @@ impl Ledger {
         })
     }
 
+    /// Syncs the ledger file, so every line in it is durable.
+    fn sync(&self) -> Result<()> {
+        let file = open_private_rw(&self.path)?;
+        #[cfg(test)]
+        if fault::sync_fails() {
+            return Err(PresentError::io(
+                &self.path,
+                std::io::Error::other("injected sync failure"),
+            ));
+        }
+        file.sync_data()
+            .map_err(|error| PresentError::io(&self.path, error))
+    }
+
     fn next_sequence(&self) -> u64 {
         self.events.len() as u64 + 1
     }
@@ -227,7 +241,7 @@ impl Ledger {
     /// replays a whole one, so a resend is always safe.
     fn append(&mut self, store: &SessionStore, event: ResponseEvent) -> Result<()> {
         if self.events.len() >= limits::MAX_RESPONSE_EVENTS {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::ServiceUnavailable(format!(
                 "the answer ledger holds at most {} lines",
                 limits::MAX_RESPONSE_EVENTS
             )));
@@ -242,7 +256,7 @@ impl Ledger {
         line.push(b'\n');
         let grown = self.length + line.len() as u64;
         if grown > limits::MAX_RESPONSE_LOG_BYTES {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::ServiceUnavailable(format!(
                 "the answer ledger reached its {} byte bound",
                 limits::MAX_RESPONSE_LOG_BYTES
             )));
@@ -385,6 +399,9 @@ impl SessionStore {
         let mut ledger = Ledger::open(self.responses_path(session_id)?, session_id)?;
         if let Some(existing) = ledger.by_request(request.request_id) {
             if existing.payload_digest == submission.payload_digest {
+                // The line may be one whose sync failed: it is durable, and
+                // its receipt given, only after a sync succeeds (I4).
+                ledger.sync()?;
                 return Ok(AnswerReceipt::of(existing, true));
             }
             return Err(PresentError::review(
@@ -506,12 +523,10 @@ fn current_form<'a>(
     Ok(form)
 }
 
-/// A test-only interruption of an append: with `CF_PRESENT_TEST_CRASH_AT`
-/// set to a byte count, the append writes that many bytes of its line,
-/// syncs them and aborts the process, as a crash mid-write would.
 /// Test-only store faults for the next append on this thread: a write
 /// that fails part way, or a sync that fails after the whole line was
-/// written and whose cut back fails too, leaving the line in the file.
+/// written and whose cut back fails too, leaving the line in the file;
+/// and ledger syncs before a replay that fail a given number of times.
 #[cfg(test)]
 pub(crate) mod fault {
     use std::cell::Cell;
@@ -525,6 +540,18 @@ pub(crate) mod fault {
     thread_local! {
         static NEXT: Cell<Option<Fault>> = const { Cell::new(None) };
         static CUT_BACK_FAILS: Cell<bool> = const { Cell::new(false) };
+        static SYNC_FAILURES: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// The next `times` ledger syncs before a replay fail.
+    pub(crate) fn fail_syncs(times: u32) {
+        SYNC_FAILURES.set(times);
+    }
+
+    pub(super) fn sync_fails() -> bool {
+        let left = SYNC_FAILURES.get();
+        SYNC_FAILURES.set(left.saturating_sub(1));
+        left > 0
     }
 
     pub(crate) fn inject(fault: Fault) {
@@ -551,6 +578,9 @@ pub(crate) mod fault {
     }
 }
 
+/// A test-only interruption of an append: with `CF_PRESENT_TEST_CRASH_AT`
+/// set to a byte count, the append writes that many bytes of its line,
+/// syncs them and aborts the process, as a crash mid-write would.
 #[cfg(test)]
 mod crash {
     pub(super) const CRASH_AT: &str = "CF_PRESENT_TEST_CRASH_AT";

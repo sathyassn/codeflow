@@ -1984,6 +1984,11 @@ impl SessionStore {
         Ok(lease)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_max_project_bytes(&mut self, bytes: u64) {
+        self.retention.max_project_bytes = bytes;
+    }
+
     pub(crate) fn ensure_project_capacity_unlocked(
         &self,
         additional_bytes: u64,
@@ -4063,7 +4068,7 @@ fn cleanup_atomic_temps_in(directory: &Path, revisions: bool) -> Result<()> {
     sync_directory(directory)
 }
 
-fn directory_size_bounded(root: &Path, byte_limit: u64) -> Result<u64> {
+pub(crate) fn directory_size_bounded(root: &Path, byte_limit: u64) -> Result<u64> {
     if !root.exists() {
         return Ok(0);
     }

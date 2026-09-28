@@ -738,14 +738,19 @@ async fn submit_answer(
             message,
             details,
         }) => typed_error(review_status(code), code, &message, &details),
-        // The store could not be locked, read, written or synced: no receipt
-        // was given. The page keeps the draft and offers the same request
-        // again, which appends the answer once or returns the receipt of a
-        // line that did reach the store.
-        Err(PresentError::Io { .. }) => typed_error(
+        // The store could not take the answer: no receipt was given. The
+        // page keeps the draft and offers the same request again, which
+        // appends the answer once or returns the receipt of a line that did
+        // reach the store.
+        Err(
+            error @ (PresentError::Io { .. }
+            | PresentError::ServiceUnavailable(_)
+            | PresentError::CorruptState(_)
+            | PresentError::UnsafePath(_)),
+        ) => typed_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "store_unavailable",
-            "the answer store could not be locked, read, written or synced; no receipt was given, and a resend with the same request_id is safe",
+            &store_unavailable_message(&error),
             &serde_json::json!({}),
         ),
         Err(error) => plain(
@@ -753,6 +758,20 @@ async fn submit_answer(
             &format!("the answer was not stored: {error}"),
         ),
     }
+}
+
+/// Why the store could not take an answer, then what the page may do.
+fn store_unavailable_message(error: &PresentError) -> String {
+    let cause = match error {
+        PresentError::ServiceUnavailable(reason) => {
+            format!("the answer store is out of capacity: {reason}")
+        }
+        PresentError::CorruptState(_) | PresentError::UnsafePath(_) => {
+            format!("the answer store could not be read: {error}")
+        }
+        _ => "the answer store could not be locked, read, written or synced".to_string(),
+    };
+    format!("{cause}; no receipt was given, and a resend with the same request_id is safe")
 }
 
 fn answer_too_large() -> Response<Body> {
@@ -1649,7 +1668,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn answers_route_answers_503_when_the_store_fails_and_a_resend_is_safe() {
-        use crate::responses::fault::{inject, Fault};
+        use crate::responses::fault::{fail_syncs, inject, Fault};
         use std::os::unix::fs::PermissionsExt as _;
 
         let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
@@ -1717,13 +1736,29 @@ mod tests {
         }
 
         // A sync that fails after the whole line was written, and whose cut
-        // back fails too: the line stays, and the resend is its receipt.
+        // back fails too: the line stays, but gets no receipt until a sync
+        // succeeds (I4). While syncs keep failing, a resend is refused;
+        // once one succeeds, the resend is its receipt.
         let count = lines(&state);
         let late = answer_body(&state, |_| {});
         inject(Fault::SyncFailsLineStays);
         let (status, body) = post_answer(&state, headers.clone(), late.clone()).await;
         unavailable(status, &body, "sync fails");
         assert_eq!(lines(&state), count + 1, "sync fails: the whole line stays");
+        fail_syncs(2);
+        for attempt in 1..=2 {
+            let (status, body) = post_answer(&state, headers.clone(), late.clone()).await;
+            unavailable(
+                status,
+                &body,
+                &format!("sync still fails, resend {attempt}"),
+            );
+            assert_eq!(
+                lines(&state),
+                count + 1,
+                "sync still fails: the ledger changed"
+            );
+        }
         let (status, receipt) = post_answer(&state, headers, late).await;
         assert_eq!(
             (status, receipt["replayed"].as_bool()),
@@ -1739,6 +1774,62 @@ mod tests {
             count + 1,
             "sync fails: the resend appended again"
         );
+    }
+
+    /// R119-2: a project out of capacity and a ledger that cannot be read
+    /// are typed 503 refusals with no receipt; nothing is appended, and the
+    /// same request stores once the store can take it.
+    #[tokio::test]
+    async fn answers_route_answers_503_when_the_store_is_full_or_unreadable() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, mut state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let ledger = state
+            .store
+            .session_dir(state.session_id)
+            .join(crate::responses::RESPONSES_FILE);
+        let refused = |status: StatusCode, body: &serde_json::Value, cause: &str| {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert_eq!(body["error"], "store_unavailable");
+            assert_eq!(body["details"], serde_json::json!({}));
+            let message = body["message"].as_str().unwrap();
+            assert!(message.contains(cause), "{message}");
+            assert!(message.contains("no receipt was given"), "{message}");
+        };
+
+        // Room for the line and the control reserve, but not for them and
+        // what the project already holds.
+        let body = answer_body(&state, |_| {});
+        let held = crate::state::directory_size_bounded(state.store.root(), u64::MAX).unwrap();
+        state
+            .store
+            .set_max_project_bytes(limits::MAX_SESSION_STATE_BYTES + held);
+        let (status, answer) = post_answer(&state, headers.clone(), body.clone()).await;
+        refused(status, &answer, "out of capacity");
+        assert_eq!(ledger_bytes(&state), None, "capacity: the store changed");
+        state
+            .store
+            .set_max_project_bytes(limits::MAX_PROJECT_STATE_BYTES);
+        let (status, receipt) = post_answer(&state, headers.clone(), body).await;
+        assert_eq!(
+            (
+                status,
+                receipt["replayed"].as_bool(),
+                receipt["sequence"].as_u64()
+            ),
+            (StatusCode::OK, Some(false), Some(1)),
+            "{receipt}"
+        );
+
+        // A line before the last that is not a record: the ledger is
+        // corrupt, and is left as it is.
+        let stored = std::fs::read(&ledger).unwrap();
+        let corrupt = [b"not a record\n".as_slice(), &stored].concat();
+        std::fs::write(&ledger, &corrupt).unwrap();
+        let (status, answer) =
+            post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        refused(status, &answer, "could not be read");
+        assert_eq!(ledger_bytes(&state), Some(corrupt));
     }
 
     #[test]
