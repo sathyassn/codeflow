@@ -902,6 +902,23 @@ publication date._
   or `case` bodies is judged too. This also blocks a commit written inside a
   subshell such as `(cd <repo> && git commit)`.
 
+<!-- codeflow:release-impact patch -->
+- **exec-guard refuses a protected deletion however it is composed.** The
+  catastrophic floor refused `rm -rf /` and `rm -rf ~` but let the same
+  deletion through as `find / -delete`, `find / -exec rm -rf {} +`,
+  `ls / | xargs rm -rf`, `rm -rf /Users/<name>`, `cd ~ && rm -rf *` or
+  `D=/; rm -rf $D`, or inside a subshell, group, `if`, `for`, `while` or
+  `case` body. Each is now refused as its `rm -rf` equivalent is. A
+  deletion inside the project, such as `find . -name '*.o' -delete` or
+  `find ~ -name .DS_Store -delete`, still runs.
+
+<!-- codeflow:release-impact patch -->
+- **A peer CLI's help no longer counts as a headless run.** `claude --help
+  -p` and `codex exec --help` print help and exit, so exec-guard no longer
+  reports them under `security.headless_peer_runs`; at the `block` level
+  they were refused. The same word as a prompt, an option's value or after
+  `--`, as in `codex exec -- --help`, is still reported.
+
 ### Changed
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->

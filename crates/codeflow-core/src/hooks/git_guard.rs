@@ -432,7 +432,7 @@ const LEADING_RESERVED_WORDS: &[&str] = &[
 
 /// Drop the reserved words that open a segment, and `time`'s own options, so
 /// the command they introduce is judged (TSK-112).
-fn strip_reserved_words(words: &mut Vec<String>) {
+pub(crate) fn strip_reserved_words(words: &mut Vec<String>) {
     let mut at = 0;
     while let Some(word) = words.get(at) {
         let after_time = at > 0 && words[at - 1] == "time" && word.starts_with('-');
@@ -880,7 +880,7 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
 /// are both handled. A floor-raise, not a solve — arbitrary interpreters
 /// (`python3 -c`) and pipe-to-shell (`echo … | sh`) are the genuinely unbounded
 /// tail and stay a documented residual (ADR-0009), backstopped by CI + remote.
-fn expand_commands(command: &str) -> Vec<String> {
+pub(crate) fn expand_commands(command: &str) -> Vec<String> {
     let mut raw = Vec::new();
     split_into_segments(command, &mut raw, 0, false);
 
@@ -3914,7 +3914,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
 /// unquoted redirections (`2>&1`, `> out`, `<<EOF`, `<<< text`), which the
 /// shell removes before the program runs. The integrity checks keep reading
 /// the full token list, where a redirect is the evidence.
-fn command_argv(segment: &str) -> Vec<String> {
+pub(crate) fn command_argv(segment: &str) -> Vec<String> {
     let words = shell_words(segment);
     let mut argv = Vec::with_capacity(words.len());
     let mut i = 0;
@@ -3956,7 +3956,7 @@ fn redirect_operator_len(word: &str) -> Option<usize> {
 /// program token and its arguments. This is a *general* normalization — the
 /// same one the launderer scan uses — so it covers `env FOO=1 bash -c …`,
 /// `command git …`, `/usr/bin/env git …`, etc., not an enumerated list.
-fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
+pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
     let mut idx = 0;
     loop {
         // Skip leading VAR=val assignments.

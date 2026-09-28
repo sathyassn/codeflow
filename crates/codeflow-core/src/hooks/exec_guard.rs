@@ -202,6 +202,42 @@ mod tests {
         }
     }
 
+    /// Each composed deletion is refused under `security.dangerous_commands`
+    /// with the message its `rm -rf` equivalent gets, alone and nested; a
+    /// project deletion raises nothing (TSK-141 AC-1, AC-2).
+    #[test]
+    fn a_composed_deletion_is_refused_as_its_rm_equivalent() {
+        use crate::security::deletion::{COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS};
+        let section = SecuritySection::default();
+        for (form, equivalent) in COMPOSED_PAIRS {
+            let expected = evaluate(equivalent, &section);
+            assert_eq!(expected.len(), 1, "{equivalent}");
+            assert_eq!(expected[0].rule, "security.dangerous_commands");
+            for nesting in NESTINGS {
+                let nested = nesting.replace("{}", form);
+                let v = evaluate(&nested, &section);
+                let refused: Vec<_> = v
+                    .iter()
+                    .filter(|v| v.rule == "security.dangerous_commands")
+                    .collect();
+                assert_eq!(refused.len(), 1, "{nested}");
+                assert!(any_blocking(&v), "{nested}");
+                if *nesting == "{}" {
+                    assert_eq!(
+                        refused[0].message, expected[0].message,
+                        "{form} as {equivalent}"
+                    );
+                }
+            }
+        }
+        for command in PROJECT_DELETIONS {
+            for nesting in NESTINGS {
+                let nested = nesting.replace("{}", command);
+                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+            }
+        }
+    }
+
     #[test]
     fn test_default_levels_are_block_and_warn() {
         let s = SecuritySection::default();

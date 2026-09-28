@@ -18,6 +18,7 @@
 //! history if ADR-0008 ever wires one.
 
 pub mod dangerous;
+pub(crate) mod deletion;
 pub mod git;
 pub mod headless;
 pub mod pattern;
