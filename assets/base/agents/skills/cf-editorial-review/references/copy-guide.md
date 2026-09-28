@@ -28,8 +28,9 @@ trees; any other path names a file in the CodeFlow repository.
 
 ## Voice
 
-Every string speaks plainly and calmly, and it addresses the reader only in
-a how-to step, a prompt on a review surface or a reply.
+Every string speaks plainly and calmly. A how-to step, a prompt on a review
+surface and a reply address the reader, a skill file instructs the agent,
+and every other string is written in the third person.
 
 - State what the subject does or what holds. Do not praise it, sell it or
   apologise for it.
@@ -115,8 +116,8 @@ A title or heading is a noun phrase in words that names its subject.
   uppercase mono kicker is the one exception.
 - Keep a heading literal and findable: no question, slogan, riddle or
   clever phrase. A noun clause that names a thing ("What each plane
-  checks") is not a question; a question asks one and ends in a question
-  mark.
+  checks") is not a question. A question heading asks the reader something
+  and ends in a question mark.
 - End a heading without punctuation.
 
 Example, a figure title (source: `cf-docs-portal/resources/figure-grammar-specimens.md`):
@@ -135,6 +136,8 @@ looking at.
 
 - Write a lead only above a carrier: a figure, a table or a fenced block. A
   plain answer takes no lead.
+- A summary that opens a list or a table is its lead, and it may take the
+  one to three sentences a summary allows.
 - Say what the carrier shows and why it is here, in one sentence.
 - Never restate the caption, the title or the legend.
 - Never describe the carrier's form: not "the figure below shows".
@@ -170,7 +173,7 @@ A legend key names the state its mark stands for, and the description names
 every state and every drawn fact.
 
 - Write a key as a noun phrase: the thing the mark stands for, with no
-  article, no subject and verb, and no instruction to the reader. "Gate
+  article, no main verb, and no instruction to the reader. "Gate
   that stops travel", not "This marks where a gate stops you" or "CI runs
   this step".
 - Give each state one key and each key one state. Two states with one
@@ -212,7 +215,7 @@ three short sentences, before the bullets or table that carry the details.
 Example, two sentences of context before a table (source: `cf-docs-portal/resources/explanation-method.md`):
 > Work through five stages in order. Each stage answers one question and produces one output.
 
-Example, the rule as the PR evidence reference states it (source: `cf-ship/references/pr-evidence.md`):
+Example, the rule as the pull request evidence reference states it (source: `cf-ship/references/pr-evidence.md`):
 > Write it as one to three short sentences.
 
 ## Bullets and tables
@@ -291,7 +294,7 @@ Example, a one-clause tooltip with its shortcut (source: `cf-docs-portal/resourc
 
 ## Replies
 
-A reply is sized to its question; the rules below say when it grows a
+A reply is sized to its question. The rules below say when it grows a
 summary, a figure or a table.
 
 - Keep a simple answer simple. In the words of the lifecycle reply rule:
@@ -338,7 +341,7 @@ Skill prose follows the sentence and word rules in the imperative register.
 - Use the exact identifiers, commands and paths the tools use, in code
   spans.
 - Write no slogan, motto, contrast turn or rhetorical triplet.
-- Use no em or en dash; the skill trees are policy surfaces.
+- Use no em or en dash. The skill trees are policy surfaces.
 
 Example, a rule as an instruction (source: `cf-editorial-review/SKILL.md`):
 > Review the artifact in its real project, audience, medium, and task context.

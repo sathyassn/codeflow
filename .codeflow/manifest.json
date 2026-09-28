@@ -203,7 +203,7 @@
     ".agents/skills/cf-editorial-review/references/copy-guide.md": {
       "src": "agents/skills/cf-editorial-review/references/copy-guide.md",
       "ownership": "managed",
-      "sha256": "b45b728e7d1140a605bd6c4c0ba34ec33a99d6623e9e3c7c377eb965f530c5d3",
+      "sha256": "9e7ff2e5eb7b04e90a104bfd26874a0d1046df2dbafbbfe7bebcac6d764dcd1e",
       "exec": false
     },
     ".agents/skills/cf-editorial-review/references/editorial-smells.md": {
@@ -311,7 +311,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "4255dbb3f6d11c0e927c8c664487f71e9e448a6e5394e43af11362df379dfa2e",
+      "sha256": "44ca0ec1a6de82f42945ddd9663009cdec2bb3b6e8104ed583fbcc500484f7f2",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -815,7 +815,7 @@
     ".claude/skills/cf-editorial-review/references/copy-guide.md": {
       "src": "agents/skills/cf-editorial-review/references/copy-guide.md",
       "ownership": "managed",
-      "sha256": "b45b728e7d1140a605bd6c4c0ba34ec33a99d6623e9e3c7c377eb965f530c5d3",
+      "sha256": "9e7ff2e5eb7b04e90a104bfd26874a0d1046df2dbafbbfe7bebcac6d764dcd1e",
       "exec": false
     },
     ".claude/skills/cf-editorial-review/references/editorial-smells.md": {
@@ -923,7 +923,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "4255dbb3f6d11c0e927c8c664487f71e9e448a6e5394e43af11362df379dfa2e",
+      "sha256": "44ca0ec1a6de82f42945ddd9663009cdec2bb3b6e8104ed583fbcc500484f7f2",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {

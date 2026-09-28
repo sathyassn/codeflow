@@ -2703,7 +2703,7 @@
             "Write a rule as an instruction to the agent",
             "Name the actor when it is not the reader",
             "Write no slogan, motto, contrast turn or rhetorical triplet.",
-            "Use no em or en dash; the skill trees are policy surfaces.",
+            "Use no em or en dash. The skill trees are policy surfaces.",
             "Drop hedges, ceremony and self-narration"
           ]
         }
