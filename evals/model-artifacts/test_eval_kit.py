@@ -195,6 +195,7 @@ def passing_grade(case: dict, number: int, fixture_digest: str, run_id: str) -> 
         "fixture_digest": fixture_digest,
         "path": str(state),
         "record": str(state.parent / "trial.fixture.json"),
+        "record_digest": "sha256:" + "e" * 64,
         "final_digest": eval_kit.state_digest(state),
         "events_digest": None,
         "judgements_digest": None,
@@ -2114,9 +2115,15 @@ print(json.dumps(seen, sort_keys=True))
         later_root = Path(self.record["subjects_root"]) / later / "repository"
         later_root.mkdir(parents=True)
         (later_root.parent / "origin.git").mkdir()
-        eval_kit.write_json(self.run_root / "records" / f"{later}{eval_kit.RESERVATION_SUFFIX}", {
-            "run_id": self.record["run_id"], "case_id": "synthetic", "trial": 2, "path": str(later_root),
-        })
+        registration = {"run_id": self.record["run_id"], "case_id": "synthetic", "trial": 2, "path": str(later_root)}
+        reservation = self.run_root / "records" / f"{later}{eval_kit.RESERVATION_SUFFIX}"
+        # T111-R12-1: a correctly named registration the evaluator did not
+        # sign, or one changed after it did, exempts nothing.
+        eval_kit.write_json(reservation, registration)
+        self.assertFalse(self.boundary())
+        eval_kit.write_json(reservation, {**eval_kit.signed_registration(registration), "trial": 3})
+        self.assertFalse(self.boundary())
+        eval_kit.write_json(reservation, eval_kit.signed_registration(registration))
         self.assertTrue(self.boundary())
 
     def test_boundary_holds_while_another_trial_finishes_materializing(self) -> None:
@@ -2129,11 +2136,12 @@ print(json.dumps(seen, sort_keys=True))
         records = self.run_root / "records"
         reservation = records / f"{later}{eval_kit.RESERVATION_SUFFIX}"
         registration = {"run_id": self.record["run_id"], "case_id": "synthetic", "trial": 2, "path": str(later_root)}
-        eval_kit.write_json(reservation, registration)
+        eval_kit.write_json(reservation, eval_kit.signed_registration(registration))
 
         def finish() -> None:
             with eval_kit.registration_lock(self.run_root):
-                eval_kit.write_json(records / f"{later}{eval_kit.RECORD_SUFFIX}", {**registration, "boundary": {}})
+                eval_kit.write_json(records / f"{later}{eval_kit.RECORD_SUFFIX}",
+                                    eval_kit.signed_registration({**registration, "boundary": {}}))
                 reservation.unlink()
 
         original = eval_kit.load_json
@@ -3240,7 +3248,7 @@ class RegradeTests(unittest.TestCase):
             settled_trials=[],
         )
         record_path = eval_kit.trial_record_path(run_root, self.case["id"], 1)
-        eval_kit.write_json(record_path, record)
+        eval_kit.write_json(record_path, eval_kit.signed_registration(record))
         judged = self.case["expected"]["files"][1]
         calibration = temp / "calibration.json"
         eval_kit.write_json(calibration, {"schema_version": 1, "judgements": [eval_kit.signed_judgement(
@@ -3331,6 +3339,47 @@ class RegradeTests(unittest.TestCase):
                 status, faults = self.consumed(change)
                 self.assertEqual("error", status)
                 self.assertTrue(faults)
+
+    def test_a_rewritten_baseline_or_forged_registration_cannot_restore_a_pass(self) -> None:
+        # T111-R12-1: a retained-state change, then the unsigned metadata a
+        # grade is compared against rewritten to match it. The receipt is
+        # never touched; each stays an error after the metadata edit.
+        def record_of(run_root: Path) -> Path:
+            return next((run_root / "records").glob(f"*{eval_kit.RECORD_SUFFIX}"))
+
+        def rewritten(run_root: Path, **fields) -> None:
+            path = record_of(run_root)
+            eval_kit.write_json(path, {**json.loads(path.read_text()), **fields})
+
+        def boundary_rebased(root: Path, run_root: Path) -> None:
+            (run_root / "later.txt").write_text("written after grading\n", encoding="utf-8")
+            record = json.loads(record_of(run_root).read_text())
+            rewritten(run_root, boundary=eval_kit.boundary_inventory(run_root, Path(record["subjects_root"])))
+
+        def refs_rebased(root: Path, run_root: Path) -> None:
+            git(root, "branch", "extra")
+            rewritten(run_root, refs=eval_kit.ref_snapshot(root))
+
+        def registration_forged(root: Path, run_root: Path) -> None:
+            record = json.loads(record_of(run_root).read_text())
+            sibling = eval_kit.trial_opaque_id(record["run_id"], self.case["id"], 2)
+            sibling_root = Path(record["subjects_root"]) / sibling / "repository"
+            sibling_root.mkdir(parents=True)
+            eval_kit.write_json(run_root / "records" / f"{sibling}{eval_kit.RESERVATION_SUFFIX}", {
+                "schema_version": 1, "run_id": record["run_id"], "case_id": self.case["id"], "trial": 2,
+                "path": str(sibling_root), "state": "materializing",
+            })
+
+        for label, change, fault in (
+            ("run-root file with a rewritten boundary inventory", boundary_rebased, "not signed under the evaluator key"),
+            ("git branch with a rewritten ref snapshot", refs_rebased, "not signed under the evaluator key"),
+            ("sibling workspace with a forged reservation", registration_forged,
+             "graded again, fixture_boundary is 'fail', not the 'pass' the grade saved"),
+        ):
+            with self.subTest(label):
+                status, faults = self.consumed(change)
+                self.assertEqual("error", status)
+                self.assertTrue(any(fault in each for each in faults), faults)
 
     def test_the_regrade_names_what_moved(self) -> None:
         def config_changed(root: Path, run_root: Path) -> None:

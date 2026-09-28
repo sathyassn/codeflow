@@ -2096,18 +2096,20 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     # Register the trial before its workspace exists, so a trial graded
     # meanwhile counts the new workspace as the evaluator's (grade_boundary).
     reservation = record_path.with_name(f"{opaque_id}{RESERVATION_SUFFIX}")
+    if any(nested(evaluator_key_path(), root) for root in (resolved_run_root, subjects.resolve())):
+        raise EvalError("the evaluator key lies inside the run or subjects root, where a trial can reach it")
     if reservation.exists():
         raise EvalError(f"trial is already registered: {reservation}")
     record_path.parent.mkdir(parents=True, exist_ok=True)
     with registration_lock(resolved_run_root):
-        write_json(reservation, {
+        write_json(reservation, signed_registration({
             "schema_version": 1,
             "run_id": marker["run_id"],
             "case_id": case_id,
             "trial": trial,
             "path": str(output),
             "state": "materializing",
-        })
+        }))
     output.mkdir(parents=True)
     tier_flag = "--full" if fixture["tier"] == "full" else "--standard"
     run_command([str(codeflow_path), "init", "--yes", tier_flag], output)
@@ -2207,6 +2209,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     with registration_lock(resolved_run_root):
         trial_record["settled_trials"] = sorted(settled_trials(resolved_run_root, marker) - {opaque_id})
         trial_record["boundary"] = boundary_inventory(resolved_run_root, subjects)
+        trial_record = signed_registration(trial_record)
         write_json(record_path, trial_record)
         reservation.unlink()
     return trial_record
@@ -2771,10 +2774,43 @@ def registration_lock(run_root: Path):
                 msvcrt.locking(marker.fileno(), msvcrt.LK_UNLCK, 1)
 
 
+# Trial records and reservations are the evaluator's registrations: the
+# baseline a trial is graded against (base commit, refs, boundary inventory,
+# roots, pinned executable) and the later trials whose workspaces a boundary
+# check exempts. Each is signed under the evaluator key when it is written,
+# and a registration that does not verify is not the evaluator's: it is
+# never graded from, and it exempts nothing.
+REGISTRATION_SIGNATURE = "codeflow-eval-registration-v1"
+
+
+def registration_signature(key: bytes, document: dict) -> str:
+    body = {name: value for name, value in document.items() if name != "signature"}
+    message = json.dumps([REGISTRATION_SIGNATURE, body], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "hmac-sha256:" + hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def signed_registration(document: dict) -> dict:
+    """`document` signed under the evaluator key, made on first use."""
+
+    key = evaluator_key(create=True)
+    assert key is not None
+    body = {name: value for name, value in document.items() if name != "signature"}
+    return {**body, "signature": registration_signature(key, body)}
+
+
+def registration_verifies(document: Any) -> bool:
+    key = evaluator_key()
+    signature = document.get("signature") if isinstance(document, dict) else None
+    return key is not None and isinstance(signature, str) and hmac.compare_digest(
+        signature, registration_signature(key, document)
+    )
+
+
 def registered_trials(run_root: Path, marker: dict, *, settled: bool = False) -> set[str]:
-    """Opaque ids of the trials this run's evaluator registered: records
-    whose file name, run and workspace path agree. With `settled`, only those
-    whose materialization finished (their record holds a boundary)."""
+    """Opaque ids of the trials this run's evaluator registered: signed
+    records whose file name, run and workspace path agree. With `settled`,
+    only those whose materialization finished (their record holds a
+    boundary)."""
 
     found: set[str] = set()
     records = run_root / "records"
@@ -2788,7 +2824,7 @@ def registered_trials(run_root: Path, marker: dict, *, settled: bool = False) ->
             record = load_json(path)
         except EvalError:
             continue
-        if not isinstance(record, dict):
+        if not isinstance(record, dict) or not registration_verifies(record):
             continue
         opaque = path.name[: -len(suffix)]
         case_id, trial = record.get("case_id"), record.get("trial")
@@ -4272,6 +4308,8 @@ def graded_trial_context(record_path: Path) -> tuple[dict, dict, Path]:
     record = load_json(record_path)
     if not isinstance(record, dict) or record.get("schema_version") != 1:
         raise EvalError(f"invalid trial record: {record_path}")
+    if not registration_verifies(record):
+        raise EvalError(f"the trial record is not signed under the evaluator key, or changed after it was: {record_path}")
     run_root = record_path.expanduser().resolve().parent.parent
     ensure_run_root(run_root)
     _, cases_doc, fixtures_doc = suite_documents()
@@ -4450,6 +4488,7 @@ def grade_trial(
         "fixture_digest": record["fixture_digest"],
         "path": record["path"],
         "record": str(record_path.expanduser().resolve()),
+        "record_digest": canonical_digest(record),
         "final_digest": final_digest,
         "events_digest": events_digest,
         "judgements_digest": judgements_digest,
@@ -4475,7 +4514,7 @@ def grade_trial(
 
 
 # The grade receipt. Grading signs the whole grade under the
-# evaluator key: the trial and trial record it names, the final state
+# evaluator key: the trial and the signed trial record it names, the final state
 # digest, the evidence digests, every judgement it read (where, its excerpt
 # digest, verdict, judge and entry digest), each assertion result and the
 # computed result. A consumer counts a pass only from a receipt that
@@ -4604,6 +4643,8 @@ def grade_errors(grade: Any, case: dict, trial: dict) -> list[str]:
     for field in ("path", "record"):
         if not isinstance(grade.get(field), str) or not os.path.isabs(grade[field]):
             errors.append(f"grade.{field} must be an absolute path")
+    if not isinstance(grade.get("record_digest"), str) or not DIGEST.fullmatch(grade["record_digest"]):
+        errors.append("grade.record_digest must be canonical sha256")
     evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
     retained = {item.get("digest") for item in evidence if isinstance(item, dict)}
     for field in ("events_digest", "judgements_digest"):
@@ -4788,6 +4829,7 @@ REGRADED_FIELDS = (
     "fixture_digest",
     "path",
     "record",
+    "record_digest",
     "final_digest",
     "events_digest",
     "judgements_digest",
@@ -4809,7 +4851,10 @@ def regraded_errors(grade: dict, trial: dict) -> list[str]:
     grades the trial again, now, from its record, its workspace, the run and
     subjects roots and the ledger, judgements and calibrations the trial
     retains, so every mechanical assertion reads the Git refs, configuration,
-    boundary and files as they are. Judgements are the one input grading
+    boundary and files as they are. What they are compared against is
+    authenticated: the record's baseline is graded only while its evaluator
+    signature verifies and it is the record the grade signed
+    (`record_digest`), and only signed registrations exempt a later trial. Judgements are the one input grading
     cannot reproduce; each counts again only for the excerpt digest its judge
     signed, so it binds to the state the judge saw. Any change that moves an
     outcome, or that grading refuses, leaves the trial not measured."""

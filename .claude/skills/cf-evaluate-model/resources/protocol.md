@@ -458,7 +458,13 @@ not gradable, never passes it.
   gives the same outcome. The regrade reads the Git refs, configuration,
   boundary and files as they are now, so no digest has to name every input
   grading uses; a judgement counts again only for the excerpt its judge
-  signed, so it binds to the state the judge saw. A missing or mismatched
+  signed, so it binds to the state the judge saw. What the regrade compares
+  against is the evaluator's own: `materialize` signs each trial record (its
+  base commit, refs, boundary inventory, roots and pinned executable) and
+  each reservation under the evaluator key, a trial is graded only from a
+  record whose signature verifies and whose digest the grade signed, and an
+  unsigned or changed registration exempts no later trial from the
+  boundary. A missing or mismatched
   receipt, a grade from another run, a workspace or record that is gone or
   reached through a link, a file that is missing or changed, an outcome
   that grades differently, or any other fault leaves the trial `error`,
