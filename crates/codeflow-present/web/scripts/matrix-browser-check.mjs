@@ -796,16 +796,21 @@ async function closeMarkers(page, width) {
     // holds that marker.
     const row = markers.filter((marker, i) => i >= 4 && !overflowed.includes(i));
     const bound = route ? route.right + 2 : (await page.evaluate(() => scrollX)) + 2;
-    // A text note's marker starts from its block, so the nine prose notes
-    // share one place, the row's first marker's (its right end is the row's;
-    // a wider marker in a gutter narrowed by the sections list ends nearer
-    // the line). Overflow continues from there, never at the row's far end.
-    const origin = Math.max(...row.map((marker) => marker.right));
+    // A text note's marker starts from its block, so each prose marker's own
+    // place follows from the page, not from where the markers ended up:
+    // derived from the prose block, the document and the sections list.
+    const geometry = await page.evaluate(() => {
+      const block = document.querySelector("[data-cf-block-id='prose']").getBoundingClientRect();
+      const root = document.getElementById("cf-present-document").getBoundingClientRect();
+      return { blockLeft: block.left + scrollX, blockRight: block.right + scrollX, rootRight: root.right + scrollX, viewRight: innerWidth + scrollX };
+    });
     for (const i of overflowed) {
       const { what } = notes[i];
       assert.ok(i >= 4, where(`marker ${i + 1} (${what}) left its line's row`));
-      assert.ok(markers[i].right >= origin - 1 && (!gutter || markers[i].right <= anchors[i].left), where(`marker ${i + 1} (${what}) ${JSON.stringify(markers[i])} overflowed away from its own place, which ends at ${origin}`));
-      const free = freeStretch(row, bound, markers[i].right, markers[i].right - markers[i].left);
+      const size = markers[i].right - markers[i].left;
+      const own = baseRight(geometry, size, route && route.right);
+      assert.ok(Math.abs(markers[i].right - own) <= 1, where(`marker ${i + 1} (${what}) ${JSON.stringify(markers[i])} overflowed away from its own place, which ends at ${own}`));
+      const free = freeStretch(row, bound, own, size);
       assert.ok(free === null, where(`marker ${i + 1} (${what}) left its row while ${JSON.stringify(free)} was free`));
       // An overflow chain starts at its line: each overflowed marker is just
       // below the line or directly under another marker.
@@ -886,12 +891,25 @@ function freeStretch(row, start, end, size) {
   return null;
 }
 
+// Where a prose marker of `size` px ends in its own place, as the placement
+// rule puts it: in the gutter left of the block, past the sections list
+// (`routeRight`) when that narrows it; with no list, above the line at the
+// block's right end, kept on the page.
+function baseRight(geometry, size, routeRight) {
+  if (routeRight !== null) return Math.max(geometry.blockLeft - 8, routeRight + 2 + size);
+  return Math.min(geometry.blockRight, geometry.rootRight - 2, geometry.viewRight - 0.03 * size - 8);
+}
+
 // Negative controls for the row oracle (Codex C158-R2-2): a row with one
 // marker at its left bound and room after it is not full, nor is one with a
 // gap in the middle; a packed row is.
 assert.deepEqual(freeStretch([{ left: 2, right: 40 }], 2, 360, 38), { from: 42, to: 360 });
 assert.deepEqual(freeStretch([{ left: 2, right: 40 }, { left: 122, right: 160 }], 2, 160, 38), { from: 42, to: 120 });
 assert.equal(freeStretch([{ left: 2, right: 40 }, { left: 42, right: 80 }, { left: 82, right: 120 }], 2, 120, 38), null);
+// Codex's shifted sparse row: an overflow chain at the page's left edge is
+// not in its own place, whatever the row holds.
+assert.ok(Math.abs(40 - baseRight({ blockLeft: 328, blockRight: 1000, rootRight: 1100, viewRight: 1280 }, 38, 264)) > 1);
+assert.ok(Math.abs(40 - baseRight({ blockLeft: 20, blockRight: 355, rootRight: 375, viewRight: 375 }, 38, null)) > 1);
 
 async function saveNote(page, body) {
   const composer = page.getByTestId("composer");
