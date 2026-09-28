@@ -4,7 +4,7 @@
  * Feedback still posts /app/api/reviews for harness-agnostic delivery.
  */
 import { createPortal } from "preact/compat";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   AppearanceMode,
   ChromeConfig,
@@ -40,6 +40,7 @@ import {
   STROKE_PADDING_PX,
 } from "./selection";
 import type { CapturedTarget, Point } from "./selection";
+import { fitCrops } from "./budget";
 import { captureRectJpeg, entityCropPadding, paddedRect, userSpaceBox } from "./excerpt";
 import {
   applyAppearance,
@@ -72,8 +73,15 @@ interface PendingPin {
   readonly clientY: number;
   /** The element an element pin resolved to, for "select enclosing". */
   readonly element?: Element;
+  /** The top of the selected line, where a text note's marker points. */
+  readonly lineTop?: number;
 }
 type Focusable = HTMLElement | SVGElement;
+interface PinOptions {
+  readonly openComposer?: boolean;
+  readonly element?: Element;
+  readonly lineTop?: number;
+}
 interface DragGesture {
   x0: number;
   y0: number;
@@ -89,7 +97,13 @@ function targetKindOf(target: Pick<PendingFeedback, "selector" | "element_select
   return "element";
 }
 
-const kindLabels: Readonly<Record<TargetKind, string>> = { text: "Text", element: "Element", region: "Region" };
+// One word per kind everywhere the reviewer reads it: float, composer, rail,
+// marker and status (the summaries in selection.ts start with the same word).
+const kindLabels: Readonly<Record<TargetKind, string>> = { text: "Text", element: "Element", region: "Area" };
+
+// The one instruction the hint, the empty rail and the status line share.
+const COMMENT_INSTRUCTION = "Select words, click any part, or drag a box; hold Shift to start a box on words.";
+
 
 /** Short float/composer quote: the summary minus its "Text:/Element:/Area:" prefix. */
 function captureQuote(captured: CapturedTarget): string {
@@ -125,10 +139,13 @@ const SPEECH_PATH =
 
 export function Chrome({ config, documentRoot }: ChromeProps) {
   const [appearance, setAppearance] = useState(initialAppearance);
-  const [notes, setNotes] = useState<readonly PendingFeedback[]>([]);
-  const [verdict, setVerdict] = useState<ReviewVerdict>("approve_with_notes");
-  const [instruction, setInstruction] = useState("");
-  const [status, setStatus] = useState("Ready for review.");
+  // Unsent notes survive a reload of this tab (QA defect 4), until a submit
+  // succeeds. They stay in this browser's session storage for this session.
+  const [draft] = useState(() => readDraft(config.session_id));
+  const [notes, setNotes] = useState<readonly PendingFeedback[]>(draft?.notes ?? []);
+  const [verdict, setVerdict] = useState<ReviewVerdict>(draft?.verdict ?? "approve_with_notes");
+  const [instruction, setInstruction] = useState(draft?.instruction ?? "");
+  const [status, setStatus] = useState(() => draftNotice(draft, config.revision) ?? "Ready for review.");
   const [busy, setBusy] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [eventMessage, setEventMessage] = useState<string | null>(null);
@@ -150,16 +167,23 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   // notices; timed for confirmations.
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef(0);
+  const toastStickyRef = useRef(false);
   const showToast = (message: string, opts?: { sticky?: boolean }): void => {
     window.clearTimeout(toastTimerRef.current);
     setToast(message);
+    toastStickyRef.current = Boolean(opts?.sticky);
     if (!opts?.sticky) toastTimerRef.current = window.setTimeout(() => setToast(null), 3400);
   };
 
   const dockRef = useRef<HTMLElement>(null);
+  const floatRef = useRef<HTMLDivElement>(null);
   const composerTextRef = useRef<HTMLTextAreaElement>(null);
   const regionDraftRef = useRef<RegionDraft | null>(null);
   const submitAttemptRef = useRef<{ fingerprint: string; eventId: string } | null>(null);
+  // Held from the first step of a submit to its end (C071-1): crop fitting
+  // awaits, and nothing that goes into the review may change meanwhile.
+  const submittingRef = useRef(false);
+  const notesRef = useRef<readonly PendingFeedback[]>(notes);
   const commentModeRef = useRef(false);
   const captureModeRef = useRef<CaptureMode>(null);
   const notesCountRef = useRef(0);
@@ -170,14 +194,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const lastPinnedSelectionRef = useRef<string>("");
   const composerOpenRef = useRef(false);
   const pendingPinRef = useRef<PendingPin | null>(null);
-  const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: { openComposer?: boolean; element?: Element }) => void>(() => undefined);
+  const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: PinOptions) => void>(() => undefined);
   const saveComposerRef = useRef<() => void>(() => undefined);
   const settingsOpenRef = useRef(false);
   const shiftRef = useRef(false);
   const hotRef = useRef<Element | null>(null);
   const hotSelRef = useRef<Element | null>(null);
   // Client-side marker placement hints (never sent to the server): for a text
-  // note, the selection's vertical fraction inside its anchor block.
+  // note, the vertical fraction of the selection's first line in its block.
   const markerMetaRef = useRef(new Map<string, { ay: number }>());
   // Where an edit was initiated (marker or note row) — positions the composer.
   const editAtRef = useRef<{ x: number; y: number } | null>(null);
@@ -186,10 +210,26 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   commentModeRef.current = commentMode;
   captureModeRef.current = captureMode;
   notesCountRef.current = notes.length;
+  notesRef.current = notes;
   composerOpenRef.current = composerOpen;
   pendingPinRef.current = pendingPin;
+  // The float is placed near the pointer, then kept inside the viewport by
+  // its measured width, so ESC is never cut off (QA defect 7).
+  useLayoutEffect(() => {
+    const float = floatRef.current;
+    if (!float) return;
+    const overflow = float.getBoundingClientRect().right - (window.innerWidth - 8);
+    if (overflow > 0) float.style.left = `${Math.max(8, float.offsetLeft - overflow)}px`;
+  }, [pendingPin, composerOpen]);
   settingsOpenRef.current = settingsOpen;
   const railVisible = commentMode && panelOpen;
+  // A timed hint about the sheet ("the Comment button opens your notes") is
+  // stale once the sheet is open; a sticky notice stays.
+  useEffect(() => {
+    if (!railVisible || !sheetLayout() || toastStickyRef.current) return;
+    window.clearTimeout(toastTimerRef.current);
+    setToast(null);
+  }, [railVisible]);
 
   const clearHot = (): void => {
     hotRef.current?.classList.remove("cf-hot");
@@ -229,9 +269,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       window.getSelection()?.removeAllRanges();
       setStatus(notesCountRef.current ? `${notesCountRef.current} note${notesCountRef.current === 1 ? "" : "s"} queued · Comment off` : "Ready for review.");
     } else {
-      setPanelOpen(true);
+      // Where the rail is a bottom sheet it would cover half the document;
+      // the Comment button opens it on request (QA defect 7).
+      setPanelOpen(!sheetLayout());
       setHintMode("element");
-      setStatus("Comment on: select text, click a figure, or drag an area.");
+      setStatus(COMMENT_INSTRUCTION);
     }
   };
 
@@ -262,6 +304,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     return undefined;
   }, [appearance, settingsOpen]);
 
+  useEffect(() => writeDraft(config.session_id, config.revision, notes, verdict, instruction), [notes, verdict, instruction]);
+  useEffect(() => {
+    const notice = draftNotice(draft, config.revision);
+    if (notice) showToast(notice, { sticky: true });
+  }, []);
   useEffect(() => observeSections(documentRoot, setActiveSection), [documentRoot, config.revision]);
   useEffect(
     () => followSessionEvents(`${config.revision}:${config.event_sequence}`, handleEvent, setEventMessage),
@@ -317,14 +364,22 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (captureMode !== "element") return undefined;
     // Keyboard stops (SPC-014 B3): entities and annotatable elements in
     // document order. Arrows move, Enter pins, Shift+Enter climbs to the
-    // enclosing entity, then the block.
-    const candidates = annotatableElements(documentRoot).filter((el): el is Focusable => el instanceof HTMLElement || el instanceof SVGElement);
+    // enclosing entity, then the block. The stops are read again on every
+    // move: a code block highlighted or a figure drawn while the mode is on
+    // replaces its elements, and the stop that had focus can leave the page.
+    const stops = (): Focusable[] => annotatableElements(documentRoot).filter((el): el is Focusable => el instanceof HTMLElement || el instanceof SVGElement);
+    const initial = stops();
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const touched = new Map<Focusable, string | null>(candidates.map((el) => [el, el.getAttribute("tabindex")]));
-    let activeIndex = Math.max(0, candidates.findIndex((el) => el.contains(previousFocus)));
-    const focusCandidate = (index: number): void => {
+    const touched = new Map<Focusable, string | null>();
+    let activeIndex = Math.max(0, initial.findIndex((el) => el.contains(previousFocus)));
+    // The stop last moved to, focused or not: one inside a closed disclosure
+    // takes no focus, and the next move still goes past it.
+    let current: Element | null = null;
+    const focusCandidate = (candidates: Focusable[], index: number): void => {
       activeIndex = (index + candidates.length) % candidates.length;
+      current = candidates[activeIndex] ?? null;
       candidates.forEach((el, i) => {
+        if (!touched.has(el)) touched.set(el, el.getAttribute("tabindex"));
         el.tabIndex = i === activeIndex ? 0 : -1;
       });
       candidates[activeIndex]?.focus();
@@ -337,7 +392,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       outer.tabIndex = -1;
       outer.focus();
       setHot(outer);
-      const index = candidates.indexOf(outer);
+      current = outer;
+      const index = stops().indexOf(outer);
       if (index >= 0) activeIndex = index;
     };
     const complete = (target: Element): void => {
@@ -371,15 +427,22 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       }
       const offset =
         event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
-      if (offset !== 0 && candidates.length > 0 && document.activeElement instanceof Element && documentRoot.contains(document.activeElement)) {
-        event.preventDefault();
-        focusCandidate(activeIndex + offset);
-      }
+      if (offset === 0) return;
+      const active = document.activeElement;
+      // Focus on the page itself means the stop that had it was replaced;
+      // the move resumes from that stop's place in the order.
+      const lost = active === null || active === document.body;
+      if (!lost && !(active instanceof Element && documentRoot.contains(active))) return;
+      const candidates = stops();
+      if (candidates.length === 0) return;
+      event.preventDefault();
+      const at = current instanceof HTMLElement || current instanceof SVGElement ? candidates.indexOf(current) : -1;
+      focusCandidate(candidates, (at >= 0 ? at : activeIndex) + offset);
     };
     documentRoot.dataset.cfCaptureMode = "element";
     documentRoot.addEventListener("click", pick, { capture: true });
     documentRoot.ownerDocument.addEventListener("keydown", keydown, { capture: true });
-    if (candidates.length > 0) focusCandidate(activeIndex);
+    if (initial.length > 0) focusCandidate(initial, activeIndex);
     return () => {
       delete documentRoot.dataset.cfCaptureMode;
       documentRoot.removeEventListener("click", pick, { capture: true });
@@ -485,7 +548,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         lastPinnedSelectionRef.current = identity;
         const rect = selection.getRangeAt(0).getBoundingClientRect();
         const cx = rect.left + rect.width / 2 - 40;
-        pinCaptureRef.current(live, cx, rect.bottom, { openComposer: false });
+        pinCaptureRef.current(live, cx, rect.bottom, { openComposer: false, lineTop: rect.top });
       }, 160);
     };
 
@@ -585,6 +648,15 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
       if (regionGesture) {
         window.getSelection()?.removeAllRanges();
+        // The browser still sends a click when the box ends on the element it
+        // began on; on a disclosure summary that click would open it and move
+        // the area just marked. A drawn box activates nothing.
+        const swallow = (click: MouseEvent): void => {
+          click.preventDefault();
+          click.stopPropagation();
+        };
+        window.addEventListener("click", swallow, { capture: true, once: true });
+        window.setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
         const captured = captureRegion(documentRoot, { x: g.x0, y: g.y0 }, { x: event.clientX, y: event.clientY });
         if (captured) {
           // Keep the marquee visible under the float/composer — it shows what
@@ -645,7 +717,20 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       pinCapture(captured, event.clientX, event.clientY, { openComposer: false, element: resolved });
     };
 
+    // An image's native drag would take the pointer (dragstart, then
+    // pointercancel), so a box drawn over it never pinned and its marquee
+    // stayed behind (QA defect 1). While commenting, the gesture is ours.
+    const onDragStart = (event: DragEvent): void => {
+      if (event.target instanceof Element && event.target.closest("img, video, a")) event.preventDefault();
+    };
+    const onPointerCancel = (): void => {
+      dragGestureRef.current = null;
+      regionDraftRef.current = null;
+      setRegionDraft(null);
+    };
     document.addEventListener("selectionchange", onSelection);
+    documentRoot.addEventListener("dragstart", onDragStart);
+    window.addEventListener("pointercancel", onPointerCancel);
     document.addEventListener("keydown", onShift);
     document.addEventListener("keyup", onShift);
     documentRoot.addEventListener("pointerdown", onPointerDown);
@@ -654,6 +739,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     return () => {
       window.clearTimeout(pinTimer);
       document.removeEventListener("selectionchange", onSelection);
+      documentRoot.removeEventListener("dragstart", onDragStart);
+      window.removeEventListener("pointercancel", onPointerCancel);
       document.removeEventListener("keydown", onShift);
       document.removeEventListener("keyup", onShift);
       documentRoot.removeEventListener("pointerdown", onPointerDown);
@@ -686,15 +773,25 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   }, [composerOpen]);
 
   /* ─── Pin → float → composer (qualified Comment flow) ─── */
-  function pinCapture(captured: CapturedTarget, clientX: number, clientY: number, opts?: { openComposer?: boolean; element?: Element }): void {
+  function pinCapture(captured: CapturedTarget, clientX: number, clientY: number, opts?: PinOptions): void {
+    if (submittingRef.current) {
+      setStatus("The review is being sent. Add the note when it is done.");
+      return;
+    }
     if (notesCountRef.current >= config.review_limits.max_notes) {
       setStatus(noteLimitMessage(config.review_limits.max_notes));
       if (!commentModeRef.current) armComment(true);
       return;
     }
     if (!commentModeRef.current) armComment(true);
-    else setPanelOpen(true);
-    setPendingPin({ captured, clientX, clientY, ...(opts?.element ? { element: opts.element } : {}) });
+    else if (!sheetLayout()) setPanelOpen(true);
+    setPendingPin({
+      captured,
+      clientX,
+      clientY,
+      ...(opts?.element ? { element: opts.element } : {}),
+      ...(opts?.lineTop !== undefined ? { lineTop: opts.lineTop } : {}),
+    });
     setComposerBody("");
     setEditingId(null);
     // Default open composer (tools + a11y). Gestures pass openComposer:false for float-first.
@@ -709,6 +806,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   }
 
   async function saveComposer(): Promise<void> {
+    if (submittingRef.current) return;
     const body = composerBody.trim();
     if (!body) {
       setStatus("Write a note before saving.");
@@ -729,14 +827,19 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (c.selector) {
         const block = documentRoot.querySelector<HTMLElement>(`[data-cf-block-id="${CSS.escape(c.blockId)}"]`);
         const rect = block?.getBoundingClientRect();
-        const ay = rect && rect.height > 0 ? Math.min(1, Math.max(0, (pendingPin.clientY - rect.top) / rect.height)) : 0;
+        const lineY = pendingPin.lineTop ?? pendingPin.clientY;
+        const ay = rect && rect.height > 0 ? Math.min(1, Math.max(0, (lineY - rect.top) / rect.height)) : 0;
         markerMetaRef.current.set(clientId, { ay });
       }
       let excerptText = c.excerptText?.trim() || c.selector?.exact?.trim() || "";
       let excerptImage = null;
       let cropBox: EntitySelector["crop_box"] | null = null;
       if (c.region_selector) {
-        const box = resolveRegion(documentRoot, c.region_selector);
+        const region = resolveRegion(documentRoot, c.region_selector);
+        // A whole-document note shows what was on screen: the full page
+        // squeezed into one crop was a sliver (QA defect 8).
+        const whole = c.region_selector.scope === "document" && c.region_selector.height_ppm === 1_000_000 && c.region_selector.width_ppm === 1_000_000;
+        const box = region && whole ? visiblePart(region) : region;
         if (box) excerptImage = await captureRectJpeg(documentRoot, box);
       } else if (c.element_selector) {
         const el = (c.entity_selector ? resolveEntity(documentRoot, c.blockId, c.entity_selector.entity_id) : null)
@@ -782,7 +885,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setComposerOpen(false);
     setComposerBody("");
     setEditingId(null);
-    setPanelOpen(true);
+    if (!sheetLayout()) setPanelOpen(true);
+    else if (!panelOpen) showToast("Note saved. The Comment button opens your notes and Submit.");
   }
   saveComposerRef.current = () => {
     void saveComposer();
@@ -800,12 +904,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   }
 
   function openNoteEditor(note: PendingFeedback, at?: { x: number; y: number }): void {
+    if (submittingRef.current) return;
     editAtRef.current = at ?? null;
     setEditingId(note.client_id);
     setComposerBody(note.body);
     setPendingPin(null);
     setComposerOpen(true);
-    setPanelOpen(true);
+    if (!sheetLayout()) setPanelOpen(true);
   }
 
   /* ─── Tool helpers (secondary path; selection captured on pointerdown so click does not clear it) ─── */
@@ -833,47 +938,72 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   };
 
   const submitReview = async (): Promise<void> => {
-    const normalizedNotes = notes.map(({ target_summary: _s, ...note }) => ({ ...note, body: note.body.trim() }));
+    if (submittingRef.current) return;
+    // What this review carries: exactly these notes and this instruction.
+    const sentNotes = notes;
+    const sentInstruction = instruction;
+    const normalizedNotes = sentNotes.map(({ target_summary: _s, ...note }) => ({ ...note, body: note.body.trim() }));
     if (normalizedNotes.some((n) => !n.body)) {
       setStatus("Write each pending note before submitting the review.");
       return;
     }
-    if (verdict === "request_changes" && !instruction.trim()) {
+    if (verdict === "request_changes" && !sentInstruction.trim()) {
       setStatus("Request changes needs a clear instruction.");
       return;
     }
     if (
-      instruction.length > config.review_limits.max_text_utf16 ||
+      sentInstruction.length > config.review_limits.max_text_utf16 ||
       normalizedNotes.some((n) => n.body.length > config.review_limits.max_text_utf16)
     ) {
       setStatus(`Each note or review summary is limited to ${config.review_limits.max_text_utf16} characters.`);
       return;
     }
-    const payload = {
-      session_id: config.session_id,
-      revision: config.revision,
-      verdict,
-      notes: normalizedNotes,
-      ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
-    };
-    const fingerprint = JSON.stringify(payload);
-    const previous = submitAttemptRef.current;
-    const eventId = previous?.fingerprint === fingerprint ? previous.eventId : crypto.randomUUID();
-    submitAttemptRef.current = { fingerprint, eventId };
-    const request: ReviewRequest = { event_id: eventId, ...payload };
-    if (new TextEncoder().encode(JSON.stringify(request)).byteLength > config.review_limits.max_payload_bytes) {
-      setStatus(`This review is too large to submit. Shorten it below ${config.review_limits.max_payload_bytes} bytes.`);
-      return;
-    }
+    // The guard and the disabled controls come before the first await, so
+    // nothing is edited or sent twice while the crops are fitted (C071-1).
+    submittingRef.current = true;
     setBusy(true);
-    setStatus("Submitting review…");
     try {
+      const payloadOf = (list: readonly (typeof normalizedNotes)[number][]) => ({
+        session_id: config.session_id,
+        revision: config.revision,
+        verdict,
+        notes: [...list],
+        ...(sentInstruction.trim() ? { instruction: sentInstruction.trim() } : {}),
+      });
+      // Crops share what the notes leave of the body limit (QA defect 3): a
+      // crop is made smaller, or left out, and no note is lost.
+      const requestBytes = (list: readonly (typeof normalizedNotes)[number][]): number =>
+        new TextEncoder().encode(JSON.stringify({ event_id: crypto.randomUUID(), ...payloadOf(list) })).byteLength;
+      setStatus("Preparing the review…");
+      const fitted = await fitCrops(normalizedNotes, config.review_limits.max_payload_bytes, requestBytes);
+      const payload = payloadOf(fitted.notes);
+      const cropNotice = fitted.reduced || fitted.dropped
+        ? ` To fit the review limit, ${[
+          fitted.reduced ? `${fitted.reduced} ${fitted.reduced === 1 ? "picture was" : "pictures were"} made smaller` : "",
+          fitted.dropped ? `${fitted.dropped} ${fitted.dropped === 1 ? "picture was" : "pictures were"} left out` : "",
+        ].filter(Boolean).join(" and ")}; every note was kept.`
+        : "";
+      const fingerprint = JSON.stringify(payload);
+      const previous = submitAttemptRef.current;
+      const eventId = previous?.fingerprint === fingerprint ? previous.eventId : crypto.randomUUID();
+      submitAttemptRef.current = { fingerprint, eventId };
+      const request: ReviewRequest = { event_id: eventId, ...payload };
+      if (new TextEncoder().encode(JSON.stringify(request)).byteLength > config.review_limits.max_payload_bytes) {
+        setStatus(`This review is too large to submit. Shorten it below ${config.review_limits.max_payload_bytes} bytes.`);
+        return;
+      }
+      setStatus("Submitting review…");
       const response = await postJson<ReviewResponse>("/app/api/reviews", request);
-      setNotes([]);
-      setInstruction("");
+      // Only what was sent is cleared: a note whose save finished while the
+      // review was on its way stays pending, and so does its draft.
+      const sent = new Set(sentNotes);
+      const left = notesRef.current.filter((note) => !sent.has(note)).length;
+      setNotes((current) => current.filter((note) => !sent.has(note)));
+      setInstruction((current) => (current === sentInstruction ? "" : current));
       submitAttemptRef.current = null;
-      armComment(false);
-      const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"} (${response.event_id}).`;
+      if (left === 0 && !composerOpenRef.current) armComment(false);
+      const pending = left ? ` ${left} ${left === 1 ? "note saved while it was sent is" : "notes saved while it was sent are"} still pending.` : "";
+      const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"}.${cropNotice}${pending}`;
       setStatus(confirmation);
       showToast(confirmation);
     } catch (error) {
@@ -885,6 +1015,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setStatus(notice);
       showToast(notice, { sticky: true });
     } finally {
+      submittingRef.current = false;
       setBusy(false);
     }
   };
@@ -974,6 +1105,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         ? createPortal(
             <>
               {regionDraft ? <div class="cf-region-draft" style={regionDraftStyle(regionDraft)} aria-hidden="true" /> : null}
+              {/* A saved area keeps a faint outline while Comment is on, so its
+                  extent stays visible after the marquee is gone. */}
+              {notes.map((note) => {
+                const outline = savedRegionStyle(documentRoot, note, markerEpoch);
+                return outline ? <div key={`area-${note.client_id}`} class="cf-region-saved" data-testid="saved-area" style={outline} aria-hidden="true" /> : null;
+              })}
               {notes.map((note, index) => {
                 const at = markerPlacement(documentRoot, note, markerMetaRef.current.get(note.client_id), index, markerEpoch);
                 if (!at) return null;
@@ -984,8 +1121,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                     class="cf-marker"
                     data-testid="note-marker"
                     style={`left:${at.left}px;top:${at.top}px;width:${38 + 8 * (String(index + 1).length - 1)}px`}
-                    aria-label={`Note ${index + 1} on ${targetKindOf(note)}: ${note.target_summary ?? note.block_label}`}
-                    title={`#${index + 1} ${targetKindOf(note)}: ${noteQuote(note)}`}
+                    aria-label={`Note ${index + 1}, ${kindLabels[targetKindOf(note)]}: ${noteQuote(note)}`}
+                    title={`#${index + 1} ${kindLabels[targetKindOf(note)]}: ${noteQuote(note)}`}
                     onClick={(e) => openNoteEditor(note, { x: e.clientX, y: e.clientY })}
                   >
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1150,9 +1287,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       </header>
 
       {commentMode ? (
-        <div class="cf-hint on" data-testid="comment-hint" data-capture-mode={hintMode} role="status">
+        <div class="cf-hint on" data-testid="comment-hint" data-capture-mode={hintMode}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z" /></svg>
-          <span>Comment: select words, click a figure part, or drag a box. Esc leaves.</span>
+          <span role="status">{COMMENT_INSTRUCTION} Esc leaves.</span>
+          <button type="button" class="cf-hint-leave" data-testid="comment-leave" onClick={() => armComment(false)}>
+            Done
+          </button>
         </div>
       ) : null}
 
@@ -1174,7 +1314,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         <div
           class="cf-float on"
           data-testid="float-chip"
-          style={`left:${Math.min(Math.max(8, pendingPin.clientX - 40), window.innerWidth - 200)}px;top:${Math.min(Math.max(8, pendingPin.clientY + 8), window.innerHeight - 48)}px`}
+          ref={floatRef}
+          style={`left:${Math.max(8, pendingPin.clientX - 40)}px;top:${Math.min(Math.max(8, pendingPin.clientY + 8), window.innerHeight - 48)}px`}
         >
           <button type="button" class="main" data-testid="float-comment" onClick={openComposerFromFloat}>
             <span class="ico" aria-hidden="true">
@@ -1216,8 +1357,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           <div class="q">
             {(() => {
               const editing = editingId ? notes.find((n) => n.client_id === editingId) : null;
-              if (editing) return `${targetKindOf(editing)} · ${noteQuote(editing)}`;
-              if (pendingPin) return `${targetKindOf(pendingPin.captured)} · ${captureQuote(pendingPin.captured)}`;
+              if (editing) return `${kindLabels[targetKindOf(editing)]} · ${noteQuote(editing)}`;
+              if (pendingPin) return `${kindLabels[targetKindOf(pendingPin.captured)]} · ${captureQuote(pendingPin.captured)}`;
               return "";
             })()}
           </div>
@@ -1230,7 +1371,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             onInput={(e) => setComposerBody(e.currentTarget.value)}
           />
           <div class="row">
-            <button type="button" class="pri" data-testid="composer-save" onClick={saveComposer}>
+            <button type="button" class="pri" data-testid="composer-save" disabled={busy} onClick={saveComposer}>
               Save note
             </button>
             {editingId ? (
@@ -1238,6 +1379,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 type="button"
                 class="danger"
                 data-testid="composer-delete"
+                disabled={busy}
                 onClick={() => {
                   setNotes((c) => c.filter((n) => n.client_id !== editingId));
                   cancelComposer();
@@ -1286,7 +1428,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           {!notes.length ? (
             <div class="empty" data-testid="notes-empty">
               <span class="t">Nothing noted yet</span>
-              <span class="h">Select words, click a figure, or drag a box on the stage or empty canvas. Hold Shift only if the drag starts on text.</span>
+              <span class="h">{COMMENT_INSTRUCTION}</span>
             </div>
           ) : (
             notes.map((note, index) => (
@@ -1312,11 +1454,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 </span>
                 <div>
                   <div class="k">
-                    {targetKindOf(note)} · #{index + 1}
+                    {kindLabels[targetKindOf(note)]} · #{index + 1}
                     <button
                       type="button"
                       class="cf-text-action"
                       data-testid="note-remove"
+                      disabled={busy}
                       aria-label={`Remove note ${index + 1}`}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1359,7 +1502,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                         <li key={note.id} data-anchor-state={note.anchor.state}>
                           <div class="cf-note-heading">
                             <strong>{note.block_label}</strong>
-                            <span>{note.anchor.state}</span>
+                            <span>{anchorWords(note.anchor)}</span>
                           </div>
                           {note.quote ? <blockquote>{note.quote}</blockquote> : null}
                           <p>{note.body}</p>
@@ -1466,7 +1609,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             class={`pri${notes.length === 0 ? " is-empty" : ""}`}
             id="submitAllBtn"
             data-testid="submit-all"
-            disabled={busy || notes.length === 0}
+            disabled={busy || (notes.length === 0 && verdict === "approve_with_notes")}
             onClick={() => void submitReview()}
           >
             {busy ? "Submitting…" : notes.length === 0 ? "Submit review" : `Submit review (${notes.length})`}
@@ -1493,6 +1636,11 @@ function regionDraftStyle(draft: RegionDraft): string {
   return `left:${left}px;top:${top}px;width:${Math.abs(draft.current.x - draft.start.x)}px;height:${Math.abs(draft.current.y - draft.start.y)}px`;
 }
 
+/** The width at which the notes rail becomes a bottom sheet (styles.css). */
+function sheetLayout(): boolean {
+  return window.matchMedia("(max-width: 879.98px)").matches;
+}
+
 function composerPositionStyle(clientX: number, clientY: number): string {
   const width = Math.min(360, Math.max(240, window.innerWidth - 24));
   const left = Math.min(Math.max(12, clientX - 20), Math.max(12, window.innerWidth - width - 12));
@@ -1505,9 +1653,11 @@ function noteQuote(note: PendingFeedback): string {
 }
 
 /**
- * Pass10 marker placement in document coordinates: text and element markers
- * park in the gutter immediately left of their anchor (flipping right when the
- * anchor hugs the edge); region markers sit inside the region's top-left.
+ * Pass10 marker placement in document coordinates: every marker parks in the
+ * gutter immediately left of the line it points at (a text note's selected
+ * line, else the top of its element or area). With no gutter, as for a full
+ * width block on a phone, it sits right of a narrow anchor, else above the
+ * line at the anchor's right end: never on the words or area it marks.
  */
 function markerPlacement(
   documentRoot: HTMLElement,
@@ -1522,14 +1672,30 @@ function markerPlacement(
   if (root.width <= 0) return null;
   const left = rect.left - root.left;
   const top = rect.top - root.top;
-  const kind = targetKindOf(note);
   const width = 38 + 8 * (String(index + 1).length - 1);
   const clamp = (x: number): number => Math.max(2 - root.left, Math.min(x, innerWidth - root.left - width * 1.03 - 8));
-  if (kind === "region") return { left: clamp(left + 8), top: top + 8 };
-  const y = kind === "text" ? top + (meta?.ay ?? 0) * rect.height - 4 : top;
+  const line = targetKindOf(note) === "text" ? top + (meta?.ay ?? 0) * rect.height : top;
   const gutter = left - width - 8;
-  const x = gutter >= 2 ? gutter : Math.min(left + rect.width + 8, root.width - width - 2);
-  return { left: clamp(Math.max(2, x)), top: Math.max(2, y) };
+  if (gutter >= 2) return { left: clamp(gutter), top: Math.max(2, line - 2) };
+  const right = left + rect.width + 8;
+  if (right + width <= root.width - 2) return { left: clamp(right), top: Math.max(2, line - 2) };
+  const end = Math.min(left + rect.width, root.width - 2) - width;
+  return { left: clamp(Math.max(2, end)), top: Math.max(2, line - markerHeight() - 4) };
+}
+
+/** A marker's height: 26 px, raised by the button minimum of 2.25rem (styles.css). */
+function markerHeight(): number {
+  return Math.max(26, 2.25 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16));
+}
+
+/** The faint outline of a saved area, in document coordinates; none for a whole-document note. */
+function savedRegionStyle(documentRoot: HTMLElement, note: PendingFeedback, markerEpoch: number): string | null {
+  const selector = note.region_selector;
+  if (!selector || (selector.scope === "document" && selector.width_ppm === 1_000_000 && selector.height_ppm === 1_000_000)) return null;
+  const rect = targetRect(documentRoot, note, markerEpoch);
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  const root = documentRoot.getBoundingClientRect();
+  return `left:${rect.left - root.left}px;top:${rect.top - root.top}px;width:${rect.width}px;height:${rect.height}px`;
 }
 
 function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpoch: number): DOMRect | null {
@@ -1550,6 +1716,19 @@ function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpo
   );
 }
 
+// The state of an earlier note in words, never its enum value (the detail
+// line below it, `anchorNotice`, says why): "moved" only when the anchor
+// reports a change.
+function anchorWords(anchor: FeedbackAnchor): string {
+  switch (anchor.state) {
+    case "orphaned": return "unpositioned";
+    case "block_fallback": return "on the block";
+    case "reanchored": return anchor.changed ? "moved" : "anchored";
+    case "entity_reanchored": return anchor.label_changed ? "moved" : "anchored";
+    default: return "anchored";
+  }
+}
+
 // What the rail says about where an earlier note now sits (SPC-014 B1): a
 // note that moved or lost its target says so, never silently.
 function anchorNotice(anchor: FeedbackAnchor) {
@@ -1562,8 +1741,71 @@ function anchorNotice(anchor: FeedbackAnchor) {
     case "entity_reanchored": return anchor.label_changed
       ? <p class="cf-anchor-warning">The part it names was relabelled in this revision.</p>
       : <p class="cf-anchor-note">Still names the same part; the block around it changed in this revision.</p>;
+    case "element_reanchored": return <p class="cf-anchor-note">The same element: its block is unchanged in this revision.</p>;
+    case "region_reanchored": return anchor.scope === "document"
+      ? <p class="cf-anchor-note">Still the whole document in this revision.</p>
+      : <p class="cf-anchor-note">The same area: its block is unchanged in this revision.</p>;
     default: return null;
   }
+}
+
+function visiblePart(rect: DOMRect): DOMRect | null {
+  const top = Math.max(rect.top, 0);
+  const bottom = Math.min(rect.bottom, window.innerHeight);
+  const left = Math.max(rect.left, 0);
+  const right = Math.min(rect.right, window.innerWidth);
+  return bottom - top >= 4 && right - left >= 4 ? new DOMRect(left, top, right - left, bottom - top) : null;
+}
+
+interface Draft {
+  readonly revision: number;
+  readonly notes: readonly PendingFeedback[];
+  readonly verdict: ReviewVerdict;
+  readonly instruction: string;
+}
+
+const draftKey = (sessionId: string): string => `cf-present-draft:${sessionId}`;
+
+function readDraft(sessionId: string): Draft | null {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(draftKey(sessionId)) ?? "null") as Draft | null;
+    return stored && Array.isArray(stored.notes) && stored.notes.length > 0 ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+// A draft too large for the storage keeps its notes without their pictures.
+function writeDraft(sessionId: string, revision: number, notes: readonly PendingFeedback[], verdict: ReviewVerdict, instruction: string): void {
+  if (notes.length === 0) {
+    clearDraft(sessionId);
+    return;
+  }
+  const withoutPictures = notes.map((note) => (note.excerpt?.image ? { ...note, excerpt: { ...(note.excerpt.text ? { text: note.excerpt.text } : {}) } } : note));
+  for (const kept of [notes, withoutPictures]) {
+    try {
+      sessionStorage.setItem(draftKey(sessionId), JSON.stringify({ revision, notes: kept, verdict, instruction }));
+      return;
+    } catch {
+      // Try the smaller draft, then give up quietly: the notes stay on screen.
+    }
+  }
+}
+
+function clearDraft(sessionId: string): void {
+  try {
+    sessionStorage.removeItem(draftKey(sessionId));
+  } catch {
+    // Storage unavailable: nothing was kept.
+  }
+}
+
+function draftNotice(draft: Draft | null, revision: number): string | null {
+  if (!draft) return null;
+  const count = `${draft.notes.length} unsent ${draft.notes.length === 1 ? "note" : "notes"}`;
+  return draft.revision === revision
+    ? `Restored ${count}.`
+    : `Restored ${count} from revision ${draft.revision}. A note on a block that changed may be refused when you submit; edit or remove it then.`;
 }
 
 function noteLimitMessage(limit: number): string {
@@ -1597,8 +1839,11 @@ function observeSections(root: HTMLElement, onChange: (id: string) => void): () 
   return () => observer.disconnect();
 }
 
+// A block inside a disclosure or a tab is hidden until opened, so the
+// sections list names the disclosure or tabs block only (QA defect 8).
 function sectionElements(root: HTMLElement): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>("section[data-cf-block-id][data-cf-block-label]")];
+  return [...root.querySelectorAll<HTMLElement>("section[data-cf-block-id][data-cf-block-label]")]
+    .filter((section) => !section.parentElement?.closest("details"));
 }
 
 function isEditable(target: EventTarget | null): boolean {

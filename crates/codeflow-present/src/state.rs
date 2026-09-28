@@ -1412,6 +1412,29 @@ impl SessionStore {
         Ok(session)
     }
 
+    /// Waits, at most `timeout`, until the session's service has released its
+    /// lease, so a `close` returns only once the service has exited and an
+    /// immediate `clear` finds nothing running. `false` when it is still
+    /// running at the deadline.
+    pub fn wait_for_service_exit(&self, id: Uuid, timeout: std::time::Duration) -> Result<bool> {
+        // The lease, not the registration, proves the service gone: a service
+        // holds it before it registers and after its registration is cleared.
+        self.load(id)?;
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(lease) =
+                self.try_acquire_runtime_lease(id, ".service.lock", "running service")?
+            {
+                drop(lease);
+                return Ok(true);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
     pub fn enforce_retention(&self) -> Result<Vec<Uuid>> {
         let _project_lease = self.lock_project_mutation()?;
         Self::cleanup_staged_creates_unlocked(&self.root.join("sessions"))?;
@@ -1597,13 +1620,13 @@ impl SessionStore {
         let events = self.read_events_unlocked(id)?;
         let ledger = FeedbackLedger::replay(&events)?;
         let Some(state) = ledger.state(event_id) else {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} does not belong to session {id}"
             )));
         };
         if let Some(existing_resolution) = state.resolution {
             if existing_resolution != resolution {
-                return Err(PresentError::InvalidDocument(format!(
+                return Err(PresentError::InvalidRequest(format!(
                     "feedback event {event_id} is already resolved as {existing_resolution:?}"
                 )));
             }
@@ -1612,19 +1635,19 @@ impl SessionStore {
             {
                 return Ok(state.version);
             }
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} is at version {}, not {expected_version}",
                 state.version
             )));
         }
         if state.version != expected_version {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} is at version {}, not {expected_version}",
                 state.version
             )));
         }
         if state.lifecycle != FeedbackLifecycle::Delivered {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} must be delivered before it can be resolved"
             )));
         }
@@ -1651,55 +1674,46 @@ impl SessionStore {
     pub fn feedback_snapshot(&self, id: Uuid) -> Result<FeedbackSnapshot> {
         // Read under the lock; re-anchor after it, so a large revision never
         // holds up the session's other operations (TSK-118 review T118-5).
-        let (session, revision, events, retired) = {
+        let (session, revision, events, sources) = {
             let _lock = self.lock_session(id)?;
             let session = self.load(id)?;
             let revision = self.revision(id, session.current_revision)?;
             let events = self.read_events_unlocked(id)?;
-            let retired = self.retired_diagram_ids(id, &events, &revision)?;
-            (session, revision, events, retired)
+            let sources = self.source_revisions(id, &events, &revision)?;
+            (session, revision, events, sources)
         };
         build_feedback_snapshot(
             id,
             &events,
             &revision.content,
             session.current_revision,
-            &retired,
+            &sources,
         )
     }
 
-    /// The diagram ids of each revision that visible notes were written on,
-    /// when that revision is a retired one, so a note on a removed diagram
-    /// orphans with a reason that names it.
-    fn retired_diagram_ids(
+    /// The content of each earlier revision that notes were written on: a
+    /// note on a removed diagram orphans with a reason that names it, and a
+    /// diff quote is read in the review text of the revision it was taken in.
+    fn source_revisions(
         &self,
         id: Uuid,
         events: &[FeedbackEvent],
         current: &RevisionRecord,
-    ) -> Result<RetiredDiagramIds> {
-        let mut sources: Vec<u64> = events
-            .iter()
-            .filter_map(|event| match event {
-                FeedbackEvent::Received { envelope, .. } if !envelope.notes.is_empty() => {
-                    Some(envelope.revision)
+    ) -> Result<SourceRevisions> {
+        let mut sources = SourceRevisions::new();
+        for event in events {
+            if let FeedbackEvent::Received { envelope, .. } = event {
+                let revision = envelope.revision;
+                if envelope.notes.is_empty()
+                    || revision == current.revision
+                    || sources.contains_key(&revision)
+                {
+                    continue;
                 }
-                _ => None,
-            })
-            .collect();
-        sources.sort_unstable();
-        sources.dedup();
-        let mut retired = RetiredDiagramIds::new();
-        for revision in sources {
-            let content = if revision == current.revision {
-                current.content.clone()
-            } else {
-                self.revision(id, revision)?.content
-            };
-            if let RevisionContent::Retired { diagram_ids, .. } = content {
-                retired.insert(revision, diagram_ids);
+                sources.insert(revision, self.revision(id, revision)?.content);
             }
         }
-        Ok(retired)
+        Ok(sources)
     }
 
     pub fn clear(
@@ -2635,7 +2649,8 @@ fn find_block<'a>(
     })
 }
 
-type RetiredDiagramIds = std::collections::HashMap<u64, Vec<String>>;
+/// The content of each earlier revision that notes were written on.
+type SourceRevisions = std::collections::HashMap<u64, RevisionContent>;
 
 /// Re-anchored notes by session, feedback event, note and current revision.
 /// Each key names immutable inputs (a stored note and a stored revision), so
@@ -2670,7 +2685,7 @@ fn build_feedback_snapshot(
     events: &[FeedbackEvent],
     current: &RevisionContent,
     current_revision: u64,
-    retired: &RetiredDiagramIds,
+    sources: &SourceRevisions,
 ) -> Result<FeedbackSnapshot> {
     let mut lifecycle = std::collections::HashMap::new();
     let mut received = Vec::new();
@@ -2705,6 +2720,12 @@ fn build_feedback_snapshot(
             lifecycle.get(&envelope.event_id).copied().ok_or_else(|| {
                 PresentError::CorruptState("feedback lifecycle is missing".to_string())
             })?;
+        let source = if envelope.revision == current_revision {
+            Some(current)
+        } else {
+            sources.get(&envelope.revision)
+        };
+        let source_document = source.and_then(source_document);
         let notes = envelope
             .notes
             .iter()
@@ -2717,23 +2738,30 @@ fn build_feedback_snapshot(
                     .selector
                     .as_ref()
                     .map(|selector| selector.exact.clone()),
-                anchor: retired
-                    .get(&envelope.revision)
-                    .filter(|ids| ids.contains(&note.block_id))
-                    .map_or_else(
-                        || {
-                            cached_reanchor(
-                                (session_id, envelope.event_id, note.id, current_revision),
-                                || reanchor_note(note, envelope.revision, current, current_revision),
-                            )
-                        },
-                        |_| FeedbackAnchor::Orphaned {
+                anchor: match source {
+                    Some(RevisionContent::Retired { diagram_ids, .. })
+                        if diagram_ids.contains(&note.block_id) =>
+                    {
+                        FeedbackAnchor::Orphaned {
                             reason: format!(
                                 "the diagram block {} was removed with Mermaid; convert it to reanchor this note",
                                 note.block_id
                             ),
+                        }
+                    }
+                    _ => cached_reanchor(
+                        (session_id, envelope.event_id, note.id, current_revision),
+                        || {
+                            reanchor_note(
+                                note,
+                                envelope.revision,
+                                source_document.as_deref(),
+                                current,
+                                current_revision,
+                            )
                         },
                     ),
+                },
             })
             .collect();
         items.push(FeedbackView {
@@ -2752,9 +2780,28 @@ fn build_feedback_snapshot(
     })
 }
 
+/// The document a note was written on. A retired revision reads with each
+/// diagram replaced by an empty narrative of its id, so its other blocks keep
+/// their text (review C071-R5-1).
+fn source_document(
+    content: &RevisionContent,
+) -> Option<std::borrow::Cow<'_, PresentationDocument>> {
+    match content {
+        RevisionContent::Supported { document } => Some(std::borrow::Cow::Borrowed(document)),
+        RevisionContent::Retired { document, .. } => {
+            let (substituted, _) = crate::retired::legacy_document(document)?;
+            serde_json::from_value(substituted)
+                .ok()
+                .map(std::borrow::Cow::Owned)
+        }
+        RevisionContent::Unsupported { .. } => None,
+    }
+}
+
 fn reanchor_note(
     note: &FeedbackNote,
     source_revision: u64,
+    source: Option<&PresentationDocument>,
     current: &RevisionContent,
     current_revision: u64,
 ) -> FeedbackAnchor {
@@ -2771,6 +2818,12 @@ fn reanchor_note(
             };
         }
     };
+    // A whole-document note names the document, not the block that carried
+    // its digest, so it holds while the document does (QA defect 8), even
+    // when that first block is gone.
+    if let Some(selector) = note.region_selector.as_ref().filter(|s| whole_document(s)) {
+        return region_anchor(selector, source_revision != current_revision);
+    }
     let Some(block) = find_block(&document.blocks, &note.block_id) else {
         return FeedbackAnchor::Orphaned {
             reason: "the referenced block is absent from the current revision".to_string(),
@@ -2842,7 +2895,11 @@ fn reanchor_note(
         };
     }
     match &note.selector {
-        Some(selector) => reanchor_text(selector, same_revision, block, &framing),
+        Some(selector) => {
+            let source_block =
+                source.and_then(|document| find_block(&document.blocks, &note.block_id));
+            reanchor_text(selector, same_revision, block, source_block, &framing)
+        }
         None => FeedbackAnchor::Block {
             block_id: note.block_id.clone(),
         },
@@ -2854,21 +2911,34 @@ fn reanchor_text(
     selector: &TextSelector,
     same_revision: bool,
     block: &crate::document::Block,
+    source: Option<&crate::document::Block>,
     framing: &crate::document::Framing,
 ) -> FeedbackAnchor {
-    if same_revision {
+    let canonical = block.canonical_review_text(framing);
+    // The stored offsets hold only while they still select the quote: a
+    // record made before the review text changed its separators (TSK-071)
+    // continues at the exact, fuzzy and block steps.
+    if same_revision
+        && utf16_slice(&canonical, selector.start_utf16, selector.end_utf16).as_deref()
+            == Some(selector.exact.as_str())
+    {
         return FeedbackAnchor::Anchored {
             start_utf16: selector.start_utf16,
             end_utf16: selector.end_utf16,
         };
     }
-    let canonical = block.canonical_review_text(framing);
     if let Some((start_utf16, end_utf16)) = exact_text_match(selector, &canonical) {
         return FeedbackAnchor::Reanchored {
             start_utf16,
             end_utf16,
             changed: false,
         };
+    }
+    // A diff quote stored before its lines lost their label and marker from
+    // the review text (TSK-071) is found in the diff's text as it was then,
+    // and its range carried over to the text as it is now.
+    if let Some(anchor) = reanchor_legacy_diff(selector, same_revision, block, source) {
+        return anchor;
     }
     let quote = crate::fuzzy::Quote {
         exact: &selector.exact,
@@ -2881,6 +2951,83 @@ fn reanchor_text(
         &canonical,
         block,
         "the quote was not found in its block",
+    )
+}
+
+/// B1 for a diff quote taken while its changed lines began with their
+/// screen-reader label and marker ("Added: +") in the review text, before
+/// TSK-071: the exact, then the fuzzy step run on the diff's text as it was
+/// then, and the range found is carried over to the text as it is now, so a
+/// line's own words are kept even when they read like a label. A quote is
+/// taken to be that old only when its source revision's block held it in
+/// that text and not in the text as it is now (review C071-R4-1). `None`
+/// otherwise, and for a block that is not a diff.
+fn reanchor_legacy_diff(
+    selector: &TextSelector,
+    same_revision: bool,
+    block: &crate::document::Block,
+    source: Option<&crate::document::Block>,
+) -> Option<FeedbackAnchor> {
+    let source = source?;
+    let (then, _) = source.legacy_diff_review_text()?;
+    // A diff's review text does not depend on the document's framing.
+    let now = source.canonical_review_text(&crate::document::Framing::default());
+    if validate_selector_anchor(selector, &now).is_ok()
+        || validate_selector_anchor(selector, &then).is_err()
+    {
+        return None;
+    }
+    let (legacy, offsets) = block.legacy_diff_review_text()?;
+    let carried = |start: u32, end: u32, changed: bool| {
+        let offset = |at: u32, starting: bool| {
+            usize::try_from(at)
+                .ok()
+                .and_then(|at| offsets.get(at))
+                .and_then(|&(start, end)| u32::try_from(if starting { start } else { end }).ok())
+        };
+        match (offset(start, true), offset(end, false)) {
+            (Some(start_utf16), Some(end_utf16)) if start_utf16 < end_utf16 => {
+                FeedbackAnchor::Reanchored {
+                    start_utf16,
+                    end_utf16,
+                    changed,
+                }
+            }
+            _ => FeedbackAnchor::BlockFallback {
+                block_id: block.id().to_string(),
+                reason: "the quote held only a diff line's label and marker".to_string(),
+            },
+        }
+    };
+    if same_revision
+        && utf16_slice(&legacy, selector.start_utf16, selector.end_utf16).as_deref()
+            == Some(selector.exact.as_str())
+    {
+        return Some(carried(selector.start_utf16, selector.end_utf16, false));
+    }
+    if let Some((start, end)) = exact_text_match(selector, &legacy) {
+        return Some(carried(start, end, false));
+    }
+    let quote = crate::fuzzy::Quote {
+        exact: &selector.exact,
+        prefix: &selector.prefix,
+        suffix: &selector.suffix,
+        start: Some(selector.start_utf16 as usize),
+    };
+    Some(
+        match fuzzy_anchor(
+            &quote,
+            &legacy,
+            block,
+            "the quote was not found in its block",
+        ) {
+            FeedbackAnchor::Reanchored {
+                start_utf16,
+                end_utf16,
+                ..
+            } => carried(start_utf16, end_utf16, true),
+            other => other,
+        },
     )
 }
 
@@ -2966,37 +3113,68 @@ fn reanchor_region(
     current_revision: u64,
     block: &crate::document::Block,
 ) -> Option<FeedbackAnchor> {
-    let anchored = |reanchored: bool| {
-        if reanchored {
-            FeedbackAnchor::RegionReanchored {
-                scope: selector.scope.clone(),
-                anchor_id: selector.anchor_id.clone(),
-                x_ppm: selector.x_ppm,
-                y_ppm: selector.y_ppm,
-                width_ppm: selector.width_ppm,
-                height_ppm: selector.height_ppm,
-            }
-        } else {
-            FeedbackAnchor::RegionAnchored {
-                scope: selector.scope.clone(),
-                anchor_id: selector.anchor_id.clone(),
-                x_ppm: selector.x_ppm,
-                y_ppm: selector.y_ppm,
-                width_ppm: selector.width_ppm,
-                height_ppm: selector.height_ppm,
-            }
-        }
-    };
     if source_revision == current_revision {
-        return Some(anchored(false));
+        return Some(region_anchor(selector, false));
     }
     match selector.scope {
-        RegionScope::Block if selector.block_digest == block_digest(block) => Some(anchored(true)),
+        RegionScope::Block if selector.block_digest == block_digest(block) => {
+            Some(region_anchor(selector, true))
+        }
         RegionScope::Block => None,
+        // A part of the document stays pinned to its revision; the whole
+        // document is held before the block lookup (`whole_document`).
         RegionScope::Document => Some(FeedbackAnchor::Orphaned {
             reason: "a document-wide visual region is pinned to its source revision".to_string(),
         }),
     }
+}
+
+/// A validated selector over the whole document: it names no layout, so
+/// every revision holds it.
+fn whole_document(selector: &RegionSelector) -> bool {
+    matches!(selector.scope, RegionScope::Document)
+        && selector.anchor_id == "document"
+        && selector.x_ppm == 0
+        && selector.y_ppm == 0
+        && selector.width_ppm == limits::REGION_COORDINATE_SCALE
+        && selector.height_ppm == limits::REGION_COORDINATE_SCALE
+}
+
+fn region_anchor(selector: &RegionSelector, reanchored: bool) -> FeedbackAnchor {
+    let scope = selector.scope.clone();
+    let anchor_id = selector.anchor_id.clone();
+    let (x_ppm, y_ppm, width_ppm, height_ppm) = (
+        selector.x_ppm,
+        selector.y_ppm,
+        selector.width_ppm,
+        selector.height_ppm,
+    );
+    if reanchored {
+        FeedbackAnchor::RegionReanchored {
+            scope,
+            anchor_id,
+            x_ppm,
+            y_ppm,
+            width_ppm,
+            height_ppm,
+        }
+    } else {
+        FeedbackAnchor::RegionAnchored {
+            scope,
+            anchor_id,
+            x_ppm,
+            y_ppm,
+            width_ppm,
+            height_ppm,
+        }
+    }
+}
+
+/// The UTF-16 range `start..end` of `text`, when it is one.
+fn utf16_slice(text: &str, start: u32, end: u32) -> Option<String> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let range = usize::try_from(start).ok()?..usize::try_from(end).ok()?;
+    String::from_utf16(units.get(range)?).ok()
 }
 
 /// The v1 exact rule (unchanged): the quote with its stored prefix before it
@@ -5502,6 +5680,37 @@ mod tests {
             );
             assert!(store.history(id).is_err(), "{name}");
             assert!(store.feedback_snapshot(id).is_err(), "{name}");
+        }
+    }
+
+    /// `close` waits on the service lease itself (TSK-071 C071-4): a service
+    /// holds it before it registers and after its registration is cleared,
+    /// so an absent registration never proves the service gone.
+    #[test]
+    fn the_close_wait_holds_while_the_service_lease_is_held() {
+        use std::time::Duration;
+        for registration_cleared in [false, true] {
+            let (_temp, store) = store();
+            let id = store.create(parsed()).unwrap().id;
+            let lease = store.acquire_service_lease(id).unwrap();
+            if registration_cleared {
+                let instance = Uuid::new_v4();
+                store
+                    .set_service(id, 4321, std::process::id(), instance)
+                    .unwrap();
+                assert!(store.clear_service(id, instance).unwrap());
+            }
+            store.close(id).unwrap();
+            assert!(store.load(id).unwrap().service_instance.is_none());
+            assert!(
+                !store.wait_for_service_exit(id, Duration::ZERO).unwrap(),
+                "registration cleared: {registration_cleared}"
+            );
+            drop(lease);
+            assert!(
+                store.wait_for_service_exit(id, Duration::ZERO).unwrap(),
+                "registration cleared: {registration_cleared}"
+            );
         }
     }
 }

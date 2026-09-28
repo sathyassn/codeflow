@@ -136,19 +136,7 @@ fn start_profile_writer(
     fixture: &TestProject,
     running: &RunningPresentation,
 ) -> (PathBuf, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
-    #[cfg(target_os = "macos")]
-    let runtime_projects = fixture
-        .home
-        .join("Library/Application Support/codeflow/present/runtime/projects");
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let runtime_projects = fixture.home.join("state/codeflow/present/runtime/projects");
-    let project = fs::read_dir(runtime_projects)
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let runtime_session = project.join(&running.session_id);
+    let runtime_session = runtime_session(fixture, &running.session_id);
     let profile = runtime_session.join("browser-profile");
     let cache = profile.join("live-cache.bin");
     let mut file = fs::OpenOptions::new()
@@ -165,6 +153,23 @@ fn start_profile_writer(
         }
     });
     (runtime_session, stop, worker)
+}
+
+/// The session's runtime directory, which holds its browser profile.
+fn runtime_session(fixture: &TestProject, session_id: &str) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    let runtime_projects = fixture
+        .home
+        .join("Library/Application Support/codeflow/present/runtime/projects");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let runtime_projects = fixture.home.join("state/codeflow/present/runtime/projects");
+    let project = fs::read_dir(runtime_projects)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    project.join(session_id)
 }
 
 fn setup_project() -> TestProject {
@@ -585,6 +590,186 @@ fn update_export_close_and_clear(
     assert_eq!(sessions.trim(), "[]");
 }
 
+/// SPC-014 C1 across the TSK-071 review-text changes: a review stored before
+/// them (separator-migration fixture, with a diff quote that carries
+/// "Added: +") reaches a 3.0.x agent on the v1 stream byte for byte as a
+/// build before the change delivered it (`feedback-v1.jsonl`, captured at
+/// ea0946594), and the history keeps the stored envelope unchanged.
+#[test]
+fn a_stored_review_reads_the_same_on_the_v1_stream() {
+    const FIXTURES: &str = "../codeflow-present/tests/fixtures/separator-migration";
+    const CAPTURED_SESSION: &str = "5e9a7c1e-0d2b-4f5a-9c3e-7b1d2f4a6c80";
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURES);
+    let read = |name: &str| fs::read_to_string(fixtures.join(name)).unwrap();
+    let fixture = setup_project();
+    let document = fixture.project.join("migration.json");
+    fs::write(&document, read("document.json")).unwrap();
+    let (session_id, _) = open_no_launch(&fixture, &document);
+    let events = read("events.jsonl").replace(CAPTURED_SESSION, &session_id);
+    fs::write(
+        session_dir(&fixture, &session_id).join("events.jsonl"),
+        &events,
+    )
+    .unwrap();
+
+    let delivered = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "feedback", &session_id],
+    ));
+    assert_eq!(
+        delivered,
+        read("feedback-v1.jsonl").replace(CAPTURED_SESSION, &session_id)
+    );
+    let history: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", &session_id],
+    )))
+    .unwrap();
+    assert_eq!(history["schema_version"], 1);
+    let stored: serde_json::Value = serde_json::from_str(events.trim()).unwrap();
+    assert_eq!(history["feedback_events"][0], stored);
+    close_and_clear(&fixture, &session_id);
+}
+
+/// TSK-071 AC-4: `present open` launches the qualified browser itself, with
+/// its profile under this test's scratch state. `present close` leaves no
+/// process of that launch, found by the pid and instance `CodeFlow` recorded
+/// and by the profile path its helpers carry, and no profile; `clear` leaves
+/// nothing that names the session. It opens a real browser window on the
+/// desktop, so it runs only on request:
+/// `cargo test -p codeflow-cli --test present_cli -- --ignored`.
+#[test]
+#[ignore = "opens a visible browser window; run with --ignored"]
+fn close_stops_the_browser_open_launched() {
+    let fixture = setup_project();
+    let document = fixture.project.join("first.json");
+    let opened = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "open", document.to_str().unwrap()],
+    ));
+    let session_id = opened.split_whitespace().nth(1).unwrap().to_string();
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    let pid = u32::try_from(
+        listed[0]["browser_pid"]
+            .as_u64()
+            .expect("recorded browser pid"),
+    )
+    .unwrap();
+    let instance = listed[0]["browser_instance"]
+        .as_str()
+        .expect("recorded browser instance")
+        .to_string();
+    let profile = runtime_session(&fixture, &session_id).join("browser-profile");
+    assert!(profile.is_dir(), "no profile at {}", profile.display());
+
+    // The recorded pid carries the recorded instance and profile; wait for
+    // the browser to start its helpers, which carry the profile path.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let launched = loop {
+        let owned = launch_processes(&instance, &profile);
+        if owned.len() > 1 || Instant::now() > deadline {
+            break owned;
+        }
+        thread::sleep(Duration::from_millis(250));
+    };
+    let leader = launched.iter().find(|(owned, _)| *owned == pid);
+    assert!(
+        leader.is_some_and(
+            |(_, command)| command.contains(&format!("--cf-present-instance={instance}"))
+        ),
+        "the recorded pid {pid} is not the launch {instance}: {launched:?}"
+    );
+    assert!(
+        launched.len() > 1,
+        "the browser started no helpers: {launched:?}"
+    );
+
+    eprintln!(
+        "launch {instance}: recorded pid {pid}, {} processes of the launch before close",
+        launched.len()
+    );
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "close", &session_id],
+    ));
+    let remaining = launch_processes(&instance, &profile);
+    assert!(
+        remaining.is_empty(),
+        "close left processes of the launch: {remaining:?}"
+    );
+    assert_ne!(
+        unsafe { libc::kill(i32::try_from(pid).unwrap(), 0) },
+        0,
+        "the recorded pid {pid} still runs"
+    );
+    assert!(
+        !profile.exists(),
+        "close left the profile at {}",
+        profile.display()
+    );
+
+    let cleared = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", &session_id, "--older-than", "0h"],
+    ));
+    assert!(
+        cleared.contains(&format!("removed {session_id}")),
+        "{cleared}"
+    );
+    let named = paths_naming(&fixture.home, &session_id);
+    assert!(named.is_empty(), "clear left state: {named:?}");
+}
+
+/// Every running process whose command line carries the launch's instance
+/// marker or its profile path, with that command line.
+fn launch_processes(instance: &str, profile: &Path) -> Vec<(u32, String)> {
+    let listing = Command::new("/bin/ps")
+        .args(["-axww", "-o", "pid=,command="])
+        .output()
+        .unwrap();
+    assert!(listing.status.success(), "ps failed");
+    let marker = format!("--cf-present-instance={instance}");
+    let profile = profile.display().to_string();
+    String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (pid, command) = line.trim_start().split_once(' ')?;
+            if !(command.contains(&marker) || command.contains(&profile)) {
+                return None;
+            }
+            Some((pid.parse().ok()?, command.to_string()))
+        })
+        .collect()
+}
+
+/// Every file or directory under `root` whose name contains `needle`.
+fn paths_naming(root: &Path, needle: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(root).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains(needle))
+        {
+            found.push(path.clone());
+        }
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            found.extend(paths_naming(&path, needle));
+        }
+    }
+    found
+}
+
 const RETIRED_REVISION: &str =
     include_str!("../../codeflow-present/tests/fixtures/retired-diagram/revision.json");
 const RETIRED_EVENTS: &str =
@@ -634,22 +819,16 @@ fn close_and_clear(fixture: &TestProject, session_id: &str) {
         &fixture.home,
         &["present", "close", session_id],
     ));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let cleared = codeflow(
-            &fixture.project,
-            &fixture.home,
-            &["present", "clear", session_id, "--older-than", "0h"],
-        );
-        if cleared.status.success() {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "clear did not converge: {cleared:?}"
-        );
-        thread::sleep(Duration::from_millis(100));
-    }
+    // close returns once the service has exited, so clear needs no retry.
+    let cleared = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", session_id, "--older-than", "0h"],
+    ));
+    assert!(
+        cleared.contains(&format!("removed {session_id}")),
+        "{cleared}"
+    );
 }
 
 fn session_dir(fixture: &TestProject, session_id: &str) -> PathBuf {
@@ -1156,5 +1335,122 @@ fn a_v2_session_opens_renders_framing_and_prints_history_v2() {
         schema_registry().errors("urn:codeflow:schema:present:session-history:2", &history),
         Vec::<String>::new()
     );
+    close_and_clear(&fixture, &session_id);
+}
+
+/// The annotation matrix in the authoring reference names every block type
+/// of the closed enum, with a text, element and area cell, each "yes" or
+/// "no: <reason>" (TSK-071). The block types come from the enum itself (its
+/// deserializer names every variant it accepts), with no fixed count, so a
+/// new variant fails here until the fixture and the matrix both carry it.
+#[test]
+fn the_annotation_matrix_names_every_block_type() {
+    use codeflow_present::document::Block;
+
+    let refusal = serde_json::from_value::<Block>(serde_json::json!({"type": "not-a-block"}))
+        .unwrap_err()
+        .to_string();
+    let listed = refusal
+        .split_once("expected one of ")
+        .map_or("", |(_, rest)| rest);
+    let mut variants: Vec<&str> = listed
+        .split(", ")
+        .map(|name| name.trim().trim_matches('`'))
+        .collect();
+    variants.sort_unstable();
+    assert!(
+        variants.len() > 1 && variants.iter().all(|name| !name.is_empty()),
+        "could not read the block types from {refusal:?}"
+    );
+
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../codeflow-present/tests/fixtures/annotation/every-block.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let blocks: Vec<Block> = serde_json::from_value(fixture["blocks"].clone()).unwrap();
+    let mut types: Vec<String> = blocks
+        .iter()
+        .map(|block| {
+            serde_json::to_value(block).unwrap()["type"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    types.sort_unstable();
+    types.dedup();
+    assert_eq!(
+        types, variants,
+        "the fixture carries one top-level block of every type"
+    );
+
+    let text = skill_file("references/document-authoring.md");
+    let section = between(
+        &text,
+        "\n### What a reviewer can mark on each block\n",
+        "\n## ",
+    );
+    let mut rows: Vec<&str> = Vec::new();
+    for line in section.lines().filter(|line| line.starts_with("| `")) {
+        let cells: Vec<&str> = line.trim_matches('|').split(" | ").map(str::trim).collect();
+        assert_eq!(cells.len(), 4, "{line}");
+        for cell in &cells[1..] {
+            assert!(
+                cell.starts_with("yes") || cell.starts_with("no: "),
+                "{line}: a cell is yes or no with a reason"
+            );
+        }
+        rows.push(cells[0].trim_matches('`'));
+    }
+    rows.sort_unstable();
+    assert_eq!(
+        rows, variants,
+        "the matrix has one row for every block type"
+    );
+}
+
+/// QA defect 10: a command's own bad input is named as a bad request, not a
+/// bad document, and a dry run with nothing eligible says so.
+#[test]
+fn cli_input_errors_and_empty_clears_are_named() {
+    let fixture = setup_project();
+    let document = fixture.project.join("review.json");
+    fs::write(&document, contract_fixture("documents/v2-framed.json")).unwrap();
+    let (session_id, _) = open_no_launch(&fixture, &document);
+    let resolve = failure(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "resolve",
+            &session_id,
+            "019f9b53-a341-7fa7-84c2-5f198ceea099",
+            "--event-version",
+            "1",
+            "--status",
+            "addressed",
+        ],
+    ));
+    assert!(
+        resolve.contains("invalid request: feedback event"),
+        "{resolve}"
+    );
+    assert!(!resolve.contains("presentation document"), "{resolve}");
+    let duration = failure(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", "--older-than", "3m"],
+    ));
+    assert!(duration.contains("invalid request: duration"), "{duration}");
+    let empty = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", "--dry-run"],
+    ));
+    assert!(empty.contains("nothing to clear"), "{empty}");
     close_and_clear(&fixture, &session_id);
 }

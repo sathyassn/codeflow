@@ -572,6 +572,9 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 #cf-present-document .comparison,
 #cf-present-document table,
 #cf-present-document pre { margin-inline: 0; max-inline-size: 100%; }
+/* One code or diff line is one element target (QA defect 6): it spans the
+   full width, so a click or drag on its blank end still names the line. */
+#cf-present-document pre .cf-line { display: inline-block; min-inline-size: 100%; }
 #cf-present-document iframe,
 #cf-present-document img,
 #cf-present-document video { max-inline-size: 100%; }
@@ -660,6 +663,9 @@ th { color: var(--cf-text-muted); font-size: 0.78rem; letter-spacing: 0.04em; te
 .feedback-prompt { padding-block-start: var(--cf-space-4); border-block-start: 0.2rem solid var(--cf-accent); font-size: 1.08rem; font-weight: 650; }
 
 /* Visually hidden but available to AT (figure status). */
+/* A diff line's marker is seen, never selected or quoted. */
+[data-cf-review-skip] { user-select: none; -webkit-user-select: none; }
+[data-cf-label-read] [data-cf-review-skip] { display: none !important; }
 .sr-only {
   position: absolute;
   inline-size: 1px;
@@ -854,6 +860,15 @@ code { font-family: var(--cf-font-mono); }
   flex-wrap: wrap;
 }
 .cf-hint.on { display: flex; }
+/* A saved area while Comment is on: a faint outline under the markers. */
+.cf-region-saved {
+  position: absolute;
+  z-index: 33;
+  pointer-events: none;
+  border-radius: 4px;
+  border: 1px dashed color-mix(in srgb, var(--cf-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--cf-accent) 5%, transparent);
+}
 /* Region marquee — document coordinates inside the marker layer, so the
    persistent rectangle scrolls with the content it covers */
 .cf-region-draft {
@@ -880,8 +895,11 @@ code { font-family: var(--cf-font-mono); }
   font-family: var(--cf-font-sans);
   font-size: 0.82rem;
   overflow: hidden;
+  max-width: calc(100vw - 16px);
 }
 .cf-float.on { display: flex; }
+.cf-float .main { min-width: 0; }
+.cf-float .esc { flex: none; }
 .cf-float .main {
   display: flex;
   align-items: center;
@@ -905,6 +923,7 @@ code { font-family: var(--cf-font-mono); }
 .cf-float .ico svg { width: 16px; height: 16px; }
 .cf-float .lab { font-weight: 600; color: var(--cf-text); }
 .cf-float .q {
+  min-width: 0;
   max-width: 12rem;
   font-family: var(--cf-font-mono);
   font-size: 0.9em;
@@ -1244,6 +1263,13 @@ code { font-family: var(--cf-font-mono); }
   font: 0.9rem/1.4 var(--cf-font-sans);
 }
 .cf-toast.on { display: block; }
+/* A notice is text only; it never takes a click meant for the control under
+   it, and it moves off the open notes rail so Submit stays in view. */
+.cf-toast { pointer-events: none; }
+#cf-feedback-panel[data-open="true"] ~ .cf-toast { right: auto; left: 22px; }
+@media (max-width: 879.98px) {
+  #cf-feedback-panel[data-open="true"] ~ .cf-toast { left: 12px; right: 12px; bottom: calc(min(46vh, 440px) + 12px); }
+}
 
 /* Tools (secondary — not the primary Comment path) */
 .cf-tools {
@@ -1302,14 +1328,14 @@ code { font-family: var(--cf-font-mono); }
 .cf-feedback-history > summary span { font-weight: 500; }
 .cf-feedback-history[open] { max-height: 28vh; overflow: auto; }
 .cf-feedback-history[open] > ol { padding: 0 14px 10px; }
-.cf-history-heading, .cf-history-meta {
+.cf-history-heading, .cf-history-meta, .cf-note-heading {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
 }
 .cf-history-heading h3 { margin: 0; font-size: 0.9rem; }
-.cf-history-heading span, .cf-history-meta span, .cf-anchor-note, .cf-anchor-warning {
+.cf-history-heading span, .cf-history-meta span, .cf-note-heading span, .cf-anchor-note, .cf-anchor-warning {
   color: var(--cf-text-muted);
   font-size: 0.72rem;
 }
@@ -1338,10 +1364,12 @@ code { font-family: var(--cf-font-mono); }
   border-radius: 4px;
   transition: outline-color 100ms ease;
 }
+/* The tint is an image layered over the target's own background colour, so
+   a crop taken while it is pinned reads that colour, not the tint. */
 .cf-hot-sel {
   outline: 2px solid var(--cf-accent);
   outline-offset: 3px;
-  background: color-mix(in srgb, var(--cf-accent) 14%, transparent);
+  background-image: linear-gradient(color-mix(in srgb, var(--cf-accent) 14%, transparent), color-mix(in srgb, var(--cf-accent) 14%, transparent));
 }
 
 /* SVG parts draw no outline: the highlight is a glow that follows the
@@ -1354,7 +1382,7 @@ svg.cf-hot {
 svg .cf-hot-sel,
 svg.cf-hot-sel {
   outline: none;
-  background: none;
+  background-image: none;
   filter: drop-shadow(0 0 1px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent));
 }
 #cf-present-document[data-cf-capture-mode="element"] svg :is(g, path, line, polyline, polygon, rect, circle, ellipse, text):focus {
@@ -1368,7 +1396,7 @@ svg.cf-hot-sel {
   background: color-mix(in srgb, var(--cf-accent) 22%, transparent);
 }
 #cf-present-document[data-cf-capture-mode="element"] { cursor: crosshair; }
-#cf-present-document[data-cf-capture-mode="element"] :is(h1,h2,h3,p,li,blockquote,pre,code,table,th,td,figure,img,video,audio,svg,details,summary,article,aside):is(:hover, :focus-visible) {
+#cf-present-document[data-cf-capture-mode="element"] :is(h1,h2,h3,p,li,blockquote,pre,code,.cf-line,table,th,td,figure,img,video,audio,svg,details,summary,article,aside):is(:hover, :focus-visible) {
   outline: 2px solid var(--cf-focus);
   outline-offset: 3px;
 }
@@ -1556,3 +1584,7 @@ html:has(.cf-chrome-frame[data-rail="open"]) .cf-hint { max-inline-size: none; }
 /* The kit's single instruction strip stays readable when it wraps on phones. */
 .cf-hint { height: auto; min-height: var(--cf-strip-h); padding: 6px 16px; gap: 10px; flex-wrap: nowrap; font-size: var(--cf-fs-ui); }
 .cf-hint svg { flex: none; width: 16px; height: 16px; fill: none; stroke: var(--cf-accent); stroke-width: 1.6; stroke-linejoin: round; }
+.cf-hint > span { flex: 1 1 auto; min-width: 0; }
+.cf-hint-leave { flex: none; margin-inline-start: auto; padding: 4px 12px; border: 1px solid var(--cf-border-strong); border-radius: 999px; background: var(--cf-surface-raised); color: var(--cf-text); font: 600 var(--cf-fs-ui)/1.2 var(--cf-font-sans); cursor: pointer; }
+.cf-hint-leave:hover { background: var(--cf-surface-subtle); }
+.cf-hint-leave:focus-visible { outline: 2px solid var(--cf-accent); outline-offset: 2px; }

@@ -877,3 +877,467 @@ fn a_quote_search_past_its_budget_falls_to_the_block_with_a_notice() {
         anchor
     );
 }
+
+/// QA defect 8: a whole-document note stays positioned across revisions; a
+/// part of the document stays pinned to its revision with its reason.
+#[test]
+fn a_whole_document_note_survives_a_revision() {
+    let first = supported("documents/v2-framed.json");
+    // The revision also drops `intro`, the first block, which carried the
+    // note's digest: the document is still there, so the note holds.
+    let mut second = supported("reanchor/revision-2.json");
+    second.blocks.retain(|block| block.id() != "intro");
+    let (_temp, store) = store();
+    let session = store
+        .create(ParsedDocument::Supported(first.clone()))
+        .unwrap();
+    let region = |width_ppm: u32| {
+        let mut note = note("intro", &find(&first, "intro").review_label());
+        note.region_selector = Some(crate::state::RegionSelector {
+            scope: crate::state::RegionScope::Document,
+            anchor_id: "document".to_string(),
+            block_digest: crate::state::block_digest(find(&first, "intro")),
+            x_ppm: 0,
+            y_ppm: 0,
+            width_ppm,
+            height_ppm: crate::limits::REGION_COORDINATE_SCALE,
+            capture_width_px: 800,
+            capture_height_px: 4000,
+        });
+        note
+    };
+    let envelope = FeedbackEnvelope {
+        event_id: Uuid::new_v4(),
+        session_id: session.id,
+        revision: 1,
+        actor: "operator".to_string(),
+        verdict: FeedbackVerdict::ApproveWithNotes,
+        instruction: None,
+        notes: vec![
+            region(crate::limits::REGION_COORDINATE_SCALE),
+            region(500_000),
+        ],
+        created_at_unix: 0,
+    };
+    store.append_feedback(envelope).unwrap();
+    store
+        .update_document(session.id, ParsedDocument::Supported(second))
+        .unwrap();
+    let after = store.feedback_snapshot(session.id).unwrap();
+    let anchors: Vec<_> = after.items[0]
+        .notes
+        .iter()
+        .map(|note| note.anchor.clone())
+        .collect();
+    assert!(
+        matches!(anchors[0], FeedbackAnchor::RegionReanchored { .. }),
+        "{:?}",
+        anchors[0]
+    );
+    assert!(
+        matches!(anchors[1], FeedbackAnchor::Orphaned { .. }),
+        "{:?}",
+        anchors[1]
+    );
+}
+
+/// SPC-014 B1 and C1 across the TSK-071 separator change: a review stored
+/// before the parts of a block were joined with a line break carries offsets
+/// into the old review text (`FirstSecond`). Reopening that same revision
+/// never trusts them blindly: a quote inside one part is found at its new
+/// place, and a quote across two parts is found near it or falls back to its
+/// block, never at stale offsets that select other text.
+#[test]
+fn a_stored_quote_from_before_the_separator_change_reanchors() {
+    const DOCUMENT: &str = include_str!("../tests/fixtures/separator-migration/document.json");
+    // One received review, its offsets taken in the pre-change review text.
+    const EVENTS: &str = include_str!("../tests/fixtures/separator-migration/events.jsonl");
+    const CAPTURED_SESSION: &str = "5e9a7c1e-0d2b-4f5a-9c3e-7b1d2f4a6c80";
+    let document = match parse_document(DOCUMENT.as_bytes()).unwrap() {
+        ParsedDocument::Supported(document) => document,
+        ParsedDocument::Unsupported { .. } => panic!("the fixture parsed as unsupported"),
+    };
+    let framing = crate::document::Framing::default();
+    let current = |id: &str| find(&document, id).canonical_review_text(&framing);
+    assert_eq!(current("intro"), "First\nSecond");
+    assert_eq!(
+        current("checks"),
+        "Linux Chrome run\none crop was a sliver\nmacOS run"
+    );
+    let (_temp, store) = store();
+    let session = store
+        .create(ParsedDocument::Supported(document.clone()))
+        .unwrap();
+    let events = store
+        .root()
+        .join("sessions")
+        .join(session.id.to_string())
+        .join("events.jsonl");
+    std::fs::write(
+        &events,
+        EVENTS.replace(CAPTURED_SESSION, &session.id.to_string()),
+    )
+    .unwrap();
+
+    let snapshot = store.feedback_snapshot(session.id).unwrap();
+    let notes = &snapshot.items[0].notes;
+    let selected = |block: &str, anchor: &FeedbackAnchor| match anchor {
+        FeedbackAnchor::Anchored {
+            start_utf16,
+            end_utf16,
+        }
+        | FeedbackAnchor::Reanchored {
+            start_utf16,
+            end_utf16,
+            ..
+        } => {
+            let units: Vec<u16> = current(block).encode_utf16().collect();
+            Some(String::from_utf16(&units[*start_utf16 as usize..*end_utf16 as usize]).unwrap())
+        }
+        _ => None,
+    };
+    // Inside one part: the old offsets now select "\nSecon" and "r\nmacOS r".
+    for (note, block, quote) in [
+        (&notes[0], "intro", "Second"),
+        (&notes[1], "checks", "macOS run"),
+    ] {
+        assert_eq!(
+            note.quote.as_deref(),
+            Some(quote),
+            "the stored quote survives"
+        );
+        assert_eq!(
+            selected(block, &note.anchor).as_deref(),
+            Some(quote),
+            "{quote}: {:?}",
+            note.anchor
+        );
+    }
+    // Across two parts: the old quote no longer occurs as it was, so the
+    // fuzzy step finds it with its new separator and marks it changed.
+    let across = &notes[2];
+    assert_eq!(across.quote.as_deref(), Some("runone crop"));
+    assert!(
+        matches!(
+            across.anchor,
+            FeedbackAnchor::Reanchored { changed: true, .. }
+        ),
+        "{:?}",
+        across.anchor
+    );
+    assert_eq!(
+        selected("checks", &across.anchor).as_deref(),
+        Some("run\none crop")
+    );
+    // A diff quote stored with its line's screen-reader label and marker
+    // ("Added: +"), which the review text no longer holds (round 3): it is
+    // read without them and found at the same line.
+    assert_eq!(
+        current("change"),
+        "One change.\n--- a/x.rs\n+++ b/x.rs\n fn f() {\n    let n = 1;\n    let n = 2;\n }\n"
+    );
+    let diff = &notes[3];
+    assert_eq!(diff.quote.as_deref(), Some("Added: +    let n = 2;"));
+    assert!(
+        matches!(diff.anchor, FeedbackAnchor::Reanchored { .. }),
+        "{:?}",
+        diff.anchor
+    );
+    assert_eq!(
+        selected("change", &diff.anchor).as_deref(),
+        Some("    let n = 2;")
+    );
+}
+
+/// A text selector over `start..end` of `text`, with the 32-unit context the
+/// page stores around it.
+fn stored_selector(text: &str, start: usize, end: usize) -> TextSelector {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let part = |from: usize, to: usize| String::from_utf16(&units[from..to]).unwrap();
+    TextSelector {
+        exact: part(start, end),
+        prefix: part(start.saturating_sub(32), start),
+        suffix: part(end, (end + 32).min(units.len())),
+        start_utf16: u32::try_from(start).unwrap(),
+        end_utf16: u32::try_from(end).unwrap(),
+    }
+}
+
+/// Stores one review of `notes` on revision 1, then rewrites the selectors
+/// named in `stored` as an earlier runtime wrote them, which the store would
+/// no longer accept from a page.
+fn store_review(
+    store: &SessionStore,
+    session: Uuid,
+    notes: Vec<FeedbackNote>,
+    stored: &[(usize, TextSelector)],
+) {
+    store
+        .append_feedback(FeedbackEnvelope {
+            event_id: Uuid::new_v4(),
+            session_id: session,
+            revision: 1,
+            actor: "operator".to_string(),
+            verdict: FeedbackVerdict::ApproveWithNotes,
+            instruction: None,
+            notes,
+            created_at_unix: 0,
+        })
+        .unwrap();
+    let events = store
+        .root()
+        .join("sessions")
+        .join(session.to_string())
+        .join("events.jsonl");
+    let mut received: Value =
+        serde_json::from_str(&std::fs::read_to_string(&events).unwrap()).unwrap();
+    for (index, selector) in stored {
+        received["envelope"]["notes"][*index]["selector"] = serde_json::to_value(selector).unwrap();
+    }
+    std::fs::write(
+        &events,
+        format!("{}\n", serde_json::to_string(&received).unwrap()),
+    )
+    .unwrap();
+}
+
+/// The text of `block` in `document` that a text anchor selects.
+fn anchored_text(
+    document: &PresentationDocument,
+    block: &str,
+    anchor: &FeedbackAnchor,
+) -> Option<String> {
+    let (FeedbackAnchor::Anchored {
+        start_utf16,
+        end_utf16,
+    }
+    | FeedbackAnchor::Reanchored {
+        start_utf16,
+        end_utf16,
+        ..
+    }) = anchor
+    else {
+        return None;
+    };
+    let units: Vec<u16> = find(document, block)
+        .canonical_review_text(&crate::document::Framing::default())
+        .encode_utf16()
+        .collect();
+    Some(String::from_utf16(&units[*start_utf16 as usize..*end_utf16 as usize]).unwrap())
+}
+
+/// SPC-014 B1 across the TSK-071 diff change (review C071-R3-1): a quote
+/// stored while a changed line began with "Added: +" or "Removed: -" is
+/// found in the diff's text as it was then and carried over, so only the
+/// generated label and marker drop out. A line whose own words read like a
+/// label keeps them, wherever the label falls between quote and context; a
+/// note taken after the change anchors as it was taken; a quote of nothing
+/// but a label falls back to its block.
+#[test]
+fn a_stored_diff_quote_keeps_line_text_that_reads_like_a_label() {
+    let document: PresentationDocument = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "title": "Literal diff content",
+        "blocks": [{"type": "diff", "id": "change", "diff": "+Added: +foo\n-bar\n baz"}]
+    }))
+    .unwrap();
+    let canonical =
+        find(&document, "change").canonical_review_text(&crate::document::Framing::default());
+    assert_eq!(canonical, "Added: +foo\nbar\n baz\n");
+    // The diff's review text in 3.0.x, and each note's range in the text it
+    // was taken in.
+    let legacy = "Added: +Added: +foo\nRemoved: -bar\n baz\n";
+    let cases = [
+        stored_selector(legacy, 0, 19),
+        stored_selector(legacy, 7, 19),
+        stored_selector(legacy, 16, 25),
+        stored_selector(&canonical, 0, 11),
+        stored_selector(legacy, 20, 30),
+    ];
+    let expected = [
+        Some("Added: +foo"),
+        Some("Added: +foo"),
+        Some("foo\n"),
+        Some("Added: +foo"),
+        None,
+    ];
+    let (_temp, store) = store();
+    let session = store
+        .create(ParsedDocument::Supported(document.clone()))
+        .unwrap();
+    let placeholder = || {
+        let mut placed = note("change", &find(&document, "change").review_label());
+        placed.selector = Some(stored_selector(&canonical, 8, 11));
+        placed
+    };
+    let stored: Vec<_> = cases.iter().cloned().enumerate().collect();
+    store_review(
+        &store,
+        session.id,
+        cases.iter().map(|_| placeholder()).collect(),
+        &stored,
+    );
+
+    let snapshot = store.feedback_snapshot(session.id).unwrap();
+    let notes = &snapshot.items[0].notes;
+    for ((note, selector), expected) in notes.iter().zip(&cases).zip(expected) {
+        let exact = selector.exact.as_str();
+        assert_eq!(
+            note.quote.as_deref(),
+            Some(exact),
+            "the stored quote survives"
+        );
+        assert!(
+            matches!(
+                note.anchor,
+                FeedbackAnchor::Anchored { .. }
+                    | FeedbackAnchor::Reanchored { changed: false, .. }
+                    | FeedbackAnchor::BlockFallback { .. }
+            ),
+            "{exact:?}: {:?}",
+            note.anchor
+        );
+        assert_eq!(
+            anchored_text(&document, "change", &note.anchor).as_deref(),
+            expected,
+            "{exact:?}: {:?}",
+            note.anchor
+        );
+    }
+    // A note taken after the change is read at its own offsets.
+    assert!(
+        matches!(notes[3].anchor, FeedbackAnchor::Anchored { .. }),
+        "{:?}",
+        notes[3].anchor
+    );
+}
+
+/// SPC-014 B1 for diff quotes across an update (review C071-R4-1): a quote is
+/// read in the old labelled text only when the revision it was taken in held
+/// it there. A quote of literal "Added: +" words taken after TSK-071 is read
+/// as the text is now: it holds while its words do and falls back to its
+/// block when they are gone; a quote taken in the old text is carried over.
+#[test]
+fn a_diff_quote_is_read_in_the_text_of_its_own_revision() {
+    let revision = |kept: &str, gone: &str| -> PresentationDocument {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "title": "Diff quotes across an update",
+            "blocks": [
+                {"type": "diff", "id": "kept", "diff": kept},
+                {"type": "diff", "id": "gone", "diff": gone}
+            ]
+        }))
+        .unwrap()
+    };
+    let first = revision("+Added: +foo", "+Added: +foo");
+    let second = revision("+Added: +foo\n+bar", "+foo");
+    let now = find(&first, "kept").canonical_review_text(&crate::document::Framing::default());
+    assert_eq!(now, "Added: +foo\n");
+    let taken = |block: &str| {
+        let mut taken = note(block, &find(&first, block).review_label());
+        taken.selector = Some(stored_selector(&now, 0, 11));
+        taken
+    };
+    let (_temp, store) = store();
+    let session = store
+        .create(ParsedDocument::Supported(first.clone()))
+        .unwrap();
+    // The third note as 3.0.x stored it, in the old text.
+    store_review(
+        &store,
+        session.id,
+        vec![taken("gone"), taken("kept"), taken("kept")],
+        &[(2, stored_selector("Added: +Added: +foo\n", 0, 19))],
+    );
+    store
+        .update_document(session.id, ParsedDocument::Supported(second.clone()))
+        .unwrap();
+
+    let snapshot = store.feedback_snapshot(session.id).unwrap();
+    let notes = &snapshot.items[0].notes;
+    assert!(
+        matches!(notes[0].anchor, FeedbackAnchor::BlockFallback { .. }),
+        "the literal words are gone: {:?}",
+        notes[0].anchor
+    );
+    for (index, quote) in [(1, "Added: +foo"), (2, "Added: +Added: +foo")] {
+        assert_eq!(notes[index].quote.as_deref(), Some(quote));
+        assert_eq!(
+            anchored_text(&second, "kept", &notes[index].anchor).as_deref(),
+            Some("Added: +foo"),
+            "{quote}: {:?}",
+            notes[index].anchor
+        );
+    }
+}
+
+/// SPC-014 B1 for a diff note on a revision that also held a removed diagram
+/// (review C071-R5-1): the retired revision still gives the diff its 3.0.x
+/// text, so the note re-anchors after conversion, while the note on the
+/// diagram orphans with its named reason even though its id is reused.
+#[test]
+fn a_diff_note_beside_a_retired_diagram_still_reanchors() {
+    let diff = serde_json::json!({"type": "diff", "id": "change", "diff": "+foo\n bar"});
+    let mut revision: Value =
+        serde_json::from_str(crate::state::retired_fixture::REVISION).unwrap();
+    revision["content"]["document"]["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .push(diff.clone());
+    let (_temp, store) = store();
+    let id =
+        crate::state::retired_fixture::install(&store, &serde_json::to_string(&revision).unwrap());
+    assert!(matches!(
+        store.current_revision(id).unwrap().content,
+        crate::state::RevisionContent::Retired { .. }
+    ));
+    let events = store
+        .root()
+        .join("sessions")
+        .join(id.to_string())
+        .join("events.jsonl");
+    let mut received: Value =
+        serde_json::from_str(&std::fs::read_to_string(&events).unwrap()).unwrap();
+    let block: Block = serde_json::from_value(diff.clone()).unwrap();
+    let mut on_diff = note("change", &block.review_label());
+    on_diff.selector = Some(stored_selector("Added: +foo\n bar\n", 0, 11));
+    received["envelope"]["notes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::to_value(on_diff).unwrap());
+    std::fs::write(
+        &events,
+        format!("{}\n", serde_json::to_string(&received).unwrap()),
+    )
+    .unwrap();
+    let converted: PresentationDocument = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "title": "Converted document",
+        "blocks": [{"type": "narrative", "id": "flow", "markdown": "The flow, converted."}, diff]
+    }))
+    .unwrap();
+    store
+        .update_document(id, ParsedDocument::Supported(converted.clone()))
+        .unwrap();
+
+    let snapshot = store.feedback_snapshot(id).unwrap();
+    let notes = &snapshot.items[0].notes;
+    assert!(
+        matches!(&notes[0].anchor, FeedbackAnchor::Orphaned { reason } if reason.contains("diagram block flow")),
+        "{:?}",
+        notes[0].anchor
+    );
+    assert!(
+        matches!(
+            notes[1].anchor,
+            FeedbackAnchor::Reanchored { changed: false, .. }
+        ),
+        "{:?}",
+        notes[1].anchor
+    );
+    assert_eq!(
+        anchored_text(&converted, "change", &notes[1].anchor).as_deref(),
+        Some("foo")
+    );
+}

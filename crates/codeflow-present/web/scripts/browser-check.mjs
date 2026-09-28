@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import axe from "axe-core";
 import { chromium, firefox, webkit } from "playwright-core";
 import { checkResolverRules, checkSelectionOccurrences } from "./selection-browser-check.mjs";
-import { checkDocumentExcerpts, checkEntityCrops } from "./excerpt-browser-check.mjs";
+import { checkDocumentExcerpts, checkEntityCrops, checkCropBudget } from "./excerpt-browser-check.mjs";
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
@@ -36,7 +36,10 @@ const server = createServer(async (request, response) => {
         "Content-Security-Policy": applicationCsp,
       });
       const fixture = url.searchParams.get("case");
-      response.end(fixtureHtml(["prose", "selection", "iframe"].includes(fixture), fixture === "selection", fixture === "iframe"));
+      // The submit race needs room for four short notes and a body limit a
+      // crop does not fit in, so fitting re-encodes it.
+      const limits = fixture === "race" ? { max_notes: 4, max_text_utf16: 200, max_selector_utf16: 64, max_payload_bytes: 1500 } : {};
+      response.end(fixtureHtml(["prose", "selection", "iframe"].includes(fixture), fixture === "selection", fixture === "iframe", limits));
       return;
     }
     if (url.pathname === "/export") {
@@ -117,9 +120,11 @@ try {
   await checkResolverRules(browser);
   await checkDocumentExcerpts(browser);
   await checkEntityCrops(browser);
+  await checkCropBudget(browser);
   await checkProseLazyPath(browser, origin);
   await checkSelectionLifecycle(browser, origin);
   await checkIframeComments(browser, origin);
+  await checkSubmitRace(browser, origin, reviewPosts);
   await checkInteractiveSurface(browser, origin, reviewPosts);
   await checkStaticExportModes(browser, origin);
   process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, figure blocks, zero CSP violations, axe, and 320 px reflow\n");
@@ -162,6 +167,118 @@ async function assertPrimary(button) {
     const p = getComputedStyle(probe);
     const result = [s.fontFamily === p.fontFamily, s.fontWeight, s.backgroundColor === p.backgroundColor, s.color === p.color]; probe.remove(); return result;
   }), [true, '600', true, true]);
+}
+
+/**
+ * C071-1: a review is fixed from its first step. While its crops are fitted
+ * (held open here), Submit, the notes, the instruction and the verdict take
+ * no edit and a second press sends nothing; a note whose save was already
+ * under way is not in the review, and it stays pending after the review is
+ * received, with its draft, until the next submit sends it.
+ */
+async function checkSubmitRace(browser, origin, reviewPosts) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  try {
+    const page = await context.newPage();
+    // The page loads an image to make a drawing's crop (a blob URL) and to
+    // re-encode a crop (decode); each waits while its gate is held.
+    await page.addInitScript(() => {
+      const gate = () => {
+        const state = { held: false, waiting: 0 };
+        state.open = new Promise((done) => { state.release = () => { state.held = false; done(); }; });
+        return state;
+      };
+      const gates = { blob: gate(), decode: gate() };
+      window.__gates = gates;
+      const decode = HTMLImageElement.prototype.decode;
+      HTMLImageElement.prototype.decode = async function held() {
+        if (gates.decode.held) {
+          gates.decode.waiting += 1;
+          await gates.decode.open;
+        }
+        return decode.call(this);
+      };
+      const source = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+      Object.defineProperty(HTMLImageElement.prototype, "src", {
+        configurable: true,
+        get() { return source.get.call(this); },
+        set(value) {
+          if (gates.blob.held && String(value).startsWith("blob:")) {
+            gates.blob.waiting += 1;
+            void gates.blob.open.then(() => source.set.call(this, value));
+            return;
+          }
+          source.set.call(this, value);
+        },
+      });
+    });
+    await page.goto(`${origin}/app?case=race`, { waitUntil: "networkidle" });
+    await page.getByTestId("comment-btn").click();
+    await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
+    // The first note: an element, whose crop is drawn at once.
+    await page.evaluate(() => { document.querySelector("details.cf-tools").open = true; });
+    await page.getByTestId("tool-pick-element").click();
+    await page.locator("#cf-present-document[data-cf-capture-mode='element'] :focus").waitFor();
+    await page.keyboard.press("Enter");
+    await page.getByTestId("composer-text").fill("Sent note.");
+    await page.getByTestId("composer-save").click();
+    await page.getByTestId("composer").waitFor({ state: "detached" });
+    await page.locator("#cf-feedback-panel textarea").fill("Sent instruction.");
+
+    // The second note: an area on the stage drawing, whose crop loads an
+    // image, so its save is still under way when Submit is pressed.
+    await page.evaluate(() => { window.__gates.blob.held = true; window.__gates.decode.held = true; });
+    const stage = page.locator("figure[aria-label='Stage fixture'] svg");
+    await stage.scrollIntoViewIfNeeded();
+    const box = await stage.boundingBox();
+    await page.keyboard.down("Shift");
+    await page.mouse.move(box.x + 10, box.y + 6);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 200, box.y + 30, { steps: 10 });
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+    await page.getByTestId("float-comment").click();
+    await page.getByTestId("composer-text").fill("Held note.");
+    await page.getByTestId("composer-save").click();
+    await page.waitForFunction(() => window.__gates.blob.waiting === 1);
+    assert.equal(await page.getByTestId("composer").count(), 1, "the held save finished early");
+
+    reviewPosts.length = 0;
+    await page.getByTestId("submit-all").evaluate((button) => button.click());
+    await page.waitForFunction(() => window.__gates.decode.waiting === 1);
+    // Fitting is under way: nothing that goes into the review takes an edit.
+    for (const [name, locator] of [
+      ["Submit", page.getByTestId("submit-all")],
+      ["the instruction", page.locator("#cf-feedback-panel textarea")],
+      ["the verdict", page.locator("#cf-review-verdict")],
+      ["Remove", page.getByTestId("note-remove").first()],
+      ["Save", page.getByTestId("composer-save")],
+    ]) assert.equal(await locator.isDisabled(), true, `${name} took input while the review was prepared`);
+    await page.getByTestId("submit-all").evaluate((button) => button.click());
+    await page.getByTestId("note-remove").first().evaluate((button) => button.click());
+    await page.getByTestId("note-row").first().evaluate((row) => row.click());
+    assert.equal(await page.getByTestId("composer-text").inputValue(), "Held note.", "an edit opened while the review was prepared");
+    // The save begun before Submit lands while the review is prepared.
+    await page.evaluate(() => window.__gates.blob.release());
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=note-row]").length === 2);
+    await page.evaluate(() => window.__gates.decode.release());
+    await page.getByTestId("toast").getByText(/Review received.* 1 note saved while it was sent is still pending\./u).waitFor({ timeout: 10_000 });
+    assert.equal(reviewPosts.length, 1, "a second press sent the review again");
+    assert.deepEqual(reviewPosts[0].notes.map((note) => note.body), ["Sent note."]);
+    assert.equal(reviewPosts[0].instruction, "Sent instruction.");
+    assert.deepEqual(await page.getByTestId("note-row").locator(".b").allInnerTexts(), ["Held note."], "the held note did not stay pending");
+    assert.equal(await page.locator("#cf-feedback-panel textarea").inputValue(), "", "the sent instruction was kept");
+    const draft = await page.evaluate(() => JSON.parse(sessionStorage.getItem("cf-present-draft:019f9b53-a341-7fa7-84c2-5f198ceea001") ?? "null"));
+    assert.deepEqual(draft?.notes.map((note) => note.body), ["Held note."], "the held note left the draft");
+
+    await page.getByTestId("submit-all").click();
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=note-row]").length === 0);
+    assert.equal(reviewPosts.length, 2);
+    assert.deepEqual(reviewPosts[1].notes.map((note) => note.body), ["Held note."]);
+    process.stdout.write("submit race passed: fitting holds the review fixed, a second press sends nothing, and a note saved meanwhile stays pending until it is sent\n");
+  } finally {
+    await context.close();
+  }
 }
 
 async function checkStaticExportModes(browser, origin) {
@@ -234,11 +351,24 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
   await assertBundledFonts(page);
+  // At phone width arming Comment leaves the notes sheet closed (QA defect 7);
+  // the second press opens it.
+  await page.getByRole("button", { name: /Comment/ }).click();
+  await page.locator(".cf-hint.on").waitFor();
+  assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-open"), "false", "the sheet opened on arming at phone width");
   await page.getByRole("button", { name: /Comment/ }).click();
   await page.getByTestId("feedback-history").waitFor();
   await page.getByTestId("feedback-history").locator("summary").click();
   await page.getByText("Matched uniquely in this revision.").waitFor();
   await page.getByText("Unpositioned: the referenced block is absent").waitFor();
+  // Each earlier note names its block and its state in words, set apart (P2-1).
+  const headings = await page.getByTestId("feedback-history").locator(".cf-note-heading").evaluateAll((nodes) =>
+    nodes.map((node) => ({ parts: [...node.children].map((child) => child.textContent), gap: parseFloat(getComputedStyle(node).columnGap) || 0 })));
+  // "moved" only when the anchor reports a change (round 3).
+  assert.deepEqual(headings.map((heading) => heading.parts), [["Summary", "anchored"], ["Removed detail", "unpositioned"], ["Implementation", "moved"], ["Flow", "anchored"], ["Whole document", "anchored"]]);
+  await page.getByText("The same element: its block is unchanged in this revision.").waitFor();
+  await page.getByText("Still the whole document in this revision.").waitFor();
+  assert.ok(headings.every((heading) => heading.gap > 0), `an earlier note heading runs its parts together: ${JSON.stringify(headings)}`);
   await page.getByRole("button", { name: "Close" }).click();
   const code = page.locator("code[data-cf-language='rust']");
   await code.scrollIntoViewIfNeeded();
@@ -303,49 +433,73 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Pass10 Comment SM: arm → pin → float → composer → rail → speech markers
   await page.getByRole("button", { name: /Comment/ }).click();
   await page.locator(".cf-hint.on").waitFor();
-  assert.equal(await page.locator(".cf-hint.on").innerText(), "Comment: select words, click a figure part, or drag a box. Esc leaves.");
-  await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
+  // One instruction in the hint, the empty rail and the status line (P3-2).
+  const instruction = "Select words, click any part, or drag a box; hold Shift to start a box on words.";
+  assert.equal(await page.locator(".cf-hint.on [role=status]").innerText(), `${instruction} Esc leaves.`);
+  await openSheet();
   await page.getByText("Nothing noted yet").waitFor();
+  assert.equal(await page.getByTestId("notes-empty").locator(".h").innerText(), instruction);
+  assert.equal(await page.locator(".cf-dock .cf-status").innerText(), instruction);
 
   // Drag starting on the prose wrapper (padding around the paragraph) must stay
   // Text. Missing that hit-test is how region marquees steal text selection.
-  for (const steps of [1, 10]) {
+  const glyphs = (from, to) => page.locator("#gesture-target").evaluate((el, [from, to]) => {
+    const range = document.createRange();
+    range.setStart(el.firstChild, from);
+    range.setEnd(el.firstChild, to);
+    const rect = range.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, y: rect.top + rect.height / 2 };
+  }, [from, to]);
+  // Each pin reopens the notes panel, which covers the prose at this width.
+  async function proseDrag(label, { from, to, steps = 10, quote }) {
+    await revealDocumentForGestures();
+    const end = await glyphs(0, to);
+    const target = { x: end.right, y: end.y };
+    const hits = await page.evaluate(({ from, target }) => ({
+      start: document.elementFromPoint(from.x, from.y)?.id,
+      end: document.elementFromPoint(target.x, target.y)?.id,
+      startElement: document.elementFromPoint(from.x, from.y)?.outerHTML.slice(0, 200),
+      endElement: document.elementFromPoint(target.x, target.y)?.outerHTML.slice(0, 200),
+    }), { from, target });
+    if (hits.start !== "gesture-root" || hits.end !== "gesture-target") {
+      throw new Error(`${label} is obscured or off-screen: ${JSON.stringify({ from, target, hits })}`);
+    }
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps });
+    const marquee = await page.locator(".cf-region-draft").count();
+    await page.mouse.up();
+    const selected = await page.evaluate(() => String(getSelection()));
+    if (selected !== quote) throw new Error(`${label} selected ${JSON.stringify(selected)}, expected ${quote}`);
+    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    await page.waitForFunction(
+      (quote) => document.querySelector("[data-testid=float-chip] .q")?.textContent === quote,
+      quote,
+      { timeout: 5000 },
+    ).catch(() => {});
+    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
+    if (marquee !== 0) throw new Error(`${label} drew a region marquee`);
+    if (kind !== "Text") throw new Error(`${label} opened ${kind}, expected Text`);
+    const pinned = await page.getByTestId("float-chip").locator(".q").innerText();
+    if (pinned !== quote) throw new Error(`${label} pinned ${JSON.stringify(pinned)}, expected ${quote}`);
+  }
+  async function prepareProse() {
     await revealDocumentForGestures();
     const prose = page.locator("#gesture-root");
     await prose.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
     const box = await prose.boundingBox();
     if (!box) throw new Error("Prose review-text-root has no box");
-    const endpoint = await page.locator("#gesture-target").evaluate((el) => {
-      const range = document.createRange();
-      range.setStart(el.firstChild, 0);
-      range.setEnd(el.firstChild, 6);
-      const rect = range.getBoundingClientRect();
-      return { x: rect.right, y: rect.top + rect.height / 2 };
-    });
-    const start = { x: box.x + 4, y: endpoint.y };
-    const hits = await page.evaluate(({ start, endpoint }) => ({
-      start: document.elementFromPoint(start.x, start.y)?.id,
-      end: document.elementFromPoint(endpoint.x, endpoint.y)?.id,
-      startElement: document.elementFromPoint(start.x, start.y)?.outerHTML.slice(0, 200),
-      endElement: document.elementFromPoint(endpoint.x, endpoint.y)?.outerHTML.slice(0, 200),
-    }), { start, endpoint });
-    if (hits.start !== "gesture-root" || hits.end !== "gesture-target") {
-      throw new Error(`Prose drag is obscured or off-screen: ${JSON.stringify({ box, hits })}`);
-    }
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    await page.mouse.move(endpoint.x, endpoint.y, { steps });
-    const marquee = await page.locator(".cf-region-draft").count();
-    await page.mouse.up();
-    const quote = await page.evaluate(() => String(getSelection()));
-    if (quote !== "Review") throw new Error(`Prose drag (${steps} steps) selected ${JSON.stringify(quote)}, expected Review`);
-    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
-    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
-    if (marquee !== 0) throw new Error("Prose drag drew a region marquee");
-    if (kind !== "Text") throw new Error(`Prose drag opened ${kind}, expected Text`);
-    if ((await page.getByTestId("float-chip").locator(".q").innerText()) !== "Review") throw new Error("Prose drag pinned a stale quote");
+    const review = await glyphs(0, 6);
+    return { padding: { x: box.x + 4, y: review.y } };
+  }
+  async function dismissChip() {
     await page.keyboard.press("Escape");
     await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
+  }
+  for (const steps of [1, 10]) {
+    const { padding } = await prepareProse();
+    await proseDrag(`Prose drag (${steps} steps)`, { from: padding, steps, to: 6, quote: "Review" });
+    await dismissChip();
   }
 
   // Words on an authored SVG stage must pin as Text (same as HTML prose).
@@ -367,6 +521,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   }
 
   async function clickTool(testId) {
+    await openSheet();
     await page.evaluate(() => {
       const tools = document.querySelector("details.cf-tools");
       if (tools) {
@@ -446,7 +601,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
   await page.keyboard.press("Escape");
   await page.locator("#cf-present-document:not([data-cf-capture-mode])").waitFor();
-  if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) !== "true") {
+  if ((await page.locator(".cf-hint.on").count()) !== 1) {
     throw new Error("Esc should exit capture without leaving Comment mode");
   }
   await removeAllNotes();
@@ -463,10 +618,13 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Harness excerpts: intercept the actual review POST, not the rail labels.
   async function submitCapturedReview() {
     capturedReviews.length = 0;
+    await openSheet();
     await page.mouse.move(0, 0);
     await assertPrimary(page.getByTestId("submit-all"));
     await page.getByTestId("submit-all").click();
     await page.getByTestId("toast").getByText(/Review received/).waitFor({ timeout: 10000 });
+    // The reviewer reads a plain receipt; the event id is the agent's (P3-4).
+    assert.equal(await page.getByTestId("toast").innerText(), "Review received.");
     if (capturedReviews.length !== 1) {
       throw new Error(`Expected one review POST, got ${capturedReviews.length}`);
     }
@@ -529,6 +687,12 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     && !document.querySelector('[data-testid="composer"]')
     && !document.getElementById("cf-present-document")?.hasAttribute("data-cf-capture-mode")
   );
+  // At phone width the notes sheet opens on request: Comment, when armed.
+  async function openSheet() {
+    if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true") return;
+    await page.locator("#cf-comment-toggle").click();
+    await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
+  }
   async function revealDocumentForGestures() {
     if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true") {
       await page.locator(".cf-feedback-close").click({ force: true });
@@ -558,7 +722,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     }
     await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
-    if (kind !== "Region") throw new Error(`Shift+drag on prose opened ${kind}, expected Region`);
+    if (kind !== "Area") throw new Error(`Shift+drag on prose opened ${kind}, expected Area`);
     return kind;
   }
 
@@ -702,7 +866,7 @@ function assertNetworkStayedLoopback({ responses, externalRoutes }) {
   assertLoopbackOnly(responses);
 }
 
-function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
+function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false, limits = {}) {
   const enhancements = proseOnly
     ? ""
     : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation" data-cf-block-digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
@@ -744,6 +908,7 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
       max_text_utf16: 32,
       max_selector_utf16: 16,
       max_payload_bytes: 262144,
+      ...limits,
     },
     identity: {
       src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -775,6 +940,46 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
               body: "This remains visible without a fabricated location.",
               quote: "removed text",
               anchor: { state: "orphaned", reason: "the referenced block is absent" },
+            },
+          ],
+        },
+        {
+          event_id: "019f9b53-a341-7fa7-84c2-5f198ceea015",
+          source_revision: 1,
+          event_version: 1,
+          lifecycle: "delivered",
+          verdict: "approve_with_notes",
+          notes: [
+            {
+              id: "019f9b53-a341-7fa7-84c2-5f198ceea013",
+              block_label: "Implementation",
+              kind: "comment",
+              body: "This quote changed in the new revision.",
+              quote: "bounded runtime",
+              anchor: { state: "reanchored", start_utf16: 0, end_utf16: 7, changed: true },
+            },
+            {
+              id: "019f9b53-a341-7fa7-84c2-5f198ceea014",
+              block_label: "Flow",
+              kind: "comment",
+              body: "This element's block did not change.",
+              anchor: { state: "element_reanchored", element_path: "h2:nth-of-type(1)" },
+            },
+          ],
+        },
+        {
+          event_id: "019f9b53-a341-7fa7-84c2-5f198ceea016",
+          source_revision: 1,
+          event_version: 1,
+          lifecycle: "delivered",
+          verdict: "approve_with_notes",
+          notes: [
+            {
+              id: "019f9b53-a341-7fa7-84c2-5f198ceea017",
+              block_label: "Whole document",
+              kind: "comment",
+              body: "This area covers the whole document.",
+              anchor: { state: "region_reanchored", scope: "document", anchor_id: "document", x_ppm: 0, y_ppm: 0, width_ppm: 1000000, height_ppm: 1000000 },
             },
           ],
         },

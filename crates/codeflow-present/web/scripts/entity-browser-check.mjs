@@ -68,9 +68,16 @@ try {
   const page = context.pages()[0] ?? await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  // The syntax module is held until the keyboard sits on a code line, so the
+  // highlight replaces the line that has focus (the check:entities flake).
+  let releaseSyntax;
+  const syntaxHeld = new Promise((resolve) => { releaseSyntax = resolve; });
+  await page.route("**/chunk-syntax-*.js", async (route) => { await syntaxHeld; await route.continue(); });
   await page.goto(pathToFileURL(bootstrap).href, { waitUntil: "commit", timeout: 120_000 });
   await page.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"), { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+  await keyboardOutlivesAHighlight(page, releaseSyntax);
+  await page.unroute("**/chunk-syntax-*.js");
   await page.locator("[data-cf-block-id='stage-flow'] [data-cf-figure-block]").scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("[data-cf-block-id='stage-flow'] [data-cf-figure-block]")?.getAttribute("data-cf-figure-block") === "ready");
 
@@ -209,7 +216,7 @@ try {
     .map((line) => line.innerText));
   assert.ok(exportedTitles.includes("Figure 2 · How a task number is issued"), JSON.stringify(exportedTitles));
   assert.ok(exportedTitles.includes("Figure 5 · From a question to a release"), JSON.stringify(exportedTitles));
-  process.stdout.write(`cf-present entity checks passed: ${TARGETS.length} targets by ${GESTURES.join(", ")} in ${THEMES.join(" and ")}, one on a drawing stretched unevenly, a figure label drag that pins (QA defect 5), select enclosing, framing titles, ${stored.length} notes stored with server labels and PNG crops, re-anchored with relabel and block fallback notices, and framing titles visible in the export\n`);
+  process.stdout.write(`cf-present entity checks passed: ${TARGETS.length} targets by ${GESTURES.join(", ")} in ${THEMES.join(" and ")}, one on a drawing stretched unevenly, a figure label drag that pins (QA defect 5), select enclosing, framing titles, the keyboard resuming after a highlight replaced its line, ${stored.length} notes stored with server labels and PNG crops, re-anchored with relabel and block fallback notices, and framing titles visible in the export\n`);
 } finally {
   if (context) await context.close().catch(() => undefined);
   if (sessionId) {
@@ -234,6 +241,30 @@ async function armPickElement(page) {
   const tools = page.getByTestId("notes-dock").locator(".cf-tools");
   if (!await tools.evaluate((element) => element.open)) await tools.locator("summary").click();
   await page.getByTestId("tool-pick-element").click();
+}
+
+// A stop replaced while it has focus (a code line the highlighter redraws)
+// leaves focus on the page; the next arrow resumes from its place in the
+// order, so the keyboard never strands in the middle of a document.
+async function keyboardOutlivesAHighlight(page, releaseSyntax) {
+  const focus = () => page.evaluate(() => {
+    const active = document.activeElement;
+    return {
+      inDocument: document.getElementById("cf-present-document").contains(active),
+      block: active?.closest?.("[data-cf-block-id]")?.getAttribute("data-cf-block-id") ?? null,
+      line: active?.matches?.(".cf-line") ?? false,
+    };
+  });
+  await armPickElement(page);
+  await focusByKeyboard(page, "[data-cf-block-id='acceptance-example'] .cf-line");
+  releaseSyntax();
+  await page.waitForFunction(() => document.querySelector("[data-cf-block-id='acceptance-example'] code")?.dataset.cfHighlight === "ready");
+  assert.equal((await focus()).inDocument, false, "the highlight kept the focused line; this step no longer replaces it");
+  await page.keyboard.press("ArrowRight");
+  const resumed = await focus();
+  assert.ok(resumed.inDocument && resumed.block === "acceptance-example" && resumed.line, `the keyboard did not resume after the highlight: ${JSON.stringify(resumed)}`);
+  await page.keyboard.press("Escape");
+  await page.locator("#cf-present-document[data-cf-capture-mode]").waitFor({ state: "detached" });
 }
 
 // Arrow through the keyboard stops until the one wanted has focus.

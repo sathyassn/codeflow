@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "title": "Separator migration",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "intro",
+      "markdown": "First\n\nSecond"
+    },
+    {
+      "type": "status",
+      "id": "checks",
+      "items": [
+        {
+          "label": "Linux Chrome run",
+          "state": "fail",
+          "detail": "one crop was a sliver"
+        },
+        {
+          "label": "macOS run",
+          "state": "pass"
+        }
+      ]
+    },
+    {
+      "type": "diff",
+      "id": "change",
+      "caption": "One change.",
+      "diff": "--- a/x.rs\n+++ b/x.rs\n fn f() {\n-    let n = 1;\n+    let n = 2;\n }"
+    }
+  ]
+}

@@ -89,3 +89,6 @@ pub const FUZZY_THRESHOLD: f64 = 0.75;
 /// needs more stops before scoring and the note shows on its block with a
 /// notice (SPC-014 B1, TSK-118 review round 1).
 pub const FUZZY_WORK_BUDGET: u64 = 32_000_000;
+
+/// How long `present close` waits for the session service to exit.
+pub const SERVICE_EXIT_WAIT_SECONDS: u64 = 10;

@@ -56,13 +56,18 @@ export async function highlightCode(element: HTMLElement, languageLabel: string)
   const code = element.textContent ?? "";
   const result = highlighter.codeToTokens(code, { lang: language, theme: semanticSyntaxTheme.name });
   const fragment = document.createDocumentFragment();
+  // Each line stays its own element target (QA defect 6), as rendered.
+  const lined = element.querySelector(".cf-line") !== null;
   result.tokens.forEach((line, lineIndex) => {
+    const host = lined ? document.createElement("span") : fragment;
+    if (host instanceof HTMLElement) host.className = "cf-line";
     line.forEach((token) => {
       const span = document.createElement("span");
       span.className = syntaxClassByColor[token.color?.toLowerCase() ?? ""] ?? "syntax-base";
       span.textContent = token.content;
-      fragment.append(span);
+      host.append(span);
     });
+    if (host !== fragment && (line.length > 0 || lineIndex + 1 < result.tokens.length)) fragment.append(host);
     if (lineIndex + 1 < result.tokens.length) fragment.append("\n");
   });
   element.replaceChildren(fragment);

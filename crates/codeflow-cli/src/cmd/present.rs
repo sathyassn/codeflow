@@ -195,7 +195,17 @@ fn close(store: &SessionStore, session_id: &str) -> codeflow_present::Result<()>
     if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
         browser::terminate_isolated(store, id, pid, instance_id, &profile)?;
     }
+    let exited = store.wait_for_service_exit(
+        id,
+        Duration::from_secs(codeflow_present::limits::SERVICE_EXIT_WAIT_SECONDS),
+    )?;
     store.enforce_retention()?;
+    if !exited {
+        return Err(PresentError::ServiceUnavailable(format!(
+            "session {id} is closed, but its service did not exit within {} s; run `codeflow present clear` later",
+            codeflow_present::limits::SERVICE_EXIT_WAIT_SECONDS
+        )));
+    }
     println!("closed {id}");
     Ok(())
 }
@@ -232,6 +242,10 @@ fn clear(
 ) -> codeflow_present::Result<()> {
     let selected = session_id.map(parse_id).transpose()?;
     let removed = store.clear(selected, parse_duration(older_than)?, dry_run)?;
+    // An empty result says so, so a dry run is never silent (QA defect 10).
+    if removed.is_empty() {
+        println!("nothing to clear: no closed session older than {older_than}");
+    }
     for id in removed {
         println!("{} {id}", if dry_run { "would remove" } else { "removed" });
     }
@@ -665,7 +679,7 @@ fn parse_id(value: &str) -> codeflow_present::Result<Uuid> {
 fn parse_duration(value: &str) -> codeflow_present::Result<Duration> {
     let (number, unit) = value.split_at(value.len().saturating_sub(1));
     let amount = number.parse::<u64>().map_err(|_| {
-        PresentError::InvalidDocument("duration must look like 24h, 30d, or 2w".to_string())
+        PresentError::InvalidRequest("duration must look like 24h, 30d, or 2w".to_string())
     })?;
     let seconds = match unit {
         "h" => amount.checked_mul(60 * 60),
@@ -673,7 +687,7 @@ fn parse_duration(value: &str) -> codeflow_present::Result<Duration> {
         "w" => amount.checked_mul(7 * 24 * 60 * 60),
         _ => None,
     }
-    .ok_or_else(|| PresentError::InvalidDocument("duration is invalid or too large".to_string()))?;
+    .ok_or_else(|| PresentError::InvalidRequest("duration is invalid or too large".to_string()))?;
     Ok(Duration::from_secs(seconds))
 }
 
@@ -681,6 +695,7 @@ fn exit_code(error: &PresentError) -> i32 {
     match error {
         PresentError::DocumentTooLarge { .. }
         | PresentError::InvalidDocument(_)
+        | PresentError::InvalidRequest(_)
         | PresentError::UnsupportedSchema { .. }
         | PresentError::InvalidSessionId(_)
         | PresentError::Review { .. }

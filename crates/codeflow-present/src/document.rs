@@ -634,67 +634,62 @@ impl Block {
             Self::Narrative { markdown, .. } => markdown_text(markdown),
             Self::Callout {
                 title, markdown, ..
-            } => format!(
-                "{}{}",
-                title.as_deref().unwrap_or_default(),
-                markdown_text(markdown)
-            ),
+            } => join_parts([title.clone().unwrap_or_default(), markdown_text(markdown)]),
             Self::Decision {
                 title,
                 status,
                 markdown,
                 ..
-            } => format!("{title}{status:?}{}", markdown_text(markdown)),
-            Self::Bullets { items, .. } => items.iter().map(|item| markdown_text(item)).collect(),
-            Self::Comparison { columns, .. } => {
-                let mut output = String::new();
-                for column in columns {
-                    output.push_str(&column.title);
-                    output.push_str(&markdown_text(&column.markdown));
-                }
-                output
-            }
-            Self::Table { columns, rows, .. } => columns
-                .iter()
-                .cloned()
-                .chain(rows.iter().flatten().map(|cell| markdown_text(cell)))
-                .collect(),
-            Self::Status { items, .. } => {
-                let mut output = String::new();
-                for item in items {
-                    output.push_str(&item.label);
-                    output.push_str(item.detail.as_deref().unwrap_or_default());
-                }
-                output
-            }
+            } => join_parts([
+                title.clone(),
+                format!("{status:?}"),
+                markdown_text(markdown),
+            ]),
+            Self::Bullets { items, .. } => join_parts(items.iter().map(|item| markdown_text(item))),
+            Self::Comparison { columns, .. } => join_parts(
+                columns
+                    .iter()
+                    .flat_map(|column| [column.title.clone(), markdown_text(&column.markdown)]),
+            ),
+            Self::Table { columns, rows, .. } => join_parts(
+                columns
+                    .iter()
+                    .cloned()
+                    .chain(rows.iter().flatten().map(|cell| markdown_text(cell))),
+            ),
+            Self::Status { items, .. } => join_parts(
+                items
+                    .iter()
+                    .flat_map(|item| [item.label.clone(), item.detail.clone().unwrap_or_default()]),
+            ),
             Self::Code { code, caption, .. } => {
-                format!("{}{}", caption.as_deref().unwrap_or_default(), code)
+                join_parts([caption.clone().unwrap_or_default(), code.clone()])
             }
             Self::Diff { diff, caption, .. } => {
                 let mut output = caption.clone().unwrap_or_default();
+                if !output.is_empty() {
+                    output.push('\n');
+                }
+                // What the reader sees and selects: a changed line without its
+                // marker, and without the screen-reader label the page gives it.
                 for line in diff.lines() {
-                    if line.starts_with('+') && !line.starts_with("+++") {
-                        output.push_str("Added: ");
-                    } else if line.starts_with('-') && !line.starts_with("---") {
-                        output.push_str("Removed: ");
-                    }
-                    output.push_str(line);
+                    output.push_str(diff_line_parts(line).2);
                     output.push('\n');
                 }
                 output
             }
             Self::Tree { label, nodes, .. } => {
                 let mut output = label.clone();
-                append_tree_text(nodes, &mut output, false);
+                append_tree_text(nodes, &mut output);
                 output
             }
             Self::Figure { declaration, .. } => {
                 let (title, caption) = figure_text(declaration);
-                format!("{title}{caption}")
+                join_parts([title, caption])
             }
             Self::Media { caption, .. } => caption.clone().unwrap_or_default(),
             Self::Disclosure { summary, .. } => summary.clone(),
-            Self::Tabs { tabs, .. } => tabs.iter().map(|tab| tab.label.as_str()).collect(),
+            Self::Tabs { tabs, .. } => join_parts(tabs.iter().map(|tab| tab.label.as_str())),
             Self::FeedbackPrompt { prompt, .. } => prompt.clone(),
             Self::Html { title, html, .. } => [
                 title.as_deref().unwrap_or_default(),
@@ -706,6 +701,51 @@ impl Block {
             .collect::<Vec<_>>()
             .join(" "),
         }
+    }
+
+    /// A diff's review text as 3.0.x wrote it, before TSK-071: each changed
+    /// line began with its screen-reader label and marker ("Added: +") and
+    /// the caption ran straight into the first line. With it come, for each
+    /// of its UTF-16 offsets, where a range starting and where a range ending
+    /// there falls in the review text as it is now (one more entry than its
+    /// length). A generated label and marker fall at the start of their
+    /// line's text; the diff's own text maps one to one. `None` for a block
+    /// that is not a diff.
+    #[must_use]
+    pub fn legacy_diff_review_text(&self) -> Option<(String, Vec<(usize, usize)>)> {
+        let Self::Diff { diff, caption, .. } = self else {
+            return None;
+        };
+        let mut text = String::new();
+        let mut offsets = Vec::new();
+        let mut current = 0;
+        // The line break the caption now ends with: a range ending before
+        // it stops at the caption, one starting after it at the first line.
+        let mut ended_before = None;
+        let mut push =
+            |part: &str, generated: bool, current: &mut usize, ended: &mut Option<usize>| {
+                for _ in part.encode_utf16() {
+                    offsets.push((*current, ended.take().unwrap_or(*current)));
+                    if !generated {
+                        *current += 1;
+                    }
+                }
+                text.push_str(part);
+            };
+        if let Some(caption) = caption.as_deref().filter(|caption| !caption.is_empty()) {
+            push(caption, false, &mut current, &mut ended_before);
+            ended_before = Some(current);
+            current += 1;
+        }
+        for line in diff.lines() {
+            let (label, marker, rest) = diff_line_parts(line);
+            push(label, true, &mut current, &mut ended_before);
+            push(marker, true, &mut current, &mut ended_before);
+            push(rest, false, &mut current, &mut ended_before);
+            push("\n", false, &mut current, &mut ended_before);
+        }
+        offsets.push((current, ended_before.unwrap_or(current)));
+        Some((text, offsets))
     }
 
     /// Short, scannable label for TOC / feedback notes. Not the full prose of
@@ -732,6 +772,17 @@ impl Block {
             }
             | Self::Decision { title, .. }
             | Self::Tree { label: title, .. } => title.clone(),
+            // No raw ids in the nav (QA defect 8): a name the reader can see.
+            Self::Tabs { tabs, .. } => tabs
+                .iter()
+                .map(|tab| tab.label.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            Self::Bullets { items, .. } => items
+                .first()
+                .map_or_else(|| "List".to_string(), |item| prose_nav_label(item)),
+            Self::Code { .. } => "Code".to_string(),
+            Self::Diff { .. } => "Diff".to_string(),
             Self::Figure { declaration, .. } => figure_text(declaration).0.to_string(),
             Self::Media { alt, .. } => alt.clone(),
             Self::Disclosure { summary, .. } => summary.clone(),
@@ -748,16 +799,36 @@ impl Block {
     }
 }
 
+/// The first sentence of the rendered text: Markdown syntax gone, its
+/// words (underscores in a name included) kept, line breaks as spaces.
 fn prose_nav_label(markdown: &str) -> String {
-    let stripped: String = markdown
-        .chars()
-        .filter(|ch| !matches!(ch, '*' | '_' | '`' | '#' | '[' | ']' | '>'))
+    let text: String = Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH)
+        .filter_map(|event| match event {
+            Event::Text(text) | Event::Code(text) => Some(text.into_string()),
+            // A heading or paragraph ends a sentence; a line break does not.
+            Event::End(pulldown_cmark::TagEnd::Heading(_) | pulldown_cmark::TagEnd::Paragraph) => {
+                Some(". ".to_string())
+            }
+            Event::SoftBreak | Event::HardBreak | Event::End(_) => Some(" ".to_string()),
+            _ => None,
+        })
         .collect();
-    let first = stripped
-        .split(['.', '!', '?'])
+    let mut collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // A reference reads as its kind: the label has no numbering at hand.
+    for (token, word) in [("[fig:", "Figure"), ("[table:", "Table")] {
+        while let Some(start) = collapsed.find(token) {
+            let end = collapsed[start..]
+                .find(']')
+                .map_or(collapsed.len(), |end| start + end + 1);
+            collapsed.replace_range(start..end, word);
+        }
+    }
+    let first = collapsed
+        .split_inclusive(['.', '!', '?'])
         .next()
-        .unwrap_or(stripped.as_str())
-        .trim();
+        .unwrap_or(collapsed.as_str())
+        .trim()
+        .trim_end_matches(['.', '!', '?']);
     if first.is_empty() {
         "Section".to_string()
     } else {
@@ -767,7 +838,8 @@ fn prose_nav_label(markdown: &str) -> String {
 
 /// Nav / TOC labels stay one short line so long titles cannot collapse the rail.
 fn truncate_nav_label(label: &str, max_chars: usize) -> String {
-    let trimmed = label.trim();
+    let collapsed = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.as_str();
     if trimmed.is_empty() {
         return "Section".to_string();
     }
@@ -1152,25 +1224,70 @@ fn validate_tree(
     Ok(())
 }
 
-fn append_tree_text(nodes: &[TreeNode], output: &mut String, separated: bool) {
+fn append_tree_text(nodes: &[TreeNode], output: &mut String) {
     for node in nodes {
-        if separated {
+        output.push('\n');
+        output.push_str(&node.label);
+        append_tree_text(&node.children, output);
+    }
+}
+
+/// A diff line as the page draws it: the screen-reader label ("Added: ",
+/// "Removed: " or none), the marker the reader sees but never quotes ("+",
+/// "-" or none) and the text that is the line's review text. File headers
+/// ("+++", "---") and context lines have no marker.
+#[must_use]
+pub fn diff_line_parts(line: &str) -> (&'static str, &str, &str) {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        ("Added: ", &line[..1], &line[1..])
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        ("Removed: ", &line[..1], &line[1..])
+    } else {
+        ("", "", line)
+    }
+}
+
+/// Joins a block's parts with one line break, so a quote or its context that
+/// crosses two parts (two status items, a tree's nodes, two table cells) keeps
+/// a separator (QA defect 8). Empty parts add none.
+fn join_parts<S: AsRef<str>>(parts: impl IntoIterator<Item = S>) -> String {
+    let mut output = String::new();
+    for part in parts {
+        let part = part.as_ref();
+        if part.is_empty() {
+            continue;
+        }
+        if !output.is_empty() && !output.ends_with('\n') {
             output.push('\n');
         }
-        output.push_str(&node.label);
-        append_tree_text(&node.children, output, separated);
+        output.push_str(part);
+    }
+    output
+}
+
+/// Ends a Markdown paragraph, heading or list item with one line break, so
+/// adjacent blocks of text do not run together in the review text.
+fn end_markdown_block(output: &mut String) {
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
     }
 }
 
 fn markdown_text(markdown: &str, framing: &Framing) -> String {
     if !framing.enabled() {
-        return Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH)
-            .filter_map(|event| match event {
-                Event::Text(text) | Event::Code(text) => Some(text.into_string()),
-                Event::SoftBreak | Event::HardBreak => Some("\n".to_string()),
-                _ => None,
-            })
-            .collect();
+        let mut output = String::new();
+        for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
+            match event {
+                Event::Text(text) | Event::Code(text) => output.push_str(&text),
+                Event::SoftBreak | Event::HardBreak => output.push('\n'),
+                Event::End(TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item) => {
+                    end_markdown_block(&mut output);
+                }
+                _ => {}
+            }
+        }
+        output.truncate(output.trim_end_matches('\n').len());
+        return output;
     }
     let mut output = String::new();
     for (event, in_link) in coalesced_markdown(markdown) {
@@ -1195,9 +1312,13 @@ fn markdown_text(markdown: &str, framing: &Framing) -> String {
             }
             Event::Text(text) | Event::Code(text) => output.push_str(&text),
             Event::SoftBreak | Event::HardBreak => output.push('\n'),
+            Event::End(TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item) => {
+                end_markdown_block(&mut output);
+            }
             _ => {}
         }
     }
+    output.truncate(output.trim_end_matches('\n').len());
     output
 }
 
@@ -1668,7 +1789,7 @@ mod tests {
         assert_eq!(block.review_label(), "One change on its review path");
         assert_eq!(
             block.canonical_review_text(&crate::document::Framing::default()),
-            "One change on its review pathA change passes review before it lands."
+            "One change on its review path\nA change passes review before it lands."
         );
 
         let refused = |change: &dyn Fn(&mut serde_json::Value), expected: &str| {
@@ -1767,6 +1888,123 @@ mod tests {
                 .collect(),
         }]);
         assert!(oversized_tree.validate().is_err());
+    }
+
+    /// QA defect 8: a quote across two parts of a block keeps a separator.
+    #[test]
+    fn review_text_separates_a_blocks_parts() {
+        let text = |value: serde_json::Value| {
+            serde_json::from_value::<Block>(value)
+                .unwrap()
+                .canonical_review_text(&crate::document::Framing::default())
+        };
+        assert_eq!(
+            text(serde_json::json!({"type": "status", "id": "s", "items": [
+                {"label": "Linux Chrome run", "state": "pending", "detail": "one crop was a sliver"},
+                {"label": "macOS run", "state": "pending"}
+            ]})),
+            "Linux Chrome run\none crop was a sliver\nmacOS run"
+        );
+        assert_eq!(
+            text(
+                serde_json::json!({"type": "tree", "id": "t", "label": "crates", "nodes": [
+                    {"label": "state.rs", "children": [{"label": "limits.rs"}]}, {"label": "lib.rs"}
+                ]})
+            ),
+            "crates\nstate.rs\nlimits.rs\nlib.rs"
+        );
+        assert_eq!(
+            text(
+                serde_json::json!({"type": "narrative", "id": "n", "markdown": "# Why\n\nOne.\n\n- a\n- b"})
+            ),
+            "Why\nOne.\na\nb"
+        );
+    }
+
+    /// TSK-071 round 3: a diff's review text is what the reader sees and
+    /// selects, a changed line without its marker and without the screen
+    /// reader label; file headers and context lines are unchanged.
+    #[test]
+    fn diff_review_text_holds_no_label_or_marker() {
+        let block: Block = serde_json::from_value(serde_json::json!({
+            "type": "diff", "id": "change", "caption": "One change.",
+            "diff": "--- a/x.rs\n+++ b/x.rs\n fn f() {\n-    let n = 1;\n+    let n = 2;\n }"
+        }))
+        .unwrap();
+        let text = block.canonical_review_text(&crate::document::Framing::default());
+        assert_eq!(
+            text,
+            "One change.\n--- a/x.rs\n+++ b/x.rs\n fn f() {\n    let n = 1;\n    let n = 2;\n }\n"
+        );
+        assert!(!text.contains("Added") && !text.contains("Removed"));
+        assert_eq!(diff_line_parts("+x"), ("Added: ", "+", "x"));
+        assert_eq!(diff_line_parts("-x"), ("Removed: ", "-", "x"));
+        assert_eq!(diff_line_parts("+++ b/x"), ("", "", "+++ b/x"));
+        assert_eq!(diff_line_parts(" x"), ("", "", " x"));
+    }
+
+    /// The 3.0.x diff text that stored quotes were taken in, and where its
+    /// offsets fall now: the caption runs into the first line then, and a
+    /// generated label maps to the start of its line's text.
+    #[test]
+    fn a_legacy_diff_text_maps_onto_the_review_text() {
+        let block: Block = serde_json::from_value(serde_json::json!({
+            "type": "diff", "id": "d", "caption": "Cap", "diff": "+x\n y"
+        }))
+        .unwrap();
+        assert_eq!(
+            block.canonical_review_text(&Framing::default()),
+            "Cap\nx\n y\n"
+        );
+        let (text, offsets) = block.legacy_diff_review_text().unwrap();
+        assert_eq!(text, "CapAdded: +x\n y\n");
+        assert_eq!(offsets.len(), text.encode_utf16().count() + 1);
+        // A range ending after the caption stops before the new line break;
+        // one starting at the label starts at the line's text.
+        assert_eq!(offsets[3], (4, 3));
+        assert_eq!(offsets[4], (4, 4));
+        assert_eq!(offsets[11], (4, 4));
+        assert_eq!(offsets[12], (5, 5));
+        assert_eq!(offsets[16], (9, 9));
+    }
+
+    #[test]
+    fn review_labels_are_readable_names_never_raw_ids() {
+        // QA defect 8: underscores kept, no Markdown syntax, a heading ends
+        // the label, references read as their kind, and no block shows its id.
+        let block = |value: serde_json::Value| -> Block { serde_json::from_value(value).unwrap() };
+        for (value, expected) in [
+            (
+                serde_json::json!({"type": "narrative", "id": "a", "markdown": "## Why `snake_case` wins\n\nMore text."}),
+                "Why snake_case wins",
+            ),
+            (
+                serde_json::json!({"type": "narrative", "id": "b", "markdown": "See [fig:flow] for\nthe path. Then more."}),
+                "See Figure for the path",
+            ),
+            (
+                serde_json::json!({"type": "table", "id": "t", "title": "Review limits", "columns": ["A"], "rows": [["1"]]}),
+                "Review limits",
+            ),
+            (
+                serde_json::json!({"type": "tabs", "id": "views", "tabs": [{"label": "Plan", "blocks": []}, {"label": "Risks", "blocks": []}]}),
+                "Plan, Risks",
+            ),
+            (
+                serde_json::json!({"type": "bullets", "id": "points", "items": ["Select **words** to quote them."]}),
+                "Select words to quote them",
+            ),
+            (
+                serde_json::json!({"type": "code", "id": "snippet", "language": "rust", "code": "fn main() {}"}),
+                "Code",
+            ),
+            (
+                serde_json::json!({"type": "diff", "id": "change", "diff": "+a"}),
+                "Diff",
+            ),
+        ] {
+            assert_eq!(block(value).review_label(), expected);
+        }
     }
 
     #[test]

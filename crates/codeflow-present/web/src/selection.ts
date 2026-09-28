@@ -1,13 +1,13 @@
 import type { ElementSelector, EntitySelector, RegionSelector, TextSelector } from "./contracts";
 // Explicit .ts: check.mjs loads this module under Node type stripping, which
 // does not resolve extensionless relative value imports.
-import { intersectingVisibleText, quoteFromRange, visibleTextOf } from "./excerpt.ts";
+import { intersectingVisibleText, labelTextOf, quoteFromRange } from "./excerpt.ts";
 
 const CONTEXT_UNITS = 32;
 const REGION_SCALE = 1_000_000;
 const ANNOTATABLE = [
   "h1", "h2", "h3", "p", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tr", "th", "td",
-  "figure", "figcaption", "img", "video", "audio", "svg", "details", "summary", "article", "aside",
+  "figure", "figcaption", "img", "video", "audio", "svg", "details", "summary", "article", "aside", ".cf-line",
 ].join(",");
 
 /**
@@ -166,7 +166,7 @@ function ownLabel(block: HTMLElement, element: Element, withText = true): string
   if (aria?.trim()) return collapseLabel(aria);
   if (element instanceof HTMLImageElement && element.alt.trim()) return collapseLabel(element.alt);
   if (element === block || !withText) return "";
-  return collapseLabel(visibleTextOf(element));
+  return collapseLabel(labelTextOf(element));
 }
 
 /** SPC-014 B2: whitespace runs collapse to one space; cut to 120 characters. */
@@ -249,6 +249,8 @@ export function segmentDistance(point: Point, from: Point, to: Point): number {
 // Details sit outside a block's review text; they take element notes
 // labelled by their text, never text selections.
 const FRAME = ".cf-frame-title, .cf-frame-caption, .cf-frame-details, .cf-legend, .cf-fig-title, .cf-fig-caption, .cf-fig-details";
+/** Text the page draws that is never review text: a diff line's label and marker. */
+export const REVIEW_SKIP = "[data-cf-review-skip]";
 const TEXTUAL_TAGS = /^(H1|H2|H3|H4|P|LI|PRE|CODE|TD|TH|LABEL|A|EM|STRONG|SMALL|BLOCKQUOTE|SPAN)$/;
 const PROSE_SELECTOR = "p, h1, h2, h3, h4, li, pre, td, th, blockquote, figcaption";
 
@@ -354,7 +356,7 @@ function reviewText(root: Node): string {
   const parts: string[] = [];
   while (walker.nextNode()) {
     const text = walker.currentNode;
-    if (!text.parentElement?.closest("style, script")) parts.push(text.textContent ?? "");
+    if (!text.parentElement?.closest(`style, script, ${REVIEW_SKIP}`)) parts.push(text.textContent ?? "");
   }
   return parts.join("");
 }
@@ -372,7 +374,7 @@ export function captureResolution(resolution: Resolution): CapturedTarget | null
   if (!blockId || !blockDigest) return null;
   // HTML prose keeps its full visible text as the element label, as in v1;
   // a drawing part carries the resolver's label.
-  const prose = resolution.via === "shape" && element instanceof HTMLElement ? truncate(visibleTextOf(element), 2048) : "";
+  const prose = resolution.via === "shape" && element instanceof HTMLElement ? truncate(labelTextOf(element), 2048) : "";
   const label = prose || resolution.label;
   const variant = element.closest("svg[data-cf-variant]")?.getAttribute("data-cf-variant");
   return {
@@ -400,7 +402,9 @@ export function captureResolution(resolution: Resolution): CapturedTarget | null
 export function captureRegion(documentRoot: HTMLElement, start: Point, end: Point): CapturedTarget | null {
   const selected = normalizedRect(start, end);
   if (selected.width < 4 || selected.height < 4) return null;
-  const blocks = [...documentRoot.querySelectorAll<HTMLElement>("[data-cf-block-id]")];
+  // Blocks inside a closed disclosure or an unopened tab are not shown and
+  // never take an area drawn over the block that hides them (QA defect 2).
+  const blocks = [...documentRoot.querySelectorAll<HTMLElement>("[data-cf-block-id]")].filter(isShown);
   const containing = blocks
     .filter((block) => containsRect(block.getBoundingClientRect(), selected))
     .sort((left, right) => rectArea(left.getBoundingClientRect()) - rectArea(right.getBoundingClientRect()))[0];

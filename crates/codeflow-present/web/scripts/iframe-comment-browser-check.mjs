@@ -56,7 +56,7 @@ export async function checkIframeComments(browser, origin) {
     await page.mouse.up();
     await page.keyboard.up("Shift");
     await page.getByTestId("float-chip").waitFor();
-    assert.equal((await page.getByTestId("float-chip").locator(".lab").innerText()).trim(), "Region");
+    assert.equal((await page.getByTestId("float-chip").locator(".lab").innerText()).trim(), "Area");
     await page.keyboard.press("Escape");
     await page.getByTestId("float-chip").waitFor({ state: "detached" });
     if (await page.locator(".cf-feedback-close").isVisible()) await page.locator(".cf-feedback-close").click();
@@ -64,6 +64,9 @@ export async function checkIframeComments(browser, origin) {
     await page.getByTestId("float-comment").click();
     await page.getByTestId("composer-text").fill("Review the embedded figure.");
     await page.getByTestId("composer-save").click();
+    // At phone width the notes sheet stays closed after a save; Comment opens it.
+    await page.getByTestId("toast").getByText(/The Comment button opens your notes/u).waitFor();
+    await page.locator("#cf-comment-toggle").click();
     await page.getByTestId("submit-all").click();
     await page.waitForFunction(() => document.querySelector("#cf-comment-toggle")?.getAttribute("aria-pressed") === "false");
     assert.equal(reviews.length, 1);
