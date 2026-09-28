@@ -640,7 +640,9 @@ publication date._
   apart from the Codex sign-in. The session summary names the path its
   ledger write failed on and the repair that path needs, and outside a git
   repository records nothing instead of warning. A guard input that is not
-  a JSON hook payload names the harness hook entry to repair. A commit on
+  a JSON hook payload, or whose `tool_name`, `tool_input`, `command` or
+  `cwd` has the wrong type, names the field and the harness hook entry to
+  repair. A commit on
   a `git.breaking_watch_paths` surface now prints a note, not a warning,
   pointing at the pull request's Release impact, and `codeflow ci` and
   `scripts/release.py` given a body that states `Breaking: no` with a

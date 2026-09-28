@@ -260,11 +260,8 @@ fn git_guard(stdin: &str) -> i32 {
 /// visible warning: an unread payload must not veto every shell call
 /// (charter principle 8: legible, not silent).
 fn payload_finding(guard: &str, error: &git_guard::PayloadError) -> codeflow_core::remedy::Finding {
-    let remedy = match error {
-        git_guard::PayloadError::Malformed(_) => codeflow_core::remedy::GUARD_PAYLOAD_MALFORMED
-            .with(&[("guard", guard), ("path", HARNESS_HOOK_FILES)]),
-        git_guard::PayloadError::Unread(_) => codeflow_core::remedy::GUARD_PAYLOAD_UNREAD.remedy(),
-    };
+    let remedy = codeflow_core::remedy::GUARD_PAYLOAD_MALFORMED
+        .with(&[("guard", guard), ("path", HARNESS_HOOK_FILES)]);
     codeflow_core::remedy::Finding::new(
         format!("unreadable hook payload ({error}); allowing"),
         remedy,

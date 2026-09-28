@@ -178,7 +178,6 @@ const ROWS: &[(&str, Proof)] = &[
     ("HOOK_UNEVALUATED", Runs),
     ("HOOK_STDIN_UNREAD", Runs),
     ("GUARD_PAYLOAD_MALFORMED", Runs),
-    ("GUARD_PAYLOAD_UNREAD", Excluded(Network)),
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
     ("REGISTRY_UNWRITTEN", Runs),
     ("PRIVILEGE_ESCALATION", Excluded(HumanAuthority)),

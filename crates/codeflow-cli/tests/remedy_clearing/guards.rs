@@ -413,37 +413,50 @@ fn wired_guard(root: &Path, guard: &str, payload: &str) -> String {
 #[test]
 fn clears_guard_payload_malformed() {
     // TSK-147 round 3 F5: a hook entry that does not pass the harness
-    // payload through (here it pipes other text into the guard) is a local
-    // repair, not a release to install.
+    // payload through is a local repair, not a release to install. Round 4:
+    // that holds for an entry that sends text that is not JSON and for one
+    // that sends an object whose known field has the wrong type (a string
+    // `tool_input`, a numeric `tool_name`, an array `command`).
     let dir = scaffolded("--standard");
     let root = project(&dir);
     let payload = r#"{"tool_name":"Bash","tool_input":{"command":"git status"}}"#;
+    let mangled = [
+        "printf not-json",
+        r#"printf '%s' '{"tool_name":"Bash","tool_input":"git status"}'"#,
+        r#"printf '%s' '{"tool_name":5,"tool_input":{"command":"git status"}}'"#,
+        r#"printf '%s' '{"tool_name":"Bash","tool_input":{"command":["git","status"]}}'"#,
+    ];
     for guard in ["git-guard", "exec-guard"] {
         let settings = read(&root, ".claude/settings.json");
         let shipped = format!("\"codeflow hook {guard}\"");
         assert!(settings.contains(&shipped), "{guard}");
-        write(
-            &root,
-            ".claude/settings.json",
-            &settings.replace(
-                &shipped,
-                &format!("\"printf not-json | codeflow hook {guard}\""),
-            ),
-        );
-        prove(
-            "GUARD_PAYLOAD_MALFORMED",
-            "unreadable hook payload",
-            || wired_guard(&root, guard, payload),
-            |printed| {
-                assert!(
-                    printed.contains(&format!("`codeflow hook {guard}`")),
-                    "{printed}"
-                );
-                assert!(printed.contains("`.claude/settings.json`"), "{printed}");
-                // The entry passes the payload through unchanged again.
-                write(&root, ".claude/settings.json", &settings);
-            },
-        );
+        for sender in mangled {
+            let entry =
+                serde_json::to_string(&format!("{sender} | codeflow hook {guard}")).unwrap();
+            write(
+                &root,
+                ".claude/settings.json",
+                &settings.replace(&shipped, &entry),
+            );
+            prove(
+                "GUARD_PAYLOAD_MALFORMED",
+                "unreadable hook payload",
+                || wired_guard(&root, guard, payload),
+                |printed| {
+                    assert!(
+                        printed.contains(&format!("`codeflow hook {guard}`")),
+                        "{sender}: {printed}"
+                    );
+                    assert!(printed.contains("`.claude/settings.json`"), "{printed}");
+                    assert!(
+                        !printed.contains("release"),
+                        "a local repair only: {printed}"
+                    );
+                    // The entry passes the payload through unchanged again.
+                    write(&root, ".claude/settings.json", &settings);
+                },
+            );
+        }
     }
 }
 

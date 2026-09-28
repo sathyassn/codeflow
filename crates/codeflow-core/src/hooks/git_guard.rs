@@ -210,19 +210,17 @@ pub struct ToolInput {
 /// Why a hook payload was not read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PayloadError {
-    /// The input is not a JSON object: the harness entry that runs the
-    /// guard did not pass the payload through unchanged.
+    /// The input is not a JSON object, or a field the guard reads has the
+    /// wrong type: the harness entry that runs the guard did not pass the
+    /// payload through unchanged. The payload ignores fields it does not
+    /// read, so these are the only ways a payload fails.
     Malformed(String),
-    /// A JSON object with a field this build does not read, such as a
-    /// newer harness schema.
-    Unread(String),
 }
 
 impl std::fmt::Display for PayloadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Malformed(why) => write!(f, "not a JSON hook payload: {why}"),
-            Self::Unread(why) => write!(f, "{why}"),
         }
     }
 }
@@ -232,9 +230,8 @@ impl HookPayload {
     ///
     /// # Errors
     ///
-    /// [`PayloadError::Malformed`] when the input is not a JSON object,
-    /// [`PayloadError::Unread`] when a field has a shape this build does
-    /// not read.
+    /// [`PayloadError::Malformed`] when the input is not a JSON object or a
+    /// field the guard reads has the wrong type; the message names the field.
     pub fn parse(json: &str) -> Result<Self, PayloadError> {
         let value: serde_json::Value =
             serde_json::from_str(json).map_err(|e| PayloadError::Malformed(e.to_string()))?;
@@ -244,7 +241,12 @@ impl HookPayload {
                 json_kind(&value)
             )));
         }
-        serde_json::from_value(value).map_err(|e| PayloadError::Unread(e.to_string()))
+        if let Some((field, expected, found)) = wrong_field_type(&value) {
+            return Err(PayloadError::Malformed(format!(
+                "field `{field}` is a JSON {found} where {expected} belongs"
+            )));
+        }
+        serde_json::from_value(value).map_err(|e| PayloadError::Malformed(e.to_string()))
     }
 
     /// The command to evaluate when this is a shell tool call.
@@ -262,6 +264,38 @@ impl HookPayload {
             None
         }
     }
+}
+
+/// The first field the guard reads whose value has the wrong type, as
+/// (field, expected, found). `null` stands for an absent optional field.
+fn wrong_field_type(
+    value: &serde_json::Value,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    use serde_json::Value;
+    let field = |names: &[&str]| names.iter().find_map(|name| value.get(*name));
+    if let Some(name) = field(&["tool_name", "toolName"]) {
+        if !name.is_string() {
+            return Some(("tool_name", "a string", json_kind(name)));
+        }
+    }
+    if let Some(input) = field(&["tool_input", "toolInput"]) {
+        match input {
+            Value::Object(_) => {
+                if let Some(command) = input.get("command") {
+                    if !(command.is_string() || command.is_null()) {
+                        return Some(("tool_input.command", "a string", json_kind(command)));
+                    }
+                }
+            }
+            other => return Some(("tool_input", "an object", json_kind(other))),
+        }
+    }
+    if let Some(cwd) = value.get("cwd") {
+        if !(cwd.is_string() || cwd.is_null()) {
+            return Some(("cwd", "a string", json_kind(cwd)));
+        }
+    }
+    None
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
@@ -4413,25 +4447,39 @@ mod tests {
 
     /// TSK-147 round 3 F5: input that is not a JSON object is a harness
     /// entry that does not pass the payload through, which a local edit
-    /// clears; a JSON object whose fields this build does not read is a
-    /// version gap, which a release build clears.
+    /// clears. Round 4: so is a JSON object whose known field has the wrong
+    /// type. The payload struct ignores unknown fields, so a wrong type on a
+    /// field it reads is the only way an object fails, and nothing in it
+    /// shows a newer harness schema rather than a mangled payload.
     #[test]
-    fn a_payload_that_is_not_a_json_object_is_malformed_not_unread() {
+    fn a_payload_that_is_not_a_json_object_is_malformed() {
         for input in ["", "not json", "{ nope", "[]", "\"x\"", "42"] {
             assert!(
                 matches!(HookPayload::parse(input), Err(PayloadError::Malformed(_))),
                 "{input:?}"
             );
         }
-        for input in [
-            r#"{"tool_name": 5}"#,
-            r#"{"tool_input": {"command": ["git"]}}"#,
+    }
+
+    #[test]
+    fn a_known_field_with_the_wrong_type_is_malformed_and_named() {
+        for (input, field) in [
+            (r#"{"tool_name": 5}"#, "tool_name"),
+            (r#"{"toolName": 5}"#, "tool_name"),
+            (r#"{"tool_input": "git status"}"#, "tool_input"),
+            (
+                r#"{"tool_input": {"command": ["git"]}}"#,
+                "tool_input.command",
+            ),
+            (r#"{"cwd": 7}"#, "cwd"),
         ] {
-            assert!(
-                matches!(HookPayload::parse(input), Err(PayloadError::Unread(_))),
-                "{input:?}"
-            );
+            let Err(PayloadError::Malformed(why)) = HookPayload::parse(input) else {
+                panic!("{input:?} is not malformed");
+            };
+            assert!(why.contains(&format!("`{field}`")), "{input:?}: {why}");
         }
+        // Fields this build does not read are ignored, not refused.
+        assert!(HookPayload::parse(r#"{"tool_name":"Bash","extra":[1]}"#).is_ok());
     }
 
     // -- commit on protected --

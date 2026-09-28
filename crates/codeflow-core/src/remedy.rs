@@ -534,13 +534,11 @@ catalog! {
     /// A git hook that could not read its input from git.
     HOOK_STDIN_UNREAD = Step::Git("git push"),
         "rerun `git push` so git hands the hook its refs on stdin: a hook manager must pass its stdin through to the codeflow shim, and a branch whose name is not UTF-8 is pushed under a UTF-8 name (`git branch <new> <old>`, then push <new>); server-side CI stays authoritative meanwhile";
-    /// A session guard input that is not a JSON hook payload: the harness
-    /// entry that runs the guard does not pass the payload through.
+    /// A session guard input that is not a JSON hook payload, or whose
+    /// known field has the wrong type: the harness entry that runs the guard
+    /// does not pass the payload through unchanged.
     GUARD_PAYLOAD_MALFORMED = Step::Edit("{path}"),
         "make the hook entry that runs `codeflow hook {guard}` pass the harness payload on stdin unchanged, in {path}; the next tool call is then read";
-    /// A session guard payload whose fields this build does not read.
-    GUARD_PAYLOAD_UNREAD = Step::Codeflow("codeflow doctor"),
-        "this codeflow build cannot read the payload the harness sent (the error names the field): install a codeflow release build that reads it, then `codeflow doctor --check hooks` confirms the hooks answer";
     /// A session summary that could not be written.
     SESSION_SUMMARY_UNWRITTEN = Step::Edit("{path}"),
         "{repair}: {path}; the session ledger lives under git's common directory, and the next session end writes it";
