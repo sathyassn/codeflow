@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -2055,6 +2056,39 @@ print(json.dumps(seen, sort_keys=True))
             "run_id": self.record["run_id"], "case_id": "synthetic", "trial": 2, "path": str(later_root),
         })
         self.assertTrue(self.boundary())
+
+    def test_boundary_holds_while_another_trial_finishes_materializing(self) -> None:
+        # Trials materialize and grade in parallel. A trial that finishes,
+        # writing its record and dropping its reservation, while grading
+        # reads the registrations must still count as the evaluator's.
+        later = eval_kit.trial_opaque_id(self.record["run_id"], "synthetic", 2)
+        later_root = Path(self.record["subjects_root"]) / later / "repository"
+        later_root.mkdir(parents=True)
+        records = self.run_root / "records"
+        reservation = records / f"{later}{eval_kit.RESERVATION_SUFFIX}"
+        registration = {"run_id": self.record["run_id"], "case_id": "synthetic", "trial": 2, "path": str(later_root)}
+        eval_kit.write_json(reservation, registration)
+
+        def finish() -> None:
+            with eval_kit.registration_lock(self.run_root):
+                eval_kit.write_json(records / f"{later}{eval_kit.RECORD_SUFFIX}", {**registration, "boundary": {}})
+                reservation.unlink()
+
+        original = eval_kit.load_json
+        finisher: list[threading.Thread] = []
+
+        def reading(path: Path):
+            if path == reservation and not finisher:
+                finisher.append(threading.Thread(target=finish))
+                finisher[0].start()
+                finisher[0].join(timeout=0.5)
+            return original(path)
+
+        with patch.object(eval_kit, "load_json", reading):
+            passed, detail = eval_kit.grade_boundary(self.record, self.run_root)
+        finisher[0].join()
+        self.assertTrue(passed, detail)
+        self.assertFalse(reservation.exists())
 
     def test_boundary_catches_writes_anywhere_outside_the_workspace(self) -> None:
         subjects = Path(self.record["subjects_root"])

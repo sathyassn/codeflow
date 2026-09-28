@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import copy
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -25,6 +26,11 @@ import sys
 import tarfile
 import tempfile
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # Windows: no POSIX file locks.
+    fcntl = None
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -2086,14 +2092,15 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     if reservation.exists():
         raise EvalError(f"trial is already registered: {reservation}")
     record_path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(reservation, {
-        "schema_version": 1,
-        "run_id": marker["run_id"],
-        "case_id": case_id,
-        "trial": trial,
-        "path": str(output),
-        "state": "materializing",
-    })
+    with registration_lock(resolved_run_root):
+        write_json(reservation, {
+            "schema_version": 1,
+            "run_id": marker["run_id"],
+            "case_id": case_id,
+            "trial": trial,
+            "path": str(output),
+            "state": "materializing",
+        })
     output.mkdir(parents=True)
     tier_flag = "--full" if fixture["tier"] == "full" else "--standard"
     run_command([str(codeflow_path), "init", "--yes", tier_flag], output)
@@ -2185,15 +2192,16 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         "subjects_root": str(subjects),
         "subject_codeflow": str(subject_codeflow),
         "subject_environment": environment,
-        "settled_trials": sorted(settled_trials(resolved_run_root, marker) - {opaque_id}),
-        "boundary": boundary_inventory(resolved_run_root, subjects),
     }
     if plan is not None:
         trial_record["session"] = plan
         trial_record["session_digest"] = canonical_digest(plan)
         trial_record["guidance_wiring"] = wiring
-    write_json(record_path, trial_record)
-    reservation.unlink()
+    with registration_lock(resolved_run_root):
+        trial_record["settled_trials"] = sorted(settled_trials(resolved_run_root, marker) - {opaque_id})
+        trial_record["boundary"] = boundary_inventory(resolved_run_root, subjects)
+        write_json(record_path, trial_record)
+        reservation.unlink()
     return trial_record
 
 
@@ -2720,6 +2728,26 @@ def boundary_inventory(run_root: Path, subjects_root: Path) -> dict[str, str]:
     return inventory
 
 
+@contextlib.contextmanager
+def registration_lock(run_root: Path):
+    """Hold the run's registration lock: an exclusive lock on the run marker,
+    which never changes, so it adds nothing to any inventory. Materialization
+    registers and settles a trial under it, and grading takes its inventory
+    and reads the registrations under it, so a trial finishing in parallel is
+    never half seen. Without POSIX file locks, trials must not materialize
+    while another is graded."""
+
+    if fcntl is None:
+        yield
+        return
+    with open(run_root.expanduser().resolve() / RUN_MARKER, "rb") as marker:
+        fcntl.flock(marker.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(marker.fileno(), fcntl.LOCK_UN)
+
+
 def registered_trials(run_root: Path, marker: dict, *, settled: bool = False) -> set[str]:
     """Opaque ids of the trials this run's evaluator registered: records
     whose file name, run and workspace path agree. With `settled`, only those
@@ -2769,9 +2797,11 @@ def grade_boundary(record: dict, run_root: Path) -> tuple[bool, str]:
     run = {"run_id": record["run_id"], "subjects_root": record["subjects_root"]}
     subjects = Path(record["subjects_root"])
     before: dict[str, str] = record["boundary"]
-    now = boundary_inventory(run_root, subjects)
+    with registration_lock(run_root):
+        now = boundary_inventory(run_root, subjects)
+        registered = registered_trials(run_root, run)
     own = Path(record["path"]).parent.name
-    unsettled = registered_trials(run_root, run) - set(record.get("settled_trials", []))
+    unsettled = registered - set(record.get("settled_trials", []))
 
     def evaluator_made(path: str) -> bool:
         parts = path.split("/")
