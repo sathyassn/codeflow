@@ -7,7 +7,11 @@
 //   IndexedDB and cookies hold none of its text, before and after a
 //   revision notice, which the draft survives without a reload;
 // - a request for the old revision is refused as stale, the draft is kept
-//   and the reviewer confirms it against the current revision;
+//   and the reviewer confirms it against the current revision when the
+//   question there is unchanged; a confirmation or correction the service
+//   refuses leaves an operable send against the current revision;
+// - a question changed at the current revision is never confirmed: the
+//   draft is shown read only, as text, and the page asks for a reload;
 // - the page refuses what the server would, before sending; a body the
 //   server refuses as malformed or over 64 KiB is refused with its typed
 //   error and the store is unchanged;
@@ -15,7 +19,10 @@
 //   it, and one the store could not take (a typed 503) are resent with the
 //   same request id and stored once;
 // - a correction is an amendment naming the original answer;
-// - a decline carries its reason; a closed session keeps the draft read only.
+// - a decline carries its reason;
+// - a session_closed refusal of an answer closes every form and the chrome,
+//   which drops the review draft; closure while answers are in flight stays
+//   closed when their replies arrive, stored or failed.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -160,7 +167,22 @@ try {
   assert.ok(await form.locator("[data-cf-form-action='confirm']").isVisible(), "stale: no confirm");
   assert.deepEqual(await draftOf(), draft, "stale: the draft changed");
   assert.deepEqual(await ledger(), [], "stale: something was stored");
+  // The service refuses the confirmation (its body is changed on the way
+  // out): the confirmation is settled, and the form edits against revision 2
+  // with an operable Submit that makes a new request (R119-4).
+  const refuseOnce = async (change) => page.route(`**${ANSWERS}`, async (route) => {
+    const body = JSON.parse(route.request().postData());
+    change(body);
+    await route.continue({ postData: JSON.stringify(body) });
+  }, { times: 1 });
+  await refuseOnce((body) => { body.values.home = "cloud"; });
   await form.locator("[data-cf-form-action='confirm']").click();
+  const refusedConfirm = await waitState(form, "editing");
+  assert.match(refusedConfirm.says, /service refused the answer/u, `refused confirm: ${refusedConfirm.says}`);
+  assert.ok(await form.locator("[data-cf-form-action='submit']").isVisible(), "refused confirm: no Submit");
+  assert.equal(await form.locator("[data-cf-form-action='confirm']").isVisible(), false, "refused confirm: Confirm is still offered");
+  assert.deepEqual(await ledger(), [], "refused confirm: something was stored");
+  await form.locator("[data-cf-form-action='submit']").click();
   const stored = await waitState(form, "stored");
   assert.equal(stored.says, "Stored, waiting for agent");
   let lines = await ledger();
@@ -168,22 +190,41 @@ try {
   assert.equal(lines[0].revision, 2, "confirm: stored against revision 2");
   assert.deepEqual(lines[0].values, { home: "local", "keep-days": 30, channels: ["rail"], contact: "reviewer@example.org" });
   assert.deepEqual(lines[0].rationales, { home: DRAFT_TEXT });
-  const [staleBody, confirmBody] = sent.slice(-2).map((body) => JSON.parse(body));
+  const [staleBody, confirmBody, sendBody] = sent.slice(-3).map((body) => JSON.parse(body));
   assert.equal(staleBody.revision, 1);
-  assert.notEqual(staleBody.request_id, confirmBody.request_id, "confirm: a new request");
-  passed.push(`stale: refused with the draft kept, then "${stale.says}"; confirming stored it against revision 2 as a new request`);
+  assert.equal(confirmBody.revision, 2);
+  assert.equal(sendBody.revision, 2, "after a refused confirm: the send names revision 2");
+  assert.equal(new Set([staleBody.request_id, confirmBody.request_id, sendBody.request_id]).size, 3, "each send is a new request");
+  passed.push(`stale: refused with the draft kept, then "${stale.says}"; a refused confirmation leaves Submit, which stores it against revision 2 as a new request`);
 
-  // A correction is an amendment naming the original answer.
+  // A correction is an amendment naming the original answer. Revision 3
+  // leaves the question as it was: the correction is refused as stale and
+  // confirmed; the service refuses that confirmation, and "Send correction"
+  // still sends it, against revision 3 (R119-4).
+  const third = JSON.parse(await readFile(fixture, "utf8"));
+  third.title = "Forms fixture, revision 3";
+  await writeFile(join(project, "forms-3.json"), `${JSON.stringify(third, null, 2)}\n`);
+  run(["present", "update", sessionId, join(project, "forms-3.json")]);
   await form.locator("[data-cf-form-action='amend']").click();
   await field("keep-days").locator("input").fill("7");
   await form.locator("[data-cf-form-action='submit']").click();
+  const staleCorrection = await waitState(form, "stale");
+  assert.match(staleCorrection.says, /Revision 3 is current\. This question is unchanged there\./u, staleCorrection.says);
+  await refuseOnce((body) => { body.values.home = "cloud"; });
+  await form.locator("[data-cf-form-action='confirm']").click();
+  await waitState(form, "editing");
+  const correct = form.locator("[data-cf-form-action='submit']");
+  assert.ok(await correct.isVisible(), "refused corrected confirm: no send action");
+  assert.equal(await correct.innerText(), "Send correction");
+  await correct.click();
   await waitState(form, "stored");
   lines = await ledger();
   assert.equal(lines.length, 2);
   assert.equal(lines[1].event, "amendment");
   assert.equal(lines[1].amends, lines[0].answer_id);
+  assert.equal(lines[1].revision, 3);
   assert.equal(lines[1].values["keep-days"], 7);
-  passed.push("amendment: 'Correct this answer' stores an amendment naming the original answer; both lines stay");
+  passed.push("amendment: 'Correct this answer' stores an amendment naming the original answer, both lines stay; a refused confirmation of a stale correction leaves 'Send correction', which stores it against revision 3");
 
   // The page refuses before sending what the server would refuse.
   {
@@ -326,9 +367,9 @@ try {
     assert.equal(await reason.isVisible(), true, "decline: Decline does not show the reason");
     await reason.fill("Not my call.");
     await decision.locator("[data-cf-form-action='decline']").click();
-    // The decision still names revision 1: confirm it against revision 2.
+    // The decision still names revision 1: confirm it against revision 3.
     const stale = await waitState(decision, "stale");
-    assert.match(stale.says, /Revision 2 is current/u);
+    assert.match(stale.says, /Revision 3 is current/u);
     await decision.locator("[data-cf-form-action='confirm']").click();
     await waitState(decision, "stored");
     const line = (await ledger()).at(-1);
@@ -341,18 +382,124 @@ try {
     passed.push("decline: the reason box shows only after Decline, is stored with no values, and hides once stored");
   }
 
-  // A closed session keeps the draft read only.
+  // Revision 4 relabels an option under the same value: the question the
+  // reviewer saw is not the current one, so a correction is never
+  // confirmed. The draft stays read only and is listed as text (R119-3).
   {
+    const before = await ledger();
+    const fourth = JSON.parse(await readFile(fixture, "utf8"));
+    fourth.title = "Forms fixture, revision 4";
+    const home = fourth.blocks.find((block) => block.id === "store-choice").fields.find((item) => item.id === "home");
+    home.options.find((option) => option.value === "local").label = "Store on this machine only";
+    await writeFile(join(project, "forms-4.json"), `${JSON.stringify(fourth, null, 2)}\n`);
+    run(["present", "update", sessionId, join(project, "forms-4.json")]);
     await form.locator("[data-cf-form-action='amend']").click();
     await field("keep-days").locator("input").fill("12");
     const kept = await draftOf();
-    run(["present", "close", sessionId]);
-    const closed = await waitState(form, "closed");
-    assert.match(closed.says, /session is closed/u);
-    assert.deepEqual(await draftOf(), kept, "closed: the draft changed");
-    assert.ok(await field("keep-days").locator("input").isDisabled(), "closed: the draft is editable");
-    passed.push(`closed: "${closed.says}" with the draft kept read only`);
+    await form.locator("[data-cf-form-action='submit']").click();
+    const changed = await waitState(form, "changed");
+    assert.match(changed.says, /This question changed in revision 4\. Reload the page to answer it/u, changed.says);
+    assert.equal(await form.locator("[data-cf-form-action]:visible").count(), 0, "changed: an action is offered");
+    assert.deepEqual(await draftOf(), kept, "changed: the draft changed");
+    assert.ok(await field("keep-days").locator("input").isDisabled(), "changed: the draft is editable");
+    const listed = await form.locator(".cf-form__kept li").allInnerTexts();
+    for (const line of ["Store: Private local store", `Store, why: ${DRAFT_TEXT}`, "Days to keep: 12", "Where to show state: Rail", "Follow-up address: reviewer@example.org"]) {
+      assert.ok(listed.includes(line), `changed: the draft list lacks ${JSON.stringify(line)}: ${JSON.stringify(listed)}`);
+    }
+    assert.deepEqual(await ledger(), before, "changed: something was stored");
+    const staleBody = JSON.parse(sent.at(-1));
+    assert.equal(staleBody.revision, 3, "changed: the correction named another revision");
+    passed.push(`changed question: a relabelled option at revision 4 gives "${changed.says}", no action, the draft read only and listed as text (${listed.length} lines), and nothing stored`);
   }
+
+  // A session_closed refusal of an answer (fulfilled here by the test, as
+  // the service stops once a session closes) closes every form and the
+  // chrome, which drops the restored review draft.
+  {
+    const draftKey = `cf-present-draft:${sessionId}`;
+    await page.evaluate((key) => sessionStorage.setItem(key, JSON.stringify({
+      revision: 4,
+      notes: [{ client_id: "restored-note", block_id: "store-choice", block_label: "Where should answers live?", kind: "comment", body: "A review note kept across the reload.", target_summary: "Where should answers live?" }],
+      verdict: "approve_with_notes",
+      instruction: "",
+    })), draftKey);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    await page.getByTestId("toast").getByText(/Restored 1 unsent note/u).waitFor({ timeout: 20_000 });
+    await decision.locator("input[value='a']").check();
+    await page.route(`**${ANSWERS}`, (route) => route.fulfill({
+      status: 410,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "session_closed", message: "session is closed", details: {} }),
+    }), { times: 1 });
+    await decision.locator("[data-cf-form-action='submit']").click();
+    await waitState(decision, "closed");
+    await waitState(form, "closed");
+    await page.getByTestId("toast").getByText(/This review session is closed\./u).waitFor({ timeout: 20_000 });
+    await page.waitForFunction((key) => sessionStorage.getItem(key) === null, draftKey, { timeout: 10_000 });
+    assert.ok(await field("keep-days").locator("input").isDisabled(), "answer 410: a sibling form is editable");
+    passed.push("answer 410: a session_closed refusal closes the form, its sibling and the chrome, and drops the restored review draft");
+  }
+
+  // Closure while answers are in flight: the replies arrive after it, one
+  // stored and one failed, and neither reopens its form (R119-7).
+  {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    await field("home").locator("input[value='local']").check();
+    await field("keep-days").locator("input").fill("5");
+    await field("channels").locator("input[value='rail']").check();
+    await field("contact").locator("input").fill("reviewer@example.org");
+    await decision.locator("input[value='a']").check();
+    const before = (await ledger()).length;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const failedRequest = page.waitForEvent("requestfailed", (request) => new URL(request.url()).pathname === ANSWERS);
+    await page.route(`**${ANSWERS}`, async (route) => {
+      const body = JSON.parse(route.request().postData());
+      if (body.form_id === "store-choice") {
+        const response = await route.fetch();
+        await gate;
+        await route.fulfill({ response });
+      } else {
+        await gate;
+        await route.abort("connectionreset");
+      }
+    }, { times: 2 });
+    await form.locator("[data-cf-form-action='submit']").click();
+    await decision.locator("[data-cf-form-action='submit']").click();
+    await waitState(form, "submitting");
+    await waitState(decision, "submitting");
+    for (let attempt = 0; (await ledger()).length === before; attempt += 1) {
+      assert.ok(attempt < 100, "in flight: the store never took the answer");
+      await new Promise((done) => setTimeout(done, 100));
+    }
+    const kept = await draftOf();
+    run(["present", "close", sessionId]);
+    await waitState(form, "closed");
+    await waitState(decision, "closed");
+    release();
+    await failedRequest;
+    await page.waitForFunction(() => /Stored, waiting for agent\. This session is now closed/u.test(document.querySelector("article[data-cf-form='store-choice'] [data-cf-form-state]")?.textContent ?? ""), null, { timeout: 20_000 });
+    const storedLate = await stateOf(form);
+    const failedLate = await stateOf(decision);
+    assert.equal(storedLate.state, "closed", "late receipt: the form reopened");
+    assert.equal(failedLate.state, "closed", "late failure: the form reopened");
+    assert.match(failedLate.says, /session is closed/u);
+    assert.equal(await page.locator("[data-cf-form] [data-cf-form-action]:visible").count(), 0, "after closure: an action is offered");
+    assert.ok(await field("keep-days").locator("input").isDisabled(), "late receipt: the draft is editable");
+    assert.ok(await decision.locator("input[value='a']").isDisabled(), "late failure: the draft is editable");
+    assert.deepEqual(await draftOf(), kept, "closed: the draft changed");
+    assert.equal((await ledger()).length, before + 1, "in flight: the store holds the answer once");
+    passed.push(`closed in flight: a receipt that lands after closure says "${storedLate.says}" and a failure says "${failedLate.says}"; neither form reopens, and the draft stays read only`);
+  }
+  // The page never sends null: an unanswered field is absent. (The one
+  // malformed body above was sent by the test, not the page.)
+  for (const body of sent.filter((text) => text !== "{\"request_id\":")) {
+    const values = JSON.parse(body).values ?? {};
+    assert.ok(Object.values(values).every((value) => value !== null), `a request sent null: ${body}`);
+  }
+  passed.push(`no null: none of the ${sent.length - 1} answer requests the page sent holds a null value`);
   assert.deepEqual(errors, [], "page errors");
   await storage("at the end");
   await context.close();

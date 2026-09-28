@@ -147,10 +147,21 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   // and are dropped once the service reports the session closed (B6).
   const [draft] = useState(() => readDraft(config.session_id));
   const closedRef = useRef(false);
-  const dropClosedDraft = (): void => {
+  // Closure is latched once any route reports it: the poll, a refused review
+  // or a refused answer. The draft goes, and every form learns of it once.
+  const closeSession = (announce: boolean): void => {
+    if (closedRef.current) return;
     closedRef.current = true;
     clearDraft(config.session_id);
+    documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: "session_closed" }));
+    if (announce) {
+      const notice = "This review session is closed.";
+      setStatus(notice);
+      showToast(notice, { sticky: true });
+    }
   };
+  const closeSessionRef = useRef(closeSession);
+  closeSessionRef.current = closeSession;
   const [notes, setNotes] = useState<readonly PendingFeedback[]>(draft?.notes ?? []);
   const [verdict, setVerdict] = useState<ReviewVerdict>(draft?.verdict ?? "approve_with_notes");
   const [instruction, setInstruction] = useState(draft?.instruction ?? "");
@@ -342,6 +353,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (notice) showToast(notice, { sticky: true });
   }, []);
   useEffect(() => observeSections(documentRoot, setActiveSection), [documentRoot, config.revision]);
+  // A form refused with session_closed reports it on the document root.
+  useEffect(() => {
+    const onSessionEvent = (event: Event): void => {
+      if ((event as CustomEvent<SessionEventDetail>).detail === "session_closed") closeSessionRef.current(true);
+    };
+    documentRoot.addEventListener(SESSION_EVENT, onSessionEvent);
+    return () => documentRoot.removeEventListener(SESSION_EVENT, onSessionEvent);
+  }, [documentRoot]);
   useEffect(
     () => followSessionEvents(`${config.revision}:${config.event_sequence}`, handleEvent, setEventMessage),
     [config.session_id, config.revision, config.event_sequence],
@@ -1070,7 +1089,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       // SPC-014 I3: a refused review names its reason; the pending notes stay
       // for every refusal, so the reviewer can correct and resend them.
       const refusal = error instanceof PresentRequestError ? parseServiceError(error.message) : null;
-      if (refusal?.error === "session_closed") dropClosedDraft();
+      if (refusal?.error === "session_closed") closeSession(false);
       const reason = refusal?.message ?? (error instanceof Error ? error.message : String(error));
       const notice = `Review was not submitted: ${reason} Your pending notes are unchanged.`;
       setStatus(notice);
@@ -1151,18 +1170,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   function handleEvent(event: SessionEvent): void {
     setEventMessage(event.message ?? null);
     // Forms keep their drafts in the page and show the notice themselves.
-    if (event.kind === "revision" || event.kind === "session_closed") {
-      documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: event.kind }));
-    }
     if (event.kind === "revision") {
+      documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: event.kind }));
       const notice = "A newer document revision is available. Finish or discard this review before reloading.";
       setStatus(notice);
       showToast(notice, { sticky: true });
     } else if (event.kind === "session_closed") {
-      dropClosedDraft();
-      const notice = "This review session is closed.";
-      setStatus(notice);
-      showToast(notice, { sticky: true });
+      closeSession(true);
     }
   }
 

@@ -25,13 +25,14 @@ import {
 export const SESSION_EVENT = "cf-present:session-event";
 export type SessionEventDetail = "revision" | "session_closed";
 
-type FormState = "editing" | "submitting" | "stored" | "failed" | "stale" | "closed";
+type FormState = "editing" | "submitting" | "stored" | "failed" | "stale" | "changed" | "closed";
 type Action = "submit" | "decline" | "cancel" | "resend" | "confirm" | "amend";
 
 const ANSWERS_PATH = "/app/api/answers";
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const JSON_NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/u;
 const CONTROLS = "input, textarea, select, button";
+const CLOSED_TEXT = "This session is closed. Your draft is kept here; nothing can be sent.";
 
 interface Receipt {
   readonly answer_id: string;
@@ -39,9 +40,12 @@ interface Receipt {
   readonly state: string;
 }
 
+// One request as sent: a resend after an uncertain outcome sends these bytes
+// again, with the same request id and against the same revision.
 interface Sent {
   readonly body: string;
   readonly outcome: Outcome;
+  readonly target: StaleTarget | null;
 }
 
 interface StaleTarget {
@@ -52,9 +56,11 @@ interface StaleTarget {
 export function enhanceForms(root: HTMLElement, config: ChromeConfig): void {
   const forms = [...root.querySelectorAll<HTMLElement>("article[data-cf-form]")]
     .filter((article) => article.querySelector("[data-cf-form-action]"))
-    .map((article) => new FormController(article, config));
+    .map((article) => new FormController(article, config, root));
   if (forms.length === 0) return;
   guardAnnotation(root);
+  // The chrome forwards the poll's events here; a form refused with
+  // session_closed reports it here too, so every form and the chrome close.
   root.addEventListener(SESSION_EVENT, (event) => {
     const detail = (event as CustomEvent<SessionEventDetail>).detail;
     for (const form of forms) {
@@ -101,8 +107,11 @@ class FormController {
   private stale: StaleTarget | null = null;
   private gone = false;
   private newer = false;
+  // Closure is latched: no later reply or action reopens the form.
+  private closed = false;
+  private kept: HTMLElement | null = null;
 
-  public constructor(private readonly article: HTMLElement, private readonly config: ChromeConfig) {
+  public constructor(private readonly article: HTMLElement, private readonly config: ChromeConfig, private readonly root: HTMLElement) {
     this.id = article.dataset.cfForm ?? "";
     this.digest = article.dataset.cfFormDigest ?? "";
     this.revision = config.revision;
@@ -127,11 +136,13 @@ class FormController {
   }
 
   public close(): void {
-    this.render("This session is closed. Your draft is kept here; nothing can be sent.", "closed");
+    if (this.closed) return;
+    this.closed = true;
+    this.render(CLOSED_TEXT, "closed");
   }
 
   private act(action: Action): void {
-    if (this.article.closest("[data-cf-commenting='true']")) return;
+    if (this.closed || this.article.closest("[data-cf-commenting='true']")) return;
     switch (action) {
       case "submit":
         void this.send("submit");
@@ -149,7 +160,7 @@ class FormController {
         void this.send("cancel");
         return;
       case "resend":
-        if (this.sent) void this.post(this.sent, null);
+        if (this.sent) void this.post(this.sent);
         return;
       case "confirm":
         if (this.stale && this.sent) void this.send(this.sent.outcome, this.stale);
@@ -163,6 +174,7 @@ class FormController {
   }
 
   private async send(outcome: Outcome, target: StaleTarget | null = null): Promise<void> {
+    if (this.closed) return;
     const draft = this.draft(outcome);
     const errors = validateAnswer(this.rules, draft);
     this.showErrors(errors);
@@ -189,12 +201,13 @@ class FormController {
       this.render(`This answer is over the ${MAX_ANSWER_REQUEST_BYTES / 1024} KiB limit; shorten it.`);
       return;
     }
-    await this.post({ body, outcome }, target);
+    await this.post({ body, outcome, target });
   }
 
   // One request: a new one, or the same bytes again for a resend, so the
   // service answers a resend with the original receipt (B6).
-  private async post(sent: Sent, target: StaleTarget | null): Promise<void> {
+  private async post(sent: Sent): Promise<void> {
+    if (this.closed) return;
     this.sent = sent;
     this.render("Sending...", "submitting");
     let status: number;
@@ -219,10 +232,10 @@ class FormController {
       return;
     }
     if (status === 200) {
-      this.stored(text, target);
+      this.stored(text, sent.target);
       return;
     }
-    this.refused(status, text);
+    this.refused(status, text, sent.target);
   }
 
   private stored(text: string, target: StaleTarget | null): void {
@@ -250,22 +263,30 @@ class FormController {
     this.render("Stored, waiting for agent", "stored");
   }
 
-  private refused(status: number, text: string): void {
+  private refused(status: number, text: string, target: StaleTarget | null): void {
     const error = parseServiceError(text);
     const details = (error?.details ?? {}) as Record<string, unknown>;
     switch (error?.error) {
       case "session_closed":
         this.close();
+        this.root.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: "session_closed" }));
         return;
       case "stale_revision": {
         const revision = Number(details.current_revision);
         const present = details.form_present === true;
         const digest = typeof details.current_form_digest === "string" ? details.current_form_digest : null;
-        this.stale = present ? { revision, digest } : null;
-        this.gone = !present;
-        this.render(present
-          ? `Revision ${revision} is current. ${digest === this.digest ? "This question is unchanged there." : "This question changed there; check your answer against it."} Confirm to send it against revision ${revision}.`
-          : `This question is not in revision ${revision}. Your draft is kept here; it cannot be sent.`, "stale");
+        this.stale = null;
+        if (!present) {
+          this.gone = true;
+          this.render(`This question is not in revision ${revision}. Your draft is kept here; it cannot be sent.`, "stale");
+        } else if (digest !== this.digest) {
+          // The digest covers the whole block: a different one means the
+          // reviewer has not seen the question as it is now.
+          this.showChanged(revision);
+        } else {
+          this.stale = { revision, digest };
+          this.render(`Revision ${revision} is current. This question is unchanged there. Confirm to send it against revision ${revision}.`, "stale");
+        }
         return;
       }
       case "store_unavailable":
@@ -274,15 +295,15 @@ class FormController {
         this.render("Not confirmed as stored: the answer store was unavailable. Your answer is kept; send it again.", "failed");
         return;
       case "request_id_conflict":
-        this.sent = null;
+        this.refusedDefinitively(target);
         this.render("That request was already used for a different answer. Send again to make a new request.", "editing");
         return;
       case "answer_too_large":
-        this.sent = null;
+        this.refusedDefinitively(target);
         this.render(`This answer is over the ${MAX_ANSWER_REQUEST_BYTES / 1024} KiB limit; shorten it.`, "editing");
         return;
       case "invalid_answer": {
-        this.sent = null;
+        this.refusedDefinitively(target);
         const fields = Array.isArray(details.fields) ? (details.fields as FieldError[]) : [];
         this.showErrors(fields);
         this.render("The service refused the answer; check the marked fields.", "editing");
@@ -291,11 +312,66 @@ class FormController {
       case undefined:
         break;
       default:
-        this.sent = null;
+        this.refusedDefinitively(target);
         this.render(`Not stored: ${error?.message ?? "refused"}`, "editing");
         return;
     }
     this.render(`Not confirmed as stored (${status}). Your answer is kept; send it again.`, "failed");
+  }
+
+  // A refusal that stored nothing for certain ends that request: the next
+  // send is a new request. A refused confirmation settles its revision, so
+  // the form edits against the current revision again, with its send.
+  private refusedDefinitively(target: StaleTarget | null): void {
+    this.sent = null;
+    if (!target) return;
+    this.revision = target.revision;
+    if (target.digest) this.digest = target.digest;
+    this.stale = null;
+    this.newer = false;
+  }
+
+  // The question changed at the current revision: the draft stays, read
+  // only, and is shown as text to enter again after a reload.
+  private showChanged(revision: number): void {
+    this.gone = true;
+    if (!this.kept) {
+      this.kept = document.createElement("ul");
+      this.kept.className = "cf-form__kept";
+      this.kept.dataset.cfReviewSkip = "";
+      this.kept.setAttribute("aria-label", "Your draft");
+      this.article.querySelector(".cf-form__actions")?.after(this.kept);
+    }
+    this.kept.replaceChildren(...this.draftLines().map((line) => {
+      const item = document.createElement("li");
+      item.textContent = line;
+      return item;
+    }));
+    this.render(`This question changed in revision ${revision}. Reload the page to answer it; your draft is listed below so you can enter it again.`, "changed");
+  }
+
+  // The draft as the reviewer entered it, one line per value or reason.
+  private draftLines(): string[] {
+    const outcome = this.sent?.outcome ?? (this.declining ? "decline" : "submit");
+    if (outcome === "cancel") return ["Dismissed for now."];
+    if (outcome === "decline") {
+      const reason = this.declineArea?.querySelector("textarea")?.value.trim() ?? "";
+      return [reason ? `Declined to answer: ${reason}` : "Declined to answer."];
+    }
+    const lines: string[] = [];
+    for (const field of this.article.querySelectorAll<HTMLElement>("[data-cf-field]")) {
+      const label = fieldLabel(field);
+      const kind = field.dataset.cfFieldKind as FieldKind;
+      const shown = kind === "boolean" || kind === "choice" || kind === "choices"
+        ? [...field.querySelectorAll<HTMLInputElement>("input[data-cf-value]:checked")]
+          .map((input) => input.closest(".cf-option")?.querySelector(".cf-option__label")?.textContent?.trim() ?? input.value)
+          .join(", ")
+        : field.querySelector<HTMLInputElement | HTMLTextAreaElement>("[data-cf-value]")?.value ?? "";
+      if (shown !== "") lines.push(`${label}: ${shown}`);
+      const rationale = field.querySelector<HTMLTextAreaElement>("[data-cf-rationale-input]")?.value.trim() ?? "";
+      if (rationale !== "") lines.push(`${label}, why: ${rationale}`);
+    }
+    return lines.length > 0 ? lines : ["No answer entered."];
   }
 
   // The answer the controls hold now; a decline or cancel carries no values.
@@ -346,6 +422,12 @@ class FormController {
   }
 
   private render(message: string, state: FormState = this.state): void {
+    if (this.closed && state !== "closed") {
+      // A reply that lands after closure may still confirm a receipt, but
+      // the form stays closed.
+      message = state === "stored" ? "Stored, waiting for agent. This session is now closed; nothing more can be sent." : CLOSED_TEXT;
+      state = "closed";
+    }
     if (state === "editing" && this.newer && !this.amending && this.original === null) state = "stale";
     this.state = state;
     this.article.dataset.cfFormState = state;
@@ -372,6 +454,15 @@ class FormController {
     if (submit) submit.textContent = this.amending ? "Send correction" : "Submit answer";
     if (this.declineArea) this.declineArea.hidden = !(this.declining && editable);
   }
+}
+
+// The field's label as the reviewer read it, without the "(required)" flag.
+function fieldLabel(field: HTMLElement): string {
+  const label = field.querySelector<HTMLElement>(".cf-field__label");
+  if (!label) return field.dataset.cfField ?? "";
+  const copy = label.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll(".cf-field__flag").forEach((flag) => flag.remove());
+  return copy.textContent?.trim() ?? "";
 }
 
 // The rules the page checks, as the service rendered them on the form.

@@ -669,7 +669,8 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .cf-form__state:empty { display: none; }
 .cf-form__state[data-cf-form-state="stored"] { color: var(--cf-positive); font-weight: 650; }
 .cf-form__state[data-cf-form-state="failed"], .cf-form__state[data-cf-form-state="closed"] { color: var(--cf-danger); }
-.cf-form__state[data-cf-form-state="stale"] { color: var(--cf-warning); }
+.cf-form__state[data-cf-form-state="stale"], .cf-form__state[data-cf-form-state="changed"] { color: var(--cf-warning); }
+.cf-form__kept { display: grid; gap: var(--cf-space-1); max-inline-size: 36rem; margin: 0; padding-inline-start: var(--cf-space-5); font-size: var(--cf-fs-caption); overflow-wrap: anywhere; }
 [data-cf-commenting="true"] .cf-form input, [data-cf-commenting="true"] .cf-form textarea, [data-cf-commenting="true"] .cf-form button { cursor: inherit; }
 table { inline-size: 100%; border-collapse: collapse; }
 th, td { padding: var(--cf-space-3); border-block-end: var(--cf-line) solid var(--cf-border); text-align: start; vertical-align: top; }
