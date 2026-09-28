@@ -604,3 +604,74 @@ fn the_three_contexts_judge_one_task_the_same_way() {
     assert!(next.contains("ready    TSK-004 Join"), "{next}");
     assert!(!next.contains("TSK-003"), "{next}");
 }
+
+/// Journey (TSK-156 AC-4): on a fresh `init --full` project, `task new`
+/// writes the pin guidance quoted, a `depends_on` pin YAML reads as a number
+/// (`70283613`) is refused by `validate --docs` with the quote remedy, and
+/// the same pin quoted passes.
+#[test]
+fn a_number_shaped_pin_is_refused_with_the_quote_remedy_on_a_fresh_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    ok(&codeflow(&root, &["epic", "new", "outcome"]), "epic new");
+    for title in ["findings", "consumer"] {
+        ok(
+            &codeflow(&root, &["task", "new", "--epic", "EPC-001", title]),
+            "task new",
+        );
+    }
+    let consumer = "project-management/tasks/TSK-002.md";
+    let written = std::fs::read_to_string(root.join(consumer)).unwrap();
+    assert!(
+        written.contains("{id: TSK-NNN, kind: research, pin: \"<commit sha>\"}, the pin quoted"),
+        "{written}"
+    );
+    edit(
+        &root,
+        "project-management/epics/EPC-001.md",
+        "- AC-1\n",
+        "- AC-1 When used, the system shall work.\n",
+    );
+    for task in ["project-management/tasks/TSK-001.md", consumer] {
+        edit(
+            &root,
+            task,
+            "- AC-1\n",
+            "- AC-1 When run, the system shall work.\n",
+        );
+    }
+    ok(
+        &codeflow(&root, &["validate", "--docs"]),
+        "validate before the pin",
+    );
+
+    edit(
+        &root,
+        consumer,
+        "depends_on: []",
+        "depends_on: [{id: TSK-001, kind: research, pin: 70283613}]",
+    );
+    let out = codeflow(&root, &["validate", "--docs"]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_ne!(out.status.code(), Some(0), "{said}");
+    assert!(
+        said.contains("TSK-001 pin reads as a YAML number")
+            && said.contains("quote it: pin: \"<commit sha>\""),
+        "{said}"
+    );
+
+    edit(&root, consumer, "pin: 70283613}", "pin: \"70283613\"}");
+    ok(
+        &codeflow(&root, &["validate", "--docs"]),
+        "validate with the pin quoted",
+    );
+}
