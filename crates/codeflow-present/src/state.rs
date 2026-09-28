@@ -383,6 +383,10 @@ pub struct FeedbackView {
     pub source_revision: u64,
     pub event_version: u64,
     pub lifecycle: FeedbackLifecycle,
+    /// Whether the agent acknowledged the review (`present ack`, SPC-014
+    /// B8): a state apart from delivery and resolution, shown beside them.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub acknowledged: bool,
     pub verdict: FeedbackVerdict,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instruction: Option<String>,
@@ -1589,6 +1593,12 @@ impl SessionStore {
     pub fn mark_delivered(&self, id: Uuid, event_ids: &[Uuid]) -> Result<()> {
         let _project_lease = self.prepare_control_mutation()?;
         let _lock = self.lock_session(id)?;
+        self.mark_delivered_unlocked(id, event_ids)
+    }
+
+    /// Appends the `delivered` event of each received review in `event_ids`;
+    /// the caller holds the project lease and the session lock.
+    pub(crate) fn mark_delivered_unlocked(&self, id: Uuid, event_ids: &[Uuid]) -> Result<()> {
         let events = self.read_events_unlocked(id)?;
         let ledger = FeedbackLedger::replay(&events)?;
         let mut sequence = ledger.next_sequence;
@@ -1692,13 +1702,22 @@ impl SessionStore {
     pub fn feedback_snapshot(&self, id: Uuid) -> Result<FeedbackSnapshot> {
         // Read under the lock; re-anchor after it, so a large revision never
         // holds up the session's other operations (TSK-118 review T118-5).
-        let (session, revision, events, sources) = {
+        let (session, revision, events, sources, acknowledged) = {
             let _lock = self.lock_session(id)?;
             let session = self.load(id)?;
             let revision = self.revision(id, session.current_revision)?;
             let events = self.read_events_unlocked(id)?;
             let sources = self.source_revisions(id, &events, &revision)?;
-            (session, revision, events, sources)
+            let ledger = crate::responses::Ledger::open(self.responses_path(id)?, id)?;
+            let acknowledged = ledger
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    crate::responses::ResponseEvent::Acknowledged(state) => Some(state.target),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            (session, revision, events, sources, acknowledged)
         };
         build_feedback_snapshot(
             id,
@@ -1706,13 +1725,14 @@ impl SessionStore {
             &revision.content,
             session.current_revision,
             &sources,
+            &acknowledged,
         )
     }
 
     /// The content of each earlier revision that notes were written on: a
     /// note on a removed diagram orphans with a reason that names it, and a
     /// diff quote is read in the review text of the revision it was taken in.
-    fn source_revisions(
+    pub(crate) fn source_revisions(
         &self,
         id: Uuid,
         events: &[FeedbackEvent],
@@ -2124,7 +2144,7 @@ impl SessionStore {
         })
     }
 
-    fn read_events_unlocked(&self, id: Uuid) -> Result<Vec<FeedbackEvent>> {
+    pub(crate) fn read_events_unlocked(&self, id: Uuid) -> Result<Vec<FeedbackEvent>> {
         let path = self.events_path(id);
         self.ensure_session_layout(id)?;
         let file = open_private_read(&path)?;
@@ -2673,7 +2693,7 @@ fn find_block<'a>(
 }
 
 /// The content of each earlier revision that notes were written on.
-type SourceRevisions = std::collections::HashMap<u64, RevisionContent>;
+pub(crate) type SourceRevisions = std::collections::HashMap<u64, RevisionContent>;
 
 /// Re-anchored notes by session, feedback event, note and current revision.
 /// Each key names immutable inputs (a stored note and a stored revision), so
@@ -2709,6 +2729,7 @@ fn build_feedback_snapshot(
     current: &RevisionContent,
     current_revision: u64,
     sources: &SourceRevisions,
+    acknowledged: &HashSet<Uuid>,
 ) -> Result<FeedbackSnapshot> {
     let mut lifecycle = std::collections::HashMap::new();
     let mut received = Vec::new();
@@ -2743,12 +2764,6 @@ fn build_feedback_snapshot(
             lifecycle.get(&envelope.event_id).copied().ok_or_else(|| {
                 PresentError::CorruptState("feedback lifecycle is missing".to_string())
             })?;
-        let source = if envelope.revision == current_revision {
-            Some(current)
-        } else {
-            sources.get(&envelope.revision)
-        };
-        let source_document = source.and_then(source_document);
         let notes = envelope
             .notes
             .iter()
@@ -2761,30 +2776,14 @@ fn build_feedback_snapshot(
                     .selector
                     .as_ref()
                     .map(|selector| selector.exact.clone()),
-                anchor: match source {
-                    Some(RevisionContent::Retired { diagram_ids, .. })
-                        if diagram_ids.contains(&note.block_id) =>
-                    {
-                        FeedbackAnchor::Orphaned {
-                            reason: format!(
-                                "the diagram block {} was removed with Mermaid; convert it to reanchor this note",
-                                note.block_id
-                            ),
-                        }
-                    }
-                    _ => cached_reanchor(
-                        (session_id, envelope.event_id, note.id, current_revision),
-                        || {
-                            reanchor_note(
-                                note,
-                                envelope.revision,
-                                source_document.as_deref(),
-                                current,
-                                current_revision,
-                            )
-                        },
-                    ),
-                },
+                anchor: note_anchor(
+                    session_id,
+                    envelope,
+                    note,
+                    current,
+                    current_revision,
+                    sources,
+                ),
             })
             .collect();
         items.push(FeedbackView {
@@ -2792,6 +2791,7 @@ fn build_feedback_snapshot(
             source_revision: envelope.revision,
             event_version,
             lifecycle: state,
+            acknowledged: acknowledged.contains(&envelope.event_id),
             verdict: envelope.verdict.clone(),
             instruction: envelope.instruction.clone(),
             notes,
@@ -2801,6 +2801,46 @@ fn build_feedback_snapshot(
         items,
         omitted_older,
     })
+}
+
+/// A review note's anchor on the current revision (SPC-014 B1), the one the
+/// rail and the v2 review line both show. `sources` holds the content of the
+/// revision the note was written on when that is not the current one.
+pub(crate) fn note_anchor(
+    session_id: Uuid,
+    envelope: &FeedbackEnvelope,
+    note: &FeedbackNote,
+    current: &RevisionContent,
+    current_revision: u64,
+    sources: &SourceRevisions,
+) -> FeedbackAnchor {
+    let source = if envelope.revision == current_revision {
+        Some(current)
+    } else {
+        sources.get(&envelope.revision)
+    };
+    match source {
+        Some(RevisionContent::Retired { diagram_ids, .. }) if diagram_ids.contains(&note.block_id) => {
+            FeedbackAnchor::Orphaned {
+                reason: format!(
+                    "the diagram block {} was removed with Mermaid; convert it to reanchor this note",
+                    note.block_id
+                ),
+            }
+        }
+        _ => cached_reanchor(
+            (session_id, envelope.event_id, note.id, current_revision),
+            || {
+                reanchor_note(
+                    note,
+                    envelope.revision,
+                    source.and_then(source_document).as_deref(),
+                    current,
+                    current_revision,
+                )
+            },
+        ),
+    }
 }
 
 /// The document a note was written on. A retired revision reads with each

@@ -1,7 +1,9 @@
-//! The answer ledger `responses.jsonl` (SPC-014 B6, B7, I4).
+//! The answer ledger `responses.jsonl` (SPC-014 B6, B7, B8, I4).
 //!
 //! Answers and amendments are appended to `responses.jsonl` in the session
-//! directory, beside the v1 `events.jsonl`, which keeps its exact shape. The
+//! directory, beside the v1 `events.jsonl`, which keeps its exact shape, and
+//! so are the `delivered` line of each answer and the `acknowledged` line of
+//! each answer or review the agent acknowledges (`delivery.rs`). The
 //! ledger lives in the private local session store, owner-only like the rest
 //! of it, and is never written into the repository (B7). A session with no
 //! answer has no ledger file.
@@ -12,8 +14,9 @@
 //! opened, a final line with no newline, or one that does not parse, is a
 //! torn append from a crash: it is truncated under the lock. Its request
 //! never got a receipt, so the page's retry appends it again. Any other line
-//! that does not parse, or a ledger whose sequence, ids or amendments do not
-//! hold together, is corrupt state and is never rewritten.
+//! that does not parse, or a ledger whose sequence, ids, amendments or
+//! delivery states do not hold together, is corrupt state and is never
+//! rewritten.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -72,20 +75,44 @@ pub struct AnswerRecord {
     pub amends: Option<Uuid>,
 }
 
-/// One line of `responses.jsonl` (I4). This task writes answers and
-/// amendments; later event kinds extend the enum additively.
+/// A `delivered` or `acknowledged` line of I4, without its `event` tag: the
+/// state an event reached, by its id. Delivery names an answer or an
+/// amendment (a review's delivery stays in `events.jsonl`); acknowledgment
+/// names a delivered answer, amendment or review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateRecord {
+    pub sequence: u64,
+    pub target: Uuid,
+    pub at_unix: u64,
+}
+
+/// One line of `responses.jsonl` (I4). Later event kinds (replies, reopens,
+/// tombstones) extend the enum additively.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ResponseEvent {
     Answer(AnswerRecord),
     Amendment(AnswerRecord),
+    Delivered(StateRecord),
+    Acknowledged(StateRecord),
 }
 
 impl ResponseEvent {
+    /// The answer an `answer` or `amendment` line holds.
     #[must_use]
-    pub const fn record(&self) -> &AnswerRecord {
+    pub const fn answer(&self) -> Option<&AnswerRecord> {
         match self {
-            Self::Answer(record) | Self::Amendment(record) => record,
+            Self::Answer(record) | Self::Amendment(record) => Some(record),
+            Self::Delivered(_) | Self::Acknowledged(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        match self {
+            Self::Answer(record) | Self::Amendment(record) => record.sequence,
+            Self::Delivered(record) | Self::Acknowledged(record) => record.sequence,
         }
     }
 }
@@ -123,9 +150,9 @@ impl AnswerReceipt {
 }
 
 /// The ledger of one session, read under the caller's session lock.
-struct Ledger {
+pub(crate) struct Ledger {
     path: PathBuf,
-    events: Vec<ResponseEvent>,
+    pub(crate) events: Vec<ResponseEvent>,
     length: u64,
     /// Whether the file exists; a failed first append removes the file it
     /// created, so the store is as it was.
@@ -135,7 +162,7 @@ struct Ledger {
 impl Ledger {
     /// Reads the ledger, truncating a torn final line. The caller holds the
     /// session lock. An absent file is an empty ledger.
-    fn open(path: PathBuf, session_id: Uuid) -> Result<Self> {
+    pub(crate) fn open(path: PathBuf, session_id: Uuid) -> Result<Self> {
         let mut file = match std::fs::symlink_metadata(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self {
@@ -200,14 +227,14 @@ impl Ledger {
             .map_err(|error| PresentError::io(&self.path, error))
     }
 
-    fn next_sequence(&self) -> u64 {
+    pub(crate) fn next_sequence(&self) -> u64 {
         self.events.len() as u64 + 1
     }
 
     fn by_request(&self, request_id: Uuid) -> Option<&AnswerRecord> {
         self.events
             .iter()
-            .map(ResponseEvent::record)
+            .filter_map(ResponseEvent::answer)
             .find(|record| record.request_id == request_id)
     }
 
@@ -220,17 +247,17 @@ impl Ledger {
                 serde_json::json!({ "amends": amends }),
             )
         };
-        match self
-            .events
-            .iter()
-            .find(|event| event.record().answer_id == amends)
-        {
+        match self.events.iter().find(|event| {
+            event
+                .answer()
+                .is_some_and(|record| record.answer_id == amends)
+        }) {
             Some(ResponseEvent::Answer(original)) if original.form_id == form_id => Ok(()),
             Some(ResponseEvent::Answer(_)) => Err(refuse("amends names an answer to another form")),
             Some(ResponseEvent::Amendment(_)) => Err(refuse(
                 "amends names an amendment; an amendment names the original answer",
             )),
-            None => Err(refuse("amends names no answer in this session")),
+            _ => Err(refuse("amends names no answer in this session")),
         }
     }
 
@@ -239,7 +266,7 @@ impl Ledger {
     /// fails too, the line stays whole or torn: no receipt was given, the
     /// next open cuts a torn line, and a resend with the same request id
     /// replays a whole one, so a resend is always safe.
-    fn append(&mut self, store: &SessionStore, event: ResponseEvent) -> Result<()> {
+    pub(crate) fn append(&mut self, store: &SessionStore, event: ResponseEvent) -> Result<()> {
         if self.events.len() >= max_events() {
             return Err(PresentError::ServiceUnavailable(format!(
                 "the answer ledger holds at most {} lines",
@@ -344,7 +371,7 @@ fn parse_ledger(path: &Path, bytes: &[u8]) -> Result<(Vec<ResponseEvent>, usize)
             None if last => return Ok((events, start)),
             None => {
                 return Err(PresentError::CorruptState(format!(
-                    "{} line {} is not an answer record",
+                    "{} line {} is not a response record",
                     path.display(),
                     events.len() + 1
                 )));
@@ -356,8 +383,11 @@ fn parse_ledger(path: &Path, bytes: &[u8]) -> Result<(Vec<ResponseEvent>, usize)
 }
 
 /// The ledger holds together: sequences count from 1, each answer and
-/// request id is used once, and each amendment names an earlier original
-/// answer of its form.
+/// request id is used once, each amendment names an earlier original answer
+/// of its form, each answer is delivered at most once and after it was
+/// stored, and each event is acknowledged at most once, an answer only after
+/// its delivery. An acknowledgment of an id that is no answer names a review,
+/// which `events.jsonl` holds; the store checked it when it wrote the line.
 fn validate_ledger(path: &Path, events: &[ResponseEvent], session_id: Uuid) -> Result<()> {
     let corrupt = |message: String| {
         Err(PresentError::CorruptState(format!(
@@ -370,12 +400,34 @@ fn validate_ledger(path: &Path, events: &[ResponseEvent], session_id: Uuid) -> R
     }
     let mut answers = HashSet::new();
     let mut requests = HashSet::new();
+    let mut delivered = HashSet::new();
+    let mut acknowledged = HashSet::new();
     for (index, event) in events.iter().enumerate() {
-        let record = event.record();
         let line = index + 1;
-        if record.sequence != line as u64 {
-            return corrupt(format!("line {line} has sequence {}", record.sequence));
+        if event.sequence() != line as u64 {
+            return corrupt(format!("line {line} has sequence {}", event.sequence()));
         }
+        let record = match event {
+            ResponseEvent::Answer(record) | ResponseEvent::Amendment(record) => record,
+            ResponseEvent::Delivered(state) => {
+                if !answers.contains(&state.target) || !delivered.insert(state.target) {
+                    return corrupt(format!(
+                        "line {line} delivers no stored answer, or one already delivered"
+                    ));
+                }
+                continue;
+            }
+            ResponseEvent::Acknowledged(state) => {
+                let undelivered_answer =
+                    answers.contains(&state.target) && !delivered.contains(&state.target);
+                if undelivered_answer || !acknowledged.insert(state.target) {
+                    return corrupt(format!(
+                        "line {line} acknowledges an undelivered answer, or an event again"
+                    ));
+                }
+                continue;
+            }
+        };
         if record.session_id != session_id {
             return corrupt(format!("line {line} names another session"));
         }
@@ -487,7 +539,7 @@ impl SessionStore {
         Ok(Ledger::open(self.responses_path(session_id)?, session_id)?.events)
     }
 
-    fn responses_path(&self, session_id: Uuid) -> Result<PathBuf> {
+    pub(crate) fn responses_path(&self, session_id: Uuid) -> Result<PathBuf> {
         self.ensure_session_layout(session_id)?;
         Ok(self.session_dir(session_id).join(RESPONSES_FILE))
     }
@@ -745,12 +797,12 @@ mod tests {
         assert!(validate_ledger(path, &events[1..], Uuid::nil()).is_err());
         let mut repeated = events.clone();
         if let ResponseEvent::Answer(record) = &mut repeated[1] {
-            record.request_id = events[0].record().request_id;
+            record.request_id = events[0].answer().unwrap().request_id;
         }
         assert!(validate_ledger(path, &repeated, Uuid::nil()).is_err());
         let mut amending = events.clone();
         if let ResponseEvent::Answer(record) = &mut amending[1] {
-            record.amends = Some(events[0].record().answer_id);
+            record.amends = Some(events[0].answer().unwrap().answer_id);
         }
         assert!(
             validate_ledger(path, &amending, Uuid::nil()).is_err(),
@@ -768,6 +820,66 @@ mod tests {
             validate_ledger(path, &amending, Uuid::nil()).is_err(),
             "an amendment names an answer of its own form"
         );
+    }
+
+    /// TSK-120: a `delivered` line follows the answer it names, once; an
+    /// `acknowledged` line follows the delivery of an answer, once. An
+    /// acknowledgment of an id that is no answer names a review.
+    #[test]
+    fn delivery_lines_hold_together_with_their_answers() {
+        let path = Path::new("responses.jsonl");
+        let answer = Uuid::from_u128(1);
+        let answer_line = serde_json::json!({
+            "event": "answer", "sequence": 1, "answer_id": answer,
+            "request_id": Uuid::from_u128(101), "payload_digest": "a".repeat(64),
+            "session_id": Uuid::nil(), "revision": 1, "form_id": "f", "form_digest": "b".repeat(64),
+            "outcome": "cancel", "values": {}, "rationales": {},
+            "question": { "title": "T", "fields": [] }, "actor": "operator", "created_at_unix": 1
+        });
+        let state = |event: &str, sequence: u64, target: Uuid| {
+            serde_json::json!({
+                "event": event, "sequence": sequence, "target": target, "at_unix": 2
+            })
+        };
+        let check = |lines: &[serde_json::Value]| {
+            let mut text = String::new();
+            for line in lines {
+                text.push_str(&line.to_string());
+                text.push('\n');
+            }
+            let (events, _) = parse_ledger(path, text.as_bytes()).unwrap();
+            assert_eq!(events.len(), lines.len(), "every line parses");
+            validate_ledger(path, &events, Uuid::nil())
+        };
+        let review = Uuid::from_u128(7);
+        let delivered = state("delivered", 2, answer);
+        assert!(check(&[answer_line.clone(), delivered.clone()]).is_ok());
+        assert!(check(&[
+            answer_line.clone(),
+            delivered.clone(),
+            state("acknowledged", 3, answer),
+            state("acknowledged", 4, review),
+        ])
+        .is_ok());
+        for broken in [
+            vec![state("delivered", 1, answer), answer_line.clone()],
+            vec![answer_line.clone(), state("delivered", 2, review)],
+            vec![
+                answer_line.clone(),
+                delivered.clone(),
+                state("delivered", 3, answer),
+            ],
+            vec![answer_line.clone(), state("acknowledged", 2, answer)],
+            vec![
+                answer_line.clone(),
+                delivered.clone(),
+                state("acknowledged", 3, answer),
+                state("acknowledged", 4, answer),
+            ],
+            vec![answer_line.clone(), state("delivered", 3, answer)],
+        ] {
+            assert!(check(&broken).is_err(), "{broken:?}");
+        }
     }
 
     /// AC-5: an append interrupted by a crash leaves the ledger whole or
@@ -830,7 +942,7 @@ mod tests {
             } else {
                 assert_eq!(events.len(), 1, "cut {cut}: the torn line is cut");
                 assert_eq!(after, before, "cut {cut}");
-                assert_eq!(events[0].record().answer_id, stored.answer_id);
+                assert_eq!(events[0].answer().unwrap().answer_id, stored.answer_id);
             }
         }
         // The session still works: the interrupted request stores on retry
@@ -1073,7 +1185,7 @@ mod tests {
                 let events = session.store.responses(session.id).unwrap();
                 assert_eq!(events.len(), sent.len(), "{context}");
                 for (event, model) in events.iter().zip(&sent) {
-                    let record = event.record();
+                    let record = event.answer().unwrap();
                     assert_eq!(record.answer_id, model.receipt.answer_id, "{context}");
                     assert_eq!(record.sequence, model.receipt.sequence, "{context}");
                     assert_eq!(

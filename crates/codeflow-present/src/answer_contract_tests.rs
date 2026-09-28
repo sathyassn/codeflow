@@ -395,7 +395,7 @@ fn a_decision_defaults_to_an_optional_rationale_and_a_form_to_none() {
 
 /// The session id the answer fixtures name; the harness puts the live
 /// session's id in its place.
-const FIXTURE_SESSION: &str = "7c1e2d3a-0000-4000-8000-000000000001";
+pub(crate) const FIXTURE_SESSION: &str = "7c1e2d3a-0000-4000-8000-000000000001";
 
 pub(crate) struct FormsSession {
     pub(crate) _temp: tempfile::TempDir,
@@ -623,7 +623,10 @@ fn every_tsk119_answer_fixture_is_stored_or_refused_as_indexed() {
                 assert!(receipt.replayed);
                 assert_eq!(receipt.sequence, 1);
                 assert_eq!(receipt.answer_id, answers[0]);
-                assert_eq!(receipt.stored_at_unix, events[0].record().created_at_unix);
+                assert_eq!(
+                    receipt.stored_at_unix,
+                    events[0].answer().unwrap().created_at_unix
+                );
                 assert_eq!(events.len(), 1);
             }
             "request-id-conflict" => {
@@ -676,7 +679,10 @@ fn a_torn_ledger_tail_is_truncated_on_open() {
     }
     let events = session.store.responses(session.id).unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].record().outcome, crate::form::Outcome::Cancel);
+    assert_eq!(
+        events[0].answer().unwrap().outcome,
+        crate::form::Outcome::Cancel
+    );
     assert_eq!(
         session.ledger_bytes().unwrap(),
         fixture.as_bytes()[..whole_line]

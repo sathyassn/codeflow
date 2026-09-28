@@ -1367,11 +1367,25 @@ fn form_fixtures_and_answer_lines_match_their_schemas() {
     );
     amendment["amends"] = line["answer_id"].clone();
     assert_eq!(registry.errors(responses, &amendment), Vec::<String>::new());
+    // TSK-120: the delivered and acknowledged lines of the query ledger.
+    for line in contract_fixture("ledger/queries.jsonl").lines() {
+        let line: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            registry.errors(responses, &line),
+            Vec::<String>::new(),
+            "{line}"
+        );
+    }
     let mut delivered = line;
     delivered["event"] = "delivered".into();
     assert!(
         !registry.errors(responses, &delivered).is_empty(),
-        "responses v1 describes answer and amendment lines only"
+        "a delivered line carries no answer fields"
+    );
+    let state = serde_json::json!({ "event": "acknowledged", "sequence": 2, "at_unix": 0 });
+    assert!(
+        !registry.errors(responses, &state).is_empty(),
+        "a state line names its target"
     );
 }
 
