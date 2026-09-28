@@ -4,18 +4,22 @@
 //! `Command::new("git")`, or as `Command::new(program)` where `program`
 //! may hold git, would dispatch its hooks by PATH again.
 //!
-//! The scan reads each production source as Rust tokens: comments are
-//! dropped wherever they fall, and string literals are decoded (escapes,
-//! raw strings, line continuations). It enforces a supported subset, in
-//! which every spawn is written `…Command::new(ARG)` or
+//! The scan reads each production source as Rust tokens, as rustc does:
+//! CRLF line ends are read as LF, comments are dropped wherever they fall,
+//! a raw identifier (`r#new`) is the identifier, and string literals are
+//! decoded by Rust's escape rules (`\x`, `\u{…}` with underscores, raw
+//! strings, line continuations). A literal the scan cannot decode is
+//! refused, never read as some other program. It enforces a supported
+//! subset, in which every spawn is written `…Command::new(ARG)` or
 //! `<…Command>::new(ARG)`, and judges each argument. A literal that names
 //! git (`git`, `git.exe`, `/usr/bin/git` and the like) is refused. Any other
 //! argument that is not one literal must be listed in [`DYNAMIC`] with the
 //! reason it never holds git, so a new spawn built from a value has to be
-//! looked at. The forms that would hide a spawn from that reading are
-//! refused outright: renaming `Command` on import, a type alias of it, the
-//! constructor taken as a value, and a macro that builds `$name::new` from
-//! a metavariable.
+//! looked at. Every other form that would hide a spawn from that reading
+//! is refused outright: renaming `Command` on import, a type alias of it
+//! (parenthesized or not), generic arguments after it (`Command::<>`),
+//! the constructor taken as a value, and a macro that builds
+//! `$name::new` or `<$name>::new` from a metavariable.
 //!
 //! Outside the subset, and so not seen: a procedural macro that assembles
 //! the name, and a process API other than `Command` (no production source
@@ -108,6 +112,8 @@ enum Token {
     Ident(String),
     Punct(char),
     Str(String),
+    /// A string literal Rust's escape rules do not decode, as written.
+    Undecodable(String),
     /// A number or character literal, or a lifetime.
     Other(String),
 }
@@ -116,7 +122,7 @@ impl Token {
     /// The token as written, for listing a dynamic argument.
     fn text(&self) -> String {
         match self {
-            Token::Ident(text) | Token::Other(text) => text.clone(),
+            Token::Ident(text) | Token::Other(text) | Token::Undecodable(text) => text.clone(),
             Token::Punct(c) => c.to_string(),
             Token::Str(value) => format!("{value:?}"),
         }
@@ -137,7 +143,8 @@ fn ident_char(c: char) -> bool {
 
 /// The tokens of `text`.
 fn tokens(text: &str) -> Vec<Token> {
-    let chars: Vec<char> = text.chars().collect();
+    // rustc reads a CRLF line end as LF, inside literals too.
+    let chars: Vec<char> = text.replace("\r\n", "\n").chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
     while i < chars.len() {
@@ -168,9 +175,25 @@ fn tokens(text: &str) -> Vec<Token> {
         } else if let Some((value, next)) = raw_string(&chars, i) {
             out.push(Token::Str(value));
             i = next;
+        } else if c == 'r'
+            && at(1) == Some('#')
+            && at(2).is_some_and(|n| ident_char(n) && !n.is_ascii_digit())
+            && !(i > 0 && ident_char(chars[i - 1]))
+        {
+            // A raw identifier is the identifier.
+            let start = i + 2;
+            i = start;
+            while i < chars.len() && ident_char(chars[i]) {
+                i += 1;
+            }
+            out.push(Token::Ident(chars[start..i].iter().collect()));
         } else if c == '"' || (c == 'b' && at(1) == Some('"')) {
-            let (value, next) = string(&chars, if c == 'b' { i + 1 } else { i });
-            out.push(Token::Str(value));
+            let open = if c == 'b' { i + 1 } else { i };
+            let (value, next) = string(&chars, open, c == 'b');
+            out.push(match value {
+                Some(value) => Token::Str(value),
+                None => Token::Undecodable(chars[open..next.min(chars.len())].iter().collect()),
+            });
             i = next;
         } else if c == '\'' {
             // A character literal, or a lifetime.
@@ -235,10 +258,13 @@ fn raw_string(chars: &[char], i: usize) -> Option<(String, usize)> {
     ))
 }
 
-/// A string literal opening at `chars[open]`, decoded, and the index after
-/// it.
-fn string(chars: &[char], open: usize) -> (String, usize) {
+/// A string literal opening at `chars[open]`, decoded by Rust's escape
+/// rules, and the index after it; `None` for a value those rules do not
+/// give (an unknown escape, a bad `\x` or `\u{…}`, no closing quote). A
+/// byte string takes any `\x` byte and no `\u{…}`.
+fn string(chars: &[char], open: usize, bytes: bool) -> (Option<String>, usize) {
     let mut value = String::new();
+    let mut ok = true;
     let mut j = open + 1;
     while j < chars.len() && chars[j] != '"' {
         if chars[j] != '\\' {
@@ -246,36 +272,58 @@ fn string(chars: &[char], open: usize) -> (String, usize) {
             j += 1;
             continue;
         }
-        let escaped = chars.get(j + 1).copied().unwrap_or('\\');
+        let escaped = chars.get(j + 1).copied();
         j += 2;
         match escaped {
-            'n' => value.push('\n'),
-            'r' => value.push('\r'),
-            't' => value.push('\t'),
-            '0' => value.push('\0'),
-            'x' => {
-                let hex: String = chars[j..(j + 2).min(chars.len())].iter().collect();
-                value.extend(u8::from_str_radix(&hex, 16).ok().map(char::from));
+            Some('n') => value.push('\n'),
+            Some('r') => value.push('\r'),
+            Some('t') => value.push('\t'),
+            Some('0') => value.push('\0'),
+            Some(c @ ('\\' | '\'' | '"')) => value.push(c),
+            Some('x') => {
+                let hex: String = chars[j.min(chars.len())..(j + 2).min(chars.len())]
+                    .iter()
+                    .collect();
+                match u8::from_str_radix(&hex, 16) {
+                    Ok(byte) if hex.len() == 2 && (bytes || byte <= 0x7f) => {
+                        value.push(char::from(byte));
+                    }
+                    _ => ok = false,
+                }
                 j += 2;
             }
-            'u' => {
-                let end = (j..chars.len())
-                    .find(|&k| chars[k] == '}')
-                    .unwrap_or(chars.len());
-                let hex: String = chars[(j + 1).min(end)..end].iter().collect();
-                value.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
-                j = end + 1;
+            Some('u') if !bytes => {
+                let close = (j..chars.len()).find(|&k| chars[k] == '}');
+                let digits: Option<String> = close.and_then(|close| {
+                    (chars.get(j) == Some(&'{')).then(|| chars[j + 1..close].iter().collect())
+                });
+                let decoded = digits.and_then(|digits: String| {
+                    let hex: String = digits.chars().filter(|c| *c != '_').collect();
+                    let well_formed = !digits.starts_with('_') && (1..=6).contains(&hex.len());
+                    u32::from_str_radix(&hex, 16)
+                        .ok()
+                        .filter(|_| well_formed)
+                        .and_then(char::from_u32)
+                });
+                match decoded {
+                    Some(c) => value.push(c),
+                    None => ok = false,
+                }
+                j = close.map_or(chars.len(), |close| close + 1);
             }
             // A line continuation drops the newline and the blanks after it.
-            '\n' => {
+            Some('\n') => {
                 while j < chars.len() && chars[j].is_whitespace() {
                     j += 1;
                 }
             }
-            other => value.push(other),
+            _ => ok = false,
         }
     }
-    (value, j + 1)
+    if j >= chars.len() {
+        ok = false;
+    }
+    (ok.then_some(value), j + 1)
 }
 
 /// Whether `toks[at..]` starts with `::new`.
@@ -348,19 +396,36 @@ fn hidden_spawns(file: &str, toks: &[Token]) -> Vec<String> {
                     "{file}: takes Command::new as a value, which hides its spawns"
                 ));
             }
+        } else if tok.is("Command") {
+            // Generic arguments between `Command` and `::new` hide it.
+            let generic = |at: usize| matches!(toks.get(at..at + 3), Some([a, b, c]) if a.punct(':') && b.punct(':') && c.punct('<'));
+            if generic(k + 1) || (next(1).is_some_and(|t| t.punct('>')) && generic(k + 2)) {
+                out.push(format!(
+                    "{file}: Command::<…> is outside what the scan reads"
+                ));
+            }
         }
-        if tok.punct('$') && matches!(next(1), Some(Token::Ident(_))) && at_new(toks, k + 2) {
+        let metavariable_new =
+            at_new(toks, k + 2) || (next(2).is_some_and(|t| t.punct('>')) && at_new(toks, k + 3));
+        if tok.punct('$') && matches!(next(1), Some(Token::Ident(_))) && metavariable_new {
             out.push(format!(
                 "{file}: a macro builds a constructor from a metavariable, which hides its spawns"
+            ));
+        }
+        if let Token::Undecodable(text) = tok {
+            out.push(format!(
+                "{file}: the string literal {text} is not one the scan can decode"
             ));
         }
         if tok.is("type") && matches!(next(1), Some(Token::Ident(_))) {
             let Some(eq) = toks[k..].iter().position(|t| t.punct('=') || t.punct(';')) else {
                 continue;
             };
+            // Parentheses around a type change nothing.
             let rhs: Vec<&Token> = toks[k + eq + 1..]
                 .iter()
                 .take_while(|t| !t.punct(';'))
+                .filter(|t| !t.punct('(') && !t.punct(')'))
                 .collect();
             let path = rhs
                 .iter()
@@ -456,7 +521,7 @@ fn every_git_process_is_built_by_the_one_constructor() {
 }
 
 #[test]
-fn the_scan_sees_every_way_a_git_spawn_is_written() {
+fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
     let refused = [
         r#"let c = Command::new("git");"#,
         "let c = std::process::Command\n    ::new(\n        \"git\"\n    );",
@@ -481,6 +546,23 @@ fn the_scan_sees_every_way_a_git_spawn_is_written() {
          fn make() -> Command { launch!(Command, \"git\") }",
         r#"let make = Command::new; let c = make("git");"#,
         "let c = Command::new(\"gi\\\n    t\");",
+        // Round 3 (Codex F8): escapes and spellings Rust accepts inside the
+        // subset, each compiled by Codex to a Command whose program is git.
+        "fn make() -> std::process::Command { std::process::Command::new(\"\\u{0_067}it\") }",
+        "fn make() -> std::process::Command { std::process::Command::new(\"\\u{6_7}\\u{6_9}\\u{7_4}\") }",
+        "fn make() -> std::process::Command { std::process::Command::new(\"gi\\\r\n    t\") }",
+        "fn make() -> std::process::Command { std::process::Command::r#new(\"git\") }",
+        "fn make() -> std::process::Command { <std::process::Command>::r#new(\"git\") }",
+        "type Spawn = (std::process::Command); fn make() -> Spawn { Spawn::new(\"git\") }",
+        "macro_rules! launch { ($c:ty, $p:expr) => { <$c>::new($p) }; } \
+         fn make() -> std::process::Command { launch!(std::process::Command, \"git\") }",
+        "fn make() -> r#Command { r#Command::new(\"git\") }",
+        "fn make() -> Command { Command::<>::new(\"git\") }",
+        // A literal the scan cannot decode is refused, not read as another
+        // program.
+        r#"let c = Command::new("\q");"#,
+        r#"let c = Command::new("\u{d800}");"#,
+        r#"let c = Command::new("\u{_67}it");"#,
     ];
     for source in refused {
         assert!(
@@ -503,6 +585,10 @@ fn the_scan_sees_every_way_a_git_spawn_is_written() {
         "type Modes = BTreeMap<String, ModeCommand>;",
         r#"let s = "type X = Command; Command::new(\"git\")";"#,
         r#"let c = Command::new("my tool");"#,
+        r#"let c = Command::new("\u{6_7}h");"#,
+        "let c = Command::new(\"g\\\r\n    h\");",
+        "type Pair = (Command, Command);",
+        "fn f(c: &mut r#Command) {}",
     ];
     for source in passed {
         assert!(
