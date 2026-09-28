@@ -164,10 +164,12 @@ struct SessionEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     /// For `answer_state`: each answer whose state changed, with its state
-    /// now (stored and pending, delivered, acknowledged). For
-    /// `session_closed`: each form's latest answer and its state.
+    /// now (stored and pending, delivered, acknowledged).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     answers: Vec<AnswerState>,
+    /// For `session_closed`: each form's answer as a reload shows it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    forms: Vec<crate::delivery::FormAnswerState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -941,8 +943,9 @@ fn session_event(
     let revised = session.current_revision > after_revision;
     // The answer ledger's cursor moves only with the answer states it
     // reports, so a revision never hides a delivery from the forms. A
-    // closure ends the poll, so it carries each form's latest answer state
-    // (`SessionStore::closing_states`), which a backlog cannot hide.
+    // closure ends the poll, so it carries each form's answer as a reload
+    // shows it (`SessionStore::closing_states`), which neither a backlog nor
+    // the answer a page followed can hide.
     let answered = !terminal && !revised && answers.through > after_responses;
     if !(revised || answered || latest > after_sequence || terminal || timed_out) {
         return None;
@@ -972,7 +975,8 @@ fn session_event(
         } else {
             (!answered && latest > after_sequence).then(|| "Review state changed.".to_string())
         },
-        answers: if carried { answers.states } else { Vec::new() },
+        forms: if terminal { answers.forms } else { Vec::new() },
+        answers: if answered { answers.states } else { Vec::new() },
     })
 }
 
@@ -2511,32 +2515,70 @@ mod tests {
             .await;
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{cursor}");
         }
+    }
 
-        // A closure ends the poll, so it carries each form's latest answer
-        // and its state, every time it is polled.
+    /// C120-R2-1: a closure ends the poll, so it carries each form's answer
+    /// as a reload shows it (form, digest, original, latest and its state),
+    /// every time it is polled, and no `answer_state` batch.
+    #[tokio::test]
+    async fn a_closure_carries_each_forms_answer_as_a_reload_shows_it() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let answer = post_answer(&state, headers.clone(), answer_body(&state, |_| {}))
+            .await
+            .1["answer_id"]
+            .clone();
         let correction = post_answer(
             &state,
-            application_headers(&state, true),
-            answer_body(&state, |body| body["amends"] = serde_json::json!(answer)),
+            headers.clone(),
+            answer_body(&state, |body| body["amends"] = answer.clone()),
         )
         .await
-        .1;
-        let correction: Uuid = serde_json::from_value(correction["answer_id"].clone()).unwrap();
+        .1["answer_id"]
+            .clone();
+        let correction: Uuid = serde_json::from_value(correction).unwrap();
         state
             .store
             .deliver(state.session_id, &[correction])
             .unwrap();
+        let digest = state.store.responses(state.session_id).unwrap()[0]
+            .answer()
+            .unwrap()
+            .form_digest
+            .clone();
         state.store.close(state.session_id).unwrap();
-        let event = poll("2:0:3").await;
+        let poll = |cursor: &str| {
+            let request = Json(PollRequest {
+                cursor: Some(cursor.to_string()),
+            });
+            let (state, headers) = (state.clone(), headers.clone());
+            async move {
+                let response = poll_events(State(state), headers, request).await;
+                let body =
+                    axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+                        .await
+                        .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+            }
+        };
+        let event = poll("1:0:1").await;
         assert_eq!(event["kind"], "session_closed");
-        assert_eq!(event["cursor"], "2:0:5");
+        assert_eq!(event["cursor"], "1:0:3");
+        assert!(event.get("answers").is_none(), "{event}");
         assert_eq!(
-            event["answers"],
-            serde_json::json!([{ "answer_id": correction, "status": "delivered" }])
+            event["forms"],
+            serde_json::json!([{
+                "form_id": "store-choice",
+                "form_digest": digest,
+                "answer_id": answer,
+                "latest_answer_id": correction,
+                "state": "delivered",
+            }])
         );
-        let again = poll("2:0:5").await;
+        let again = poll("1:0:3").await;
         assert_eq!(again["kind"], "session_closed");
-        assert_eq!(again["answers"], event["answers"]);
+        assert_eq!(again["forms"], event["forms"]);
     }
 
     /// Grok 2: a closure behind a backlog longer than one batch of ledger
@@ -2585,9 +2627,19 @@ mod tests {
         let event: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(event["kind"], "session_closed");
         assert_eq!(event["cursor"], "1:0:122");
+        let forms = event["forms"].as_array().unwrap();
+        assert_eq!(forms.len(), 1, "{event}");
         assert_eq!(
-            event["answers"],
-            serde_json::json!([{ "answer_id": latest, "status": "delivered" }])
+            (
+                &forms[0]["answer_id"],
+                &forms[0]["latest_answer_id"],
+                &forms[0]["state"]
+            ),
+            (
+                &original,
+                &serde_json::json!(latest),
+                &serde_json::json!("delivered")
+            )
         );
     }
 

@@ -14,8 +14,9 @@
 // - the rail shows a review's delivery and its acknowledgment apart;
 // - after the service is killed and restarted, a pending answer is
 //   delivered once and a later wait finds nothing;
-// - a closure that carries answer states the page has not seen shows them
-//   before the forms latch closed.
+// - a closure binds every form to its answer as a reload renders it, before
+//   the forms latch closed: a tab following an original the other tab
+//   corrected, a page that never saw an answer, and a state not yet seen.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -318,12 +319,103 @@ try {
     passed.push("restart: after the service is killed and show restarts it, the pending answer is delivered once and the next wait times out (exit 6)");
   }
 
+  // C120-R2-1, on a second session. Tab A stores the original O and
+  // follows it; tab B loads after it and stores the correction M; both are
+  // delivered and acknowledged; then the session closes. A's polls and
+  // those of page C, which loaded before any answer, are held from the
+  // start, so the closure is the first state either one hears. The closure
+  // body is the one the service sent B. A reload shows M acknowledged, so
+  // A and C must close on it, with the original kept for a correction.
+  {
+    const copy = join(project, "forms-closure.json");
+    await writeFile(copy, await readFile(fixture, "utf8"));
+    const opened = run(["present", "open", copy, "--no-launch"]);
+    const secondId = opened.match(/session ([0-9a-f-]+) ready/u)?.[1];
+    const secondBootstrap = opened.match(/owner-private bootstrap file (.+?) in a qualified/u)?.[1];
+    if (!secondId || !secondBootstrap) throw new Error(`could not parse present open output: ${opened}`);
+    const secondPort = JSON.parse(run(["present", "list"])).find((entry) => entry.id === secondId)?.service_port;
+    let release;
+    const gate = new Promise((done) => { release = done; });
+    let closure = null;
+    const held = async () => {
+      const tab = await context.newPage();
+      tab.on("pageerror", (error) => errors.push(error.message));
+      await tab.route("**/app/api/events/poll", async (route) => {
+        await gate;
+        await route.fulfill({ status: 200, contentType: "application/json", body: closure });
+      });
+      return tab;
+    };
+    const tabA = await held();
+    await tabA.goto(pathToFileURL(secondBootstrap).href, { waitUntil: "commit", timeout: 120_000 });
+    await tabA.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${secondPort}/app/`, "u"), { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await tabA.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    const tabC = await held();
+    await tabC.goto(tabA.url(), { waitUntil: "domcontentloaded" });
+    await tabC.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    const inTab = (tab, id) => tab.locator(`article[data-cf-form='${id}']`);
+    const shownIn = async (tab, id) => ({
+      state: await inTab(tab, id).getAttribute("data-cf-form-state"),
+      says: (await inTab(tab, id).locator("[data-cf-form-state]").innerText()).trim(),
+      original: await inTab(tab, id).getAttribute("data-cf-answer-id"),
+    });
+    const stateIn = (tab, id, state) => tab.waitForFunction(({ id, state }) => document.querySelector(`article[data-cf-form='${id}']`)?.getAttribute("data-cf-form-state") === state, { id, state }, { timeout: 20_000 });
+
+    const a = inTab(tabA, "store-choice");
+    await a.locator("[data-cf-field='home'] input[value='local']").check();
+    await a.locator("[data-cf-field='keep-days'] input").fill("30");
+    await a.locator("[data-cf-form-action='submit']").click();
+    await stateIn(tabA, "store-choice", "stored");
+
+    const tabB = await context.newPage();
+    tabB.on("pageerror", (error) => errors.push(error.message));
+    await tabB.goto(tabA.url(), { waitUntil: "domcontentloaded" });
+    await tabB.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    await stateIn(tabB, "store-choice", "stored");
+    const b = inTab(tabB, "store-choice");
+    await b.locator("[data-cf-form-action='amend']").click();
+    await b.locator("[data-cf-field='home'] input[value='local']").check();
+    await b.locator("[data-cf-field='keep-days'] input").fill("60");
+    await b.locator("[data-cf-form-action='submit']").click();
+    await stateIn(tabB, "store-choice", "stored");
+
+    const [original, correction] = lines(run(["present", "responses", "list", secondId, "--form", "store-choice"]));
+    assert.equal(correction.kind, "amendment");
+    const delivered = cli(["present", "feedback", secondId, "--wait", "--timeout", "10", "--format", "v2"]);
+    assert.equal(delivered.status, 0, delivered.stderr);
+    assert.deepEqual(lines(delivered.stdout).map((line) => line.event_id), [original.event_id, correction.event_id]);
+    run(["present", "ack", secondId, original.event_id]);
+    run(["present", "ack", secondId, correction.event_id]);
+    await stateIn(tabB, "store-choice", "acknowledged");
+    assert.equal((await shownIn(tabA, "store-choice")).state, "stored", "closure: tab A heard a state before the closure");
+
+    const closed = tabB.waitForResponse(async (response) => new URL(response.url()).pathname === "/app/api/events/poll"
+      && (await response.json().catch(() => ({}))).kind === "session_closed", { timeout: 30_000 });
+    run(["present", "close", secondId]);
+    closure = await (await closed).text();
+    release();
+    for (const tab of [tabA, tabC]) await stateIn(tab, "store-choice", "closed").catch(() => undefined);
+    const results = { A: await shownIn(tabA, "store-choice"), C: await shownIn(tabC, "store-choice"), C_decision: await shownIn(tabC, "d-scope") };
+    const expected = "Acknowledged by agent. This session is now closed; nothing more can be sent.";
+    assert.deepEqual(
+      { A: [results.A.state, results.A.says, results.A.original], C: [results.C.state, results.C.says, results.C.original] },
+      { A: ["closed", expected, original.event_id], C: ["closed", expected, original.event_id] },
+      `closure: tabs close where a reload would; the closure was ${closure}`,
+    );
+    assert.equal(results.C_decision.says, "This session is closed. Your draft is kept here; nothing can be sent.");
+    for (const tab of [tabA, tabB, tabC]) await tab.close();
+    run(["present", "clear", secondId, "--older-than", "0d"]);
+    passed.push(`closure rebinding: a tab following the original and a page that never saw an answer both close on the correction the other tab stored, "${expected}", with the original kept for a correction`);
+  }
+
   // The closure carries the states the page has not seen: the agent
   // acknowledged the correction just before the session closed. The page's
   // next poll gets that closure (fulfilled by the test: a closed session's
   // service stops), and the form shows the state before it latches.
   {
-    const [correction] = lines(run(["present", "responses", "list", sessionId, "--form", "store-choice"])).slice(-1);
+    const answered = lines(run(["present", "responses", "list", sessionId, "--form", "store-choice"]));
+    const [original, correction] = [answered[0], answered.at(-1)];
+    const digest = await form.getAttribute("data-cf-form-digest");
     let release;
     const gate = new Promise((done) => { release = done; });
     await page.route("**/app/api/events/poll", async (route) => {
@@ -331,7 +423,11 @@ try {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ cursor: "9:9:9", kind: "session_closed", answers: [{ answer_id: correction.event_id, status: "acknowledged" }] }),
+        body: JSON.stringify({
+          cursor: "9:9:9",
+          kind: "session_closed",
+          forms: [{ form_id: "store-choice", form_digest: digest, answer_id: original.event_id, latest_answer_id: correction.event_id, state: "acknowledged" }],
+        }),
       });
     }, { times: 1 });
     await page.reload({ waitUntil: "domcontentloaded" });

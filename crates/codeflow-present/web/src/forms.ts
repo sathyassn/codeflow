@@ -6,7 +6,7 @@
 // is never written to any browser storage. Annotating a form never changes a
 // value and never sends.
 
-import { parseServiceError, REQUEST_HEADER, type AnswerDelivery, type AnswerStateEntry, type ChromeConfig } from "./contracts";
+import { parseServiceError, REQUEST_HEADER, type AnswerDelivery, type AnswerStateEntry, type ChromeConfig, type FormAnswerEntry } from "./contracts";
 import {
   MAX_ANSWER_REQUEST_BYTES,
   MAX_DECLINE_REASON_BYTES,
@@ -27,6 +27,9 @@ export type SessionEventDetail = "revision" | "session_closed";
 /** The chrome forwards the poll's answer states under this name (SPC-014 B8). */
 export const ANSWER_STATE_EVENT = "cf-present:answer-state";
 export type AnswerStateDetail = readonly AnswerStateEntry[];
+/** A closure's answers, one per form, which the forms bind to before closing. */
+export const FORM_ANSWERS_EVENT = "cf-present:form-answers";
+export type FormAnswersDetail = readonly FormAnswerEntry[];
 
 type FormState = "editing" | "submitting" | "stored" | "delivered" | "acknowledged" | "failed" | "stale" | "changed" | "closed";
 
@@ -79,6 +82,16 @@ export function enhanceForms(root: HTMLElement, config: ChromeConfig): void {
       if (DELIVERY_ORDER[entry.status] > DELIVERY_ORDER[known]) delivery.set(entry.answer_id, entry.status);
     }
     for (const form of forms) form.showDelivery();
+  });
+  // A closure carries each form's answer as a reload renders it: every form
+  // binds to its own, whichever answer it followed, before it latches closed.
+  root.addEventListener(FORM_ANSWERS_EVENT, (event) => {
+    for (const entry of (event as CustomEvent<FormAnswersDetail>).detail) {
+      const status: AnswerDelivery = entry.state === "stored" ? "pending" : entry.state;
+      const known = delivery.get(entry.latest_answer_id) ?? "pending";
+      if (DELIVERY_ORDER[status] > DELIVERY_ORDER[known]) delivery.set(entry.latest_answer_id, status);
+    }
+    for (const form of forms) form.bind((event as CustomEvent<FormAnswersDetail>).detail);
   });
   // The chrome forwards the poll's events here; a form refused with
   // session_closed reports it here too, so every form and the chrome close.
@@ -133,6 +146,9 @@ class FormController {
   // Closure is latched: no later reply or action reopens the form.
   private closed = false;
   private kept: HTMLElement | null = null;
+  // The state of the stored answer this form shows last, which a closed
+  // form keeps showing whatever reply lands after the closure.
+  private answered: "stored" | "delivered" | "acknowledged" | null = null;
 
   public constructor(
     private readonly article: HTMLElement,
@@ -185,13 +201,32 @@ class FormController {
     this.render(DELIVERY_TEXT[status], status);
   }
 
-  // An answered form keeps its answer's state words before the closed
-  // sentence; any other form keeps its draft, read only.
+  // Takes the answer a reload would render for this form and digest: the
+  // original stays the correction target, the latest's state is shown. The
+  // draft stays in the controls; nothing is sent.
+  public bind(entries: readonly FormAnswerEntry[]): void {
+    if (this.closed) return;
+    const entry = entries.find((candidate) => candidate.form_id === this.id && candidate.form_digest === this.digest);
+    if (!entry) return;
+    this.original = entry.answer_id;
+    this.latest = entry.latest_answer_id;
+    this.article.dataset.cfAnswerId = entry.answer_id;
+    this.sent = null;
+    this.stale = null;
+    this.amending = false;
+    this.declining = false;
+    this.render(stateText(entry.state), entry.state);
+  }
+
+  // An answered form keeps its stored answer's state words before the
+  // closed sentence, as a reload shows it, even while a correction was
+  // being drafted; any other form keeps its draft, read only.
   public close(): void {
     if (this.closed) return;
     this.closed = true;
     const state = this.state;
-    if (state === "stored" || state === "delivered" || state === "acknowledged") this.render(stateText(state), state);
+    const shown = state === "stored" || state === "delivered" || state === "acknowledged" ? state : this.gone ? null : this.answered;
+    if (shown) this.render(stateText(shown), shown);
     else this.render(CLOSED_TEXT, "closed");
   }
 
@@ -498,12 +533,15 @@ class FormController {
 
   private render(message: string, state: FormState = this.state): void {
     let storedLate: string | null = null;
+    const answerState = state === "stored" || state === "delivered" || state === "acknowledged" ? state : null;
+    if (answerState && !this.closed) this.answered = answerState;
     if (this.closed && state !== "closed") {
       // A reply that lands after closure may still confirm a receipt, but
-      // the form stays closed. An answer's state reads first, in the
-      // stored colour.
-      if (state === "stored" || state === "delivered" || state === "acknowledged") {
-        storedLate = stateText(state);
+      // the form stays closed. The stored answer's state reads first, in
+      // the stored colour, as a reload shows it.
+      const words = this.gone ? answerState : this.answered ?? answerState;
+      if (words) {
+        storedLate = stateText(words);
         message = "This session is now closed; nothing more can be sent.";
       } else {
         message = CLOSED_TEXT;

@@ -186,11 +186,23 @@ export interface AnswerStateEntry {
   readonly status: AnswerDelivery;
 }
 
+/** A form's answer as a reload renders it; a closure carries one per form. */
+export interface FormAnswerEntry {
+  readonly form_id: string;
+  readonly form_digest: string;
+  /** The original answer, which a correction names. */
+  readonly answer_id: string;
+  /** The latest answer or correction, whose state is shown. */
+  readonly latest_answer_id: string;
+  readonly state: "stored" | "delivered" | "acknowledged";
+}
+
 export interface SessionEvent {
   readonly cursor: string;
   readonly kind: "feedback_state" | "revision" | "session_closed" | "answer_state";
   readonly message?: string;
   readonly answers?: readonly AnswerStateEntry[];
+  readonly forms?: readonly FormAnswerEntry[];
 }
 
 export function readChromeConfig(root: HTMLElement): ChromeConfig {

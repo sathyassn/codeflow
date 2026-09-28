@@ -22,7 +22,7 @@ import type {
 import { parseServiceError } from "./contracts";
 import type { EntitySelector } from "./contracts";
 import { followSessionEvents } from "./events";
-import { ANSWER_STATE_EVENT, SESSION_EVENT, type AnswerStateDetail, type SessionEventDetail } from "./forms";
+import { ANSWER_STATE_EVENT, FORM_ANSWERS_EVENT, SESSION_EVENT, type AnswerStateDetail, type FormAnswersDetail, type SessionEventDetail } from "./forms";
 import { postJson, PresentRequestError } from "./http";
 import {
   annotatableAncestor,
@@ -1234,9 +1234,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setStatus(notice);
       showToast(notice, { sticky: true });
     } else if (event.kind === "session_closed") {
-      // The closure carries the answer states not reported yet: the forms
-      // show them before they latch closed.
-      if (event.answers?.length) documentRoot.dispatchEvent(new CustomEvent<AnswerStateDetail>(ANSWER_STATE_EVENT, { detail: event.answers }));
+      // The closure carries each form's answer as a reload renders it: the
+      // forms bind to it before they latch closed.
+      if (event.forms?.length) documentRoot.dispatchEvent(new CustomEvent<FormAnswersDetail>(FORM_ANSWERS_EVENT, { detail: event.forms }));
       closeSession(true);
     } else if (event.kind === "answer_state" && event.answers?.length) {
       // Each form shows its own answer's delivery and acknowledgment.

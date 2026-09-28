@@ -150,12 +150,28 @@ pub struct AnswerState {
     pub status: DeliveryStatus,
 }
 
-/// The answer states the ledger lines after a cursor changed.
+/// The answer states the ledger lines after a cursor changed, or at a
+/// closure each form's latest answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnswerStates {
     /// The last line these states cover; the next cursor.
     pub through: u64,
     pub states: Vec<AnswerState>,
+    /// At a closure: each form's answer as a reload shows it.
+    pub forms: Vec<FormAnswerState>,
+}
+
+/// A form's answer as a reload renders it (I4 `session_closed`): the form
+/// and digest it answers, the original a correction names, the latest
+/// answer or correction and that one's state in the page's words. The page
+/// binds each form to it, so a closure ends every form where a reload would.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FormAnswerState {
+    pub form_id: String,
+    pub form_digest: String,
+    pub answer_id: Uuid,
+    pub latest_answer_id: Uuid,
+    pub state: &'static str,
 }
 
 /// The latest answer to a form, as the page shows it when it loads: the
@@ -439,6 +455,7 @@ impl SessionStore {
             }
         }
         Ok(AnswerStates {
+            forms: Vec::new(),
             through: through as u64,
             states: changed
                 .into_iter()
@@ -452,11 +469,12 @@ impl SessionStore {
 }
 
 impl SessionStore {
-    /// What a closure carries (Grok 2): the poll stops at a closure, so
-    /// rather than the next batch of ledger lines it carries the latest
-    /// answer to each form and that answer's state, as a reload shows them,
-    /// whatever the backlog. The current revision's forms come first, then
-    /// the latest answers to older questions, newest first, up to `limit`.
+    /// What a closure carries (Grok 2, C120-R2-1): the poll stops at a
+    /// closure, so rather than the next batch of ledger lines it carries
+    /// each form's answer as a reload shows it, whatever the backlog and
+    /// whichever answer a page followed. The current revision's forms come
+    /// first, then the latest answers to older questions, newest first, up
+    /// to `limit`.
     pub fn closing_states(&self, id: Uuid, limit: usize) -> Result<AnswerStates> {
         let (ledger, current) = {
             let _lock = self.lock_session(id)?;
@@ -487,11 +505,15 @@ impl SessionStore {
         forms.truncate(limit);
         Ok(AnswerStates {
             through: ledger.len() as u64,
-            states: forms
+            states: Vec::new(),
+            forms: forms
                 .into_iter()
-                .map(|(_, answer)| AnswerState {
-                    answer_id: answer.latest,
-                    status: answer.status,
+                .map(|((form_id, form_digest), answer)| FormAnswerState {
+                    form_id,
+                    form_digest,
+                    answer_id: answer.original,
+                    latest_answer_id: answer.latest,
+                    state: answer.status.page_state(),
                 })
                 .collect(),
         })
