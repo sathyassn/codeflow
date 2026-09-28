@@ -1042,7 +1042,7 @@ mod tests {
             let dep = if pin.is_empty() {
                 "[{id: TSK-001, kind: research}]".to_string()
             } else {
-                format!("[{{id: TSK-001, kind: research, pin: {pin}}}]")
+                format!("[{{id: TSK-001, kind: research, pin: \"{pin}\"}}]")
             };
             task(root, "TSK-002", "todo", &dep, "");
             // The same predecessor may be a code dependency of another task.
@@ -1278,7 +1278,7 @@ mod tests {
             root,
             "TSK-002",
             "todo",
-            &format!("[{{id: TSK-001, kind: research, pin: {pin}}}]"),
+            &format!("[{{id: TSK-001, kind: research, pin: \"{pin}\"}}]"),
             "",
         );
         commit(root, "consumer");
@@ -1290,6 +1290,46 @@ mod tests {
             entry(&backlog(root).unwrap(), "TSK-002").state,
             State::Waiting
         );
+    }
+
+    /// TSK-156 AC-3: fixed pins, never a random commit prefix. Unquoted, a
+    /// digit or exponent pin leaves the graph unreadable with the quote
+    /// remedy; quoted, each is read as an object id and judged as one.
+    #[test]
+    fn a_pin_is_judged_the_same_for_fixed_digit_exponent_and_letter_cases() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "complete", "[]", "");
+        commit(root, "findings");
+        let graph = |pin: &str| {
+            task(
+                root,
+                "TSK-002",
+                "todo",
+                &format!("[{{id: TSK-001, kind: research, pin: {pin}}}]"),
+                "",
+            );
+            commit(root, "consumer");
+            let repo = Repository::open(root).unwrap();
+            let tree = repo.head().unwrap().peel_to_tree().unwrap();
+            records_from_tree(&repo, &tree).map(|_| ())
+        };
+        for pin in ["70283613", "949894e0"] {
+            let error = graph(pin).unwrap_err().to_string();
+            assert!(
+                error.contains("pin reads as a YAML number"),
+                "{pin}: {error}"
+            );
+            assert!(error.contains("quote it"), "{pin}: {error}");
+        }
+        for pin in ["\"70283613\"", "\"949894e0\"", "0123abcd", "\"0123abcd\""] {
+            graph(pin).unwrap();
+            let error = verdict(root, "TSK-002").unwrap_err().to_string();
+            assert!(
+                error.contains("not an object in this repository"),
+                "{pin}: {error}"
+            );
+        }
     }
 
     /// T103-2: a target on another remote is read there, never from origin.
