@@ -152,7 +152,7 @@ const ALLOWED: [(&str, &str); 33] = [
         "language.strip() == \"mermaid\"",
     ),
     // TSK-073: the copy guide's reply rule says a reply figure is never Mermaid.
-    ("cf-editorial-review/references/copy-guide.md", "Never Mermaid."),
+    ("cf-editorial-review/references/copy-guide.md", "Never use Mermaid."),
 ];
 
 /// A present block typed `diagram`, in a JSON file or quoted inside a string

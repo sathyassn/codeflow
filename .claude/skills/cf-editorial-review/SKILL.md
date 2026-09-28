@@ -64,10 +64,10 @@ misrepresent the author or project.
    Utility copy does not become product voice, and CodeFlow does not supply a
    personality for either. Keep formatting proportionate: a simple
    answer needs no apparatus, and when a relationship is materially clearer
-   drawn, use a figure in one of the nine families of the explanation method
-   (`cf-present/resources/explanation-method.md`) whose scope and detail fit
-   the explanation, in the form the surface renders as the lifecycle reply
-   rule sets out. Prefer the least
+   drawn, use a figure whose scope and detail fit the explanation, in one of
+   the nine families of the explanation method
+   (`cf-present/resources/explanation-method.md`) and in the form the
+   lifecycle reply rule sets for the surface. Prefer the least
    complicated form that remains complete, not the physically smallest;
    complex subjects may need a larger, layered, or multi-view diagram. Add a
    brief caption or legend when it aids orientation. A decorative or forced

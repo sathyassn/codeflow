@@ -1841,13 +1841,13 @@ fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
     let universal_parts = named(&parts, "every answer");
     let universal_checks = named(&checks, "every answer");
     // An answer with no figure and a table lookup take only the universal rows.
-    // TSK-073: the lead is drafted only where there is a carrier or a summary,
-    // so a short answer, its own summary under the copy guide, takes no lead.
+    // TSK-073: the lead is drafted only for an answer with a carrier, so a
+    // short answer, its own summary under the copy guide, takes no lead.
     assert!(
         parts.iter().any(|row| row[0] == "Lead"
-            && row[1] == "every answer that has a carrier or a summary"
-            && row[2].ends_with("a short answer takes no lead")),
-        "the lead is drafted for an answer with a carrier or a summary, never a short answer"
+            && row[1] == "an answer with a carrier"
+            && row[2] == "one sentence saying what the reader is looking at, above the carrier"),
+        "the lead is drafted only for an answer with a carrier"
     );
     for carrier in ["an answer with no figure", "a table lookup"] {
         assert_eq!(
@@ -1885,7 +1885,7 @@ fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
     let normalized = normalized_whitespace(&method);
     for marker in [
         "An answer with no figure, a table lookup included, passes on the universal checks alone",
-        "An answer with no carrier drafts only the lead and the acting text, and a short answer drafts only the answer: it takes no lead.",
+        "An answer with no carrier drafts its summary, when it leads into a list, and the acting text; a short answer drafts only the answer.",
         "a chat form: every pair of marks differs in glyph and each is keyed in the legend line",
         "A chat form has no declaration file or twin",
     ] {
@@ -2508,18 +2508,29 @@ fn level_two_sections(text: &str) -> Vec<(String, String)> {
     sections
 }
 
-/// The examples in one guide section: each is a line
-/// ``Example (source: `<path>`):`` followed by one or more `> ` lines that
-/// hold the exact string. Returns (source path, normalized example text).
-fn copy_guide_examples(body: &str) -> Vec<(String, String)> {
+/// The examples in one guide section. Each is a line
+/// ``Example, <label> (source: `<path>`):`` (the label is optional) followed
+/// by one or more `> ` lines that hold the exact string. Returns the
+/// (source path, whitespace-folded example text) pairs and the problems: a
+/// line that starts with "Example" but does not parse, a heading with no
+/// quotation, and a quotation with no parsed heading above it.
+fn copy_guide_examples(body: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let heading = regex::Regex::new(r"^Example(?:, .+?)? \(source: `([^`]+)`\):$")
+        .expect("valid example heading pattern");
     let mut examples = Vec::new();
+    let mut problems = Vec::new();
     let mut lines = body.lines().peekable();
     while let Some(line) = lines.next() {
-        let Some(source) = line
-            .trim()
-            .strip_prefix("Example (source: `")
-            .and_then(|rest| rest.strip_suffix("`):"))
-        else {
+        let trimmed = line.trim();
+        if trimmed.starts_with('>') {
+            problems.push(format!("quotation with no example heading: {trimmed}"));
+            continue;
+        }
+        if !trimmed.starts_with("Example") {
+            continue;
+        }
+        let Some(source) = heading.captures(trimmed).map(|found| found[1].to_string()) else {
+            problems.push(format!("example heading that does not parse: {trimmed}"));
             continue;
         };
         while lines.peek().is_some_and(|next| next.trim().is_empty()) {
@@ -2533,9 +2544,12 @@ fn copy_guide_examples(body: &str) -> Vec<(String, String)> {
             quoted.push(text.trim().to_string());
             lines.next();
         }
-        examples.push((source.to_string(), normalized_whitespace(&quoted.join(" "))));
+        if quoted.is_empty() {
+            problems.push(format!("example heading with no quotation: {trimmed}"));
+        }
+        examples.push((source, normalized_whitespace(&quoted.join(" "))));
     }
-    examples
+    (examples, problems)
 }
 
 /// Where a named example source lives: a path starting with `cf-` is inside
@@ -2612,7 +2626,12 @@ fn copy_guide_examples_resolve_verbatim_in_their_named_sources() {
     let mut problems = Vec::new();
     let mut first = None;
     for (heading, body) in level_two_sections(&repo_text(COPY_GUIDE)) {
-        let examples = copy_guide_examples(&body);
+        let (examples, malformed) = copy_guide_examples(&body);
+        problems.extend(
+            malformed
+                .into_iter()
+                .map(|problem| format!("{heading}: {problem}")),
+        );
         if examples.is_empty() {
             problems.push(format!("{heading}: no example"));
         }
@@ -2641,6 +2660,25 @@ fn copy_guide_examples_resolve_verbatim_in_their_named_sources() {
         example_resolves(&source, &format!("{example} TSK-073 absent")),
         Ok(false),
         "the resolution check must fail on a missing string"
+    );
+    // Negative controls (Codex review R1, finding 3): an example heading the
+    // parser cannot read and a quotation with no heading both fail, even
+    // beside a well-formed example; a labelled heading parses.
+    let (parsed, malformed) = copy_guide_examples(
+        "Example, a label (source: `cf-present/SKILL.md`):\n> text\n\n\
+         Example from `cf-present/SKILL.md`:\n> stale text\n\n> orphan quotation\n",
+    );
+    assert_eq!(
+        parsed,
+        vec![("cf-present/SKILL.md".to_string(), "text".to_string())]
+    );
+    assert_eq!(
+        malformed,
+        vec![
+            "example heading that does not parse: Example from `cf-present/SKILL.md`:".to_string(),
+            "quotation with no example heading: > stale text".to_string(),
+            "quotation with no example heading: > orphan quotation".to_string(),
+        ]
     );
 }
 
@@ -2857,7 +2895,7 @@ fn copy_guide_pointers_and_shape_deliverables_markers_stay_pinned() {
             &[
                 "This skill, its copy guide and its contextual-smells reference are the canonical CodeFlow home",
                 "Load [references/copy-guide.md](references/copy-guide.md) when writing and [references/editorial-smells.md](references/editorial-smells.md) when reviewing.",
-                "use a figure in one of the nine families of the explanation method (`cf-present/resources/explanation-method.md`)",
+                "in one of the nine families of the explanation method (`cf-present/resources/explanation-method.md`)",
             ][..],
         ),
         (

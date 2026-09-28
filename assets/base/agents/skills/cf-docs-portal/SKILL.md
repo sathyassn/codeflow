@@ -100,9 +100,9 @@ purpose and mental model                         (concept)
 records: decisions, epics, tasks and specs are pointed to as folders
 ```
 
-Keep navigation predictable. Match an established project voice;
-otherwise write every string by the copy guide
-(`cf-editorial-review/references/copy-guide.md`).
+Keep navigation predictable. Write every string by the copy guide
+(`cf-editorial-review/references/copy-guide.md`), in the project's
+documented voice where it has one.
 
 ### Visual craft (utility presentation system, mandatory)
 
