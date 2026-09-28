@@ -1161,8 +1161,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 const outline = savedRegionStyle(documentRoot, note, markerEpoch);
                 return outline ? <div key={`area-${note.client_id}`} class="cf-region-saved" data-testid="saved-area" style={outline} aria-hidden="true" /> : null;
               })}
-              {notes.map((note, index) => {
-                const at = markerPlacement(documentRoot, note, markerMetaRef.current.get(note.client_id), index, markerEpoch);
+              {(() => {
+                const spots = markerPlacements(documentRoot, notes, markerMetaRef.current, markerEpoch);
+                return notes.map((note, index) => {
+                const at = spots[index];
                 if (!at) return null;
                 return (
                   <button
@@ -1170,7 +1172,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                     type="button"
                     class="cf-marker"
                     data-testid="note-marker"
-                    style={`left:${at.left}px;top:${at.top}px;width:${38 + 8 * (String(index + 1).length - 1)}px`}
+                    style={`left:${at.left}px;top:${at.top}px;width:${at.width}px`}
                     aria-label={`Note ${index + 1}, ${kindLabels[targetKindOf(note)]}: ${noteQuote(note)}`}
                     title={`#${index + 1} ${kindLabels[targetKindOf(note)]}: ${noteQuote(note)}`}
                     onClick={(e) => openNoteEditor(note, { x: e.clientX, y: e.clientY })}
@@ -1181,7 +1183,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                     <span class="n">{index + 1}</span>
                   </button>
                 );
-              })}
+                });
+              })()}
             </>,
             markerLayer,
           )
@@ -1703,6 +1706,20 @@ function noteQuote(note: PendingFeedback): string {
   return (note.target_summary ?? note.block_label).replace(/^(Text|Element|Area):\s*/, "").slice(0, 96);
 }
 
+/** Where a marker sits: its box in document coordinates and how it is placed. */
+interface MarkerSpot {
+  left: number;
+  top: number;
+  width: number;
+  /** Beside its anchor (in the gutter or right of it), or above its line. */
+  beside: boolean;
+}
+
+/** The width of a marker whose number has as many digits as `index + 1`. */
+function markerWidth(index: number): number {
+  return 38 + 8 * (String(index + 1).length - 1);
+}
+
 /**
  * Pass10 marker placement in document coordinates: every marker parks in the
  * gutter immediately left of the line it points at (a text note's selected
@@ -1716,22 +1733,84 @@ function markerPlacement(
   meta: { ay: number } | undefined,
   index: number,
   markerEpoch: number,
-): { left: number; top: number } | null {
+): MarkerSpot | null {
   const rect = targetRect(documentRoot, note, markerEpoch);
   if (!rect) return null;
   const root = documentRoot.getBoundingClientRect();
   if (root.width <= 0) return null;
   const left = rect.left - root.left;
   const top = rect.top - root.top;
-  const width = 38 + 8 * (String(index + 1).length - 1);
+  const width = markerWidth(index);
   const clamp = (x: number): number => Math.max(2 - root.left, Math.min(x, innerWidth - root.left - width * 1.03 - 8));
   const line = targetKindOf(note) === "text" ? top + (meta?.ay ?? 0) * rect.height : top;
   const gutter = left - width - 8;
-  if (gutter >= 2) return { left: clamp(gutter), top: Math.max(2, line - 2) };
+  if (gutter >= 2) return { left: clamp(gutter), top: Math.max(2, line - 2), width, beside: true };
   const right = left + rect.width + 8;
-  if (right + width <= root.width - 2) return { left: clamp(right), top: Math.max(2, line - 2) };
+  if (right + width <= root.width - 2) return { left: clamp(right), top: Math.max(2, line - 2), width, beside: true };
   const end = Math.min(left + rect.width, root.width - 2) - width;
-  return { left: clamp(Math.max(2, end)), top: Math.max(2, line - markerHeight() - 4) };
+  return { left: clamp(Math.max(2, end)), top: Math.max(2, line - markerHeight() - 4), width, beside: false };
+}
+
+/**
+ * Every note's marker, placed so that no two overlap (TSK-158). Markers
+ * beside their anchors that would touch share their column: each run of
+ * them stacks with a small gap, centred on the anchors it marks, so each
+ * stays level with its own line or within a marker's height of it. A marker
+ * above its line moves left along that line, past the markers it would
+ * cover, while it stays on screen.
+ */
+function markerPlacements(
+  documentRoot: HTMLElement,
+  notes: readonly PendingFeedback[],
+  meta: Map<string, { ay: number }>,
+  markerEpoch: number,
+): (MarkerSpot | null)[] {
+  const spots = notes.map((note, index) => markerPlacement(documentRoot, note, meta.get(note.client_id), index, markerEpoch));
+  const height = markerHeight();
+  const gap = 2;
+  const overlaps = (a: MarkerSpot, b: MarkerSpot): boolean =>
+    a.left < b.left + b.width + gap && b.left < a.left + a.width + gap && a.top < b.top + height + gap && b.top < a.top + height + gap;
+  // Beside: in each column, runs of touching markers stack, centred on the
+  // stretch their own places cover; a run that then meets the one above it
+  // joins it, and the two stack as one.
+  const columns = new Map<number, { spot: MarkerSpot; top: number }[]>();
+  for (const spot of spots) {
+    if (!spot?.beside) continue;
+    const key = Math.round(spot.left);
+    columns.set(key, [...(columns.get(key) ?? []), { spot, top: spot.top }]);
+  }
+  for (const column of columns.values()) {
+    column.sort((a, b) => a.top - b.top);
+    const runs: { items: { spot: MarkerSpot; top: number }[]; top: number }[] = [];
+    const bottom = (run: { items: unknown[]; top: number }): number => run.top + run.items.length * (height + gap);
+    for (const item of column) {
+      let lower = { items: [item], top: item.top };
+      let upper = runs.pop();
+      // A run that reaches the one above it joins it and restacks.
+      while (upper && lower.top < bottom(upper)) {
+        const items = [...upper.items, ...lower.items];
+        const first = items[0]?.top ?? 0;
+        const reach = (items[items.length - 1]?.top ?? first) + height - first;
+        const span = items.length * (height + gap) - gap;
+        lower = { items, top: Math.max(2, first + reach / 2 - span / 2) };
+        upper = runs.pop();
+      }
+      if (upper) runs.push(upper);
+      runs.push(lower);
+    }
+    for (const run of runs) run.items.forEach(({ spot }, i) => { spot.top = run.top + i * (height + gap); });
+  }
+  // Above: in note order, each moves left past any marker it would cover.
+  const placed = spots.filter((spot): spot is MarkerSpot => Boolean(spot?.beside));
+  for (const spot of spots) {
+    if (!spot || spot.beside) continue;
+    const floor = 2 - documentRoot.getBoundingClientRect().left;
+    for (let hit = placed.find((other) => overlaps(spot, other)); hit && hit.left - spot.width - gap >= floor; hit = placed.find((other) => overlaps(spot, other))) {
+      spot.left = hit.left - spot.width - gap;
+    }
+    placed.push(spot);
+  }
+  return spots;
 }
 
 /** A marker's height: 26 px, raised by the button minimum of 2.25rem (styles.css). */

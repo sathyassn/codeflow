@@ -118,6 +118,8 @@ try {
   for (const hidden of ["more-text", "plan-text", "risk-text"]) assert.ok(!listed.includes(`#${hidden}`), `the sections list names the hidden block ${hidden}`);
   for (const shown of ["prose", "more", "views"]) assert.ok(listed.includes(`#${shown}`), `the sections list lacks ${shown}: ${listed.join(" ")}`);
   await phoneWidth(page);
+  for (const width of [1280, 375]) await closeMarkers(page, width);
+  process.stdout.write("close markers passed: at 1280 and 375 px, notes on two adjacent diff lines, two adjacent code lines and twice on one prose line have markers that do not overlap, each level with its own line or just above it and off its anchor, and a click at each marker's centre opens its own note\n");
   process.stdout.write("sections and phone width passed: no hidden block in the sections list; at 375 px the sheet stays closed on arming, a gesture, a save and a pin, the float keeps ESC on screen, markers stay off the heading and the selected line, Comment opens the sheet and dismisses the save hint, and Done leaves\n");
 
   const expected = [];
@@ -710,6 +712,85 @@ async function phoneWidth(page) {
   } finally {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.emulateMedia({ colorScheme: "light" });
+  }
+}
+
+// Notes whose anchors lie closer than a marker's height keep their markers
+// apart (TSK-158): no two marker boxes meet; each marker is level with its
+// own line (its vertical range meets the line's) or sits just above it (its
+// bottom within 8 px of the line's top), and never on its anchor; a click at
+// a marker's centre opens that marker's own note.
+async function closeMarkers(page, width) {
+  const where = (what) => `close markers at ${width} px, ${what}`;
+  await page.setViewportSize({ width, height: width < 800 ? 812 : 900 });
+  const notes = [];
+  const pageBox = (rect) => page.evaluate((rect) => ({ left: rect.x + scrollX, top: rect.y + scrollY, right: rect.x + rect.width + scrollX, bottom: rect.y + rect.height + scrollY }), rect);
+  const save = async (body) => {
+    await page.getByTestId("composer-text").fill(body);
+    await page.getByTestId("composer-save").click();
+    await page.getByTestId("composer").waitFor({ state: "detached" });
+  };
+  try {
+    await armComment(page);
+    for (const [block, click] of [["change", "del"], ["change", "ins"], ["snippet", ".cf-line:nth-of-type(2)"], ["snippet", ".cf-line:nth-of-type(3)"]]) {
+      await reveal(page, block);
+      const cell = { gesture: "element", block, recipe: { click, label: "" } };
+      await gesture(page, cell).catch((error) => { throw new Error(where(`${block} ${click}: ${error.message}`)); });
+      const anchor = await pageBox(await page.locator(`[data-cf-block-id='${block}'] ${click}`).first().boundingBox());
+      const body = `close ${notes.length + 1}`;
+      await save(body);
+      notes.push({ body, anchor, what: `${block} ${click}` });
+    }
+    // Twice on one prose line: two words of its first line.
+    for (const words of ["Every block", "runtime draws"]) {
+      await reveal(page, "prose");
+      await gesture(page, { gesture: "text", block: "prose", recipe: { in: "p", words } });
+      const line = await page.evaluate((words) => {
+        const node = [...document.querySelector("[data-cf-block-id='prose'] p").childNodes].find((child) => child.nodeType === Node.TEXT_NODE && child.data.includes(words));
+        const range = document.createRange();
+        const at = node.data.indexOf(words);
+        range.setStart(node, at);
+        range.setEnd(node, at + words.length);
+        const rect = range.getClientRects()[0];
+        return { left: rect.left + scrollX, top: rect.top + scrollY, right: rect.right + scrollX, bottom: rect.bottom + scrollY };
+      }, words);
+      const body = `close ${notes.length + 1}`;
+      await save(body);
+      notes.push({ body, anchor: line, what: `prose "${words}"` });
+    }
+    assert.equal(notes[4].anchor.top, notes[5].anchor.top, where("the two prose words are not on one line"));
+    const markers = await page.getByTestId("note-marker").evaluateAll((all) => all.map((marker) => {
+      const rect = marker.getBoundingClientRect();
+      return { left: rect.left + scrollX, top: rect.top + scrollY, right: rect.right + scrollX, bottom: rect.bottom + scrollY };
+    }));
+    assert.equal(markers.length, notes.length, where("a marker is missing"));
+    const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    for (const [i, marker] of markers.entries()) {
+      const { anchor, what } = notes[i];
+      for (const [j, other] of markers.entries()) {
+        if (j > i) assert.ok(!meets(marker, other), where(`markers ${i + 1} (${what}) and ${j + 1} (${notes[j].what}) overlap: ${JSON.stringify([marker, other])}`));
+      }
+      const level = marker.top < anchor.bottom && anchor.top < marker.bottom;
+      const above = marker.bottom <= anchor.top && anchor.top - marker.bottom <= 8;
+      assert.ok(level || above, where(`marker ${i + 1} (${what}) ${JSON.stringify(marker)} is neither level with nor just above its line ${JSON.stringify(anchor)}`));
+      assert.ok(!meets(marker, anchor), where(`marker ${i + 1} (${what}) sits on its anchor`));
+    }
+    for (const [i, { body, what }] of notes.entries()) {
+      await page.getByTestId("note-marker").nth(i).click({ timeout: 5000 }).catch((error) => { throw new Error(where(`marker ${i + 1} (${what}) takes no click at its centre: ${error.message.split("\n")[0]}`)); });
+      await page.getByTestId("composer").waitFor();
+      assert.equal(await page.getByTestId("composer-text").inputValue(), body, where(`marker ${i + 1} (${what}) opened another note`));
+      await page.getByTestId("composer-cancel").click();
+      await page.getByTestId("composer").waitFor({ state: "detached" });
+    }
+  } finally {
+    // The last marker drawn is on top, so it takes the click even where
+    // markers overlap, and the first failure stays the one reported.
+    while (await page.getByTestId("note-marker").count()) {
+      await page.getByTestId("note-marker").last().click();
+      await page.getByTestId("composer-delete").click();
+      await page.getByTestId("composer").waitFor({ state: "detached" });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
   }
 }
 
