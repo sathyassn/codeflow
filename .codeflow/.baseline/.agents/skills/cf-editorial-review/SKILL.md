@@ -9,8 +9,11 @@ Review the artifact in its real project, audience, medium, and task context.
 Improve clarity and credibility without flattening a legitimate voice or
 inventing one.
 
-This skill and its contextual-smells reference are the canonical CodeFlow home
-for shared language guidance. Other skills should route here instead of copying
+This skill, its copy guide and its contextual-smells reference are the
+canonical CodeFlow home for shared language guidance. Load
+[references/copy-guide.md](references/copy-guide.md) when writing and
+[references/editorial-smells.md](references/editorial-smells.md) when
+reviewing. Other skills should route here instead of copying
 title, emoji, personality, or authority rules into parallel checklists.
 
 ## Authority order
@@ -60,10 +63,11 @@ misrepresent the author or project.
    understandable in context.
    Utility copy does not become product voice, and CodeFlow does not supply a
    personality for either. Keep formatting proportionate: a simple
-   answer needs no apparatus, and when relationships, hierarchy, state,
-   timelines, mappings, or a decision are materially clearer drawn, use a
-   diagram whose scope and detail fit the explanation, in the form the
-   surface renders as the lifecycle reply rule sets out. Prefer the least
+   answer needs no apparatus, and when a relationship is materially clearer
+   drawn, use a figure whose scope and detail fit the explanation, in one of
+   the nine families of the explanation method
+   (`cf-present/resources/explanation-method.md`) and in the form the
+   lifecycle reply rule sets for the surface. Prefer the least
    complicated form that remains complete, not the physically smallest;
    complex subjects may need a larger, layered, or multi-view diagram. Add a
    brief caption or legend when it aids orientation. A decorative or forced

@@ -8,10 +8,11 @@ import { chromium } from "playwright-core";
 import axe from "axe-core";
 import { validateWindowsQualificationConfinement } from "./windows-qualification-scope.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
+import { codeflowBinary } from "./codeflow-binary.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
-const codeflow = resolve(process.env.CF_PRESENT_CODEFLOW ?? join(repoRoot, "target/debug/codeflow"));
+const codeflow = codeflowBinary(repoRoot);
 await access(codeflow);
 // A figure block the grammar draws with no rule failure (the portal's state specimen).
 const figureDeclaration = JSON.parse(await readFile(join(repoRoot, "docs-portal/tests/fixtures/figures/05-state.json"), "utf8"));

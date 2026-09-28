@@ -78,7 +78,8 @@ perl -CSD -ne 'print "$ARGV\n" if /\x{2013}|\x{2014}/' *
 
 ## Writing rules
 
-Every string on a page follows these rules:
+Every string on a page follows these rules; the copy guide
+(`cf-editorial-review/references/copy-guide.md`) states them in full:
 
 - Visuals first: a lead sentence above each figure, the acting sentences below.
 - Short plain sentences; bullets or a table where they carry facts better
