@@ -1637,3 +1637,79 @@ fn no_owner_keeps_the_retired_summary_or_dash_wording() {
         }
     }
 }
+
+/// Each reply duty the lifecycle reply rule owns (SPC-013 R-117), with the
+/// clause that states it there and the clause that states it in the writing
+/// reference. The writing reference is what an agent reads at the moment it
+/// reports, at every tier: the rule map routes "report status" to it, and the
+/// minimal tier installs no lifecycle.
+const REPLY_DUTIES_AT_THE_REPORTING_MOMENT: &[(&str, &str, &str)] = &[
+    ("report order", "A reply or report opens with the result it serves and where the work stands", "A reply or report opens with the result it serves and where the work stands"),
+    ("steps last", "steps, gates, counts and tooling come last, and only where they explain those", "steps, gates, counts and tooling come last, and only where they explain those"),
+    ("order not headings", "This is an order, not a set of headings", "This is an order, not a set of headings"),
+    ("design talk in prose", "A design discussion leads with the result in prose", "a design discussion leads with the result in prose"),
+    ("no forced labels", "labels forced onto a short answer are a defect", "labels forced onto a short answer are a defect"),
+    ("running report", "A running report on long work opens with the result the work serves and where it stands", "A running report on long work opens with the result the work serves and where it stands"),
+    ("anchoring summary", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines.", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines."),
+    ("detail after the anchor", "detail that does not help the reader orient comes after it", "detail that does not help the reader orient comes after it"),
+    ("buried anchor", "A summary that buries the anchor in detail fails, however short it is.", "A summary that buries the anchor in detail fails, however short it is."),
+    ("attention placement", "NEED YOUR ATTENTION, at most once per reply, after the opening and before the detail", "go once under NEED YOUR ATTENTION, after the opening and before the detail"),
+    ("attention verbs", "(Decide, Do, Confirm, Clarify or Note)", "(Decide, Do, Confirm, Clarify or Note)"),
+    ("operator-only items", "the decisions, actions and confirmations only the operator can give", "the decisions, actions and confirmations only the operator can give"),
+    ("hard gate", "including a hard gate that waits on the operator; other work keeps moving", "including a hard gate that waits on the operator; other work keeps moving"),
+    ("no manufactured ask", "With nothing owed there is no heading, and a manufactured ask is a defect.", "With nothing owed there is no heading, and a manufactured ask is a defect."),
+    ("heading exclusions", "never appears in a pull request body, document, commit message, outbound draft or machine payload", "never appears in a pull request body, document, commit message, outbound draft or machine payload"),
+    ("simple answer", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line."),
+    ("figure by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders"),
+    ("no Mermaid", "Never use Mermaid", "Never use Mermaid"),
+    ("exact links", "Never guess a URL, port, or pull request number; state an unknown link as unknown.", "Never guess a URL, port, or pull request number; state an unknown link as unknown."),
+    ("dash guideline", "Avoid em and en dashes in prose", "avoid em and en dashes in prose"),
+    ("replies judged without a hook", "no hook sees a reply", "No hook sees a chat reply"),
+];
+
+fn missing_reply_duties(owner: &str, reporting: &str) -> Vec<String> {
+    let (owner, reporting) = (normalized(owner), normalized(reporting));
+    let mut missing = Vec::new();
+    for (duty, owner_clause, reporting_clause) in REPLY_DUTIES_AT_THE_REPORTING_MOMENT {
+        if !owner.contains(owner_clause) {
+            missing.push(format!("owner lost {duty}"));
+        }
+        if !reporting.contains(reporting_clause) {
+            missing.push(format!("writing reference lacks {duty}"));
+        }
+    }
+    missing
+}
+
+/// TSK-138 AC-1: the writing reference, read when an agent reports at every
+/// tier, states each reply duty its owner states, so the two cannot drift
+/// apart and the minimal tier loses none of them.
+#[test]
+fn reply_duties_read_when_reporting_match_their_owner() {
+    let root = repo_root();
+    let owner = read_text(
+        &root.join("assets/base/claude/skills/cf-method/references/workflow-lifecycle.md"),
+    );
+    for path in [
+        "assets/base/rules/writing.md",
+        ".codeflow/rules/writing.md",
+        ".codeflow/.baseline/.codeflow/rules/writing.md",
+    ] {
+        let reporting = read_text(&root.join(path));
+        let missing = missing_reply_duties(&owner, &reporting);
+        assert!(missing.is_empty(), "{path}: {missing:#?}");
+    }
+
+    // Negative controls: a duty dropped from either side is named.
+    let reporting = read_text(&root.join("assets/base/rules/writing.md"));
+    let dropped = reporting.replacen("a manufactured ask is a defect", "an ask is fine", 1);
+    assert_eq!(
+        missing_reply_duties(&owner, &dropped),
+        vec!["writing reference lacks no manufactured ask".to_string()]
+    );
+    let owner_dropped = owner.replacen("other work keeps moving", "all work waits", 1);
+    assert_eq!(
+        missing_reply_duties(&owner_dropped, &reporting),
+        vec!["owner lost hard gate".to_string()]
+    );
+}

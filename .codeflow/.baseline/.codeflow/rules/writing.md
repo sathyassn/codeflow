@@ -15,21 +15,31 @@ summaries, documents, records, commit messages and PR bodies. Managed by
   never the whole title; it goes in the body.
 - A reply or report opens with the result it serves and where the work
   stands, then what would change that and who resolves it, then what the
-  reader must decide or do; steps, gates, counts and tooling come last. This
-  is an order, not a set of headings: labels belong only in status, readiness
-  or closeout reports the same reader compares.
+  reader must decide or do; steps, gates, counts and tooling come last, and
+  only where they explain those. This is an order, not a set of headings: a
+  design discussion leads with the result in prose, labels belong only in
+  status, readiness or closeout reports the same reader compares, and labels
+  forced onto a short answer are a defect.
+- A running report on long work opens with the result the work serves and
+  where it stands, then what would change it and who resolves it; progress
+  lines follow.
 - A summary anchors the reader: what this is, why it matters and where it
   stands, in a few lines. It is judgment, not a sentence count or a list of
   banned items; a key number, file name, data point or caveat belongs there
-  when it is part of that context. The details follow as bullets, one point
-  each, in a logical order (problem, change, effect, limits, or the order of
-  the flow); a table for tabular data and a fenced block for pasted output.
+  when it is part of that context, and detail that does not help the reader
+  orient comes after it. The details follow as bullets, one point each, in a
+  logical order (problem, change, effect, limits, or the order of the flow);
+  a table for tabular data and a fenced block for pasted output. A summary
+  that buries the anchor in detail fails, however short it is.
 - In a reply to the operator, items the operator must act on go once under
   NEED YOUR ATTENTION, after the opening and before the detail. Each starts
   with what is needed (Decide, Do, Confirm, Clarify or Note) and stands on its
-  own with the subject, the options and a recommendation. With nothing owed
-  there is no heading. It never appears in a pull request body, document,
-  commit message or machine payload; a project may rename or drop it in its
+  own with the subject, the options and a recommendation. The items are the
+  decisions, actions and confirmations only the operator can give, including
+  a hard gate that waits on the operator; other work keeps moving. With
+  nothing owed there is no heading, and a manufactured ask is a defect. The
+  heading never appears in a pull request body, document, commit message,
+  outbound draft or machine payload; a project may rename or drop it in its
   own section of `AGENTS.md`.
 - A simple answer stays simple: no figure, no headings, no recap, and a
   one-line answer stays one line.
