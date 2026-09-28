@@ -1,7 +1,7 @@
 // The crop likeness rule the annotation matrix applies (likeness.mjs), held
 // to synthetic pictures: a crop of the right rectangle passes; a stripe
-// field, a blank crop, a crop of another place and the right ink moved 4 or
-// 12 px all fail (TSK-071, G071-1).
+// field, a blank crop, a crop of another place, the right ink moved 4 or
+// 12 px and the right rectangle a line or two off all fail (TSK-071, G071-1).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { LIKENESS_FLOOR, NEARBY_OFFSETS, gridShape, inkGrid, likeness, placed } from "./likeness.mjs";
@@ -45,6 +45,18 @@ test("the right ink moved 4 or 12 px is not placed", () => {
         const moved = window(TEXT, rect, dx, dy);
         assert.equal(verdict(rect, moved, 14), false, `${rect}, moved ${dx},${dy}: ${JSON.stringify(judge(rect, moved, 14))}`);
       }
+    }
+  }
+});
+
+// Text lines repeat every 22 px, so a crop a line or two off shares the
+// rectangle's line pattern and half its words (review G071-1, round 3).
+test("the right rectangle one or two lines off is not placed", () => {
+  for (const rect of RECTANGLES) {
+    for (const dy of [22, -22, 44, -44]) {
+      const moved = window(TEXT, rect, 0, dy);
+      const where = `${rect}, moved ${dy} px: ${JSON.stringify(judge(rect, moved, 14))}`;
+      assert.equal(verdict(rect, moved, 14), false, where);
     }
   }
 });

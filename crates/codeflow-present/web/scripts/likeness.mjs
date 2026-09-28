@@ -7,9 +7,11 @@
 // The lowest inside likeness a crop may have. The 30 true crops of the
 // annotation matrix score 0.90 to 1.00 (the tabs and diff elements lowest;
 // the tabs crop lacks the summary's ::marker, which the runtime cannot
-// paint); the stripe fields in likeness.test.mjs score up to 0.69, and a
-// blank crop 0. The floor sits between the two.
-export const LIKENESS_FLOOR = 0.8;
+// paint). In likeness.test.mjs a stripe field scores up to 0.20, a crop of
+// the same rectangle one or two lines off up to 0.42, another text 0.12, the
+// right ink moved 4 or 12 px up to 0.82, and a blank crop 0. The floor sits
+// between them, and the registration check below catches small shifts too.
+export const LIKENESS_FLOOR = 0.85;
 
 // A crop in place is at least as like its own rectangle as the same rectangle
 // moved 4 or 12 px any way (text repeats along a line, so one distance is
@@ -50,10 +52,20 @@ export function inkGrid(pixels, width, height, columns, rows) {
 }
 
 /**
- * The correlation of two ink grids: 1 for the same layout of ink, near 0 for
- * unrelated ink, and 0 for a picture with no ink structure at all.
+ * The correlation of two ink grids, each row taken less its own mean: 1 for
+ * the same layout of ink, near 0 for unrelated ink, and 0 for a picture with
+ * no ink structure at all. Text lines share their rhythm of ink and gap, so
+ * only where the words fall along each row tells one line from the next.
+ * `columns` is the grid's width (gridShape's 48).
  */
-export function likeness(left, right) {
+export function likeness(left, right, columns = 48) {
+  const alongRows = (grid) => grid.map((value, cell) => {
+    const start = cell - (cell % columns);
+    let sum = 0;
+    for (let index = start; index < start + columns; index += 1) sum += grid[index];
+    return value - sum / columns;
+  });
+  [left, right] = [alongRows(left), alongRows(right)];
   const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
   const [a, b] = [mean(left), mean(right)];
   let product = 0;
