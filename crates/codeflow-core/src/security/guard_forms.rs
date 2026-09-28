@@ -830,6 +830,8 @@ pub const REVIEW_ROUND_TWO_PROBES: &[(&str, &str, Expect)] = &[
         Expect::Allowed,
     ),
     ("control-glob", "rm -rf ./*", Expect::Allowed),
+    // A link the last component matches is removed, not followed.
+    ("control-glob-link-itself", "rm -rf root-*", Expect::Allowed),
     ("control-pwd", "rm -rf \"$PWD/build\"", Expect::Allowed),
     (
         "control-source-then-cd",

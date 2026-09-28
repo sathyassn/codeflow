@@ -3077,7 +3077,8 @@ impl Reader<'_> {
     /// Every path a glob in `path` may name: its matches on disk, and the
     /// protected names it could match where the disk does not show them.
     /// A final `*` is kept, since the protected classification reads
-    /// `dir/*` itself. Empty for a path without a glob or one the reader
+    /// `dir/*` itself, and a link the last component matches is left out,
+    /// since the deletion removes the link; a trailing `/` follows it. Empty for a path without a glob or one the reader
     /// cannot place; `None` when a directory cannot be listed or there are
     /// too many matches.
     fn glob_paths(&self, path: &str) -> Option<Vec<String>> {
@@ -3106,9 +3107,15 @@ impl Reader<'_> {
                     .into_iter()
                     .map(str::to_string)
                     .collect();
+                // A link matched by the last component is removed itself,
+                // not followed.
+                let last = i + 1 == parts.len() && keep_last;
                 match std::fs::read_dir(listed) {
                     Ok(entries) => {
                         for entry in entries.flatten() {
+                            if last && entry.file_type().is_ok_and(|t| t.is_symlink()) {
+                                continue;
+                            }
                             names.insert(entry.file_name().to_string_lossy().into_owned());
                         }
                     }
