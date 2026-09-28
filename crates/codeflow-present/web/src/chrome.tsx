@@ -212,6 +212,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   // native selection. Debounced gestures always recapture the live range.
   const toolbarSelectionRef = useRef<CapturedTarget | null>(null);
   const lastPinnedSelectionRef = useRef<string>("");
+  // The debounced selection pin (TSK-159). A ref, so an explicit capture can
+  // cancel it: the effect that owns it is only torn down after the next paint.
+  const selectionPinTimerRef = useRef(0);
   const composerOpenRef = useRef(false);
   const pendingPinRef = useRef<PendingPin | null>(null);
   const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: PinOptions) => void>(() => undefined);
@@ -580,9 +583,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (!commentMode || captureMode || busy || composerOpen) return undefined;
 
     shiftRef.current = false;
-    let pinTimer = 0;
     const onSelection = (): void => {
-      window.clearTimeout(pinTimer);
+      window.clearTimeout(selectionPinTimerRef.current);
       if (!commentModeRef.current || captureModeRef.current) return;
       const drag = dragGestureRef.current;
       if (drag && !drag.proseOnly && drag.region) return;
@@ -593,8 +595,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         return;
       }
       setHintMode("text");
-      pinTimer = window.setTimeout(() => {
-        if (!commentModeRef.current || captureModeRef.current) return;
+      selectionPinTimerRef.current = window.setTimeout(() => {
+        // A composer opened since the selection (the Add text tool) owns it.
+        if (!commentModeRef.current || captureModeRef.current || composerOpenRef.current) return;
         const live = captureSelection(documentRoot);
         const selection = window.getSelection();
         if (!live?.selector || live.selector.exact.length > config.review_limits.max_selector_utf16 || selection?.rangeCount !== 1) return;
@@ -807,7 +810,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
     return () => {
-      window.clearTimeout(pinTimer);
+      window.clearTimeout(selectionPinTimerRef.current);
       document.removeEventListener("selectionchange", onSelection);
       documentRoot.removeEventListener("dragstart", onDragStart);
       window.removeEventListener("pointercancel", onPointerCancel);
@@ -994,6 +997,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   /* ─── Tool helpers (secondary path; selection captured on pointerdown so click does not clear it) ─── */
   const stashSelection = (): void => {
+    // The tool press takes the selection, so its pending pin must not land
+    // between the press and its click; under load that lost the click (TSK-159).
+    window.clearTimeout(selectionPinTimerRef.current);
     const selected = captureSelection(documentRoot);
     toolbarSelectionRef.current = selected?.selector && selected.selector.exact.length <= config.review_limits.max_selector_utf16
       ? selected : null;
