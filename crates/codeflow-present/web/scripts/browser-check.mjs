@@ -364,7 +364,10 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Each earlier note names its block and its state in words, set apart (P2-1).
   const headings = await page.getByTestId("feedback-history").locator(".cf-note-heading").evaluateAll((nodes) =>
     nodes.map((node) => ({ parts: [...node.children].map((child) => child.textContent), gap: parseFloat(getComputedStyle(node).columnGap) || 0 })));
-  assert.deepEqual(headings.map((heading) => heading.parts), [["Summary", "moved"], ["Removed detail", "unpositioned"]]);
+  // "moved" only when the anchor reports a change (round 3).
+  assert.deepEqual(headings.map((heading) => heading.parts), [["Summary", "anchored"], ["Removed detail", "unpositioned"], ["Implementation", "moved"], ["Flow", "anchored"], ["Whole document", "anchored"]]);
+  await page.getByText("The same element: its block is unchanged in this revision.").waitFor();
+  await page.getByText("Still the whole document in this revision.").waitFor();
   assert.ok(headings.every((heading) => heading.gap > 0), `an earlier note heading runs its parts together: ${JSON.stringify(headings)}`);
   await page.getByRole("button", { name: "Close" }).click();
   const code = page.locator("code[data-cf-language='rust']");
@@ -937,6 +940,46 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false, limit
               body: "This remains visible without a fabricated location.",
               quote: "removed text",
               anchor: { state: "orphaned", reason: "the referenced block is absent" },
+            },
+          ],
+        },
+        {
+          event_id: "019f9b53-a341-7fa7-84c2-5f198ceea015",
+          source_revision: 1,
+          event_version: 1,
+          lifecycle: "delivered",
+          verdict: "approve_with_notes",
+          notes: [
+            {
+              id: "019f9b53-a341-7fa7-84c2-5f198ceea013",
+              block_label: "Implementation",
+              kind: "comment",
+              body: "This quote changed in the new revision.",
+              quote: "bounded runtime",
+              anchor: { state: "reanchored", start_utf16: 0, end_utf16: 7, changed: true },
+            },
+            {
+              id: "019f9b53-a341-7fa7-84c2-5f198ceea014",
+              block_label: "Flow",
+              kind: "comment",
+              body: "This element's block did not change.",
+              anchor: { state: "element_reanchored", element_path: "h2:nth-of-type(1)" },
+            },
+          ],
+        },
+        {
+          event_id: "019f9b53-a341-7fa7-84c2-5f198ceea016",
+          source_revision: 1,
+          event_version: 1,
+          lifecycle: "delivered",
+          verdict: "approve_with_notes",
+          notes: [
+            {
+              id: "019f9b53-a341-7fa7-84c2-5f198ceea017",
+              block_label: "Whole document",
+              kind: "comment",
+              body: "This area covers the whole document.",
+              anchor: { state: "region_reanchored", scope: "document", anchor_id: "document", x_ppm: 0, y_ppm: 0, width_ppm: 1000000, height_ppm: 1000000 },
             },
           ],
         },

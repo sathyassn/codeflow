@@ -1701,15 +1701,14 @@ function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpo
 }
 
 // The state of an earlier note in words, never its enum value (the detail
-// line below it, `anchorNotice`, says why).
+// line below it, `anchorNotice`, says why): "moved" only when the anchor
+// reports a change.
 function anchorWords(anchor: FeedbackAnchor): string {
   switch (anchor.state) {
     case "orphaned": return "unpositioned";
     case "block_fallback": return "on the block";
-    case "reanchored":
-    case "element_reanchored":
-    case "entity_reanchored":
-    case "region_reanchored": return "moved";
+    case "reanchored": return anchor.changed ? "moved" : "anchored";
+    case "entity_reanchored": return anchor.label_changed ? "moved" : "anchored";
     default: return "anchored";
   }
 }
@@ -1726,6 +1725,10 @@ function anchorNotice(anchor: FeedbackAnchor) {
     case "entity_reanchored": return anchor.label_changed
       ? <p class="cf-anchor-warning">The part it names was relabelled in this revision.</p>
       : <p class="cf-anchor-note">Still names the same part; the block around it changed in this revision.</p>;
+    case "element_reanchored": return <p class="cf-anchor-note">The same element: its block is unchanged in this revision.</p>;
+    case "region_reanchored": return anchor.scope === "document"
+      ? <p class="cf-anchor-note">Still the whole document in this revision.</p>
+      : <p class="cf-anchor-note">The same area: its block is unchanged in this revision.</p>;
     default: return null;
   }
 }
