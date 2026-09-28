@@ -169,10 +169,14 @@ ADR-0026 from arbitrary Bash while leaving brokered tools and MCP processes
 available. The deterministic shell plane accepts both Bash and PowerShell
 payloads and keeps its catastrophic classifier non-relaxable across Unix/macOS
 roots and Windows drive, system, profile, disk, recovery, and permission
-operations. A composed deletion is read as scoped shell: each variable and
-the working directory carry every value they may hold through subshells,
-branches and loops, and the deletion is refused when any of them reaches a
-protected location (TSK-141). macOS and Linux use native harness
+operations. A composed deletion is read as scoped shell: each variable,
+positional parameter and the working directory carry every value they may
+hold through subshells, branches, loops and function calls, and the deletion
+is refused when any of them reaches a protected location. A construct the
+reader does not model exactly (a sourced file, a name reference, an
+unresolved parameter expansion) makes what it may change unknown, and a
+deletion that depends on an unknown value is refused as unproven (TSK-141).
+macOS and Linux use native harness
 sandboxes; WSL2 follows the Linux path. Native Windows Codex selects its
 elevated sandbox, while native Windows Claude has no equivalent OS sandbox
 and therefore moves high-blast-radius work to WSL2 or a container (ADR-0033). Beyond the

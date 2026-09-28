@@ -928,7 +928,13 @@ publication date._
   whatever its tests, so `find ~ -name .DS_Store -delete` is now refused.
   Each is refused as its `rm -rf` equivalent is. A variable or directory
   that may hold a protected value on any path is refused too, and the
-  message then says so. A deletion inside the project, such as
+  message then says so. Functions, `local`, positional parameters, arrays,
+  `read`, `IFS`, aliases, `eval`, `command cd` and `builtin cd` are
+  followed as the shell runs them. A deletion whose target depends on
+  something exec-guard does not follow exactly, such as a sourced file,
+  `declare -n`, `${V/x/y}` or `read` from a command it cannot see, is
+  refused as unproven, and the message asks for the project path written
+  literally. A deletion inside the project, such as
   `find . -name '*.o' -delete`, still runs.
 
 <!-- codeflow:release-impact patch -->
@@ -941,9 +947,11 @@ publication date._
 <!-- codeflow:release-impact patch -->
 - **A peer CLI started through a package runner counts as a headless run.**
   `npx @anthropic-ai/claude-code -p`, `bunx @openai/codex exec`, and the
-  same through `pnpm dlx` or `yarn dlx`, are now judged as the direct
+  same through `npm exec`, `npm x`, `bun x`, `pnpm dlx`, `yarn dlx` or an
+  installed peer through `pnpm exec`, are now judged as the direct
   `claude -p` or `codex exec` is, under `security.headless_peer_runs` at
-  both `warn` and `block`; before, they passed unreported.
+  both `warn` and `block`; before, they passed unreported. The runner's own
+  `--help` or `--version` runs nothing and passes.
 
 <!-- codeflow:release-impact patch -->
 - **A git hook runs the codeflow that started git.** When a `codeflow`
