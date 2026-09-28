@@ -1674,55 +1674,46 @@ impl SessionStore {
     pub fn feedback_snapshot(&self, id: Uuid) -> Result<FeedbackSnapshot> {
         // Read under the lock; re-anchor after it, so a large revision never
         // holds up the session's other operations (TSK-118 review T118-5).
-        let (session, revision, events, retired) = {
+        let (session, revision, events, sources) = {
             let _lock = self.lock_session(id)?;
             let session = self.load(id)?;
             let revision = self.revision(id, session.current_revision)?;
             let events = self.read_events_unlocked(id)?;
-            let retired = self.retired_diagram_ids(id, &events, &revision)?;
-            (session, revision, events, retired)
+            let sources = self.source_revisions(id, &events, &revision)?;
+            (session, revision, events, sources)
         };
         build_feedback_snapshot(
             id,
             &events,
             &revision.content,
             session.current_revision,
-            &retired,
+            &sources,
         )
     }
 
-    /// The diagram ids of each revision that visible notes were written on,
-    /// when that revision is a retired one, so a note on a removed diagram
-    /// orphans with a reason that names it.
-    fn retired_diagram_ids(
+    /// The content of each earlier revision that notes were written on: a
+    /// note on a removed diagram orphans with a reason that names it, and a
+    /// diff quote is read in the review text of the revision it was taken in.
+    fn source_revisions(
         &self,
         id: Uuid,
         events: &[FeedbackEvent],
         current: &RevisionRecord,
-    ) -> Result<RetiredDiagramIds> {
-        let mut sources: Vec<u64> = events
-            .iter()
-            .filter_map(|event| match event {
-                FeedbackEvent::Received { envelope, .. } if !envelope.notes.is_empty() => {
-                    Some(envelope.revision)
+    ) -> Result<SourceRevisions> {
+        let mut sources = SourceRevisions::new();
+        for event in events {
+            if let FeedbackEvent::Received { envelope, .. } = event {
+                let revision = envelope.revision;
+                if envelope.notes.is_empty()
+                    || revision == current.revision
+                    || sources.contains_key(&revision)
+                {
+                    continue;
                 }
-                _ => None,
-            })
-            .collect();
-        sources.sort_unstable();
-        sources.dedup();
-        let mut retired = RetiredDiagramIds::new();
-        for revision in sources {
-            let content = if revision == current.revision {
-                current.content.clone()
-            } else {
-                self.revision(id, revision)?.content
-            };
-            if let RevisionContent::Retired { diagram_ids, .. } = content {
-                retired.insert(revision, diagram_ids);
+                sources.insert(revision, self.revision(id, revision)?.content);
             }
         }
-        Ok(retired)
+        Ok(sources)
     }
 
     pub fn clear(
@@ -2658,7 +2649,8 @@ fn find_block<'a>(
     })
 }
 
-type RetiredDiagramIds = std::collections::HashMap<u64, Vec<String>>;
+/// The content of each earlier revision that notes were written on.
+type SourceRevisions = std::collections::HashMap<u64, RevisionContent>;
 
 /// Re-anchored notes by session, feedback event, note and current revision.
 /// Each key names immutable inputs (a stored note and a stored revision), so
@@ -2693,7 +2685,7 @@ fn build_feedback_snapshot(
     events: &[FeedbackEvent],
     current: &RevisionContent,
     current_revision: u64,
-    retired: &RetiredDiagramIds,
+    sources: &SourceRevisions,
 ) -> Result<FeedbackSnapshot> {
     let mut lifecycle = std::collections::HashMap::new();
     let mut received = Vec::new();
@@ -2728,6 +2720,11 @@ fn build_feedback_snapshot(
             lifecycle.get(&envelope.event_id).copied().ok_or_else(|| {
                 PresentError::CorruptState("feedback lifecycle is missing".to_string())
             })?;
+        let source = if envelope.revision == current_revision {
+            Some(current)
+        } else {
+            sources.get(&envelope.revision)
+        };
         let notes = envelope
             .notes
             .iter()
@@ -2740,23 +2737,30 @@ fn build_feedback_snapshot(
                     .selector
                     .as_ref()
                     .map(|selector| selector.exact.clone()),
-                anchor: retired
-                    .get(&envelope.revision)
-                    .filter(|ids| ids.contains(&note.block_id))
-                    .map_or_else(
-                        || {
-                            cached_reanchor(
-                                (session_id, envelope.event_id, note.id, current_revision),
-                                || reanchor_note(note, envelope.revision, current, current_revision),
-                            )
-                        },
-                        |_| FeedbackAnchor::Orphaned {
+                anchor: match source {
+                    Some(RevisionContent::Retired { diagram_ids, .. })
+                        if diagram_ids.contains(&note.block_id) =>
+                    {
+                        FeedbackAnchor::Orphaned {
                             reason: format!(
                                 "the diagram block {} was removed with Mermaid; convert it to reanchor this note",
                                 note.block_id
                             ),
+                        }
+                    }
+                    _ => cached_reanchor(
+                        (session_id, envelope.event_id, note.id, current_revision),
+                        || {
+                            reanchor_note(
+                                note,
+                                envelope.revision,
+                                source,
+                                current,
+                                current_revision,
+                            )
                         },
                     ),
+                },
             })
             .collect();
         items.push(FeedbackView {
@@ -2778,6 +2782,7 @@ fn build_feedback_snapshot(
 fn reanchor_note(
     note: &FeedbackNote,
     source_revision: u64,
+    source: Option<&RevisionContent>,
     current: &RevisionContent,
     current_revision: u64,
 ) -> FeedbackAnchor {
@@ -2871,7 +2876,15 @@ fn reanchor_note(
         };
     }
     match &note.selector {
-        Some(selector) => reanchor_text(selector, same_revision, block, &framing),
+        Some(selector) => {
+            let source_block = match source {
+                Some(RevisionContent::Supported { document }) => {
+                    find_block(&document.blocks, &note.block_id)
+                }
+                _ => None,
+            };
+            reanchor_text(selector, same_revision, block, source_block, &framing)
+        }
         None => FeedbackAnchor::Block {
             block_id: note.block_id.clone(),
         },
@@ -2883,6 +2896,7 @@ fn reanchor_text(
     selector: &TextSelector,
     same_revision: bool,
     block: &crate::document::Block,
+    source: Option<&crate::document::Block>,
     framing: &crate::document::Framing,
 ) -> FeedbackAnchor {
     let canonical = block.canonical_review_text(framing);
@@ -2908,7 +2922,7 @@ fn reanchor_text(
     // A diff quote stored before its lines lost their label and marker from
     // the review text (TSK-071) is found in the diff's text as it was then,
     // and its range carried over to the text as it is now.
-    if let Some(anchor) = reanchor_legacy_diff(selector, same_revision, block) {
+    if let Some(anchor) = reanchor_legacy_diff(selector, same_revision, block, source) {
         return anchor;
     }
     let quote = crate::fuzzy::Quote {
@@ -2925,30 +2939,38 @@ fn reanchor_text(
     )
 }
 
-/// B1 for a diff quote stored while its changed lines began with their
+/// B1 for a diff quote taken while its changed lines began with their
 /// screen-reader label and marker ("Added: +") in the review text, before
 /// TSK-071: the exact, then the fuzzy step run on the diff's text as it was
 /// then, and the range found is carried over to the text as it is now, so a
-/// line's own words are kept even when they read like a label. `None` when
-/// the block is not a diff or the quote and its context hold no label.
+/// line's own words are kept even when they read like a label. A quote is
+/// taken to be that old only when its source revision's block held it in
+/// that text and not in the text as it is now (review C071-R4-1). `None`
+/// otherwise, and for a block that is not a diff.
 fn reanchor_legacy_diff(
     selector: &TextSelector,
     same_revision: bool,
     block: &crate::document::Block,
+    source: Option<&crate::document::Block>,
 ) -> Option<FeedbackAnchor> {
-    let (legacy, offsets) = block.legacy_diff_review_text()?;
-    let stored = format!("{}{}{}", selector.prefix, selector.exact, selector.suffix);
-    if !stored.contains("Added: +") && !stored.contains("Removed: -") {
+    let source = source?;
+    let (then, _) = source.legacy_diff_review_text()?;
+    // A diff's review text does not depend on the document's framing.
+    let now = source.canonical_review_text(&crate::document::Framing::default());
+    if validate_selector_anchor(selector, &now).is_ok()
+        || validate_selector_anchor(selector, &then).is_err()
+    {
         return None;
     }
+    let (legacy, offsets) = block.legacy_diff_review_text()?;
     let carried = |start: u32, end: u32, changed: bool| {
-        let offset = |at: u32| {
+        let offset = |at: u32, starting: bool| {
             usize::try_from(at)
                 .ok()
                 .and_then(|at| offsets.get(at))
-                .and_then(|&now| u32::try_from(now).ok())
+                .and_then(|&(start, end)| u32::try_from(if starting { start } else { end }).ok())
         };
-        match (offset(start), offset(end)) {
+        match (offset(start, true), offset(end, false)) {
             (Some(start_utf16), Some(end_utf16)) if start_utf16 < end_utf16 => {
                 FeedbackAnchor::Reanchored {
                     start_utf16,

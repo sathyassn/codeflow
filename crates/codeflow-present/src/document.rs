@@ -703,41 +703,48 @@ impl Block {
         }
     }
 
-    /// A diff's review text as it was before TSK-071, when each changed line
-    /// began with its screen-reader label and marker ("Added: +"), with the
-    /// current review-text offset of each of its UTF-16 offsets (one more
-    /// than its length). A generated label and marker map to the start of
-    /// their line's text; the diff's own text maps one to one. `None` for a
-    /// block that is not a diff.
+    /// A diff's review text as 3.0.x wrote it, before TSK-071: each changed
+    /// line began with its screen-reader label and marker ("Added: +") and
+    /// the caption ran straight into the first line. With it come, for each
+    /// of its UTF-16 offsets, where a range starting and where a range ending
+    /// there falls in the review text as it is now (one more entry than its
+    /// length). A generated label and marker fall at the start of their
+    /// line's text; the diff's own text maps one to one. `None` for a block
+    /// that is not a diff.
     #[must_use]
-    pub fn legacy_diff_review_text(&self) -> Option<(String, Vec<usize>)> {
+    pub fn legacy_diff_review_text(&self) -> Option<(String, Vec<(usize, usize)>)> {
         let Self::Diff { diff, caption, .. } = self else {
             return None;
         };
         let mut text = String::new();
         let mut offsets = Vec::new();
         let mut current = 0;
-        let mut push = |part: &str, generated: bool| {
-            for _ in part.encode_utf16() {
-                offsets.push(current);
-                if !generated {
-                    current += 1;
+        // The line break the caption now ends with: a range ending before
+        // it stops at the caption, one starting after it at the first line.
+        let mut ended_before = None;
+        let mut push =
+            |part: &str, generated: bool, current: &mut usize, ended: &mut Option<usize>| {
+                for _ in part.encode_utf16() {
+                    offsets.push((*current, ended.take().unwrap_or(*current)));
+                    if !generated {
+                        *current += 1;
+                    }
                 }
-            }
-            text.push_str(part);
-        };
+                text.push_str(part);
+            };
         if let Some(caption) = caption.as_deref().filter(|caption| !caption.is_empty()) {
-            push(caption, false);
-            push("\n", false);
+            push(caption, false, &mut current, &mut ended_before);
+            ended_before = Some(current);
+            current += 1;
         }
         for line in diff.lines() {
             let (label, marker, rest) = diff_line_parts(line);
-            push(label, true);
-            push(marker, true);
-            push(rest, false);
-            push("\n", false);
+            push(label, true, &mut current, &mut ended_before);
+            push(marker, true, &mut current, &mut ended_before);
+            push(rest, false, &mut current, &mut ended_before);
+            push("\n", false, &mut current, &mut ended_before);
         }
-        offsets.push(current);
+        offsets.push((current, ended_before.unwrap_or(current)));
         Some((text, offsets))
     }
 
@@ -1934,6 +1941,31 @@ mod tests {
         assert_eq!(diff_line_parts("-x"), ("Removed: ", "-", "x"));
         assert_eq!(diff_line_parts("+++ b/x"), ("", "", "+++ b/x"));
         assert_eq!(diff_line_parts(" x"), ("", "", " x"));
+    }
+
+    /// The 3.0.x diff text that stored quotes were taken in, and where its
+    /// offsets fall now: the caption runs into the first line then, and a
+    /// generated label maps to the start of its line's text.
+    #[test]
+    fn a_legacy_diff_text_maps_onto_the_review_text() {
+        let block: Block = serde_json::from_value(serde_json::json!({
+            "type": "diff", "id": "d", "caption": "Cap", "diff": "+x\n y"
+        }))
+        .unwrap();
+        assert_eq!(
+            block.canonical_review_text(&Framing::default()),
+            "Cap\nx\n y\n"
+        );
+        let (text, offsets) = block.legacy_diff_review_text().unwrap();
+        assert_eq!(text, "CapAdded: +x\n y\n");
+        assert_eq!(offsets.len(), text.encode_utf16().count() + 1);
+        // A range ending after the caption stops before the new line break;
+        // one starting at the label starts at the line's text.
+        assert_eq!(offsets[3], (4, 3));
+        assert_eq!(offsets[4], (4, 4));
+        assert_eq!(offsets[11], (4, 4));
+        assert_eq!(offsets[12], (5, 5));
+        assert_eq!(offsets[16], (9, 9));
     }
 
     #[test]
