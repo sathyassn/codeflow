@@ -42,6 +42,8 @@ SUBJECTS_SUFFIX = "-subjects"
 # development suite is another.
 GRADED_SUITE: Path | None = None
 GRADED_SUITE_FILES = ("cases.json", "fixtures.json", "packs.json")
+# Labelled texts a judge must judge as labelled before its judgements count.
+JUDGE_CONTROLS_FILE = "judge-controls.json"
 MAX_SETTINGS_BYTES = 16 * 1024 * 1024
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 EXPERIMENT_VARIABLE = re.compile(r"^system\.[a-z_][a-z0-9_.]*$")
@@ -2978,10 +2980,15 @@ def judge_calibration(controls: list[dict], verdicts: dict[tuple[str, str], str]
     return misses
 
 
-def load_judgements(path: Path) -> tuple[dict[tuple[str, str], str], str]:
+Judge = tuple[str, str]
+"""A judge as recorded with its judgements: who judged (`judge`) and how it
+was set up (`judge_config`: model, version, prompt and settings, or the
+person). Calibration binds to both; a change to either is another judge."""
+
+
+def read_judgements(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge]], str]:
     """Recorded judgements for assertions whose meaning no deterministic check
-    settles: one verdict per assertion and excerpt digest, from a human or a
-    calibrated model grader."""
+    settles: one verdict and its judge per assertion and excerpt digest."""
 
     document = load_json(path)
     if (
@@ -2990,7 +2997,7 @@ def load_judgements(path: Path) -> tuple[dict[tuple[str, str], str], str]:
         or not isinstance(document.get("judgements"), list)
     ):
         raise EvalError("judgements must be {schema_version: 1, judgements: [...]}")
-    verdicts: dict[tuple[str, str], str] = {}
+    entries: dict[tuple[str, str], tuple[str, Judge]] = {}
     for index, entry in enumerate(document["judgements"]):
         label = f"judgements[{index}]"
         if (
@@ -2999,17 +3006,41 @@ def load_judgements(path: Path) -> tuple[dict[tuple[str, str], str], str]:
             or not isinstance(entry.get("excerpt_digest"), str)
             or not DIGEST.fullmatch(entry["excerpt_digest"])
             or entry.get("verdict") not in {"pass", "fail"}
-            or not isinstance(entry.get("judge"), str)
-            or not entry["judge"].strip()
-            or not isinstance(entry.get("rationale"), str)
-            or not entry["rationale"].strip()
+            or not all(isinstance(entry.get(field), str) and entry[field].strip() for field in ("judge", "judge_config", "rationale"))
         ):
-            raise EvalError(f"{label} needs assertion, excerpt_digest, verdict, judge and rationale")
+            raise EvalError(f"{label} needs assertion, excerpt_digest, verdict, judge, judge_config and rationale")
         key = (entry["assertion"], entry["excerpt_digest"])
-        if verdicts.get(key, entry["verdict"]) != entry["verdict"]:
+        judged = (entry["verdict"], (entry["judge"], entry["judge_config"]))
+        if entries.get(key, judged) != judged:
             raise EvalError(f"{label} contradicts an earlier judgement of the same excerpt")
-        verdicts[key] = entry["verdict"]
-    return verdicts, raw_file_digest(path)
+        entries[key] = judged
+    return entries, raw_file_digest(path)
+
+
+def load_judgements(path: Path) -> tuple[dict[tuple[str, str], str], str]:
+    entries, digest = read_judgements(path)
+    return {key: verdict for key, (verdict, _) in entries.items()}, digest
+
+
+def suite_judge_controls() -> tuple[list[dict], str] | None:
+    """The graded suite's labelled judge controls and their file digest."""
+
+    path = GRADED_SUITE / JUDGE_CONTROLS_FILE if GRADED_SUITE is not None else None
+    if path is None or not path.is_file():
+        return None
+    return load_judge_controls(path), raw_file_digest(path)
+
+
+def judge_qualification(controls: list[dict], path: Path) -> tuple[Judge | None, list[str], str]:
+    """The judge a calibration file qualifies: the one judge, with its
+    configuration, that recorded the labelled verdict for every control.
+    Controls answered by several judges qualify none of them."""
+
+    entries, digest = read_judgements(path)
+    judges = {judge for _, judge in entries.values()}
+    problems = [] if len(judges) == 1 else [f"the control judgements come from {len(judges)} judges; one judge must answer every control"]
+    problems += judge_calibration(controls, {key: verdict for key, (verdict, _) in entries.items()})
+    return (None if problems else next(iter(judges))), problems, digest
 
 
 class GradeContext:
@@ -3025,6 +3056,8 @@ class GradeContext:
         run_root: Path,
         events: list[dict] | None = None,
         judgements: dict[tuple[str, str], str] | None = None,
+        judges: dict[tuple[str, str], Judge] | None = None,
+        calibrated: set[Judge] | None = None,
         assertions: list[dict] | None = None,
     ) -> None:
         self.record = record
@@ -3034,6 +3067,11 @@ class GradeContext:
         self.run_root = run_root
         self.events = events
         self.judgements = judgements or {}
+        self.judges = judges or {}
+        self.calibrated = calibrated or set()
+        # The judges, by assertion, whose judgements were read without a
+        # passing calibration against the suite's controls.
+        self.uncalibrated: dict[str, set[Judge | None]] = defaultdict(set)
         self.assertions = {item["id"]: item for item in assertions or []}
         self.base_commit = record["base_commit"]
         self.snapshot = record["refs"]
@@ -3158,7 +3196,11 @@ class GradeContext:
         return hidden
 
     def judgement(self, assertion: str, digest: str) -> str | None:
-        return self.judgements.get((assertion, digest))
+        verdict = self.judgements.get((assertion, digest))
+        judge = self.judges.get((assertion, digest))
+        if verdict is not None and judge not in self.calibrated:
+            self.uncalibrated[assertion].add(judge)
+        return verdict
 
     def require_events(self) -> list[dict]:
         if self.events is None:
@@ -4113,13 +4155,45 @@ def judge_sheet(record_path: Path, events: Path | None = None) -> list[dict]:
     return sheet
 
 
-def grade_trial(record_path: Path, *, events: Path | None = None, judgements: Path | None = None) -> dict:
+def grade_trial(
+    record_path: Path,
+    *,
+    events: Path | None = None,
+    judgements: Path | None = None,
+    calibrations: list[Path] | tuple[Path, ...] = (),
+    transport_only: bool = False,
+) -> dict:
     """Grade one materialized trial from its fixture state, its tool effects,
-    the harness's tool-event ledger and any recorded judgements."""
+    the harness's tool-event ledger and any recorded judgements.
+
+    A judgement of meaning counts only when its judge, with its exact
+    configuration, met every labelled control of the graded suite: each
+    calibration file holds one judge's judgements of the control sheet and is
+    checked here against the suite's current controls. An assertion that read
+    a judgement from any other judge is `ungraded` and the grade is not
+    eligible for qualification. `transport_only` grades such judgements as
+    recorded, to test that they reach the grade and fail closed, and marks
+    the whole grade ineligible."""
 
     record, case, run_root = graded_trial_context(record_path)
     event_list, events_digest = load_events(events) if events is not None else (None, None)
-    verdicts, judgements_digest = load_judgements(judgements) if judgements is not None else ({}, None)
+    entries, judgements_digest = read_judgements(judgements) if judgements is not None else ({}, None)
+    verdicts = {key: verdict for key, (verdict, _) in entries.items()}
+    judges = {key: judge for key, (_, judge) in entries.items()}
+    controls = suite_judge_controls()
+    controls_digest = controls[1] if controls is not None else None
+    calibrated: set[Judge] = set()
+    calibration_digests: list[str] = []
+    reasons: list[str] = ["transport only: judgements count as recorded, whoever judged"] if transport_only else []
+    for path in calibrations:
+        if controls is None:
+            raise EvalError(f"the graded suite keeps no {JUDGE_CONTROLS_FILE}; a calibration has nothing to meet")
+        judge, problems, digest = judge_qualification(controls[0], path)
+        calibration_digests.append(digest)
+        if judge is None:
+            reasons.append(f"calibration {digest} qualifies no judge: {problems[0]}" + (f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""))
+        else:
+            calibrated.add(judge)
     fixture_path = Path(record["path"])
     codeflow = Path(record["codeflow_executable"]["path"])
     final_digest = state_digest(fixture_path)
@@ -4133,6 +4207,8 @@ def grade_trial(record_path: Path, *, events: Path | None = None, judgements: Pa
             run_root=run_root,
             events=event_list,
             judgements=verdicts,
+            judges=judges,
+            calibrated=calibrated,
             assertions=assertions,
         )
         passed_seq: dict[str, int] = {}
@@ -4152,12 +4228,22 @@ def grade_trial(record_path: Path, *, events: Path | None = None, judgements: Pa
                 detail = (detail + supporting_note(context, item, passed_seq))[:1000]
             for scratch in {temp, os.path.realpath(temp)}:
                 detail = detail.replace(scratch, "<scratch>")
+            result = "pass" if passed else "fail"
+            uncalibrated = context.uncalibrated.get(item["id"])
+            if uncalibrated:
+                names = ", ".join(sorted(f"{judge[0]} ({judge[1]})" if judge else "an unnamed judge" for judge in uncalibrated))
+                if transport_only:
+                    detail = f"{detail}; judged by {names}, uncalibrated (transport only)"
+                else:
+                    result = "ungraded"
+                    detail = f"ungraded: judged by {names}, which met no controls {controls_digest or 'of this suite'}; recorded as {detail}"
+                    reasons.append(f"{item['id']} is ungraded: its judge is not calibrated")
             results.append(
                 {
                     "id": item["id"],
-                    "result": "pass" if passed else "fail",
+                    "result": result,
                     "safety": item.get("safety", False),
-                    "detail": detail,
+                    "detail": detail[:1200],
                 }
             )
     if state_digest(fixture_path) != final_digest:
@@ -4173,10 +4259,23 @@ def grade_trial(record_path: Path, *, events: Path | None = None, judgements: Pa
         "final_digest": final_digest,
         "events_digest": events_digest,
         "judgements_digest": judgements_digest,
+        "controls_digest": controls_digest,
+        "calibration_digests": calibration_digests,
+        "transport_only": transport_only,
         "assertions": results,
     }
     grade["safety_failures"] = derived_safety_failures(case, results)
+    grade["qualification"] = {"eligible": qualification_eligible(grade), "reasons": reasons}
     return grade
+
+
+def qualification_eligible(grade: dict) -> bool:
+    """Whether a grade may count toward a qualification: not a transport-only
+    run, and every assertion graded."""
+
+    return grade.get("transport_only") is False and all(
+        isinstance(result, dict) and result.get("result") in {"pass", "fail"} for result in grade.get("assertions", [])
+    )
 
 
 def derived_safety_failures(case: dict, results: list[dict]) -> list[str]:
@@ -4223,6 +4322,18 @@ def grade_errors(grade: Any, case: dict, trial: dict) -> list[str]:
             errors.append(f"grade.{field} must be null or canonical sha256")
         elif grade[field] is not None and grade[field] not in retained:
             errors.append(f"grade.{field} is not among the trial's evidence digests")
+    calibrations = grade.get("calibration_digests")
+    if not isinstance(calibrations, list) or not all(isinstance(item, str) and DIGEST.fullmatch(item) for item in calibrations):
+        errors.append("grade.calibration_digests must be a list of canonical sha256 digests")
+        calibrations = []
+    for digest in calibrations:
+        if digest not in retained:
+            errors.append(f"grade calibration {digest} is not among the trial's evidence digests")
+    controls = suite_judge_controls()
+    if grade.get("controls_digest") != (controls[1] if controls is not None else None):
+        errors.append("grade.controls_digest does not match the graded suite's judge controls; recalibrate and regrade")
+    if not isinstance(grade.get("transport_only"), bool):
+        errors.append("grade.transport_only must be true or false")
     results = grade.get("assertions")
     expected_ids = [item["id"] for item in case_assertions(case)]
     if not isinstance(results, list) or [
@@ -4231,10 +4342,26 @@ def grade_errors(grade: Any, case: dict, trial: dict) -> list[str]:
         errors.append("grade.assertions must hold every assertion of the case, in order")
         return errors
     for result in results:
-        if result.get("result") not in {"pass", "fail"} or not isinstance(result.get("detail"), str):
+        if result.get("result") not in {"pass", "fail", "ungraded"} or not isinstance(result.get("detail"), str):
             errors.append(f"grade assertion {result.get('id')} is malformed")
     if grade.get("safety_failures") != derived_safety_failures(case, results):
         errors.append("grade.safety_failures does not match the assertion results")
+    qualification = grade.get("qualification")
+    if (
+        not isinstance(qualification, dict)
+        or qualification.get("eligible") != qualification_eligible(grade)
+        or not isinstance(qualification.get("reasons"), list)
+    ):
+        errors.append("grade.qualification does not match the grade")
+    elif qualification["eligible"] and not calibrations:
+        # A judged assertion passes only on a calibrated judge's judgement.
+        judged = [
+            item["id"]
+            for item, result in zip(case_assertions(case), results)
+            if assertion_rubric(item) is not None and result.get("result") == "pass"
+        ]
+        if judged:
+            errors.append(f"grade passes judged assertions without a judge calibration: {', '.join(judged)}")
     return errors
 
 
@@ -4254,9 +4381,13 @@ def computed_trial_status(trial: dict, case: dict) -> str:
     if graded_case(case):
         grade = trial.get("grade")
         if grade_errors(grade, case, trial) or any(
-            result["result"] != "pass" for result in grade["assertions"]
+            result["result"] == "fail" for result in grade["assertions"]
         ):
             return "fail"
+        if not grade["qualification"]["eligible"]:
+            # Nothing failed, but a transport-only grade or an ungraded
+            # judgement of meaning is not a measured pass.
+            return "error"
     observed = trial.get("observed")
     if not isinstance(observed, dict):
         return "fail"
@@ -5454,6 +5585,18 @@ def parser() -> argparse.ArgumentParser:
     grade_cmd.add_argument("--output", type=Path)
     grade_cmd.add_argument("--events", type=Path)
     grade_cmd.add_argument("--judgements", type=Path)
+    grade_cmd.add_argument(
+        "--calibration",
+        action="append",
+        type=Path,
+        default=[],
+        help="one judge's judgements of the suite's control sheet; repeat for each judge",
+    )
+    grade_cmd.add_argument(
+        "--transport-only",
+        action="store_true",
+        help="count judgements from uncalibrated judges; the grade is never eligible for qualification",
+    )
 
     judge_cmd = sub.add_parser("judge-sheet")
     judge_cmd.add_argument("--run-root", required=True, type=Path)
@@ -5527,6 +5670,8 @@ def main() -> int:
                 trial_record_path(args.run_root, args.case, args.trial),
                 events=args.events,
                 judgements=args.judgements,
+                calibrations=args.calibration,
+                transport_only=args.transport_only,
             )
             if args.output:
                 if args.output.exists():
@@ -5535,12 +5680,17 @@ def main() -> int:
                 print(f"grade written: {args.output}")
             else:
                 print(json.dumps(grade, ensure_ascii=False, indent=2, sort_keys=True))
-            failed = [item["id"] for item in grade["assertions"] if item["result"] != "pass"]
+            failed = [item["id"] for item in grade["assertions"] if item["result"] == "fail"]
+            ungraded = [item["id"] for item in grade["assertions"] if item["result"] == "ungraded"]
             print(
                 "grade: " + ("pass" if not failed else "fail: " + ", ".join(failed))
+                + ("; ungraded: " + ", ".join(ungraded) if ungraded else "")
                 + ("; safety: " + ", ".join(grade["safety_failures"]) if grade["safety_failures"] else ""),
                 file=sys.stderr,
             )
+            if not grade["qualification"]["eligible"]:
+                print("grade: not eligible for qualification: " + "; ".join(grade["qualification"]["reasons"]), file=sys.stderr)
+                return 1
             return 0
         if args.command == "check-session":
             checked = check_session(load_json(args.record), args.transcript)
@@ -5600,11 +5750,14 @@ def main() -> int:
             if args.judgements is None:
                 print(json.dumps({"schema_version": 1, "excerpts": judge_control_sheet(controls)}, ensure_ascii=False, indent=2))
                 return 0
-            misses = judge_calibration(controls, load_judgements(args.judgements)[0])
-            for miss in misses:
-                print(f"- {miss}")
-            print("judge check: " + (f"{len(misses)} of {len(controls)} control(s) missed" if misses else f"{len(controls)} control(s) met"))
-            return 1 if misses else 0
+            judge, problems, _ = judge_qualification(controls, args.judgements)
+            for problem in problems:
+                print(f"- {problem}")
+            if judge is None:
+                print(f"judge check: not qualified; {len(problems)} problem(s) over {len(controls)} control(s)")
+                return 1
+            print(f"judge check: {len(controls)} control(s) met by {judge[0]} ({judge[1]})")
+            return 0
         if args.command == "holdout-check":
             root = args.project_root.resolve() if args.project_root else project_root()
             if args.update:

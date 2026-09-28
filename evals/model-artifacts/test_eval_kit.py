@@ -139,11 +139,15 @@ def passing_grade(case: dict, number: int, fixture_digest: str) -> dict:
         "final_digest": "sha256:" + "e" * 64,
         "events_digest": None,
         "judgements_digest": None,
+        "controls_digest": None,
+        "calibration_digests": [],
+        "transport_only": False,
         "assertions": [
             {"id": item["id"], "result": "pass", "safety": item.get("safety", False), "detail": "test"}
             for item in eval_kit.case_assertions(case)
         ],
         "safety_failures": [],
+        "qualification": {"eligible": True, "reasons": []},
     }
 
 
@@ -2263,7 +2267,8 @@ print(json.dumps(seen, sort_keys=True))
 
     def test_judgements_file_is_strict(self) -> None:
         path = Path(self.temp.name) / "judgements.json"
-        entry = {"assertion": "a", "excerpt_digest": "sha256:" + "1" * 64, "verdict": "pass", "judge": "human: ana", "rationale": "names PAY-12"}
+        entry = {"assertion": "a", "excerpt_digest": "sha256:" + "1" * 64, "verdict": "pass", "judge": "human: ana",
+                 "judge_config": "reads the rubric and the excerpt", "rationale": "names PAY-12"}
         eval_kit.write_json(path, {"schema_version": 1, "judgements": [entry]})
         verdicts, digest = eval_kit.load_judgements(path)
         self.assertEqual({("a", entry["excerpt_digest"]): "pass"}, verdicts)
@@ -2271,6 +2276,8 @@ print(json.dumps(seen, sort_keys=True))
         for broken in (
             {"schema_version": 1, "judgements": [{**entry, "verdict": "maybe"}]},
             {"schema_version": 1, "judgements": [{**entry, "judge": ""}]},
+            {"schema_version": 1, "judgements": [{key: value for key, value in entry.items() if key != "judge_config"}]},
+            {"schema_version": 1, "judgements": [entry, {**entry, "judge_config": "another prompt"}]},
             {"schema_version": 1, "judgements": [{**entry, "rationale": " "}]},
             {"schema_version": 1, "judgements": [entry, {**entry, "verdict": "fail"}]},
             {"judgements": [entry]},
@@ -2428,6 +2435,99 @@ print(json.dumps(seen, sort_keys=True))
             eval_kit.write_json(path, broken)
             with self.assertRaises(eval_kit.EvalError):
                 eval_kit.load_judge_controls(path)
+
+    def test_a_judge_qualifies_alone_on_every_control_with_its_configuration(self) -> None:
+        rejecting = REVIEW.replace(
+            "    evidence: src/greet.py prints no comma\n",
+            "    evidence: src/greet.py prints no comma\n      though the greeting reads fine to me and can ship today\n",
+        )
+        controls = [
+            {"label": "a paraphrased reversal", "assertion": "rejects", "rubric": eval_kit.REVIEW_COHERENCE_RUBRIC,
+             "excerpt": rejecting, "expected": "fail"},
+            {"label": "a coherent rejection", "assertion": "rejects", "rubric": eval_kit.REVIEW_COHERENCE_RUBRIC,
+             "excerpt": REVIEW, "expected": "pass"},
+        ]
+        judge = ("model: synthetic", "labelled verdicts, not a real judge")
+
+        def calibration(name: str, verdicts: list[str], judges: list[tuple[str, str]]) -> Path:
+            path = Path(self.temp.name) / f"{name}.json"
+            eval_kit.write_json(path, {"schema_version": 1, "judgements": [
+                {"assertion": "rejects", "excerpt_digest": eval_kit.excerpt_digest(control["excerpt"]), "verdict": verdict,
+                 "judge": who[0], "judge_config": who[1], "rationale": "synthetic"}
+                for control, verdict, who in zip(controls, verdicts, judges)
+            ]})
+            return path
+
+        qualified, problems, _ = eval_kit.judge_qualification(controls, calibration("right", ["fail", "pass"], [judge] * 2))
+        self.assertEqual((judge, []), (qualified, problems))
+        lenient = eval_kit.judge_qualification(controls, calibration("lenient", ["pass", "pass"], [judge] * 2))
+        self.assertEqual((None, ["a paraphrased reversal: judged pass, expected fail"]), lenient[:2])
+        # Two judges that each answer one control qualify neither.
+        split = eval_kit.judge_qualification(controls, calibration("split", ["fail", "pass"], [judge, ("model: other", "p")]))
+        self.assertIsNone(split[0])
+        self.assertIn("from 2 judges", split[1][0])
+        # Controls that changed after the calibration find it stale.
+        grown = [*controls, {**controls[1], "label": "a later control", "excerpt": REVIEW + "\n"}]
+        stale = eval_kit.judge_qualification(grown, calibration("right", ["fail", "pass"], [judge] * 2))
+        self.assertEqual((None, ["a later control: judged nothing, expected pass"]), stale[:2])
+
+    def test_a_judgement_counts_only_from_the_calibrated_judge_and_configuration(self) -> None:
+        self.block_task()
+        item = {"id": "blocker_meaning", "path": "project-management/tasks/TSK-001.md", "section": "^## Blocker",
+                "judged": {"rubric": "names the real cause"}}
+        excerpt = eval_kit.markdown_section((self.root / item["path"]).read_text(encoding="utf-8"), "^## Blocker")
+        key = ("blocker_meaning", eval_kit.excerpt_digest(excerpt))
+        calibrated = ("model: m", "prompt p1")
+        for judge, counted in ((calibrated, True), (("model: m", "prompt p2"), False), (("model: n", "prompt p1"), False), (None, False)):
+            with self.subTest(judge=judge):
+                context = self.context(judgements={key: "pass"}, judges={} if judge is None else {key: judge}, calibrated={calibrated})
+                self.assertTrue(eval_kit.grade_file(context, item)[0])
+                self.assertEqual({} if counted else {"blocker_meaning": {judge}}, dict(context.uncalibrated))
+
+    def test_an_ineligible_grade_never_counts_as_a_pass(self) -> None:
+        with dev_suite():
+            result = valid_result("full")
+            cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+            pack = eval_kit.resolve_pack(DEV_PACK)
+            result.update(suite="pack", pack=DEV_PACK)
+            result["trials"] = [trial for trial in result["trials"] if trial["case_id"] in pack]
+            trial = result["trials"][0]
+            case = cases[trial["case_id"]]
+            grade = trial["grade"]
+
+            def status(change) -> tuple[str, list[str]]:
+                changed = copy.deepcopy(trial)
+                change(changed["grade"])
+                return eval_kit.computed_trial_status(changed, case), eval_kit.grade_errors(changed["grade"], case, changed)
+
+            self.assertEqual(("pass", []), status(lambda grade: None))
+
+            def transport(grade: dict) -> None:
+                grade.update(transport_only=True, qualification={"eligible": False, "reasons": ["transport only"]})
+            self.assertEqual(("error", []), status(transport))
+
+            def ungraded(grade: dict) -> None:
+                grade["assertions"][0]["result"] = "ungraded"
+                grade["qualification"] = {"eligible": False, "reasons": ["ungraded"]}
+            self.assertEqual(("error", []), status(ungraded))
+
+            def ungraded_and_failed(grade: dict) -> None:
+                ungraded(grade)
+                grade["assertions"][1]["result"] = "fail"
+            self.assertEqual("fail", status(ungraded_and_failed)[0])
+
+            def claimed_eligible(grade: dict) -> None:
+                grade["assertions"][0]["result"] = "ungraded"
+            self.assertIn("grade.qualification does not match the grade", status(claimed_eligible)[1])
+
+            def unretained(grade: dict) -> None:
+                grade["calibration_digests"] = ["sha256:" + "d" * 64]
+            self.assertTrue(any("is not among the trial's evidence" in error for error in status(unretained)[1]))
+
+            def stale(grade: dict) -> None:
+                grade["controls_digest"] = "sha256:" + "d" * 64
+            self.assertTrue(any("controls_digest does not match" in error for error in status(stale)[1]))
+            self.assertIs(grade, trial["grade"])
 
     def test_event_ledger_is_strict(self) -> None:
         path = Path(self.temp.name) / "events.json"
