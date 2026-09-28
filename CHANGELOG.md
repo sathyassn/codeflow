@@ -957,6 +957,12 @@ publication date._
   or `case` bodies is judged too. This also blocks a commit written inside a
   subshell such as `(cd <repo> && git commit)`.
 
+<!-- codeflow:release-impact patch -->
+- **An unquoted numeric pin is refused for its quoting.** A `depends_on`
+  pin such as `pin: 70283613`, which YAML reads as a number, was reported
+  as not a commit id. The message now says the pin must be quoted, as in
+  `pin: "70283613"`, since the text may well be a commit id.
+
 ### Changed
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
