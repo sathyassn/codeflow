@@ -791,3 +791,35 @@ fn the_server_answer_checks_match_the_shared_parity_vectors() {
     }
     assert!(seen >= 30, "{seen} parity cases");
 }
+
+/// I3: the 64 KiB bound is checked before anything else in the body, at
+/// the store as at the route: exactly 64 KiB is read, one byte more is
+/// `answer_too_large` whatever the body holds. A revision newer than the
+/// current one is stale too.
+#[test]
+fn the_answer_bound_is_exact_and_a_future_revision_is_stale() {
+    let session = FormsSession::open();
+    let valid = fixture_json("answers/submit-valid.json");
+    let mut at_limit = session.body(&valid, &[]);
+    at_limit.resize(crate::limits::MAX_ANSWER_REQUEST_BYTES, b' ');
+    let receipt = session.submit(&at_limit).unwrap();
+    assert_eq!((receipt.sequence, receipt.replayed), (1, false));
+    let stored = session.ledger_bytes();
+    let mut over = at_limit.clone();
+    over.push(b' ');
+    let (code, details) = refusal(session.submit(&over));
+    assert_eq!(
+        (code, details["limit_bytes"].as_u64()),
+        ("answer_too_large", Some(65_536))
+    );
+    let mut garbage = vec![b'x'; crate::limits::MAX_ANSWER_REQUEST_BYTES + 1];
+    garbage[0] = b'{';
+    assert_eq!(refusal(session.submit(&garbage)).0, "answer_too_large");
+    let mut future = valid.clone();
+    future["request_id"] = Value::String(Uuid::new_v4().to_string());
+    future["revision"] = 2.into();
+    let (code, details) = refusal(session.submit(&session.body(&future, &[])));
+    assert_eq!(code, "stale_revision");
+    assert_eq!(details["current_revision"], 1);
+    assert_eq!(session.ledger_bytes(), stored);
+}

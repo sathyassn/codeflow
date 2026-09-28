@@ -708,12 +708,11 @@ async fn submit_answer(
     if let Err(response) = require_application_request(&state, &headers, true) {
         return response;
     }
+    // Read one byte past the bound at most: the store refuses a body of
+    // that length with the same typed error, and a longer one stops here.
     let Ok(bytes) = axum::body::to_bytes(body, limits::MAX_ANSWER_REQUEST_BYTES + 1).await else {
         return answer_too_large();
     };
-    if bytes.len() > limits::MAX_ANSWER_REQUEST_BYTES {
-        return answer_too_large();
-    }
     match state.store.submit_answer(state.session_id, &bytes) {
         Ok(receipt) => {
             state.last_activity.store(now_unix(), Ordering::Release);
