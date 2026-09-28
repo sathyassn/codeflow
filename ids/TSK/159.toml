@@ -1,0 +1,11 @@
+id = "TSK-159"
+uid = "468fdf57-9831-469d-ac2b-7092fc67d678"
+kind = "TSK"
+title = "present composer opens after Add text under load"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T12:47:21Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
