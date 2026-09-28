@@ -114,10 +114,12 @@ publication date._
   `status` and `orient` read the same rule: `status` shows active, ready,
   landed and conflicting branches with epic progress and keeps a live
   integration line, and `orient` prints a task summary. A `depends_on` entry
-  may be `{id, kind: research | decision, pin: <commit>}`, met at its pin; a
-  code dependency complete only on another line waits until its change is
-  in this base. A join can carry `awaiting_selection`, which only a `plan/`
-  pull request removes, and `spec new --for` accepts several consumers.
+  may be `{id, kind: research | decision, pin: "<commit>"}`, met at its pin;
+  an unquoted pin that YAML reads as a number, such as `70283613`, is
+  refused with a message that says to quote it. A code dependency complete
+  only on another line waits until its change is in this base. A join can
+  carry `awaiting_selection`, which only a `plan/` pull request removes,
+  and `spec new --for` accepts several consumers.
   `work start` now names a blocked task's reason instead of its status, and
   refuses a task whose epic is complete, cancelled or archived.
 
