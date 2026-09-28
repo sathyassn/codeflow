@@ -119,7 +119,7 @@ try {
   for (const shown of ["prose", "more", "views"]) assert.ok(listed.includes(`#${shown}`), `the sections list lacks ${shown}: ${listed.join(" ")}`);
   await phoneWidth(page);
   for (const width of [1280, 375]) await closeMarkers(page, width);
-  process.stdout.write("close markers passed: at 1280 and 375 px, thirteen notes (two adjacent diff lines, two adjacent code lines, nine on one prose line, three of them on the same words) have markers that do not overlap and sit off their anchors, each in the gutter level with its line on a desktop or just above it on a phone, leaving that row only once it is full, and a click at each marker's centre opens its own note\n");
+  process.stdout.write("close markers passed: at 1280 and 375 px, thirteen notes (two adjacent diff lines, two adjacent code lines, nine on one prose line, three of them on the same words) have markers that do not overlap and sit off their anchors, each in the gutter level with its line on a desktop, clear of the sections list, or just above it on a phone, leaving that row only once it is full, and a click at each marker's centre opens its own note\n");
   process.stdout.write("sections and phone width passed: no hidden block in the sections list; at 375 px the sheet stays closed on arming, a gesture, a save and a pin, the float keeps ESC on screen, markers stay off the heading and the selected line, Comment opens the sheet and dismisses the save hint, and Done leaves\n");
 
   const expected = [];
@@ -774,6 +774,13 @@ async function closeMarkers(page, width) {
     // above it. A marker leaves its line's row, down the gutter, or on a
     // phone to below the line, only once that row is full.
     const gutter = width >= 800;
+    // The sections list is fixed at the left on a desktop, so no marker may
+    // sit in its column: an entry under a marker could not be uncovered.
+    const route = await page.locator(".cf-section-route").evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 ? { right: rect.right + scrollX } : null;
+    });
+    assert.equal(route !== null, gutter, where(`the sections list is ${route ? "shown" : "hidden"}`));
     const overflowed = [];
     for (const [i, marker] of markers.entries()) {
       const { anchor, what } = notes[i];
@@ -783,6 +790,7 @@ async function closeMarkers(page, width) {
       }
       assert.ok(!meets(marker, anchor), where(`${name} sits on its anchor`));
       if (gutter) {
+        assert.ok(marker.left >= route.right, where(`${name} covers the sections list, which ends at ${route.right}`));
         assert.ok(marker.right <= anchor.left, where(`${name} is not in the gutter left of its line ${JSON.stringify(anchor)}`));
         const level = marker.top < anchor.bottom && anchor.top < marker.bottom;
         if (!level) {
@@ -796,13 +804,23 @@ async function closeMarkers(page, width) {
         assert.ok(marker.bottom <= anchor.top && anchor.top - marker.bottom <= 8, where(`${name} is neither just above nor below its line ${JSON.stringify(anchor)}`));
       }
     }
-    // Only the nine-note prose row may overflow, and only once it is full.
-    const row = markers.filter((marker, i) => i >= 4 && !overflowed.includes(i));
-    const leftmost = Math.min(...row.map((marker) => marker.left));
-    const pageLeft = await page.evaluate(() => scrollX);
+    // Only the nine-note prose row may overflow, and only once it is full:
+    // no gap between its markers, or between the row and its left bound (the
+    // sections list on a desktop, else the page edge), holds the marker.
+    const row = markers.filter((marker, i) => i >= 4 && !overflowed.includes(i)).sort((a, b) => a.left - b.left);
+    const bound = (route ? route.right : await page.evaluate(() => scrollX)) + 2;
     for (const i of overflowed) {
-      assert.ok(i >= 4, where(`marker ${i + 1} (${notes[i].what}) left its line's row`));
-      assert.ok(leftmost - pageLeft < markers[i].right - markers[i].left + 4, where(`marker ${i + 1} (${notes[i].what}) left its row while the row had room left of ${leftmost}`));
+      const { what } = notes[i];
+      const size = markers[i].right - markers[i].left;
+      assert.ok(i >= 4, where(`marker ${i + 1} (${what}) left its line's row`));
+      for (const [k, next] of row.entries()) {
+        const start = k === 0 ? bound : row[k - 1].right + 2;
+        assert.ok(next.left - size - 2 < start, where(`marker ${i + 1} (${what}) left its row while ${start} to ${next.left} was free`));
+      }
+      // An overflow chain starts at its line: each overflowed marker is just
+      // below the line or directly under another marker.
+      const under = markers.some((other, j) => j !== i && other.left < markers[i].right && markers[i].left < other.right && markers[i].top - other.bottom >= 0 && markers[i].top - other.bottom <= 3);
+      assert.ok(under || markers[i].top - notes[i].anchor.bottom <= 12, where(`marker ${i + 1} (${what}) ${JSON.stringify(markers[i])} is far below its line with a free place above it`));
     }
     if (!gutter) assert.ok(overflowed.length > 0, where("nine markers on one line fit one phone row, so no overflow was exercised"));
     const side = (i) => (markers[i].top >= notes[i].anchor.bottom ? "below" : "above");

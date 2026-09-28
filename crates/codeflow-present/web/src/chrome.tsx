@@ -1777,10 +1777,11 @@ function markerPlacement(
  * Every note's marker, placed so that no two overlap (TSK-158) and each
  * stays by its own line. Markers are placed top to bottom. One whose place is
  * taken first moves along its line, down for a marker beside its anchor and
- * up for one above it, within its reach. Where that is not enough it takes
- * the next lane, one widest marker further from its anchor (left, or right of
- * a narrow anchor), while the lane stays on screen. When every lane is full it
- * overflows down its first lane to the first free place: down the gutter
+ * up for one above it, within its reach. Where that is not enough it tries
+ * the places just past each marker already placed, nearest first, further
+ * from its anchor (left, or right of a narrow anchor), while it stays on
+ * screen and clear of the sections list. Only when none is free does it
+ * overflow down its own place to the first free one: down the gutter
  * beside its line, or, for a marker above its line, from just below the line.
  * Overflow never rises, so it never reaches under the page's fixed comment
  * hint at the top.
@@ -1794,9 +1795,11 @@ function markerPlacements(
   const spots = notes.map((note, index) => markerPlacement(documentRoot, note, meta.get(note.client_id), index, markerEpoch));
   const height = markerHeight();
   const gap = 2;
-  const pitch = markerWidth(Math.max(0, notes.length - 1)) + gap;
   const root = documentRoot.getBoundingClientRect();
-  const floor = 2 - root.left;
+  // Lanes stop short of the sections list while it shows (it is fixed, so a
+  // marker over it would hide an entry that no scroll can uncover).
+  const route = document.querySelector<HTMLElement>(".cf-section-route")?.getBoundingClientRect();
+  const floor = route && route.width > 0 ? route.right + gap - root.left : 2 - root.left;
   const ceiling = innerWidth - root.left - 8;
   const placed: MarkerSpot[] = [];
   const hit = (box: MarkerSpot): MarkerSpot | undefined =>
@@ -1817,14 +1820,16 @@ function markerPlacements(
     .sort((a, b) => a.spot.top - b.spot.top || a.index - b.index);
   for (const { spot, index } of order) {
     const up = spot.side === "above";
-    // Lanes share one pitch, so a wider marker lines up with its neighbours
-    // on the side away from its anchor.
-    const edge = spot.side === "right" ? spot.left : spot.left + spot.width;
+    // Its own place, then the place just outside each placed marker, nearest
+    // first: a free gap anywhere in the row is found, not only on a grid.
+    const out = spot.side === "right" ? 1 : -1;
+    const lefts = [spot.left, ...placed.map((other) => (out === 1 ? other.left + other.width + gap : other.left - spot.width - gap))]
+      .filter((left, i) => i === 0 || ((left - spot.left) * out > 0 && left >= floor && left + spot.width <= ceiling))
+      .sort((a, b) => Math.abs(a - spot.left) - Math.abs(b - spot.left));
     let chosen: MarkerSpot | null = null;
-    for (let lane = 0; !chosen; lane += 1) {
-      const left = spot.side === "right" ? edge + lane * pitch : edge - lane * pitch - spot.width;
-      if (lane > 0 && (left < floor || left + spot.width > ceiling)) break;
+    for (const left of lefts) {
       chosen = settle(spot, left, spot.reach, up);
+      if (chosen) break;
     }
     // Moving down past every marker in the way always ends at a free place.
     chosen ??= settle(up ? { ...spot, top: spot.below } : spot, spot.left, Infinity, false) ?? spot;
