@@ -451,6 +451,53 @@ impl SessionStore {
     }
 }
 
+impl SessionStore {
+    /// What a closure carries (Grok 2): the poll stops at a closure, so
+    /// rather than the next batch of ledger lines it carries the latest
+    /// answer to each form and that answer's state, as a reload shows them,
+    /// whatever the backlog. The current revision's forms come first, then
+    /// the latest answers to older questions, newest first, up to `limit`.
+    pub fn closing_states(&self, id: Uuid, limit: usize) -> Result<AnswerStates> {
+        let (ledger, current) = {
+            let _lock = self.lock_session(id)?;
+            let session = self.load(id)?;
+            let current = match self.revision(id, session.current_revision)?.content {
+                crate::state::RevisionContent::Supported { document } => document
+                    .walk()
+                    .into_iter()
+                    .filter_map(crate::form::FormView::of)
+                    .map(|form| (form.id.to_string(), form.digest()))
+                    .collect::<HashSet<_>>(),
+                _ => HashSet::new(),
+            };
+            (Ledger::open(self.responses_path(id)?, id)?.events, current)
+        };
+        let sequences: HashMap<Uuid, u64> = ledger
+            .iter()
+            .filter_map(ResponseEvent::answer)
+            .map(|record| (record.answer_id, record.sequence))
+            .collect();
+        let mut forms: Vec<_> = form_answers_of(&ledger).into_iter().collect();
+        forms.sort_by_key(|(key, answer)| {
+            (
+                !current.contains(key),
+                std::cmp::Reverse(sequences.get(&answer.latest).copied()),
+            )
+        });
+        forms.truncate(limit);
+        Ok(AnswerStates {
+            through: ledger.len() as u64,
+            states: forms
+                .into_iter()
+                .map(|(_, answer)| AnswerState {
+                    answer_id: answer.latest,
+                    status: answer.status,
+                })
+                .collect(),
+        })
+    }
+}
+
 impl Snapshot {
     /// A review's line, each note anchored on the current revision; none when
     /// the read loaded no revision, which it does only when it lists reviews.

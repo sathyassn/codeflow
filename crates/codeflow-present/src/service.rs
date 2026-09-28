@@ -163,9 +163,9 @@ struct SessionEvent {
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
-    /// For `answer_state`, and for `session_closed` when the page has not
-    /// seen them yet: each answer whose state changed, with its state now
-    /// (stored and pending, delivered, acknowledged).
+    /// For `answer_state`: each answer whose state changed, with its state
+    /// now (stored and pending, delivered, acknowledged). For
+    /// `session_closed`: each form's latest answer and its state.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     answers: Vec<AnswerState>,
 }
@@ -884,11 +884,17 @@ async fn poll_events(
             Ok(latest) => latest,
             Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
         };
-        let answers = match state.store.answer_states_since(
-            state.session_id,
-            after_responses,
-            limits::MAX_EVENTS_PER_RESPONSE,
-        ) {
+        let answers = match if session.status == SessionStatus::Closed {
+            state
+                .store
+                .closing_states(state.session_id, limits::MAX_EVENTS_PER_RESPONSE)
+        } else {
+            state.store.answer_states_since(
+                state.session_id,
+                after_responses,
+                limits::MAX_EVENTS_PER_RESPONSE,
+            )
+        } {
             Ok(answers) => answers,
             Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
         };
@@ -935,13 +941,13 @@ fn session_event(
     let revised = session.current_revision > after_revision;
     // The answer ledger's cursor moves only with the answer states it
     // reports, so a revision never hides a delivery from the forms. A
-    // closure ends the poll, so it carries the states not yet reported.
-    let unreported = answers.through > after_responses;
-    let answered = !terminal && !revised && unreported;
+    // closure ends the poll, so it carries each form's latest answer state
+    // (`SessionStore::closing_states`), which a backlog cannot hide.
+    let answered = !terminal && !revised && answers.through > after_responses;
     if !(revised || answered || latest > after_sequence || terminal || timed_out) {
         return None;
     }
-    let carried = answered || (terminal && unreported);
+    let carried = answered || terminal;
     let responses = if carried {
         answers.through
     } else {
@@ -2506,8 +2512,8 @@ mod tests {
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{cursor}");
         }
 
-        // A closure ends the poll, so it carries the answer states the page
-        // has not seen yet; with none left, it carries none.
+        // A closure ends the poll, so it carries each form's latest answer
+        // and its state, every time it is polled.
         let correction = post_answer(
             &state,
             application_headers(&state, true),
@@ -2528,9 +2534,61 @@ mod tests {
             event["answers"],
             serde_json::json!([{ "answer_id": correction, "status": "delivered" }])
         );
-        let event = poll("2:0:5").await;
+        let again = poll("2:0:5").await;
+        assert_eq!(again["kind"], "session_closed");
+        assert_eq!(again["answers"], event["answers"]);
+    }
+
+    /// Grok 2: a closure behind a backlog longer than one batch of ledger
+    /// lines still carries each form's latest state. 121 answer lines wait
+    /// unread; the batch after the page's cursor ends before the latest
+    /// correction, and the closure carries that correction as delivered.
+    #[tokio::test]
+    async fn a_closure_behind_a_long_backlog_carries_each_forms_latest_state() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let (_, original) = post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        let original = original["answer_id"].clone();
+        let mut latest = Uuid::nil();
+        for _ in 0..120 {
+            let (status, receipt) = post_answer(
+                &state,
+                headers.clone(),
+                answer_body(&state, |body| body["amends"] = original.clone()),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{receipt}");
+            latest = serde_json::from_value(receipt["answer_id"].clone()).unwrap();
+        }
+        state.store.deliver(state.session_id, &[latest]).unwrap();
+        let batch = state
+            .store
+            .answer_states_since(state.session_id, 0, limits::MAX_EVENTS_PER_RESPONSE)
+            .unwrap();
+        assert!(
+            batch.states.iter().all(|entry| entry.answer_id != latest),
+            "the backlog fits one batch"
+        );
+        state.store.close(state.session_id).unwrap();
+        let response = poll_events(
+            State(state.clone()),
+            headers,
+            Json(PollRequest {
+                cursor: Some("1:0:0".to_string()),
+            }),
+        )
+        .await;
+        let body = axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+            .await
+            .unwrap();
+        let event: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(event["kind"], "session_closed");
-        assert!(event.get("answers").is_none(), "{event}");
+        assert_eq!(event["cursor"], "1:0:122");
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": latest, "status": "delivered" }])
+        );
     }
 
     /// TSK-120: the page shows each form's latest answer and its state as it
