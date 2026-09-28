@@ -1,0 +1,11 @@
+id = "ADR-0075"
+uid = "12db10d6-e393-4367-8a33-258001a0df9c"
+kind = "ADR"
+title = "Agent sessions refuse instead of prompting, under a guarded floor"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T23:26:25Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
