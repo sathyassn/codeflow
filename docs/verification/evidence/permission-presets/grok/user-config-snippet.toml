@@ -1,0 +1,14 @@
+# Offered to the operator for `~/.grok/config.toml` (operator's file; CodeFlow
+# prints it, never writes it). A project `.grok/config.toml` may contribute
+# only [mcp_servers], [plugins] and [permission] (docs.x.ai/build/settings/
+# reference), so the child-environment scrub has to live here.
+#
+# The default (`inherit = "all"`, `ignore_default_excludes = true`) passes
+# every variable, including *KEY*, *SECRET* and *TOKEN*, to commands the model
+# runs (Grok user guide 18-sandbox:238-251). `false` drops them. A tool
+# that authenticates through an environment token (GH_TOKEN) then needs its
+# keychain or file login instead, the same as a Codex seat.
+
+[shell_environment_policy]
+inherit = "all"
+ignore_default_excludes = false
