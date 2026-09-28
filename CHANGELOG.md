@@ -392,8 +392,11 @@ publication date._
   checkers, whose failure to finish fails the assertion. It measures the
   result, not how it was made: CLI use, readiness checks and review before
   completion need the harness's own record of the session, and a command's
-  process record is only reported beside the effect it names. `judge-check`
-  qualifies a judge against labelled controls. Graded cases live in a graded
+  process record is only reported beside the effect it names. A judgement
+  counts only from a judge, with its exact configuration, whose calibration
+  meets every labelled control of the graded suite (`judge-check`, `grade
+  --calibration`); otherwise its assertion is ungraded and the trial is never
+  scored as a pass. Graded cases live in a graded
   suite outside the shipped kit (`--graded-suite`); a qualification holdout
   stays outside the published repository, and `holdout-check` fails when a
   holdout path, file, JSON object or copied run of text appears in the tracked

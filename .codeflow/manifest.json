@@ -257,7 +257,7 @@
     ".agents/skills/cf-evaluate-model/resources/protocol.md": {
       "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
       "ownership": "managed",
-      "sha256": "8deccf61b8b86c053409ebe5490d917b0d25920dc1989c6f1fb13f37dea3b09e",
+      "sha256": "2a5ed17d4cb72e41164571dbf4b1bfd1735a7bc8c374a8f14bf0220fe1ba8879",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
@@ -935,7 +935,7 @@
     ".claude/skills/cf-evaluate-model/resources/protocol.md": {
       "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
       "ownership": "managed",
-      "sha256": "8deccf61b8b86c053409ebe5490d917b0d25920dc1989c6f1fb13f37dea3b09e",
+      "sha256": "2a5ed17d4cb72e41164571dbf4b1bfd1735a7bc8c374a8f14bf0220fe1ba8879",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {

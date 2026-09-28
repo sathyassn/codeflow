@@ -59,8 +59,12 @@ never enters a line at all.
   matches the holdout.
 - The holdout also keeps the labelled judge controls (`judge-controls.json`):
   reviews whose free text reverses their verdict in paraphrase, with the
-  judgement a qualified judge must record. The holdout's scripted judge misses
-  them by design; it tests transport and fail-closed binding only.
+  judgement a qualified judge must record. The grader counts a judgement only
+  from a judge whose calibration meets every control; any other judgement
+  leaves its assertion ungraded and the trial not measured. The holdout's
+  scripted judge misses controls by design and tests transport and
+  fail-closed binding only; its synthetic oracle meets them and tests the
+  binding path. Neither is evidence that meaning was judged.
 - After changing the holdout, run `eval_kit.py holdout-check --manifest
   evals/holdout.json --holdout <checkout> --update` and commit the manifest.
 

@@ -768,9 +768,10 @@ A case may also carry `expected.files` and `expected.effects`, graded by
 `eval_kit.py grade` on the work a session left: file state, coherent reviews
 in the reviewer's verdict format, branches and their tracking, records
 consistent with the id registry, changed paths, judgements bound to the exact
-text from a judge qualified with `judge-check`, confined product checks with
-expected output, and the shipped `codeflow validate --docs` and `codeflow ci`,
-which must finish their checks. It does not prove CLI use, readiness checks or
+text from a judge whose calibration meets every labelled control (otherwise
+the assertion is ungraded and the trial never scores as a pass), confined
+product checks with expected output, and the shipped `codeflow validate
+--docs` and `codeflow ci`, which must finish their checks. It does not prove CLI use, readiness checks or
 review before completion; those need the harness's own record of the session
 (TSK-116), and a command's process record is reported as supporting evidence
 only. Graded cases live in a graded suite outside the shipped kit and binary:

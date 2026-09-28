@@ -360,13 +360,15 @@ harness's tool-event ledger and the recorded judgements:
 ```text
 python3 .agents/skills/cf-evaluate-model/scripts/eval_kit.py grade \
   --run-root <path> --case <case-id> --trial <n> \
-  --events <events.json> --judgements <judgements.json> --output <grade.json>
+  --events <events.json> --judgements <judgements.json> \
+  --calibration <control-judgements.json> --output <grade.json>
 ```
 
-The grade holds one `pass` or `fail` per assertion, in case order, with the
-case, grader, materialized and final fixture digests and the digests of the
-ledger and judgements files, which must also be among the trial's evidence
-digests. Put it in the trial as `grade`; `score` recomputes the status from
+The grade holds one `pass`, `fail` or `ungraded` per assertion, in case
+order, with the case, grader, materialized and final fixture digests, the
+digests of the ledger, judgements and calibration files, which must also be
+among the trial's evidence digests, and the digest of the suite's judge
+controls. Put it in the trial as `grade`; `score` recomputes the status from
 it. A grade from another case, fixture or grader revision is refused, so a
 changed grader requalifies. `--output` may not point inside the run root or
 the subjects root. Grading never changes the fixture; a check that cannot run
@@ -407,16 +409,25 @@ fails its assertion as not gradable, never passes it.
   to the text needs a new judgement. `judge-sheet --run-root <path> --case
   <id> --trial <n> [--events <events.json>]` lists every excerpt to judge
   with its rubric and digest, including each review a verdict assertion
-  reads. Each judgement names its `judge` (a person or a calibrated model
-  grader) and a `rationale`.
-- The grade trusts the judgement it is given, so the judge is qualified
-  first. Keep labelled judge controls with the graded suite (texts with the
+  reads. Each judgement names its `judge`, the judge's `judge_config`
+  (model, version, prompt and settings, or the person) and a `rationale`.
+- A judgement counts only from a calibrated judge. The graded suite keeps
+  labelled judge controls in a judge-controls.json file (texts with the
   verdict a qualified judge must record, including reversals paraphrased in
-  fields the format allows) and run `judge-check --controls <file>` for the
-  blind sheet, then `judge-check --controls <file> --judgements <file>`: a
-  judge that misses any control does not grade a qualification. A scripted
-  judge may test that judgements reach the grade and fail closed; its
-  passing runs are never evidence that meaning was judged.
+  fields the format allows). `judge-check --controls <file>` prints the blind sheet;
+  one judge records its judgements of it, and that file is the judge's
+  calibration. `grade --calibration <file>` checks it against the suite's
+  current controls: it qualifies the one judge, with its exact
+  configuration, that recorded the labelled verdict for every control.
+  Controls answered by several judges, a missed control or changed controls
+  qualify no one. An assertion that read a judgement from any other judge is
+  `ungraded`, and the grade's `qualification.eligible` is false. `score`
+  never counts such a trial as a pass: with no failed assertion its status
+  is `error`, not measured; `grade` exits 1 for it. `--transport-only`
+  grades uncalibrated judgements as recorded, to test that judgements reach
+  the grade and fail closed, and marks the grade ineligible. A scripted or
+  synthetic judge only exercises this plumbing; its passing runs are never
+  evidence that meaning was judged.
 - An action is graded by the state it leaves, in the form CodeFlow writes
   it: the branch a claim creates and tracks (`git_config` on
   `branch.<name>.remote`), the record a status change writes, or a record
@@ -494,6 +505,7 @@ and, reported as supporting evidence only, `{"seq": 2, "kind": "process",
 "..."}` or `{"seq": 3, "kind": "shell", "command": "..."}`. The judgements
 file is `{"schema_version": 1, "judgements": [{"assertion": "...",
 "excerpt_digest": "sha256:...", "verdict": "pass | fail", "judge": "...",
+"judge_config": "...",
 "rationale": "..."}]}`.
 
 ### Rendered design comparisons
