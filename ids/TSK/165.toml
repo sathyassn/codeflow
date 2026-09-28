@@ -1,0 +1,11 @@
+id = "TSK-165"
+uid = "0b582998-924a-49a7-b9fd-0f5f0d00f58c"
+kind = "TSK"
+title = "task work in linked worktrees, the root checkout on its root branch"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T19:43:30Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
