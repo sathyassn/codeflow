@@ -4,9 +4,9 @@ Status: evidence for TSK-138 AC-1 to AC-4. The task reads every shipped
 skill, reference, resource, rule file and template for duties stated twice
 or stated away from the moment their reader needs them. One artifact
 changed: the writing reference, which lacked five reply duties that its
-owner states. Every other candidate is kept, with its reason, or left to
-the task that owns the file under SPC-013 R-118; those are listed at the
-end for planning.
+owner states. A duplicate that serves two read moments stays and carries a
+parity guard; one that does not is consolidated by the task that owns the
+file. Two guards are added here; one consolidation is filed as TSK-163.
 
 Paths below are under `assets/base/`. `lifecycle` means
 `claude/skills/cf-method/references/workflow-lifecycle.md`.
@@ -14,15 +14,18 @@ Paths below are under `assets/base/`. `lifecycle` means
 ## Where an agent reads the reply duties
 
 ```text
-agent about to report, at any tier
-  rule map row "report status or summarize work"
-    -> rules/writing.md            every tier; the reporting moment
-  cf-method lifecycle reply rule   standard and full; the owner (R-117)
+agent about to report or explain, at any tier
+  rule-map.toml:209-227, 270-288 (writing, present, report and explain rows)
+    -> rules/writing.md              every tier; the reporting moment
+agent about to build an accepted change, standard and full
+  rule-map.toml:326-330 (build row)
+    -> cf-method lifecycle           the reply rule's owner (R-117)
 ```
 
 The minimal tier installs no skills, so the writing reference is the only
 reply guidance there. At the standard and full tiers the rule map still
-routes the reporting moment to it. Before this task it carried a compact
+routes the reporting moment to it, and the lifecycle is read when a
+change is built. Before this task it carried a compact
 form that dropped five duties the owner states.
 
 ## Writing reference (`rules/writing.md`)
@@ -63,30 +66,28 @@ where the agent reads them before it reports.
 Nothing was removed. The owner, the lifecycle reply rule, is unchanged.
 The new test `reply_duties_read_when_reporting_match_their_owner` pins 21
 duties on both sides and fails, naming the duty, when either side drops
-one.
+one. A pin whose clause ends the owner's sentence carries its full stop,
+so a qualifier appended after it also fails; a negative control proves
+it. The review record is the Closeout of TSK-138.
 
 ## Candidates kept
 
 | Candidate | Readers and moments | Decision |
 |---|---|---|
+| Reply duties in the lifecycle and `rules/writing.md` | an agent reporting, at every tier; an agent building, at standard and full | kept with the parity guard this task adds; a single home would need an R-117 amendment and moving the CF-OUT-001 to 004 and 007 marker paths, for no reader gain |
 | `awaiting_selection` rule in cf-method `project-organization.md` and orchestrator `task-graph.md` | a planner writing records; the orchestrator building the graph, which also needs the guard evidence and ledger detail | kept; TSK-108's `lifecycle_guidance_is_one_section_the_skills_follow` pins both homes |
-| Figure proportionality in `cf-editorial-review` and orchestrator `quality/editorial.md` | an author revising prose; a reviewer grading a change | kept; each is the rule at its own moment, and CF-OUT-003 pins the author's copy |
+| Figure proportionality in the lifecycle, orchestrator `quality/editorial.md` and `cf-editorial-review` | an author shaping a reply; a reviewer grading a change; an editor revising prose | kept with a parity guard this task adds; the three copies state the same six duties, each in its reader's voice (the author "never adds", the reviewer grades "findings", the editor calls it "a defect"), so `figure_duties_match_for_author_reviewer_and_editor` pins each file's own wording; CF-OUT-003 still pins the author's copy |
 | `utility-presentation-system.md` in `cf-present` and `cf-docs-portal` | two skills installed and read on their own | kept; each copy is tailored (Comment chrome, skins, portal limits) |
 | PR template and cf-ship `pr-evidence.md` | the PR author filling a form; the author checking the rules | kept; a form and its reference |
 | Root `README.md` and `docs/adoption.md` install steps | a first-time visitor; an adopter installing | kept |
-| cf-plan, cf-develop, cf-ship "follow the work lifecycle" lines | each stage skill at a status change | kept; each is the pointer to the one lifecycle section |
+| `docs/capabilities.md` and the delegate adapter's byte rules | an adopter reading the catalog; an agent driving the lane | kept; the catalog states the contract at its altitude, not the mechanics, and each task updates its own rows at ship (R-118 docs row) |
+| cf-plan, cf-develop, cf-ship "follow the work lifecycle" lines | each stage skill at a status change | pointers to the one lifecycle section, not duplicates |
 
-## Left to the owning task
+## Consolidated by the owning task
 
-Each of these is a real second statement. SPC-013 R-118 gives the file to
-another task, or moving the text would change requirement markers that
-R-118 reserves; TSK-138 leaves SPC-013 unchanged, so none is edited here.
-
-| Duplication | Owner and blocker | Proposed one home |
+| Duplication | Why it moves | Owner |
 |---|---|---|
-| Lifecycle reply rule and `rules/writing.md` state the same reply duties | R-117 names the lifecycle as owner; CF-OUT-001 to 004 and 007 pin the lifecycle text; eval markers are append-only (TSK-111's kit) | `rules/writing.md`, read at every tier at the reporting moment, with the lifecycle pointing to it; needs an R-117 amendment and the marker paths moved |
-| cf-delegate `lane-lifecycle.md` Lifecycle section and `claude-turn-completion.md` restate the turn detection and stop-hook rules | cf-delegate line: TSK-144 is the open later editor; `delegate_doctrine_contract` and `reverse_lane_uses_hook_completion_not_pane_stability` pin both | the turn adapter, with the lane pointing to it, after TSK-144 lands |
-| `docs/capabilities.md` restates the delegate adapter's byte rules | rows are per capability, updated by the task that ships it (R-118 docs row) | the adapter; the row names it |
+| cf-delegate `lane-lifecycle.md` Lifecycle section and `claude-turn-completion.md` | one reader (an agent on a non-Claude host) at successive moments of one task, and the copies drifted: the lane runs the sibling Stop-hook preflight "Before delivery", the adapter "Before launching"; separate pins at `delegate_doctrine_contract.rs:265` and `:272` lock both wordings | TSK-163, filed by planning PR 719: one home in the adapter, before launch, and one guard; after TSK-144 on the R-118 cf-delegate row |
 
 ## Measured totals
 
