@@ -3454,22 +3454,38 @@ fn mapping_string<'a>(mapping: &'a serde_yaml::Mapping, key: &str) -> Option<&'a
         .and_then(serde_yaml::Value::as_str)
 }
 
+/// Derives a record's relationships from its frontmatter. A `depends_on`
+/// entry is an id, or a research or decision input written as a mapping whose
+/// `id` names it; `validate --docs` owns the other keys (`kind`, `pin`), so
+/// they are not read here. Legacy `dependencies` is a task-record key: it
+/// reads as `depends_on` only when `source_id` is a task id.
 fn relationships_from_mapping(
     mapping: &serde_yaml::Mapping,
     source_id: Option<&str>,
 ) -> Result<BTreeSet<Relationship>, String> {
-    const FIELDS: [(&str, &str); 8] = [
+    const FIELDS: [(&str, &str); 9] = [
         ("epic_id", "epic"),
         ("epics", "epic"),
         ("specs", "spec"),
         ("depends_on", "depends_on"),
+        ("dependencies", "depends_on"),
         ("capabilities", "capability"),
         ("adrs", "decision"),
         ("related", "related"),
         ("superseded_by", "superseded_by"),
     ];
+    let task = source_id.is_some_and(|id| id.starts_with("TSK-") && strict_id(id));
+    let has = |key: &str| mapping.contains_key(serde_yaml::Value::String(key.to_string()));
+    if task && has("depends_on") && has("dependencies") {
+        return Err(
+            "declares both depends_on and legacy dependencies; keep only depends_on".into(),
+        );
+    }
     let mut relationships = BTreeSet::new();
     for (field, kind) in FIELDS {
+        if field == "dependencies" && !task {
+            continue;
+        }
         let Some(value) = mapping.get(serde_yaml::Value::String(field.to_string())) else {
             continue;
         };
@@ -3477,10 +3493,12 @@ fn relationships_from_mapping(
             serde_yaml::Value::Null => Vec::new(),
             serde_yaml::Value::String(target) => vec![target],
             serde_yaml::Value::Sequence(targets) => {
-                let parsed: Option<Vec<&str>> =
-                    targets.iter().map(serde_yaml::Value::as_str).collect();
+                let parsed: Option<Vec<&str>> = targets
+                    .iter()
+                    .map(|item| relationship_target(item, kind))
+                    .collect();
                 parsed
-                    .ok_or_else(|| format!("declared {field} relationship is not a string list"))?
+                    .ok_or_else(|| format!("declared {field} relationship is not a list of ids"))?
             }
             _ => {
                 return Err(format!(
@@ -3502,6 +3520,14 @@ fn relationships_from_mapping(
         }
     }
     Ok(relationships)
+}
+
+/// A relationship target: an id string, or for `depends_on` a mapping's `id`.
+fn relationship_target<'a>(item: &'a serde_yaml::Value, kind: &str) -> Option<&'a str> {
+    match item {
+        serde_yaml::Value::Mapping(entry) if kind == "depends_on" => mapping_string(entry, "id"),
+        _ => item.as_str(),
+    }
 }
 
 fn strict_id(value: &str) -> bool {

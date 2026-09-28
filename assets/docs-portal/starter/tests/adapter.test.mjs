@@ -419,6 +419,44 @@ test("explicit record authority fails closed while absent ids may be inferred", 
   assert.deepEqual(extractPageRelationships({ depends_on: "TSK-102", related: ["ADR-0001"] }, "", "project-management/tasks/TSK-101.md").map(({ type, target }) => [type, target]), [["depends_on", "TSK-102"], ["related", "ADR-0001"]]);
 });
 
+test("every depends_on form validate accepts is one depends-on relationship to its id", () => {
+  const source = "project-management/tasks/TSK-101.md";
+  const pairs = (frontmatter) => extractPageRelationships(frontmatter, "", source).map(({ type, target }) => [type, target]);
+  assert.deepEqual(pairs({ id: "TSK-101", depends_on: ["TSK-100"] }), [["depends_on", "TSK-100"]]);
+  assert.deepEqual(pairs({ id: "TSK-101", depends_on: [{ id: "TSK-100", kind: "research", pin: "0123abcd" }] }), [["depends_on", "TSK-100"]]);
+  assert.deepEqual(pairs({ id: "TSK-101", depends_on: [{ id: "TSK-100", kind: "decision" }] }), [["depends_on", "TSK-100"]]);
+  assert.deepEqual(pairs({ id: "TSK-101", dependencies: ["TSK-100"] }), [["depends_on", "TSK-100"]]);
+  for (const entry of [{ kind: "research" }, { id: "not-an-id", kind: "decision" }, { id: 7 }, null]) {
+    assert.throws(() => pairs({ id: "TSK-101", depends_on: [entry] }), /depends_on relationship is invalid/, JSON.stringify(entry));
+  }
+  assert.throws(() => pairs({ id: "TSK-101", depends_on: ["TSK-100"], dependencies: ["TSK-100"] }), /keep only depends_on/);
+  // `dependencies` is a task-record key; any other page keeps its own meaning for it.
+  assert.deepEqual(pairs({ id: "SPC-101", dependencies: ["serde"] }), []);
+  assert.deepEqual(extractPageRelationships({ title: "Guide", dependencies: ["serde"] }, "", "docs/guide.md"), []);
+  const capabilityBlock = "```yaml\nid: CAP-101\ndepends_on: [{id: CAP-100}]\n```\n";
+  assert.throws(() => extractPageRelationships({}, capabilityBlock, "docs/capabilities.md"), /depends_on relationship is invalid/);
+});
+
+test("the adapter builds a page whose dependencies use the object or legacy form", async () => {
+  const root = await portalFixture();
+  try {
+    await writeFile(path.join(root, "docs/findings.md"), "---\nid: TSK-100\ntitle: Findings\n---\n\n# Findings\n\nThe findings.\n");
+    await writeFile(path.join(root, "docs/consumer.md"), "---\nid: TSK-101\ntitle: Consumer\ndepends_on: [{id: TSK-100, kind: research, pin: \"0123abcd\"}]\n---\n\n# Consumer\n\nReads the findings.\n");
+    await writeFile(path.join(root, "docs/legacy.md"), "---\nid: TSK-102\ntitle: Legacy\ndependencies: [TSK-100]\n---\n\n# Legacy\n\nAn older record.\n");
+    commitFixture(root, "add dependency forms");
+    runAdapter(root);
+    const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    for (const [sourcePath, id] of [["docs/consumer.md", "TSK-101"], ["docs/legacy.md", "TSK-102"]]) {
+      const page = evidence.pages.find((item) => item.source_path === sourcePath);
+      assert.equal(page.stale, false, sourcePath);
+      assert.deepEqual(page.relationships.map(({ type, target, source_id }) => [type, target, source_id]), [["depends_on", "TSK-100", id]], sourcePath);
+    }
+    const consumer = await readFile(path.join(root, "src/content/docs/reference/consumer.md"), "utf8");
+    assert.match(consumer, /Reads the findings/);
+    assert.doesNotMatch(consumer, /Source unavailable/);
+  } finally { await rm(root, treeRemoval); }
+});
+
 test("evidence ordering is explicit and independent of the process locale", () => {
   const values = ["ä", "z", "a", "Z"];
   assert.deepEqual([...values].sort(compareDeterministicText), ["Z", "a", "z", "ä"]);

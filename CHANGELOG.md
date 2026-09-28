@@ -778,6 +778,19 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The guide reads every dependency form a task record accepts.** A task
+  that depends on a research or decision input, written
+  `{id: TSK-NNN, kind: research, pin: "<commit sha>"}` or
+  `{id: TSK-NNN, kind: decision}`, builds as a normal portal page that shows
+  the dependency, not a "Source unavailable" page. A task record that still
+  uses the legacy `dependencies` key shows its dependencies too; any other
+  page keeps its own meaning for that key. The portal generator and
+  `codeflow validate --portal` read the same forms. Like `validate --docs`,
+  both refuse a task record that carries `depends_on` and `dependencies`
+  together. Run `codeflow portal setup --path <dir>` to take the fix into an
+  installed portal.
+
+<!-- codeflow:release-impact patch -->
 - **`git gc` works in a hooked clone.** The reference-transaction hook no
   longer refuses `git pack-refs`, which `git gc` and auto gc run: moving a
   protected branch such as `main` from a loose ref into packed-refs, and
