@@ -379,6 +379,22 @@ fn has_known_identity(raw: &str) -> bool {
     !raw.contains(['\\', '$', '`', '\'', '"'])
 }
 
+/// The names directly below `dir` whose deletion is refused whole, so a
+/// glob the disk does not resolve is still matched against them.
+pub(super) fn protected_names(dir: &str) -> Vec<&'static str> {
+    match dir {
+        "/" => SYSTEM_DIRS
+            .iter()
+            .chain(ROOT_COLLECTION_DIRS)
+            .chain(&["tmp"])
+            .copied()
+            .collect(),
+        "/private" => vec!["tmp", "var"],
+        "/var" | "/private/var" => vec!["tmp"],
+        _ => Vec::new(),
+    }
+}
+
 /// Classify a normalized absolute path as the root, a system directory or a
 /// whole top-level user or mount collection.
 fn protected_path(norm: &str) -> Option<&'static str> {
@@ -661,16 +677,7 @@ impl SecurityModule for DangerousModule {
             return Some(v);
         }
         if let Some(found) = super::deletion::composed_deletion(cmd) {
-            // A target reached on only some paths through the line is still
-            // refused (TSK-141 round 1); the message says why.
-            let reason = if found.ambiguous {
-                "Recursive deletion of a protected location: it is one of several values \
-                 the command may reach here (after a branch, loop, subshell or earlier \
-                 value), and any of them is refused; name the target directly"
-            } else {
-                "Recursive deletion of a protected location"
-            };
-            return Some(block("Dangerous Command", reason, found.target));
+            return Some(composed_verdict(&found));
         }
 
         // Disk operation checks.
@@ -690,6 +697,35 @@ impl SecurityModule for DangerousModule {
 
         None
     }
+}
+
+/// The refusal for a deletion the composed reader finds. A target reached
+/// on only some paths through the line is still refused (TSK-141 round
+/// 1), and one the reader cannot prove is refused as unproven (round 2);
+/// each message says why.
+fn composed_verdict(found: &super::deletion::Found) -> Verdict {
+    let reason = match &found.unproven {
+        Some(unproven) if unproven.cwd => format!(
+            "Recursive deletion whose target cannot be proven: it runs in a working \
+             directory that depends on {}, which the guard does not follow exactly; \
+             name the project path literally, for example `rm -rf ./build` after a \
+             literal `cd` to the project",
+            unproven.reason
+        ),
+        Some(unproven) => format!(
+            "Recursive deletion whose target cannot be proven: it depends on {}, which \
+             the guard does not follow exactly; name the project path literally, for \
+             example `rm -rf ./build`",
+            unproven.reason
+        ),
+        None if found.ambiguous => "Recursive deletion of a protected location: it is one \
+             of several values the command may reach here (after a branch, loop, \
+             subshell or earlier value), and any of them is refused; name the target \
+             directly"
+            .to_string(),
+        None => "Recursive deletion of a protected location".to_string(),
+    };
+    block("Dangerous Command", &reason, found.target)
 }
 
 /// Block recursive `rm` of a protected location, however the flags and operand

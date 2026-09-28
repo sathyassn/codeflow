@@ -284,6 +284,565 @@ pub const REVIEW_PROBES: &[(&str, &str, bool)] = &[
     ("printf-data", "printf '%s' 'find / -delete'", false),
 ];
 
+/// The verdict a round 2 probe is held to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expect {
+    /// Refused, naming the protected target it reaches.
+    Protected,
+    /// Refused because its target cannot be proven: it depends on a
+    /// construct the reader does not model exactly.
+    Unproven,
+    /// Runs.
+    Allowed,
+    /// The composed reader allows it, and the literal `rm` floor, which
+    /// reads each `rm` whether or not the line can reach it, refuses it.
+    Floor,
+}
+
+/// Every command of the Codex round 2 deletion probe (`extended-cases.json`,
+/// 67 cases, read in a project holding `build`, `empty` and a `root-link`
+/// to `/`), then the taint rule's own probes and the cleanups it keeps.
+pub const REVIEW_ROUND_TWO_PROBES: &[(&str, &str, Expect)] = &[
+    (
+        "function-local-restores-outer",
+        "D=/; f(){ local D=build; }; f; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "function-cd",
+        "f(){ cd /; }; f; rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "function-return",
+        "D=build; f(){ D=/; return; D=build; }; f; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "function-parameter",
+        "f(){ D=$1; }; f /; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "function-direct-parameter",
+        "f(){ rm -rf \"$1\"; }; f /",
+        Expect::Protected,
+    ),
+    (
+        "function-child-definition",
+        "f(){ D=/; }; (f(){ D=build; }); f; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "function-child-unset",
+        "f(){ D=/; }; (unset -f f); f; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "function-prefix-env",
+        "f(){ rm -rf \"$D\"; }; D=/ f",
+        Expect::Protected,
+    ),
+    (
+        "function-cd-prefix",
+        "f(){ cd \"$D\"; }; D=/ f; rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "break-simple",
+        "D=build; for x in a; do D=/; break; D=build; done; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "continue-simple",
+        "D=build; for x in a; do D=/; continue; D=build; done; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "break-in-function",
+        "stop(){ break; }; for D in / build; do stop; done; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "break-two",
+        "D=build; for a in x; do for b in y; do D=/; break 2; D=build; done; D=build; done; \
+         rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "return-nested-loop",
+        "D=build; f(){ for x in a; do D=/; return; D=build; done; D=build; }; f; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "nested-subshell",
+        "D=/; ( (D=build) ); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    ("array-all", "D=(/); rm -rf \"${D[@]}\"", Expect::Protected),
+    (
+        "array-index",
+        "D[0]=/; rm -rf \"${D[0]}\"",
+        Expect::Protected,
+    ),
+    ("array-scalar", "D=(/); rm -rf \"$D\"", Expect::Protected),
+    (
+        "set-positional",
+        "set -- /; rm -rf \"$1\"",
+        Expect::Protected,
+    ),
+    ("set-at", "set -- /; rm -rf \"$@\"", Expect::Protected),
+    (
+        "shell-positional",
+        "bash -c 'rm -rf \"$1\"' probe /",
+        Expect::Protected,
+    ),
+    ("read-one", "read D <<< /; rm -rf \"$D\"", Expect::Protected),
+    (
+        "read-two",
+        "read a D <<< \"build /\"; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "read-array",
+        "read -a D <<< /; rm -rf \"${D[0]}\"",
+        Expect::Protected,
+    ),
+    (
+        "read-custom-ifs",
+        "IFS=: read a D <<< \"build:/\"; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "export-child",
+        "D=/; (export D=build); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "export-child-nested",
+        "D=/; ( (export D=build) ); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "eval-literal",
+        "eval 'D=/'; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "eval-with-command",
+        "command eval 'D=/'; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "eval-with-builtin",
+        "builtin eval 'D=/'; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    ("command-cd", "command cd /; rm -rf *", Expect::Protected),
+    ("builtin-cd", "builtin cd /; rm -rf *", Expect::Protected),
+    (
+        "command-export",
+        "command export D=/; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "alias-constant",
+        "shopt -s expand_aliases; alias wipe='rm -rf';\nwipe /",
+        Expect::Protected,
+    ),
+    (
+        "ifs-mixed",
+        "IFS=:; D=build:/; rm -rf $D",
+        Expect::Protected,
+    ),
+    ("ifs-only-root", "IFS=:; D=:/; rm -rf $D", Expect::Protected),
+    ("brace-system", "rm -rf /{etc,usr}", Expect::Protected),
+    (
+        "brace-nested",
+        "rm -rf /{var/{root,empty},etc}",
+        Expect::Protected,
+    ),
+    (
+        "brace-assignment",
+        "D=/; rm -rf {build,$D}",
+        Expect::Protected,
+    ),
+    ("glob-home", "rm -rf /Users/*", Expect::Protected),
+    ("glob-system", "rm -rf /et?", Expect::Protected),
+    ("glob-root-link", "rm -rf root-*/*", Expect::Protected),
+    (
+        "glob-root-link-cd",
+        "cd root-*/; rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "glob-bracket-link",
+        "rm -rf root-lin[k]/*",
+        Expect::Protected,
+    ),
+    (
+        "child-variable-control",
+        "D=build; (D=/); rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "function-local-safe",
+        "D=build; f(){ local D=/; }; f; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "function-not-called",
+        "f(){ D=/; }; rm -rf ./build",
+        Expect::Allowed,
+    ),
+    (
+        "subshell-safe",
+        "(cd /; pwd); rm -rf ./build",
+        Expect::Allowed,
+    ),
+    ("quote-safe", "D=/; rm -rf '$D'", Expect::Allowed),
+    (
+        "default-safe",
+        "D=build; rm -rf \"${D:-/}\"",
+        Expect::Allowed,
+    ),
+    (
+        "fixed-loop-safe",
+        "for D in / build; do :; done; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "loop-disclosed",
+        "D=/; for d in x; do D=build; done; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "case-disclosed",
+        "D=/; case x in x) D=build;; esac; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "rsync-source",
+        "rsync -a --remove-source-files /Users/alice/ ./build/",
+        Expect::Protected,
+    ),
+    (
+        "rsync-del",
+        "rsync -a --del ./empty/ /Users/alice/",
+        Expect::Protected,
+    ),
+    (
+        "rsync-nested",
+        "D=/Users/alice; (rsync -a --delete ./empty/ \"$D\")",
+        Expect::Protected,
+    ),
+    (
+        "rsync-project",
+        "rsync -a --delete ./empty/ ./build/",
+        Expect::Allowed,
+    ),
+    (
+        "find-wrapper-exec",
+        r"find . -exec command rm -rf /Users/alice \;",
+        Expect::Protected,
+    ),
+    (
+        "find-name-now-block",
+        "find /Users/alice -name .DS_Store -delete",
+        Expect::Protected,
+    ),
+    (
+        "find-project",
+        "find . -name '*.o' -delete",
+        Expect::Allowed,
+    ),
+    (
+        "function-relative-safe",
+        "f(){ cd build; }; f; rm -rf *",
+        Expect::Allowed,
+    ),
+    (
+        "unreachable-return-safe",
+        "f(){ return; rm -rf /; }; f",
+        Expect::Floor,
+    ),
+    ("unreachable-exit-safe", "exit 0; rm -rf /", Expect::Floor),
+    ("glob-usr", "rm -rf /u?r", Expect::Protected),
+    (
+        "parameter-assign-side-effect",
+        "unset D; : ${D:=/}; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "sequential-multi-assignment",
+        "A=/ D=$A; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "read-option-r",
+        "IFS=: read -r a D <<< \"build:/\"; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    // The taint rule: a construct the reader does not model exactly makes
+    // what it may change unknown, and a deletion that depends on it is
+    // refused as unproven.
+    (
+        "taint-source-variable",
+        "source ./env.sh; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "taint-source-cwd",
+        ". ./env.sh; rm -rf build",
+        Expect::Unproven,
+    ),
+    (
+        "taint-recursion",
+        "f(){ f; }; f; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "taint-nameref",
+        "declare -n R=D; R=/; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "taint-case-attribute",
+        "declare -u D; D=/usr; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "taint-eval-unknown",
+        "eval \"$(cat cmds)\"; rm -rf build",
+        Expect::Unproven,
+    ),
+    (
+        "taint-read-delimiter",
+        "read -d '' D < list; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "taint-mapfile",
+        "mapfile -t L < list; rm -rf \"${L[@]}\"",
+        Expect::Unproven,
+    ),
+    (
+        "taint-read-unseen",
+        "cat list | while read f; do rm -rf \"$f\"; done",
+        Expect::Unproven,
+    ),
+    (
+        "taint-substitution-op",
+        "D=/xetc; rm -rf \"${D/x/}\"",
+        Expect::Unproven,
+    ),
+    (
+        "taint-indirection",
+        "N=D; D=/; rm -rf \"${!N}\"",
+        Expect::Unproven,
+    ),
+    (
+        "taint-ifs-unknown",
+        "IFS=$SEP; D=build:/; rm -rf $D",
+        Expect::Unproven,
+    ),
+    ("taint-command-name", "$CMD /; rm -rf *", Expect::Unproven),
+    (
+        "taint-alias-unknown",
+        "alias go=\"$GO\"; go; rm -rf *",
+        Expect::Unproven,
+    ),
+    // Constructs modelled exactly keep the protected target in view.
+    (
+        "readonly-keeps",
+        "readonly D=/; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "declare-global",
+        "f(){ local D=build; declare -g D=/; }; f; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "unset-reveals-outer",
+        "D=/; f(){ local D=build; g; rm -rf \"$D\"; }; g(){ unset D; }; f",
+        Expect::Protected,
+    ),
+    (
+        "function-shadows-cd",
+        "cd(){ builtin cd /; }; cd build; rm -rf *",
+        Expect::Protected,
+    ),
+    ("brace-range", "rm -rf /{a..f}tc", Expect::Protected),
+    (
+        "array-append",
+        "D=(build); D+=(/); rm -rf \"${D[@]}\"",
+        Expect::Protected,
+    ),
+    (
+        "shift-positional",
+        "set -- build /; shift; rm -rf \"$1\"",
+        Expect::Protected,
+    ),
+    ("star-positional", "set -- /; rm -rf $*", Expect::Protected),
+    (
+        "shell-name-parameter",
+        "bash -c 'rm -rf \"$0\"' /",
+        Expect::Protected,
+    ),
+    ("glob-directory-link", "rm -rf */", Expect::Protected),
+    (
+        "alias-trailing-blank",
+        "alias s='sudo '; alias w='rm -rf';\ns w /",
+        Expect::Protected,
+    ),
+    (
+        "compound-here-string",
+        "while read -r d; do rm -rf \"$d\"; done <<< /",
+        Expect::Protected,
+    ),
+    (
+        "associative-array",
+        "declare -A m=([a]=/); rm -rf \"${m[a]}\"",
+        Expect::Protected,
+    ),
+    (
+        "heredoc-to-shell",
+        "D=/; cat <<EOF | sh\nrm -rf $D\nEOF",
+        Expect::Protected,
+    ),
+    (
+        "echo-to-shell",
+        "D=/; echo \"rm -rf $D\" | sh",
+        Expect::Protected,
+    ),
+    (
+        "substitution-pwd",
+        "D=$(cd / && pwd); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "function-runs-arguments",
+        "run(){ \"$@\"; }; run rm -rf /",
+        Expect::Protected,
+    ),
+    (
+        "printf-assign",
+        "printf -v D %s /; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-at-exit",
+        "trap 'rm -rf \"$D\"' EXIT; D=/",
+        Expect::Protected,
+    ),
+    (
+        "mapfile-here-string",
+        "mapfile -t L <<< /; rm -rf \"${L[@]}\"",
+        Expect::Protected,
+    ),
+    (
+        "heredoc-read",
+        "read -r D <<EOF\n/\nEOF\nrm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    ("home-reassigned", "HOME=/; rm -rf ~/etc", Expect::Protected),
+    (
+        "taint-unsettled-loop",
+        "D=x; while true; do D=$D/x; done; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    // Ordinary cleanups built from the same constructs still run.
+    (
+        "control-array",
+        "files=(build dist); rm -rf \"${files[@]}\"",
+        Expect::Allowed,
+    ),
+    (
+        "control-function-parameter",
+        "clean(){ rm -rf \"$1\"; }; clean build",
+        Expect::Allowed,
+    ),
+    (
+        "control-function-local",
+        "f(){ local d=build; rm -rf \"$d\"; }; f",
+        Expect::Allowed,
+    ),
+    (
+        "control-set-options",
+        "set -euo pipefail; rm -rf build",
+        Expect::Allowed,
+    ),
+    (
+        "control-ifs",
+        "IFS=:; D=build:dist; rm -rf $D",
+        Expect::Allowed,
+    ),
+    (
+        "control-read",
+        "read -r D <<< build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "control-alias",
+        "alias ll='ls -l'; rm -rf build",
+        Expect::Allowed,
+    ),
+    (
+        "control-builtin-cd",
+        "builtin cd build && rm -rf *",
+        Expect::Allowed,
+    ),
+    ("control-brace", "rm -rf build/{a,b}", Expect::Allowed),
+    (
+        "control-export",
+        "export D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "control-readonly",
+        "declare -r D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "control-assign-default",
+        ": ${D:=build}; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "control-positional-loop",
+        "set -- build dist; for d; do rm -rf \"$d\"; done",
+        Expect::Allowed,
+    ),
+    (
+        "control-compound-here-string",
+        "while read -r d; do rm -rf \"$d\"; done <<< build",
+        Expect::Allowed,
+    ),
+    (
+        "control-trap",
+        "trap 'rm -rf ./build' EXIT",
+        Expect::Allowed,
+    ),
+    (
+        "control-substitution",
+        "D=$(printf build); rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    ("control-glob", "rm -rf ./*", Expect::Allowed),
+    ("control-pwd", "rm -rf \"$PWD/build\"", Expect::Allowed),
+    (
+        "control-source-then-cd",
+        "source ./env.sh; cd /Users/alice/project && rm -rf build",
+        Expect::Allowed,
+    ),
+    (
+        "control-source-absolute",
+        "source ./env.sh; rm -rf /Users/alice/project/target",
+        Expect::Allowed,
+    ),
+];
+
 /// The probe's two symlink cases: `root-link` is a project entry that
 /// links to `/`, so both reach the root.
 pub const REVIEW_SYMLINK_PROBES: &[(&str, &str)] = &[
