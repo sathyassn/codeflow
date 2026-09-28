@@ -1,0 +1,11 @@
+id = "TSK-177"
+uid = "0324b720-8aeb-4c99-a5ee-bd0d2687c4c6"
+kind = "TSK"
+title = "every writing and reply surface states the plain-writing rule"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T23:56:34Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
