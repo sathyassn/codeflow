@@ -816,11 +816,14 @@ publication date._
 
 <!-- codeflow:release-impact patch -->
 - **Herdr delivery confirms a started turn.** `cf-herdr` delivers through
-  `scripts/deliver.py`. For a Codex or Grok seat it confirms within 20 s
-  that the seat started working, sends Enter at most once more while the
-  prompt still waits in the input, and otherwise reports that the prompt was
-  not submitted, naming the pane. It sends nothing to a seat whose working
-  folder is gone and names the relaunch step, and cleanup keeps a worktree
+  `scripts/deliver.py`. For a Codex or Grok seat it sends one Enter and
+  confirms within 20 s that the seat started working, and otherwise reports
+  the turn not confirmed, naming the pane; it never sends a second Enter,
+  since Herdr cannot tell a prompt in the input from one already submitted.
+  It sends nothing to a seat that is working, blocked or of unknown status,
+  or whose working folder is gone, where it names the relaunch step. The
+  Claude lane adds the fold sentence only for a fold its own paste made.
+  Cleanup keeps a worktree
   that a live seat uses. The Claude lane keeps its `accepted` wait. Run
   `codeflow update` to install the script.
 

@@ -148,14 +148,15 @@ codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
   --until terminal --turn-id "$TURN" --timeout-seconds 3600
 ```
 
-It sends nothing when the seat's folder is gone (exit 3) or the file is over
+It sends nothing when the seat's folder is gone (exit 3), the file is over
 256 KiB (exit 2: use degraded tmux paste-buffer, since `send-text` is argv
-and can `E2BIG`). Without the hook it confirms within 20 s that the seat
-reached `working` or `blocked` (or a newer `done`), sends Enter at most once
-more while the prompt still waits in the input, and otherwise exits 4
-naming the pane: not submitted. Inspect with `herdr agent read`; never
-resend blindly. `--lifecycle` adds the fold sentence the hook requires when
-the paste folded (see cf-delegate); the `accepted` wait stays the check.
+and can `E2BIG`), or, without the hook, the seat is `working`, `blocked` or
+`unknown` (exit 5). It then confirms within 20 s that the seat reached
+`working` or `blocked` (or a newer `done`), else exits 4 naming the pane. It
+sends one Enter only: Herdr cannot tell the input from the scrollback.
+Inspect with `herdr agent read`; never resend blindly. `--lifecycle` adds
+the fold sentence the hook requires when the paste folded (see
+cf-delegate); the `accepted` wait stays the check.
 
 Do not `tmux load-buffer` / `paste-buffer` into a Herdr pane, and do not use
 `herdr agent prompt`: submission alone does not prove a started turn. Prove

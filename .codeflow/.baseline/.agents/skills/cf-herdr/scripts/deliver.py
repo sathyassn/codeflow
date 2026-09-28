@@ -9,18 +9,21 @@ Every lane first reads the pane (`herdr pane get`) and stops before sending
 anything when the seat's working folder no longer exists or the prompt is
 over 256 KiB.
 
-A seat without the lifecycle hook (Codex, Grok): after Enter, the seat must
-reach `working` or `blocked`, or show a newer `state_change_seq` with
-`done`, within --start-timeout seconds (`herdr agent get`). If it has not and
-the prompt still waits in the input, Enter is sent once more and the wait
-repeats. Otherwise the script stops and reports that the prompt was not
-submitted, naming the pane; it never resends the prompt.
+A seat without the lifecycle hook (Codex, Grok) must not be `working`,
+`blocked` or `unknown` before the send. After one Enter it must reach
+`working` or `blocked`, or show a newer `state_change_seq` with `done`,
+within --start-timeout seconds (`herdr agent get`). Otherwise the script
+stops and reports the turn not confirmed, naming the pane. Herdr 0.9.0
+exposes no input line or cursor, so a prompt waiting in the input cannot be
+told from the same words already submitted: it never sends a second Enter
+and never resends the prompt.
 
---lifecycle (tracked Claude): send, fold sentence when the paste folded,
-Enter; the lifecycle's `accepted` wait stays the caller's next step.
+--lifecycle (tracked Claude): send, fold sentence when this paste added a
+fold to the screen, Enter; the lifecycle's `accepted` wait stays the
+caller's next step.
 
 Exit codes: 0 started or sent; 1 herdr error; 2 usage or oversize;
-3 seat folder missing; 4 turn not started; 5 seat busy.
+3 seat folder missing; 4 turn not confirmed; 5 seat busy or unknown.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ LIMIT = 256 * 1024
 FOLD = "[Pasted"
 FOLD_SENTENCE = "Carry out the pasted instructions."
 STARTED = {"working", "blocked"}
+BUSY = STARTED | {"unknown"}
 
 
 class Stop(Exception):
@@ -55,16 +59,13 @@ def herdr(*args: str) -> dict:
         raise Stop(1, f"herdr {' '.join(args[:2])} returned no JSON: {error}")
 
 
-def visible(pane: str, text: str) -> bool:
-    """Whether `text` shows in the pane's bottom lines (the input area)."""
-    if not text:
-        return False
-    done = subprocess.run(
-        ["herdr", "pane", "wait-output", pane, "--match", text,
-         "--source", "visible", "--lines", "8", "--timeout", "500"],
-        capture_output=True, text=True,
-    )
-    return done.returncode == 0
+def folds(pane: str) -> int:
+    """How many folded pastes the pane's screen shows."""
+    done = subprocess.run(["herdr", "pane", "read", pane, "--source", "visible"],
+                          capture_output=True, text=True)
+    if done.returncode != 0:
+        raise Stop(1, f"herdr pane read failed: {(done.stderr or done.stdout).strip()}")
+    return done.stdout.count(FOLD)
 
 
 def agent(pane: str) -> tuple[str, int]:
@@ -83,11 +84,6 @@ def started(pane: str, seq: int, bound: float) -> str | None:
         time.sleep(min(0.5, max(bound / 10, 0.05)))
 
 
-def tail(prompt: str) -> str:
-    lines = [line.strip() for line in prompt.splitlines() if line.strip()]
-    return lines[-1][-40:] if lines else ""
-
-
 def deliver(args: argparse.Namespace) -> str:
     try:
         with open(args.file, encoding="utf-8") as handle:
@@ -104,16 +100,20 @@ def deliver(args: argparse.Namespace) -> str:
                       "exists; nothing was sent. To relaunch: close that tab, "
                       "then create a new tab with --cwd in a live worktree and "
                       "start the seat again (cf-herdr, Create or resume).")
-    if not args.lifecycle:
+    if args.lifecycle:
+        before = folds(args.pane)
+    else:
         status, seq = agent(args.pane)
-        if status in STARTED:
+        if status in BUSY:
             raise Stop(5, f"pane {args.pane} is {status}; nothing was sent. "
                           "Harvest or answer it first.")
 
     herdr("pane", "send-text", args.pane, prompt)
     time.sleep(args.settle)  # input settle; not completion detection
     if args.lifecycle:
-        if visible(args.pane, FOLD):
+        # A fold already on screen may be an earlier turn's; only one this
+        # paste added gets the sentence.
+        if folds(args.pane) > before:
             herdr("pane", "send-text", args.pane, FOLD_SENTENCE)
             time.sleep(0.3)
         herdr("pane", "send-keys", args.pane, "Enter")
@@ -124,21 +124,12 @@ def deliver(args: argparse.Namespace) -> str:
     state = started(args.pane, seq, args.start_timeout)
     if state:
         return f"pane {args.pane} started ({state})"
-    marker = tail(prompt)
-    if visible(args.pane, FOLD) or visible(args.pane, marker):
-        herdr("pane", "send-keys", args.pane, "Enter")
-        state = started(args.pane, seq, args.start_timeout)
-        if state:
-            return f"pane {args.pane} started ({state}) after one more Enter"
-        raise Stop(4, f"prompt not submitted to pane {args.pane}: it still "
-                      f"waited in the input and the seat did not start within "
-                      f"{args.start_timeout:g}s after one more Enter. Inspect "
-                      f"with `herdr agent read {args.pane}`.")
-    raise Stop(4, f"prompt not submitted to pane {args.pane}: the seat did not "
-                  f"start within {args.start_timeout:g}s and the prompt is not "
-                  f"in the input. Do not resend blindly; inspect with "
+    raise Stop(4, f"turn not confirmed on pane {args.pane}: the seat did not "
+                  f"start within {args.start_timeout:g}s of one Enter. Herdr "
+                  "cannot show whether the prompt still waits in the input or "
+                  "was submitted, so no second Enter was sent. Inspect with "
                   f"`herdr agent read {args.pane}` and `herdr agent get "
-                  f"{args.pane}`.")
+                  f"{args.pane}`; never resend blindly.")
 
 
 def main() -> int:

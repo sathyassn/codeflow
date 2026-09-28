@@ -54,6 +54,11 @@ def reply(result):
     print(json.dumps({"id": "stub", "result": result}))
 
 
+def screen():
+    # A live pane: what was submitted stays on screen above the input.
+    return state["scrollback"] + state["input"]
+
+
 verb = tuple(args[:2])
 if verb == ("pane", "get"):
     reply({"type": "pane_info", "pane": pane})
@@ -61,7 +66,10 @@ elif verb == ("agent", "get"):
     reply({"type": "agent_info",
            "agent": dict(pane, state_change_seq=state["seq"])})
 elif verb == ("pane", "send-text"):
-    state["input"] += args[3]
+    text = args[3]
+    if state["fold_paste"] and text.count("\n") > 1:
+        text = "[Pasted text #1 +%d lines]" % text.count("\n")
+    state["input"] += text
     reply({"type": "ok"})
 elif verb == ("pane", "send-keys"):
     if "Enter" in args[3:]:
@@ -70,13 +78,20 @@ elif verb == ("pane", "send-keys"):
         if start is not None and state["enters"] >= start:
             pane["agent_status"] = state["started_status"]
             state["seq"] += 1
+            state["scrollback"] += "> " + state["input"] + "\n"
+            state["input"] = ""
+        elif state["submit_on_enter"]:
+            # Submitted, but the seat's status has not moved yet.
+            state["scrollback"] += "> " + state["input"] + "\n"
             state["input"] = ""
         elif state["clear_on_enter"]:
             state["input"] = ""
     reply({"type": "ok"})
+elif verb == ("pane", "read"):
+    print(screen())
 elif verb == ("pane", "wait-output"):
     needle = args[args.index("--match") + 1]
-    if needle in state["input"]:
+    if needle in screen():
         reply({"type": "wait_matched", "event": {}})
     else:
         sys.stderr.write(json.dumps({"error": {"code": "timeout"}}))
@@ -113,12 +128,15 @@ class StubSeat:
                 "agent_status": scenario.pop("status", "idle"),
             },
             "seq": 4,
+            "scrollback": scenario.pop("scrollback", ""),
             "input": "",
             "enters": 0,
             "calls": [],
             "start_on_enter": scenario.pop("start_on_enter", 1),
             "started_status": scenario.pop("started_status", "working"),
             "clear_on_enter": scenario.pop("clear_on_enter", False),
+            "submit_on_enter": scenario.pop("submit_on_enter", False),
+            "fold_paste": scenario.pop("fold_paste", False),
         }
         assert not scenario, scenario
         self.state_path.write_text(json.dumps(state), encoding="utf-8")
@@ -313,20 +331,35 @@ class StubDeliveryTests(unittest.TestCase):
         [text] = seat.sent("send-text")
         self.assertEqual(text[3], seat.prompt.read_text(encoding="utf-8"))
 
-    def test_a_seat_that_starts_after_one_more_enter(self) -> None:
+    def test_a_seat_that_has_not_started_gets_no_second_enter(self) -> None:
+        # Herdr 0.9.0 exposes no input line or cursor state, so the script
+        # cannot tell a prompt waiting in the input from the same words in
+        # the scrollback, and never presses Enter twice (TSK-144 review 1).
         seat = self.seat(start_on_enter=2)
         done = seat.deliver()
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(seat.state()["enters"], 2)
-        self.assertIn("after one more Enter", done.stdout)
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertEqual(seat.state()["enters"], 1)
+        self.assertIn(f"turn not confirmed on pane {PANE}", done.stderr)
+        self.assertIn("no second Enter", done.stderr)
 
     def test_a_seat_that_never_starts_is_reported_by_pane(self) -> None:
         seat = self.seat(start_on_enter=None)
         done = seat.deliver()
         self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertEqual(seat.state()["enters"], 2, "at most one more Enter")
+        self.assertEqual(seat.state()["enters"], 1, "one Enter only")
         self.assertEqual(len(seat.sent("send-text")), 1, "the prompt is never resent")
-        self.assertIn(f"prompt not submitted to pane {PANE}", done.stderr)
+        self.assertIn(f"turn not confirmed on pane {PANE}", done.stderr)
+        self.assertIn("herdr agent read", done.stderr)
+
+    def test_a_submitted_prompt_left_in_the_scrollback_gets_no_second_enter(self) -> None:
+        # The first Enter submits; the seat's status has not moved inside
+        # the bound, and the prompt's words stay on screen above the input.
+        seat = self.seat(start_on_enter=None, submit_on_enter=True)
+        done = seat.deliver()
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertEqual(seat.state()["enters"], 1, "a second Enter would submit twice")
+        self.assertIn("Reply with the single word ok.", seat.state()["scrollback"])
+        self.assertIn(f"turn not confirmed on pane {PANE}", done.stderr)
 
     def test_a_prompt_gone_from_the_input_gets_no_blind_enter(self) -> None:
         seat = self.seat(start_on_enter=None, clear_on_enter=True)
@@ -342,11 +375,30 @@ class StubDeliveryTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(seat.state()["enters"], 1)
 
-    def test_a_working_seat_gets_nothing(self) -> None:
-        seat = self.seat(status="working")
-        done = seat.deliver()
-        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
-        self.assertEqual(seat.sent("send-text") + seat.sent("send-keys"), [])
+    def test_a_busy_or_unknown_seat_gets_nothing(self) -> None:
+        # `unknown` may be a turn still running that herdr cannot classify.
+        for status in ("working", "blocked", "unknown"):
+            seat = self.seat(status=status)
+            done = seat.deliver()
+            self.assertEqual(done.returncode, 5, f"{status}: {done.stdout}{done.stderr}")
+            self.assertEqual(seat.sent("send-text") + seat.sent("send-keys"), [], status)
+            self.assertIn(f"pane {PANE} is {status}", done.stderr)
+
+    def test_a_fold_already_on_screen_is_not_this_paste(self) -> None:
+        # A folded paste from an earlier turn stays in the scrollback; only
+        # a fold this paste added gets the fold sentence.
+        seat = self.seat(start_on_enter=None, scrollback="> [Pasted text #1 +40 lines]\n")
+        done = seat.deliver("--lifecycle")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(len(seat.sent("send-text")), 1, "no fold sentence")
+
+    def test_a_fold_this_paste_added_gets_the_fold_sentence(self) -> None:
+        seat = self.seat(start_on_enter=None, fold_paste=True)
+        done = seat.deliver("--lifecycle")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        texts = [call[3] for call in seat.sent("send-text")]
+        self.assertEqual(texts[1:], ["Carry out the pasted instructions."])
+        self.assertEqual(seat.state()["enters"], 1)
 
     def test_the_lifecycle_lane_keeps_its_accepted_wait(self) -> None:
         seat = self.seat(start_on_enter=None)

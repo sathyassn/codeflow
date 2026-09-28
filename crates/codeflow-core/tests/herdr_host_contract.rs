@@ -112,7 +112,8 @@ fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
 const HERDR_DELIVER: &str = "assets/base/agents/skills/cf-herdr/scripts/deliver.py";
 
 /// TSK-144 AC-1 and AC-2: delivery goes through the script that confirms a
-/// started turn and refuses a seat whose folder is gone; resume uses the same
+/// started turn, sends one Enter only and refuses a busy or unknown seat or
+/// one whose folder is gone; resume uses the same
 /// script; cleanup keeps a live seat's worktree; the Claude lane keeps its
 /// `accepted` wait. The behaviour itself is proven against a stub `herdr` in
 /// `evals/herdr-delivery/test_delivery.py`.
@@ -125,8 +126,9 @@ fn herdr_delivery_confirms_a_started_turn_and_checks_the_seat_folder() {
             "--lifecycle",
             "--until accepted",
             "confirms within 20 s",
-            "sends Enter at most once more while the prompt still waits in the input",
-            "naming the pane: not submitted",
+            "sends one Enter only: Herdr cannot tell the input from the scrollback",
+            "`unknown` (exit 5)",
+            "else exits 4 naming the pane",
             "never resend blindly",
             "sends nothing when the seat's folder is gone",
             "Resume delivers through the same script",
@@ -138,7 +140,9 @@ fn herdr_delivery_confirms_a_started_turn_and_checks_the_seat_folder() {
         &[
             "\"agent\", \"get\"",
             "state_change_seq",
-            "prompt not submitted to pane",
+            "turn not confirmed on pane",
+            "no second Enter was sent",
+            "BUSY = STARTED | {\"unknown\"}",
             "nothing was sent. To relaunch",
             "LIMIT = 256 * 1024",
         ],
