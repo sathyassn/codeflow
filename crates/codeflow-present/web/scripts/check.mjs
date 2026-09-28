@@ -65,8 +65,16 @@ function checkManifest(manifest) {
   const appPath = manifest.service.entrypoints["present.app"];
   const app = assets.find((asset) => asset.request_path === appPath);
   if (!app) throw new Error("Canonical app entrypoint is missing");
-  const dynamicImports = app.imports.filter((item) => item.kind === "dynamic-import");
-  if (dynamicImports.length < 2) throw new Error("Code and diagram enhancement are not lazy entry paths");
+  assertLazyEntryPaths(app);
+  // Negative control: one extra dynamic import must fail the pin.
+  const widened = { ...app, imports: [...app.imports, { request_path: "/app/assets/chunk-extra-AAAAAAAA.js", kind: "dynamic-import" }] };
+  let widenedRefused = false;
+  try {
+    assertLazyEntryPaths(widened);
+  } catch {
+    widenedRefused = true;
+  }
+  if (!widenedRefused) throw new Error("The lazy entry pin accepted an extra dynamic import");
   const grammarChunks = assets.filter((asset) => /bash|diff|javascript|json|python|rust|toml|typescript|yaml/iu.test(asset.request_path));
   if (grammarChunks.length < 9) throw new Error("The nine curated grammar paths were not emitted separately");
   const exportAsset = manifest.export["present.export"];
@@ -75,6 +83,18 @@ function checkManifest(manifest) {
   }
   if (!manifest.service.inline["present.prepaint"]?.csp_sha256?.startsWith("sha256-")) {
     throw new Error("Pre-paint script is missing its CSP hash");
+  }
+}
+
+// The app entry loads exactly two chunks lazily: syntax highlighting and the
+// bundled fonts. Anything else, a diagram renderer included, is a new lazy
+// path to review, not a silent addition.
+function assertLazyEntryPaths(app) {
+  const lazy = [...new Set(app.imports
+    .filter((item) => item.kind === "dynamic-import")
+    .map((item) => item.request_path.match(/^\/app\/assets\/chunk-([a-z]+)-[A-Z0-9]+\.js$/u)?.[1] ?? item.request_path))].sort();
+  if (lazy.join(",") !== "fonts,syntax") {
+    throw new Error(`The app entry's dynamic imports must be exactly the syntax and fonts chunks; found ${lazy.join(", ")}`);
   }
 }
 

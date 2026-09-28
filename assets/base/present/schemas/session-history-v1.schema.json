@@ -66,6 +66,21 @@
                 "schema_version": {"type": "integer", "minimum": 2, "maximum": 4294967295},
                 "raw": {"type": "string", "x-codeflow-max-bytes": 8388608}
               }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "document", "diagram_ids"],
+              "$comment": "A revision a pre-release build stored with a diagram block, which was removed with Mermaid. It loads read only, is never rewritten, and carries the stored document unchanged with the ids of its diagram blocks.",
+              "properties": {
+                "kind": {"const": "retired"},
+                "document": {"type": "object"},
+                "diagram_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"}
+                }
+              }
             }
           ]
         }

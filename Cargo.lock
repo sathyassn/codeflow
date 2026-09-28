@@ -259,6 +259,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "pulldown-cmark",
+ "regex",
  "rust-embed",
  "serde_json",
  "serde_yaml_ng",

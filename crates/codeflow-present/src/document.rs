@@ -8,6 +8,7 @@ use crate::{
     error::{PresentError, Result},
     limits,
     media::matches_declared_media,
+    retired::refuse_retired_blocks,
     safe_html::{validate_sandbox_html, visible_text_from_html},
 };
 
@@ -91,13 +92,6 @@ pub enum Block {
         label: String,
         nodes: Vec<TreeNode>,
     },
-    Diagram {
-        id: String,
-        kind: DiagramKind,
-        source: String,
-        acc_title: String,
-        acc_description: String,
-    },
     Media {
         id: String,
         mime_type: MediaMime,
@@ -144,18 +138,6 @@ pub enum DecisionStatus {
     Accepted,
     Rejected,
     Open,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagramKind {
-    Flowchart,
-    Sequence,
-    Timeline,
-    State,
-    Class,
-    EntityRelationship,
-    Mindmap,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -271,6 +253,7 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParsedDocument> {
         });
     }
 
+    refuse_retired_blocks(&probe)?;
     let document: PresentationDocument = serde_json::from_value(probe)?;
     document.validate()?;
     Ok(ParsedDocument::Supported(document))
@@ -288,16 +271,8 @@ impl PresentationDocument {
         }
         let mut ids = HashSet::new();
         let mut count = 0;
-        let mut diagram_count = 0;
         let mut collection_items = 0;
-        validate_blocks(
-            &self.blocks,
-            1,
-            &mut count,
-            &mut diagram_count,
-            &mut collection_items,
-            &mut ids,
-        )
+        validate_blocks(&self.blocks, 1, &mut count, &mut collection_items, &mut ids)
     }
 }
 
@@ -315,7 +290,6 @@ impl Block {
             | Self::Code { id, .. }
             | Self::Diff { id, .. }
             | Self::Tree { id, .. }
-            | Self::Diagram { id, .. }
             | Self::Media { id, .. }
             | Self::Disclosure { id, .. }
             | Self::Tabs { id, .. }
@@ -384,12 +358,6 @@ impl Block {
                 append_tree_text(nodes, &mut output, false);
                 output
             }
-            Self::Diagram {
-                acc_title,
-                acc_description,
-                source,
-                ..
-            } => format!("{source}{acc_title} — {acc_description}"),
             Self::Media { caption, .. } => caption.clone().unwrap_or_default(),
             Self::Disclosure { summary, .. } => summary.clone(),
             Self::Tabs { tabs, .. } => tabs.iter().map(|tab| tab.label.as_str()).collect(),
@@ -427,7 +395,6 @@ impl Block {
             }
             | Self::Decision { title, .. }
             | Self::Tree { label: title, .. } => title.clone(),
-            Self::Diagram { acc_title, .. } => acc_title.clone(),
             Self::Media { alt, .. } => alt.clone(),
             Self::Disclosure { summary, .. } => summary.clone(),
             // Full prompt is rendered in the block body; never dump it into the nav.
@@ -484,7 +451,6 @@ fn validate_blocks(
     blocks: &[Block],
     depth: usize,
     count: &mut usize,
-    diagram_count: &mut usize,
     collection_items: &mut usize,
     ids: &mut HashSet<String>,
 ) -> Result<()> {
@@ -502,20 +468,11 @@ fn validate_blocks(
                 limits::MAX_BLOCKS
             )));
         }
-        if matches!(block, Block::Diagram { .. }) {
-            *diagram_count += 1;
-            if *diagram_count > limits::MAX_DIAGRAM_BLOCKS {
-                return Err(invalid(format!(
-                    "diagram count exceeds {}",
-                    limits::MAX_DIAGRAM_BLOCKS
-                )));
-            }
-        }
         validate_id(block.id())?;
         if !ids.insert(block.id().to_string()) {
             return Err(invalid(format!("duplicate block id {}", block.id())));
         }
-        validate_block(block, depth, count, diagram_count, collection_items, ids)?;
+        validate_block(block, depth, count, collection_items, ids)?;
     }
     Ok(())
 }
@@ -525,7 +482,6 @@ fn validate_block(
     block: &Block,
     depth: usize,
     count: &mut usize,
-    diagram_count: &mut usize,
     collection_items: &mut usize,
     ids: &mut HashSet<String>,
 ) -> Result<()> {
@@ -629,24 +585,6 @@ fn validate_block(
             let mut tree_items = 0;
             validate_tree(nodes, depth + 1, &mut tree_items, collection_items)
         }
-        Block::Diagram {
-            source,
-            acc_title,
-            acc_description,
-            ..
-        } => {
-            bounded("diagram source", source, limits::MAX_DIAGRAM_BYTES)?;
-            require_nonempty_bounded(
-                "diagram accessible title",
-                acc_title,
-                limits::MAX_TITLE_BYTES,
-            )?;
-            require_nonempty_bounded(
-                "diagram accessible description",
-                acc_description,
-                limits::MAX_PROSE_BYTES,
-            )
-        }
         Block::Media {
             mime_type,
             data_base64,
@@ -673,14 +611,7 @@ fn validate_block(
             summary, blocks, ..
         } => {
             require_nonempty_bounded("disclosure summary", summary, limits::MAX_TITLE_BYTES)?;
-            validate_blocks(
-                blocks,
-                depth + 1,
-                count,
-                diagram_count,
-                collection_items,
-                ids,
-            )
+            validate_blocks(blocks, depth + 1, count, collection_items, ids)
         }
         Block::Tabs { tabs, .. } => {
             if tabs.is_empty() || tabs.len() > 12 {
@@ -689,14 +620,7 @@ fn validate_block(
             add_collection_items(tabs.len(), collection_items)?;
             for tab in tabs {
                 require_nonempty_bounded("tab label", &tab.label, limits::MAX_TITLE_BYTES)?;
-                validate_blocks(
-                    &tab.blocks,
-                    depth + 1,
-                    count,
-                    diagram_count,
-                    collection_items,
-                    ids,
-                )?;
+                validate_blocks(&tab.blocks, depth + 1, count, collection_items, ids)?;
             }
             Ok(())
         }
@@ -980,21 +904,37 @@ mod tests {
     }
 
     #[test]
-    fn diagram_sources_and_document_counts_are_bounded_before_rendering() {
-        let diagram = |index: usize, source: String| Block::Diagram {
-            id: format!("diagram-{index}"),
-            kind: DiagramKind::Flowchart,
-            source,
-            acc_title: format!("Diagram {index}"),
-            acc_description: "A bounded test diagram.".to_string(),
-        };
-        let oversized = document(vec![diagram(0, "x".repeat(limits::MAX_DIAGRAM_BYTES + 1))]);
-        assert!(oversized.validate().is_err());
+    fn diagram_blocks_are_refused_before_typed_parsing() {
+        let raw = br#"{
+          "schema_version": 1,
+          "title": "Retired",
+          "blocks": [{"type":"tabs","id":"views","tabs":[{"label":"One","blocks":[
+            {"type":"diagram","id":"flow","kind":"flowchart","source":"flowchart LR","acc_title":"Flow","acc_description":"A flow."}
+          ]}]}]
+        }"#;
+        let message = parse_document(raw).unwrap_err().to_string();
+        assert!(
+            message.contains("block \"flow\" is a diagram block, which was removed with Mermaid"),
+            "{message}"
+        );
+        assert!(
+            message.contains("convert its flowchart to an html block holding an inline SVG"),
+            "{message}"
+        );
 
-        let diagrams = (0..=limits::MAX_DIAGRAM_BLOCKS)
-            .map(|index| diagram(index, "flowchart LR\nA-->B".to_string()))
-            .collect();
-        assert!(document(diagrams).validate().is_err());
+        // Refused before typed parsing: a diagram whose shape would never
+        // parse still names the conversion instead of a serde error.
+        let malformed =
+            br#"{"schema_version":1,"title":"T","blocks":[{"type":"diagram","kind":"mindmap"}]}"#;
+        let message = parse_document(malformed).unwrap_err().to_string();
+        assert!(
+            message.contains("the block at blocks[0] is a diagram block"),
+            "{message}"
+        );
+        assert!(
+            message.contains("convert its mindmap to a tree block"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -1043,14 +983,12 @@ mod tests {
         assert_eq!(feedback.review_label(), "Feedback request");
         assert!(feedback.review_label().chars().count() <= 40);
 
-        let diagram = Block::Diagram {
+        let tree = Block::Tree {
             id: "fig".to_string(),
-            kind: DiagramKind::Flowchart,
-            source: "flowchart LR\n  A-->B".to_string(),
-            acc_title: "Verified native paths versus open Windows gap and more words".to_string(),
-            acc_description: "Long description for accessibility only.".to_string(),
+            label: "Verified native paths versus open Windows gap and more words".to_string(),
+            nodes: Vec::new(),
         };
-        let label = diagram.review_label();
+        let label = tree.review_label();
         assert!(label.chars().count() <= 40, "{label}");
         assert!(label.ends_with('…'), "{label}");
         // Full prompt still available for body rendering via prompt field, not review_label.
