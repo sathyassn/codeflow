@@ -61,10 +61,11 @@ still pending. A later `--wait` still returns every pending event.
 and handled a delivered event. The reviewer sees delivered and acknowledged
 as separate states. Acknowledging twice changes nothing, and an unknown or
 undelivered event exits 2. It prints `acknowledged <event-id>`, or
-`<event-id> was already acknowledged` when nothing changed. Acknowledge only after the event is in your
-working context and acted on or routed: take each event into your active
-turn before you ack or resolve it. Delivery alone proves a complete line
-reached your command, not that you used it.
+`<event-id> was already acknowledged` when nothing changed. Acknowledge
+only after the event is in your working context and acted on or routed:
+take each event into your active turn before you ack or resolve it.
+Delivery alone proves a complete line reached your command, not that you
+used it.
 
 Reviews still close with `present resolve ... addressed|dismissed`; `ack`
 does not replace resolve.
