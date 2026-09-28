@@ -242,6 +242,17 @@ impl Section<'_> {
 /// labels alone are not evidence. Code output counts as content, but cannot
 /// manufacture release fields or a Not tested declaration.
 fn visible_text(body: &str, include_code: bool) -> String {
+    rendered_text(body, include_code, true)
+}
+
+/// The lines a Release impact field may come from: visible text outside
+/// code and outside quotes, since a quoted field is an example taken from
+/// elsewhere, not this change's assessment (TSK-147 F4).
+fn field_text(body: &str) -> String {
+    rendered_text(body, false, false)
+}
+
+fn rendered_text(body: &str, include_code: bool, include_quotes: bool) -> String {
     let mut text = String::new();
     let mut excluded = 0;
     let mut heading_excluded = false;
@@ -252,6 +263,8 @@ fn visible_text(body: &str, include_code: bool) -> String {
                 excluded += usize::from(heading_excluded);
             }
             Event::Start(Tag::CodeBlock(_)) if !include_code => excluded += 1,
+            Event::Start(Tag::BlockQuote(_)) if !include_quotes => excluded += 1,
+            Event::End(TagEnd::BlockQuote(_)) if !include_quotes => excluded -= 1,
             Event::End(TagEnd::Heading(_)) => {
                 excluded -= usize::from(heading_excluded);
                 if !heading_excluded {
@@ -421,25 +434,41 @@ fn wrapped_rows(line: &str) -> usize {
     rows
 }
 
-/// Whether the body's one Release impact section states `Breaking: no` with
-/// a `Rationale` that gives a reason (TSK-147 AC-4).
-pub(super) fn declares_no_break(body: &str) -> bool {
+/// The body's one Release impact section's own fields, each `(key,
+/// value)` with the key in lower case; `None` without exactly one section.
+/// Fields come only from the section's own text outside code and quotes,
+/// never from a subsection; both the release check and the watched-path
+/// settlement read them here.
+fn release_fields(body: &str) -> Option<Vec<(String, String)>> {
     let parsed = sections(body);
-    let matching = matching_sections(&parsed, "Release impact");
-    let [section] = matching.as_slice() else {
-        return false;
+    let matched = matching_sections(&parsed, "Release impact");
+    let [section] = matched.as_slice() else {
+        return None;
     };
     let content = section.content();
     let end = sections(content)
         .first()
         .map_or(content.len(), |s| s.heading_start);
-    let text = visible_text(&content[..end], false);
-    let field = |name: &str| {
-        let values: Vec<&str> = text
+    Some(
+        field_text(&content[..end])
             .lines()
             .filter_map(|line| line.trim().split_once(':'))
-            .filter(|(key, _)| key.trim().eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.trim())
+            .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.trim().to_string()))
+            .collect(),
+    )
+}
+
+/// Whether the body's one Release impact section states `Breaking: no` with
+/// a `Rationale` that gives a reason (TSK-147 AC-4).
+pub(super) fn declares_no_break(body: &str) -> bool {
+    let Some(fields) = release_fields(body) else {
+        return false;
+    };
+    let field = |name: &str| {
+        let values: Vec<&str> = fields
+            .iter()
+            .filter(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
             .collect();
         match values.as_slice() {
             [value] => Some(*value),
@@ -464,26 +493,17 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
         ));
     };
     let parsed = sections(body);
-    let matched = matching_sections(&parsed, "Release impact");
-    let [section] = matched.as_slice() else {
+    // Do not consume sibling/subsection migration fields as release fields.
+    let Some(lines) = release_fields(body) else {
         issue("PR body needs exactly one Release impact section".into());
         return out;
     };
-    // Do not consume sibling/subsection migration fields as release fields.
-    let content = section.content();
-    let end = sections(content)
-        .first()
-        .map_or(content.len(), |s| s.heading_start);
-    let text = visible_text(&content[..end], false);
     let mut fields = std::collections::BTreeMap::new();
-    for line in text.lines() {
-        if let Some((key, value)) = line.trim().split_once(':') {
-            let key = key.trim().to_ascii_lowercase();
-            if ["impact", "breaking", "rationale", "migration"].contains(&key.as_str())
-                && fields.insert(key.clone(), value.trim()).is_some()
-            {
-                issue(format!("PR Release impact has duplicate {key} fields"));
-            }
+    for (key, value) in &lines {
+        if ["impact", "breaking", "rationale", "migration"].contains(&key.as_str())
+            && fields.insert(key.clone(), value.as_str()).is_some()
+        {
+            issue(format!("PR Release impact has duplicate {key} fields"));
         }
     }
     for key in ["impact", "breaking", "rationale", "migration"] {

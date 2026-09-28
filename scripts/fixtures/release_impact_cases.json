@@ -57,6 +57,11 @@
       "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n<!--\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n-->\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
     },
     {
+      "name": "invalid_fields_only_in_a_quote",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nNot assessed yet; an example from another pull request:\n\n> - Impact: patch\n> - Breaking: no\n> - Rationale: Clarify the command output.\n> - Migration: none\n\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
       "name": "invalid_migration_borrowed_from_a_subsection",
       "valid": false,
       "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n### Notes\n\n- Migration: none\n"

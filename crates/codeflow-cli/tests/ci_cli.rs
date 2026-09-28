@@ -1339,6 +1339,27 @@ fn a_bodyless_run_notes_a_watched_path_and_points_at_release_impact() {
 }
 
 #[test]
+fn a_quoted_example_of_the_fields_keeps_the_watched_path_warning() {
+    // TSK-147 F4: fields quoted from another pull request are an example,
+    // not this change's assessment.
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let fields = "- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n";
+    let quoted = fields.replace("- ", "> - ");
+    let body = FULL_BODY.replace(
+        fields,
+        &format!("Not assessed yet; an example from another pull request:\n\n{quoted}\n"),
+    );
+    assert_ne!(body, FULL_BODY);
+    let out = ci_with_body(dir.path(), &body);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("warning — policy rule git.breaking_watch_paths (warn)"),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_body_without_the_declaration_keeps_the_watched_path_warning() {
     let dir = tempfile::tempdir().unwrap();
     repo_touching_a_watched_path(dir.path());
