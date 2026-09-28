@@ -200,6 +200,12 @@
       "sha256": "da3308a7a1e1276ee6ed301867ee84ddf03e31eb44e1909e94b3176f8ccc2f83",
       "exec": false
     },
+    ".agents/skills/cf-editorial-review/references/copy-guide.md": {
+      "src": "agents/skills/cf-editorial-review/references/copy-guide.md",
+      "ownership": "managed",
+      "sha256": "7edba8c05fc38a29140c125fc8e2d9829e9a2e7d341475c8a9d56659e5f91864",
+      "exec": false
+    },
     ".agents/skills/cf-editorial-review/references/editorial-smells.md": {
       "src": "agents/skills/cf-editorial-review/references/editorial-smells.md",
       "ownership": "managed",
@@ -804,6 +810,12 @@
       "src": "agents/skills/cf-editorial-review/agents/openai.yaml",
       "ownership": "managed",
       "sha256": "da3308a7a1e1276ee6ed301867ee84ddf03e31eb44e1909e94b3176f8ccc2f83",
+      "exec": false
+    },
+    ".claude/skills/cf-editorial-review/references/copy-guide.md": {
+      "src": "agents/skills/cf-editorial-review/references/copy-guide.md",
+      "ownership": "managed",
+      "sha256": "7edba8c05fc38a29140c125fc8e2d9829e9a2e7d341475c8a9d56659e5f91864",
       "exec": false
     },
     ".claude/skills/cf-editorial-review/references/editorial-smells.md": {
