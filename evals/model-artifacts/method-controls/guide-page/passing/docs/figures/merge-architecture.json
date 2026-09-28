@@ -5,19 +5,19 @@
     "family": "structure",
     "binding": "authored",
     "question": "How do the parts of the merge policy relate?",
-    "idea": "The merge bot reads one policy file and applies its parts to each pull request.",
-    "title": "What the merge bot reads",
-    "caption": "The bot takes each pull request and reads its rules from the one policy file.",
+    "idea": "The merge bot reads one policy file and applies its three parts, rules, checks and methods, to each pull request in order.",
+    "title": "What the merge bot reads and applies",
+    "caption": "The bot takes each pull request, reads the one policy file, and applies its rules, checks and merge method in that order.",
     "states": [
       {
         "name": "part",
         "mark": "state",
-        "means": "A part outside the bot"
+        "means": "A part: the pull request, the policy file, or one part the bot applies"
       },
       {
         "name": "bot",
-        "mark": "optional",
-        "means": "The merge bot and what it applies"
+        "mark": "layer-remote",
+        "means": "The merge bot and the parts it applies, in order"
       },
       {
         "name": "read",
@@ -33,6 +33,16 @@
         "check": {
           "kind": "contains",
           "text": "The merge bot reads one file"
+        },
+        "value": true
+      },
+      {
+        "claim": "the bot applies the three parts in order",
+        "source": "docs/merge-policy.md#architecture",
+        "derive": "the Architecture section",
+        "check": {
+          "kind": "contains",
+          "text": "applies its three parts in order"
         },
         "value": true
       }
@@ -64,26 +74,87 @@
           "state": "bot",
           "shape": "rect",
           "x": 230,
-          "y": 30,
-          "w": 200,
-          "h": 124,
+          "y": 24,
+          "w": 300,
+          "h": 140,
           "rx": 10,
           "id": "r0"
         },
         {
           "text": "Merge bot",
           "x": 246,
-          "y": 54,
+          "y": 48,
           "style": "strong",
           "for": [
             "r0"
           ]
         },
         {
-          "text": "three parts in order",
-          "x": 330,
+          "state": "part",
+          "shape": "rect",
+          "x": 246,
+          "y": 72,
+          "w": 76,
+          "h": 40,
+          "rx": 8,
+          "id": "part-rules"
+        },
+        {
+          "text": "rules",
+          "x": 284,
           "y": 97,
           "anchor": "middle",
+          "for": [
+            "part-rules",
+            "r0"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 344,
+          "y": 72,
+          "w": 76,
+          "h": 40,
+          "rx": 8,
+          "id": "part-checks"
+        },
+        {
+          "text": "checks",
+          "x": 382,
+          "y": 97,
+          "anchor": "middle",
+          "for": [
+            "part-checks",
+            "r0"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 442,
+          "y": 72,
+          "w": 76,
+          "h": 40,
+          "rx": 8,
+          "id": "part-method"
+        },
+        {
+          "text": "method",
+          "x": 480,
+          "y": 97,
+          "anchor": "middle",
+          "for": [
+            "part-method",
+            "r0"
+          ]
+        },
+        {
+          "text": "applied in this order",
+          "x": 380,
+          "y": 146,
+          "anchor": "middle",
+          "style": "mute",
           "for": [
             "r0"
           ]
@@ -108,16 +179,16 @@
         {
           "state": "part",
           "shape": "rect",
-          "x": 540,
+          "x": 600,
           "y": 70,
-          "w": 160,
+          "w": 100,
           "h": 44,
           "rx": 8,
           "id": "p2"
         },
         {
           "text": "policy file",
-          "x": 620,
+          "x": 650,
           "y": 97,
           "anchor": "middle",
           "for": [
@@ -127,13 +198,13 @@
         {
           "state": "read",
           "shape": "path",
-          "d": "M432 92H538",
+          "d": "M532 92H598",
           "head": "end",
           "id": "e1"
         },
         {
           "text": "reads",
-          "x": 485,
+          "x": 565,
           "y": 80,
           "anchor": "middle",
           "style": "mute",
@@ -143,7 +214,7 @@
         },
         {
           "text": "one file at the root",
-          "x": 620,
+          "x": 650,
           "y": 140,
           "anchor": "middle",
           "style": "mute",
@@ -158,7 +229,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 296,
+      "height": 298,
       "draw": [
         {
           "state": "part",
@@ -198,27 +269,88 @@
         {
           "state": "bot",
           "shape": "rect",
-          "x": 40,
+          "x": 30,
           "y": 84,
-          "w": 280,
-          "h": 100,
+          "w": 300,
+          "h": 106,
           "rx": 10,
           "id": "s0"
         },
         {
           "text": "Merge bot",
-          "x": 52,
-          "y": 106,
+          "x": 42,
+          "y": 104,
           "style": "strong",
           "for": [
             "s0"
           ]
         },
         {
-          "text": "three parts in order",
-          "x": 180,
-          "y": 150,
+          "state": "part",
+          "shape": "rect",
+          "x": 42,
+          "y": 120,
+          "w": 84,
+          "h": 36,
+          "rx": 8,
+          "id": "part-rules"
+        },
+        {
+          "text": "rules",
+          "x": 84,
+          "y": 143,
           "anchor": "middle",
+          "for": [
+            "part-rules",
+            "s0"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 138,
+          "y": 120,
+          "w": 84,
+          "h": 36,
+          "rx": 8,
+          "id": "part-checks"
+        },
+        {
+          "text": "checks",
+          "x": 180,
+          "y": 143,
+          "anchor": "middle",
+          "for": [
+            "part-checks",
+            "s0"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 234,
+          "y": 120,
+          "w": 84,
+          "h": 36,
+          "rx": 8,
+          "id": "part-method"
+        },
+        {
+          "text": "method",
+          "x": 276,
+          "y": 143,
+          "anchor": "middle",
+          "for": [
+            "part-method",
+            "s0"
+          ]
+        },
+        {
+          "text": "applied in this order",
+          "x": 180,
+          "y": 178,
+          "anchor": "middle",
+          "style": "mute",
           "for": [
             "s0"
           ]
@@ -226,14 +358,14 @@
         {
           "state": "read",
           "shape": "path",
-          "d": "M180 186V222",
+          "d": "M180 192V228",
           "head": "end",
           "id": "f1"
         },
         {
           "text": "reads",
           "x": 192,
-          "y": 209,
+          "y": 215,
           "style": "mute",
           "for": [
             "f1"
@@ -243,7 +375,7 @@
           "state": "part",
           "shape": "rect",
           "x": 100,
-          "y": 226,
+          "y": 232,
           "w": 160,
           "h": 36,
           "rx": 8,
@@ -252,7 +384,7 @@
         {
           "text": "policy file",
           "x": 180,
-          "y": 249,
+          "y": 255,
           "anchor": "middle",
           "for": [
             "q2"
@@ -261,7 +393,7 @@
         {
           "text": "one file at the root",
           "x": 180,
-          "y": 284,
+          "y": 290,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -286,6 +418,11 @@
           "Merge bot",
           "policy file",
           "a read of the three parts"
+        ],
+        [
+          "Merge bot",
+          "rules, checks, method",
+          "the pull request, one part at a time, in that order"
         ]
       ]
     }
