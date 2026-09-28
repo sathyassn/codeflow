@@ -50,8 +50,9 @@ use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
 use super::settings_merge::merge_settings_from_baseline;
 use super::state::{
-    guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file, Baseline,
-    InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig, SyncBatch,
+    guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file,
+    write_record, Baseline, InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
+    SyncBatch,
 };
 use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 use crate::hooks::policy_schema::DEPRECATED_KEYS;
@@ -254,7 +255,7 @@ fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldE
         what: path.display().to_string(),
         detail: e.to_string(),
     })?;
-    write_file(&path, next.as_bytes())?;
+    write_record(&path, next.as_bytes())?;
     Ok(Some(format!(
         "recorded {BASELINE_KEY} = {head}: work-record rules apply to records changed after this commit"
     )))

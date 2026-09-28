@@ -106,7 +106,7 @@ impl ProjectState {
             what: PROJECT_TOML.to_string(),
             detail: e.to_string(),
         })?;
-        write_file(&path, text.as_bytes())
+        write_record(&path, text.as_bytes())
     }
 }
 
@@ -262,7 +262,7 @@ impl InstalledManifest {
     pub fn store(&self, root: &Path) -> Result<(), ScaffoldError> {
         let mut text = serde_json::to_string_pretty(self)?;
         text.push('\n');
-        write_file(&Self::path(root), text.as_bytes())
+        write_record(&Self::path(root), text.as_bytes())
     }
 }
 
@@ -291,7 +291,8 @@ impl Baseline {
     ///
     /// IO failures, or a symlinked baseline path (refused, not followed).
     pub fn write(root: &Path, dest: &str, content: &str) -> Result<(), ScaffoldError> {
-        write_beneath_root(root, &Self::rel(dest), content.as_bytes())
+        let path = guard_beneath_root(root, Path::new(&Self::rel(dest)))?;
+        write_record(&path, content.as_bytes())
     }
 
     /// Removes the baseline copy for `dest`. A missing baseline is not an error.
@@ -309,12 +310,11 @@ impl Baseline {
 /// The bytes go to a temp file that is synced before it is renamed over
 /// `path`, so a crash leaves the old content or the new, never a torn or
 /// empty file, including after a power cut. Outside a [`SyncBatch`] the
-/// content sync is a full flush and the parent directory is flushed at once,
-/// as for any single write. Inside a batch the content sync is the cheapest
-/// call that still puts the data ahead of the rename on the disk (see the
-/// `sync` module) and the directory flush waits for [`SyncBatch::finish`],
-/// which flushes each touched directory once and the device cache once per
-/// run.
+/// content and the parent directory are fully flushed at once, as for any
+/// single write. Inside a batch the content sync is the cheapest call that
+/// still puts the data ahead of the rename on the disk, and the directory
+/// sync waits until a record write ([`write_record`]) or
+/// [`SyncBatch::finish`] needs it (see the `sync` module).
 pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
     let parent = path.parent().ok_or_else(|| {
         ScaffoldError::io(
@@ -341,7 +341,7 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
             .map_err(|e| ScaffoldError::io(&temp_path, e))?;
         sync::content(&temp, !batched).map_err(|e| ScaffoldError::io(&temp_path, e))?;
         #[cfg(test)]
-        interruption::before_rename(path)?;
+        interruption::before_rename(path, bytes)?;
         std::fs::rename(&temp_path, path).map_err(|e| ScaffoldError::io(path, e))?;
         sync::written();
         #[cfg(test)]
@@ -350,7 +350,7 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
             sync::defer_directory(parent);
             Ok(())
         } else {
-            sync::flush_directories(&[parent.to_path_buf()])
+            sync::directory_now(parent)
         }
     })();
     if result.is_err() {
@@ -359,15 +359,27 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
     result
 }
 
-/// One scaffold run's deferred directory flushes (TSK-153).
+/// Writes a state record (a baseline copy, the manifest, `project.toml`)
+/// that says earlier writes are in place.
+///
+/// Inside a batch, every directory an earlier write renamed into is synced
+/// first, so the record never reaches the disk ahead of the files it
+/// describes: after a crash, a record that survived means those files did.
+pub(crate) fn write_record(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
+    sync::settle()?;
+    write_file(path, bytes)
+}
+
+/// One scaffold run's deferred directory syncs and device flushes (TSK-153).
 ///
 /// A run (`init`, `update`, a pull request template decision) opens a batch
-/// before its writes and calls [`SyncBatch::finish`] after them, so the
-/// expensive flush happens once per touched directory and once per run
-/// instead of for every file. A batch opened while another is active on the
-/// same thread joins it: only the outermost one flushes. A batch dropped
-/// without `finish` (an error path) still flushes, ignoring failures.
-#[must_use = "call `finish` so the run's directory flushes happen and report errors"]
+/// before its writes and calls [`SyncBatch::finish`] after them. Directory
+/// syncs wait for the next record write or the end of the run, and the full
+/// device flush happens once per device the run touched instead of for every
+/// file. A batch opened while another is active on the same thread joins it:
+/// only the outermost one flushes. A batch dropped without `finish` (an error
+/// path) still flushes, ignoring failures.
+#[must_use = "call `finish` so the run's directory syncs and device flushes happen"]
 pub struct SyncBatch {
     outermost: bool,
     finished: bool,
@@ -382,15 +394,16 @@ impl SyncBatch {
         }
     }
 
-    /// Flushes every directory the batch touched, then the device cache.
+    /// Syncs every directory the batch still has pending, then flushes the
+    /// cache of each device the batch touched.
     ///
     /// # Errors
     ///
-    /// A directory that cannot be opened or synced.
+    /// A directory that cannot be opened or synced, or a failed flush.
     pub fn finish(mut self) -> Result<(), ScaffoldError> {
         self.finished = true;
         if self.outermost {
-            sync::flush_directories(&sync::close_batch())
+            sync::finish_batch()
         } else {
             Ok(())
         }
@@ -400,7 +413,7 @@ impl SyncBatch {
 impl Drop for SyncBatch {
     fn drop(&mut self) {
         if self.outermost && !self.finished {
-            let _ = sync::flush_directories(&sync::close_batch());
+            let _ = sync::finish_batch();
         }
     }
 }
@@ -413,11 +426,11 @@ pub struct SyncCounts {
     /// Ordered content syncs inside a batch: `F_BARRIERFSYNC` on macOS,
     /// `fsync` elsewhere.
     pub content_syncs: usize,
-    /// Plain `fsync` of a directory after renames into it.
-    pub directory_fsyncs: usize,
-    /// Device cache flushes: `sync_all` for a single write outside a batch,
-    /// and on macOS the run's final `F_FULLFSYNC` and any refused barrier's
-    /// fallback.
+    /// Directory syncs after renames into them.
+    pub directory_syncs: usize,
+    /// Full flushes: a single write outside a batch (its content and its
+    /// directory), and on macOS the `F_FULLFSYNC` for each device a run
+    /// touched and any refused barrier's fallback.
     pub full_flushes: usize,
 }
 
@@ -428,40 +441,51 @@ pub fn sync_counts() -> SyncCounts {
 }
 
 mod sync {
-    //! The platform sync calls behind [`super::write_file`] and
-    //! [`super::SyncBatch`], with per-thread counts.
+    //! The platform sync calls behind [`super::write_file`],
+    //! [`super::write_record`] and [`super::SyncBatch`], with per-thread
+    //! counts.
     //!
-    //! A renamed file must never be torn or empty, even after a power cut,
-    //! so its data has to reach the disk before the rename does.
+    //! Two orderings must hold across a crash or a power cut: a renamed file's
+    //! data reaches the disk before its rename, and a state record reaches the
+    //! disk only after the renames it describes.
     //!
-    //! - macOS: `fsync(2)` only hands the data to the drive, which may write
-    //!   its cache in any order, so after a power cut the rename can land
-    //!   without the data. `File::sync_all` is `fcntl(F_FULLFSYNC)`, which
-    //!   empties the whole drive cache (about 13 ms a call on an internal
-    //!   SSD). `fcntl(F_BARRIERFSYNC)` writes the file's data and makes the
-    //!   drive finish it before any later write, the rename included (about
-    //!   5.5 ms), so each file in a run gets the barrier and the run ends with
-    //!   one `F_FULLFSYNC`. A file system that refuses the barrier gets
-    //!   `F_FULLFSYNC` instead, never a plain `fsync`.
-    //! - Linux: `fsync(2)` writes the file's data and flushes the device
-    //!   cache before it returns, so it already orders the data ahead of the
-    //!   rename; each directory sync is a full one and no separate device
-    //!   flush is issued.
+    //! - macOS: `fsync(2)` only hands data to the drive, which may write its
+    //!   cache in any order, so after a power cut a rename can land without
+    //!   its data. `fcntl(F_FULLFSYNC)` empties the whole drive cache (about
+    //!   13 ms a call on an internal SSD). `fcntl(F_BARRIERFSYNC)` writes the
+    //!   file or directory and makes the drive finish it before any later
+    //!   write (about 5.5 ms). So each file in a run gets the barrier before
+    //!   its rename, each directory renamed into gets the barrier before the
+    //!   next record write and at the end, and the run ends with one
+    //!   `F_FULLFSYNC` for each device it touched. A file system that refuses
+    //!   the barrier gets `F_FULLFSYNC` instead, never a plain `fsync`.
+    //! - Linux: `fsync(2)` writes the file or directory and flushes the device
+    //!   cache before it returns, so it gives both orderings; no separate
+    //!   device flush is issued.
 
     use std::cell::{Cell, RefCell};
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs::File;
     use std::path::{Path, PathBuf};
 
+    #[cfg(test)]
+    use super::interruption::{self, Op};
     use super::{ScaffoldError, SyncCounts};
 
+    /// The open batch: directories renamed into since the last settle, and
+    /// one directory per device a settle has synced.
+    struct Batch {
+        pending: BTreeSet<PathBuf>,
+        devices: BTreeMap<u64, PathBuf>,
+    }
+
     thread_local! {
-        static PENDING: RefCell<Option<BTreeSet<PathBuf>>> = const { RefCell::new(None) };
+        static BATCH: RefCell<Option<Batch>> = const { RefCell::new(None) };
         static COUNTS: Cell<SyncCounts> = const {
             Cell::new(SyncCounts {
                 files_written: 0,
                 content_syncs: 0,
-                directory_fsyncs: 0,
+                directory_syncs: 0,
                 full_flushes: 0,
             })
         };
@@ -484,36 +508,29 @@ mod sync {
     }
 
     pub(super) fn batch_active() -> bool {
-        PENDING.with(|pending| pending.borrow().is_some())
+        BATCH.with(|batch| batch.borrow().is_some())
     }
 
     /// Opens a batch; `false` when one is already open (the caller joins it).
     pub(super) fn open_batch() -> bool {
-        PENDING.with(|pending| {
-            let mut pending = pending.borrow_mut();
-            if pending.is_some() {
+        BATCH.with(|batch| {
+            let mut batch = batch.borrow_mut();
+            if batch.is_some() {
                 false
             } else {
-                *pending = Some(BTreeSet::new());
+                *batch = Some(Batch {
+                    pending: BTreeSet::new(),
+                    devices: BTreeMap::new(),
+                });
                 true
             }
         })
     }
 
-    pub(super) fn close_batch() -> Vec<PathBuf> {
-        PENDING.with(|pending| {
-            pending
-                .borrow_mut()
-                .take()
-                .map(|set| set.into_iter().collect())
-                .unwrap_or_default()
-        })
-    }
-
     pub(super) fn defer_directory(dir: &Path) {
-        PENDING.with(|pending| {
-            if let Some(set) = pending.borrow_mut().as_mut() {
-                set.insert(dir.to_path_buf());
+        BATCH.with(|batch| {
+            if let Some(batch) = batch.borrow_mut().as_mut() {
+                batch.pending.insert(dir.to_path_buf());
             }
         });
     }
@@ -522,61 +539,159 @@ mod sync {
     /// its rename: a full flush outside a batch, an ordered sync inside one.
     pub(super) fn content(file: &File, full: bool) -> std::io::Result<()> {
         if full {
-            file.sync_all()?;
-            bump(|c| c.full_flushes += 1);
+            full_flush(file)
         } else {
             ordered(file)?;
             bump(|c| c.content_syncs += 1);
+            Ok(())
+        }
+    }
+
+    /// Inside a batch, syncs every directory renamed into since the last
+    /// settle, with the ordered sync, and notes its device. Outside a batch
+    /// nothing is pending.
+    // Directory sync is a Unix call; other targets keep the fallible contract.
+    #[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
+    pub(super) fn settle() -> Result<(), ScaffoldError> {
+        let pending = BATCH.with(|batch| {
+            batch
+                .borrow_mut()
+                .as_mut()
+                .map(|batch| std::mem::take(&mut batch.pending))
+                .unwrap_or_default()
+        });
+        #[cfg(unix)]
+        for dir in pending {
+            let handle = File::open(&dir).map_err(|e| ScaffoldError::io(&dir, e))?;
+            ordered(&handle).map_err(|e| ScaffoldError::io(&dir, e))?;
+            bump(|c| c.directory_syncs += 1);
+            #[cfg(test)]
+            interruption::synced(&dir);
+            let device = device_of(&dir, &handle).map_err(|e| ScaffoldError::io(&dir, e))?;
+            BATCH.with(|batch| {
+                if let Some(batch) = batch.borrow_mut().as_mut() {
+                    batch.devices.entry(device).or_insert(dir);
+                }
+            });
+        }
+        #[cfg(not(unix))]
+        drop(pending);
+        Ok(())
+    }
+
+    /// Closes the batch: settles what is pending, then flushes the cache of
+    /// each device the batch touched.
+    pub(super) fn finish_batch() -> Result<(), ScaffoldError> {
+        let settled = settle();
+        let devices = BATCH
+            .with(|batch| batch.borrow_mut().take())
+            .map(|batch| batch.devices)
+            .unwrap_or_default();
+        settled?;
+        for dir in devices.values() {
+            let handle = File::open(dir).map_err(|e| ScaffoldError::io(dir, e))?;
+            device_flush(&handle).map_err(|e| ScaffoldError::io(dir, e))?;
         }
         Ok(())
     }
 
-    /// `F_BARRIERFSYNC`, or `F_FULLFSYNC` where the file system refuses it;
-    /// the fallback counts as a full flush, so the tests see it.
+    /// A single write's directory, fully flushed at once.
+    // Directory sync is a Unix call; other targets keep the fallible contract.
+    #[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
+    pub(super) fn directory_now(dir: &Path) -> Result<(), ScaffoldError> {
+        #[cfg(unix)]
+        {
+            let handle = File::open(dir).map_err(|e| ScaffoldError::io(dir, e))?;
+            full_flush(&handle).map_err(|e| ScaffoldError::io(dir, e))?;
+            bump(|c| c.directory_syncs += 1);
+            #[cfg(test)]
+            interruption::synced(dir);
+        }
+        #[cfg(not(unix))]
+        let _ = dir;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn device_of(dir: &Path, handle: &File) -> std::io::Result<u64> {
+        use std::os::unix::fs::MetadataExt;
+        #[cfg(test)]
+        if let Some(device) = interruption::device(dir) {
+            return Ok(device);
+        }
+        let _ = dir;
+        Ok(handle.metadata()?.dev())
+    }
+
+    /// The ordered sync: `F_BARRIERFSYNC`, or `F_FULLFSYNC` where the file
+    /// system refuses the barrier.
     #[cfg(target_vendor = "apple")]
     fn ordered(file: &File) -> std::io::Result<()> {
-        use std::os::unix::io::AsRawFd;
-        // SAFETY: `fcntl` with `F_BARRIERFSYNC` takes no argument and only
-        // uses the descriptor, which `file` keeps open for the call.
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_BARRIERFSYNC) } == -1 {
-            file.sync_all()?;
-            bump(|c| c.full_flushes += 1);
+        if fcntl(file, libc::F_BARRIERFSYNC).is_err() {
+            full_flush(file)?;
         }
         Ok(())
     }
 
-    /// `fsync` already flushes the device where the target is not Apple.
+    /// The ordered sync: `fsync`, which already flushes the device here.
     #[cfg(not(target_vendor = "apple"))]
     fn ordered(file: &File) -> std::io::Result<()> {
         fsync(file)
     }
 
-    /// Syncs each directory once, then flushes the device cache once where
-    /// `fsync` does not already do it.
-    // Directory sync is a Unix call; other targets keep the fallible contract.
-    #[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
-    pub(super) fn flush_directories(dirs: &[PathBuf]) -> Result<(), ScaffoldError> {
-        #[cfg(unix)]
+    /// A full flush: `F_FULLFSYNC` on macOS, `sync_all` elsewhere.
+    fn full_flush(file: &File) -> std::io::Result<()> {
+        #[cfg(target_vendor = "apple")]
+        fcntl(file, libc::F_FULLFSYNC)?;
+        #[cfg(not(target_vendor = "apple"))]
         {
-            let mut last = None;
-            for dir in dirs {
-                let handle = File::open(dir).map_err(|e| ScaffoldError::io(dir, e))?;
-                fsync(&handle).map_err(|e| ScaffoldError::io(dir, e))?;
-                bump(|c| c.directory_fsyncs += 1);
-                last = Some((dir, handle));
-            }
-            if let Some((dir, handle)) = last {
-                device_flush(&handle).map_err(|e| ScaffoldError::io(dir, e))?;
-            }
+            #[cfg(test)]
+            interruption::op(Op::SyncAll);
+            file.sync_all()?;
         }
-        #[cfg(not(unix))]
-        let _ = dirs;
+        bump(|c| c.full_flushes += 1);
         Ok(())
     }
 
-    #[cfg(unix)]
+    /// One device cache flush on macOS; nothing where `fsync` already
+    /// flushes the device.
+    #[cfg(target_vendor = "apple")]
+    fn device_flush(file: &File) -> std::io::Result<()> {
+        full_flush(file)
+    }
+
+    #[cfg(not(target_vendor = "apple"))]
+    #[allow(clippy::unnecessary_wraps)]
+    fn device_flush(_file: &File) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    /// The one place a sync `fcntl` reaches the kernel, so the tests can see
+    /// which command ran.
+    #[cfg(target_vendor = "apple")]
+    fn fcntl(file: &File, command: libc::c_int) -> std::io::Result<()> {
+        use std::os::unix::io::AsRawFd;
+        #[cfg(test)]
+        {
+            interruption::op(Op::Fcntl(command));
+            if interruption::refused(command) {
+                return Err(std::io::Error::from_raw_os_error(libc::ENOTSUP));
+            }
+        }
+        // SAFETY: `F_BARRIERFSYNC` and `F_FULLFSYNC` take no argument and only
+        // use the descriptor, which `file` keeps open for the call.
+        if unsafe { libc::fcntl(file.as_raw_fd(), command) } == -1 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    #[cfg(all(unix, not(target_vendor = "apple")))]
     fn fsync(file: &File) -> std::io::Result<()> {
         use std::os::unix::io::AsRawFd;
+        #[cfg(test)]
+        interruption::op(Op::Fsync);
         // SAFETY: `fsync` only reads the descriptor, which `file` keeps open
         // for the duration of the call.
         if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
@@ -588,23 +703,16 @@ mod sync {
 
     #[cfg(not(unix))]
     fn fsync(file: &File) -> std::io::Result<()> {
+        #[cfg(test)]
+        interruption::op(Op::Fsync);
         file.sync_all()
-    }
-
-    /// One device cache flush on macOS; nothing where `fsync` already
-    /// flushes the device.
-    #[cfg(unix)]
-    fn device_flush(file: &File) -> std::io::Result<()> {
-        if cfg!(target_vendor = "apple") {
-            file.sync_all()?;
-            bump(|c| c.full_flushes += 1);
-        }
-        Ok(())
     }
 }
 
-/// A test-only interruption point between a file's synced temp copy and its
-/// rename, standing in for a crash at that moment (TSK-153 AC-4).
+/// Test-only observation and interruption points for the scaffold writes
+/// (TSK-153): the sync calls that reached the kernel, the order of renames
+/// and directory syncs, a stop before a rename (as an error, or as an abrupt
+/// process abort), a refused barrier, and fake device identities.
 #[cfg(test)]
 pub(crate) mod interruption {
     use std::cell::{Cell, RefCell};
@@ -612,27 +720,105 @@ pub(crate) mod interruption {
 
     use super::ScaffoldError;
 
+    /// A sync call as it reached the kernel. Each platform makes only its
+    /// own calls, so the others are never constructed there.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[allow(dead_code)]
+    pub(crate) enum Op {
+        Fcntl(i32),
+        Fsync,
+        SyncAll,
+    }
+
+    /// A rename or a directory sync, in the order they happened.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum Event {
+        Renamed(PathBuf, Vec<u8>),
+        Synced(PathBuf),
+    }
+
     thread_local! {
         static STOP_AT: Cell<Option<usize>> = const { Cell::new(None) };
-        static COMPLETED: RefCell<Vec<(PathBuf, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+        static ABORT: Cell<bool> = const { Cell::new(false) };
+        static INTENTS: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+        static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+        static OPS: RefCell<Vec<Op>> = const { RefCell::new(Vec::new()) };
+        static REFUSE: Cell<Option<i32>> = const { Cell::new(None) };
+        static DEVICES: RefCell<Vec<(PathBuf, u64)>> = const { RefCell::new(Vec::new()) };
     }
 
-    /// Interrupts the write after `completed` writes have landed on this
-    /// thread; `None` lets every write through. Clears the completed log.
+    /// Stops the write after `completed` renames on this thread with an
+    /// error; `None` lets every write through. Clears the logs.
     pub(crate) fn arm(completed: Option<usize>) {
         STOP_AT.with(|stop| stop.set(completed));
-        COMPLETED.with(|log| log.borrow_mut().clear());
+        ABORT.with(|abort| abort.set(false));
+        INTENTS.with(|intents| *intents.borrow_mut() = None);
+        EVENTS.with(|log| log.borrow_mut().clear());
+        OPS.with(|log| log.borrow_mut().clear());
     }
 
-    /// The writes that landed since [`arm`], in order.
+    /// Aborts the process before the rename after `completed` renames,
+    /// skipping every destructor and flush, as a killed process would.
+    /// Each write's path and content digest is appended to `intents` before
+    /// its rename.
+    pub(crate) fn arm_abort(completed: usize, intents: &Path) {
+        arm(Some(completed));
+        ABORT.with(|abort| abort.set(true));
+        INTENTS.with(|log| *log.borrow_mut() = Some(intents.to_path_buf()));
+    }
+
+    /// The renames since [`arm`], in order.
     pub(crate) fn completed() -> Vec<(PathBuf, Vec<u8>)> {
-        COMPLETED.with(|log| log.borrow().clone())
+        events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::Renamed(path, bytes) => Some((path, bytes)),
+                Event::Synced(_) => None,
+            })
+            .collect()
     }
 
-    pub(super) fn before_rename(path: &Path) -> Result<(), ScaffoldError> {
-        let landed = COMPLETED.with(|log| log.borrow().len());
+    pub(crate) fn events() -> Vec<Event> {
+        EVENTS.with(|log| log.borrow().clone())
+    }
+
+    pub(crate) fn ops() -> Vec<Op> {
+        OPS.with(|log| log.borrow().clone())
+    }
+
+    /// Makes the kernel refuse `command` (as an unsupported file system
+    /// would), or stops refusing with `None`.
+    pub(crate) fn refuse(command: Option<i32>) {
+        REFUSE.with(|refuse| refuse.set(command));
+    }
+
+    /// Reports each directory under a listed prefix as on that device.
+    pub(crate) fn fake_devices(devices: Vec<(PathBuf, u64)>) {
+        DEVICES.with(|list| *list.borrow_mut() = devices);
+    }
+
+    pub(super) fn before_rename(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
+        if let Some(intents) = INTENTS.with(|log| log.borrow().clone()) {
+            use std::io::Write;
+            let line = format!(
+                "{}\t{}\n",
+                path.display(),
+                crate::scaffold::hash::sha256_hex(bytes)
+            );
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&intents)
+                .map_err(|e| ScaffoldError::io(&intents, e))?;
+            file.write_all(line.as_bytes())
+                .map_err(|e| ScaffoldError::io(&intents, e))?;
+        }
+        let landed = completed().len();
         // Sticky, like a crash: once reached, no later write lands either.
         if STOP_AT.with(Cell::get).is_some_and(|stop| landed >= stop) {
+            if ABORT.with(Cell::get) {
+                std::process::abort();
+            }
             return Err(ScaffoldError::io(
                 path,
                 std::io::Error::other("test interruption before rename"),
@@ -642,7 +828,35 @@ pub(crate) mod interruption {
     }
 
     pub(super) fn renamed(path: &Path, bytes: &[u8]) {
-        COMPLETED.with(|log| log.borrow_mut().push((path.to_path_buf(), bytes.to_vec())));
+        EVENTS.with(|log| {
+            log.borrow_mut()
+                .push(Event::Renamed(path.to_path_buf(), bytes.to_vec()));
+        });
+    }
+
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(super) fn synced(dir: &Path) {
+        EVENTS.with(|log| log.borrow_mut().push(Event::Synced(dir.to_path_buf())));
+    }
+
+    pub(super) fn op(op: Op) {
+        OPS.with(|log| log.borrow_mut().push(op));
+    }
+
+    #[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
+    pub(super) fn refused(command: i32) -> bool {
+        REFUSE.with(Cell::get) == Some(command)
+    }
+
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(super) fn device(dir: &Path) -> Option<u64> {
+        DEVICES.with(|list| {
+            list.borrow()
+                .iter()
+                .filter(|(prefix, _)| dir.starts_with(prefix))
+                .max_by_key(|(prefix, _)| prefix.as_os_str().len())
+                .map(|(_, device)| *device)
+        })
     }
 }
 
@@ -966,9 +1180,14 @@ mod tests {
             after.content_syncs, before.content_syncs,
             "content is fully flushed"
         );
-        assert_eq!(after.directory_fsyncs - before.directory_fsyncs, 1);
-        let device = usize::from(cfg!(target_vendor = "apple"));
-        assert_eq!(after.full_flushes - before.full_flushes, 1 + device);
+        // Directory sync is a Unix call; Windows syncs the content only.
+        let directory = usize::from(cfg!(unix));
+        assert_eq!(after.directory_syncs - before.directory_syncs, directory);
+        assert_eq!(
+            after.full_flushes - before.full_flushes,
+            1 + directory,
+            "the content and the directory, each in full"
+        );
     }
 
     #[test]
@@ -990,7 +1209,7 @@ mod tests {
             "one ordered sync per file"
         );
         assert_eq!(
-            mid.directory_fsyncs, before.directory_fsyncs,
+            mid.directory_syncs, before.directory_syncs,
             "deferred to the end"
         );
         assert_eq!(
@@ -1000,8 +1219,8 @@ mod tests {
         batch.finish().unwrap();
         let after = sync_counts();
         assert_eq!(
-            after.directory_fsyncs - before.directory_fsyncs,
-            2,
+            after.directory_syncs - before.directory_syncs,
+            2 * usize::from(cfg!(unix)),
             "once per directory"
         );
         let device = usize::from(cfg!(target_vendor = "apple"));
@@ -1022,7 +1241,10 @@ mod tests {
             write_file(&dir.path().join("x/1"), b"1").unwrap();
         }
         let after = sync_counts();
-        assert_eq!(after.directory_fsyncs - before.directory_fsyncs, 1);
+        assert_eq!(
+            after.directory_syncs - before.directory_syncs,
+            usize::from(cfg!(unix))
+        );
         assert!(!sync::batch_active(), "the dropped batch closed");
     }
 
@@ -1109,7 +1331,7 @@ mod tests {
         crate::scaffold::init(&shipped_assets(), &root, &init_opts(Tier::Standard)).unwrap();
         let after = sync_counts();
         let written = after.files_written - before.files_written;
-        let directories = after.directory_fsyncs - before.directory_fsyncs;
+        let directories = after.directory_syncs - before.directory_syncs;
         assert!(
             written > 200,
             "a standard init writes the scaffold: {written}"
@@ -1120,13 +1342,13 @@ mod tests {
             "one per file"
         );
         assert!(
-            directories > 0 && directories < written / 2,
+            directories <= written && (directories > 0 || cfg!(not(unix))),
             "{directories} of {written}"
         );
         assert_eq!(
             after.full_flushes - before.full_flushes,
             device,
-            "one per run"
+            "one per device, and the run touched one"
         );
         println!("init: {written} files, {directories} directories, {device} device flush");
 
@@ -1143,20 +1365,28 @@ mod tests {
         assert_eq!(after.full_flushes - before.full_flushes, device);
         println!(
             "update: {written} files, {} directories",
-            after.directory_fsyncs - before.directory_fsyncs
+            after.directory_syncs - before.directory_syncs
         );
     }
 
-    /// After a run stops at an arbitrary write, each file holds its content
-    /// from before the run or the content of a write that completed: never
-    /// torn, never empty.
+    /// After a run stops at an arbitrary write, every file that existed
+    /// before is still there, and each file holds its content from before the
+    /// run or the content of a write that completed: never torn, never empty.
     fn assert_whole_files(
         root: &Path,
         before: &std::collections::BTreeMap<PathBuf, Vec<u8>>,
         stop: usize,
     ) {
         let completed = interruption::completed();
-        for (rel, bytes) in snapshot(root) {
+        let now = snapshot(root);
+        for rel in before.keys() {
+            assert!(
+                now.contains_key(rel),
+                "stop {stop}: {} existed before the run and is gone",
+                rel.display()
+            );
+        }
+        for (rel, bytes) in now {
             let hidden = rel.file_name().unwrap().to_string_lossy().starts_with('.');
             if hidden && rel.extension().is_some_and(|ext| ext == "tmp") {
                 continue; // a temp copy, never a managed path
@@ -1176,7 +1406,7 @@ mod tests {
     }
 
     #[test]
-    fn an_interrupted_init_or_update_leaves_no_torn_or_empty_file() {
+    fn an_init_or_update_stopped_by_an_error_leaves_no_torn_or_empty_file() {
         let dir = tempfile::tempdir().unwrap();
         // A fresh init, stopped at writes spread across the run.
         interruption::arm(None);
@@ -1223,5 +1453,364 @@ mod tests {
             assert_whole_files(&root, &edited, stop);
         }
         interruption::arm(None);
+    }
+
+    // TSK-153 review round 1: the sync calls that reach the kernel, record
+    // ordering, every device, and an abrupt process abort.
+
+    /// The ordered sync as it reaches the kernel on this platform.
+    fn ordered_op() -> interruption::Op {
+        #[cfg(target_vendor = "apple")]
+        return interruption::Op::Fcntl(libc::F_BARRIERFSYNC);
+        #[cfg(not(target_vendor = "apple"))]
+        return interruption::Op::Fsync;
+    }
+
+    /// A device flush as it reaches the kernel, where the platform needs one.
+    fn device_flush_ops() -> Vec<interruption::Op> {
+        #[cfg(target_vendor = "apple")]
+        return vec![interruption::Op::Fcntl(libc::F_FULLFSYNC)];
+        #[cfg(not(target_vendor = "apple"))]
+        return Vec::new();
+    }
+
+    #[test]
+    fn a_run_reaches_the_kernel_only_with_ordered_syncs_and_one_flush() {
+        // A plain `fsync` on macOS, or a full flush per file, fails here.
+        let dir = tempfile::tempdir().unwrap();
+        interruption::arm(None);
+        let batch = SyncBatch::begin();
+        write_file(&dir.path().join("a/1"), b"1").unwrap();
+        write_file(&dir.path().join("a/2"), b"2").unwrap();
+        Baseline::write(dir.path(), "a/1", "1").unwrap();
+        batch.finish().unwrap();
+        let ops = interruption::ops();
+        let (syncs, last) = ops.split_at(ops.len() - device_flush_ops().len());
+        assert_eq!(last, device_flush_ops().as_slice());
+        // 3 file contents, then on Unix `a` before the record and
+        // `.codeflow/.baseline/a` at the end.
+        let directories = 2 * usize::from(cfg!(unix));
+        assert_eq!(
+            syncs,
+            vec![ordered_op(); 3 + directories].as_slice(),
+            "{ops:?}"
+        );
+        interruption::arm(None);
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn a_refused_barrier_falls_back_to_a_full_flush_never_fsync() {
+        let dir = tempfile::tempdir().unwrap();
+        interruption::arm(None);
+        interruption::refuse(Some(libc::F_BARRIERFSYNC));
+        let batch = SyncBatch::begin();
+        write_file(&dir.path().join("one.txt"), b"one").unwrap();
+        let result = batch.finish();
+        interruption::refuse(None);
+        result.unwrap();
+        let barrier = interruption::Op::Fcntl(libc::F_BARRIERFSYNC);
+        let full = interruption::Op::Fcntl(libc::F_FULLFSYNC);
+        assert_eq!(
+            interruption::ops(),
+            vec![barrier, full, barrier, full, full],
+            "content and directory each fall back; then the device flush"
+        );
+        interruption::arm(None);
+    }
+
+    #[test]
+    fn each_device_a_run_touched_is_flushed() {
+        let dir = tempfile::tempdir().unwrap();
+        interruption::arm(None);
+        interruption::fake_devices(vec![
+            (dir.path().join("project"), 1),
+            (dir.path().join("report"), 2),
+        ]);
+        let before = sync_counts();
+        let batch = SyncBatch::begin();
+        write_file(&dir.path().join("project/a.txt"), b"a").unwrap();
+        write_file(&dir.path().join("project/b/c.txt"), b"c").unwrap();
+        write_file(&dir.path().join("report/diff.txt"), b"d").unwrap();
+        let result = batch.finish();
+        interruption::fake_devices(Vec::new());
+        result.unwrap();
+        let flushes = interruption::ops()
+            .into_iter()
+            .filter(|op| device_flush_ops().contains(op))
+            .count();
+        assert_eq!(flushes, 2 * device_flush_ops().len(), "one per device");
+        assert_eq!(
+            sync_counts().full_flushes - before.full_flushes,
+            2 * device_flush_ops().len()
+        );
+        interruption::arm(None);
+    }
+
+    #[cfg(unix)]
+    /// A state record: a baseline copy, the manifest or `project.toml`.
+    fn is_record(root: &Path, path: &Path) -> bool {
+        path.starts_with(root.join(BASELINE_DIR))
+            || path == InstalledManifest::path(root)
+            || path == ProjectState::path(root)
+    }
+
+    #[cfg(unix)]
+    /// Every rename a state record follows has its directory synced before
+    /// the record's rename.
+    fn assert_records_follow_durable_files(root: &Path) {
+        // Renames whose directory has not been synced since, in order.
+        let mut unsynced: Vec<PathBuf> = Vec::new();
+        for event in interruption::events() {
+            match event {
+                interruption::Event::Synced(dir) => {
+                    unsynced.retain(|file| file.parent() != Some(dir.as_path()));
+                }
+                interruption::Event::Renamed(file, _) => {
+                    if is_record(root, &file) {
+                        assert!(
+                            unsynced.is_empty(),
+                            "{} reached the disk ahead of {}'s directory",
+                            file.display(),
+                            unsynced[0].display()
+                        );
+                    }
+                    unsynced.push(file);
+                }
+            }
+        }
+    }
+
+    // Directory sync is a Unix call, so the ordering is a Unix guarantee.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_never_reaches_the_disk_ahead_of_its_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        interruption::arm(None);
+        crate::scaffold::init(&shipped_assets(), &root, &init_opts(Tier::Standard)).unwrap();
+        assert_records_follow_durable_files(&root);
+        assert!(edit_managed_skills(&root) > 5);
+        interruption::arm(None);
+        crate::scaffold::update(&shipped_assets(), &root, &force_update()).unwrap();
+        assert_records_follow_durable_files(&root);
+        interruption::arm(None);
+    }
+
+    #[cfg(unix)]
+    /// The shipped assets plus one managed file, `zzz/payload.txt`, whose
+    /// shipped content is `body`.
+    fn assets_with_payload(dir: &Path, body: &str) -> crate::scaffold::DirSource {
+        let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        copy_tree(&assets, dir);
+        let manifest = dir.join("base/scaffold-manifest.toml");
+        let mut text = std::fs::read_to_string(&manifest).unwrap();
+        text.push_str(
+            "\n[[entry]]\nsrc = \"payload\"\ndest = \"zzz/payload.txt\"\n\
+             ownership = \"managed\"\ntiers = [\"standard\"]\n",
+        );
+        std::fs::write(&manifest, text).unwrap();
+        std::fs::write(dir.join("base/payload"), body).unwrap();
+        crate::scaffold::DirSource::new(dir.to_path_buf())
+    }
+
+    #[cfg(unix)]
+    /// The worst state a crash after `events` may leave: every rename whose
+    /// directory was synced, every state record, and no other rename.
+    fn crash_state(
+        root: &Path,
+        before: &std::collections::BTreeMap<PathBuf, Vec<u8>>,
+        events: &[interruption::Event],
+    ) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut synced_later = std::collections::BTreeSet::new();
+        let mut kept = Vec::new();
+        for event in events.iter().rev() {
+            match event {
+                interruption::Event::Synced(dir) => {
+                    synced_later.insert(dir.clone());
+                }
+                interruption::Event::Renamed(path, bytes) => {
+                    if synced_later.contains(path.parent().unwrap()) || is_record(root, path) {
+                        kept.push((path, bytes));
+                    }
+                }
+            }
+        }
+        let mut state = before.clone();
+        for (path, bytes) in kept.into_iter().rev() {
+            state.insert(
+                path.strip_prefix(root).unwrap().to_path_buf(),
+                bytes.clone(),
+            );
+        }
+        state
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_update_after_a_crash_at_any_point_installs_the_new_version() {
+        // T153-1: a record ahead of its file made the next update keep the
+        // old shipped file as a user edit.
+        let dir = tempfile::tempdir().unwrap();
+        let old = assets_with_payload(&dir.path().join("old"), "old shipped data\n");
+        let new = assets_with_payload(&dir.path().join("new"), "new shipped data\n");
+        let upgrade = crate::scaffold::UpdateOptions {
+            force: false,
+            binary_version: "9.9.9".to_string(),
+            diff_out: None,
+        };
+        let base = dir.path().join("base");
+        crate::scaffold::init(&old, &base, &init_opts(Tier::Standard)).unwrap();
+        let before = snapshot(&base);
+        let probe = dir.path().join("probe");
+        copy_tree(&base, &probe);
+        interruption::arm(None);
+        crate::scaffold::update(&new, &probe, &upgrade).unwrap();
+        let events: Vec<_> = interruption::events()
+            .into_iter()
+            .map(|event| match event {
+                interruption::Event::Renamed(path, bytes) => interruption::Event::Renamed(
+                    base.join(path.strip_prefix(&probe).unwrap()),
+                    bytes,
+                ),
+                interruption::Event::Synced(path) => {
+                    interruption::Event::Synced(base.join(path.strip_prefix(&probe).unwrap()))
+                }
+            })
+            .collect();
+        interruption::arm(None);
+        let expected = snapshot(&probe);
+        assert_eq!(
+            expected[Path::new("zzz/payload.txt")],
+            b"new shipped data\n".to_vec()
+        );
+        // The update rewrites every managed file; crash just before and just
+        // after each write that concerns the payload: the file, its baseline,
+        // the manifest and the project state.
+        let watched = [
+            base.join("zzz/payload.txt"),
+            Baseline::path(&base, "zzz/payload.txt"),
+            InstalledManifest::path(&base),
+            ProjectState::path(&base),
+        ];
+        let mut points = std::collections::BTreeSet::from([0, events.len()]);
+        for (at, event) in events.iter().enumerate() {
+            if matches!(event, interruption::Event::Renamed(path, _) if watched.contains(path)) {
+                points.extend([at, at + 1]);
+            }
+        }
+        assert!(points.len() >= 8, "{points:?}");
+        for point in points {
+            let root = dir.path().join(format!("crash-{point}"));
+            copy_tree(&base, &root);
+            for (rel, bytes) in crash_state(&base, &before, &events[..point]) {
+                std::fs::write(root.join(rel), bytes).unwrap();
+            }
+            crate::scaffold::update(&new, &root, &upgrade).unwrap();
+            assert_eq!(
+                snapshot(&root)[Path::new("zzz/payload.txt")],
+                b"new shipped data\n".to_vec(),
+                "a crash after event {point} of {} keeps the old file",
+                events.len()
+            );
+        }
+    }
+
+    const CHILD: &str = "CODEFLOW_TSK153_ABORT_CHILD";
+
+    #[test]
+    fn an_update_killed_mid_run_leaves_every_file_whole() {
+        // An abrupt abort skips every destructor and deferred flush.
+        if let Ok(spec) = std::env::var(CHILD) {
+            let mut parts = spec.split('\n');
+            let root = PathBuf::from(parts.next().unwrap());
+            let stop: usize = parts.next().unwrap().parse().unwrap();
+            let intents = PathBuf::from(parts.next().unwrap());
+            interruption::arm_abort(stop, &intents);
+            let _ = crate::scaffold::update(&shipped_assets(), &root, &force_update());
+            std::process::exit(3); // not reached when the abort fires
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("base");
+        crate::scaffold::init(&shipped_assets(), &base, &init_opts(Tier::Standard)).unwrap();
+        assert!(edit_managed_skills(&base) > 5);
+        let before = snapshot(&base);
+        copy_tree(&base, &dir.path().join("probe"));
+        interruption::arm(None);
+        crate::scaffold::update(
+            &shipped_assets(),
+            &dir.path().join("probe"),
+            &force_update(),
+        )
+        .unwrap();
+        let total = interruption::completed().len();
+        interruption::arm(None);
+        for stop in [0, total / 2, total - 1] {
+            let root = dir.path().join(format!("killed-{stop}"));
+            copy_tree(&base, &root);
+            let intents = dir.path().join(format!("intents-{stop}"));
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "scaffold::state::tests::an_update_killed_mid_run_leaves_every_file_whole",
+                    "--exact",
+                    "--test-threads=1",
+                ])
+                .env(
+                    CHILD,
+                    format!("{}\n{stop}\n{}", root.display(), intents.display()),
+                )
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                assert_eq!(
+                    status.signal(),
+                    Some(libc::SIGABRT),
+                    "stop {stop}: {status}"
+                );
+            }
+            #[cfg(not(unix))]
+            assert!(!status.success(), "stop {stop}: {status}");
+            let intended: Vec<(PathBuf, String)> = std::fs::read_to_string(&intents)
+                .unwrap()
+                .lines()
+                .map(|line| {
+                    let (path, digest) = line.split_once('\t').unwrap();
+                    (PathBuf::from(path), digest.to_string())
+                })
+                .collect();
+            assert_eq!(
+                intended.len(),
+                stop + 1,
+                "the child stopped at write {stop}"
+            );
+            let now = snapshot(&root);
+            for rel in before.keys() {
+                assert!(
+                    now.contains_key(rel),
+                    "stop {stop}: {} is gone",
+                    rel.display()
+                );
+            }
+            for (rel, bytes) in now {
+                let hidden = rel.file_name().unwrap().to_string_lossy().starts_with('.');
+                if hidden && rel.extension().is_some_and(|ext| ext == "tmp") {
+                    continue; // the stopped write's temp copy, never a managed path
+                }
+                let digest = crate::scaffold::hash::sha256_hex(&bytes);
+                let landed = intended.iter().any(|(path, sum)| {
+                    path.strip_prefix(&root).is_ok_and(|r| r == rel) && *sum == digest
+                });
+                let kept = before.get(&rel).is_some_and(|old| *old == bytes);
+                assert!(
+                    landed || kept,
+                    "stop {stop}: {} is neither its earlier content nor an intended write",
+                    rel.display()
+                );
+            }
+        }
     }
 }
