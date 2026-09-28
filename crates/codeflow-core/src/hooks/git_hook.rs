@@ -22,13 +22,17 @@ use super::{standards, Violation};
 pub struct StageReport {
     /// Policy violations (block and warn level).
     pub violations: Vec<Violation>,
-    /// Non-violation diagnostics (skipped gates, degraded checks) — printed
-    /// so degradation stays legible (charter principle 8).
-    pub notes: Vec<String>,
+    /// Non-violation diagnostics (skipped gates, degraded checks), each with
+    /// the step that clears it, printed so degradation stays legible
+    /// (charter principle 8, SPC-013 R-80).
+    pub notes: Vec<crate::remedy::Finding>,
+    /// Progress lines that report something done or passed: nothing to
+    /// clear, so no remedy (a timing, a check that passed).
+    pub status: Vec<String>,
+    /// Findings another plane printed when this one ran its check, as it
+    /// printed them, each with the remedy lines under it.
+    pub relayed: Vec<String>,
 }
-
-const SANCTIONED: &str =
-    "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
 
 // ---------------------------------------------------------------------------
 // pre-commit
@@ -58,7 +62,7 @@ pub fn pre_commit(
             "git.commit_to_protected",
             policy.commit_to_protected,
             format!("commit on protected branch '{branch}'"),
-            SANCTIONED.to_string(),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
 
@@ -78,9 +82,10 @@ fn scan_staged(
 ) {
     let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
     let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), None, None) else {
-        report
-            .notes
-            .push("secret scan skipped: could not read the staged diff".to_string());
+        report.notes.push(crate::remedy::Finding::new(
+            "secret scan skipped: could not read the staged diff",
+            crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
+        ));
         return;
     };
 
@@ -100,8 +105,7 @@ fn scan_staged(
                 "git.secret_scan",
                 policy.secret_scan,
                 format!("dotenv file staged for commit: {path_str}"),
-                "keep env files out of git (.gitignore covers them); commit a .env.example instead"
-                    .to_string(),
+                crate::remedy::ENV_FILE_STAGED.remedy(),
             ));
         }
     }
@@ -137,7 +141,7 @@ fn scan_staged(
             "git.secret_scan",
             policy.secret_scan,
             format!("staged secret scan incomplete: {error}"),
-            "retry the commit after the staged diff can be scanned completely".to_string(),
+            crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
         ));
         return;
     }
@@ -149,8 +153,7 @@ fn scan_staged(
                 "possible secret ({}) staged at {}:{}",
                 hit.pattern, hit.file, hit.line
             ),
-            "remove the secret from the staged content; rotate it if it was ever committed"
-                .to_string(),
+            crate::remedy::SECRET_STAGED.remedy(),
         ));
     }
 }
@@ -174,10 +177,7 @@ fn push_format_violations(
             "git.commit_format",
             policy.commit_format,
             reason,
-            format!(
-                "use `type(scope): description` with type one of: {}",
-                policy.commit_types.join(", ")
-            ),
+            crate::remedy::COMMIT_TYPE.with(&[("types", &policy.commit_types.join(", "))]),
         ));
     }
     if let Some(reason) = standards::check_subject_length(
@@ -189,10 +189,10 @@ fn push_format_violations(
             "git.commit_format",
             policy.commit_format,
             reason,
-            format!(
-                "keep the description ≤ {} chars and the whole subject line ≤ {} chars",
-                policy.commit_desc_max_len, policy.commit_subject_max_len
-            ),
+            crate::remedy::COMMIT_LENGTH.with(&[
+                ("description", &policy.commit_desc_max_len.to_string()),
+                ("subject", &policy.commit_subject_max_len.to_string()),
+            ]),
         ));
     }
     if let Some(reason) = standards::check_subject_separator(cleaned) {
@@ -200,7 +200,7 @@ fn push_format_violations(
             "git.commit_format",
             policy.commit_format,
             reason,
-            "put one blank line between the subject and the body".to_string(),
+            crate::remedy::COMMIT_BLANK_LINE.remedy(),
         ));
     }
     if let Some(reason) = standards::check_breaking_footer(subject, cleaned) {
@@ -208,9 +208,7 @@ fn push_format_violations(
             "git.commit_format",
             policy.commit_format,
             reason,
-            "signal a breaking change with `type!: description` or the exact footer \
-             `BREAKING CHANGE:` (uppercase)"
-                .to_string(),
+            crate::remedy::COMMIT_BREAKING_FOOTER.remedy(),
         ));
     }
 }
@@ -379,12 +377,10 @@ pub fn commit_msg_from(
                 "git.commit_body",
                 policy.commit_body,
                 reason,
-                format!(
-                    "the body is `- ` bullets (max {}, each ≤ {} chars) and an optional \
-                     `BREAKING CHANGE:` footer; blank lines are fine, prose paragraphs are not. \
-                     Other trailers are allowed only when opted in via git.commit_footer_tokens",
-                    policy.commit_body_max_bullets, policy.commit_body_bullet_max_len
-                ),
+                crate::remedy::COMMIT_BODY.with(&[
+                    ("bullets", &policy.commit_body_max_bullets.to_string()),
+                    ("length", &policy.commit_body_bullet_max_len.to_string()),
+                ]),
             ));
         }
         if let Some(reason) =
@@ -394,10 +390,8 @@ pub fn commit_msg_from(
                 "git.commit_body",
                 policy.commit_body,
                 reason,
-                format!(
-                    "every commit must carry these footer trailers: {}",
-                    policy.commit_required_footers.join(", ")
-                ),
+                crate::remedy::COMMIT_REQUIRED_FOOTERS
+                    .with(&[("footers", &policy.commit_required_footers.join(", "))]),
             ));
         }
     }
@@ -418,10 +412,8 @@ pub fn commit_msg_from(
                 "git.commit_ticket",
                 level,
                 reason,
-                format!(
-                    "add a ticket-reference footer trailer (key one of: {})",
-                    policy.commit_ticket_keys.join(", ")
-                ),
+                crate::remedy::COMMIT_TICKET
+                    .with(&[("keys", &policy.commit_ticket_keys.join(", "))]),
             ));
         }
     }
@@ -432,8 +424,7 @@ pub fn commit_msg_from(
                 "git.ai_attribution",
                 policy.ai_attribution,
                 format!("commit message contains AI attribution ({which})"),
-                "remove it — project policy forbids AI attribution in commits and PR bodies (charter §6.4)"
-                    .to_string(),
+                crate::remedy::COMMIT_AI_ATTRIBUTION.remedy(),
             ));
         }
     }
@@ -444,7 +435,7 @@ pub fn commit_msg_from(
                 "git.commit_emoji",
                 policy.commit_emoji,
                 format!("commit subject contains emoji ('{c}')"),
-                "remove emoji from the commit subject (charter §6.4)".to_string(),
+                crate::remedy::COMMIT_EMOJI.remedy(),
             ));
         }
     }
@@ -491,7 +482,7 @@ fn policy_character_violation(policy: &GitPolicy, scanned: &str) -> Option<Viola
         "git.policy_characters",
         policy.policy_characters,
         format!("{place} contains an {name}"),
-        standards::POLICY_CHARACTER_FIX.to_string(),
+        crate::remedy::COMMIT_POLICY_CHARACTER.remedy(),
     ))
 }
 
@@ -529,9 +520,7 @@ pub fn commit_msg_with_files(
             "git.breaking_watch_paths",
             PolicyLevel::Warn,
             format!("commit touches a declared contract surface ({path})"),
-            "confirm it is not a breaking change, or mark it with `type!:` and a \
-             `BREAKING CHANGE:` footer with the migration path"
-                .to_string(),
+            crate::remedy::BREAKING_WATCH_PATH.remedy(),
         ));
     }
     report
@@ -592,7 +581,7 @@ pub fn pre_merge_commit(
             "git.merge_to_protected",
             policy.merge_to_protected,
             format!("merge commit on protected branch '{branch}'"),
-            SANCTIONED.to_string(),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
 
@@ -677,7 +666,7 @@ pub fn reference_transaction(
                     "git.delete_protected",
                     policy.delete_protected,
                     format!("deleting protected branch '{branch}' via a local ref update"),
-                    "protected branches are never deleted; remove the entry from git.protected_branches first if truly intended".to_string(),
+                    crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
             continue;
@@ -701,7 +690,7 @@ pub fn reference_transaction(
             "git.local_ref_protection",
             policy.local_ref_protection,
             format!("local update of protected branch '{branch}' that is not a sync from origin"),
-            SANCTIONED.to_string(),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
     Ok(report)
@@ -859,7 +848,7 @@ pub fn pre_push(
                     "git.delete_protected",
                     policy.delete_protected,
                     format!("push would delete protected branch '{branch}'"),
-                    "protected branches are never deleted remotely; adjust git.protected_branches first if truly intended".to_string(),
+                    crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
             continue;
@@ -870,7 +859,7 @@ pub fn pre_push(
                 "git.push_to_protected",
                 policy.push_to_protected,
                 format!("direct push to protected branch '{branch}'"),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
 
@@ -881,7 +870,7 @@ pub fn pre_push(
                         "git.force_push_protected",
                         policy.force_push_protected,
                         format!("non-fast-forward (force) push to protected branch '{branch}'"),
-                        SANCTIONED.to_string(),
+                        crate::remedy::PROTECTED_BRANCH.remedy(),
                     ));
                 }
             } else if policy.force_push_unprotected.is_active() {
@@ -889,8 +878,7 @@ pub fn pre_push(
                     "git.force_push_unprotected",
                     policy.force_push_unprotected,
                     format!("non-fast-forward (force) push to branch '{branch}'"),
-                    "policy git.force_push_unprotected restricts force-pushes in this repo"
-                        .to_string(),
+                    crate::remedy::FORCE_PUSH.remedy(),
                 ));
             }
         }
@@ -900,10 +888,7 @@ pub fn pre_push(
                 "git.branch_naming",
                 policy.branch_naming,
                 format!("branch '{branch}' does not match `{{prefix}}/{{kebab-name}}`"),
-                format!(
-                    "rename with a sanctioned prefix: {}",
-                    policy.branch_prefixes.join(" ")
-                ),
+                crate::remedy::BRANCH_NAME.with(&[("prefixes", &policy.branch_prefixes.join(" "))]),
             ));
         }
     }
@@ -920,11 +905,10 @@ pub fn pre_push(
 /// range that cannot be read blocks too.
 fn registry_push(root: &Path, repo: &Repository, r: &PushRef, report: &mut StageReport) {
     let block = |message: String| {
-        Violation::new(
+        Violation::always_blocking(
             "registry.append_only",
-            PolicyLevel::Block,
             message,
-            "issue ids with `codeflow task|epic|spec new`; repair damage with `codeflow ids restore <id>...`".to_string(),
+            "issue ids with `codeflow task|epic|spec new`; repair damage with `codeflow ids restore <id>...`",
         )
     };
     if r.is_delete() {
@@ -1010,18 +994,20 @@ pub fn run_push_targets(
 ) -> Vec<PushStep> {
     let cfg_path = root.join(".codeflow").join("test-config.json");
     if !cfg_path.exists() {
-        report.notes.push(
-            "quick targets skipped: no .codeflow/test-config.json (run /cf-stack to add a \
-             stack, or create .codeflow/test-config.json)"
-                .to_string(),
-        );
+        report.notes.push(crate::remedy::Finding::new(
+            "quick targets skipped: no .codeflow/test-config.json",
+            crate::remedy::PUSH_TARGETS_UNCONFIGURED.remedy(),
+        ));
         return Vec::new();
     }
     match run_gate_exact(root, "quick") {
         Ok(GateOutcome::NoTargets { reason }) => {
-            report.notes.push(format!(
-                "quick targets skipped: {reason} (the push set runs the targets with a \
-                 `quick` mode in .codeflow/test-config.json)"
+            report.notes.push(crate::remedy::Finding::new(
+                format!(
+                    "quick targets skipped: {reason} (the push set runs the targets with a \
+                     `quick` mode)"
+                ),
+                crate::remedy::PUSH_TARGETS_NONE.remedy(),
             ));
             Vec::new()
         }
@@ -1029,7 +1015,7 @@ pub fn run_push_targets(
             results, passed, ..
         }) => {
             if passed {
-                report.notes.push(format!(
+                report.status.push(format!(
                     "quick targets passed on the working checkout ({} target(s); untracked \
                      files there can influence them, CI checks the pushed commit)",
                     results.len()
@@ -1044,8 +1030,7 @@ pub fn run_push_targets(
                     "git.test_gate_on_push",
                     policy.test_gate_on_push,
                     format!("push set failed for: {}", failed.join(", ")),
-                    "fix the failing target(s), or run `codeflow test --mode quick` to reproduce"
-                        .to_string(),
+                    crate::remedy::PUSH_SET_FAILED.remedy(),
                 ));
             }
             results.iter().map(target_step).collect()
@@ -1055,8 +1040,7 @@ pub fn run_push_targets(
                 "git.test_gate_on_push",
                 policy.test_gate_on_push,
                 format!("push set could not load test-config.json: {e}"),
-                "repair .codeflow/test-config.json, then run `codeflow test --mode quick`"
-                    .to_string(),
+                crate::remedy::TEST_CONFIG_REPAIR.remedy(),
             ));
             Vec::new()
         }
@@ -1073,13 +1057,13 @@ fn target_step(result: &GateTargetResult) -> PushStep {
 
 /// When the whole push set took longer than `budget`, the note naming its
 /// slowest step and what moves it: the `modes.quick` key for a test-config
-/// target, or a pointer to run a built-in check alone.
+/// target, or the push-set rule for a built-in check.
 #[must_use]
 pub fn over_budget_note(
     steps: &[PushStep],
     total: std::time::Duration,
     budget: std::time::Duration,
-) -> Option<String> {
+) -> Option<crate::remedy::Finding> {
     if total <= budget {
         return None;
     }
@@ -1089,19 +1073,23 @@ pub fn over_budget_note(
         budget.as_secs()
     );
     Some(match steps.iter().max_by_key(|s| s.duration) {
-        Some(slow) if slow.configurable => format!(
-            "{head}; slowest step: target '{}' ({:.1}s): remove its `modes.quick` in \
-             .codeflow/test-config.json to move it to the full gate",
-            slow.name,
-            slow.duration.as_secs_f64()
+        Some(slow) if slow.configurable => crate::remedy::Finding::new(
+            format!(
+                "{head}; slowest step: target '{}' ({:.1}s)",
+                slow.name,
+                slow.duration.as_secs_f64()
+            ),
+            crate::remedy::PUSH_OVER_BUDGET_TARGET.with(&[("target", &slow.name)]),
         ),
-        Some(slow) => format!(
-            "{head}; slowest step: built-in `{}` ({:.1}s), which has no push-set key: \
-             run it alone to see what makes it slow",
-            slow.name,
-            slow.duration.as_secs_f64()
+        Some(slow) => crate::remedy::Finding::new(
+            format!(
+                "{head}; slowest step: built-in `{}` ({:.1}s), which has no push-set key",
+                slow.name,
+                slow.duration.as_secs_f64()
+            ),
+            crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy(),
         ),
-        None => head,
+        None => crate::remedy::Finding::new(head, crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy()),
     })
 }
 
@@ -2516,7 +2504,7 @@ mod tests {
             report
                 .notes
                 .iter()
-                .any(|n| n.contains("quick targets skipped")),
+                .any(|n| n.text.contains("quick targets skipped")),
             "absence must be loud: {:?}",
             report.notes
         );
@@ -2593,7 +2581,8 @@ mod tests {
             report
                 .notes
                 .iter()
-                .any(|n| n.contains("quick targets skipped") && n.contains("no enabled target")),
+                .any(|n| n.text.contains("quick targets skipped")
+                    && n.text.contains("no enabled target")),
             "{:?}",
             report.notes
         );
@@ -2635,10 +2624,9 @@ mod tests {
         assert!(report.violations.is_empty(), "{:?}", report.violations);
         assert!(steps.is_empty());
         assert!(
-            report
-                .notes
-                .iter()
-                .any(|n| n.contains("quick targets skipped") && n.contains("`quick` mode")),
+            report.notes.iter().any(
+                |n| n.text.contains("quick targets skipped") && n.text.contains("`quick` mode")
+            ),
             "{:?}",
             report.notes
         );
@@ -2659,7 +2647,7 @@ mod tests {
         assert_eq!(gate.len(), 1, "{:?}", report.violations);
         assert!(gate[0].message.contains("could not load"));
         assert!(gate[0].message.contains("invalid test config"));
-        assert!(!report.notes.iter().any(|n| n.contains("skipped")));
+        assert!(!report.notes.iter().any(|n| n.text.contains("skipped")));
     }
 
     fn step(name: &str, secs: u64, configurable: bool) -> PushStep {
@@ -2678,7 +2666,9 @@ mod tests {
             step("codeflow validate --docs", 2, false),
         ];
         let total = std::time::Duration::from_secs(61);
-        let note = over_budget_note(&steps, total, PUSH_SET_BUDGET).unwrap();
+        let note = over_budget_note(&steps, total, PUSH_SET_BUDGET)
+            .unwrap()
+            .to_string();
         assert!(note.contains("61.0s, over its 60s budget"), "{note}");
         assert!(note.contains("target 'rust-clippy'"), "{note}");
         assert!(note.contains("`modes.quick`"), "{note}");
@@ -2693,8 +2683,9 @@ mod tests {
             step("lint", 2, true),
             step("codeflow ci --head abc --branch feat/x", 70, false),
         ];
-        let note =
-            over_budget_note(&steps, std::time::Duration::from_secs(72), PUSH_SET_BUDGET).unwrap();
+        let note = over_budget_note(&steps, std::time::Duration::from_secs(72), PUSH_SET_BUDGET)
+            .unwrap()
+            .to_string();
         assert!(note.contains("built-in `codeflow ci"), "{note}");
         assert!(!note.contains("modes.quick"), "{note}");
         // No configured targets at all still gets a diagnosis.
@@ -2704,7 +2695,8 @@ mod tests {
             std::time::Duration::from_secs(65),
             PUSH_SET_BUDGET,
         )
-        .unwrap();
+        .unwrap()
+        .to_string();
         assert!(note.contains("validate --docs"), "{note}");
     }
 

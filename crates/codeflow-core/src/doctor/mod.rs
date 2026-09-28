@@ -12,47 +12,52 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::DoctorError;
 use crate::model_qualification;
+use crate::remedy::{self, Finding, Remedy};
 use crate::scaffold::manifest::{Ownership, RegionFormat};
 use crate::scaffold::region;
 use crate::scaffold::sha256_hex;
 use crate::scaffold::state::InstalledManifest;
 
 /// Outcome of a health check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
     Pass,
     Fail,
-    Warn,
+    /// A warning, with the step that clears it (SPC-013 R-80).
+    Warn(Remedy),
+}
+
+impl Status {
+    /// Whether this is a warning.
+    #[must_use]
+    pub fn is_warn(&self) -> bool {
+        matches!(self, Self::Warn(_))
+    }
 }
 
 /// Result of a single doctor check.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CheckResult {
     pub name: String,
     pub status: Status,
     pub message: String,
-    #[serde(with = "duration_millis")]
+    #[serde(serialize_with = "duration_millis::serialize")]
     pub duration: Duration,
 }
 
 /// Serialization helper for Duration as milliseconds.
 mod duration_millis {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::Serializer;
     use std::time::Duration;
 
     pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
         let ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
         s.serialize_u64(ms)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
-        let ms = u64::deserialize(d)?;
-        Ok(Duration::from_millis(ms))
     }
 }
 
@@ -325,8 +330,8 @@ fn check_hooks(opts: &Options) -> CheckResult {
     if let Some(warning) = hooks_wiring_warning(Path::new(&opts.project_dir)) {
         return CheckResult {
             name: "hooks".into(),
-            status: Status::Warn,
-            message: warning,
+            status: Status::Warn(warning.remedy),
+            message: warning.text,
             duration: start.elapsed(),
         };
     }
@@ -345,7 +350,7 @@ fn check_hooks(opts: &Options) -> CheckResult {
 /// to verify — no shims on disk, or not a git repo: this flags, it never
 /// guesses. A recorded `git_hooks = "unwired"` (another hook manager owned
 /// the hooks at init, deliberately not clobbered) gets its own remedy text.
-fn hooks_wiring_warning(root: &Path) -> Option<String> {
+fn hooks_wiring_warning(root: &Path) -> Option<Finding> {
     use crate::scaffold::detect::CODEFLOW_HOOKS_PATH;
     use crate::scaffold::state::{ProjectState, GIT_HOOKS_UNWIRED};
 
@@ -361,8 +366,11 @@ fn hooks_wiring_warning(root: &Path) -> Option<String> {
             return None;
         }
         if std::path::Path::new(&configured).is_absolute() {
-            return Some(format!(
-                "core.hooksPath is absolute ({configured}); set the project-relative `{CODEFLOW_HOOKS_PATH}` so each worktree uses its own shims — `git config core.hooksPath {CODEFLOW_HOOKS_PATH}`"
+            return Some(Finding::new(
+                format!(
+                    "core.hooksPath is absolute ({configured}); the project-relative `{CODEFLOW_HOOKS_PATH}` lets each worktree use its own shims"
+                ),
+                remedy::DOCTOR_HOOKS_PATH.with(&[("hooks", CODEFLOW_HOOKS_PATH)]),
             ));
         }
     }
@@ -378,12 +386,15 @@ fn hooks_wiring_warning(root: &Path) -> Option<String> {
     let recorded_unwired = ProjectState::exists(root)
         && ProjectState::load(root).is_ok_and(|s| s.git_hooks == GIT_HOOKS_UNWIRED);
     Some(if recorded_unwired {
-        format!(
-            "codeflow shims are not git's active hooks (recorded git_hooks = \"unwired\": another hook manager owns them) — call the {CODEFLOW_HOOKS_PATH}/ shims from that manager's stages"
+        let step = format!("call the {CODEFLOW_HOOKS_PATH}/ shims from that manager's stages");
+        Finding::new(
+            "codeflow shims are not git's active hooks (recorded git_hooks = \"unwired\": another hook manager owns them)",
+            remedy::DOCTOR_EXTERNAL.with(&[("step", &step), ("check", "hooks")]),
         )
     } else {
-        format!(
-            "hook subcommands respond, but the codeflow shims are not git's active hooks (fresh clone?) — run `git config core.hooksPath {CODEFLOW_HOOKS_PATH}`"
+        Finding::new(
+            "hook subcommands respond, but the codeflow shims are not git's active hooks (fresh clone?)",
+            remedy::DOCTOR_HOOKS_PATH.with(&[("hooks", CODEFLOW_HOOKS_PATH)]),
         )
     })
 }
@@ -402,7 +413,10 @@ fn check_claude(opts: &Options) -> CheckResult {
         // plane (charter section 9); codeflow works without a harness.
         Err(_) => CheckResult {
             name: "claude".into(),
-            status: Status::Warn,
+            status: Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[
+                ("step", "install the claude CLI on PATH"),
+                ("check", "claude"),
+            ])),
             message: "claude CLI not found in PATH (Claude-layer hooks inactive)".into(),
             duration: start.elapsed(),
         },
@@ -440,9 +454,12 @@ fn check_codex(opts: &Options) -> CheckResult {
     };
     CheckResult {
         name: "codex".into(),
-        status: Status::Warn,
+        status: Status::Warn(remedy::DOCTOR_UNSEEN.with(&[(
+            "step",
+            "run `/hooks` inside interactive codex once and approve the CodeFlow hooks",
+        )])),
         message: format!(
-            ".codex/hooks.json present, {presence} — in-session guards are wired structurally; trust is a one-time in-codex step: run `/hooks` inside interactive codex and approve the CodeFlow hooks (trust state is not inspectable from here; git hooks + CI enforce regardless)"
+            ".codex/hooks.json present, {presence}: in-session guards are wired structurally; trust is a one-time in-codex step that is not inspectable from here (git hooks and CI enforce regardless)"
         ),
         duration: start.elapsed(),
     }
@@ -481,9 +498,12 @@ fn check_grok(opts: &Options) -> CheckResult {
     };
     CheckResult {
         name: "grok".into(),
-        status: Status::Warn,
+        status: Status::Warn(remedy::DOCTOR_UNSEEN.with(&[(
+            "step",
+            "run `/hooks-trust` (or start grok with `--trust`) once so project hooks load",
+        )])),
         message: format!(
-            ".grok/hooks present, {presence} — in-session guards are wired structurally; trust is a one-time in-grok step: run `/hooks-trust` (or `--trust`) so project hooks load (trust state is not inspectable from here; git hooks + CI enforce regardless)"
+            ".grok/hooks present, {presence}: in-session guards are wired structurally; trust is a one-time in-grok step that is not inspectable from here (git hooks and CI enforce regardless)"
         ),
         duration: start.elapsed(),
     }
@@ -496,8 +516,8 @@ fn check_config(opts: &Options) -> CheckResult {
     if !config_dir.is_dir() {
         return CheckResult {
             name: "config".into(),
-            status: Status::Warn,
-            message: ".codeflow/ directory not found (run codeflow init)".into(),
+            status: Status::Warn(remedy::DOCTOR_INIT.remedy()),
+            message: ".codeflow/ directory not found".into(),
             duration: start.elapsed(),
         };
     }
@@ -611,7 +631,10 @@ fn check_promoted_model_bindings(
     if !drift.is_empty() {
         return model_binding_result(
             start,
-            Status::Warn,
+            Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[
+                ("step", "requalify each binding named with the /cf-evaluate-model skill"),
+                ("check", "model-bindings"),
+            ])),
             format!(
                 "binding requalification required: {}. Requested model/effort remain native-session observations, never inferred by doctor",
                 drift
@@ -625,9 +648,12 @@ fn check_promoted_model_bindings(
     if !unobservable.is_empty() {
         return model_binding_result(
             start,
-            Status::Warn,
+            Status::Warn(remedy::DOCTOR_UNSEEN.with(&[(
+                "step",
+                "re-run a native canary of each binding named (/cf-evaluate-model) when freshness matters",
+            )])),
             format!(
-                "{} approved binding(s) are structurally valid; {}. Re-run a native canary when freshness matters",
+                "{} approved binding(s) are structurally valid; {}",
                 records.len(),
                 unobservable.join("; ")
             ),
@@ -1039,9 +1065,9 @@ fn check_permissions(opts: &Options) -> CheckResult {
 
 fn check_network(opts: &Options) -> CheckResult {
     let start = Instant::now();
-    let warn = |message: String| CheckResult {
+    let warn = |message: String, step: &str| CheckResult {
         name: "network".into(),
-        status: Status::Warn,
+        status: Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[("step", step), ("check", "network")])),
         message,
         duration: start.elapsed(),
     };
@@ -1049,7 +1075,10 @@ fn check_network(opts: &Options) -> CheckResult {
     // The probe is `host`. If it isn't installed we cannot infer offline from its
     // absence — say so and skip, rather than implying the network is down.
     if opts.do_look_path("host").is_err() {
-        return warn("`host` not found — skipping connectivity probe".into());
+        return warn(
+            "`host` not found; skipping connectivity probe".into(),
+            "install the `host` tool on PATH",
+        );
     }
 
     match opts.do_exec("host", &["-W", "2", "github.com"]) {
@@ -1059,7 +1088,10 @@ fn check_network(opts: &Options) -> CheckResult {
             message: "network connectivity OK".into(),
             duration: start.elapsed(),
         },
-        Err(_) => warn("network connectivity check failed (offline?)".into()),
+        Err(_) => warn(
+            "network connectivity check failed (offline?)".into(),
+            "restore network access to github.com",
+        ),
     }
 }
 
@@ -1129,7 +1161,10 @@ fn check_delegates(opts: &Options) -> CheckResult {
     } else {
         CheckResult {
             name: "delegates".into(),
-            status: Status::Warn,
+            status: Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[
+                ("step", "install or sign in to each missing piece named"),
+                ("check", "delegates"),
+            ])),
             message: format!(
                 "cross-vendor delegation is partially unavailable (optional): {}. Verify Claude auth with an interactive TTY canary; status output alone is not authoritative{agy_note}",
                 gaps.join("; ")
@@ -1490,13 +1525,21 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
     )];
     let mut status = Status::Pass;
     if let Err(error) = &raw {
-        status = Status::Warn;
+        status = Status::Warn(
+            remedy::DOCTOR_POLICY_DECISION
+                .with(&[("decision", "make it valid JSON so its provenance reads")]),
+        );
         parts.push(format!(
             "policy provenance unreadable ({error}); the configured level stands and any kept PR template mapping is unresolved"
         ));
     }
     if let Some(pending) = adoption::pending_decision(&policy.git) {
-        status = Status::Warn;
+        if !status.is_warn() {
+            status = Status::Warn(remedy::DOCTOR_POLICY_DECISION.with(&[(
+                "decision",
+                "`git.pr_section_mapping.decided`: accepted, refused or custom",
+            )]));
+        }
         parts.push(pending);
     }
     match adoption::release_backend(&root) {
@@ -1505,7 +1548,9 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
             if let Some(finding) =
                 adoption::release_backend_finding(backend, &adoption::detect_release_tools(&root))
             {
-                status = Status::Warn;
+                if !status.is_warn() {
+                    status = Status::Warn(remedy::DOCTOR_RELEASE_BACKEND.remedy());
+                }
                 parts.push(finding);
             }
         }
@@ -1539,9 +1584,9 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
     if content.contains(CI_PLACEHOLDER_MARK) {
         return CheckResult {
             name: "ci-perimeter".into(),
-            status: Status::Warn,
+            status: Status::Warn(remedy::DOCTOR_CI_PLACEHOLDER.with(&[("path", &dest)])),
             message: format!(
-                "{dest} install step is still the PLACEHOLDER — the CI perimeter is not armed; wire the release installer so the test/validate gates enforce"
+                "{dest} install step is still the PLACEHOLDER: the CI perimeter is not armed"
             ),
             duration: start.elapsed(),
         };
@@ -1580,7 +1625,7 @@ fn check_id_registry(opts: &Options) -> CheckResult {
         // state is repaired, and the warning keeps the cause visible.
         Err(error) => {
             return result(
-                Status::Warn,
+                Status::Warn(remedy::DOCTOR_TRACKING_UNKNOWN.remedy()),
                 format!("not applicable: durable-work tracking cannot be determined ({error})"),
             )
         }
@@ -1598,7 +1643,7 @@ fn check_id_registry(opts: &Options) -> CheckResult {
     let mut status = if report.warns.is_empty() {
         Status::Pass
     } else {
-        Status::Warn
+        Status::Warn(remedy::DOCTOR_ID_REGISTRY.remedy())
     };
     if git.has_remote(crate::ids::AUTHORITY) {
         let state = crate::ids::state::load(&git).unwrap_or_default();
@@ -1613,7 +1658,9 @@ fn check_id_registry(opts: &Options) -> CheckResult {
                 "host data profile applied; last verified tip {last}"
             ));
         } else {
-            status = Status::Warn;
+            if !status.is_warn() {
+                status = Status::Warn(remedy::DOCTOR_REGISTRY_UNPROTECTED.remedy());
+            }
             notes.push(format!(
                 "reduced assurance: no host rules recorded for codeflow/registry (`codeflow remote protect` applies them); a rewrite is detected only against the last verified tip ({last})"
             ));
@@ -1687,9 +1734,9 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
     }
     CheckResult {
         name: "managed-drift".into(),
-        status: Status::Warn,
+        status: Status::Warn(remedy::DOCTOR_MANAGED_DRIFT.remedy()),
         message: format!(
-            "{} managed region(s) hand-edited inside codeflow markers — `codeflow update` will regenerate and lose these edits: {}",
+            "{} managed region(s) hand-edited inside codeflow markers; `codeflow update` will regenerate and lose these edits: {}",
             drifted.len(),
             drifted.join(", ")
         ),
@@ -1762,9 +1809,11 @@ fn check_customization(opts: &Options) -> CheckResult {
     } else {
         CheckResult {
             name: "customization".into(),
-            status: Status::Warn,
+            status: Status::Warn(
+                remedy::DOCTOR_CUSTOMIZATION.with(&[("path", &incomplete.join(", "))]),
+            ),
             message: format!(
-                "consuming-project context still needs reconciliation: {} — run `/cf-customize` to verify it against README, manifests, code, CI, harness settings, and live tools",
+                "consuming-project context still needs reconciliation: {}; `/cf-customize` verifies it against README, manifests, code, CI, harness settings, and live tools",
                 incomplete.join(", ")
             ),
             duration: start.elapsed(),
@@ -1810,7 +1859,7 @@ fn check_instructions(opts: &Options) -> CheckResult {
             .map(|(file, bytes)| format!("{} is {bytes} bytes", chain_label(file)))
             .collect();
         (
-            Status::Warn,
+            Status::Warn(remedy::DOCTOR_INSTRUCTIONS.remedy()),
             format!(
                 "{}, over Codex's {limit}-byte instruction limit: Codex cuts the end of the chain, where the project section lives; move project detail into files the section points at",
                 listed.join("; ")
@@ -1902,8 +1951,13 @@ fn check_reading(opts: &Options) -> CheckResult {
             format!("within guidelines: {}{note}", listed(within)),
         )
     } else {
+        let subjects = over
+            .iter()
+            .map(|measure| measure.subject.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         (
-            Status::Warn,
+            Status::Warn(remedy::DOCTOR_READING.with(&[("path", &subjects)])),
             format!(
                 "above guideline: {}. Sizes are guidelines, not failures: move detail behind a trigger (an index entry or a conditional read) to clear this, never cut a duty. Within: {}{note}",
                 listed(over),
@@ -2032,7 +2086,7 @@ fn check_test_config(opts: &Options) -> CheckResult {
     if failures.is_empty() {
         return CheckResult {
             name: "test-config".into(),
-            status: Status::Warn,
+            status: Status::Warn(remedy::DOCTOR_TEST_CONFIG.remedy()),
             message: format!(
                 "{} test-config warning(s): {} — run `codeflow doctor --check test-config` for the aggregate result and inspect the config",
                 warnings.len(),
@@ -2044,7 +2098,7 @@ fn check_test_config(opts: &Options) -> CheckResult {
 
     CheckResult {
         name: "test-config".into(),
-        status: Status::Warn,
+        status: Status::Warn(remedy::DOCTOR_TEST_CONFIG.remedy()),
         message: format!(
             "{} test-config health check(s) failed: {} — run `codeflow doctor --check test-config` for detail",
             failures.len(),
@@ -2056,6 +2110,14 @@ fn check_test_config(opts: &Options) -> CheckResult {
 
 #[cfg(test)]
 mod tests {
+    /// The step a warning names, or "" for any other status.
+    fn warn_remedy(result: &CheckResult) -> &str {
+        match &result.status {
+            Status::Warn(remedy) => remedy,
+            _ => "",
+        }
+    }
+
     use super::*;
 
     fn test_opts() -> Options {
@@ -2078,7 +2140,7 @@ mod tests {
             ..test_opts()
         };
         let result = check_id_registry(&opts);
-        assert_eq!(result.status, Status::Warn, "{}", result.message);
+        assert!(result.status.is_warn(), "{}", result.message);
         assert!(
             result.message.starts_with("not applicable:"),
             "{}",
@@ -2327,7 +2389,7 @@ mod tests {
         });
         opts.exec_command = Some(|_, _| Ok("2.2.0 (Claude Code)".into()));
         let result = check_model_bindings(&opts);
-        assert_eq!(result.status, Status::Warn);
+        assert!(result.status.is_warn());
         assert!(result.message.contains("harness version changed"));
         assert!(result.message.contains("settings changed"));
         assert!(result.message.contains("never inferred by doctor"));
@@ -2359,7 +2421,7 @@ mod tests {
         });
         opts.exec_command = Some(|_, _| Ok("2.1.220 (Claude Code)".into()));
         let result = check_model_bindings(&opts);
-        assert_eq!(result.status, Status::Warn);
+        assert!(result.status.is_warn());
         assert!(result.message.contains("exceeds 16777216 byte limit"));
     }
 
@@ -2420,7 +2482,7 @@ mod tests {
     fn test_check_claude_not_found_warns() {
         let opts = test_opts();
         let result = check_claude(&opts);
-        assert_eq!(result.status, Status::Warn);
+        assert!(result.status.is_warn());
     }
 
     #[test]
@@ -2461,16 +2523,16 @@ mod tests {
         let mut opts = test_opts(); // look_path errs → codex CLI absent
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_codex(&opts);
-        assert_eq!(r.status, Status::Warn);
+        assert!(r.status.is_warn());
         assert!(
             r.message.contains("wired structurally"),
             "got: {}",
             r.message
         );
         assert!(
-            r.message.contains("/hooks"),
+            warn_remedy(&r).contains("`/hooks` inside interactive codex"),
             "names the one-time step: {}",
-            r.message
+            warn_remedy(&r)
         );
         assert!(
             r.message.contains("not inspectable"),
@@ -2499,9 +2561,8 @@ mod tests {
             }
         });
         let r = check_codex(&opts);
-        assert_eq!(
-            r.status,
-            Status::Warn,
+        assert!(
+            r.status.is_warn(),
             "presence never upgrades to pass: {}",
             r.message
         );
@@ -2530,16 +2591,16 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_grok(&opts);
-        assert_eq!(r.status, Status::Warn);
+        assert!(r.status.is_warn());
         assert!(
             r.message.contains("wired structurally"),
             "got: {}",
             r.message
         );
         assert!(
-            r.message.contains("/hooks-trust"),
+            warn_remedy(&r).contains("/hooks-trust"),
             "names the one-time step: {}",
-            r.message
+            warn_remedy(&r)
         );
         assert!(
             r.message.contains("grok CLI not found"),
@@ -2554,7 +2615,7 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().to_string();
         let result = check_config(&opts);
-        assert_eq!(result.status, Status::Warn);
+        assert!(result.status.is_warn());
         assert!(result.message.contains("not found"));
     }
 
@@ -2632,7 +2693,7 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let result = check_customization(&opts);
-        assert_eq!(result.status, Status::Warn);
+        assert!(result.status.is_warn());
         assert!(result.message.contains("docs/product.md"));
         assert!(result.message.contains("docs/architecture.md"));
         assert!(result.message.contains("AGENTS.md"));
@@ -2717,7 +2778,7 @@ mod tests {
         let guideline = crate::reading::skill_guideline("cf-herdr");
         let (dir, opts) = reading_project("cf-herdr", 2 * guideline);
         let result = check_reading(&opts);
-        assert_eq!(result.status, Status::Warn, "{}", result.message);
+        assert!(result.status.is_warn(), "{}", result.message);
         assert!(result.message.starts_with(&format!(
             "above guideline: cf-herdr {} of {guideline} bytes",
             2 * guideline
@@ -2736,7 +2797,7 @@ mod tests {
         std::fs::write(dir.path().join("AGENTS.md"), big).unwrap();
         std::fs::write(dir.path().join(".claude/skills/cf-herdr/SKILL.md"), "x").unwrap();
         let result = check_reading(&opts);
-        assert_eq!(result.status, Status::Warn, "{}", result.message);
+        assert!(result.status.is_warn(), "{}", result.message);
         assert!(
             result
                 .message
@@ -2794,7 +2855,7 @@ mod tests {
 
         std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(32 * 1024 + 1)).unwrap();
         let over = check_instructions(&opts);
-        assert_eq!(over.status, Status::Warn);
+        assert!(over.status.is_warn());
         assert!(over.message.contains("32769 bytes"), "{}", over.message);
         assert!(over.message.contains("project section"));
     }
@@ -2814,7 +2875,7 @@ mod tests {
         )
         .unwrap();
         let nested = check_instructions(&opts);
-        assert_eq!(nested.status, Status::Warn, "{}", nested.message);
+        assert!(nested.status.is_warn(), "{}", nested.message);
         assert!(
             nested
                 .message
@@ -2826,7 +2887,7 @@ mod tests {
         // The chain is what counts: two files each under the limit.
         std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(20 * 1024)).unwrap();
         std::fs::write(dir.path().join("nested/AGENTS.md"), "x".repeat(13 * 1024)).unwrap();
-        assert_eq!(check_instructions(&opts).status, Status::Warn);
+        assert!(check_instructions(&opts).status.is_warn());
 
         // An override replaces its directory's AGENTS.md in the chain.
         std::fs::write(dir.path().join("nested/AGENTS.override.md"), "short\n").unwrap();
@@ -2846,7 +2907,7 @@ mod tests {
             "x".repeat(32 * 1024 + 1),
         )
         .unwrap();
-        assert_eq!(check_instructions(&opts).status, Status::Warn);
+        assert!(check_instructions(&opts).status.is_warn());
     }
 
     /// git in a tempdir, isolated from the host config (mirrors orient's
@@ -2917,10 +2978,9 @@ mod tests {
         git(dir.path(), &["init", "-b", "main"]);
         write_shims(dir.path());
         let r = check_hooks(&hooks_opts(dir.path()));
-        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(r.status.is_warn(), "got: {}", r.message);
         assert!(
-            r.message
-                .contains("git config core.hooksPath .codeflow/git-hooks"),
+            warn_remedy(&r).contains("git config core.hooksPath .codeflow/git-hooks"),
             "remedy: {}",
             r.message
         );
@@ -2954,15 +3014,14 @@ mod tests {
             ],
         );
         let r = check_hooks(&hooks_opts(dir.path()));
-        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(r.status.is_warn(), "got: {}", r.message);
         assert!(
             r.message.contains("absolute"),
             "expected absolute-path warning, got: {}",
             r.message
         );
         assert!(
-            r.message
-                .contains("git config core.hooksPath .codeflow/git-hooks"),
+            warn_remedy(&r).contains("git config core.hooksPath .codeflow/git-hooks"),
             "remedy: {}",
             r.message
         );
@@ -2990,7 +3049,7 @@ mod tests {
         .store(dir.path())
         .unwrap();
         let r = check_hooks(&hooks_opts(dir.path()));
-        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(r.status.is_warn(), "got: {}", r.message);
         assert!(r.message.contains("hook manager"), "got: {}", r.message);
         assert!(
             !r.message.contains("git config core.hooksPath"),
@@ -3060,7 +3119,7 @@ mod tests {
             }
         });
         let result = check_network(&opts);
-        assert_eq!(result.status, Status::Warn);
+        assert!(result.status.is_warn());
         assert!(result.message.contains("offline"));
     }
 
@@ -3070,7 +3129,7 @@ mod tests {
         // probe. test_opts()'s look_path errs for every name, including `host`.
         let opts = test_opts();
         let result = check_network(&opts);
-        assert_eq!(result.status, Status::Warn);
+        assert!(result.status.is_warn());
         assert!(result.message.contains("not found"));
         assert!(result.message.contains("skipping"));
         assert!(!result.message.contains("offline"));
@@ -3143,7 +3202,7 @@ mod tests {
         // Optional capability: absence is explicit but never a doctor failure.
         let opts = test_opts();
         let result = check_delegates(&opts);
-        assert_eq!(result.status, Status::Warn);
+        assert!(result.status.is_warn());
         assert!(
             result.message.contains("codex missing"),
             "got: {}",
@@ -3178,7 +3237,7 @@ mod tests {
             }
         });
         let result = check_delegates(&opts);
-        assert_eq!(result.status, Status::Warn);
+        assert!(result.status.is_warn());
         assert!(
             result.message.contains("codex login"),
             "got: {}",
@@ -3379,7 +3438,7 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_ci_perimeter(&opts);
-        assert_eq!(r.status, Status::Warn);
+        assert!(r.status.is_warn());
         assert!(r.message.contains("not armed"), "got: {}", r.message);
         assert!(
             r.message.contains("codeflow-ci.yml"),
@@ -3469,7 +3528,7 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = root.to_string_lossy().into_owned();
         let r = check_managed_drift(&opts);
-        assert_eq!(r.status, Status::Warn);
+        assert!(r.status.is_warn());
         assert!(
             r.message.contains("AGENTS.md"),
             "names the drifted file: {}",
@@ -3586,7 +3645,7 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_test_config(&opts);
-        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(r.status.is_warn(), "got: {}", r.message);
         assert!(r.message.contains("failed"), "got: {}", r.message);
         assert!(
             r.message.contains("codeflow doctor --check test-config"),
@@ -3605,7 +3664,7 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let result = check_test_config(&opts);
-        assert_eq!(result.status, Status::Warn, "got: {}", result.message);
+        assert!(result.status.is_warn(), "got: {}", result.message);
         assert!(result.message.contains("structural-unenforced"));
     }
 
@@ -3613,8 +3672,13 @@ mod tests {
     fn test_status_serde() {
         let json = serde_json::to_string(&Status::Pass).unwrap();
         assert_eq!(json, "\"pass\"");
-        let parsed: Status = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, Status::Pass);
+        // A warning serializes with the step that clears it (R-80).
+        let warn = Status::Warn(crate::remedy::DOCTOR_INIT.remedy());
+        let json = serde_json::to_string(&warn).unwrap();
+        assert_eq!(
+            json,
+            "{\"warn\":\"run `codeflow init` in the project root\"}"
+        );
     }
 
     #[test]

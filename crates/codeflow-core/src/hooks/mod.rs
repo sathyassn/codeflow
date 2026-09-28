@@ -45,6 +45,8 @@ pub mod standards;
 pub use policy::{GitPolicy, GuidanceSection, Policy, PolicyLevel, SecuritySection};
 pub use repo::RepoInfo;
 
+use crate::remedy::Remedy;
+
 /// Environment variable carrying the `codeflow integrate` gate-context token
 /// (charter §6.2, D9). When set, the sanctioned local merge path is active
 /// and protected-branch commit/push checks step aside. It is a discipline
@@ -74,20 +76,33 @@ pub struct Violation {
     pub level: PolicyLevel,
     /// Human-readable explanation of what was attempted.
     pub message: String,
-    /// The sanctioned path: what to do instead.
-    pub remedy: String,
+    /// The sanctioned path: what to do instead. A violation that can print
+    /// at warn names the step that clears it (R-80).
+    pub remedy: Remedy,
 }
 
 impl Violation {
-    /// Build a violation for `rule` at `level`.
+    /// Build a violation for `rule` at `level`, with a catalogued remedy.
     #[must_use]
-    pub fn new(rule: &str, level: PolicyLevel, message: String, remedy: String) -> Self {
+    pub fn new(rule: &str, level: PolicyLevel, message: String, remedy: Remedy) -> Self {
         Self {
             rule: rule.to_string(),
             level,
             message,
             remedy,
         }
+    }
+
+    /// Build a violation of an always-blocking rule (R-80). It never prints
+    /// as a warning, so its sanctioned path may be any text.
+    #[must_use]
+    pub fn always_blocking(rule: &str, message: String, sanctioned: &str) -> Self {
+        Self::new(
+            rule,
+            PolicyLevel::Block,
+            message,
+            Remedy::sanctioned(sanctioned),
+        )
     }
 
     /// Render the violation for stderr, prefixed with the emitting plane
@@ -207,7 +222,7 @@ mod tests {
             "git.push_to_protected",
             PolicyLevel::Block,
             "direct push to protected branch 'main'".into(),
-            "open a PR or run `codeflow integrate`".into(),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
         );
         let out = v.render("git-guard");
         assert!(out.contains("BLOCKED"));
@@ -222,15 +237,20 @@ mod tests {
             "git.commit_format",
             PolicyLevel::Warn,
             "bad subject".into(),
-            "use type(scope): description".into(),
+            crate::remedy::COMMIT_BLANK_LINE.remedy(),
         );
         assert!(v.render("commit-msg").contains("warning"));
     }
 
     #[test]
     fn test_any_blocking() {
-        let warn = Violation::new("r", PolicyLevel::Warn, String::new(), String::new());
-        let block = Violation::new("r", PolicyLevel::Block, String::new(), String::new());
+        let warn = Violation::new(
+            "r",
+            PolicyLevel::Warn,
+            String::new(),
+            crate::remedy::COMMIT_BLANK_LINE.remedy(),
+        );
+        let block = Violation::always_blocking("r", String::new(), "");
         assert!(!any_blocking(std::slice::from_ref(&warn)));
         assert!(any_blocking(&[warn, block]));
         assert!(!any_blocking(&[]));

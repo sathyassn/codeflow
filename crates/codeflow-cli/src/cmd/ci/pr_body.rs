@@ -325,8 +325,7 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
             "git.pr_sections",
             PolicyLevel::Warn,
             message,
-            "keep the body concise and link detailed evidence; retain necessary verification"
-                .into(),
+            codeflow_core::remedy::PR_PRESENTATION.remedy(),
         ));
     };
     let outline = outline(body);
@@ -432,7 +431,7 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
             "git.pr_release_impact",
             git.pr_release_impact,
             message,
-            "declare Impact, Breaking, Rationale and Migration under Release impact using the project's breaking level".into(),
+            codeflow_core::remedy::PR_RELEASE_IMPACT.remedy(),
         ));
     };
     let parsed = sections(body);

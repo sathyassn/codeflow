@@ -50,8 +50,8 @@ impl std::fmt::Display for DocsLintIssue {
 #[derive(Debug, Default)]
 pub struct DocsLintReport {
     pub issues: Vec<DocsLintIssue>,
-    /// Skipped-layer notes (absent tiers).
-    pub notes: Vec<String>,
+    /// Skipped-layer notes (absent tiers), each with the step that clears it.
+    pub notes: Vec<crate::remedy::Finding>,
 }
 
 impl DocsLintReport {
@@ -173,9 +173,10 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
         let (entries, _) = parse_capabilities(&content);
         Some(entries.into_iter().map(|e| e.id).collect())
     } else {
-        report
-            .notes
-            .push("docs/capabilities.md absent — capability checks skipped".to_string());
+        report.notes.push(crate::remedy::Finding::new(
+            "docs/capabilities.md absent — capability checks skipped",
+            crate::remedy::DOCS_LAYER_ABSENT.with(&[("path", "docs/capabilities.md")]),
+        ));
         None
     };
 
@@ -202,9 +203,10 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
         }
         Some(ids)
     } else {
-        report
-            .notes
-            .push("docs/decisions/ absent — ADR checks skipped".to_string());
+        report.notes.push(crate::remedy::Finding::new(
+            "docs/decisions/ absent — ADR checks skipped",
+            crate::remedy::DOCS_LAYER_ABSENT.with(&[("path", "docs/decisions/")]),
+        ));
         None
     };
 
@@ -219,9 +221,10 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
                 .collect(),
         )
     } else {
-        report
-            .notes
-            .push("project-management/epics/ absent — epic reference checks skipped".to_string());
+        report.notes.push(crate::remedy::Finding::new(
+            "project-management/epics/ absent — epic reference checks skipped",
+            crate::remedy::DOCS_LAYER_ABSENT.with(&[("path", "project-management/epics/")]),
+        ));
         None
     };
 
@@ -235,9 +238,10 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
                 .collect(),
         )
     } else {
-        report
-            .notes
-            .push("project-management/specs/ absent — spec reference checks skipped".to_string());
+        report.notes.push(crate::remedy::Finding::new(
+            "project-management/specs/ absent — spec reference checks skipped",
+            crate::remedy::DOCS_LAYER_ABSENT.with(&[("path", "project-management/specs/")]),
+        ));
         None
     };
 
@@ -467,9 +471,10 @@ fn lint_tasks(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
     let files = crate::workgraph::layout::task_record_files(&repo_root.join("project-management"));
     if files.is_empty() {
         if !repo_root.join("project-management/tasks").is_dir() {
-            report
-                .notes
-                .push("project-management/tasks/ absent — task graph checks skipped".to_string());
+            report.notes.push(crate::remedy::Finding::new(
+                "project-management/tasks/ absent — task graph checks skipped",
+                crate::remedy::DOCS_LAYER_ABSENT.with(&[("path", "project-management/tasks/")]),
+            ));
         }
         return;
     }
@@ -1289,12 +1294,15 @@ mod tests {
         let report = lint_docs(dir.path());
         assert!(report.is_clean());
         assert_eq!(report.notes.len(), 5, "notes: {:?}", report.notes);
-        assert!(report.notes.iter().any(|n| n.contains("capabilities.md")));
-        assert!(report.notes.iter().any(|n| n.contains("decisions")));
         assert!(report
             .notes
             .iter()
-            .any(|n| n.contains("project-management")));
+            .any(|n| n.text.contains("capabilities.md")));
+        assert!(report.notes.iter().any(|n| n.text.contains("decisions")));
+        assert!(report
+            .notes
+            .iter()
+            .any(|n| n.text.contains("project-management")));
     }
 
     #[test]
@@ -1316,7 +1324,7 @@ mod tests {
         assert!(report
             .notes
             .iter()
-            .any(|n| n.contains("project-management")));
+            .any(|n| n.text.contains("project-management")));
     }
 
     #[test]

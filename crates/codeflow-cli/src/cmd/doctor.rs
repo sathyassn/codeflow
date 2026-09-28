@@ -61,7 +61,7 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
     for r in &results {
         let badge = match r.status {
             Status::Pass => "ok  ",
-            Status::Warn => "warn",
+            Status::Warn(_) => "warn",
             Status::Fail => {
                 failed = true;
                 "FAIL"
@@ -73,6 +73,9 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
             name = r.name,
             message = r.message
         );
+        if let Status::Warn(remedy) = &r.status {
+            let _ = writeln!(out, "      clear it: {remedy}");
+        }
     }
     i32::from(failed)
 }
@@ -138,6 +141,23 @@ mod tests {
         assert_eq!(code, 1);
         assert!(out.contains("FAIL"), "got: {out}");
         assert!(out.contains("manifest.json"), "names the offender: {out}");
+    }
+
+    #[test]
+    fn a_warning_prints_the_step_that_clears_it() {
+        // SPC-013 R-80: an uninitialized project warns and names `codeflow init`.
+        let dir = tempfile::tempdir().unwrap();
+        let opts = Options {
+            project_dir: dir.path().to_string_lossy().into_owned(),
+            ..Options::default()
+        };
+        let (code, out) = run_to_string(&args(Some("config"), false), &opts);
+        assert_eq!(code, 0, "a warning never fails doctor: {out}");
+        assert!(out.starts_with("warn  config:"), "got: {out}");
+        assert!(
+            out.contains("\n      clear it: run `codeflow init` in the project root"),
+            "got: {out}"
+        );
     }
 
     #[test]

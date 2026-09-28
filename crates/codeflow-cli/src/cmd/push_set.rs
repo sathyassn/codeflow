@@ -40,6 +40,7 @@ use std::time::{Duration, Instant};
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
 use codeflow_core::hooks::policy::GitPolicy;
 use codeflow_core::hooks::Violation;
+use codeflow_core::remedy::{self, Finding};
 
 /// Run the push set for `refs` into `report`. `remote` and `url` are the
 /// pre-push hook's arguments: a configured remote name (or the URL or path
@@ -74,7 +75,7 @@ pub(super) fn run(
             report.violations.push(violation(
                 policy,
                 format!("push set could not locate the codeflow binary: {error}"),
-                "run `codeflow ci` and `codeflow validate --docs` by hand".to_string(),
+                codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
             ));
             return;
         }
@@ -135,10 +136,13 @@ pub(super) fn run(
         } else {
             "tracked files differ from the checked-out commit".to_string()
         };
-        report.notes.push(format!(
-            "tree checks (`codeflow validate --docs`, quick targets) did not run for '{}': \
-             {why}; CI runs them",
-            r.remote_branch().unwrap_or_default()
+        report.notes.push(Finding::new(
+            format!(
+                "tree checks (`codeflow validate --docs`, quick targets) did not run for '{}': \
+                 {why}; CI runs them",
+                r.remote_branch().unwrap_or_default()
+            ),
+            remedy::PUSH_TREE_UNCHECKED.remedy(),
         ));
     }
 
@@ -147,17 +151,31 @@ pub(super) fn run(
         report.notes.push(note);
     }
     report
-        .notes
+        .status
         .push(format!("push set finished in {:.1}s", total.as_secs_f64()));
 }
 
-fn violation(policy: &GitPolicy, message: String, remedy: String) -> Violation {
+fn violation(
+    policy: &GitPolicy,
+    message: String,
+    remedy: codeflow_core::remedy::Remedy,
+) -> Violation {
     Violation::new(
         "git.test_gate_on_push",
         policy.test_gate_on_push,
         message,
         remedy,
     )
+}
+
+/// How to clear a push-set check: rerun it by hand after fixing its findings.
+fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
+    let (clearing, rest) = match args.split_first() {
+        Some((&"validate", rest)) => (&codeflow_core::remedy::PUSH_SET_VALIDATE, rest),
+        Some((_, rest)) => (&codeflow_core::remedy::PUSH_SET_CI, rest),
+        None => (&codeflow_core::remedy::PUSH_SET_CI, args),
+    };
+    clearing.with(&[("args", &rest.join(" "))])
 }
 
 /// Run `codeflow ci` over each pushed ref's range, or note why it could not.
@@ -195,10 +213,13 @@ fn run_ci_ranges(
                 .failure()
                 .map(|why| format!("; asking it: {why}"))
                 .unwrap_or_default();
-            report.notes.push(format!(
-                "`codeflow ci` did not run for '{branch}': range unresolved (a new \
+            report.notes.push(Finding::new(
+                format!(
+                    "`codeflow ci` did not run for '{branch}': range unresolved (a new \
                      branch, and neither the destination's advertised tips nor tracking \
                      refs bound to it give a base{why}); CI checks it"
+                ),
+                remedy::PUSH_RANGE_UNRESOLVED.remedy(),
             ));
         }
     }
@@ -226,25 +247,31 @@ fn release_preflight(
     });
     match result {
         Ok(outcome) => {
-            report.notes.extend(
-                outcome
-                    .notes
-                    .iter()
-                    .map(|note| format!("release preflight ({branch}): {note}")),
-            );
+            report.notes.extend(outcome.notes.iter().map(|note| {
+                Finding::new(
+                    format!("release preflight ({branch}): {note}"),
+                    remedy::RELEASE_PREFLIGHT_NOTE.with(&[
+                        ("script", codeflow_core::release_local::SCRIPT),
+                        ("branch", branch),
+                    ]),
+                )
+            }));
             if outcome.blocked() {
                 report.violations.push(violation(
                     policy,
                     format!("release preflight ({branch}): this push breaks the release tree"),
-                    format!(
-                        "fix the release state named above, then rerun `python3 {} preflight --branch {branch}`",
-                        codeflow_core::release_local::SCRIPT
-                    ),
+                    codeflow_core::remedy::RELEASE_PREFLIGHT.with(&[
+                        ("script", codeflow_core::release_local::SCRIPT),
+                        ("branch", branch),
+                    ]),
                 ));
             }
         }
-        Err(error) => report.notes.push(format!(
-            "release preflight did not run for '{branch}': {error}; the pull request job checks it"
+        Err(error) => report.notes.push(Finding::new(
+            format!(
+                "release preflight did not run for '{branch}': {error}; the pull request job checks it"
+            ),
+            remedy::RELEASE_PREFLIGHT_UNRUN.with(&[("branch", branch)]),
         )),
     }
 }
@@ -275,14 +302,10 @@ fn run_check(
             // A passing check can still have degraded, or name what a human
             // reviews (a baseline list it introduces); keep that legible.
             let stderr = String::from_utf8_lossy(&out.stderr);
-            report.notes.extend(
-                stderr
-                    .lines()
-                    .filter(|line| {
-                        (line.contains("warning:") && !line.contains("registry"))
-                            || line.contains("notice:")
-                    })
-                    .map(|line| format!("`{shown}`: {}", line.trim())),
+            report.relayed.extend(
+                relayed_findings(&stderr)
+                    .into_iter()
+                    .map(|finding| format!("`{shown}`: {finding}")),
             );
         }
         Ok(out) => {
@@ -291,15 +314,52 @@ fn run_check(
             report.violations.push(violation(
                 policy,
                 format!("push set check failed: `{shown}` (output above)"),
-                format!("fix the findings, then rerun `{shown}`"),
+                check_remedy(args),
             ));
         }
         Err(error) => report.violations.push(violation(
             policy,
             format!("push set check could not run: `{shown}`: {error}"),
-            format!("run `{shown}` by hand"),
+            check_remedy(args),
         )),
     }
+}
+
+/// The warnings, notes and notices a passing check printed, each with the
+/// lines under it that name its remedy. The per-user registry warning is
+/// left out: this hook's own process reports it.
+fn relayed_findings(stderr: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in stderr.lines() {
+        if line.starts_with("  ") {
+            if open {
+                if let Some(last) = found.last_mut() {
+                    last.push('\n');
+                    last.push_str(line);
+                }
+            }
+            continue;
+        }
+        open = is_finding_header(line);
+        if open {
+            found.push(line.trim().to_string());
+        }
+    }
+    found
+}
+
+/// Whether `line` opens a finding: `<plane>: warning`, `note` or `notice`,
+/// followed by `:` (a finding) or ` —` (a policy rule).
+fn is_finding_header(line: &str) -> bool {
+    let Some((plane, rest)) = line.split_once(": ") else {
+        return false;
+    };
+    plane != "codeflow"
+        && ["warning", "note", "notice"].iter().any(|kind| {
+            rest.strip_prefix(kind)
+                .is_some_and(|after| after.starts_with(':') || after.starts_with(" —"))
+        })
 }
 
 /// The remote-tracking prefix a configured remote fetches into (for example
@@ -519,7 +579,7 @@ fn kill_group(child: &mut std::process::Child) {
 /// is wider than the push itself.
 struct RangeBase {
     base: String,
-    note: Option<String>,
+    note: Option<Finding>,
 }
 
 /// The base of a pushed branch's range. Only history known to be on the
@@ -557,10 +617,13 @@ fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option
                 .map(|base| RangeBase { base, note: None });
         }
         Advertised::Tips(_) => None,
-        Advertised::Failed(why) => Some(format!(
-            "asking the destination for its branches failed ({why}): the range of new \
-             branch '{}' is bounded by its tracked protected branches instead",
-            r.remote_branch().unwrap_or_default()
+        Advertised::Failed(why) => Some(Finding::new(
+            format!(
+                "asking the destination for its branches failed ({why}): the range of new \
+                 branch '{}' is bounded by its tracked protected branches instead",
+                r.remote_branch().unwrap_or_default()
+            ),
+            remedy::PUSH_DESTINATION_SILENT.remedy(),
         )),
     };
     let ns = destination.namespace?;
@@ -624,9 +687,12 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
     let rewrite = format!("'{branch}' rewrites the destination's {}", short(old));
     let note = match (failed, count) {
         (None, None) => None,
-        (None, Some(count)) => Some(format!(
-            "{rewrite}: `codeflow ci` checks {count} commit(s), leaving out history the \
-             destination's branches and tags hold"
+        (None, Some(count)) => Some(Finding::new(
+            format!(
+                "{rewrite}: `codeflow ci` checks {count} commit(s), leaving out history the \
+                 destination's branches and tags hold"
+            ),
+            remedy::PUSH_REWRITE.remedy(),
         )),
         (Some(why), count) => {
             let fallback = format!(
@@ -634,13 +700,16 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
                  '{branch}' is bounded by its advertised {} alone",
                 short(old)
             );
-            Some(match count {
-                Some(count) => format!(
-                    "{fallback}; {rewrite}: `codeflow ci` checks all {count} commit(s) not \
-                     on it, including any the rewrite brought in from other branches"
-                ),
-                None => fallback,
-            })
+            Some(Finding::new(
+                match count {
+                    Some(count) => format!(
+                        "{fallback}; {rewrite}: `codeflow ci` checks all {count} commit(s) not \
+                         on it, including any the rewrite brought in from other branches"
+                    ),
+                    None => fallback,
+                },
+                remedy::PUSH_DESTINATION_SILENT.remedy(),
+            ))
         }
     };
     RangeBase { base, note }
@@ -666,7 +735,7 @@ fn bounded_by<'a>(
 
 /// The base from `rev-list --boundary` output: its first boundary commit, or
 /// the pushed sha itself when no commit is new.
-fn boundary(listed: &str, local_sha: &str, note: Option<String>) -> Option<RangeBase> {
+fn boundary(listed: &str, local_sha: &str, note: Option<Finding>) -> Option<RangeBase> {
     if listed.trim().is_empty() {
         return Some(RangeBase {
             base: local_sha.to_string(),

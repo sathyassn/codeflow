@@ -211,7 +211,11 @@ fn git_guard(stdin: &str) -> i32 {
         Err(e) => {
             // Fail open with a visible warning: a malformed payload must not
             // veto every shell call (charter principle 8 — legible, not silent).
-            eprintln!("codeflow git-guard: warning: unreadable hook payload ({e}); allowing");
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("unreadable hook payload ({e}); allowing"),
+                codeflow_core::remedy::GUARD_PAYLOAD_UNREAD.remedy(),
+            );
+            eprintln!("{}", finding.line("codeflow git-guard", "warning"));
             return 0;
         }
     };
@@ -265,7 +269,11 @@ fn exec_guard(stdin: &str) -> i32 {
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("codeflow exec-guard: warning: unreadable hook payload ({e}); allowing");
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("unreadable hook payload ({e}); allowing"),
+                codeflow_core::remedy::GUARD_PAYLOAD_UNREAD.remedy(),
+            );
+            eprintln!("{}", finding.line("codeflow exec-guard", "warning"));
             return 0;
         }
     };
@@ -323,7 +331,11 @@ fn session_summary(stdin: &str) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("codeflow session-summary: warning: {e} — session unaffected");
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("{e}; session unaffected"),
+                codeflow_core::remedy::SESSION_SUMMARY_UNWRITTEN.remedy(),
+            );
+            eprintln!("{}", finding.line("codeflow session-summary", "warning"));
             0
         }
     }

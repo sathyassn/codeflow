@@ -66,7 +66,7 @@ fn push(tagged: &mut Vec<super::TaggedViolation>, level: PolicyLevel, message: S
             RULE,
             level,
             message,
-            "issue ids with `codeflow task|epic|spec new`; a maintainer admits a hand-written record with `codeflow ids admit`".to_string(),
+            codeflow_core::remedy::ID_REGISTRY.remedy(),
         ),
     });
 }

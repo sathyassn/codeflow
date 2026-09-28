@@ -57,11 +57,11 @@ pub fn project_root(start: &std::path::Path) -> PathBuf {
 pub fn render_outcome(
     plane: &str,
     violations: &[Violation],
-    notes: &[String],
+    notes: &[codeflow_core::remedy::Finding],
     block_code: i32,
 ) -> i32 {
     for note in notes {
-        eprintln!("codeflow {plane}: {note}");
+        eprintln!("{}", note.line(&format!("codeflow {plane}"), "note"));
     }
     for v in violations {
         eprintln!("{}", v.render(plane));
@@ -89,7 +89,11 @@ pub fn touch_registry_best_effort() {
     };
     if let Some(root) = registry::find_repo_root(&cwd) {
         if let Err(e) = registry::touch_registry(&home, &root) {
-            eprintln!("warning: registry touch failed: {e}");
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("registry touch failed: {e}"),
+                codeflow_core::remedy::REGISTRY_UNWRITTEN.remedy(),
+            );
+            eprintln!("{}", finding.line("codeflow", "warning"));
         }
     }
 }
