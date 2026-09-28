@@ -246,8 +246,8 @@ struct Snapshot {
 
 impl SessionStore {
     /// The session's events as v2 feedback lines that the filter admits, in
-    /// the order they were stored: by time, a review before an answer of the
-    /// same second, then by sequence. Reading changes no state.
+    /// the order they were stored: by time, a review before any other kind
+    /// of the same second, then by sequence. Reading changes no state.
     pub fn feedback_lines(&self, id: Uuid, filter: &EventFilter) -> Result<Vec<FeedbackLine>> {
         let snapshot = {
             let _lock = self.lock_session(id)?;

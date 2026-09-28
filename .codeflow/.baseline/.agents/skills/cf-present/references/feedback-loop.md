@@ -11,6 +11,10 @@ event is pending. It prints every pending event as one JSON line, marks each
 one delivered, and exits. Each line already shows `"status": "delivered"`,
 a `kind` of `review`, `answer` or `amendment`, and `"untrusted": true`.
 
+Lines come in the order they were stored: by time, a review before any other
+kind at the same second, then by sequence. `responses list` uses the same
+order.
+
 | Exit | Meaning | What to do |
 |---|---|---|
 | 0 | events printed | read them, act, acknowledge, start the loop again |
