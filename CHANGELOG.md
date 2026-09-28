@@ -45,6 +45,20 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Workspace mode for umbrella repositories.** An umbrella that holds
+  several projects, each its own repository, keeps its root checkout on a
+  working branch, `integration/workspace` by convention.
+  `codeflow init --workspace` creates or reuses that branch, sets
+  `git.root_branch` and adds every nested repository to `.gitignore`,
+  leaving registered submodules alone; it refuses over uncommitted changes.
+  Plain `init` and `update` in such a folder switch nothing and name the
+  flag. `codeflow doctor` reports the root branch, nested repositories no
+  tracked `.gitignore` covers, and linked worktrees outside
+  `git.worktree_locations`, whose default covers `.worktrees/` and the
+  folders Claude, Codex and Grok manage. See `docs/workspace-mode.md` and
+  ADR-0074.
+
+<!-- codeflow:release-impact minor -->
 - **Guidance retention evaluations.** `cf-evaluate-model` gains a scripted
   multi-turn case kind: the fixture supplies warm-up turns, the case prompt
   is the probe, and only the probe turn is graded. A new
@@ -380,6 +394,16 @@ publication date._
   consistent, and takes errata as dated notes in a `## Errata` block.
 
 ### Changed
+
+<!-- codeflow:release-impact minor -->
+- **The root checkout keeps its root branch.** Task work happens in a
+  linked worktree. A commit at the root checkout on any branch other than
+  its root branch (`git.root_branch`, by default the default branch) is now
+  refused for agents by git-guard and by the git hooks when a harness marks
+  the session; a human at their own terminal is warned. This is a behaviour
+  change for adopters whose agents commit at the root on a feature branch:
+  move that work into a worktree, or set `git.root_checkout_commits` to
+  `warn` or `off`. See ADR-0074.
 
 <!-- codeflow:release-impact minor -->
 - **Present no longer draws Mermaid diagrams.** The `diagram` block leaves
