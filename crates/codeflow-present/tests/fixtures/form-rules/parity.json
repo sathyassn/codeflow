@@ -1,0 +1,1029 @@
+{
+  "$comment": "Answer checks the page (web/src/form-rules.ts, scripts/check.mjs) and the server (src/form.rs, answer_contract_tests.rs) must agree on, error for error in order (SPC-014 B6).",
+  "document": {
+    "schema_version": 2,
+    "title": "Answer check parity",
+    "blocks": [
+      {
+        "type": "form",
+        "id": "all-kinds",
+        "title": "Every field kind",
+        "fields": [
+          {
+            "id": "name",
+            "label": "Name",
+            "kind": "text",
+            "min_length": 2,
+            "max_length": 5
+          },
+          {
+            "id": "mail",
+            "label": "Mail",
+            "kind": "text",
+            "format": "email"
+          },
+          {
+            "id": "link",
+            "label": "Link",
+            "kind": "text",
+            "format": "uri"
+          },
+          {
+            "id": "day",
+            "label": "Day",
+            "kind": "text",
+            "format": "date"
+          },
+          {
+            "id": "when",
+            "label": "When",
+            "kind": "text",
+            "format": "date-time"
+          },
+          {
+            "id": "note",
+            "label": "Note",
+            "kind": "text",
+            "format": "multiline",
+            "rationale": "none"
+          },
+          {
+            "id": "ratio",
+            "label": "Ratio",
+            "kind": "number",
+            "minimum": -1.5,
+            "maximum": 2.5
+          },
+          {
+            "id": "count",
+            "label": "Count",
+            "kind": "integer",
+            "minimum": -3,
+            "maximum": 10
+          },
+          {
+            "id": "big",
+            "label": "Big",
+            "kind": "integer"
+          },
+          {
+            "id": "flag",
+            "label": "Flag",
+            "kind": "boolean",
+            "rationale": "required"
+          },
+          {
+            "id": "pick",
+            "label": "Pick",
+            "kind": "choice",
+            "rationale": "optional",
+            "options": [
+              {
+                "value": "x",
+                "label": "X"
+              },
+              {
+                "value": "y",
+                "label": "Y",
+                "recommended": true
+              },
+              {
+                "value": "z",
+                "label": "Z"
+              }
+            ]
+          },
+          {
+            "id": "many",
+            "label": "Many",
+            "kind": "choices",
+            "min_items": 1,
+            "max_items": 2,
+            "options": [
+              {
+                "value": "p",
+                "label": "P"
+              },
+              {
+                "value": "q",
+                "label": "Q"
+              },
+              {
+                "value": "r",
+                "label": "R"
+              }
+            ]
+          }
+        ],
+        "required": [
+          "name",
+          "flag"
+        ]
+      },
+      {
+        "type": "decision",
+        "id": "d",
+        "title": "Pick one",
+        "markdown": "Choose.",
+        "options": [
+          {
+            "value": "a",
+            "label": "A",
+            "recommended": true
+          },
+          {
+            "value": "b",
+            "label": "B"
+          }
+        ],
+        "rationale": "required"
+      }
+    ]
+  },
+  "formats": [
+    {
+      "format": "email",
+      "value": "a@b.c",
+      "valid": true
+    },
+    {
+      "format": "email",
+      "value": "first.last@example.org",
+      "valid": true
+    },
+    {
+      "format": "email",
+      "value": "@b.c",
+      "valid": false
+    },
+    {
+      "format": "email",
+      "value": "a@bc",
+      "valid": false
+    },
+    {
+      "format": "email",
+      "value": "a@b@c.d",
+      "valid": false
+    },
+    {
+      "format": "email",
+      "value": "a b@c.d",
+      "valid": false
+    },
+    {
+      "format": "email",
+      "value": "a@b.c",
+      "valid": false
+    },
+    {
+      "format": "email",
+      "value": "a﻿@b.c",
+      "valid": true
+    },
+    {
+      "format": "email",
+      "value": "a@b.c　",
+      "valid": false
+    },
+    {
+      "format": "email",
+      "value": "a@b.c ",
+      "valid": false
+    },
+    {
+      "format": "email",
+      "value": "",
+      "valid": false
+    },
+    {
+      "format": "email",
+      "value": "a@.",
+      "valid": true
+    },
+    {
+      "format": "uri",
+      "value": "https://example.org/x?y=1",
+      "valid": true
+    },
+    {
+      "format": "uri",
+      "value": "mailto:a@b.c",
+      "valid": true
+    },
+    {
+      "format": "uri",
+      "value": "urn:isbn:1",
+      "valid": true
+    },
+    {
+      "format": "uri",
+      "value": "x:",
+      "valid": false
+    },
+    {
+      "format": "uri",
+      "value": ":rest",
+      "valid": false
+    },
+    {
+      "format": "uri",
+      "value": "1http://a",
+      "valid": false
+    },
+    {
+      "format": "uri",
+      "value": "http://a b",
+      "valid": false
+    },
+    {
+      "format": "uri",
+      "value": "a+b-c.d:rest",
+      "valid": true
+    },
+    {
+      "format": "uri",
+      "value": "http:é",
+      "valid": false
+    },
+    {
+      "format": "uri",
+      "value": "no-colon",
+      "valid": false
+    },
+    {
+      "format": "date",
+      "value": "2024-02-29",
+      "valid": true
+    },
+    {
+      "format": "date",
+      "value": "2023-02-29",
+      "valid": false
+    },
+    {
+      "format": "date",
+      "value": "1900-02-29",
+      "valid": false
+    },
+    {
+      "format": "date",
+      "value": "2000-02-29",
+      "valid": true
+    },
+    {
+      "format": "date",
+      "value": "2024-13-01",
+      "valid": false
+    },
+    {
+      "format": "date",
+      "value": "2024-00-10",
+      "valid": false
+    },
+    {
+      "format": "date",
+      "value": "2024-04-31",
+      "valid": false
+    },
+    {
+      "format": "date",
+      "value": "2024-04-30",
+      "valid": true
+    },
+    {
+      "format": "date",
+      "value": "2024-4-01",
+      "valid": false
+    },
+    {
+      "format": "date",
+      "value": "２０２４-01-01",
+      "valid": false
+    },
+    {
+      "format": "date",
+      "value": "2024-01-01 ",
+      "valid": false
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T12:30:00Z",
+      "valid": true
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29t12:30:00z",
+      "valid": true
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T23:59:60+05:30",
+      "valid": true
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T24:00:00Z",
+      "valid": false
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T12:60:00Z",
+      "valid": false
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T12:30:00.123-08:00",
+      "valid": true
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T12:30:00.Z",
+      "valid": false
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T12:30:00+24:00",
+      "valid": false
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T12:30:00",
+      "valid": false
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29 12:30:00Z",
+      "valid": false
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T12:30:00+05:60",
+      "valid": false
+    },
+    {
+      "format": "date-time",
+      "value": "2023-02-29T12:30:00Z",
+      "valid": false
+    },
+    {
+      "format": "date-time",
+      "value": "2024-02-29T12:30:00+0530",
+      "valid": false
+    }
+  ],
+  "answers": [
+    {
+      "name": "a minimal valid answer",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": []
+    },
+    {
+      "name": "every field answered",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "mail": "a@b.c",
+        "link": "https://example.org",
+        "day": "2024-02-29",
+        "when": "2024-02-29T12:30:00Z",
+        "note": "",
+        "ratio": 2.5,
+        "count": -3,
+        "big": 9007199254740991,
+        "pick": "y",
+        "many": [
+          "p",
+          "r"
+        ]
+      },
+      "rationales": {
+        "flag": "because",
+        "pick": "fine"
+      },
+      "errors": []
+    },
+    {
+      "name": "nothing answered",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {},
+      "rationales": {},
+      "errors": [
+        [
+          "name",
+          "required"
+        ],
+        [
+          "flag",
+          "required"
+        ]
+      ]
+    },
+    {
+      "name": "an empty string and null answer nothing",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "",
+        "flag": null
+      },
+      "rationales": {},
+      "errors": [
+        [
+          "name",
+          "required"
+        ],
+        [
+          "flag",
+          "required"
+        ]
+      ]
+    },
+    {
+      "name": "text bounds count UTF-16 units",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "😀😀😀",
+        "flag": true
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "name",
+          "too_long"
+        ]
+      ]
+    },
+    {
+      "name": "text too short",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "é",
+        "flag": true
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "name",
+          "too_short"
+        ]
+      ]
+    },
+    {
+      "name": "text of the wrong kind",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": 5,
+        "flag": true
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "name",
+          "wrong_kind"
+        ]
+      ]
+    },
+    {
+      "name": "formats refused",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "mail": "a@bc",
+        "link": "x:",
+        "day": "2023-02-29",
+        "when": "2024-02-29T12:30:00"
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "mail",
+          "format"
+        ],
+        [
+          "link",
+          "format"
+        ],
+        [
+          "day",
+          "format"
+        ],
+        [
+          "when",
+          "format"
+        ]
+      ]
+    },
+    {
+      "name": "number bounds",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "ratio": 2.51,
+        "count": 11
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "ratio",
+          "above_maximum"
+        ],
+        [
+          "count",
+          "above_maximum"
+        ]
+      ]
+    },
+    {
+      "name": "number lower bounds",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "ratio": -1.6,
+        "count": -4
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "ratio",
+          "below_minimum"
+        ],
+        [
+          "count",
+          "below_minimum"
+        ]
+      ]
+    },
+    {
+      "name": "numbers of the wrong kind",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "ratio": "1",
+        "count": true
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "ratio",
+          "wrong_kind"
+        ],
+        [
+          "count",
+          "wrong_kind"
+        ]
+      ]
+    },
+    {
+      "name": "an integer with a fraction",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "count": 1.5
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "count",
+          "not_integer"
+        ]
+      ]
+    },
+    {
+      "name": "integers beyond the safe range",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "big": 9007199254740992,
+        "count": -9007199254740992
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "count",
+          "below_minimum"
+        ],
+        [
+          "big",
+          "above_maximum"
+        ]
+      ]
+    },
+    {
+      "name": "a huge integer",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "big": 1e+300
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "big",
+          "above_maximum"
+        ]
+      ]
+    },
+    {
+      "name": "a boolean of the wrong kind",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": "yes"
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "flag",
+          "wrong_kind"
+        ]
+      ]
+    },
+    {
+      "name": "a required rationale missing",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true
+      },
+      "rationales": {},
+      "errors": [
+        [
+          "flag",
+          "rationale_required"
+        ]
+      ]
+    },
+    {
+      "name": "a blank required rationale",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true
+      },
+      "rationales": {
+        "flag": "   "
+      },
+      "errors": [
+        [
+          "flag",
+          "rationale_required"
+        ]
+      ]
+    },
+    {
+      "name": "choice and choices refused",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "pick": "w",
+        "many": [
+          "p",
+          "p"
+        ]
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "pick",
+          "unknown_option"
+        ],
+        [
+          "many",
+          "wrong_kind"
+        ]
+      ]
+    },
+    {
+      "name": "a choice of the wrong kind",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "pick": 1,
+        "many": "p"
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "pick",
+          "wrong_kind"
+        ],
+        [
+          "many",
+          "wrong_kind"
+        ]
+      ]
+    },
+    {
+      "name": "too many and unknown options",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "many": [
+          "p",
+          "q",
+          "r"
+        ]
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "many",
+          "too_many"
+        ]
+      ]
+    },
+    {
+      "name": "an unknown option in choices",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "many": [
+          "s"
+        ]
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "many",
+          "unknown_option"
+        ]
+      ]
+    },
+    {
+      "name": "an empty list for a choices field",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "many": []
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "many",
+          "too_few"
+        ]
+      ]
+    },
+    {
+      "name": "a rationale on a field that takes none",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "note": "hi"
+      },
+      "rationales": {
+        "flag": "because",
+        "note": "why"
+      },
+      "errors": [
+        [
+          "note",
+          "rationale_not_allowed"
+        ]
+      ]
+    },
+    {
+      "name": "unknown keys, sorted",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "zzz": 1
+      },
+      "rationales": {
+        "flag": "because",
+        "aaa": "x"
+      },
+      "errors": [
+        [
+          "aaa",
+          "unknown_field"
+        ],
+        [
+          "zzz",
+          "unknown_field"
+        ]
+      ]
+    },
+    {
+      "name": "a reason on a submit",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "reason": "no",
+      "errors": [
+        [
+          "reason",
+          "unknown_field"
+        ]
+      ]
+    },
+    {
+      "name": "a decline carries nothing",
+      "form": "all-kinds",
+      "outcome": "decline",
+      "values": {
+        "name": "ab"
+      },
+      "rationales": {
+        "flag": "x"
+      },
+      "reason": "Not my call.",
+      "errors": [
+        [
+          "name",
+          "unknown_field"
+        ],
+        [
+          "flag",
+          "rationale_not_allowed"
+        ]
+      ]
+    },
+    {
+      "name": "a decline reason at 4 KiB",
+      "form": "all-kinds",
+      "outcome": "decline",
+      "values": {},
+      "rationales": {},
+      "reason": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "errors": []
+    },
+    {
+      "name": "a decline reason over 4 KiB",
+      "form": "all-kinds",
+      "outcome": "decline",
+      "values": {},
+      "rationales": {},
+      "reason": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééx",
+      "errors": [
+        [
+          "reason",
+          "too_long"
+        ]
+      ]
+    },
+    {
+      "name": "a cancel with a reason",
+      "form": "all-kinds",
+      "outcome": "cancel",
+      "values": {},
+      "rationales": {},
+      "reason": "later",
+      "errors": [
+        [
+          "reason",
+          "unknown_field"
+        ]
+      ]
+    },
+    {
+      "name": "a plain cancel",
+      "form": "all-kinds",
+      "outcome": "cancel",
+      "values": {},
+      "rationales": {},
+      "errors": []
+    },
+    {
+      "name": "a decision answered with its rationale",
+      "form": "d",
+      "outcome": "submit",
+      "values": {
+        "choice": "a"
+      },
+      "rationales": {
+        "choice": "because"
+      },
+      "errors": []
+    },
+    {
+      "name": "a decision without its required rationale",
+      "form": "d",
+      "outcome": "submit",
+      "values": {
+        "choice": "b"
+      },
+      "rationales": {},
+      "errors": [
+        [
+          "choice",
+          "rationale_required"
+        ]
+      ]
+    },
+    {
+      "name": "a decision with an unknown option",
+      "form": "d",
+      "outcome": "submit",
+      "values": {
+        "choice": "c"
+      },
+      "rationales": {
+        "choice": "because"
+      },
+      "errors": [
+        [
+          "choice",
+          "unknown_option"
+        ]
+      ]
+    },
+    {
+      "name": "a decision unanswered",
+      "form": "d",
+      "outcome": "submit",
+      "values": {},
+      "rationales": {},
+      "errors": [
+        [
+          "choice",
+          "required"
+        ]
+      ]
+    }
+  ]
+}

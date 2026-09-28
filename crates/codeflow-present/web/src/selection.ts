@@ -8,6 +8,7 @@ const REGION_SCALE = 1_000_000;
 const ANNOTATABLE = [
   "h1", "h2", "h3", "p", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tr", "th", "td",
   "figure", "figcaption", "img", "video", "audio", "svg", "details", "summary", "article", "aside", ".cf-line",
+  ".cf-field",
 ].join(",");
 
 /**

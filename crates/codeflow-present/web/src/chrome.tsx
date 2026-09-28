@@ -22,6 +22,7 @@ import type {
 import { parseServiceError } from "./contracts";
 import type { EntitySelector } from "./contracts";
 import { followSessionEvents } from "./events";
+import { SESSION_EVENT, type SessionEventDetail } from "./forms";
 import { postJson, PresentRequestError } from "./http";
 import {
   annotatableAncestor,
@@ -591,7 +592,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (event.button !== 0 || !(event.target instanceof Element)) return;
       if (!documentRoot.contains(event.target)) return;
       if (event.target.closest(".cf-marker, .cf-marker-layer")) return;
-      if (event.target.closest("button, a, input, textarea, select")) return;
+      // A form's controls are review targets while commenting; the form
+      // runtime keeps the gesture from changing them (SPC-014 B6).
+      if (event.target.closest("button, a, input, textarea, select") && !event.target.closest("[data-cf-form]")) return;
       let releasedText = false;
       if (pendingPinRef.current) {
         releasedText = capturedSelectionCovers(pendingPinRef.current, event.clientX, event.clientY);
@@ -1138,6 +1141,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   function handleEvent(event: SessionEvent): void {
     setEventMessage(event.message ?? null);
+    // Forms keep their drafts in the page and show the notice themselves.
+    if (event.kind === "revision" || event.kind === "session_closed") {
+      documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: event.kind }));
+    }
     if (event.kind === "revision") {
       const notice = "A newer document revision is available. Finish or discard this review before reloading.";
       setStatus(notice);

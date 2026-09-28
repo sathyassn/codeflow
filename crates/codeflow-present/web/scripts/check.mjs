@@ -16,6 +16,7 @@ checkBinaryAttributes();
 run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/likeness.test.mjs"]);
 await checkSelectorOffsets();
 await checkEntityLabelParity();
+await checkAnswerRuleParity();
 
 const scratch = await mkdtemp(join(tmpdir(), "cf-present-check-"));
 try {
@@ -66,6 +67,29 @@ async function checkEntityLabelParity() {
   if (JSON.stringify(rows) !== JSON.stringify(golden)) {
     throw new Error(`the grammar's entity table differs from entities/landing.json:\n${JSON.stringify(rows, null, 2)}`);
   }
+}
+
+// The page refuses an answer exactly as the server would (SPC-014 B6): both
+// run the vectors in form-rules/parity.json, and a Rust test in
+// codeflow-present asserts the same errors in the same order.
+async function checkAnswerRuleParity() {
+  const rules = await import("../src/form-rules.ts");
+  const parity = JSON.parse(await readFile(join(crateRoot, "tests/fixtures/form-rules/parity.json"), "utf8"));
+  const formats = { email: rules.isEmail, uri: rules.isUri, date: rules.isFullDate, "date-time": rules.isDateTime };
+  for (const vector of parity.formats) {
+    if (formats[vector.format](vector.value) !== vector.valid) {
+      throw new Error(`form-rules ${vector.format} disagrees with the server on ${JSON.stringify(vector.value)}`);
+    }
+  }
+  const forms = new Map(parity.document.blocks.map((block) => [block.id, rules.rulesFromBlock(block)]));
+  for (const answer of parity.answers) {
+    const draft = { outcome: answer.outcome, values: answer.values, rationales: answer.rationales, ...(answer.reason !== undefined ? { reason: answer.reason } : {}) };
+    const errors = rules.validateAnswer(forms.get(answer.form), draft).map((error) => [error.field, error.code]);
+    if (JSON.stringify(errors) !== JSON.stringify(answer.errors)) {
+      throw new Error(`form-rules disagrees with the server on "${answer.name}": ${JSON.stringify(errors)}`);
+    }
+  }
+  if (parity.answers.length < 30) throw new Error("form-rules parity lost its cases");
 }
 
 async function checkSelectorOffsets() {

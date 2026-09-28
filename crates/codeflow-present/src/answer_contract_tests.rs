@@ -722,3 +722,72 @@ fn answers_are_refused_for_closed_sessions_unknown_forms_and_foreign_amendments(
     assert!(retry.replayed);
     assert_eq!(session.ledger_bytes(), before);
 }
+
+/// B6: the page and the server check answers alike. The vectors in
+/// `tests/fixtures/form-rules/parity.json` are also run by the page's
+/// `form-rules.ts` in `web/scripts/check.mjs`; both must give exactly these
+/// errors in this order.
+#[test]
+fn the_server_answer_checks_match_the_shared_parity_vectors() {
+    use crate::form::{is_date_time, is_email, is_full_date, is_uri, AnswerRequest, FormView};
+
+    let parity: Value = serde_json::from_slice(
+        &std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/form-rules/parity.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for vector in parity["formats"].as_array().unwrap() {
+        let value = vector["value"].as_str().unwrap();
+        let valid = match vector["format"].as_str().unwrap() {
+            "email" => is_email(value),
+            "uri" => is_uri(value),
+            "date" => is_full_date(value),
+            "date-time" => is_date_time(value),
+            other => panic!("unknown format {other}"),
+        };
+        assert_eq!(
+            valid,
+            vector["valid"].as_bool().unwrap(),
+            "{}: {value:?}",
+            vector["format"]
+        );
+    }
+    let ParsedDocument::Supported(document) =
+        parse_document(&serde_json::to_vec(&parity["document"]).unwrap()).unwrap()
+    else {
+        panic!("the parity document is a v2 document")
+    };
+    let mut seen = 0;
+    for case in parity["answers"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let form = FormView::of(find(&document, case["form"].as_str().unwrap())).unwrap();
+        let mut request = serde_json::json!({
+            "request_id": Uuid::nil(), "session_id": Uuid::nil(), "revision": 1,
+            "form_id": case["form"], "form_digest": form.digest(), "outcome": case["outcome"],
+            "values": case["values"], "rationales": case["rationales"],
+        });
+        if let Some(reason) = case.get("reason") {
+            request["reason"] = reason.clone();
+        }
+        let request: AnswerRequest = serde_json::from_value(request).unwrap();
+        let errors = match form.validate_answer(&request) {
+            Ok(()) => Vec::new(),
+            Err(PresentError::Review { code, details, .. }) => {
+                assert_eq!(code, "invalid_answer", "{name}");
+                details["fields"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|entry| serde_json::json!([entry["field"], entry["code"]]))
+                    .collect()
+            }
+            Err(other) => panic!("{name}: {other}"),
+        };
+        assert_eq!(Value::Array(errors), case["errors"], "{name}");
+        seen += 1;
+    }
+    assert!(seen >= 30, "{seen} parity cases");
+}
