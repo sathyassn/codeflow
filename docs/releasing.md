@@ -46,12 +46,10 @@ label is a withdrawal (it needs the `Withdrawal` field), and a changed body
 or impact under a kept label is an edit of that item. An entry is the whole
 bullet as Markdown renders it, including unindented lines that continue its
 paragraph. An edit is assessed at its impact like an addition, whatever the
-declaration: the checker cannot prove that changed words keep their meaning,
-so only rewrapping prose, which keeps every word, paragraph, code span, the
-label and the impact, is not an edit. An entry that holds code or nested
-structure (a list, quote, table, fence or hard break) is compared byte for
-byte, since there indentation and line breaks carry meaning. Moving an entry
-under another heading is not an edit either.
+declaration: the checker cannot prove that a change keeps the entry's
+meaning, so entries compare byte for byte and a rewrap is an edit too (in
+code and nested Markdown, whitespace carries meaning). Moving an entry under
+another heading, which leaves its bytes alone, is not an edit.
 Lowering an entry's impact needs `Withdrawal`, and a renamed label is a
 withdrawal plus an addition. Notes outside entries, such as the upgrade steps,
 carry no impact and are judged in review.
@@ -88,7 +86,7 @@ proposed merge passes, `check-pr` accepts a PR that changes only
 manifest hashes, which `sync` writes together). The configuration comes from
 the base, so a repair that changes `.release/config.json` is refused; the
 output names the invariant repaired. A repair keeps every existing pending
-entry's words and impact (rewrapping aside); an edit waits for its own PR.
+entry byte for byte; an edit waits for its own PR.
 When a repair touches a managed baseline or the manifest, each baseline must
 carry the one managed stamp of the release version and the manifest must
 record its exact hash. Published sections are held to their exact public
