@@ -272,7 +272,7 @@ fn validate_field(form_context: &str, field: &FormField) -> Result<()> {
                     .map(|number| {
                         number
                             .as_i64()
-                            .filter(|value| value.abs() <= MAX_SAFE_INTEGER)
+                            .filter(|value| (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value))
                             .ok_or_else(|| {
                                 invalid(format!("{context}: integer bounds must be safe integers"))
                             })

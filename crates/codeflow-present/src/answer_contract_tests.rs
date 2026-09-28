@@ -275,6 +275,11 @@ fn form_definitions_refuse_misplaced_and_out_of_range_constraints() {
         parse_document(&bytes)
     };
     assert!(parse(serde_json::json!({ "id": "a", "label": "A", "kind": "boolean" })).is_ok());
+    assert!(parse(
+        serde_json::json!({ "id": "a", "label": "A", "kind": "integer",
+        "minimum": -9_007_199_254_740_991_i64, "maximum": 9_007_199_254_740_991_i64 })
+    )
+    .is_ok());
     for bad in [
         serde_json::json!({ "id": "a", "label": "A", "kind": "boolean", "options": [] }),
         serde_json::json!({ "id": "a", "label": "A", "kind": "text", "max_length": 16385 }),
@@ -282,6 +287,12 @@ fn form_definitions_refuse_misplaced_and_out_of_range_constraints() {
         serde_json::json!({ "id": "a", "label": "A", "kind": "text", "minimum": 1 }),
         serde_json::json!({ "id": "a", "label": "A", "kind": "integer", "minimum": 0.5 }),
         serde_json::json!({ "id": "a", "label": "A", "kind": "integer", "maximum": 9_007_199_254_740_992_u64 }),
+        serde_json::json!({ "id": "a", "label": "A", "kind": "integer", "minimum": -9_007_199_254_740_992_i64 }),
+        // The extreme signed integers are refused, not a panic.
+        serde_json::json!({ "id": "a", "label": "A", "kind": "integer", "minimum": i64::MIN }),
+        serde_json::json!({ "id": "a", "label": "A", "kind": "integer", "maximum": i64::MIN }),
+        serde_json::json!({ "id": "a", "label": "A", "kind": "integer", "minimum": i64::MAX }),
+        serde_json::json!({ "id": "a", "label": "A", "kind": "integer", "maximum": i64::MAX }),
         serde_json::json!({ "id": "a", "label": "A", "kind": "number", "minimum": 3, "maximum": 2 }),
         serde_json::json!({ "id": "a", "label": "A", "kind": "integer", "minimum": 3, "maximum": 2 }),
         serde_json::json!({ "id": "a", "label": "A", "kind": "choice" }),
