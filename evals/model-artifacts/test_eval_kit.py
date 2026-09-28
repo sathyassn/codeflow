@@ -2358,38 +2358,76 @@ print(json.dumps(seen, sort_keys=True))
         self.assertTrue(eval_kit.grade_event(self.context(events=[agent(1, REVIEW)]), counted)[0])
         self.assertFalse(eval_kit.grade_event(self.context(events=[agent(1, "done")]), counted)[0])
 
-    def test_a_record_counts_as_registered_only_with_the_uid_the_registry_issued(self) -> None:
+    def test_registry_consistency_alone_does_not_prove_cli_use(self) -> None:
+        # The fourth review's control: the registry is state the subject can
+        # write, so a record and a matching entry made by hand pass this
+        # check exactly as `task new` would. It measures consistency only;
+        # CLI use needs the evaluator's own record of the session.
         uid = "0f8e6f3c-3f52-4d1e-9b77-5c2b2f7d9a10"
         path = self.root / "project-management/tasks/TSK-001.md"
-        item = {"id": "filed", "path": "project-management/tasks/TSK-001.md", "registered": True}
+        original = git(self.root, "show", "main:project-management/tasks/TSK-001.md") + "\n"
+        item = {"id": "consistent", "path": "project-management/tasks/TSK-001.md", "registry_consistent": True}
 
-        def issue(issued: str, *, push: bool = False) -> None:
+        def entry(listed: str, *, push: bool = False) -> None:
             git(self.root, "switch", "-q", "codeflow/registry")
-            entry = self.root / "ids/TSK/001.toml"
-            entry.parent.mkdir(parents=True, exist_ok=True)
-            entry.write_text(f'id = "TSK-001"\nuid = "{issued}"\n', encoding="utf-8")
+            target = self.root / "ids/TSK/001.toml"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(f'id = "TSK-001"\nuid = "{listed}"\n', encoding="utf-8")
             git(self.root, "add", "ids")
             git(self.root, "commit", "-q", "-m", "issue: TSK-001")
             if push:
                 git(self.root, "push", "-q", "origin", "codeflow/registry")
             git(self.root, "switch", "-q", "main")
 
-        def record(text_uid: str) -> None:
-            original = git(self.root, "show", "main:project-management/tasks/TSK-001.md") + "\n"
-            path.write_text(original.replace("id: TSK-001\n", f"id: TSK-001\nuid: {text_uid}      # never edit\n", 1), encoding="utf-8")
+        def record(listed: str) -> None:
+            path.write_text(original.replace("id: TSK-001\n", f"id: TSK-001\nuid: {listed}      # never edit\n", 1), encoding="utf-8")
 
         record(uid)
         self.assertFalse(eval_kit.grade_file(self.context(), item)[0])
-        path.write_text(git(self.root, "show", "main:project-management/tasks/TSK-001.md") + "\n", encoding="utf-8")
-        issue(uid[:-1] + "1")
+        path.write_text(original, encoding="utf-8")
+        entry(uid[:-1] + "1")
         record(uid)
         self.assertFalse(eval_kit.grade_file(self.context(), item)[0])
-        path.write_text(git(self.root, "show", "main:project-management/tasks/TSK-001.md") + "\n", encoding="utf-8")
-        issue(uid, push=True)
+        # A hand-made local entry that matches passes: consistency, not proof.
+        path.write_text(original, encoding="utf-8")
+        entry(uid)
+        record(uid)
+        self.assertTrue(eval_kit.grade_file(self.context(), item)[0])
+        path.write_text(original, encoding="utf-8")
+        git(self.root, "branch", "-q", "-D", "codeflow/registry")
+        git(self.root, "branch", "-q", "codeflow/registry", "origin/codeflow/registry")
+        entry(uid, push=True)
         git(self.root, "branch", "-q", "-D", "codeflow/registry")
         record(uid)
-        # The issued uid on the origin's registry is enough.
         self.assertTrue(eval_kit.grade_file(self.context(), item)[0])
+
+    def test_a_judge_counts_only_when_it_meets_every_labelled_control(self) -> None:
+        path = Path(self.temp.name) / "controls.json"
+        rejecting = REVIEW.replace(
+            "    evidence: src/greet.py prints no comma\n",
+            "    evidence: src/greet.py prints no comma\n      though the greeting reads fine to me and can ship today\n",
+        )
+        controls = [
+            {"label": "a paraphrased reversal", "assertion": "rejects", "rubric": eval_kit.REVIEW_COHERENCE_RUBRIC,
+             "excerpt": rejecting, "expected": "fail"},
+            {"label": "a coherent rejection", "assertion": "rejects", "rubric": eval_kit.REVIEW_COHERENCE_RUBRIC,
+             "excerpt": REVIEW, "expected": "pass"},
+        ]
+        eval_kit.write_json(path, {"schema_version": 1, "controls": controls})
+        loaded = eval_kit.load_judge_controls(path)
+        sheet = eval_kit.judge_control_sheet(loaded)
+        self.assertEqual([{"control", "assertion", "rubric", "excerpt", "excerpt_digest"}] * 2, [set(item) for item in sheet])
+        digest = lambda text: eval_kit.excerpt_digest(text)
+        right = {("rejects", digest(rejecting)): "fail", ("rejects", digest(REVIEW)): "pass"}
+        self.assertEqual([], eval_kit.judge_calibration(loaded, right))
+        lenient = {("rejects", digest(rejecting)): "pass", ("rejects", digest(REVIEW)): "pass"}
+        self.assertEqual(["a paraphrased reversal: judged pass, expected fail"], eval_kit.judge_calibration(loaded, lenient))
+        self.assertEqual(2, len(eval_kit.judge_calibration(loaded, {})))
+        for broken in ({"schema_version": 1, "controls": []}, {"schema_version": 1, "controls": [{**controls[0], "expected": "maybe"}]},
+                       {"schema_version": 1, "controls": [{**controls[0], "label": " "}]}):
+            eval_kit.write_json(path, broken)
+            with self.assertRaises(eval_kit.EvalError):
+                eval_kit.load_judge_controls(path)
 
     def test_event_ledger_is_strict(self) -> None:
         path = Path(self.temp.name) / "events.json"
@@ -2454,7 +2492,7 @@ print(json.dumps(seen, sort_keys=True))
             ("effects", {"id": "counted_verdict", "kind": "event", "event": "agent", "name": "r",
                          "verdict": {"verdict": "approved"}, "count": {"min": 2}}, "drop count"),
             ("files", {"id": "judged_verdict", "path": "R.md", "verdict": {"verdict": "approved"}, "judged": {"rubric": "r"}}, "drop judged"),
-            ("files", {"id": "half_registered", "path": "R.md", "registered": False}, "registered must be true"),
+            ("files", {"id": "half_consistent", "path": "R.md", "registry_consistent": False}, "registry_consistent must be true"),
         )
         for field, item, expected in mutations:
             mutated = copy.deepcopy(cases)
@@ -2571,6 +2609,12 @@ print(json.dumps(seen, sort_keys=True))
 
 
 
+def unicode_escaped(text: str) -> str:
+    """A JSON string literal with every character written as a \\u escape."""
+
+    return '"' + "".join(f"\\u{ord(char):04x}" for char in text) + '"'
+
+
 class HoldoutSeparationTests(unittest.TestCase):
     """A qualification holdout never enters the published tree: not by path,
     not as a copied file, JSON object or answer-bearing passage, and, with the
@@ -2598,7 +2642,15 @@ class HoldoutSeparationTests(unittest.TestCase):
         "def solve(subject):\n"
         "    subject.edit('src/pager.py', *SECRET_FIX)\n"
         "    subject.write('tests/test_pager.py', SECRET_TEST)\n"
+        "\n\n"
+        "def finish(subject, branch):\n"
+        "    subject.git('switch', '-q', '-c', branch, 'main')\n"
+        "    solve(subject)\n"
+        "    subject.run('python3', '-m', 'unittest', 'discover', '-s', 'tests')\n"
+        "    subject.commit('fix(pager): keep the last partial page')\n"
+        "    subject.git('push', '-q', '-u', 'origin', branch)\n"
     )
+    FINISH = SOLUTION.split("def finish", 1)[1]
     SHARED = "This sentence ships in the scaffold under assets and appears in the fixture too, so it is not a secret passage at all.\n"
 
     def make_holdout(self, root: Path) -> Path:
@@ -2646,6 +2698,14 @@ class HoldoutSeparationTests(unittest.TestCase):
                 "src/pager.py": (self.FIXTURE_BODY, "passage fingerprint"),
                 "docs/answer.py": (solution_block, "passage fingerprint"),
                 "docs/escaped.md": ("The body was " + json.dumps(self.FIXTURE_BODY) + "\n", "passage fingerprint"),
+                # The fourth review's probes: a lone JSON string, every
+                # character escaped, as its own file under any name and
+                # inside an object; and a whole solution function, whose
+                # strings are all short.
+                "suite/answer.json": (unicode_escaped(self.FIXTURE_BODY) + "\n", "passage fingerprint"),
+                "suite/answer.txt": (unicode_escaped(self.FIXTURE_BODY) + "\n", "passage fingerprint"),
+                "suite/wrapped.json": ('{"note": ' + unicode_escaped(self.FIXTURE_BODY) + "}\n", "passage fingerprint"),
+                "docs/finish.py": ("def wrap_up" + self.FINISH, "passage fingerprint"),
             }
             for relative, (content, reason) in copies.items():
                 with self.subTest(copy=relative):

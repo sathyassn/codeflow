@@ -2227,7 +2227,7 @@ FILE_KEYS = frozenset(
         "count",
         "verdict",
         "judged",
-        "registered",
+        "registry_consistent",
         "via",
         "safety",
         "safety_if",
@@ -2418,8 +2418,8 @@ def file_assertion_errors(label: str, item: dict) -> list[str]:
         errors.extend(verdict_constraint_errors(label, item["verdict"]))
     if "via" in item:
         errors.extend(via_errors(label, item["via"]))
-    if "registered" in item and item["registered"] is not True:
-        errors.append(f"{label}.registered must be true")
+    if "registry_consistent" in item and item["registry_consistent"] is not True:
+        errors.append(f"{label}.registry_consistent must be true")
     if "verdict" in item and "judged" in item:
         errors.append(f"{label}: a verdict is judged for coherence by the kit's own rubric; drop judged")
     if "judged" in item:
@@ -2925,6 +2925,59 @@ def load_events(path: Path) -> tuple[list[dict], str]:
     return document["events"], raw_file_digest(path)
 
 
+def load_judge_controls(path: Path) -> list[dict]:
+    """Labelled texts with the judgement a qualified judge must record for
+    them: `{"schema_version": 1, "controls": [{"label", "assertion",
+    "rubric", "excerpt", "expected": "pass | fail"}]}`. They belong with the
+    graded suite and are as private as its cases."""
+
+    document = load_json(path)
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("controls"), list)
+        or not document["controls"]
+    ):
+        raise EvalError("judge controls must be {schema_version: 1, controls: [...]}")
+    for index, control in enumerate(document["controls"]):
+        if (
+            not isinstance(control, dict)
+            or set(control) != {"label", "assertion", "rubric", "excerpt", "expected"}
+            or not all(isinstance(control[key], str) and control[key].strip() for key in ("label", "assertion", "rubric", "excerpt"))
+            or control["expected"] not in {"pass", "fail"}
+        ):
+            raise EvalError(f"controls[{index}] needs label, assertion, rubric, excerpt and expected pass or fail")
+    return document["controls"]
+
+
+def judge_control_sheet(controls: list[dict]) -> list[dict]:
+    """The controls as a judge sees them: no label and no expected verdict."""
+
+    return [
+        {
+            "control": index,
+            "assertion": control["assertion"],
+            "rubric": control["rubric"],
+            "excerpt": control["excerpt"],
+            "excerpt_digest": excerpt_digest(control["excerpt"]),
+        }
+        for index, control in enumerate(controls)
+    ]
+
+
+def judge_calibration(controls: list[dict], verdicts: dict[tuple[str, str], str]) -> list[str]:
+    """The controls a judge's recorded judgements miss. A judge counts for
+    qualification only when it meets every control; a scripted stand-in that
+    only exercises the grader's plumbing is never such a judge."""
+
+    misses: list[str] = []
+    for control in controls:
+        verdict = verdicts.get((control["assertion"], excerpt_digest(control["excerpt"])))
+        if verdict != control["expected"]:
+            misses.append(f"{control['label']}: judged {verdict or 'nothing'}, expected {control['expected']}")
+    return misses
+
+
 def load_judgements(path: Path) -> tuple[dict[tuple[str, str], str], str]:
     """Recorded judgements for assertions whose meaning no deterministic check
     settles: one verdict per assertion and excerpt digest, from a human or a
@@ -3421,8 +3474,8 @@ def grade_file(context: GradeContext, item: dict) -> tuple[bool, str]:
             if text is None:
                 continue
             qualifies, reason = qualification(item, text)
-            if qualifies and item.get("registered"):
-                qualifies, reason = registered(context, text)
+            if qualifies and item.get("registry_consistent"):
+                qualifies, reason = registry_consistent(context, text)
             if qualifies and assertion_rubric(item) is not None:
                 digest = excerpt_digest(judged_excerpt(item, text))
                 verdict = context.judgement(item["id"], digest)
@@ -3444,11 +3497,13 @@ def grade_file(context: GradeContext, item: dict) -> tuple[bool, str]:
     return passed, f"qualifying files per state: {detail}"[:900]
 
 
-def registered(context: GradeContext, text: str) -> tuple[bool, str]:
-    """Whether a record's id and uid are the ones CodeFlow's id registry
-    issued: `ids/<KIND>/<n>.toml` on the `codeflow/registry` branch, locally
-    or at the fixture's origin, holds the same uid. `task new` writes both;
-    a hand-made record cannot know an issued uid."""
+def registry_consistent(context: GradeContext, text: str) -> tuple[bool, str]:
+    """Whether a record agrees with the id registry in the fixture: an entry
+    `ids/<KIND>/<n>.toml` on the `codeflow/registry` branch, locally or at
+    the fixture's origin, holds the record's uid. Both are state the subject
+    can write, so a match is consistency only: it never shows that `task new`
+    wrote the record. Proof of CLI use needs the evaluator's own record of
+    the session."""
 
     fields = frontmatter_fields(text)
     record_id, uid = fields.get("id", ""), fields.get("uid", "")
@@ -3457,10 +3512,10 @@ def registered(context: GradeContext, text: str) -> tuple[bool, str]:
     kind, _, number = record_id.partition("-")
     for tree in context.trees(["branch:codeflow/registry", "origin:codeflow/registry"]):
         entry = tree.read(f"ids/{kind}/{number}.toml") or ""
-        issued = re.search(r'(?m)^uid = "([^"]+)"$', entry)
-        if issued and issued.group(1) == uid:
+        listed = re.search(r'(?m)^uid = "([^"]+)"$', entry)
+        if listed and listed.group(1) == uid:
             return True, "qualifies"
-    return False, f"the id registry issued no uid {uid} for {record_id}"
+    return False, f"no registry entry for {record_id} holds uid {uid}"
 
 
 def worktree_changes(fixture: Path) -> set[str]:
@@ -5097,9 +5152,10 @@ FRAGMENT_WORDS = 12
 FRAGMENT_WINDOW = 16
 # JSON objects smaller than this are too generic to fingerprint ({"min": 1}).
 ENTRY_MIN_BYTES = 120
-# Text CodeFlow ships (the scaffold a fixture is built from) is not holdout
-# content, so passages it shares with the holdout are not fingerprinted.
-SHIPPED_TREE = "assets/"
+# Text the public repository legitimately shares with a holdout is not
+# fingerprinted: the shipped scaffold a fixture is built from, and the kit's
+# own public tests, whose harness calls a holdout's dry grading repeats.
+SHARED_TREES = ("assets/", "evals/model-artifacts/")
 
 
 def holdout_files(holdout: Path) -> dict[str, str]:
@@ -5128,12 +5184,19 @@ def json_nodes(value: Any):
 
 
 def json_strings(value: Any) -> list[str]:
+    """Every string in a JSON value, the value itself when it is one."""
+
+    if isinstance(value, str):
+        return [value]
     return [
         item
         for node in json_nodes(value)
         for item in (node.values() if isinstance(node, dict) else node)
         if isinstance(item, str)
     ]
+
+
+JSON_STRING_LITERAL = re.compile(r'"(?:[^"\\\n]|\\.)*"')
 
 
 def entry_digests(document: Any) -> set[str]:
@@ -5148,23 +5211,28 @@ def entry_digests(document: Any) -> set[str]:
 
 
 def passage_texts(data: bytes) -> tuple[list[str], Any]:
-    """A file's text and, when it is JSON whatever its name, each of its
-    decoded string values, with the parsed document."""
+    """A file's text and, when it is JSON whatever its name and whatever its
+    root (an object, an array or a lone string), each decoded string value,
+    with the parsed document. Escaped string literals elsewhere in the text
+    are decoded too, so an escaped copy reads as the passage it encodes."""
 
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return [], None
     document = None
-    if text.lstrip()[:1] in {"{", "["}:
-        try:
-            document = json.loads(text)
-        except json.JSONDecodeError:
-            document = None
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError:
+        document = None
     texts = [text, *json_strings(document)]
-    if "\\n" in text:
-        # A passage pasted as an escaped string ("a\\nb") reads as its text.
-        texts.append(text.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"'))
+    if "\\" in text:
+        for literal in JSON_STRING_LITERAL.findall(text):
+            if "\\" in literal:
+                try:
+                    texts.append(json.loads(literal))
+                except json.JSONDecodeError:
+                    continue
     return texts, document
 
 
@@ -5205,23 +5273,26 @@ def holdout_canaries(holdout: Path) -> set[str]:
 
 
 def holdout_answers(path: Path) -> list[str]:
-    """The answer-bearing text of one holdout file: every string value of a
-    JSON document (prompts, fixture files, expectations, rubrics) and every
-    string literal of Python code (scripted solutions and reviews), never
-    the structure or harness code around them, which public code shares."""
+    """The text of one holdout file that is fingerprinted: every string value
+    of a JSON document (prompts, fixture files, expectations, rubrics), the
+    whole source of code together with each of its string literals, so
+    solution procedures count as much as the payloads they write, and any
+    other text whole. JSON structure is left to the object digests."""
 
     data = path.read_bytes()
     if path.suffix == ".py":
-        tree = ast.parse(data.decode("utf-8"))
-        return [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
-    return json_strings(passage_texts(data)[1])
+        source = data.decode("utf-8")
+        tree = ast.parse(source)
+        return [source, *(node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str))]
+    texts, document = passage_texts(data)
+    return json_strings(document) if document is not None else texts[:1]
 
 
 def holdout_manifest(holdout: Path, root: Path, *, name: str, ref: str, paths: list[str]) -> dict:
     """The public manifest of a holdout checkout: its paths and the digests
-    of its files, its JSON objects and its answer-bearing passages, never
-    their content. Passages the shipped scaffold under `assets/` also holds
-    are left out: fixtures are built from it."""
+    of its files, its JSON objects and its passages, never their content.
+    Every file but the README (which describes the route) is fingerprinted;
+    passages the public trees in `SHARED_TREES` also hold are left out."""
 
     entries: set[str] = set()
     fragments: set[str] = set()
@@ -5229,11 +5300,13 @@ def holdout_manifest(holdout: Path, root: Path, *, name: str, ref: str, paths: l
         document = passage_texts((holdout / relative).read_bytes())[1]
         if document is not None:
             entries |= entry_digests(document)
+        if relative == "README.md":
+            continue
         for text in holdout_answers(holdout / relative):
             fragments |= winnowed(shingles(text))
     for relative in tracked_files(root):
         path = root / relative
-        if relative.startswith(SHIPPED_TREE) and path.is_file() and not path.is_symlink():
+        if relative.startswith(SHARED_TREES) and path.is_file() and not path.is_symlink():
             for text in passage_texts(path.read_bytes())[0]:
                 fragments -= set(shingles(text))
     return {
@@ -5388,6 +5461,10 @@ def parser() -> argparse.ArgumentParser:
     judge_cmd.add_argument("--trial", required=True, type=int)
     judge_cmd.add_argument("--events", type=Path)
 
+    judge_check_cmd = sub.add_parser("judge-check")
+    judge_check_cmd.add_argument("--controls", required=True, type=Path)
+    judge_check_cmd.add_argument("--judgements", type=Path, help="check these; without it, print the blind sheet")
+
     holdout_cmd = sub.add_parser("holdout-check")
     holdout_cmd.add_argument("--manifest", required=True, type=Path)
     holdout_cmd.add_argument("--holdout", type=Path)
@@ -5398,7 +5475,7 @@ def parser() -> argparse.ArgumentParser:
     cleanup_cmd.add_argument("--run-root", required=True, type=Path)
     cleanup_cmd.add_argument("--confirm", required=True)
     for name, command in sub.choices.items():
-        if name not in {"grade", "judge-sheet", "cleanup", "holdout-check"}:
+        if name not in {"grade", "judge-sheet", "judge-check", "cleanup", "holdout-check"}:
             # A run root records its graded suite; the grader reloads it.
             command.add_argument("--graded-suite", type=Path)
     return cli
@@ -5518,12 +5595,27 @@ def main() -> int:
             write_qualified_binding(output, record)
             print(f"qualified binding written: {output}")
             return 0
+        if args.command == "judge-check":
+            controls = load_judge_controls(args.controls)
+            if args.judgements is None:
+                print(json.dumps({"schema_version": 1, "excerpts": judge_control_sheet(controls)}, ensure_ascii=False, indent=2))
+                return 0
+            misses = judge_calibration(controls, load_judgements(args.judgements)[0])
+            for miss in misses:
+                print(f"- {miss}")
+            print("judge check: " + (f"{len(misses)} of {len(controls)} control(s) missed" if misses else f"{len(controls)} control(s) met"))
+            return 1 if misses else 0
         if args.command == "holdout-check":
             root = args.project_root.resolve() if args.project_root else project_root()
             if args.update:
                 if args.holdout is None:
                     raise EvalError("--update needs --holdout")
                 old = load_json(args.manifest)
+                # Text already in the shared trees is left out of a new
+                # manifest, so a leak there must not be written over.
+                existing = holdout_leaks(root, args.manifest) if set(old) == HOLDOUT_MANIFEST_KEYS else []
+                if existing:
+                    raise EvalError(f"refusing to update: the current manifest finds {len(existing)} leak(s): {existing[0]}")
                 write_json(args.manifest, holdout_manifest(args.holdout, root, name=old["holdout"], ref=old["ref"], paths=old["paths"]))
             leaks = holdout_leaks(root, args.manifest, args.holdout)
             for leak in leaks:

@@ -328,16 +328,20 @@ scripted solutions, and point `--graded-suite` at a checkout of it. Record
 its paths and digests, never its content, in a public manifest and run
 `holdout-check --manifest <file>` in CI. It fails on a holdout path, a
 copied holdout file, any JSON object of the holdout nested anywhere in a
-file that parses as JSON whatever its name, and any copied passage of the
-holdout's answers (its JSON string values and the string literals of its
-code) fingerprinted as runs of 12 words, so a passage of about 27 words or
-more is always caught and shorter ones often are; passages the shipped
-scaffold under `assets/` also holds are not counted. With `--holdout
-<checkout>` it also checks that the manifest is current and that no id or
-rubric opening only the holdout holds appears, and `--update` rewrites the
-manifest. A paraphrase is not caught. A holdout that was ever published
-counts as exposed; replace its cases before claiming a holdout qualification
-again.
+file that parses as JSON whatever its name, and a copied run of 27 or more
+consecutive whitespace-separated words of the holdout's fingerprinted text:
+its JSON string values, the whole source and string literals of its code,
+and any other file whole, but not its README. The copy is found as written,
+or as a JSON string (a lone JSON document, a value inside one, or an escaped
+literal in any file); shorter runs are often caught and not promised. Text
+that `assets/` and `evals/model-artifacts/` already hold when the manifest
+is written is not fingerprinted, and `--update` refuses a tree its current
+manifest finds a leak in. With `--holdout <checkout>` it also checks that
+the manifest is current and that no id or rubric opening only the holdout
+holds appears; `--update` rewrites the manifest. A paraphrase, a run broken
+by edits, or another encoding is not caught. A holdout that was ever
+published counts as exposed; replace its cases before claiming a holdout
+qualification again.
 
 `materialize` keeps the evaluator and the subject apart. The run root holds
 the marker and one record per trial; the subjects root, beside it and by
@@ -405,17 +409,31 @@ fails its assertion as not gradable, never passes it.
   with its rubric and digest, including each review a verdict assertion
   reads. Each judgement names its `judge` (a person or a calibrated model
   grader) and a `rationale`.
-- An action is graded by the effect CodeFlow leaves: the branch a claim
-  creates and tracks (`git_config` on `branch.<name>.remote`), the record a
-  status change writes, or a record whose `registered` uid the id registry
-  issued on `codeflow/registry` (what `task new` writes and a hand-made
-  record cannot know). `via` names the command expected to leave the effect,
-  with `program`, leading `args`, `options` and optionally `after` an agent
-  assertion; the grade reports the matching process records beside the
-  result and never counts them, because a record shows only that a command
-  ran, not what it did (`--help`, a stand-in named `codeflow`). Shell lines
-  prove nothing. A claim, block or completion made by hand exactly as
-  CodeFlow makes it therefore passes; only the record says which it was.
+- The grade trusts the judgement it is given, so the judge is qualified
+  first. Keep labelled judge controls with the graded suite (texts with the
+  verdict a qualified judge must record, including reversals paraphrased in
+  fields the format allows) and run `judge-check --controls <file>` for the
+  blind sheet, then `judge-check --controls <file> --judgements <file>`: a
+  judge that misses any control does not grade a qualification. A scripted
+  judge may test that judgements reach the grade and fail closed; its
+  passing runs are never evidence that meaning was judged.
+- An action is graded by the state it leaves, in the form CodeFlow writes
+  it: the branch a claim creates and tracks (`git_config` on
+  `branch.<name>.remote`), the record a status change writes, or a record
+  whose uid is `registry_consistent` with an entry on `codeflow/registry`.
+  `via` names the command expected to leave that state, with `program`,
+  leading `args`, `options` and optionally `after` an agent assertion; the
+  grade reports the matching process records beside the result and never
+  counts them, because a record shows only that a command ran, not what it
+  did (`--help`, a stand-in named `codeflow`). Shell lines prove nothing.
+- Effect grading measures the resulting work and nothing about how it was
+  made. It does not prove that the CLI was used (the fixture state, the
+  registry included, is the subject's to write, so a claim, block,
+  completion or record made by hand in the same form passes), that readiness
+  checks ran, or that the review came before completion. Those properties,
+  and whether a record was invented, are graded only from evidence the
+  subject cannot write: the native harness transcript or ledger converted by
+  the evaluator. A result without it reports them as not measured.
 - `event` reads an `agent` the harness ran: with a `verdict` constraint, the
   last completed run of the named agent decides, and its whole output must
   be a review that reads, holds and was judged coherent, so an approval
