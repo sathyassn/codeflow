@@ -99,14 +99,6 @@ def validate_config(value: Any) -> dict[str, Any]:
     return value
 
 
-def normalize_value(value: str) -> str:
-    value = value.strip()
-    marker = chr(96)
-    if len(value) >= 2 and value[0] == value[-1] == marker:
-        value = value[1:-1].strip()
-    return value
-
-
 def is_placeholder(value: str) -> bool:
     return not substantive_text(value, [])
 
@@ -143,442 +135,77 @@ def lacks_migration_guidance(value: str) -> bool:
     return not substantive_text(value, UNRESOLVED_ALTERNATIVES | {"see breaking change"})
 
 
-# Markdown structure of a PR body, read the way the Rust PR-body check reads
-# it through pulldown-cmark: a CommonMark block parser, ported from the
-# reference implementation (commonmark.js) and reduced to what the section
-# and field readers need. Only document-level ATX headings at column zero
-# open sections, and a section's fields end at its first subsection. Code,
-# HTML blocks and HTML comments are never fields. A comment that opens a
-# line is an HTML block, so it ends the paragraph or list it interrupts the
-# way CommonMark does. `scripts/fixtures/release_impact_cases.json` holds the
-# cases both parsers must agree on, and the Rust test
-# `release_impact_readers_agree_on_a_generated_corpus` compares them over a
-# generated corpus of structures.
-LINE_END = re.compile(r"\r\n|\r|\n")
-ATX_START = re.compile(r"#{1,6}(?:[ \t]+|$)")
-FENCE_START = re.compile(r"`{3,}(?!.*`)|~{3,}")
-FENCE_CLOSE = re.compile(r"(`{3,}|~{3,})[ \t]*$")
-THEMATIC_BREAK = re.compile(r"(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$")
-SETEXT_UNDERLINE = re.compile(r"(?:=+|-+)[ \t]*$")
-LIST_MARKER = re.compile(r"[*+-]|(\d{1,9})[.)]")
-RAW_TEXT_TAG = r"(?:script|pre|textarea|style)"
-TAG_NAME = r"[A-Za-z][A-Za-z0-9-]*"
-TAG_ATTRIBUTE = r"""(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^"'=<>`\x00-\x20]+|'[^']*'|"[^"]*"))?)"""
-BLOCK_TAG = (
-    r"address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|"
-    r"details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|"
-    r"h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|"
-    r"optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|"
-    r"track|ul"
-)
-# CommonMark's seven HTML block kinds, by start and (for kinds 1 to 5) end.
-HTML_BLOCK_START = [
-    re.compile(rf"<{RAW_TEXT_TAG}(?:\s|>|$)", re.I),
-    re.compile(r"<!--"),
-    re.compile(r"<\?"),
-    re.compile(r"<![A-Za-z]"),
-    re.compile(r"<!\[CDATA\["),
-    re.compile(rf"</?(?:{BLOCK_TAG})(?:\s|/?>|$)", re.I),
-    re.compile(
-        rf"(?:<(?!{RAW_TEXT_TAG}(?![A-Za-z0-9-])){TAG_NAME}{TAG_ATTRIBUTE}*\s*/?>"
-        rf"|</(?!{RAW_TEXT_TAG}(?![A-Za-z0-9-])){TAG_NAME}\s*>)\s*$",
-        re.I,
-    ),
-]
-HTML_BLOCK_END = [
-    re.compile(rf"</{RAW_TEXT_TAG}>", re.I),
-    re.compile(r"-->"),
-    re.compile(r"\?>"),
-    re.compile(r">"),
-    re.compile(r"\]\]>"),
-]
-INLINE_COMMENT = re.compile(r"<!--(?:-?>|[\s\S]*?-->)")
-CONTAINERS = {"document", "quote", "list", "item"}
-# The first characters that can open a block other than a paragraph.
-MAY_START_BLOCK = set("#`~*+_=<>-0123456789")
-
-
-class MarkdownBlock:
-    """One block of the CommonMark block tree and the source lines it took."""
-
-    def __init__(self, kind: str, parent: MarkdownBlock | None, **data: Any) -> None:
-        self.kind = kind
-        self.parent = parent
-        self.data = data
-        self.open = True
-        self.children: list[MarkdownBlock] = []
-        self.lines: list[str] = []
-
-    def quoted(self) -> bool:
-        block = self.parent
-        while block is not None:
-            if block.kind == "quote":
-                return True
-            block = block.parent
-        return False
-
-
-class MarkdownBlocks:
-    """CommonMark's two-phase block parse, first phase only: containers
-    (block quotes, lists, list items) and leaves (paragraphs, headings,
-    code, HTML blocks, breaks), with the spec's tab columns and lazy
-    continuation. Inline content stays text; `leaves` lists the finished
-    leaves in document order."""
-
-    def __init__(self, body: str) -> None:
-        self.document = MarkdownBlock("document", None)
-        self.tip = self.document
-        self.leaves: list[MarkdownBlock] = []
-        for line in LINE_END.split(body):
-            self.incorporate(line)
-        while self.tip is not None:
-            self.finalize(self.tip)
-
-    # Position within the current line, in characters and in columns.
-    def find_next_nonspace(self) -> None:
-        index, column = self.offset, self.column
-        while index < len(self.text) and self.text[index] in " \t":
-            column += 1 if self.text[index] == " " else 4 - column % 4
-            index += 1
-        self.blank = index == len(self.text)
-        self.next_nonspace, self.next_column = index, column
-        self.indent = column - self.column
-        self.indented = self.indent >= 4
-
-    def advance_next_nonspace(self) -> None:
-        self.offset, self.column, self.partial = self.next_nonspace, self.next_column, False
-
-    def advance(self, count: int, *, columns: bool) -> None:
-        while count > 0 and self.offset < len(self.text):
-            if self.text[self.offset] == "\t":
-                to_tab = 4 - self.column % 4
-                if columns:
-                    self.partial = to_tab > count
-                    step = min(to_tab, count)
-                    self.column += step
-                    self.offset += 0 if self.partial else 1
-                    count -= step
-                    continue
-                self.column += to_tab
-            else:
-                self.column += 1
-            self.partial = False
-            self.offset += 1
-            count -= 1
-
-    def peek(self, index: int) -> str:
-        return self.text[index : index + 1]
-
-    def spaced(self) -> bool:
-        return self.peek(self.offset) in (" ", "\t")
-
-    # Building the tree.
-    def add_child(self, kind: str, **data: Any) -> MarkdownBlock:
-        while not (
-            self.tip.kind == "list" and kind == "item"
-            or self.tip.kind in {"document", "quote", "item"} and kind != "item"
-        ):
-            self.finalize(self.tip)
-        block = MarkdownBlock(kind, self.tip, **data)
-        self.tip.children.append(block)
-        self.tip = block
-        return block
-
-    def add_line(self) -> None:
-        prefix = ""
-        if self.partial:
-            self.offset += 1
-            prefix = " " * (4 - self.column % 4)
-        self.tip.lines.append(prefix + self.text[self.offset :])
-
-    def finalize(self, block: MarkdownBlock) -> None:
-        block.open = False
-        self.tip = block.parent
-        if block.kind not in CONTAINERS:
-            self.leaves.append(block)
-
-    def close_unmatched(self) -> None:
-        if not self.all_closed:
-            while self.old_tip is not self.last_matched:
-                parent = self.old_tip.parent
-                self.finalize(self.old_tip)
-                self.old_tip = parent
-            self.all_closed = True
-
-    def continues(self, block: MarkdownBlock) -> int:
-        """Whether an open block takes this line: 0 it does, 1 it does not,
-        2 it took the whole line."""
-        if block.kind == "quote":
-            if self.indented or self.peek(self.next_nonspace) != ">":
-                return 1
-            self.advance_next_nonspace()
-            self.advance(1, columns=False)
-            if self.spaced():
-                self.advance(1, columns=True)
-        elif block.kind == "item":
-            width = block.data["marker_offset"] + block.data["padding"]
-            if self.blank:
-                if not block.children:
-                    return 1
-                self.advance_next_nonspace()
-            elif self.indent >= width:
-                self.advance(width, columns=True)
-            else:
-                return 1
-        elif block.kind == "code" and block.data["fence"]:
-            fence = block.data["fence"]
-            close = FENCE_CLOSE.match(self.text, self.next_nonspace)
-            if self.indent <= 3 and close and close.group(1)[0] == fence[0] and len(close.group(1)) >= len(fence):
-                self.finalize(block)
-                return 2
-            skip = block.data["fence_offset"]
-            while skip > 0 and self.spaced():
-                self.advance(1, columns=True)
-                skip -= 1
-        elif block.kind == "code":
-            if self.indent >= 4:
-                self.advance(4, columns=True)
-            elif self.blank:
-                self.advance_next_nonspace()
-            else:
-                return 1
-        elif block.kind == "html":
-            return int(self.blank and block.data["type"] >= 6)
-        elif block.kind == "paragraph":
-            return int(self.blank)
-        elif block.kind in {"heading", "break"}:
-            return 1
-        return 0
-
-    def start(self, container: MarkdownBlock) -> int:
-        """Opens a block at this position: 0 none, 1 a container, 2 a leaf."""
-        rest = self.text[self.next_nonspace :]
-        if not self.indented and rest[:1] not in MAY_START_BLOCK:
-            return 0
-        if self.indented:
-            if self.tip.kind == "paragraph" or self.blank:
-                return 0
-            self.advance(4, columns=True)
-            self.close_unmatched()
-            self.add_child("code", fence="")
-            return 2
-        if rest.startswith(">"):
-            self.advance_next_nonspace()
-            self.advance(1, columns=False)
-            if self.spaced():
-                self.advance(1, columns=True)
-            self.close_unmatched()
-            self.add_child("quote")
-            return 1
-        if match := ATX_START.match(rest):
-            column_zero = self.next_nonspace == 0
-            self.advance_next_nonspace()
-            self.advance(len(match.group(0)), columns=False)
-            self.close_unmatched()
-            content = re.sub(r"^[ \t]*#+[ \t]*$", "", self.text[self.offset :])
-            content = re.sub(r"[ \t]+#+[ \t]*$", "", content)
-            heading = self.add_child("heading", depth=len(match.group(0).strip()), column_zero=column_zero)
-            heading.lines.append(content)
-            self.offset = len(self.text)
-            return 2
-        if match := FENCE_START.match(rest):
-            self.close_unmatched()
-            self.add_child("code", fence=match.group(0), fence_offset=self.indent)
-            self.advance_next_nonspace()
-            self.advance(len(match.group(0)), columns=False)
-            return 2
-        if rest.startswith("<"):
-            lazy = not self.all_closed and not self.blank and self.tip.kind == "paragraph"
-            for kind, pattern in enumerate(HTML_BLOCK_START, start=1):
-                if pattern.match(rest) and (kind < 7 or container.kind != "paragraph" and not lazy):
-                    self.close_unmatched()
-                    self.add_child("html", type=kind)
-                    return 2
-        if container.kind == "paragraph" and SETEXT_UNDERLINE.match(rest):
-            self.close_unmatched()
-            container.kind = "heading"
-            container.data.update(setext=True)
-            self.offset = len(self.text)
-            return 2
-        if THEMATIC_BREAK.match(rest):
-            self.close_unmatched()
-            self.add_child("break")
-            self.offset = len(self.text)
-            return 2
-        return int(self.list_item(container, rest))
-
-    def list_item(self, container: MarkdownBlock, rest: str) -> bool:
-        match = LIST_MARKER.match(rest)
-        if not match:
-            return False
-        marker = match.group(0)
-        ordinal = match.group(1)
-        after = rest[len(marker) :]
-        if after[:1] not in ("", " ", "\t"):
-            return False
-        # Only a non-empty bullet or an ordered item starting at 1 may
-        # interrupt a paragraph.
-        if container.kind == "paragraph" and (
-            not after.strip(" \t") or ordinal is not None and int(ordinal) != 1
-        ):
-            return False
-        marker_offset = self.indent
-        self.advance_next_nonspace()
-        self.advance(len(marker), columns=True)
-        start_column, start_offset = self.column, self.offset
-        while True:
-            self.advance(1, columns=True)
-            if not (self.column - start_column < 5 and self.spaced()):
-                break
-        spaces = self.column - start_column
-        if spaces >= 5 or spaces < 1 or self.offset >= len(self.text):
-            # Content starts one column after the marker; the rest of the
-            # spaces belong to it (indented code, for five or more).
-            padding = len(marker) + 1
-            self.column, self.offset, self.partial = start_column, start_offset, False
-            if self.spaced():
-                self.advance(1, columns=True)
-        else:
-            padding = len(marker) + spaces
-        self.close_unmatched()
-        ordered = ordinal is not None
-        if self.tip.kind != "list" or self.tip.data["delimiter"] != marker[-1] or self.tip.data["ordered"] != ordered:
-            self.add_child("list", delimiter=marker[-1], ordered=ordered)
-        self.add_child("item", marker_offset=marker_offset, padding=padding)
-        return True
-
-    def incorporate(self, text: str) -> None:
-        self.text, self.offset, self.column, self.partial = text, 0, 0, False
-        self.old_tip = self.tip
-        container = self.document
-        while container.children and container.children[-1].open:
-            container = container.children[-1]
-            self.find_next_nonspace()
-            matched = self.continues(container)
-            if matched == 2:
-                return
-            if matched == 1:
-                container = container.parent
-                break
-        self.all_closed = container is self.old_tip
-        self.last_matched = container
-        leaf = container.kind in {"code", "html"}
-        while not leaf:
-            self.find_next_nonspace()
-            started = self.start(container)
-            if not started:
-                self.advance_next_nonspace()
-                break
-            container = self.tip
-            leaf = started == 2
-        if not self.all_closed and not self.blank and self.tip.kind == "paragraph":
-            self.add_line()  # lazy continuation
-            return
-        self.close_unmatched()
-        if container.kind in {"paragraph", "code", "html"}:
-            self.add_line()
-            kind = container.data.get("type", 0)
-            if container.kind == "html" and kind <= 5 and HTML_BLOCK_END[kind - 1].search(self.text, self.offset):
-                self.finalize(container)
-        elif self.offset < len(self.text) and not self.blank:
-            self.add_child("paragraph")
-            self.advance_next_nonspace()
-            self.add_line()
-
-
-def markdown_lines(
-    body: str, *, include_code: bool, include_quotes: bool
-) -> list[tuple[str, tuple[int, str] | None]]:
-    """Visible text lines, each with its (depth, name) when it is a section
-    heading. HTML blocks and comments are never visible; code and quoted
-    lines are visible only when included."""
-    blocks = MarkdownBlocks(body)
-    lines: list[tuple[str, tuple[int, str] | None]] = []
-    for leaf in blocks.leaves:
-        section = (
-            leaf.kind == "heading"
-            and not leaf.data.get("setext")
-            and leaf.parent is blocks.document
-            and leaf.data["column_zero"]
-        )
-        if section:
-            name = re.sub(r"[*_`]", "", INLINE_COMMENT.sub("", leaf.lines[0])).strip()
-            lines.append((leaf.lines[0], (leaf.data["depth"], name)))
-        elif leaf.quoted() and not include_quotes:
-            continue
-        elif leaf.kind in {"paragraph", "heading"}:
-            # Any other heading is text, as the Rust check renders it.
-            text = INLINE_COMMENT.sub("", "\n".join(leaf.lines))
-            lines.extend((line.strip(), None) for line in text.split("\n"))
-        elif leaf.kind == "code" and include_code:
-            code = leaf.lines[1:] if leaf.data["fence"] else leaf.lines
-            lines.extend((line, None) for line in code)
-    return lines
-
-
-def markdown_section(body: str, name: str, *, fields: bool, own_only: bool) -> list[list[str]]:
-    """Each section named `name` (at depth 2, else depth 3) as its lines.
-
-    `fields` reads only the lines a field may come from, outside code and
-    quotes (the Rust check's `field_text`); otherwise code and quotes count
-    as content too (its `visible_text`). `own_only` stops at the first
-    subsection; otherwise a section runs to the next heading at its depth or
-    above.
-    """
-    lines = markdown_lines(body, include_code=not fields, include_quotes=not fields)
-    headings = [
-        (index, depth, title)
-        for index, (_, heading) in enumerate(lines)
-        if heading is not None
-        for depth, title in [heading]
-    ]
-    wanted = name.casefold()
-    depth = 2 if any(d == 2 and t.casefold() == wanted for _, d, t in headings) else 3
-    found = []
-    for index, heading_depth, title in headings:
-        if heading_depth != depth or title.casefold() != wanted:
-            continue
-        end = len(lines)
-        for next_index, next_depth, _ in headings:
-            if next_index > index and (own_only or next_depth <= depth):
-                end = next_index
-                break
-        found.append([line for line, heading in lines[index + 1 : end] if heading is None])
-    return found
-
-
 RELEASE_FIELDS = {
     "unit", "impact", "breaking", "contract", "rationale", "migration", "evidence", "withdrawal",
 }
-# A field is a visible text line whose label may be emphasised. List markers
-# and indentation are already gone, so a literal `10. Impact:` or `* Impact:`
-# continuing a paragraph is no field: a `*` or `_` run opens emphasis only
-# when a letter follows it.
-FIELD_LINE = re.compile(r"^\s*((?:[*_]+(?=[A-Za-z]))?[A-Za-z][A-Za-z ]*?)[*_]*\s*:[*_]*\s*(.*?)\s*$")
+
+# A PR body is read by the codeflow binary, the same reader `codeflow ci`
+# uses (`codeflow ci --read-release-impact`), so the two can never read a
+# body differently (TSK-147 F4). The caller names the binary, with
+# --codeflow-bin or CODEFLOW_BIN: pre-push passes the codeflow running the
+# hook, CI the one it built from this tree. release.py never searches PATH,
+# where an older codeflow could read differently from the enforcer.
+CODEFLOW_BIN = "CODEFLOW_BIN"
 
 
-def release_impact_fields(body: str) -> list[tuple[str, str]] | None:
-    """The one Release impact section's own field lines, in order, as (key,
-    value) pairs; None without exactly one section. The Rust PR-body check
-    reads the same pairs (`pr_body::release_fields`), and its differential
-    test compares the two over a generated corpus."""
-    sections = markdown_section(body, "Release impact", fields=True, own_only=True)
-    if len(sections) != 1:
+def codeflow_bin(args: argparse.Namespace | None = None) -> Path:
+    named = getattr(args, "codeflow_bin", None) or os.environ.get(CODEFLOW_BIN)
+    if not named:
+        fail(
+            "reading a PR body needs the codeflow binary: pass --codeflow-bin or set "
+            f"{CODEFLOW_BIN} (release.py does not search PATH)"
+        )
+    path = Path(named)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        fail(f"the codeflow binary {path} is not an executable file")
+    return path
+
+
+def read_pr_bodies(bodies: list[str], binary: Path | None = None) -> list[dict[str, Any]]:
+    """The codeflow binary's reading of each body: `release_impact`, the one
+    Release impact section's own (key, value) fields in order, or None
+    without exactly one section; `breaking_change`, the visible text of each
+    Breaking change section; `findings`, `codeflow ci`'s Release impact
+    findings under the default policy."""
+    binary = binary or codeflow_bin()
+    try:
+        done = subprocess.run(
+            [str(binary), "ci", "--read-release-impact"],
+            input=json.dumps(bodies), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        fail(f"{binary} could not run: {error}")
+    if done.returncode != 0:
+        fail(
+            f"{binary} ci --read-release-impact failed ({done.returncode}): "
+            f"{done.stderr.strip() or done.stdout.strip()}; a codeflow built from this tree reads PR bodies"
+        )
+    try:
+        readings = json.loads(done.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"{binary} ci --read-release-impact printed no JSON: {error}")
+    if not isinstance(readings, list) or len(readings) != len(bodies) or not all(
+        isinstance(reading, dict)
+        and (reading.get("release_impact") is None or isinstance(reading["release_impact"], list))
+        and isinstance(reading.get("breaking_change"), list)
+        for reading in readings
+    ):
+        fail(f"{binary} ci --read-release-impact printed an unexpected reading")
+    return readings
+
+
+def release_impact_fields(reading: dict[str, Any]) -> list[tuple[str, str]] | None:
+    pairs = reading["release_impact"]
+    if pairs is None:
         return None
-    pairs = []
-    for line in sections[0]:
-        match = FIELD_LINE.match(line)
-        if not match:
-            continue
-        label = re.sub(r"[*_]", "", match.group(1)).strip()
-        if label:
-            value = normalize_value(re.sub(r"^[*_]+|[*_]+$", "", match.group(2)))
-            pairs.append((label.casefold().replace(" ", "_"), value))
-    return pairs
+    return [(str(key).casefold().replace(" ", "_"), str(value)) for key, value in pairs]
 
 
-def parse_release_impact(body: str) -> dict[str, str]:
-    pairs = release_impact_fields(body)
+def parse_release_impact(
+    body: str, binary: Path | None = None, *, reading: dict[str, Any] | None = None
+) -> dict[str, str]:
+    reading = reading or read_pr_bodies([body], binary)[0]
+    pairs = release_impact_fields(reading)
     if pairs is None:
         fail("PR body must contain exactly one '## Release impact' section")
     fields: dict[str, str] = {}
@@ -615,7 +242,7 @@ def parse_release_impact(body: str) -> dict[str, str]:
         fields["breaking"] = CONTRACT_BREAKING[fields["contract"]]
     if "migration" in fields and is_unresolved_alternative(fields["migration"]):
         fail("release impact field migration still holds the template alternatives")
-    fields[MIGRATION_GUIDANCE] = "yes" if migration_guidance(body, fields.get("migration", "")) else "no"
+    fields[MIGRATION_GUIDANCE] = "yes" if migration_guidance(reading, fields.get("migration", "")) else "no"
     if (fields["breaking"] == "yes") != (fields["impact"] == "major"):
         fail("breaking must be yes if and only if impact is major")
     if fields["breaking"] == "yes" and fields[MIGRATION_GUIDANCE] != "yes":
@@ -628,10 +255,10 @@ def parse_release_impact(body: str) -> dict[str, str]:
 MIGRATION_GUIDANCE = "_migration_guidance"
 
 
-def migration_guidance(body: str, migration: str) -> bool:
+def migration_guidance(reading: dict[str, Any], migration: str) -> bool:
     if guidance_text(migration) == "see breaking change":
-        sections = markdown_section(body, "Breaking change", fields=False, own_only=False)
-        return len(sections) == 1 and substantive_text("\n".join(sections[0]), [])
+        sections = reading["breaking_change"]
+        return len(sections) == 1 and substantive_text(sections[0], [])
     return not lacks_migration_guidance(migration)
 
 
@@ -1331,7 +958,7 @@ def check_pr(args: argparse.Namespace) -> None:
         if args.body_file
         else os.getenv(args.body_env, "")
     )
-    fields = parse_release_impact(body)
+    fields = parse_release_impact(body, codeflow_bin(args))
     floor = commit_impact(base, head, cwd=args.root)
     if IMPACT_ORDER[fields["impact"]] < IMPACT_ORDER[floor]:
         changed = set(changed_paths(base, head, cwd=args.root))
@@ -1834,7 +1461,7 @@ def draft_intent(args: argparse.Namespace, notes: list[str]) -> str | None:
     if path is None:
         return None
     try:
-        return parse_release_impact(path.read_text(encoding="utf-8"))["impact"]
+        return parse_release_impact(path.read_text(encoding="utf-8"), codeflow_bin(args))["impact"]
     except (OSError, ReleaseError) as error:
         notes.append(f"the PR draft {path} gives no readable Release impact: {error}")
         return None
@@ -2199,6 +1826,7 @@ def parser() -> argparse.ArgumentParser:
     source = check.add_mutually_exclusive_group(required=True)
     source.add_argument("--body-file", type=Path)
     source.add_argument("--body-env")
+    check.add_argument("--codeflow-bin", help=f"the codeflow that reads the body (else ${CODEFLOW_BIN})")
     add_host_args(check)
     check.set_defaults(func=check_pr)
 
@@ -2224,6 +1852,7 @@ def parser() -> argparse.ArgumentParser:
     local.add_argument("--target", default="")
     local.add_argument("--base", default="")
     local.add_argument("--body-file", type=Path)
+    local.add_argument("--codeflow-bin", help=f"the codeflow that reads the draft (else ${CODEFLOW_BIN})")
     local.set_defaults(func=preflight)
 
     inventory = sub.add_parser("host-state")

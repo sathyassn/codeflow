@@ -110,7 +110,7 @@ pub(super) fn run(
     if codeflow_core::release_local::adopted(root) {
         let remote = remote.unwrap_or("origin");
         for r in &pushed {
-            release_preflight(root, r, remote, policy, report, &mut steps);
+            release_preflight(&exe, root, r, remote, policy, report, &mut steps);
         }
     }
 
@@ -234,6 +234,7 @@ fn run_ci_ranges(
 /// pushed branch. A missing entry is a note; only a push that breaks a
 /// release tree its base kept valid is a violation.
 fn release_preflight(
+    exe: &Path,
     root: &Path,
     pushed: &PushRef,
     remote: &str,
@@ -243,7 +244,8 @@ fn release_preflight(
 ) {
     let branch = pushed.remote_branch().unwrap_or_default();
     let started = Instant::now();
-    let result = codeflow_core::release_local::preflight(root, &pushed.local_sha, branch, remote);
+    let result =
+        codeflow_core::release_local::preflight(root, &pushed.local_sha, branch, remote, exe);
     steps.push(PushStep {
         name: format!("release preflight ({branch})"),
         duration: started.elapsed(),

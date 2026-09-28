@@ -1,5 +1,5 @@
 {
-  "description": "One fixture set for both parsers of a pull request's Release impact block (SPC-013 R-96, TSK-106 AC-8): scripts/release.py (parse_release_impact) and the Rust PR-body check (codeflow ci, pr_body::release at the default policy). Each case is a whole PR body and whether its block is valid. The cases cover the block's shared structure and field rules; CodeFlow's own rules (Unit and Evidence, the legacy Contract field, and Breaking if and only if major) are tested by scripts/test_release.py alone, so every body carries Unit and Evidence.",
+  "description": "One fixture set for both checks of a pull request's Release impact block (SPC-013 R-96, TSK-106 AC-8): scripts/release.py (parse_release_impact) and the Rust PR-body check (codeflow ci, pr_body::release at the default policy). Both read the body with one parser, the codeflow binary (codeflow ci --read-release-impact, TSK-147 F4). Each case is a whole PR body and whether its block is valid. The cases cover the block's shared structure and field rules; CodeFlow's own rules (Unit and Evidence, the legacy Contract field, and Breaking if and only if major) are tested by scripts/test_release.py alone, so every body carries Unit and Evidence.",
   "cases": [
     {
       "name": "valid_patch",
@@ -205,6 +205,36 @@
       "name": "valid_fields_with_blocks_nested_in_tight_items",
       "valid": true,
       "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\n- Unit: codeflow\n  - Impact: minor\n    - Breaking: no\n- Rationale: Adds a function preserving all callers.\n  > quoted aside\n- Migration: none\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_fields_only_inside_a_link_reference_title",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\n[example]: https://example.test \"\nUnit: codeflow\nImpact: minor\nBreaking: no\nRationale: Adds a function preserving all callers.\nMigration: none\nEvidence: cargo test passed.\n\"\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_fields_only_inside_a_multiline_link_reference_title",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\n[example]:\n  https://example.test\n  (\nUnit: codeflow\nImpact: minor\nBreaking: no\nRationale: Adds a function preserving all callers.\nMigration: none\nEvidence: cargo test passed.\n)\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_breaking_migration_is_a_linked_placeholder",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Adds a function preserving all callers.\nMigration: [none](https://example.test)\nEvidence: cargo test passed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_breaking_migration_is_an_entity_placeholder",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Adds a function preserving all callers.\nMigration: &#110;one\nEvidence: cargo test passed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_rationale_is_an_entity_placeholder",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nBreaking: no\nRationale: &#116;odo\nMigration: none\nEvidence: cargo test passed.\n",
+      "valid": false
+    },
+    {
+      "name": "valid_breaking_migration_with_linked_steps",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Adds a function preserving all callers.\nMigration: follow [the upgrade steps](https://example.test)\nEvidence: cargo test passed.\n",
+      "valid": true
     }
   ]
 }

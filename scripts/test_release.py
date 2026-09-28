@@ -25,6 +25,39 @@ sys.modules[SPEC.name] = release
 SPEC.loader.exec_module(release)
 
 
+def built_codeflow() -> Path:
+    """The codeflow that reads PR bodies for these tests (release.py takes
+    it from CODEFLOW_BIN): the one named there, else this checkout's own
+    build, which cargo brings up to date. Never a codeflow found on PATH,
+    and never a skip: without the binary the run stops here."""
+    named = os.environ.get(release.CODEFLOW_BIN)
+    if named:
+        path = Path(named)
+    else:
+        root = SCRIPT.parent.parent
+        try:
+            subprocess.run(["cargo", "build", "--locked", "-q", "-p", "codeflow-cli"], cwd=root, check=True)
+            metadata = subprocess.run(
+                ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+                cwd=root, check=True, capture_output=True, text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            sys.exit(
+                "test_release.py reads PR bodies with the codeflow binary built from this "
+                f"checkout, and building it failed: {error}. Build it, or set "
+                f"{release.CODEFLOW_BIN} to a codeflow built from this tree."
+            )
+        target = Path(json.loads(metadata.stdout)["target_directory"])
+        path = target / "debug" / ("codeflow.exe" if os.name == "nt" else "codeflow")
+    if not path.is_file() or not os.access(path, os.X_OK):
+        sys.exit(f"test_release.py: the codeflow binary {path} is not an executable file")
+    os.environ[release.CODEFLOW_BIN] = str(path)
+    return path
+
+
+CODEFLOW = built_codeflow()
+
+
 # The published source archive whose digest the fixture config records.
 BOOTSTRAP_ARCHIVE = {"name": "source.tar.gz", "digest": "sha256:" + "a" * 64, "size": 1}
 
@@ -885,7 +918,8 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("feat!: replace old command")
         with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
             self.run_check(base, head, filled_template("major", "yes"))
-        with self.assertRaisesRegex(release.ReleaseError, "migration is required"):
+        # The binary reads a lone "``" as that text, which is no guidance.
+        with self.assertRaisesRegex(release.ReleaseError, "requires migration guidance"):
             self.run_check(base, head, filled_template("major", "yes", "``"))
         self.run_check(base, head, filled_template("major", "yes", "run the new command"))
 
@@ -1400,6 +1434,61 @@ class SharedReleaseImpactFixtureTests(unittest.TestCase):
                 except release.ReleaseError:
                     valid = False
                 self.assertEqual(case["valid"], valid)
+
+
+class PrBodyReaderTests(unittest.TestCase):
+    """TSK-147 F4: release.py reads a PR body only through the codeflow
+    binary its caller names, the reader `codeflow ci` uses."""
+
+    def stub(self, directory: Path, name: str, script: str) -> Path:
+        path = directory / name
+        path.write_text(f"#!/bin/sh\n{script}\n", encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def test_the_binary_is_never_found_on_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            self.stub(Path(temp), "codeflow", "echo '[]'")
+            env = {key: value for key, value in os.environ.items() if key != release.CODEFLOW_BIN}
+            env["PATH"] = f"{temp}{os.pathsep}{env.get('PATH', '')}"
+            with mock.patch.dict(os.environ, env, clear=True):
+                with self.assertRaisesRegex(release.ReleaseError, "--codeflow-bin or set CODEFLOW_BIN"):
+                    release.parse_release_impact(filled_template("minor", "no", "none"))
+                with self.assertRaisesRegex(release.ReleaseError, "does not search PATH"):
+                    release.codeflow_bin(argparse.Namespace(codeflow_bin=None))
+
+    def test_the_named_binary_wins_over_the_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            other = self.stub(Path(temp), "other", "exit 3")
+            self.assertEqual(release.codeflow_bin(argparse.Namespace(codeflow_bin=str(other))), other)
+            self.assertEqual(release.codeflow_bin(argparse.Namespace(codeflow_bin=None)), CODEFLOW)
+
+    def test_a_binary_that_cannot_read_bodies_fails_by_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            old = self.stub(Path(temp), "codeflow", "echo 'unexpected argument' >&2; exit 2")
+            with self.assertRaisesRegex(release.ReleaseError, f"{re.escape(str(old))} ci --read-release-impact failed"):
+                release.parse_release_impact(filled_template("minor", "no", "none"), old)
+            short = self.stub(Path(temp), "short", "cat >/dev/null; echo '[]'")
+            with self.assertRaisesRegex(release.ReleaseError, "unexpected reading"):
+                release.parse_release_impact(filled_template("minor", "no", "none"), short)
+            missing = Path(temp) / "missing"
+            with self.assertRaisesRegex(release.ReleaseError, "not an executable file"):
+                release.codeflow_bin(argparse.Namespace(codeflow_bin=str(missing)))
+
+    def test_release_py_and_codeflow_ci_agree_on_every_shared_case(self) -> None:
+        cases = json.loads(IMPACT_CASES.read_text(encoding="utf-8"))["cases"]
+        bodies = [case["body"] for case in cases]
+        for case, reading in zip(cases, release.read_pr_bodies(bodies)):
+            with self.subTest(case=case["name"]):
+                try:
+                    release.parse_release_impact(case["body"], reading=reading)
+                    valid = True
+                except release.ReleaseError:
+                    valid = False
+                self.assertEqual(valid, case["valid"])
+                if not reading["findings"]:
+                    continue
+                self.assertFalse(valid, reading["findings"])
 
 
 class EntryIdentityTests(unittest.TestCase):

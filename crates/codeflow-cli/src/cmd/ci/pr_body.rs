@@ -485,6 +485,27 @@ fn release_fields(body: &str) -> Option<Vec<(String, String)>> {
     )
 }
 
+/// What `scripts/release.py` reads from a PR body, through
+/// `codeflow ci --read-release-impact`: the Release impact fields, the
+/// visible text of each Breaking change section (a `Migration: see Breaking
+/// change` reference), and this check's findings under the default policy.
+pub(super) fn reading(body: &str) -> serde_json::Value {
+    let parsed = sections(body);
+    let breaking_change: Vec<String> = matching_sections(&parsed, "Breaking change")
+        .iter()
+        .map(|section| visible_text(section.content(), true))
+        .collect();
+    let findings: Vec<String> = release(&GitPolicy::default(), body, false)
+        .into_iter()
+        .map(|violation| violation.message)
+        .collect();
+    serde_json::json!({
+        "release_impact": release_fields(body),
+        "breaking_change": breaking_change,
+        "findings": findings,
+    })
+}
+
 /// Whether the body's one Release impact section states `Breaking: no` with
 /// a `Rationale` that gives a reason (TSK-147 AC-4).
 pub(super) fn declares_no_break(body: &str) -> bool {
@@ -540,8 +561,8 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
             ));
         }
     }
-    // The same field rules as `scripts/release.py`; both parsers pass
-    // `scripts/fixtures/release_impact_cases.json`.
+    // The same field rules as `scripts/release.py`, which reads the body
+    // through this reader; both pass `scripts/fixtures/release_impact_cases.json`.
     if fields
         .get("rationale")
         .is_some_and(|value| !value.is_empty() && placeholder(value))
@@ -1115,8 +1136,10 @@ mod tests {
         }
     }
 
-    /// TSK-106 AC-8: the Release impact parsers share one fixture set;
-    /// `scripts/test_release.py` runs the same cases through `release.py`.
+    /// TSK-106 AC-8: the shared fixture set; `scripts/test_release.py` runs
+    /// the same cases through `release.py`, which reads them with this
+    /// reader (`codeflow ci --read-release-impact`), and the seeded corpus
+    /// in `tests/release_impact_corpus.rs` compares the two verdicts.
     #[test]
     fn release_impact_block_passes_the_shared_fixture_set() {
         let fixtures: serde_json::Value = serde_json::from_str(include_str!(
@@ -1142,326 +1165,6 @@ mod tests {
             }
         }
         assert!(disagreements.is_empty(), "{disagreements:#?}");
-    }
-
-    /// `SplitMix64`: a tiny seeded generator, so the differential corpus is
-    /// the same on every run without a new dependency.
-    struct Corpus(u64);
-
-    impl Corpus {
-        fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
-        }
-
-        fn below(&mut self, bound: usize) -> usize {
-            usize::try_from(self.next() % u64::try_from(bound).unwrap()).unwrap()
-        }
-
-        fn chance(&mut self, percent: usize) -> bool {
-            self.below(100) < percent
-        }
-
-        fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
-            items[self.below(items.len())]
-        }
-    }
-
-    const CORPUS_SEED: u64 = 0x0147_F4D1_FFE2_0003;
-    const CORPUS_SIZE: usize = 5000;
-    const FIELDS: [(&str, &str); 6] = [
-        ("Unit", "codeflow"),
-        ("Impact", "minor"),
-        ("Breaking", "no"),
-        ("Rationale", "Adds a function preserving all callers."),
-        ("Migration", "none"),
-        ("Evidence", "cargo test passed."),
-    ];
-    const INDENTS: [&str; 14] = [
-        "", "", "", "", " ", "  ", "   ", "    ", "     ", "      ", "        ", "\t", " \t",
-        "\t\t",
-    ];
-    const MARKERS: [&str; 16] = [
-        "", "", "", "- ", "* ", "+ ", "1. ", "1) ", "2. ", "10. ", "100) ", "1000. ", "-\t",
-        "1.  ", "-     ", "1000)\t",
-    ];
-
-    /// A block that can stand before, between or after the field lines:
-    /// lists with one- to four-digit ordinals, prose, quotes, fences,
-    /// comments in every position, breaks, HTML containers and indented
-    /// code, some carrying a decoy `Impact` line, all at a random indent.
-    fn corpus_block(rng: &mut Corpus) -> String {
-        let text = match rng.below(20) {
-            0 => format!("{} example\n", rng.pick(&["-", "*", "+"])),
-            1 => format!(
-                "{}{} example\n",
-                rng.pick(&["1", "2", "10", "100", "1000"]),
-                rng.pick(&[".", ")"])
-            ),
-            2 => "- outer\n  - inner\n".into(),
-            3 => "1000. outer\n      - inner\n".into(),
-            4 => "Outside prose.\n".into(),
-            5 => "> quote\n".into(),
-            6 => "> - Impact: patch\n".into(),
-            7 => format!("{f}\ncode\n{f}\n", f = rng.pick(&["```", "~~~", "````"])),
-            8 => format!("{f}\n- Impact: patch\n{f}\n", f = rng.pick(&["```", "~~~"])),
-            9 => "```\n".into(),
-            10 => "<!-- comment -->\n".into(),
-            11 => "<!--\nnote\n-->\n".into(),
-            12 => "<!-- note\n- Impact: patch\n-->\n".into(),
-            13 => "<!-- note --> Outside prose.\n".into(),
-            14 => rng.pick(&["***\n", "---\n", "___\n"]).into(),
-            15 => "<details>\n<summary>More</summary>\n".into(),
-            16 => "    - Impact: patch\n".into(),
-            17 => "Prose then <!-- a\nnote --> more prose.\n".into(),
-            18 => "-\n".into(),
-            _ => "\n".into(),
-        };
-        if !rng.chance(30) {
-            return text;
-        }
-        let indent = rng.pick(&INDENTS);
-        let mut indented = String::new();
-        for line in text.lines() {
-            indented.push_str(indent);
-            indented.push_str(line);
-            indented.push('\n');
-        }
-        indented
-    }
-
-    fn corpus_field(rng: &mut Corpus, (key, value): (&str, &str), group: (&str, &str)) -> String {
-        let (indent, marker) = if rng.chance(75) {
-            group
-        } else {
-            (rng.pick(&INDENTS), rng.pick(&MARKERS))
-        };
-        let quote = if rng.chance(4) { "> " } else { "" };
-        let line = match rng.below(30) {
-            0 => format!("<!-- c --> {key}: {value}"),
-            1 => format!("{key}: {value} <!-- c -->"),
-            2 => format!("<!-- c -->{key}: {value}"),
-            3 => format!("{key}: <!-- c -->{value}"),
-            4 => format!("{key}: {value} <!-- a\nb -->"),
-            _ => format!("{key}: {value}"),
-        };
-        format!("{indent}{quote}{marker}{line}\n")
-    }
-
-    fn corpus_separator(rng: &mut Corpus) -> &'static str {
-        rng.pick(&["", "", "\n", "\n", "\n\n"])
-    }
-
-    /// One whole PR body whose Release impact block mixes the structures.
-    fn corpus_body(rng: &mut Corpus) -> String {
-        let mut body = String::from("## Summary\n\nAdds an item.\n\n## Release impact\n");
-        body.push_str(rng.pick(&["\n", "\n", ""]));
-        for _ in 0..rng.below(3) {
-            body.push_str(&corpus_block(rng));
-            body.push_str(corpus_separator(rng));
-        }
-        let group = (rng.pick(&INDENTS), rng.pick(&MARKERS));
-        for (index, field) in FIELDS.into_iter().enumerate() {
-            if index > 0 && rng.chance(12) {
-                body.push_str(&corpus_block(rng));
-                body.push_str(corpus_separator(rng));
-            } else if index > 0 && rng.chance(10) {
-                body.push('\n');
-            }
-            body.push_str(&corpus_field(rng, field, group));
-        }
-        match rng.below(8) {
-            0 => body.push_str("\n<!-- end -->\n"),
-            1 => body.push_str("\n### Notes\n\n- Impact: patch\n"),
-            2 => body.push_str("\n## Reviews\n\nNone.\n"),
-            3 => body.push_str(&corpus_block(rng)),
-            _ => {}
-        }
-        body
-    }
-
-    /// What one reader makes of a body: its verdict, and the Release impact
-    /// fields it reads, restricted to the six the corpus writes and sorted.
-    /// Both readers lower-case keys and trim values; the corpus writes plain
-    /// values, so no other normalization is needed for equal meaning to
-    /// compare equal.
-    #[derive(Debug, PartialEq)]
-    struct Reading {
-        valid: bool,
-        fields: Option<Vec<(String, String)>>,
-    }
-
-    fn corpus_fields(pairs: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
-        let mut fields: Vec<_> = pairs
-            .filter(|(key, _)| {
-                FIELDS
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(key))
-            })
-            .collect();
-        fields.sort();
-        fields
-    }
-
-    /// The Rust reading. `release` omits `scripts/release.py`'s CodeFlow-only
-    /// rules (one `Unit: codeflow` and one substantive `Evidence`), so they
-    /// are applied here to the fields Rust read; every corpus body keeps
-    /// Breaking consistent with Impact, the third such rule.
-    fn rust_reading(body: &str) -> Reading {
-        let fields = release_fields(body).map(|pairs| corpus_fields(pairs.into_iter()));
-        let only = |fields: &[(String, String)], name: &str| {
-            let values: Vec<_> = fields.iter().filter(|(key, _)| key == name).collect();
-            match values.as_slice() {
-                [(_, value)] => Some(value.clone()),
-                _ => None,
-            }
-        };
-        let codeflow_rules = fields.as_deref().is_some_and(|fields| {
-            only(fields, "unit").as_deref() == Some("codeflow")
-                && only(fields, "evidence").is_some_and(|value| !placeholder(&value))
-        });
-        Reading {
-            valid: release(&GitPolicy::default(), body, false).is_empty() && codeflow_rules,
-            fields,
-        }
-    }
-
-    /// Reads each body with `scripts/release.py`; `None` without python3.
-    fn python_readings(bodies: &[String]) -> Option<Vec<Reading>> {
-        // The cache reads each body's fields once for both calls below.
-        const SCRIPT: &str = "import functools, json, sys\n\
-            sys.path.insert(0, sys.argv[1])\n\
-            import release\n\
-            release.release_impact_fields = functools.cache(release.release_impact_fields)\n\
-            readings = []\n\
-            for body in json.load(open(sys.argv[2], encoding='utf-8')):\n\
-            \x20   try:\n\
-            \x20       release.parse_release_impact(body)\n\
-            \x20       valid = True\n\
-            \x20   except release.ReleaseError:\n\
-            \x20       valid = False\n\
-            \x20   readings.append({'valid': valid, 'fields': release.release_impact_fields(body)})\n\
-            json.dump(readings, sys.stdout)\n";
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return None;
-        }
-        let scripts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts");
-        let input = tempfile::NamedTempFile::new().unwrap();
-        serde_json::to_writer(input.as_file(), bodies).unwrap();
-        let output = std::process::Command::new("python3")
-            .args(["-B", "-c", SCRIPT])
-            .arg(&scripts)
-            .arg(input.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let values: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-        Some(
-            values
-                .iter()
-                .map(|value| Reading {
-                    valid: value["valid"].as_bool().unwrap(),
-                    fields: value["fields"].as_array().map(|pairs| {
-                        corpus_fields(pairs.iter().map(|pair| {
-                            let text = |index: usize| pair[index].as_str().unwrap().to_string();
-                            (text(0), text(1))
-                        }))
-                    }),
-                })
-                .collect(),
-        )
-    }
-
-    fn disagrees(body: &str, python: &Reading) -> bool {
-        rust_reading(body) != *python
-    }
-
-    /// Drops lines from each disagreeing body while the readers still
-    /// disagree, so a failure shows the smallest body that reproduces it.
-    fn minimize(mut bodies: Vec<String>) -> Vec<String> {
-        loop {
-            let mut candidates = Vec::new();
-            for (owner, body) in bodies.iter().enumerate() {
-                let lines: Vec<&str> = body.split_inclusive('\n').collect();
-                for skip in 0..lines.len() {
-                    let candidate: String = lines
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| *index != skip)
-                        .map(|(_, line)| *line)
-                        .collect();
-                    candidates.push((owner, candidate));
-                }
-            }
-            let texts: Vec<String> = candidates.iter().map(|(_, text)| text.clone()).collect();
-            let python = python_readings(&texts).unwrap();
-            let mut changed = false;
-            let mut taken = vec![false; bodies.len()];
-            for ((owner, candidate), python) in candidates.into_iter().zip(python) {
-                if !taken[owner] && disagrees(&candidate, &python) {
-                    bodies[owner] = candidate;
-                    taken[owner] = true;
-                    changed = true;
-                }
-            }
-            if !changed {
-                return bodies;
-            }
-        }
-    }
-
-    /// TSK-147 F4: `scripts/release.py` and this check read the same
-    /// Release impact block from a seeded corpus of structures, not only
-    /// from the hand-picked fixture cases. Readings compare the verdict and
-    /// the fields read, so two readers that fail the same body for
-    /// different reasons still disagree.
-    #[test]
-    fn release_impact_readers_agree_on_a_generated_corpus() {
-        use std::fmt::Write as _;
-        let mut rng = Corpus(CORPUS_SEED);
-        let bodies: Vec<String> = (0..CORPUS_SIZE).map(|_| corpus_body(&mut rng)).collect();
-        let Some(python) = python_readings(&bodies) else {
-            eprintln!("python3 is unavailable; the differential corpus is skipped");
-            return;
-        };
-        let rust: Vec<Reading> = bodies.iter().map(|body| rust_reading(body)).collect();
-        let accepted = rust.iter().filter(|reading| reading.valid).count();
-        assert!(
-            accepted * 20 >= CORPUS_SIZE && accepted * 20 <= CORPUS_SIZE * 19,
-            "the corpus mixes valid and invalid bodies: {accepted} valid"
-        );
-        let disagreeing: Vec<usize> = (0..CORPUS_SIZE)
-            .filter(|index| rust[*index] != python[*index])
-            .collect();
-        eprintln!("{CORPUS_SIZE} bodies (seed {CORPUS_SEED:#x}): {accepted} valid");
-        if disagreeing.is_empty() {
-            return;
-        }
-        let shown: Vec<usize> = disagreeing.iter().copied().take(12).collect();
-        let minimized = minimize(shown.iter().map(|index| bodies[*index].clone()).collect());
-        let mut report = format!(
-            "{} of {CORPUS_SIZE} bodies (seed {CORPUS_SEED:#x}) read differently; first {} minimized:\n",
-            disagreeing.len(),
-            shown.len()
-        );
-        let python = python_readings(&minimized).unwrap();
-        for ((index, body), python) in shown.iter().zip(&minimized).zip(python) {
-            let rust = rust_reading(body);
-            writeln!(report, "\n--- body {index}\n{body}--- rust:   {rust:?}").unwrap();
-            writeln!(report, "--- python: {python:?}").unwrap();
-        }
-        panic!("{report}");
     }
 
     #[test]

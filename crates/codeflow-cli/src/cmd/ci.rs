@@ -88,6 +88,15 @@ pub struct CiArgs {
     /// (SPC-013 R-80).
     #[arg(long, value_name = "LEVEL", hide = true, value_parser = parse_level)]
     pub run_level: Option<PolicyLevel>,
+
+    /// Read PR bodies for `scripts/release.py`, the one reader both use:
+    /// a JSON array of body strings on stdin, and on stdout a JSON array of
+    /// readings, each the Release impact fields (`null` without exactly one
+    /// section), the Breaking change sections' visible text, and this
+    /// check's Release impact findings under the default policy. Reads no
+    /// repository and no range.
+    #[arg(long, hide = true, exclusive = true)]
+    pub read_release_impact: bool,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -162,6 +171,9 @@ fn policy_verifiable(root: &Path) -> bool {
 
 #[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 pub fn run(args: &CiArgs) -> i32 {
+    if args.read_release_impact {
+        return read_release_impact();
+    }
     let root = super::repo_root();
     // An invalid policy cannot verify the consumer's intent — fail loudly,
     // naming each offending key, rather than silently verify against the
@@ -1621,6 +1633,36 @@ fn parse_log(stdout: &str) -> Vec<CommitRecord> {
 /// First 8 chars of a sha for display; the full string when shorter.
 fn short(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
+}
+
+/// `codeflow ci --read-release-impact`: the PR-body reading `release.py`
+/// takes from this binary, so the release calculator and this check read a
+/// body with one parser (TSK-147 F4). Exit 2 on input that is not a JSON
+/// array of strings.
+fn read_release_impact() -> i32 {
+    let mut input = String::new();
+    if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input) {
+        eprintln!("codeflow ci --read-release-impact: cannot read stdin: {error}");
+        return 2;
+    }
+    let bodies: Vec<String> = match serde_json::from_str(&input) {
+        Ok(bodies) => bodies,
+        Err(error) => {
+            eprintln!(
+                "codeflow ci --read-release-impact: stdin must be a JSON array of PR body strings: {error}"
+            );
+            return 2;
+        }
+    };
+    let readings: Vec<serde_json::Value> =
+        bodies.iter().map(|body| pr_body::reading(body)).collect();
+    match serde_json::to_writer(std::io::stdout().lock(), &readings) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("codeflow ci --read-release-impact: cannot write stdout: {error}");
+            2
+        }
+    }
 }
 
 #[cfg(test)]

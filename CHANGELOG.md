@@ -650,6 +650,13 @@ publication date._
   pointing at the pull request's Release impact, and `codeflow ci` and
   `scripts/release.py` given a body that states `Breaking: no` with a
   `Rationale`, outside code and quotes, report nothing for it.
+  `scripts/release.py` reads a pull request body through the `codeflow`
+  binary its caller names (`--codeflow-bin` or `CODEFLOW_BIN`), with the
+  parser `codeflow ci` uses, so the two cannot read a body differently; it
+  never takes a `codeflow` from `PATH`. The pre-push preflight passes the
+  `codeflow` running the hook, and the release impact job builds one from
+  the checked-out tree. A project that runs `release.py check-pr` itself
+  passes a `codeflow` built from its tree.
 
 <!-- codeflow:release-impact minor -->
 - **One full gate at a time, running the suite once.** Public behaviour
