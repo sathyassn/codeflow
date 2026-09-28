@@ -173,6 +173,17 @@
       }
     },
     {
+      "name": "journey-gate",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "python3 -B scripts/test_journey_gate.py && python3 -B scripts/journey-gate.py"
+        }
+      },
+      "timeout_seconds": 3600
+    },
+    {
       "name": "cf-present-qualification",
       "enabled": true,
       "runner": "custom",

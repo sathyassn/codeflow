@@ -107,6 +107,12 @@ jobs:
       - name: cargo clippy --workspace --all-targets -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # The journey gate (TSK-110, SPC-013 R-104, R-107): every mapped journey
+      # runs here too, so each new command is proven on Windows. Journeys
+      # whose tests are unix-only are named as skipped, never passed.
+      - name: journey gate
+        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --skip-benchmark
+
       - uses: actions/setup-node@v6
         with:
           node-version: 24.18.0

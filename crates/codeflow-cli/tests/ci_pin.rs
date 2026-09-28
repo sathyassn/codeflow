@@ -398,10 +398,24 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
 /// reads the workflow, the pin and the policy from the target.
 #[test]
 fn a_pr_editing_the_workflow_changes_neither_the_pin_nor_the_verdict() {
+    judge_a_forged_head("9.9.9");
+}
+
+/// SPC-013 R-104 (TSK-110): a head that lowers the pin while it touches the
+/// workflow and the policy is judged by the target's binary, as a raise is.
+#[test]
+fn a_pr_lowering_the_pin_is_still_judged_by_the_target_binary() {
+    judge_a_forged_head("1.0.0");
+}
+
+/// A head that sets its own pin to `head_pin`, forges the workflow, relaxes
+/// the policy and breaks the commit format; the target's pinned binary
+/// judges it and blocks.
+fn judge_a_forged_head(head_pin: &str) {
     let dir = tempfile::tempdir().unwrap();
     let releases = dir.path().join("releases");
     publish(&releases, "1.2.3");
-    publish(&releases, "9.9.9");
+    publish(&releases, head_pin);
     let origin = dir.path().join("origin");
     std::fs::create_dir_all(&origin).unwrap();
     repo(&origin, "1.2.3");
@@ -415,7 +429,7 @@ fn a_pr_editing_the_workflow_changes_neither_the_pin_nor_the_verdict() {
     git(&origin, &["add", "."]);
     git(&origin, &["commit", "-m", "ci: add the enforcing workflow"]);
 
-    // The head: an always-green workflow, a raised pin, a relaxed policy and
+    // The head: an always-green workflow, its own pin, a relaxed policy and
     // a commit that breaks the target's format rule.
     git(&origin, &["checkout", "-b", "feat/x"]);
     let forged = POLICY.replace(
@@ -424,7 +438,11 @@ fn a_pr_editing_the_workflow_changes_neither_the_pin_nor_the_verdict() {
     );
     assert_ne!(forged, POLICY);
     std::fs::write(origin.join(".github/workflows/codeflow-policy.yml"), forged).unwrap();
-    std::fs::write(origin.join(".codeflow/project.toml"), project_toml("9.9.9")).unwrap();
+    std::fs::write(
+        origin.join(".codeflow/project.toml"),
+        project_toml(head_pin),
+    )
+    .unwrap();
     let relaxed = include_str!("../../../assets/base/policy.json")
         .replace("\"commit_format\": \"block\"", "\"commit_format\": \"off\"");
     std::fs::write(origin.join(".codeflow/policy.json"), relaxed).unwrap();

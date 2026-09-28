@@ -639,7 +639,13 @@ pub fn declared_work_target(repo_root: &Path, task_id: &str) -> Option<String> {
                 .and_then(|stem| stem.to_str())
                 .is_some_and(|stem| stem == task_id)
         })
-        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|path| declared_work_target_at(&path))
+}
+
+/// The `integration_target` the task record at `path` declares.
+pub(crate) fn declared_work_target_at(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
         .and_then(|content| parse_record(&content, RecordKind::Task).ok())
         .and_then(|record| record.integration_target)
         .filter(|target| !target.trim().is_empty())
@@ -1145,12 +1151,30 @@ fn markdown_stem(file: &str) -> Option<&str> {
     extension.eq_ignore_ascii_case("md").then_some(stem)
 }
 
+/// The tree every work record lives under.
+const RECORDS_ROOT: &str = "project-management";
+
+/// The largest work record a tree read accepts. The largest real record is
+/// about 100 KiB; the bound matches the portal's per-file source limit.
+const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;
+
+#[cfg(test)]
+thread_local! {
+    /// How many trees `records_from_tree` has parsed on this thread.
+    pub(crate) static TREE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn records_from_tree(
     repo: &Repository,
     tree: &git2::Tree<'_>,
 ) -> Result<BTreeMap<String, Record>, WorkStartError> {
+    #[cfg(test)]
+    TREE_PARSES.with(|parses| parses.set(parses.get() + 1));
     let mut records = BTreeMap::new();
     let mut failure = None;
+    let odb = repo
+        .odb()
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let walk_result = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
         if failure.is_some() {
             return TreeWalkResult::Abort;
@@ -1159,9 +1183,29 @@ pub(crate) fn records_from_tree(
             return TreeWalkResult::Ok;
         };
         let path = format!("{root}{name}");
+        // Only the record paths are read (SPC-013 R-103): a tree elsewhere
+        // is never loaded, so a partial clone that lacks it still reads.
+        if entry.kind() == Some(git2::ObjectType::Tree) {
+            return if path == RECORDS_ROOT || path.starts_with(&format!("{RECORDS_ROOT}/")) {
+                TreeWalkResult::Ok
+            } else {
+                TreeWalkResult::Skip
+            };
+        }
         let Some(kind) = record_kind_for_tree_path(&path) else {
             return TreeWalkResult::Ok;
         };
+        // A record's size is read from its object header before its bytes,
+        // so a hostile tip cannot make every reader load it.
+        if odb
+            .read_header(entry.id())
+            .is_ok_and(|(size, _)| u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES))
+        {
+            failure = Some(format!(
+                "{path}: record exceeds the 4 MiB bound for a work record"
+            ));
+            return TreeWalkResult::Abort;
+        }
         let Ok(blob) = repo.find_blob(entry.id()) else {
             failure = Some(format!("{path}: cannot read blob"));
             return TreeWalkResult::Abort;

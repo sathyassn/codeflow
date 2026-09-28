@@ -964,6 +964,49 @@ fn custom_mapping_checks_the_policy_list_the_project_sets() {
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
 }
 
+/// SPC-013 R-104: a kept template on upgrade in each mapping state. Repeated
+/// updates keep the decision, the policy and the template byte for byte,
+/// write no sidecar, and leave the verdict the decision gave.
+#[test]
+fn each_mapping_state_survives_an_upgrade() {
+    for (answer, state, passing, failing) in [
+        (
+            "accept",
+            "accepted",
+            PROJECT_BODY,
+            "## Description\n\nOnly this.\n",
+        ),
+        ("refuse", "refused", SHIPPED_BODY, PROJECT_BODY),
+        ("custom", "custom", SHIPPED_BODY, PROJECT_BODY),
+    ] {
+        let dir = decided(answer);
+        let policy_path = dir.path().join(".codeflow/policy.json");
+        let policy = std::fs::read(&policy_path).unwrap();
+        let template = std::fs::read(dir.path().join(TEMPLATE_PATH)).unwrap();
+        for _ in 0..2 {
+            let out = codeflow(dir.path(), &["update"]);
+            let all = text(&out);
+            assert_eq!(out.status.code(), Some(0), "{state}: {all}");
+            assert!(!all.contains("awaits a decision"), "{state}: {all}");
+        }
+        assert_eq!(std::fs::read(&policy_path).unwrap(), policy, "{state}");
+        assert_eq!(
+            std::fs::read(dir.path().join(TEMPLATE_PATH)).unwrap(),
+            template,
+            "{state}"
+        );
+        assert!(!dir.path().join(format!("{TEMPLATE_PATH}.new")).exists());
+        assert_eq!(
+            policy_value(dir.path())["git"]["pr_section_mapping"]["state"],
+            state
+        );
+        let out = ci_pr(dir.path(), passing);
+        assert_eq!(out.status.code(), Some(0), "{state}: {}", text(&out));
+        let out = ci_pr(dir.path(), failing);
+        assert_eq!(out.status.code(), Some(1), "{state}: {}", text(&out));
+    }
+}
+
 #[test]
 fn update_installs_the_enforcing_workflow_for_an_existing_adopter() {
     let dir = tempfile::tempdir().unwrap();

@@ -1,0 +1,35 @@
+{
+  "inventory": {
+    "lines": 10,
+    "task_records": 10000,
+    "stale_task_branches": 3000
+  },
+  "calibration_ms": 296,
+  "commands": {
+    "orient": {
+      "wall_ms": 41992,
+      "latency_ratio": 141.47,
+      "peak_kib": 184432,
+      "git_processes": 500
+    },
+    "status": {
+      "wall_ms": 48813,
+      "latency_ratio": 164.45,
+      "peak_kib": 188064,
+      "git_processes": 500
+    },
+    "validate --docs": {
+      "wall_ms": 1893,
+      "latency_ratio": 6.38,
+      "peak_kib": 126544,
+      "git_processes": 0
+    },
+    "work next": {
+      "wall_ms": 41466,
+      "latency_ratio": 139.7,
+      "peak_kib": 176768,
+      "git_processes": 500
+    }
+  },
+  "recorded_on": "macos-aarch64"
+}

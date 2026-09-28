@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
+use std::rc::Rc;
 
 use git2::{BranchType, Repository};
 
@@ -298,7 +299,7 @@ fn landed(repo: &Repository, repo_root: &Path, tip: git2::Oid, target: git2::Oid
     if tip == target || repo.graph_descendant_of(target, tip).unwrap_or(false) {
         return on_first_parent_line(repo, target, tip) == Some(false);
     }
-    cherry_landed(repo_root, &target.to_string(), &tip.to_string())
+    cherry_landed_in(repo, repo_root, target, tip)
 }
 
 /// Whether every commit `tip` adds over `target` is patch-equivalent there.
@@ -308,6 +309,40 @@ pub(crate) fn cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
     if target.starts_with('-') || tip.starts_with('-') {
         return false;
     }
+    let resolved = Repository::open(repo_root).ok().and_then(|repo| {
+        let oid = |name: &str| {
+            repo.revparse_single(name)
+                .ok()?
+                .peel_to_commit()
+                .ok()
+                .map(|c| c.id())
+        };
+        Some((oid(target)?, oid(tip)?, repo))
+    });
+    match resolved {
+        Some((target, tip, repo)) => cherry_landed_in(&repo, repo_root, target, tip),
+        None => spawned_cherry_landed(repo_root, target, tip),
+    }
+}
+
+/// [`cherry_landed`] on resolved commits. Only `git cherry` proves a
+/// landing; an in-process read first rules out the ranges it could never
+/// prove, so thousands of stale branches cost no process each (R-103).
+fn cherry_landed_in(
+    repo: &Repository,
+    repo_root: &Path,
+    target: git2::Oid,
+    tip: git2::Oid,
+) -> bool {
+    let (target_name, tip_name) = (target.to_string(), tip.to_string());
+    match could_be_patch_equivalent(repo, target, tip) {
+        Some(false) => false,
+        Some(true) => cherry_all_equivalent(repo_root, &target_name, &tip_name),
+        None => spawned_cherry_landed(repo_root, &target_name, &tip_name),
+    }
+}
+
+fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
     let range = format!("{target}..{tip}");
     let merges = git(
         repo_root,
@@ -316,8 +351,113 @@ pub(crate) fn cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
     if !merges.is_ok_and(|out| out.trim().is_empty()) {
         return false;
     }
+    cherry_all_equivalent(repo_root, target, tip)
+}
+
+fn cherry_all_equivalent(repo_root: &Path, target: &str, tip: &str) -> bool {
     git(repo_root, &["cherry", target, tip])
         .is_ok_and(|out| !out.trim().is_empty() && out.lines().all(|line| line.starts_with("- ")))
+}
+
+/// Whether `git cherry target tip` could find every commit of `tip`
+/// patch-equivalent on `target`, from what each commit changes: a patch id
+/// hashes the name of every changed path with its whitespace removed, so
+/// equal patch ids need equal changed paths under that same normalisation,
+/// and a `tip` commit whose paths no `target` commit changes can never be
+/// matched. `Some(false)` also covers a merge in
+/// the range and a range that adds nothing, where the spawned check says
+/// the same. `None` when the commits cannot be read here, or a commit changes
+/// nothing: the spawned check then decides alone.
+fn could_be_patch_equivalent(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> Option<bool> {
+    let mut added = Vec::new();
+    let mut walk = repo.revwalk().ok()?;
+    walk.push(tip).ok()?;
+    walk.hide(target).ok()?;
+    for oid in walk {
+        let commit = repo.find_commit(oid.ok()?).ok()?;
+        if commit.parent_count() > 1 {
+            return Some(false);
+        }
+        added.push(changed_paths(repo, &commit)?);
+    }
+    if added.is_empty() {
+        return Some(false);
+    }
+    let mut upstream = std::collections::HashSet::new();
+    let mut walk = repo.revwalk().ok()?;
+    walk.push(target).ok()?;
+    walk.hide(tip).ok()?;
+    for oid in walk {
+        let commit = repo.find_commit(oid.ok()?).ok()?;
+        // `git cherry` compares against non-merge commits only.
+        if commit.parent_count() <= 1 {
+            if let Some(paths) = changed_paths(repo, &commit) {
+                upstream.insert(paths);
+            }
+        }
+    }
+    Some(added.iter().all(|paths| upstream.contains(paths)))
+}
+
+thread_local! {
+    /// Changed-path digests by commit id. A commit id names its content, so
+    /// the memo holds across repositories; it is cleared when large.
+    static CHANGED_PATHS: std::cell::RefCell<std::collections::HashMap<git2::Oid, Option<u64>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// A digest of the paths `commit` changes against its first parent (the
+/// diff `git cherry` takes a patch id of), each normalised as the patch id
+/// normalises it: every whitespace byte removed, so `a b` and `ab` are one
+/// path, as they are to `git cherry` after a rename. Both names of a changed
+/// pair count, as both enter the patch id. `None` when the commit changes
+/// nothing or cannot be read.
+fn changed_paths(repo: &Repository, commit: &git2::Commit<'_>) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    if let Some(known) = CHANGED_PATHS.with(|memo| memo.borrow().get(&commit.id()).copied()) {
+        return known;
+    }
+    let digest = (|| {
+        let tree = commit.tree().ok()?;
+        let parent = match commit.parent_count() {
+            0 => None,
+            _ => Some(commit.parent(0).ok()?.tree().ok()?),
+        };
+        let diff = repo
+            .diff_tree_to_tree(parent.as_ref(), Some(&tree), None)
+            .ok()?;
+        let mut paths: Vec<Vec<u8>> = diff
+            .deltas()
+            .flat_map(|delta| [delta.old_file().path_bytes(), delta.new_file().path_bytes()])
+            .flatten()
+            .map(patch_id_path)
+            .collect();
+        if paths.is_empty() {
+            return None;
+        }
+        paths.sort_unstable();
+        paths.dedup();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        paths.hash(&mut hasher);
+        Some(hasher.finish())
+    })();
+    CHANGED_PATHS.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.len() > 200_000 {
+            memo.clear();
+        }
+        memo.insert(commit.id(), digest);
+    });
+    digest
+}
+
+/// A path as a patch id hashes it: without the bytes C's `isspace` matches
+/// (git's `remove_space`).
+fn patch_id_path(path: &[u8]) -> Vec<u8> {
+    path.iter()
+        .copied()
+        .filter(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'))
+        .collect()
 }
 
 /// Whether `tip` is on the first-parent line of `target`, by parent links
@@ -368,13 +508,18 @@ fn fetched_at(repo: &Repository) -> Option<String> {
 /// The declared targets of the task records in the working tree, as
 /// written, and the default target for records that declare none.
 fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
+    // One listing; the first record of each id speaks for it, as
+    // `declared_work_target` finds it (R-103: no scan per record).
+    let mut ids = BTreeSet::new();
     let mut targets: BTreeSet<String> =
         crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
             .into_iter()
-            .filter_map(|path| {
-                let stem = path.file_stem()?.to_str()?.to_string();
-                super::declared_work_target(repo_root, &stem)
+            .filter(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| ids.insert(stem.to_string()))
             })
+            .filter_map(|path| super::work_start::declared_work_target_at(&path))
             .collect();
     if let Some(default) = super::default_work_target(repo_root) {
         targets.insert(default);
@@ -407,11 +552,13 @@ impl<'a> Targets<'a> {
 }
 
 /// One target tip read: the declared target, the resolved ref, its tip and
-/// the records there.
-type Tip = (String, String, git2::Oid, BTreeMap<String, Record>);
+/// the records there, shared with every other tip on the same tree.
+type Tip = (String, String, git2::Oid, Rc<BTreeMap<String, Record>>);
 
 /// Read each declared target's tip once (two spellings of one ref are one
 /// tip) and name every snapshot, including the ones that cannot be read.
+/// Each distinct tree is parsed once (R-103): refs on one tree keep their
+/// own identity and are judged apart, over one shared set of records.
 fn read_tips(
     repo: &Repository,
     targets: &mut Targets<'_>,
@@ -419,6 +566,7 @@ fn read_tips(
     snapshots: &mut Vec<Snapshot>,
 ) -> Result<Vec<Tip>, String> {
     let mut tips: Vec<Tip> = Vec::new();
+    let mut parsed: BTreeMap<git2::Oid, Rc<BTreeMap<String, Record>>> = BTreeMap::new();
     for target in declared {
         let (reference, tip, problem) = match targets.resolve(&target) {
             Ok(Some((reference, oid))) => (Some(reference), Some(oid), None),
@@ -436,7 +584,14 @@ fn read_tips(
                 .find_commit(oid)
                 .and_then(|commit| commit.tree())
                 .map_err(|error| error.to_string())?;
-            let records = records_from_tree(repo, &tree).map_err(|error| error.to_string())?;
+            let records = if let Some(records) = parsed.get(&tree.id()) {
+                Rc::clone(records)
+            } else {
+                let records =
+                    Rc::new(records_from_tree(repo, &tree).map_err(|error| error.to_string())?);
+                parsed.insert(tree.id(), Rc::clone(&records));
+                records
+            };
             tips.push((target.clone(), reference.clone(), oid, records));
         }
         snapshots.push(Snapshot {
@@ -1851,5 +2006,219 @@ mod tests {
             "{rendered}"
         );
         assert!(rendered.contains("active"), "{rendered}");
+    }
+
+    /// TSK-110 AC-2: the in-process read decides no landing by itself. On
+    /// each shape it agrees with `git cherry` alone, and it spares the
+    /// process only where `git cherry` could never prove a landing.
+    #[test]
+    fn the_in_process_landing_read_agrees_with_git_cherry() {
+        let dir = repo();
+        let root = dir.path();
+        fs::write(root.join("a.txt"), "1\n2\n3\n4\n5\n6\n7\n8\n9\n").unwrap();
+        commit(root, "base");
+        let branch = |name: &str, file: &str, text: &str| {
+            run(root, &["switch", "-q", "-c", name, "main"]);
+            fs::write(root.join(file), text).unwrap();
+            commit(root, name)
+        };
+        // Squash-landed: the same change is on main as a new commit.
+        let squashed = branch("task/TSK-001-squash", "s.txt", "s\n");
+        // Rebase-landed with shifted context: the patch still matches.
+        let shifted = branch(
+            "task/TSK-002-shift",
+            "a.txt",
+            "1\n2\n3\n4\n5\n6\n7\n8\nnine\n",
+        );
+        // Same path, another change: a candidate `git cherry` refuses.
+        branch("task/TSK-003-other", "s.txt", "other\n");
+        // Never landed, and partly landed.
+        branch("task/TSK-004-open", "open.txt", "open\n");
+        let part = branch("task/TSK-005-part", "p1.txt", "p1\n");
+        fs::write(root.join("p2.txt"), "p2\n").unwrap();
+        commit(root, "part two");
+        // A merge in the range, and a commit that changes nothing.
+        run(root, &["switch", "-q", "-c", "task/TSK-006-merge", "main"]);
+        run(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "merge", "task/TSK-004-open"],
+        );
+        run(root, &["switch", "-q", "-c", "task/TSK-007-empty", "main"]);
+        run(root, &["commit", "-q", "--allow-empty", "-m", "empty"]);
+        run(root, &["switch", "-q", "main"]);
+        fs::write(root.join("a.txt"), "zero\n1\n2\n3\n4\n5\n6\n7\n8\n9\n").unwrap();
+        commit(root, "main moves");
+        run(root, &["cherry-pick", &squashed]);
+        run(root, &["cherry-pick", &shifted]);
+        run(root, &["cherry-pick", &part]);
+
+        let repo = Repository::open(root).unwrap();
+        let oid = |name: &str| {
+            repo.revparse_single(name)
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+        };
+        let main = oid("main");
+        for (name, landed, spared) in [
+            ("task/TSK-001-squash", true, Some(true)),
+            ("task/TSK-002-shift", true, Some(true)),
+            ("task/TSK-003-other", false, Some(true)),
+            ("task/TSK-004-open", false, Some(false)),
+            ("task/TSK-005-part", false, Some(false)),
+            ("task/TSK-006-merge", false, Some(false)),
+            ("task/TSK-007-empty", false, None),
+        ] {
+            let alone = spawned_cherry_landed(root, "main", name);
+            assert_eq!(alone, landed, "{name}: git cherry alone");
+            assert_eq!(cherry_landed(root, "main", name), alone, "{name}");
+            assert_eq!(
+                could_be_patch_equivalent(&repo, main, oid(name)),
+                spared,
+                "{name}: in-process read"
+            );
+        }
+    }
+
+    /// Lines cut at one tree, as one commit or as commits that differ only
+    /// in metadata, are parsed once and still judged each on its own line.
+    #[test]
+    fn refs_on_one_tree_parse_it_once() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        for (id, line) in [
+            ("TSK-002", "integration/EPC-001-a"),
+            ("TSK-003", "integration/EPC-001-b"),
+        ] {
+            task_in(root, id, Some("EPC-001"), line, "todo", "[]", "");
+        }
+        commit(root, "plan");
+        run(root, &["branch", "integration/EPC-001-a"]);
+        run(root, &["switch", "-q", "-c", "integration/EPC-001-b"]);
+        run(root, &["commit", "-q", "--allow-empty", "-m", "cut"]);
+        run(root, &["switch", "-q", "main"]);
+
+        super::super::work_start::TREE_PARSES.with(|parses| parses.set(0));
+        let backlog = backlog(root).unwrap();
+        let parses = super::super::work_start::TREE_PARSES.with(std::cell::Cell::get);
+        assert_eq!(parses, 1, "three refs on one tree");
+        let judged: Vec<(&str, &str, State)> = backlog
+            .entries
+            .iter()
+            .map(|entry| (entry.task_id.as_str(), entry.target.as_str(), entry.state))
+            .collect();
+        assert_eq!(
+            judged,
+            [
+                ("TSK-001", "main", State::Ready),
+                ("TSK-002", "integration/EPC-001-a", State::Ready),
+                ("TSK-003", "integration/EPC-001-b", State::Ready),
+            ]
+        );
+        let tips: BTreeSet<_> = backlog.snapshots.iter().map(|shot| &shot.tip).collect();
+        assert_eq!(tips.len(), 2, "each line keeps its own tip");
+    }
+
+    /// Renames, copies and mode changes are where changed paths could part
+    /// from a patch id: the in-process read never rules out a branch
+    /// `git cherry` alone finds landed, under default rename handling and
+    /// with copies detected.
+    #[test]
+    fn the_in_process_landing_read_agrees_with_git_cherry_across_renames() {
+        let dir = repo();
+        let root = dir.path();
+        run(root, &["config", "core.fileMode", "false"]);
+        for (file, text) in [
+            ("a b", "space\n"),
+            ("cd", "joined\n"),
+            ("dir x/f.txt", "in a dir\n"),
+            ("x.txt", "plain\n"),
+            ("m n", "renamed by the task\n"),
+            ("c.txt", "copied\n"),
+            ("run.sh", "echo run\n"),
+        ] {
+            let path = root.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        }
+        commit(root, "base");
+        let edit = |name: &str, file: &str| {
+            run(root, &["switch", "-q", "-c", name, "main"]);
+            fs::write(root.join(file), format!("{name}\n")).unwrap();
+            commit(root, name)
+        };
+        let space_removed = edit("task/TSK-011-space-removed", "a b");
+        let space_added = edit("task/TSK-012-space-added", "cd");
+        let dir_space = edit("task/TSK-013-dir-space", "dir x/f.txt");
+        let renamed = edit("task/TSK-014-renamed", "x.txt");
+        run(
+            root,
+            &["switch", "-q", "-c", "task/TSK-015-task-renames", "main"],
+        );
+        run(root, &["mv", "m n", "mn"]);
+        let task_renames = commit(root, "task renames");
+        run(root, &["switch", "-q", "-c", "task/TSK-016-copy", "main"]);
+        fs::write(root.join("c copy.txt"), "copied\n").unwrap();
+        let copy = commit(root, "copy");
+        run(root, &["switch", "-q", "-c", "task/TSK-017-mode", "main"]);
+        run(root, &["update-index", "--chmod=+x", "run.sh"]);
+        run(root, &["commit", "-q", "-m", "mode"]);
+        let mode = run(root, &["rev-parse", "HEAD"]);
+
+        run(root, &["switch", "-q", "main"]);
+        for (from, to, pick) in [
+            ("a b", "ab", &space_removed),
+            ("cd", "c d", &space_added),
+            ("dir x", "dirx", &dir_space),
+            ("x.txt", "y.txt", &renamed),
+        ] {
+            run(root, &["mv", from, to]);
+            commit(root, &format!("rename {from}"));
+            run(root, &["cherry-pick", pick]);
+        }
+        for pick in [&task_renames, &copy, &mode] {
+            run(root, &["cherry-pick", pick]);
+        }
+
+        let repo = Repository::open(root).unwrap();
+        let oid = |name: &str| {
+            repo.revparse_single(name)
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+        };
+        let main = oid("main");
+        for copies in [false, true] {
+            if copies {
+                run(root, &["config", "diff.renames", "copies"]);
+            }
+            for (name, landed) in [
+                ("task/TSK-011-space-removed", true),
+                ("task/TSK-012-space-added", true),
+                ("task/TSK-013-dir-space", true),
+                ("task/TSK-014-renamed", false),
+                ("task/TSK-015-task-renames", true),
+                ("task/TSK-016-copy", true),
+                ("task/TSK-017-mode", true),
+            ] {
+                let alone = spawned_cherry_landed(root, "main", name);
+                assert_eq!(alone, landed, "{name} (copies {copies}): git cherry alone");
+                assert_eq!(
+                    cherry_landed(root, "main", name),
+                    alone,
+                    "{name} (copies {copies})"
+                );
+                if alone {
+                    assert_ne!(
+                        could_be_patch_equivalent(&repo, main, oid(name)),
+                        Some(false),
+                        "{name} (copies {copies}): in-process read ruled out a landing"
+                    );
+                }
+            }
+        }
     }
 }
