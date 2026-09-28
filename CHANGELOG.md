@@ -382,6 +382,19 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact minor -->
+- **Present no longer draws Mermaid diagrams.** The `diagram` block leaves
+  the 3.0.0 document schema with its Mermaid renderer, so the review document
+  entry above no longer caps diagram count, source or enhancement.
+  `codeflow present open` and `update` refuse a document that holds one and
+  name the block that replaces it on this release: an html block holding an
+  inline SVG, a table or a tree block, as the conversion section of the
+  `cf-present` authoring reference shows. A session a pre-release build stored
+  with a diagram block still opens, read only: every other block renders as
+  before, and each diagram shows its source and its conversion in its place,
+  until `present update` stores the converted document. The
+  web bundle, its licence list and SBOM no longer carry Mermaid.
+
+<!-- codeflow:release-impact minor -->
 - **Reading is checked by structure; sizes are reported, not failed.** The
   shipped instruction files load progressively: a small kernel (the managed
   `AGENTS.md` block) at session start, and everything else through an index
@@ -826,6 +839,16 @@ publication date._
   Cleanup keeps a worktree
   that a live seat uses. The Claude lane keeps its `accepted` wait. Run
   `codeflow update` to install the script.
+
+<!-- codeflow:release-impact patch -->
+- **The writing reference carries every reply duty.** The rule map sends an
+  agent about to report to `.codeflow/rules/writing.md`, the only reply
+  guidance a minimal-tier project installs. It now states each duty of the
+  lifecycle reply rule: the running report on long work, labels forced onto
+  a short answer, a summary that buries its anchor, a hard gate that waits
+  on the operator while other work keeps moving, and no manufactured ask.
+  A contract test fails when the two drift apart. `codeflow update` brings
+  the reference at every tier.
 
 <!-- codeflow:release-impact patch -->
 - **Work reads survive a partial clone and refuse an oversized record.**

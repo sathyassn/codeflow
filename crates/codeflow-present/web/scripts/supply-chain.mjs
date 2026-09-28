@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -22,7 +21,6 @@ const allowedLicenses = new Set([
   "BSD-3-Clause",
   "ISC",
   "MIT",
-  "MIT (verified license file)",
   "(MPL-2.0 OR Apache-2.0)",
   "Unlicense",
 ]);
@@ -34,18 +32,6 @@ for (const [path, locked] of Object.entries(lock.packages ?? {})) {
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   const license = normalizeLicense(packageJson.license ?? packageJson.licenses);
   const record = { name, version: locked.version, license };
-  if (name === "khroma" && locked.version === "2.1.0" && license === "UNKNOWN") {
-    // The immutable 2.1.0 package publishes this file as lowercase `license`.
-    // Use the archive's real spelling so clean case-sensitive Linux installs
-    // verify the same evidence as macOS and Windows.
-    const licenseText = await readFile(join(webRoot, path, "license"));
-    const hash = createHash("sha256").update(licenseText).digest("hex");
-    if (hash !== "66b333b0f66759a0b710459e03f7029abe17f4358114a128d2c972e642961b49") {
-      throw new Error("khroma 2.1.0 license evidence changed");
-    }
-    record.license = "MIT (verified license file)";
-    record.license_file_sha256 = hash;
-  }
   if (record.license === "UNKNOWN") throw new Error(`Missing license metadata for ${name}@${locked.version}`);
   if (!allowedLicenses.has(record.license)) {
     throw new Error(`Unreviewed production license ${record.license} for ${name}@${locked.version}`);

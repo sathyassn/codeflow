@@ -21,6 +21,9 @@ pub struct RenderOptions<'a> {
     pub feedback: Option<&'a FeedbackSnapshot>,
     pub read_only_warning: Option<&'a str>,
     pub interactive: bool,
+    /// The stored document of a retired revision: an empty narrative whose
+    /// id names one of its diagrams is drawn as that diagram's source.
+    pub retired: Option<&'a serde_json::Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -132,8 +135,72 @@ pub fn render_unsupported(raw: &str, schema_version: u32) -> String {
     html
 }
 
+/// The notice a retired revision opens with.
+const RETIRED_NOTICE: &str = "This revision holds a diagram block, which was removed with Mermaid, so it is shown read only, with each diagram's source in its place. Convert each diagram in your document as the \"Converting a diagram block\" section of cf-present/references/document-authoring.md shows, then run `codeflow present update` with the converted document.";
+
+/// A revision stored with the removed diagram block, read only: every other
+/// block renders as it always did (TSK-114, T114-1), and each diagram shows
+/// its source, escaped, beside its replacement. Nothing is drawn and no
+/// script loads. `document` is the stored document and `readable` its typed
+/// form with each diagram replaced by an empty narrative of the same id.
+#[must_use]
+pub fn render_retired(
+    document: &serde_json::Value,
+    readable: &PresentationDocument,
+    revision: u64,
+) -> String {
+    render_document(
+        readable,
+        &RenderOptions {
+            session_id: "retired",
+            revision,
+            event_sequence: 0,
+            script_path: None,
+            style_path: None,
+            prepaint_source: None,
+            utility_style: None,
+            identity: None,
+            feedback: None,
+            read_only_warning: Some(RETIRED_NOTICE),
+            interactive: false,
+            retired: Some(document),
+        },
+    )
+}
+
+/// The former diagram a retired revision's placeholder stands for.
+fn render_retired_diagram(block: &crate::retired::RetiredBlock<'_>, output: &mut String) {
+    let kind = block.kind().unwrap_or_default();
+    output.push_str("<section class=\"block block--retired\" id=\"");
+    escape_attr_to(block.id().unwrap_or(&block.position), output);
+    output.push_str("\"><h2>");
+    escape_html_to(block.id().unwrap_or(&block.position), output);
+    if let Some(title) = block.text("acc_title") {
+        output.push_str(": ");
+        escape_html_to(title, output);
+    }
+    output.push_str("</h2><p>Former ");
+    escape_html_to(kind, output);
+    output.push_str(" diagram; convert it to ");
+    escape_html_to(crate::retired::replacement(Some(kind)), output);
+    output.push_str(".</p><pre><code>");
+    escape_html_to(block.text("source").unwrap_or_default(), output);
+    output.push_str("</code></pre></section>");
+}
+
 #[allow(clippy::too_many_lines)]
 fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String) {
+    if let (Some(stored), Block::Narrative { id, markdown }) = (options.retired, block) {
+        let diagram = markdown.is_empty().then(|| {
+            crate::retired::retired_blocks(stored)
+                .into_iter()
+                .find(|diagram| diagram.id() == Some(id.as_str()))
+        });
+        if let Some(Some(diagram)) = diagram {
+            render_retired_diagram(&diagram, output);
+            return;
+        }
+    }
     output.push_str("<section class=\"block block--");
     output.push_str(block_kind(block));
     output.push_str("\" id=\"");
@@ -337,32 +404,6 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             render_tree(nodes, output);
             output.push_str("</ul>");
         }
-        Block::Diagram {
-            kind,
-            source,
-            acc_title,
-            acc_description,
-            ..
-        } => {
-            output.push_str("<figure class=\"diagram cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable diagram\"><div data-cf-diagram=\"pending\" data-cf-diagram-kind=\"");
-            escape_attr_to(&format!("{kind:?}").to_lowercase(), output);
-            output.push_str("\" data-cf-diagram-title=\"");
-            escape_attr_to(acc_title, output);
-            output.push_str("\" data-cf-diagram-description=\"");
-            escape_attr_to(acc_description, output);
-            output.push_str("\"><template data-cf-diagram-source>");
-            escape_html_to(source, output);
-            output.push_str("</template><div data-cf-diagram-output><pre><code>");
-            escape_html_to(source, output);
-            output.push_str("</code></pre></div><p data-cf-diagram-status class=\"sr-only\" role=\"status\"></p></div><figcaption>");
-            // Visible caption stays short (title only). Full description is on
-            // data-cf-diagram-description and in a screen-reader span so the
-            // fold is not eaten by a prose wall under the primary figure.
-            escape_html_to(acc_title, output);
-            output.push_str("<span class=\"sr-only\"> — ");
-            escape_html_to(acc_description, output);
-            output.push_str("</span></figcaption></figure>");
-        }
         Block::Media {
             mime_type,
             data_base64,
@@ -450,7 +491,6 @@ fn block_kind(block: &Block) -> &'static str {
         Block::Code { .. } => "code",
         Block::Diff { .. } => "diff",
         Block::Tree { .. } => "tree",
-        Block::Diagram { .. } => "diagram",
         Block::Media { .. } => "media",
         Block::Disclosure { .. } => "disclosure",
         Block::Tabs { .. } => "tabs",
@@ -550,11 +590,85 @@ fn escape_attr_to(value: &str, output: &mut String) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::document::{Block, PresentationDocument, Provenance, Tab};
     use scraper::{ElementRef, Html};
 
     use super::*;
+
+    /// What a retired revision page must show and must never carry.
+    pub(crate) fn assert_retired_page(html: &str) {
+        assert!(
+            html.contains("This revision holds a diagram block, which was removed with Mermaid"),
+            "{html}"
+        );
+        // T114-1: every other block renders as it always did.
+        for kept in [
+            "The qualification path before the diagram block was retired.",
+            "<summary><span data-cf-review-text-root>Message order</span></summary>",
+        ] {
+            assert!(html.contains(kept), "{kept}: {html}");
+        }
+        assert!(!html.contains("present history"), "{html}");
+        assert!(html.contains(
+            crate::retired::CONVERSION_GUIDE
+                .replace('"', "&quot;")
+                .as_str()
+        ));
+        for (heading, source, conversion) in [
+            (
+                "flow: Qualification flow",
+                "flowchart LR\n  Input --&gt; Review --&gt; Evidence",
+                "Former flowchart diagram; convert it to an html block holding an inline SVG.",
+            ),
+            (
+                "handshake: Open handshake",
+                "sequenceDiagram\n  Agent-&gt;&gt;Service: open\n  Service--&gt;&gt;Agent: ready",
+                "Former sequence diagram; convert it to an html block holding an inline SVG, or a table of the messages in order.",
+            ),
+        ] {
+            assert!(html.contains(&format!("<h2>{heading}</h2>")), "{html}");
+            assert!(
+                html.contains(&format!("<pre><code>{source}</code></pre>")),
+                "{html}"
+            );
+            assert!(html.contains(conversion), "{html}");
+        }
+        for absent in [
+            "data-cf-diagram",
+            "pending",
+            "<script",
+            "<template",
+            "type=\"module\"",
+        ] {
+            assert!(
+                !html.contains(absent),
+                "retired page carries {absent}: {html}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_retired_revision_renders_its_notice_and_escaped_sources_and_draws_nothing() {
+        let page = |stored: &serde_json::Value| {
+            let (substituted, _) = crate::retired::legacy_document(stored).unwrap();
+            let readable: PresentationDocument = serde_json::from_value(substituted).unwrap();
+            render_retired(stored, &readable, 1)
+        };
+        let stored: serde_json::Value =
+            serde_json::from_str(crate::state::retired_fixture::REVISION).unwrap();
+        let html = page(&stored["content"]["document"]);
+        assert_retired_page(&html);
+        assert!(html.contains("<title>Qualification review</title>"));
+
+        let hostile = serde_json::json!({"schema_version": 1, "title": "<b>x</b>", "blocks": [{
+            "type": "diagram", "id": "d", "kind": "flowchart",
+            "source": "</code><script>alert(1)</script>", "acc_title": "<i>t</i>", "acc_description": "d"
+        }]});
+        let html = page(&hostile);
+        assert!(!html.contains("<script>") && !html.contains("<b>") && !html.contains("<i>"));
+        assert!(html.contains("&lt;/code&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
+    }
 
     #[test]
     fn markdown_drops_raw_html() {
@@ -582,6 +696,7 @@ mod tests {
                 feedback: None,
                 read_only_warning: None,
                 interactive: true,
+                retired: None,
             },
         );
         assert!(!rendered.contains("<script>alert"));
@@ -664,6 +779,7 @@ mod tests {
                 feedback: None,
                 read_only_warning: None,
                 interactive: true,
+                retired: None,
             },
         );
         let parsed = Html::parse_document(&rendered);

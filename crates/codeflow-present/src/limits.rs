@@ -7,6 +7,8 @@ pub const MAX_NESTING: usize = 12;
 pub const MAX_TITLE_BYTES: usize = 512;
 pub const MAX_PROSE_BYTES: usize = 512 * 1024;
 pub const MAX_CODE_BYTES: usize = 1024 * 1024;
+/// The removed diagram block's bounds, kept to judge a stored pre-release
+/// revision: one outside them was never admitted (TSK-114).
 pub const MAX_DIAGRAM_BYTES: usize = 64 * 1024;
 pub const MAX_DIAGRAM_BLOCKS: usize = 24;
 pub const MAX_HTML_BYTES: usize = 512 * 1024;
