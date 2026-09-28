@@ -1,0 +1,11 @@
+id = "ADR-0074"
+uid = "e637024b-bdf7-477d-b11b-83b3acbe7f36"
+kind = "ADR"
+title = "the root checkout keeps its root branch, and hooks tell agents by harness markers"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T20:18:46Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
