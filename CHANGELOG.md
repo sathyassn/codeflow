@@ -921,9 +921,15 @@ publication date._
   deletion through as `find / -delete`, `find / -exec rm -rf {} +`,
   `ls / | xargs rm -rf`, `rm -rf /Users/<name>`, `cd ~ && rm -rf *` or
   `D=/; rm -rf $D`, or inside a subshell, group, `if`, `for`, `while` or
-  `case` body. Each is now refused as its `rm -rf` equivalent is. A
-  deletion inside the project, such as `find . -name '*.o' -delete` or
-  `find ~ -name .DS_Store -delete`, still runs.
+  `case` body. The same holds for `rsync --delete` into a protected
+  directory, `${HOME:-/}` and `~user`, a link that lands on one, and a
+  deletion behind `command`, `env`, `nice` or a here-string. A `find` rooted
+  at a protected directory with `-delete` or an `-exec` remover is refused
+  whatever its tests, so `find ~ -name .DS_Store -delete` is now refused.
+  Each is refused as its `rm -rf` equivalent is. A variable or directory
+  that may hold a protected value on any path is refused too, and the
+  message then says so. A deletion inside the project, such as
+  `find . -name '*.o' -delete`, still runs.
 
 <!-- codeflow:release-impact patch -->
 - **A peer CLI's help no longer counts as a headless run.** `claude --help
@@ -931,6 +937,13 @@ publication date._
   reports them under `security.headless_peer_runs`; at the `block` level
   they were refused. The same word as a prompt, an option's value or after
   `--`, as in `codex exec -- --help`, is still reported.
+
+<!-- codeflow:release-impact patch -->
+- **A peer CLI started through a package runner counts as a headless run.**
+  `npx @anthropic-ai/claude-code -p`, `bunx @openai/codex exec`, and the
+  same through `pnpm dlx` or `yarn dlx`, are now judged as the direct
+  `claude -p` or `codex exec` is, under `security.headless_peer_runs` at
+  both `warn` and `block`; before, they passed unreported.
 
 <!-- codeflow:release-impact patch -->
 - **A git hook runs the codeflow that started git.** When a `codeflow`

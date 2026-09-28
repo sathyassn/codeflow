@@ -169,10 +169,13 @@ ADR-0026 from arbitrary Bash while leaving brokered tools and MCP processes
 available. The deterministic shell plane accepts both Bash and PowerShell
 payloads and keeps its catastrophic classifier non-relaxable across Unix/macOS
 roots and Windows drive, system, profile, disk, recovery, and permission
-operations. macOS and Linux use native harness sandboxes; WSL2 follows the
-Linux path. Native Windows Codex selects its elevated sandbox, while native
-Windows Claude has no equivalent OS sandbox and therefore moves
-high-blast-radius work to WSL2 or a container (ADR-0033). Beyond the
+operations. A composed deletion is read as scoped shell: each variable and
+the working directory carry every value they may hold through subshells,
+branches and loops, and the deletion is refused when any of them reaches a
+protected location (TSK-141). macOS and Linux use native harness
+sandboxes; WSL2 follows the Linux path. Native Windows Codex selects its
+elevated sandbox, while native Windows Claude has no equivalent OS sandbox
+and therefore moves high-blast-radius work to WSL2 or a container (ADR-0033). Beyond the
 guards, `session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
 interactive Codex session opens with — and re-orients after a compaction from —
 the same orientation digest Claude gets. The same command is the advisory
