@@ -262,7 +262,14 @@ impl Ledger {
             )));
         }
         store.enforce_retention_unlocked()?;
-        store.ensure_project_capacity_unlocked(line.len() as u64, true)?;
+        // A project bound too small for this line and the control reserve is
+        // capacity too, whatever the shared check calls it.
+        store
+            .ensure_project_capacity_unlocked(line.len() as u64, true)
+            .map_err(|error| match error {
+                PresentError::InvalidDocument(reason) => PresentError::ServiceUnavailable(reason),
+                other => other,
+            })?;
         let mut file = open_private_append(&self.path)?;
         #[cfg(test)]
         crash::interrupt(&mut file, &line);
@@ -639,6 +646,67 @@ mod crash {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The largest record the bounds allow, with every part at its worst:
+    /// question text of control characters (a six-byte escape each), the
+    /// request's share as one string of its full size, `u64::MAX` numbers,
+    /// the longest event and outcome names, and an amendment's `amends`.
+    fn largest_record() -> ResponseEvent {
+        use crate::form::{FieldKind, FieldSnapshot, OptionSnapshot};
+        let text = |chars: usize| "\u{1}".repeat(chars);
+        let fields = (0..limits::MAX_FORM_FIELDS)
+            .map(|_| FieldSnapshot {
+                id: "a".repeat(64),
+                label: text(limits::MAX_FORM_LABEL_CHARS),
+                kind: FieldKind::Choices,
+                options: Some(
+                    (0..limits::MAX_FIELD_OPTIONS)
+                        .map(|_| OptionSnapshot {
+                            value: text(limits::MAX_FORM_LABEL_CHARS),
+                            label: text(limits::MAX_FORM_LABEL_CHARS),
+                        })
+                        .collect(),
+                ),
+            })
+            .collect();
+        ResponseEvent::Amendment(AnswerRecord {
+            sequence: u64::MAX,
+            answer_id: Uuid::max(),
+            request_id: Uuid::max(),
+            payload_digest: "f".repeat(64),
+            session_id: Uuid::max(),
+            revision: u64::MAX,
+            form_id: "a".repeat(64),
+            form_digest: "f".repeat(64),
+            outcome: Outcome::Decline,
+            values: Map::new(),
+            rationales: BTreeMap::new(),
+            reason: Some("x".repeat(limits::MAX_RECORD_REQUEST_BYTES)),
+            question: QuestionSnapshot {
+                title: text(limits::MAX_TITLE_BYTES),
+                fields,
+            },
+            actor: Actor::Operator,
+            created_at_unix: u64::MAX,
+            amends: Some(Uuid::max()),
+        })
+    }
+
+    /// The record cap is exactly the largest record's length, so every form
+    /// the service accepts can be answered, and a cap one byte lower fails.
+    #[test]
+    fn the_answer_record_cap_is_the_largest_record() {
+        let largest = serde_json::to_vec(&largest_record()).unwrap();
+        let text_and_request = limits::MAX_SNAPSHOT_TEXT_BYTES + limits::MAX_RECORD_REQUEST_BYTES;
+        assert_eq!(
+            largest.len(),
+            usize::try_from(limits::MAX_RESPONSE_RECORD_BYTES).unwrap(),
+            "the record frame is {} bytes",
+            largest.len() - text_and_request
+        );
+        let fit = limits::MAX_RESPONSE_LOG_BYTES / (limits::MAX_RESPONSE_RECORD_BYTES + 1);
+        assert!(fit >= 34, "the ledger holds {fit} of the largest records");
+    }
 
     #[test]
     fn a_torn_final_line_is_cut_and_a_middle_one_is_corruption() {

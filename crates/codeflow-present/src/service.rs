@@ -1821,6 +1821,17 @@ mod tests {
             "{receipt}"
         );
 
+        // A project bound below the control reserve alone: no answer fits.
+        let small = answer_body(&state, |_| {});
+        let before = ledger_bytes(&state);
+        state.store.set_max_project_bytes(1024);
+        let (status, answer) = post_answer(&state, headers.clone(), small).await;
+        refused(status, &answer, "out of capacity");
+        state
+            .store
+            .set_max_project_bytes(limits::MAX_PROJECT_STATE_BYTES);
+        assert_eq!(ledger_bytes(&state), before, "headroom: the store changed");
+
         // A line before the last that is not a record: the ledger is
         // corrupt, and is left as it is.
         let stored = std::fs::read(&ledger).unwrap();
@@ -1925,6 +1936,112 @@ mod tests {
         );
         assert_eq!(lines(&state), 3);
         lower_bounds(None, None);
+    }
+
+    /// R119-R2-1: the largest form the service accepts (32 choices fields of
+    /// 24 options, every label and value 200 four-byte characters, a
+    /// 512-byte title, 64-byte ids) can be answered with a 64 KiB request,
+    /// declined with the longest reason and dismissed: each is stored with a
+    /// receipt, though its question alone is over the old 1 MiB cap.
+    #[tokio::test]
+    async fn the_largest_form_is_answered_declined_and_dismissed() {
+        let wide = |chars: usize| "\u{1d538}".repeat(chars);
+        let id = |index: usize| format!("field-{index:02}-{}", "a".repeat(55));
+        let fields = (0..limits::MAX_FORM_FIELDS)
+            .map(|index| {
+                let options = (0..limits::MAX_FIELD_OPTIONS)
+                    .map(|option| {
+                        serde_json::json!({
+                            "value": format!("{}{option:02}", wide(limits::MAX_FORM_LABEL_CHARS - 2)),
+                            "label": wide(limits::MAX_FORM_LABEL_CHARS),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "id": id(index), "label": wide(limits::MAX_FORM_LABEL_CHARS),
+                    "kind": "choices", "rationale": "optional", "options": options,
+                })
+            })
+            .collect::<Vec<_>>();
+        let document = serde_json::json!({
+            "schema_version": 2, "title": "The largest form",
+            "blocks": [{ "type": "form", "id": "largest", "title": wide(limits::MAX_TITLE_BYTES / 4), "fields": fields }],
+        });
+        let document =
+            crate::document::parse_document(&serde_json::to_vec(&document).unwrap()).unwrap();
+        let (_temp, state) = app_state_with(document);
+        let headers = application_headers(&state, true);
+        let crate::state::RevisionContent::Supported { document } = state
+            .store
+            .current_revision(state.session_id)
+            .unwrap()
+            .content
+        else {
+            unreachable!()
+        };
+        let form = document
+            .walk()
+            .into_iter()
+            .find(|block| block.id() == "largest")
+            .unwrap();
+        let request = |outcome: &str| {
+            serde_json::json!({
+                "request_id": Uuid::new_v4(), "session_id": state.session_id, "revision": 1,
+                "form_id": "largest", "form_digest": crate::state::block_digest(form),
+                "outcome": outcome, "values": {}, "rationales": {},
+            })
+        };
+
+        // Submit: every field answered, and a rationale that fills the
+        // request to exactly 64 KiB.
+        let mut submit = request("submit");
+        for index in 0..limits::MAX_FORM_FIELDS {
+            submit["values"][id(index)] =
+                serde_json::json!([format!("{}00", wide(limits::MAX_FORM_LABEL_CHARS - 2))]);
+        }
+        submit["rationales"][id(0)] = serde_json::json!("x");
+        let short = limits::MAX_ANSWER_REQUEST_BYTES - serde_json::to_vec(&submit).unwrap().len();
+        submit["rationales"][id(0)] = serde_json::json!("x".repeat(short + 1));
+        let submit = serde_json::to_vec(&submit).unwrap();
+        assert_eq!(submit.len(), limits::MAX_ANSWER_REQUEST_BYTES);
+        // Decline with the longest reason; dismiss with nothing.
+        let mut decline = request("decline");
+        decline["reason"] = serde_json::json!(wide(limits::MAX_DECLINE_REASON_BYTES / 4));
+        let cancel = request("cancel");
+
+        for (sequence, body) in [
+            submit,
+            serde_json::to_vec(&decline).unwrap(),
+            serde_json::to_vec(&cancel).unwrap(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (status, receipt) = post_answer(&state, headers.clone(), body).await;
+            assert_eq!(
+                (
+                    status,
+                    receipt["state"].as_str(),
+                    receipt["sequence"].as_u64()
+                ),
+                (StatusCode::OK, Some("stored"), Some(sequence as u64 + 1)),
+                "{receipt}"
+            );
+        }
+        let ledger = ledger_bytes(&state).unwrap();
+        let lines = ledger
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(lines.len(), 3);
+        for line in lines {
+            assert!(
+                line.len() > 1024 * 1024,
+                "a line of {} bytes is under the old cap",
+                line.len()
+            );
+            assert!(line.len() as u64 <= limits::MAX_RESPONSE_RECORD_BYTES);
+        }
     }
 
     #[test]
