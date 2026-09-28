@@ -703,6 +703,44 @@ impl Block {
         }
     }
 
+    /// A diff's review text as it was before TSK-071, when each changed line
+    /// began with its screen-reader label and marker ("Added: +"), with the
+    /// current review-text offset of each of its UTF-16 offsets (one more
+    /// than its length). A generated label and marker map to the start of
+    /// their line's text; the diff's own text maps one to one. `None` for a
+    /// block that is not a diff.
+    #[must_use]
+    pub fn legacy_diff_review_text(&self) -> Option<(String, Vec<usize>)> {
+        let Self::Diff { diff, caption, .. } = self else {
+            return None;
+        };
+        let mut text = String::new();
+        let mut offsets = Vec::new();
+        let mut current = 0;
+        let mut push = |part: &str, generated: bool| {
+            for _ in part.encode_utf16() {
+                offsets.push(current);
+                if !generated {
+                    current += 1;
+                }
+            }
+            text.push_str(part);
+        };
+        if let Some(caption) = caption.as_deref().filter(|caption| !caption.is_empty()) {
+            push(caption, false);
+            push("\n", false);
+        }
+        for line in diff.lines() {
+            let (label, marker, rest) = diff_line_parts(line);
+            push(label, true);
+            push(marker, true);
+            push(rest, false);
+            push("\n", false);
+        }
+        offsets.push(current);
+        Some((text, offsets))
+    }
+
     /// Short, scannable label for TOC / feedback notes. Not the full prose of
     /// long prompts or captions — those remain in the block body.
     #[must_use]

@@ -2906,23 +2906,11 @@ fn reanchor_text(
         };
     }
     // A diff quote stored before its lines lost their label and marker from
-    // the review text (TSK-071) is read without them.
-    let legacy = matches!(block, crate::document::Block::Diff { .. })
-        .then(|| without_diff_labels(selector))
-        .flatten();
-    let selector = match &legacy {
-        Some(unlabelled) => {
-            if let Some((start_utf16, end_utf16)) = exact_text_match(unlabelled, &canonical) {
-                return FeedbackAnchor::Reanchored {
-                    start_utf16,
-                    end_utf16,
-                    changed: false,
-                };
-            }
-            unlabelled
-        }
-        None => selector,
-    };
+    // the review text (TSK-071) is found in the diff's text as it was then,
+    // and its range carried over to the text as it is now.
+    if let Some(anchor) = reanchor_legacy_diff(selector, same_revision, block) {
+        return anchor;
+    }
     let quote = crate::fuzzy::Quote {
         exact: &selector.exact,
         prefix: &selector.prefix,
@@ -2937,51 +2925,73 @@ fn reanchor_text(
     )
 }
 
-/// A stored diff quote without the "Added: +" and "Removed: -" that its
-/// changed lines carried in the review text before TSK-071, wherever the
-/// quote, its prefix and its suffix split them; `None` when it has none.
-fn without_diff_labels(selector: &TextSelector) -> Option<TextSelector> {
-    let parts = [&selector.prefix, &selector.exact, &selector.suffix];
-    let mut chars: Vec<(char, usize)> = Vec::new();
-    for (part, text) in parts.iter().enumerate() {
-        chars.extend(text.chars().map(|ch| (ch, part)));
+/// B1 for a diff quote stored while its changed lines began with their
+/// screen-reader label and marker ("Added: +") in the review text, before
+/// TSK-071: the exact, then the fuzzy step run on the diff's text as it was
+/// then, and the range found is carried over to the text as it is now, so a
+/// line's own words are kept even when they read like a label. `None` when
+/// the block is not a diff or the quote and its context hold no label.
+fn reanchor_legacy_diff(
+    selector: &TextSelector,
+    same_revision: bool,
+    block: &crate::document::Block,
+) -> Option<FeedbackAnchor> {
+    let (legacy, offsets) = block.legacy_diff_review_text()?;
+    let stored = format!("{}{}{}", selector.prefix, selector.exact, selector.suffix);
+    if !stored.contains("Added: +") && !stored.contains("Removed: -") {
+        return None;
     }
-    let mut kept = Vec::with_capacity(chars.len());
-    let mut index = 0;
-    let mut found = false;
-    while index < chars.len() {
-        let rest = chars[index..].iter().map(|(ch, _)| *ch);
-        let label = ["Added: +", "Removed: -"].into_iter().find(|label| {
-            let mut rest = rest.clone();
-            label.chars().all(|ch| rest.next() == Some(ch))
-        });
-        if let Some(label) = label {
-            index += label.chars().count();
-            found = true;
-        } else {
-            kept.push(chars[index]);
-            index += 1;
+    let carried = |start: u32, end: u32, changed: bool| {
+        let offset = |at: u32| {
+            usize::try_from(at)
+                .ok()
+                .and_then(|at| offsets.get(at))
+                .and_then(|&now| u32::try_from(now).ok())
+        };
+        match (offset(start), offset(end)) {
+            (Some(start_utf16), Some(end_utf16)) if start_utf16 < end_utf16 => {
+                FeedbackAnchor::Reanchored {
+                    start_utf16,
+                    end_utf16,
+                    changed,
+                }
+            }
+            _ => FeedbackAnchor::BlockFallback {
+                block_id: block.id().to_string(),
+                reason: "the quote held only a diff line's label and marker".to_string(),
+            },
         }
-    }
-    if !found {
-        return None;
-    }
-    let part = |wanted: usize| -> String {
-        kept.iter()
-            .filter(|(_, part)| *part == wanted)
-            .map(|(ch, _)| *ch)
-            .collect()
     };
-    let (prefix, exact, suffix) = (part(0), part(1), part(2));
-    if exact.trim().is_empty() {
-        return None;
+    if same_revision
+        && utf16_slice(&legacy, selector.start_utf16, selector.end_utf16).as_deref()
+            == Some(selector.exact.as_str())
+    {
+        return Some(carried(selector.start_utf16, selector.end_utf16, false));
     }
-    Some(TextSelector {
-        exact,
-        prefix,
-        suffix,
-        ..selector.clone()
-    })
+    if let Some((start, end)) = exact_text_match(selector, &legacy) {
+        return Some(carried(start, end, false));
+    }
+    let quote = crate::fuzzy::Quote {
+        exact: &selector.exact,
+        prefix: &selector.prefix,
+        suffix: &selector.suffix,
+        start: Some(selector.start_utf16 as usize),
+    };
+    Some(
+        match fuzzy_anchor(
+            &quote,
+            &legacy,
+            block,
+            "the quote was not found in its block",
+        ) {
+            FeedbackAnchor::Reanchored {
+                start_utf16,
+                end_utf16,
+                ..
+            } => carried(start_utf16, end_utf16, true),
+            other => other,
+        },
+    )
 }
 
 /// B1 step 2 for a note whose quote has no stored offset or context (an
