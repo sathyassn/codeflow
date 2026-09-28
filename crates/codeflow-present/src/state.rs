@@ -2725,6 +2725,7 @@ fn build_feedback_snapshot(
         } else {
             sources.get(&envelope.revision)
         };
+        let source_document = source.and_then(source_document);
         let notes = envelope
             .notes
             .iter()
@@ -2754,7 +2755,7 @@ fn build_feedback_snapshot(
                             reanchor_note(
                                 note,
                                 envelope.revision,
-                                source,
+                                source_document.as_deref(),
                                 current,
                                 current_revision,
                             )
@@ -2779,10 +2780,28 @@ fn build_feedback_snapshot(
     })
 }
 
+/// The document a note was written on. A retired revision reads with each
+/// diagram replaced by an empty narrative of its id, so its other blocks keep
+/// their text (review C071-R5-1).
+fn source_document(
+    content: &RevisionContent,
+) -> Option<std::borrow::Cow<'_, PresentationDocument>> {
+    match content {
+        RevisionContent::Supported { document } => Some(std::borrow::Cow::Borrowed(document)),
+        RevisionContent::Retired { document, .. } => {
+            let (substituted, _) = crate::retired::legacy_document(document)?;
+            serde_json::from_value(substituted)
+                .ok()
+                .map(std::borrow::Cow::Owned)
+        }
+        RevisionContent::Unsupported { .. } => None,
+    }
+}
+
 fn reanchor_note(
     note: &FeedbackNote,
     source_revision: u64,
-    source: Option<&RevisionContent>,
+    source: Option<&PresentationDocument>,
     current: &RevisionContent,
     current_revision: u64,
 ) -> FeedbackAnchor {
@@ -2877,12 +2896,8 @@ fn reanchor_note(
     }
     match &note.selector {
         Some(selector) => {
-            let source_block = match source {
-                Some(RevisionContent::Supported { document }) => {
-                    find_block(&document.blocks, &note.block_id)
-                }
-                _ => None,
-            };
+            let source_block =
+                source.and_then(|document| find_block(&document.blocks, &note.block_id));
             reanchor_text(selector, same_revision, block, source_block, &framing)
         }
         None => FeedbackAnchor::Block {

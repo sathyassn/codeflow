@@ -1271,3 +1271,73 @@ fn a_diff_quote_is_read_in_the_text_of_its_own_revision() {
         );
     }
 }
+
+/// SPC-014 B1 for a diff note on a revision that also held a removed diagram
+/// (review C071-R5-1): the retired revision still gives the diff its 3.0.x
+/// text, so the note re-anchors after conversion, while the note on the
+/// diagram orphans with its named reason even though its id is reused.
+#[test]
+fn a_diff_note_beside_a_retired_diagram_still_reanchors() {
+    let diff = serde_json::json!({"type": "diff", "id": "change", "diff": "+foo\n bar"});
+    let mut revision: Value =
+        serde_json::from_str(crate::state::retired_fixture::REVISION).unwrap();
+    revision["content"]["document"]["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .push(diff.clone());
+    let (_temp, store) = store();
+    let id =
+        crate::state::retired_fixture::install(&store, &serde_json::to_string(&revision).unwrap());
+    assert!(matches!(
+        store.current_revision(id).unwrap().content,
+        crate::state::RevisionContent::Retired { .. }
+    ));
+    let events = store
+        .root()
+        .join("sessions")
+        .join(id.to_string())
+        .join("events.jsonl");
+    let mut received: Value =
+        serde_json::from_str(&std::fs::read_to_string(&events).unwrap()).unwrap();
+    let block: Block = serde_json::from_value(diff.clone()).unwrap();
+    let mut on_diff = note("change", &block.review_label());
+    on_diff.selector = Some(stored_selector("Added: +foo\n bar\n", 0, 11));
+    received["envelope"]["notes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::to_value(on_diff).unwrap());
+    std::fs::write(
+        &events,
+        format!("{}\n", serde_json::to_string(&received).unwrap()),
+    )
+    .unwrap();
+    let converted: PresentationDocument = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "title": "Converted document",
+        "blocks": [{"type": "narrative", "id": "flow", "markdown": "The flow, converted."}, diff]
+    }))
+    .unwrap();
+    store
+        .update_document(id, ParsedDocument::Supported(converted.clone()))
+        .unwrap();
+
+    let snapshot = store.feedback_snapshot(id).unwrap();
+    let notes = &snapshot.items[0].notes;
+    assert!(
+        matches!(&notes[0].anchor, FeedbackAnchor::Orphaned { reason } if reason.contains("diagram block flow")),
+        "{:?}",
+        notes[0].anchor
+    );
+    assert!(
+        matches!(
+            notes[1].anchor,
+            FeedbackAnchor::Reanchored { changed: false, .. }
+        ),
+        "{:?}",
+        notes[1].anchor
+    );
+    assert_eq!(
+        anchored_text(&converted, "change", &notes[1].anchor).as_deref(),
+        Some("foo")
+    );
+}
