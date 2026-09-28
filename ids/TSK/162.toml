@@ -1,0 +1,11 @@
+id = "TSK-162"
+uid = "2f634e15-77a3-4cb7-a081-826dc95d13f5"
+kind = "TSK"
+title = "form ignores a revision notice it already uses"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T18:19:04Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
