@@ -451,6 +451,18 @@ try {
   await reveal(page, "points");
   await gesture(page, draftCell);
   await saveNote(page, "draft: kept across the reload");
+  // The stored draft keeps words and anchors, never a picture of the page.
+  const pictureCell = { type: "bullets", gesture: "element", block: "points", recipe: RECIPES.bullets.element };
+  await armComment(page);
+  await reveal(page, "points");
+  await gesture(page, pictureCell);
+  await saveNote(page, "draft: an element note loses its picture");
+  const storedDraft = await page.waitForFunction((key) => {
+    const kept = sessionStorage.getItem(key);
+    return kept?.includes("an element note loses its picture") ? kept : null;
+  }, `cf-present-draft:${sessionId}`, { timeout: 10_000 }).then((handle) => handle.jsonValue());
+  assert.doesNotMatch(storedDraft, /data_base64|"image"/u, "lifecycle, draft: the stored draft holds a picture");
+  assert.ok(JSON.parse(storedDraft).notes.every((note) => !note.excerpt || Object.keys(note.excerpt).length > 0), "lifecycle, draft: an empty excerpt is stored");
   // update: a revision that keeps the prose and drops the decision re-anchors
   // the prose note and orphans the decision notes with their reason.
   const revised = JSON.parse(await readFile(fixture, "utf8"));
@@ -462,14 +474,20 @@ try {
   await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
   await armComment(page);
   const restored = await page.getByTestId("toast").innerText();
-  assert.match(restored, /Restored 1 unsent note from revision 1\./u, "lifecycle, draft: no restore notice");
+  assert.match(restored, /Restored 2 unsent notes from revision 1\./u, "lifecycle, draft: no restore notice");
   await armComment(page);
-  assert.equal(await page.getByTestId("note-row").count(), 1, "lifecycle, draft: the unsent note is gone");
+  assert.equal(await page.getByTestId("note-row").count(), 2, "lifecycle, draft: an unsent note is gone");
   await page.getByLabel("Verdict").selectOption("approve_with_notes");
   await page.getByTestId("submit-all").click();
   const kept = await nextEnvelope();
   assert.equal(kept.revision, 2);
-  assert.deepEqual(kept.notes.map((note) => note.body), ["draft: kept across the reload"], "lifecycle, draft: delivered notes");
+  assert.deepEqual(kept.notes.map((note) => note.body), ["draft: kept across the reload", "draft: an element note loses its picture"], "lifecycle, draft: delivered notes");
+  // A restored element note is sent without a picture and accepted: its
+  // label excerpt and selector stay; nothing re-captures it.
+  const restoredElement = kept.notes[1];
+  assert.ok(restoredElement.element_selector, "lifecycle, draft: the element note lost its selector");
+  assert.equal(restoredElement.excerpt?.image, undefined, "lifecycle, draft: the restored element note carries a picture");
+  assert.ok(restoredElement.excerpt?.text, "lifecycle, draft: the restored element note lost its text excerpt");
   assert.equal(await page.evaluate((id) => sessionStorage.getItem(`cf-present-draft:${id}`), sessionId), null, "lifecycle, draft: kept after submit");
   await armComment(page);
   const earlier = page.getByTestId("feedback-history");
@@ -525,7 +543,7 @@ try {
   assert.throws(() => run(["present", "history", sessionId]), "lifecycle, clear: history still readable");
   const cleared = sessionId;
   sessionId = null;
-  process.stdout.write(`lifecycle passed: an approval with no notes, an unsent note kept across update and reload, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, an unsent note dropped from session storage when the session closes, close and clear of ${cleared}\n`);
+  process.stdout.write(`lifecycle passed: an approval with no notes, unsent text and element notes kept across update and reload with no picture in storage, the element note sent without its picture and accepted, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, an unsent note dropped from session storage when the session closes, close and clear of ${cleared}\n`);
   process.stdout.write(`cf-present annotation matrix passed: ${cells.length} cells and a whole-document note over ${matrix.size} block types (${cells.filter((cell) => cell.gesture === "text").length} text, ${cells.filter((cell) => cell.gesture === "element").length} element, ${cells.filter((cell) => cell.gesture === "area").length} area), each delivered with its kind and selector; ${decoded.length} JPEG crops sized to the rectangle each note reloads, not one colour, and ${decoded.filter((crop) => crop.inside !== undefined).length} of them at least ${LIKENESS_FLOOR} like the page inside that rectangle, more like it than just outside, and in register with the same rectangle moved 4 or 12 px\n`);
   for (const cell of expected) {
     const crop = decoded.find((item) => item.where === cell.where);

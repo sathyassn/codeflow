@@ -41,7 +41,7 @@ import {
   STROKE_PADDING_PX,
 } from "./selection";
 import type { CapturedTarget, Point } from "./selection";
-import { fitCrops } from "./budget";
+import { fitCrops, withoutPicture } from "./budget";
 import { captureRectJpeg, entityCropPadding, paddedRect, userSpaceBox } from "./excerpt";
 import {
   applyAppearance,
@@ -1958,20 +1958,17 @@ function readDraft(sessionId: string): Draft | null {
   }
 }
 
-// A draft too large for the storage keeps its notes without their pictures.
+// The stored draft keeps the reviewer's words and anchors, never a picture of
+// the page: a note restored after a reload is sent without its picture.
 function writeDraft(sessionId: string, revision: number, notes: readonly PendingFeedback[], verdict: ReviewVerdict, instruction: string): void {
   if (notes.length === 0) {
     clearDraft(sessionId);
     return;
   }
-  const withoutPictures = notes.map((note) => (note.excerpt?.image ? { ...note, excerpt: { ...(note.excerpt.text ? { text: note.excerpt.text } : {}) } } : note));
-  for (const kept of [notes, withoutPictures]) {
-    try {
-      sessionStorage.setItem(draftKey(sessionId), JSON.stringify({ revision, notes: kept, verdict, instruction }));
-      return;
-    } catch {
-      // Try the smaller draft, then give up quietly: the notes stay on screen.
-    }
+  try {
+    sessionStorage.setItem(draftKey(sessionId), JSON.stringify({ revision, notes: notes.map(withoutPicture), verdict, instruction }));
+  } catch {
+    // Storage full or unavailable: give up quietly, the notes stay on screen.
   }
 }
 
