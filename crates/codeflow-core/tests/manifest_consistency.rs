@@ -546,7 +546,10 @@ fn installed_manifest_loads_and_matches_managed_sources_and_baselines() {
             continue;
         }
         compared += 1;
-        for copy in [base.join(&file.src), root.join(".codeflow/.baseline").join(dest)] {
+        for copy in [
+            base.join(&file.src),
+            root.join(".codeflow/.baseline").join(dest),
+        ] {
             match std::fs::read(&copy) {
                 Ok(bytes) if sha256_hex(&bytes) == file.sha256 => {}
                 Ok(_) => problems.push(format!("{dest}: {} differs", rel(&root, &copy))),
@@ -554,7 +557,10 @@ fn installed_manifest_loads_and_matches_managed_sources_and_baselines() {
             }
         }
     }
-    assert!(compared > 0, "expected managed entries in the installed manifest");
+    assert!(
+        compared > 0,
+        "expected managed entries in the installed manifest"
+    );
     problems.sort();
     assert!(
         problems.is_empty(),
