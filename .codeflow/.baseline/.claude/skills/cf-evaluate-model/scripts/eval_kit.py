@@ -659,8 +659,11 @@ def native_index(entries: list[dict]) -> dict[str, int]:
     return by_uuid
 
 
-def parent_uuid(entry: dict) -> Any:
-    return entry.get("parentUuid") or entry.get("logicalParentUuid")
+def parent_uuid(entry: dict) -> str | None:
+    """The entry's native parent id, or `None` when it has no string one."""
+
+    parent = entry.get("parentUuid") or entry.get("logicalParentUuid")
+    return parent if isinstance(parent, str) else None
 
 
 def order_problems(entries: list[dict]) -> list[tuple[str, str]]:
@@ -683,44 +686,55 @@ def order_problems(entries: list[dict]) -> list[tuple[str, str]]:
 FINISHED_STOP_REASONS = frozenset({"end_turn", "stop_sequence"})
 
 
-def tool_calls_in_order(window: list[dict]) -> tuple[bool, set[Any]]:
-    """Walks a turn's tool events in order: each call has a new identity and
-    each result answers a call still outstanding. Returns whether the order
-    held and the calls left without a result."""
+def tool_walk(window: list[dict]) -> tuple[bool, bool]:
+    """Walks a turn's own entries in order and returns whether its tool
+    events held their native order, and whether the turn finished.
 
-    outstanding: set[Any] = set()
-    seen: set[Any] = set()
+    A call counts only in an assistant message and needs a new string id; a
+    result counts only in a user message and answers a call still
+    outstanding. Anything else is broken evidence. The turn finishes at its
+    last assistant reply when that reply carries a finishing stop reason and
+    no call is outstanding at that point.
+    """
+
+    outstanding: set[str] = set()
+    seen: set[str] = set()
     ordered = True
+    finished = False
     for entry in window:
-        for block in (entry.get("message") or {}).get("content") or []:
+        kind = entry.get("type")
+        message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
+        role = message.get("role")
+        content = message.get("content")
+        for block in content if isinstance(content, list) else []:
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_use":
                 call = block.get("id")
-                if not isinstance(call, str) or not call or call in seen:
+                if (kind, role) != ("assistant", "assistant") or not isinstance(call, str) or (
+                    not call or call in seen
+                ):
                     ordered = False
-                seen.add(call)
-                outstanding.add(call)
+                if isinstance(call, str):
+                    seen.add(call)
+                    outstanding.add(call)
             elif block.get("type") == "tool_result":
                 call = block.get("tool_use_id")
-                if call in outstanding:
+                native = (kind, role) == ("user", "user") and not entry.get("isMeta")
+                if native and isinstance(call, str) and call in outstanding:
                     outstanding.discard(call)
                 else:
                     ordered = False
-    return ordered, outstanding
+        if kind == "assistant":
+            finished = message.get("stop_reason") in FINISHED_STOP_REASONS and not outstanding
+    return ordered, ordered and finished
 
 
 def turn_finished(window: list[dict]) -> bool:
     """A turn's own entries end with a native finishing stop reason, with
-    every tool call answered, in order, exactly once."""
+    every tool call answered, in order and in its native role, before it."""
 
-    replies = [entry for entry in window if entry.get("type") == "assistant"]
-    if not replies or (replies[-1].get("message") or {}).get("stop_reason") not in (
-        FINISHED_STOP_REASONS
-    ):
-        return False
-    ordered, outstanding = tool_calls_in_order(window)
-    return ordered and not outstanding
+    return tool_walk(window)[1]
 
 
 def turn_problems(
@@ -736,7 +750,7 @@ def turn_problems(
             entries[index] for index in range(prompt + 1, following) if owners[index] == number
         ]
         finished = turn_finished(window)
-        if not tool_calls_in_order(window)[0]:
+        if not tool_walk(window)[0]:
             problems.append(
                 ("missing_trace", f"turn {number + 1}: a tool result or call breaks the call order")
             )
@@ -765,11 +779,12 @@ def session_identity_problems(entries: list[dict]) -> list[tuple[str, str]]:
     message, so turns can be bound by ancestry."""
 
     messages = [entry for entry in entries if entry.get("type") in {"user", "assistant"}]
-    sessions = {entry.get("sessionId") for entry in messages} | {
+    values = [entry.get("sessionId") for entry in messages] + [
         entry["sessionId"] for entry in entries if "sessionId" in entry
-    }
-    if not sessions or any(not isinstance(value, str) or not value for value in sessions):
+    ]
+    if not values or any(not isinstance(value, str) or not value for value in values):
         return [("missing_trace", "the transcript lacks one native session identity")]
+    sessions = set(values)
     if len(sessions) > 1:
         return [("reused_session", f"{len(sessions)} sessions in one trial")]
     if any(not isinstance(entry.get("uuid"), str) or not entry["uuid"] for entry in messages):

@@ -668,13 +668,50 @@ class CheckSessionTests(unittest.TestCase):
                            "input": {"file_path": "api/RELEASE.md"}}], "tool_use")
         reused.add(result("shared"))
         reused.assistant([{**skill, "id": "shared"}], "tool_use").reply("Here is the page.")
-        for label, transcript in [("result before its call", early), ("reused call id", reused)]:
+        # R4-1: a call and its result count only in their native roles, and
+        # the finishing reply comes after every result.
+        self_resolved = Transcript().typed(case["prompt"]).assistant(
+            [{**skill, "id": "a"}, {"type": "tool_result", "tool_use_id": "a", "content": "ok"}],
+            "end_turn",
+        )
+        misplaced = {}
+        for kind, role in [("assistant", "assistant"), ("system", "system"), ("attachment", "user")]:
+            transcript = Transcript().typed(case["prompt"]).assistant([{**skill, "id": "a"}], "tool_use")
+            transcript.add({"type": kind, "message": {"role": role, "content": [
+                {"type": "tool_result", "tool_use_id": "a", "content": "ok"}]}})
+            misplaced[f"result in {kind}"] = transcript.reply("Here is the page.")
+        late = Transcript().typed(case["prompt"]).assistant([{**skill, "id": "a"}], "end_turn")
+        late.add(result("a"))
+        answered_late = Transcript().typed(case["prompt"]).assistant([{**skill, "id": "a"}], "tool_use")
+        answered_late.assistant([{"type": "text", "text": "Here is the page."}], "end_turn")
+        answered_late.add(result("a"))
+        broken = [("result before its call", early), ("reused call id", reused),
+                  ("result in the calling message", self_resolved), *misplaced.items()]
+        for label, transcript in broken:
             with self.subTest(label):
                 checked = self.check(case, transcript)
                 self.assertFalse(checked["valid"])
                 self.assertIn("the probe turn has no finished reply", checked["problems"])
                 self.assertIn("turn 1: a tool result or call breaks the call order",
                               checked["problems"])
+        for label, transcript in [("result after the stop", late),
+                                  ("result after the final reply", answered_late)]:
+            with self.subTest(label):
+                checked = self.check(case, transcript)
+                self.assertFalse(checked["valid"])
+                self.assertIn("the probe turn has no finished reply", checked["problems"])
+        for label, call_id in [("list id", ["a"]), ("object id", {"id": "a"})]:
+            with self.subTest(label):
+                odd = Transcript().typed(case["prompt"]).assistant([{**skill, "id": call_id}], "tool_use")
+                odd.add(result("a")).reply("Here is the page.")
+                checked = self.check(case, odd)
+                self.assertFalse(checked["valid"])
+                self.assertIn("turn 1: a tool result or call breaks the call order",
+                              checked["problems"])
+        hooked = Transcript().typed(case["prompt"]).reply(
+            "Here is the page.", {"name": "Skill", "input": {"skill": "cf-present"}})
+        hooked.hook("Stop", "codeflow hook session-summary")
+        self.assertTrue(self.check(case, hooked)["valid"], "post-reply hook records stay allowed")
 
         several = Transcript().typed(case["prompt"]).reply(
             "Here is the page.",
@@ -742,6 +779,12 @@ class CheckSessionTests(unittest.TestCase):
         self.assertFalse(checked["valid"])
         self.assertIn("missing_trace", checked["validity_flags"])
         self.assertTrue(any("native session identity" in item for item in checked["problems"]))
+        for odd in (["session-a"], {"id": "session-a"}):
+            listed = Transcript().typed(case["prompt"]).reply("Refunds no longer charge twice.")
+            listed.entries[-1]["sessionId"] = odd
+            listed.entries[-1]["parentUuid"] = [listed.entries[-2]["uuid"]]
+            checked = self.check(case, listed)
+            self.assertIn("missing_trace", checked["validity_flags"], odd)
         unnamed = Transcript().typed(case["prompt"]).reply("Refunds no longer charge twice.")
         del unnamed.entries[-1]["uuid"]
         self.assertIn("missing_trace", self.check(case, unnamed)["validity_flags"])
