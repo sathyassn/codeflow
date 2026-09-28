@@ -29,16 +29,16 @@ trees; any other path names a file in the CodeFlow repository.
 ## Voice
 
 Every string speaks plainly and calmly. A how-to step, a prompt on a review
-surface and a reply address the reader, a skill file instructs the agent,
-and every other string is written in the third person.
+surface, interface microcopy and a reply address the reader, a skill file
+instructs the agent, and every other string is written in the third person.
 
 - State what the subject does or what holds. Do not praise it, sell it or
   apologise for it.
 - Use the third person in a guide page, a reference page, a caption, a
   description and a record; a skill file takes the imperative (see Skill
   prose).
-- Use the second person in a how-to step, a prompt on a review surface and a
-  reply: the reader is the actor.
+- Use the second person in a how-to step, a prompt on a review surface,
+  interface microcopy and a reply: the reader is the actor.
 - Keep one register through a document. A page does not switch from "the
   adapter derives" to "you will see".
 - Invent no personality, experience, feelings, familiarity or slang. Where a
@@ -131,14 +131,14 @@ Example, a section heading in sentence case (source: `cf-docs-portal/resources/d
 
 ## Leads
 
-A lead is the one sentence above a carrier that says what the reader is
+A lead is the sentence above a carrier that says what the reader is
 looking at.
 
 - Write a lead only above a carrier: a figure, a table or a fenced block. A
   plain answer takes no lead.
-- A summary that opens a list or a table is its lead, and it may take the
-  one to three sentences a summary allows.
-- Say what the carrier shows and why it is here, in one sentence.
+- When a summary opens a table, the summary is the lead: add no second
+  lead, and keep the one to three sentences a summary allows.
+- Otherwise, say what the carrier shows and why it is here, in one sentence.
 - Never restate the caption, the title or the legend.
 - Never describe the carrier's form: not "the figure below shows".
 
@@ -173,7 +173,7 @@ A legend key names the state its mark stands for, and the description names
 every state and every drawn fact.
 
 - Write a key as a noun phrase: the thing the mark stands for, with no
-  article, no main verb, and no instruction to the reader. "Gate
+  article, no main verb, and no words addressed to the reader. "Gate
   that stops travel", not "This marks where a gate stops you" or "CI runs
   this step".
 - Give each state one key and each key one state. Two states with one

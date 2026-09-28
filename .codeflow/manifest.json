@@ -203,7 +203,7 @@
     ".agents/skills/cf-editorial-review/references/copy-guide.md": {
       "src": "agents/skills/cf-editorial-review/references/copy-guide.md",
       "ownership": "managed",
-      "sha256": "9e7ff2e5eb7b04e90a104bfd26874a0d1046df2dbafbbfe7bebcac6d764dcd1e",
+      "sha256": "e81212d59747adc6da72c19165d034e2cc1f7feb0a8f3d321c8230c9d50576d0",
       "exec": false
     },
     ".agents/skills/cf-editorial-review/references/editorial-smells.md": {
@@ -815,7 +815,7 @@
     ".claude/skills/cf-editorial-review/references/copy-guide.md": {
       "src": "agents/skills/cf-editorial-review/references/copy-guide.md",
       "ownership": "managed",
-      "sha256": "9e7ff2e5eb7b04e90a104bfd26874a0d1046df2dbafbbfe7bebcac6d764dcd1e",
+      "sha256": "e81212d59747adc6da72c19165d034e2cc1f7feb0a8f3d321c8230c9d50576d0",
       "exec": false
     },
     ".claude/skills/cf-editorial-review/references/editorial-smells.md": {
