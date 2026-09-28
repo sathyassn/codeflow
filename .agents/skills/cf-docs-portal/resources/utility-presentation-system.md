@@ -99,8 +99,10 @@ a teaser dump.
 - Full-width stage with margins; large labeled nodes; named edges.
 - One governing path at rest; secondary crossings only if they teach.
 - Material state change must change structure or labels—not only a tint.
-- Mermaid/ASCII may **support** a figure; they are not a substitute for a
-  subject-led composition when the claim needs a true stage.
+- ASCII may **support** a figure; it is not a substitute for a subject-led
+  composition when the claim needs a true stage.
+- Mermaid is unsupported on both surfaces: present refuses a `diagram`
+  block, and the portal shows its fence as plain code.
 
 ### Anti-patterns (fail closed)
 
@@ -109,7 +111,7 @@ a teaser dump.
 3. Permanent annotate `+` on every block (present)
 4. Free-form HTML inventing a second visual language
 5. Product design-system components or brand packs inside the utility
-6. Mermaid/ASCII as the primary page form when geometry should teach
+6. ASCII as the primary page form when geometry should teach
 7. Cryptic headings, emoji personality, promotional filler
 8. Restyling the same chat answer without a new information structure
 9. Portal as a vision / marketing site or second content authority

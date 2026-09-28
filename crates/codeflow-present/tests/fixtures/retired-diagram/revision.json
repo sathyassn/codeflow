@@ -1,0 +1,43 @@
+{
+  "state_schema_version": 1,
+  "revision": 1,
+  "created_at_unix": 1790355528,
+  "content": {
+    "kind": "supported",
+    "document": {
+      "schema_version": 1,
+      "title": "Qualification review",
+      "provenance": {},
+      "blocks": [
+        {
+          "type": "narrative",
+          "id": "summary",
+          "markdown": "The qualification path before the diagram block was retired."
+        },
+        {
+          "type": "diagram",
+          "id": "flow",
+          "kind": "flowchart",
+          "source": "flowchart LR\n  Input --> Review --> Evidence",
+          "acc_title": "Qualification flow",
+          "acc_description": "Input moves through review to evidence."
+        },
+        {
+          "type": "disclosure",
+          "id": "more",
+          "summary": "Message order",
+          "blocks": [
+            {
+              "type": "diagram",
+              "id": "handshake",
+              "kind": "sequence",
+              "source": "sequenceDiagram\n  Agent->>Service: open\n  Service-->>Agent: ready",
+              "acc_title": "Open handshake",
+              "acc_description": "The agent opens a session and the service answers ready."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

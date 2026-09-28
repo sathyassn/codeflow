@@ -987,10 +987,10 @@ CodeFlow-owned isolated browser profile against an authenticated loopback-only
 service. Host/Origin/CSP/path/body limits, inert revision-qualified HTML
 sandboxing, strict primitive-token import, crash recovery, bounded retention,
 and identity-scoped cleanup are code boundaries. Event parsing and partial-tail
-repair are self-bounded and operate through one opened handle. Mermaid input is
-capped per diagram and per document; browser enhancement is serialized, yields
-between diagrams, and fails remaining items to escaped source when the eager
-fallback exhausts its cumulative budget. Browser and auxiliary system-tool
+repair are self-bounded and operate through one opened handle. The `diagram`
+block was removed with Mermaid: new input carrying one is refused with its
+conversion named, and a revision stored with one loads read only with a notice
+and its escaped source. Browser and auxiliary system-tool
 children share one allowlist-only environment. Windows ACL mutation is confined
 to creation for every private file, including append and lease files; existing
 state uses native read-only owner/protected-DACL/trustee/inheritance
@@ -1031,8 +1031,7 @@ asset/release checks, and fresh native interactive model trials. That matrix
 includes Windows Unicode known-folder/profile paths, creation-time ACL
 hardening plus read-only weakened-ACL rejection, trusted system tools, exact
 process-tree identity and file URLs; Linux/WSL2
-bounded `/proc` identity and group signaling; and a dense multi-diagram browser
-corpus with long-task evidence. Cross-builds alone do not claim native runtime
+bounded `/proc` identity and group signaling. Cross-builds alone do not claim native runtime
 support.
 
 ## CAP-015 — opt-in-documentation-portal
