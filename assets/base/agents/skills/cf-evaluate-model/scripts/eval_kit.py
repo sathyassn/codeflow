@@ -7,6 +7,7 @@ import argparse
 import ast
 import contextlib
 import copy
+import errno
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import fnmatch
@@ -29,8 +30,14 @@ from typing import Any
 
 try:
     import fcntl
-except ImportError:  # Windows: no POSIX file locks.
+except ImportError:  # Windows
     fcntl = None
+try:
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None
+# What msvcrt.locking raises while another process holds the lock.
+LOCK_BUSY = getattr(errno, "EDEADLOCK", errno.EDEADLK)
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -2734,18 +2741,34 @@ def registration_lock(run_root: Path):
     which never changes, so it adds nothing to any inventory. Materialization
     registers and settles a trial under it, and grading takes its inventory
     and reads the registrations under it, so a trial finishing in parallel is
-    never half seen. Without POSIX file locks, trials must not materialize
-    while another is graded."""
+    never half seen. POSIX takes it with flock and Windows with
+    msvcrt.locking on the marker's first byte; a platform with neither is
+    refused, never left to race."""
 
-    if fcntl is None:
-        yield
-        return
+    if fcntl is None and msvcrt is None:
+        raise EvalError("this platform has no file lock, so trials cannot be materialized or graded safely")
     with open(run_root.expanduser().resolve() / RUN_MARKER, "rb") as marker:
-        fcntl.flock(marker.fileno(), fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(marker.fileno(), fcntl.LOCK_EX)
+        else:
+            while True:
+                marker.seek(0)
+                try:
+                    msvcrt.locking(marker.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError as error:
+                    # LK_LOCK gives up after ten one-second tries; keep
+                    # waiting while another process holds the lock.
+                    if error.errno != LOCK_BUSY:
+                        raise
         try:
             yield
         finally:
-            fcntl.flock(marker.fileno(), fcntl.LOCK_UN)
+            if fcntl is not None:
+                fcntl.flock(marker.fileno(), fcntl.LOCK_UN)
+            else:
+                marker.seek(0)
+                msvcrt.locking(marker.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def registered_trials(run_root: Path, marker: dict, *, settled: bool = False) -> set[str]:

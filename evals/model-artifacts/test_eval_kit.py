@@ -2111,6 +2111,45 @@ print(json.dumps(seen, sort_keys=True))
         self.assertTrue(passed, detail)
         self.assertFalse(reservation.exists())
 
+    def test_the_registration_lock_is_chosen_per_platform(self) -> None:
+        # POSIX locks the marker with flock, Windows with msvcrt.locking on
+        # its first byte, retrying while another process holds it; with
+        # neither, materializing and grading are refused rather than raced.
+        # Each side is faked, so either host checks both.
+        calls: list[tuple] = []
+
+        class FakeFcntl:
+            LOCK_EX, LOCK_UN = "LOCK_EX", "LOCK_UN"
+
+            def flock(self, fd: int, operation: str) -> None:
+                calls.append(("flock", operation))
+
+        class FakeMsvcrt:
+            LK_LOCK, LK_UNLCK = "LK_LOCK", "LK_UNLCK"
+            busy = 1
+
+            def locking(self, fd: int, mode: str, length: int) -> None:
+                calls.append(("locking", mode, length, os.lseek(fd, 0, os.SEEK_CUR)))
+                if mode == self.LK_LOCK and self.busy:
+                    self.busy -= 1
+                    raise OSError(eval_kit.LOCK_BUSY, "held by another process")
+
+        def held(fcntl, msvcrt) -> list[tuple]:
+            calls.clear()
+            with patch.object(eval_kit, "fcntl", fcntl), patch.object(eval_kit, "msvcrt", msvcrt):
+                with eval_kit.registration_lock(self.run_root):
+                    calls.append(("held",))
+            return list(calls)
+
+        self.assertEqual([("flock", "LOCK_EX"), ("held",), ("flock", "LOCK_UN")], held(FakeFcntl(), FakeMsvcrt()))
+        self.assertEqual(
+            [("locking", "LK_LOCK", 1, 0), ("locking", "LK_LOCK", 1, 0), ("held",), ("locking", "LK_UNLCK", 1, 0)],
+            held(None, FakeMsvcrt()),
+        )
+        with self.assertRaisesRegex(eval_kit.EvalError, "no file lock"):
+            held(None, None)
+        self.assertNotIn(("held",), calls)
+
     def test_boundary_catches_writes_anywhere_outside_the_workspace(self) -> None:
         subjects = Path(self.record["subjects_root"])
         origin = self.root.parent / "origin.git"
