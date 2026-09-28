@@ -242,9 +242,10 @@ try {
         range.selectNodeContents(line);
         return range.getBoundingClientRect();
       };
-      const [first, last] = [lines[4], lines[6]].map((line) => ({ line: line.getBoundingClientRect(), text: text(line) }));
+      const [first, middle, last] = [lines[4], lines[5], lines[6]].map((line) => ({ line: line.getBoundingClientRect(), text: text(line) }));
       return {
         from: { x: first.text.right + 24, y: first.line.top + first.line.height / 2 },
+        hold: { x: middle.text.right + 40, y: middle.line.top + middle.line.height / 2 },
         to: { x: Math.min(last.line.right - 8, last.text.right + 160), y: last.line.top + last.line.height / 2 },
         blank: first.line.right - first.text.right,
       };
@@ -252,7 +253,12 @@ try {
     assert.ok(drag.blank > 60, `diff whitespace: the line has no blank end to drag from: ${JSON.stringify(drag)}`);
     await page.mouse.move(drag.from.x, drag.from.y);
     await page.mouse.down();
-    await page.mouse.move(drag.to.x, drag.to.y, { steps: 12 });
+    // The reader pauses on the middle line past the pin's settle delay. A
+    // drag pins on release only, so no chip opens under it (TSK-160).
+    await page.mouse.move(drag.hold.x, drag.hold.y, { steps: 6 });
+    await page.waitForTimeout(400);
+    assert.equal(await page.getByTestId("float-chip").count(), 0, "diff whitespace: a chip opened while the drag was held");
+    await page.mouse.move(drag.to.x, drag.to.y, { steps: 6 });
     await page.mouse.up();
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText({ timeout: 10_000 })).trim();
     const quote = await page.evaluate(() => String(getSelection()));
@@ -262,7 +268,7 @@ try {
     assert.doesNotMatch(summary, /Added|Removed|(^|\n|: )[+-] /u, `diff whitespace: the chip quotes ${JSON.stringify(summary)}`);
     await saveNote(page, "matrix: diff whitespace");
     expected.push({ type: "diff", gesture: "text", block: "change", where: "diff whitespace", recipe: { seen: ["256 * 1024", "bytes <= limit"] }, summary });
-    process.stdout.write(`diff whitespace passed: a plain drag over the blank ends of three diff lines selects them as text, not the whole diff, quoted as ${JSON.stringify(summary)}\n`);
+    process.stdout.write(`diff whitespace passed: a plain drag over the blank ends of three diff lines, held 400 ms on the middle one, opens no chip until release and then selects them as text, not the whole diff, quoted as ${JSON.stringify(summary)}\n`);
   }
   // Markers park beside what they mark, and a saved area keeps a faint
   // outline while Comment is on (P2-2): no area marker sits on its area.
