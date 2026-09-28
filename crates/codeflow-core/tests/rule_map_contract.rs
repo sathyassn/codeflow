@@ -211,7 +211,7 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "never human weeks, sprints or person-days",
         "Replies, status and summaries lead with outcomes in plain words, with IDs and file names after",
         "titles name the subject in words",
-        "no em or en dash in new text",
+        "avoid em and en dashes in prose",
         "Evidence and honest analysis outrank agreement",
         "say what was not verified",
         "Find broadly; act by materiality.",
@@ -284,6 +284,43 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         &repo_root().join("assets/base/rules/workflow-discipline.md"),
     ));
     assert!(discipline.contains("Review verdicts require `cf-reviewer`"));
+}
+
+/// TSK-108 AC-6 (SPC-013 R-117, ADR-0071): every tier's map carries the
+/// compact outcome-first rules: the result decides the work, the report
+/// order, the anchoring summary, the one attention marker and the dash
+/// guideline. The retired absolute dash wording is gone.
+#[test]
+fn every_tier_map_carries_the_outcome_first_rules() {
+    let kernel = Kernel::shipped();
+    let pinned = [
+        "Name the result, who uses it and the evidence that would establish it",
+        "a gate or criterion is evidence toward the result, never the result",
+        "Separate what is done here from what still depends on other work",
+        "open with the result and where it stands, then what would change it and who \
+         resolves it, then what the reader must do; steps and tooling last",
+        "A summary anchors the reader in a few lines",
+        "operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed",
+        "avoid em and en dashes in prose",
+    ];
+    for tier in Kernel::tiers() {
+        let block = normalized(
+            managed_block(&kernel.render(agents_output(tier))).expect("managed markers"),
+        );
+        let missing: Vec<&str> = pinned
+            .iter()
+            .copied()
+            .filter(|needle| !block.contains(needle))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{tier} map lost outcome-first rules: {missing:?}"
+        );
+        assert!(
+            !block.contains("no em or en dash in new text"),
+            "{tier} map keeps the retired absolute dash rule"
+        );
+    }
 }
 
 /// Backticked tokens in a managed block that name an installed file or

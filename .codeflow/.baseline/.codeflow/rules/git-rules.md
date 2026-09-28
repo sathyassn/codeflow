@@ -100,8 +100,10 @@ missing automation for adoption rather than silently enabling publication.
 - **PR bodies:** follow the template: five fixed sections, plus conditional
   ones when they apply (`cf-ship` owns the format where installed). A PR
   names its work with `Task: TSK-NNN` or `Task: none: <reason>`. The Summary
-  gives context only, in one to three short sentences; every detail follows
-  as bullets. Match presentation to the shape of the data: tables for
+  anchors a reader with no context in a few lines: the result, why it
+  matters and where it stands; a key file name or number belongs there when
+  it is part of that context, and the details follow as bullets. Match
+  presentation to the shape of the data: tables for
   matrices, fenced blocks for pasted output, one-line bullets for the rest,
   never paragraph walls. A code PR **must** carry real test evidence in
   `## Testing`: pasted test summary, coverage number, new tests, and what was

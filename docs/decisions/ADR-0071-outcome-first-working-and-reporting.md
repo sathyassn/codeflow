@@ -141,3 +141,7 @@ rules 5 and 6 give to `autonomy.md` live in the lifecycle reply rule and the
 orchestrator's joint closeout, and rule 7 is reconciled here by the
 ADR-0067 note of 2026-09-25 and the removal of the pull request Summary
 warnings for a code span or a path.
+
+On this line the requirement named CF-OUT-006 above is CF-OUT-007:
+TSK-130 had already landed a different CF-OUT-006, on naming each item by
+its outcome, and evaluation surfaces are append-only (R-118).

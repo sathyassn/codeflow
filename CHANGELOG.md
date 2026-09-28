@@ -57,6 +57,28 @@ publication date._
   the changed skill at the standard and full tiers.
 
 <!-- codeflow:release-impact minor -->
+- **Outcome-first working and reporting (ADR-0071).** The contract, the
+  lifecycle reply rule and the report owners put the result first: an agent
+  names the result, who uses it and the evidence that would establish it,
+  and a gate or criterion counts only as evidence toward it. A reply or
+  report opens with the result and where it stands, then what would change
+  it, then what the reader must do. Items the operator must act on go once
+  under NEED YOUR ATTENTION, and not at all when nothing is owed. Em and en
+  dashes are a prose guideline judged in review. `codeflow ci` no longer
+  warns on a code span or a path in a pull request Summary. The evaluation
+  kit adds requirement CF-OUT-007, an amended CF-OUT-002 and an
+  `outcome-first` pack.
+
+<!-- codeflow:release-impact patch -->
+- **One work lifecycle section.** cf-method's project organization reference
+  states once how a work item moves and which verbs move it: allocation on a
+  planning branch, `work next`, `work claim` and `work start`, the dependency
+  forms and guarded selections, every `task status` transition, and spec and
+  epic status. cf-plan, cf-develop, cf-ship, cf-customize and the task graph
+  point to it, and the research folder, spec and epic, and standalone rules
+  are each stated there once.
+
+<!-- codeflow:release-impact minor -->
 - **Review findings, repair and a copy guide.** The duo quality contract has a
   new section on review findings and repair, read when a defect is fixed or
   review findings are briefed, written or acted on. A defect fix states its
@@ -634,8 +656,10 @@ publication date._
 
 <!-- codeflow:release-impact patch -->
 - **Summary shape and reply figures.** A pull request body, report or reply
-  opens with one to three short sentences of context only, and every detail
-  follows as bullets in a logical order. A reply figure matches its surface:
+  opens with a summary that anchors the reader in a few lines: what this is,
+  why it matters and where it stands, with a key number, file name or caveat
+  where it is part of that context. Every detail follows as bullets in a
+  logical order. A reply figure matches its surface:
   an inline HTML figure where the harness renders one, a `cf-present` page
   when it needs a full page, fenced ASCII on a terminal or other plain-text
   surface, and never Mermaid. The operating-doctrine evaluation cases grade

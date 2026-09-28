@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-27-guidance-retention-v1",
+  "requirements_version": "2026-09-28-outcome-first-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -1300,7 +1300,7 @@
     {
       "id": "CF-OUT-002",
       "level": "hard",
-      "statement": "Substantial prose and every operator-facing reply are reviewed in their full project, audience, medium, and task context; preserve technical meaning and credible documented voice; remove unsupported certainty, sycophancy, inflation, obstructive formatting, and mannered prose (slogans, contrast turns, dramatic fragments, paragraph walls) without fabricating personality. A reply, report, or pull request body opens with a summary that gives context only: one to three short sentences on what this is and why, with no mechanism, file name, identifier, number, rule list, or caveat. Every detail follows as bullets, one point each, in a logical order, with tables for tabular data and fenced blocks for pasted output. The summary is judged by what it carries as well as its length: a short summary that already holds the details fails. A one-line answer stays one line and is never padded into a summary. The only fixed exclusions are the em and en dash in new text that ADR-0067 names; there is otherwise no lexical, punctuation, list, or emoji blacklist, and legitimate punctuation on existing lines is preserved.",
+      "statement": "Substantial prose and every operator-facing reply are reviewed in their full project, audience, medium, and task context; preserve technical meaning and credible documented voice; remove unsupported certainty, sycophancy, inflation, obstructive formatting, and mannered prose (slogans, contrast turns, dramatic fragments, paragraph walls) without fabricating personality. A reply, report, or pull request body opens with a summary that anchors the reader in a few lines of plain prose: what this is, why it matters and where it stands. It is judgment, not a sentence count or a list of banned items; a key number, file name, data point or caveat belongs there when it is part of that context, and a summary that buries the anchor in detail is a defect. The details follow as bullets, one point each, in a logical order, with tables for tabular data and fenced blocks for pasted output. A one-line answer stays one line and is never padded into a summary. Em and en dashes are avoided in new prose as a writing guideline: a gratuitous dash is a defect, while a quoted title or a numeric range in data keeps its dash. There is otherwise no lexical, punctuation, list, or emoji blacklist, and legitimate punctuation on existing lines is preserved.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
@@ -1323,12 +1323,11 @@
           "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
           "markers": [
             "Operator-facing replies follow the written content policy (ADR-0067)",
-            "opens with a summary that gives context only",
-            "Write the summary as one to three short sentences",
-            "Judge the summary by what it carries",
+            "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines.",
+            "That is judgment, not a sentence count or a list of banned items",
             "a one-line answer stays one line",
             "is a defect in a reply as much as in a document",
-            "Em and en dashes are absent from new text on every policy surface, replies included"
+            "Avoid em and en dashes in prose, replies included"
           ]
         },
         {
@@ -1337,17 +1336,17 @@
             "Mannered prose performs instead of informing",
             "It is a defect in any operator-facing text, a chat reply included",
             "A reply or summary runs as a paragraph wall",
-            "A summary carries details where it should give context only",
+            "A summary does not anchor the reader",
             "Details sit in prose paragraphs after the summary",
-            "Do not rewrite merely because text uses an em dash on a line that predates ADR-0067"
+            "Do not rewrite merely because text uses an em dash on a line that predates ADR-0067",
+            "New prose uses an em or en dash where a comma, colon, full stop or hyphen serves."
           ]
         },
         {
           "path": ".agents/skills/cf-ship/references/pr-evidence.md",
           "markers": [
-            "**Summary** gives context only: what the PR is and why it exists",
-            "Write it as one to three short sentences",
-            "Judge it by what it carries"
+            "**Summary** anchors a zero-context reader in a few lines",
+            "A key file name or number belongs there when it is part of that context"
           ]
         }
       ]
@@ -2528,6 +2527,65 @@
           "markers": [
             "names each item by what it achieved or what is at stake",
             "never as the heading or the lead of a bullet"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-OUT-007",
+      "level": "hard",
+      "statement": "Work and reports serve the result the task exists to produce. The agent names that result, who uses it and the evidence that would establish it; judges completion by the result, never by green gates or met criteria alone; keeps what is done here separate from a larger result that still depends on other work; and repairs or reports a result that criteria missed instead of passing it. A reply or report opens with the result and where it stands, then what would change it and who resolves it, then what the reader must decide or do, with steps, gates and tooling last; a one-line answer stays one line, and labels are neither required nor credited. A non-trivial design is framed by the subject's own parts, with files as the means. Items the operator must act on go once under NEED YOUR ATTENTION after the opening, each self-contained with its options and a recommendation; with nothing owed there is no heading, and the heading never appears in a pull request body, document, commit message or machine payload.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "a gate or criterion is evidence toward the result, never the result",
+            "Separate what is done here from what still depends on other work",
+            "open with the result and where it stands, then what would change it and who resolves it",
+            "operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
+          "markers": [
+            "Frame a non-trivial subject by its own parts as its consumer meets them",
+            "This is an order, not a set of headings.",
+            "labels forced onto a short answer are a defect",
+            "A running report on long work opens with the result the work serves and where it stands",
+            "NEED YOUR ATTENTION, at most once per reply, after the opening and before the detail",
+            "With nothing owed there is no heading, and a manufactured ask is a defect.",
+            "The heading never appears in a pull request body, document, commit message, outbound draft or machine payload."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/completion.md",
+          "markers": [
+            "criteria that pass while that result is missed are a finding that returns to `cf-plan`, not a pass"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "If every criterion passes but the result the task names is not reached"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "The report opens with the result reached for its consumer and what still depends on other work",
+            "follow once under NEED YOUR ATTENTION"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-develop/SKILL.md",
+          "markers": [
+            "first the result for its consumer and what still depends on other work"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "It opens with the result the change gives its consumer and where it stands."
           ]
         }
       ]

@@ -95,9 +95,11 @@ itself a blocker finding — return changes_requested.
    Verify candidate/source identity and fresh human publication authority when
    publication is in scope. Do not impose CodeFlow's own versioning tools.
 7. Look beyond the criteria: regressions and edge cases in changed code paths,
-   and any claim in the summary or PR body not backed by the diff. Require the
-   named impact set and, for a defect fix, the mechanism sentence and a
-   regression test that fails before the fix and passes after
+   and any claim in the summary or PR body not backed by the diff. If every
+   criterion passes but the result the task names is not reached, that is an
+   `axis: spec` finding that returns the task to planning, not an approval.
+   Require the named impact set and, for a defect fix, the mechanism
+   sentence and a regression test that fails before the fix and passes after
    (`.claude/skills/cf-model-orchestrator/resources/quality/findings.md`).
    Where the changed path is performance-, scale-, or concurrency-sensitive,
    inspect it as

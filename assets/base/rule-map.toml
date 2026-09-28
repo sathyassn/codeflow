@@ -151,7 +151,7 @@ text = """
 [[rule]]
 id = "outcome"
 title = "Work to the outcome."
-text = "Know what done means before acting, work in small verified steps, and iterate until the outcome is proven or a real blocker is surfaced with options and a recommendation."
+text = "Name the result, who uses it and the evidence that would establish it, and let that result decide each step; a gate or criterion is evidence toward the result, never the result. Separate what is done here from what still depends on other work. Work in small verified steps until the outcome is proven or a real blocker is surfaced with options and a recommendation."
 see = [".codeflow/rules/workflow-discipline.md"]
 
 [[rule]]
@@ -209,7 +209,7 @@ see = [".codeflow/rules/workflow-discipline.md"]
 [[rule]]
 id = "writing"
 title = "Outcomes first, in words."
-text = "Replies, status and summaries lead with outcomes in plain words, with IDs and file names after; titles name the subject in words; no em or en dash in new text."
+text = "Replies, status and summaries lead with outcomes in plain words, with IDs and file names after: open with the result and where it stands, then what would change it and who resolves it, then what the reader must do; steps and tooling last. A summary anchors the reader in a few lines; titles name the subject in words; avoid em and en dashes in prose."
 see = [".codeflow/rules/writing.md"]
 
 [[rule]]
@@ -271,7 +271,7 @@ tiers = ["minimal"]
 [[moment]]
 key = "status"
 when = "report status or summarize work"
-action = "each item by its outcome in words, IDs after"
+action = "the result and where it stands first, each item by its outcome in words, IDs after; operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed"
 see = [".codeflow/rules/writing.md"]
 
 [[moment]]

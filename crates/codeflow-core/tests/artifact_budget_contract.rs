@@ -1472,3 +1472,168 @@ fn the_kernel_check_rejects_a_removed_entry_or_a_wrong_target() {
         ]
     );
 }
+
+/// The lifecycle reply rule and route, the main owner of rules 3, 4, 6, 7
+/// and 8 on this source (TSK-108 AC-6).
+const LIFECYCLE_OUTCOME_CLAUSES: &[(&str, &str)] = &[
+    ("real parts", "Frame a non-trivial subject by its own parts as its consumer meets them"),
+    ("not a checklist", "This is judgment, not a checklist"),
+    ("order not headings", "This is an order, not a set of headings."),
+    ("no forced labels", "labels forced onto a short answer are a defect"),
+    ("anchoring summary", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines."),
+    ("summary judgment", "That is judgment, not a sentence count or a list of banned items"),
+    ("running report", "A running report on long work opens with the result the work serves and where it stands"),
+    ("marker once", "NEED YOUR ATTENTION, at most once per reply, after the opening and before the detail"),
+    ("marker verbs", "(Decide, Do, Confirm, Clarify or Note)"),
+    ("no marker when nothing is owed", "With nothing owed there is no heading, and a manufactured ask is a defect."),
+    ("marker exclusions", "The heading never appears in a pull request body, document, commit message, outbound draft or machine payload."),
+    ("marker override", "A consuming project may rename or drop it in its own instructions."),
+    ("dash guideline", "Avoid em and en dashes in prose, replies included"),
+];
+
+/// TSK-108 AC-6 (SPC-013 R-117): each outcome-first rule of ADR-0071 lives
+/// at its owner on this source. The running report and the attention
+/// heading, owned by `autonomy.md` on the EPC-018 line, live in the
+/// lifecycle reply rule and the orchestrator's joint closeout here.
+#[test]
+fn outcome_first_rules_live_at_their_owners() {
+    let root = repo_root();
+    let lifecycle = "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md";
+    let owners: [(&str, &[(&str, &str)]); 13] = [
+        (lifecycle, LIFECYCLE_OUTCOME_CLAUSES),
+        (
+            "assets/base/rules/workflow-discipline.md",
+            &[
+                ("result named first", "name the result the work exists to produce, who uses it in their terms, and the evidence that would establish it"),
+                ("result before gates", "A gate or criterion is evidence toward the result, never the result."),
+                ("done here versus dependent", "Separate what is done here from what still depends on other work"),
+            ],
+        ),
+        (
+            "assets/base/rules/writing.md",
+            &[
+                ("report order", "A reply or report opens with the result it serves and where the work stands"),
+                ("order not headings", "This is an order, not a set of headings"),
+                ("anchoring summary", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines."),
+                ("one attention marker", "items the operator must act on go once under NEED YOUR ATTENTION"),
+                ("dash guideline", "The written content policy (ADR-0067): avoid em and en dashes in prose"),
+            ],
+        ),
+        (
+            "assets/base/rules/git-rules.md",
+            &[("anchoring PR summary", "The Summary anchors a reader with no context in a few lines")],
+        ),
+        (
+            "assets/base/agents/skills/cf-model-orchestrator/resources/quality/completion.md",
+            &[("criteria met, result missed", "criteria that pass while that result is missed are a finding that returns to `cf-plan`, not a pass")],
+        ),
+        (
+            "assets/base/claude/agents/cf-reviewer.md",
+            &[
+                ("criteria met, result missed", "If every criterion passes but the result the task names is not reached"),
+                ("returns to planning", "returns the task to planning, not an approval"),
+            ],
+        ),
+        (
+            "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+            &[
+                ("closeout order", "The report opens with the result reached for its consumer and what still depends on other work"),
+                ("closeout attention", "follow once under NEED YOUR ATTENTION"),
+            ],
+        ),
+        (
+            "assets/base/agents/skills/cf-develop/SKILL.md",
+            &[("completion order", "first the result for its consumer and what still depends on other work")],
+        ),
+        (
+            "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+            &[
+                ("anchoring summary", "**Summary** anchors a zero-context reader in a few lines"),
+                ("readiness order", "It opens with the result the change gives its consumer and where it stands."),
+            ],
+        ),
+        (
+            "assets/base/ci/pull_request_template.md",
+            &[("anchoring summary", "anchor a reader with no context: the result this gives its consumer")],
+        ),
+        (
+            ".github/pull_request_template.md",
+            &[("anchoring summary", "anchor a reader with no context: the result this gives its consumer")],
+        ),
+        (
+            "assets/base/agents/skills/cf-editorial-review/references/editorial-smells.md",
+            &[
+                ("buried anchor", "A summary does not anchor the reader"),
+                ("result before process", "A reply or report opens with steps, gates, counts or tooling before the result it serves"),
+                ("dash guideline", "New prose uses an em or en dash where a comma, colon, full stop or hyphen serves."),
+            ],
+        ),
+        (
+            "docs/decisions/ADR-0067-written-content-policy.md",
+            &[
+                ("the 2026-09-25 note", "## Note (2026-09-25): summaries anchor the reader; dashes are a guideline"),
+                ("replaces the context-only wording", "the context-only wording of the 2026-09-24 note"),
+            ],
+        ),
+    ];
+    for (path, clauses) in owners {
+        assert_contains_all(&root.join(path), clauses);
+    }
+    assert!(root
+        .join("docs/decisions/ADR-0071-outcome-first-working-and-reporting.md")
+        .is_file());
+}
+
+/// TSK-108 AC-6: the always-loaded contract, as installed and as recorded
+/// in the baseline, carries the compact outcome-first rules.
+#[test]
+fn installed_contract_carries_the_outcome_first_kernel() {
+    let root = repo_root();
+    let clauses = [
+        ("result before gates", "a gate or criterion is evidence toward the result, never the result"),
+        ("done here versus dependent", "Separate what is done here from what still depends on other work"),
+        ("report order", "open with the result and where it stands, then what would change it and who resolves it"),
+        ("anchoring summary", "A summary anchors the reader in a few lines"),
+        ("one attention marker", "operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed"),
+        ("dash guideline", "avoid em and en dashes in prose"),
+    ];
+    for path in ["AGENTS.md", ".codeflow/.baseline/AGENTS.md"] {
+        assert_contains_all(&root.join(path), &clauses);
+    }
+}
+
+/// TSK-108 AC-6 (ADR-0071 rule 7): no owner keeps the retired summary rules,
+/// the sentence count of ADR-0067 or the context-only wording of its
+/// 2026-09-24 note, nor the absolute dash wording rule 8 replaces.
+#[test]
+fn no_owner_keeps_the_retired_summary_or_dash_wording() {
+    let root = repo_root();
+    for path in [
+        "assets/base/AGENTS.minimal.md.tmpl",
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+        "AGENTS.md",
+        "assets/base/rules/writing.md",
+        "assets/base/rules/git-rules.md",
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        "assets/base/ci/pull_request_template.md",
+        ".github/pull_request_template.md",
+        "assets/base/agents/skills/cf-editorial-review/references/editorial-smells.md",
+    ] {
+        let text = normalized(&read_text(&root.join(path))).to_lowercase();
+        for retired in [
+            "gives context only",
+            "give context only",
+            "one to three short sentences",
+            "two to four sentences",
+            "no em or en dash in new text",
+            "em and en dashes are absent",
+        ] {
+            assert!(
+                !text.contains(retired),
+                "{path} still carries the retired wording {retired:?}"
+            );
+        }
+    }
+}

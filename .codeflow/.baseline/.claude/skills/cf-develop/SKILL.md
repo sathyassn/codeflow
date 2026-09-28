@@ -43,10 +43,8 @@ records the required interactive seat unavailable and the reduced assurance.
       and passes after; for a defect that resists a first glance, first run one
       command that fails on the exact reported symptom (a cheap local failing
       test, else the closest executable check). Use small
-      conventional commits. When a remote
-      is configured, push the branch after each committed unit so work survives a
-      machine failure — backup, not a merge (`--force-with-lease` if you rewrote
-      history).
+      conventional commits; with a remote, push each for durability (backup,
+      not a merge; `--force-with-lease` after a rewrite).
       At every multi-task node transition, verify predecessor/decision evidence
       against the approved graph. Stop for Plan vN+1 on a material graph
       mutation; do not replan ordinary work inside the approved node. Persist
@@ -71,5 +69,6 @@ records the required interactive seat unavailable and the reduced assurance.
       the orchestrator's verification-selection resource: run any property,
       mutation, or architecture fitness check earned by the plan's trigger
       evidence, and report `none selected` rather than inventing ceremony.
-6. Report completion with evidence (test output, review verdict, file:line for
-   each criterion). Hand off to `cf-ship` to land it.
+6. Report completion: first the result for its consumer and what still
+   depends on other work, then the evidence (test output, review verdict,
+   file:line for each criterion). Hand off to `cf-ship` to land it.

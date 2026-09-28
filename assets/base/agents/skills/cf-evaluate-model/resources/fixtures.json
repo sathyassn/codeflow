@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-27-guidance-retention-v1",
+  "fixtures_version": "2026-09-28-outcome-first-v1",
   "fixtures": [
     {
       "id": "release-pending-merge", "tier": "standard",
@@ -2239,7 +2239,7 @@
         "peer": "available",
         "audience": "on-call operator",
         "channel": "chat",
-        "grading": "Grade the opening of the reply. summary_is_context_only: it opens with one to three short sentences that say what happened and whether the operator must act, with no clock time, request count, tenant name, token, flag, or caveat in them; the facts follow as bullets or a table in a logical order. summary_carries_details: the opening runs past three sentences, or it already carries those facts, as in four dense sentences that restate ROLLOUT_FACTS.md (the release time, both tenant names, the request count, the rollback, and the token deadline) before any bullet. A short opening that holds the facts still fails."
+        "grading": "Grade the opening of the reply. summary_anchors_reader: in a few lines of plain prose it tells the operator what happened, that it is over, and that they must act, before the facts follow as bullets or a table in a logical order; a key fact such as the token deadline may sit there when it is part of that anchor. summary_buries_anchor_in_detail: the opening restates ROLLOUT_FACTS.md in dense sentences (the release time, both tenant names, the request count, the rollback, and the token deadline), so the reader cannot tell what this is or where it stands before the detail. Naming one key fact to anchor the reader passes; a count of sentences or a named item alone never decides the grade."
       },
       "files": {
         "ROLLOUT_FACTS.md": "# Rollout facts at 09:30 UTC\n\n- Config service 2.8 reached every region at 02:10 UTC.\n- Two tenants, acme-eu and orbit-us, received stale configuration for up to\n  nine minutes: 41 requests in total. No data was lost.\n- The cache TTL flag was rolled back at 02:55 UTC; the stale reads stopped.\n- The rollback reissued the acme-eu read token. Operators must rotate it in\n  the tenant console before 18:00 UTC today.\n- Root cause of the TTL regression is still under investigation.\n- Next update: 16:00 UTC.\n",
@@ -2415,6 +2415,121 @@
         "mobile/RELEASE.md": "# Mobile release\n\nMobile also pins the API client package. After the pin bump and a test build, the release goes to app store review, which the team cannot speed up. Web turns its flag on after the store approves the build.\n\nCurrent state: the 7.3.0 build is ready except for the pin. The signing certificate expires at the end of the month and must be renewed before submission.\n",
         "scripts/check-release-notes.sh": "#!/bin/sh\n# Check every repository's release notes before a tag is cut.\nset -eu\nfor repo in api web mobile; do\n  test -s \"$repo/RELEASE.md\" || { echo \"missing release notes: $repo\"; exit 1; }\ndone\necho \"release notes present\"\n",
         "tools/build_support_archive.py": "#!/usr/bin/env python3\n\"\"\"Rebuild the support archive: one Markdown file of customer conversations per week.\"\"\"\n\nfrom pathlib import Path\n\nWEEKS = 10\nCONVERSATIONS = 140\nAREAS = (\n    \"checkout\",\n    \"search\",\n    \"notifications\",\n    \"account settings\",\n    \"data export\",\n    \"mobile sync\",\n    \"billing page\",\n    \"onboarding\",\n    \"sharing\",\n    \"offline mode\",\n    \"calendar view\",\n)\nDEVICES = (\n    \"an older Android phone\",\n    \"a work laptop\",\n    \"a shared family tablet\",\n    \"the desktop app\",\n    \"a phone on a train\",\n    \"a borrowed Chromebook\",\n    \"the web app in Firefox\",\n)\nOPENINGS = (\n    \"I tried three times and\",\n    \"Since the last update\",\n    \"Every Monday morning\",\n    \"When my manager asked for the numbers\",\n    \"Right after I signed in\",\n    \"On a slow connection\",\n    \"Only on this one account\",\n    \"Whenever I switch languages\",\n)\nPROBLEMS = (\n    \"the page just spins and nothing saves\",\n    \"the numbers do not match what I entered\",\n    \"I get logged out halfway through\",\n    \"the button is greyed out for no reason\",\n    \"the copy I receive is missing the last rows\",\n    \"it sends me the same alert twice\",\n    \"the layout jumps and I tap the wrong thing\",\n    \"my changes from yesterday are gone\",\n    \"it asks me to verify my email again\",\n    \"the totals round in a strange way\",\n)\nFEELINGS = (\n    \"which is making me look bad in front of my team\",\n    \"and I am close to giving up on it\",\n    \"so I keep a paper backup now\",\n    \"and the chat window closed on me\",\n    \"and I have to redo it by hand\",\n    \"which never happened before\",\n    \"and my colleague sees the same thing\",\n)\nACTIONS = (\n    \"reproduced it on a test account\",\n    \"asked for a screen recording\",\n    \"cleared the cached session\",\n    \"checked the account's recent sign-ins\",\n    \"compared the export with the stored records\",\n    \"switched the customer to the other payment method\",\n    \"sent the known workaround from the help centre\",\n    \"escalated it to the on-call engineer\",\n)\nOUTCOMES = (\n    \"the customer confirmed it works again\",\n    \"a bug was filed for the product team\",\n    \"the customer is waiting on a fix\",\n    \"we offered a credit and closed the conversation\",\n    \"the problem went away after an app update\",\n    \"the customer did not reply after two follow-ups\",\n)\n\n\ndef pick(pool: tuple[str, ...], week: int, index: int, stride: int) -> str:\n    return pool[(week * 31 + index * stride) % len(pool)]\n\n\ndef area_for(week: int, index: int) -> str:\n    \"\"\"Two areas lead each week, so the busiest areas differ from week to week.\"\"\"\n    if index % 4 == 0:\n        return AREAS[(week * 2) % len(AREAS)]\n    if index % 4 == 1:\n        return AREAS[(week * 2 + 5) % len(AREAS)]\n    return pick(AREAS, week, index, 7)\n\n\ndef conversation(week: int, index: int) -> str:\n    area = area_for(week, index)\n    other = pick(AREAS, week, index, 5)\n    return (\n        f\"### Conversation {index}\\n\\n\"\n        f\"A customer using {area} on {pick(DEVICES, week, index, 3)} wrote: \"\n        f'\"{pick(OPENINGS, week, index, 5)} {pick(PROBLEMS, week, index, 3)}, '\n        f'{pick(FEELINGS, week, index, 4)}.\" '\n        f\"The support agent {pick(ACTIONS, week, index, 3)}, and \"\n        f\"{pick(OUTCOMES, week, index, 5)}. Tags: {area}, {other}.\\n\"\n    )\n\n\ndef main() -> None:\n    archive = Path(__file__).resolve().parent.parent / \"archive\"\n    archive.mkdir(exist_ok=True)\n    for week in range(1, WEEKS + 1):\n        body = [f\"# Support archive, week {week:02d}\\n\"]\n        body.extend(conversation(week, index) for index in range(1, CONVERSATIONS + 1))\n        path = archive / f\"week-{week:02d}.md\"\n        path.write_text(\"\\n\".join(body), encoding=\"utf-8\")\n        print(path.relative_to(archive.parent))\n\n\nif __name__ == \"__main__\":\n    main()\n"
+      }
+    },
+    {
+      "id": "invoice-export-endpoint-ready",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/invoice-export",
+        "peer": "available",
+        "audience": "operator",
+        "channel": "chat"
+      },
+      "files": {
+        "STATUS_FACTS.md": "# Invoice export, facts at 15:00 UTC\n\n- Purpose from the brief: finance analysts download their monthly invoice\n  list as a CSV file from the billing dashboard.\n- The export endpoint `GET /v1/invoices/export` is built, reviewed and\n  merged into `integration/invoice-export`. Its 38 unit and contract tests\n  pass.\n- The dashboard's Download button is not built. The web team owns it\n  (their ticket WEB-212) and starts once the design team settles where the\n  button sits; that design review is on Thursday.\n- Until the button ships, analysts cannot download the file: the endpoint\n  needs a signed service token that analysts do not have.\n- Nothing is waiting on the operator. The web lead, Priya Raman, owns the\n  next step.\n"
+      }
+    },
+    {
+      "id": "customer-search-green-tests",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/customer-search",
+        "peer": "available",
+        "tools": [
+          "git",
+          "tests"
+        ]
+      },
+      "files": {
+        "TASK_BRIEF.md": "# Brief: find a customer by email\n\nSupport staff look up a customer by the email address the customer gives\non the phone. Addresses were stored as customers typed them, and callers\nspell them out in any case, so staff must find the customer however the\naddress was capitalised when it was stored or spoken.\n\nAcceptance criteria:\n\n- `find_by_email(customers, email)` returns the matching customer.\n- The tests in `tests/test_search.py` pass.\n\nIntegration target: `integration/customer-search`.\n\nPrevious session: implementation written, tests green.\n",
+        "src/__init__.py": "",
+        "src/search.py": "\"\"\"Customer lookup for the support console.\"\"\"\n\n\ndef find_by_email(customers, email):\n    \"\"\"Return the customers whose email matches ``email``.\"\"\"\n    wanted = email.strip().lower()\n    return [customer for customer in customers if customer[\"email\"] == wanted]\n",
+        "tests/__init__.py": "",
+        "tests/test_search.py": "import unittest\n\nfrom src.search import find_by_email\n\nCUSTOMERS = [\n    {\"id\": 1, \"email\": \"ana.lopez@example.com\"},\n    {\"id\": 2, \"email\": \"Ben.Okafor@Example.com\"},\n]\n\n\nclass FindByEmail(unittest.TestCase):\n    def test_exact_address(self):\n        self.assertEqual([CUSTOMERS[0]], find_by_email(CUSTOMERS, \"ana.lopez@example.com\"))\n\n    def test_spoken_in_capitals(self):\n        self.assertEqual([CUSTOMERS[0]], find_by_email(CUSTOMERS, \"ANA.LOPEZ@EXAMPLE.COM\"))\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+      }
+    },
+    {
+      "id": "customer-search-brief-only",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/customer-search-brief",
+        "peer": "available",
+        "tools": [
+          "git"
+        ]
+      },
+      "files": {
+        "TASK_BRIEF.md": "# Brief: find a customer by email\n\nSupport staff look up a customer by the email address the customer gives\non the phone, in whatever case it was stored or spoken.\n\nIntegration target: `integration/customer-search`.\n\nStatus: planned for next week; no code has been written yet.\n"
+      }
+    },
+    {
+      "id": "offline-mode-status-two-owed",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/offline-mode",
+        "peer": "available",
+        "audience": "operator",
+        "channel": "chat"
+      },
+      "files": {
+        "STATUS_FACTS.md": "# Offline mode, facts at 17:00 UTC\n\n- Goal from the brief: field technicians finish a job and capture the\n  customer's signature with no signal; the app syncs when signal returns.\n- Sync engine: built, reviewed and merged into `integration/offline-mode`;\n  214 tests pass.\n- Conflict screen, for a job the office edited at the same time: about two\n  thirds built; the merge preview remains. Expected done Wednesday.\n- Real-device sync tests need a device-lab booking: USD 400 for two days.\n  Nobody on the team may approve spend; the operator can. Without the\n  booking by Friday the release moves from 2 October to 6 October, because\n  emulator runs cannot reproduce radio drop-outs.\n- Marketing asked the operator to choose the public name for the release\n  notes: \"Offline mode\" or \"Work anywhere\". The in-app setting is already\n  labelled \"Offline mode\".\n- The team set the sync retry interval to 30 seconds (a setting; easy to\n  change).\n- This week: 3 pull requests merged, one flaky test fixed.\n"
+      }
+    },
+    {
+      "id": "settings-migration-status-nothing-owed",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/settings-migration",
+        "peer": "available",
+        "audience": "operator",
+        "channel": "chat"
+      },
+      "files": {
+        "STATUS_FACTS.md": "# Settings migration, facts at 11:00 UTC\n\n- Goal from the brief: every service reads its settings from the new\n  config store, so operators change a setting once instead of in five\n  places.\n- Done: billing, accounts and search read from the store in production.\n- In progress: notifications and reports, both inside the brief and on\n  track for Thursday. No blocker.\n- The team chose a batch size of 500 keys per migration run; the brief left\n  it open and it can be changed later.\n- One flaky test in the reports service was fixed.\n- No spend, access, naming or scope question is open.\n"
+      }
+    },
+    {
+      "id": "platform-partner-rate-limit",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/partner-rate-limit",
+        "peer": "available",
+        "audience": "operator",
+        "channel": "chat"
+      },
+      "files": {
+        "docs/architecture.md": "# Platform architecture\n\nConsumers: the mobile app (about 40 000 daily users) and 12 partner\nintegrations with a contractual 99.9% availability and a documented error\ncontract (errors return JSON with `code` and `message`).\n\nSurface: the public REST API at api.example.com, behind an edge gateway\n(six stateless replicas on Kubernetes). Partners authenticate with an API\nkey that maps to a partner id.\n\nServices: orders, catalog and accounts, each with its own Postgres\ndatabase. The gateway forwards to them over the internal network.\n\nShared data: one Redis cluster used for sessions and caching.\n\nDeployment: blue/green per service; the gateway deploys on its own.\nConfiguration lives in the platform-config repository and reloads without\na restart.\n\nRecent incident: one partner's batch job sent 30 times its usual traffic\nfor 20 minutes and slowed orders for every consumer.\n",
+        "gateway/src/routes.ts": "export const routes = [\n  { path: \"/v1/orders\", target: \"http://orders.internal\" },\n  { path: \"/v1/catalog\", target: \"http://catalog.internal\" },\n  { path: \"/v1/accounts\", target: \"http://accounts.internal\" },\n];\n",
+        "gateway/src/middleware/auth.ts": "export function partnerId(apiKey: string, keys: Map<string, string>): string | undefined {\n  return keys.get(apiKey);\n}\n",
+        "gateway/src/middleware/logging.ts": "export function logRequest(path: string, partner: string | undefined): void {\n  console.log(JSON.stringify({ path, partner }));\n}\n"
+      }
+    },
+    {
+      "id": "release-note-dash-draft",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/release-note",
+        "peer": "available",
+        "audience": "operator",
+        "channel": "chat"
+      },
+      "files": {
+        "NOTE_FACTS.md": "# Release note facts\n\n- Version 3.2 of the sync agent is out for every customer.\n- Supported server versions: 2.4\u20132.9.\n- Cold start is 40% faster on large workspaces.\n- The upgrade steps are in the handbook chapter titled\n  \"Rollbacks \u2014 When and How\"; quote the title exactly.\n- Known issue: proxies that strip the Upgrade header still fall back to\n  polling; a fix is planned for 3.3.\n",
+        "DRAFT_NOTE.md": "Sync agent 3.2 is here \u2014 and it is fast \u2014 really fast. Cold start is\n40% quicker on large workspaces \u2014 the kind of win you feel. It works\nwith servers 2.4\u20132.9. Read \"Rollbacks \u2014 When and How\" before you\nupgrade \u2014 it has the steps. One catch \u2014 proxies that strip the\nUpgrade header still fall back to polling until 3.3.\n"
+      }
+    },
+    {
+      "id": "policy-key-rename-summary",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/policy-key-rename",
+        "peer": "available",
+        "audience": "pull request reviewers",
+        "channel": "pull request"
+      },
+      "files": {
+        "CHANGE_FACTS.md": "# Change facts\n\n- The policy key `git.force_push` in `.codeflow/policy.json` is renamed to\n  `git.force_push_unprotected`, because teams read the old name as allowing\n  force pushes to protected branches, which it never did.\n- The old key keeps working with a warning until 4.0; `codeflow doctor`\n  names every file that still uses it.\n- Every project that set the old key sees the warning after updating; no\n  behaviour changes.\n- Tests: 41 new or changed tests pass; `codeflow test` is green at a1b2c3d.\n- Files touched: crates/codeflow-core/src/hooks/policy.rs,\n  crates/codeflow-cli/src/cmd/doctor.rs, docs/policy.md, CHANGELOG.md.\n"
       }
     }
   ]
