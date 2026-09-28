@@ -256,8 +256,10 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
 
 ### Status and closeout
 
-A task's status changes only through `codeflow task status`; any other
-transition is refused:
+`codeflow task status` is the safe way to change a task's status. It is not
+the only writer: a hand edit in a reviewed pull request is judged by the
+same rules, and any transition this table does not list is refused, whoever
+writes it:
 
 | Transition | Command | Carries |
 |---|---|---|

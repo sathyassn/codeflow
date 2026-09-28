@@ -1530,6 +1530,44 @@ fn lifecycle_section(text: &str) -> String {
     rest[..end].to_string()
 }
 
+/// R-63, R-65, R-66: each rule is stated in one place across every
+/// shipped text, and that place is the lifecycle reference. Each rule is
+/// matched by the phrasings a restatement would use, case-insensitively,
+/// so a paraphrase elsewhere counts as a second statement (Codex review of
+/// TSK-108: cf-method once restated the standalone test in its own words).
+fn each_rule_is_stated_once(texts: &BTreeMap<String, String>) {
+    for (rule, phrasings) in [
+        (
+            "research folder",
+            &["one file per question", "a file per question"][..],
+        ),
+        ("spec and epic", &["many to many", "many-to-many"][..]),
+        (
+            "standalone test",
+            &[
+                "reviewable pull request",
+                "reviewable pr",
+                "one pull request",
+                "single pull request",
+            ][..],
+        ),
+    ] {
+        let holders: Vec<&String> = texts
+            .iter()
+            .filter(|(_, text)| {
+                let text = text.to_lowercase();
+                phrasings.iter().any(|phrase| text.contains(phrase))
+            })
+            .map(|(path, _)| path)
+            .collect();
+        assert_eq!(
+            holders,
+            vec!["assets/base/claude/skills/cf-method/references/project-organization.md"],
+            "the {rule} rule must be stated once, in the lifecycle reference"
+        );
+    }
+}
+
 #[test]
 fn lifecycle_guidance_is_one_section_the_skills_follow() {
     // TSK-108 AC-1 to AC-3 (SPC-013 R-34, R-43, R-63, R-65, R-66, R-112).
@@ -1576,28 +1614,8 @@ fn lifecycle_guidance_is_one_section_the_skills_follow() {
         );
     }
 
-    // R-63, R-65, R-66: each rule is stated in one place across every
-    // shipped text, and that place is the lifecycle reference.
     let texts = shipped_texts();
-    for (rule, marker) in [
-        ("research folder", "one file per question"),
-        ("spec and epic", "Spec and epic are many to many"),
-        (
-            "standalone test",
-            "its outcome is one reviewable pull request",
-        ),
-    ] {
-        let holders: Vec<&String> = texts
-            .iter()
-            .filter(|(_, text)| text.contains(marker))
-            .map(|(path, _)| path)
-            .collect();
-        assert_eq!(
-            holders,
-            vec!["assets/base/claude/skills/cf-method/references/project-organization.md"],
-            "the {rule} rule must be stated once, in the lifecycle reference"
-        );
-    }
+    each_rule_is_stated_once(&texts);
     for stale in [
         "`status: implemented` when",
         "frozen (`status: implemented`)",

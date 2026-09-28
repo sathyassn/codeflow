@@ -323,13 +323,13 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "95c323d6ff918f82a0945a69e0bf32d589cdf2f4145bd263991ebecb0996f6ab",
+      "sha256": "258cc65d1c9cae71aaddccf743b30904ff6c2589dccfa650ef540789aaba7a47",
       "exec": false
     },
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "c900706ecf083deeb5498997dd3c0b8bd4a2d42b79f124e6c73f5ef3300c3f45",
+      "sha256": "d8cb830dbc35089f82c6c51d8a055ca1d839d98a5e30fba35000455b89247e1e",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -1001,13 +1001,13 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "95c323d6ff918f82a0945a69e0bf32d589cdf2f4145bd263991ebecb0996f6ab",
+      "sha256": "258cc65d1c9cae71aaddccf743b30904ff6c2589dccfa650ef540789aaba7a47",
       "exec": false
     },
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "c900706ecf083deeb5498997dd3c0b8bd4a2d42b79f124e6c73f5ef3300c3f45",
+      "sha256": "d8cb830dbc35089f82c6c51d8a055ca1d839d98a5e30fba35000455b89247e1e",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {

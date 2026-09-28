@@ -60,9 +60,9 @@ An epic exists to make one question answerable before any code is written:
 *what does done look like, verifiably?*
 
 **An epic is optional — reach for one only when the work needs it.** Warrant an
-epic when the outcome is more than one reviewable pull request; anything
-smaller is a single task with acceptance criteria and no epic (the standalone
-test), and an epic never gates a single task. The clarity
+epic only when the work fails the standalone test in the work lifecycle
+reference; otherwise it is a single task with acceptance criteria and no
+epic, and an epic never gates a single task. The clarity
 checklist below applies either way — to the epic when there is one, otherwise to
 the task.
 
