@@ -103,6 +103,8 @@ function targetKindOf(target: Pick<PendingFeedback, "selector" | "element_select
 // One word per kind everywhere the reviewer reads it: float, composer, rail,
 // marker and status (the summaries in selection.ts start with the same word).
 const kindLabels: Readonly<Record<TargetKind, string>> = { text: "Text", element: "Element", region: "Area" };
+/** A press on one of these acts on the chrome; its release never pins a selection. */
+const PRESS_OWNERS = "button, a, input, textarea, select, summary, label, [role=button], .cf-capture-tools, .cf-float, [data-testid=composer]";
 
 // The one instruction the hint, the empty rail and the status line share.
 const COMMENT_INSTRUCTION = "Select words, click any part, or drag a box; hold Shift to start a box on words.";
@@ -215,6 +217,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   // The debounced selection pin (TSK-159). A ref, so an explicit capture can
   // cancel it: the effect that owns it is only torn down after the next paint.
   const selectionPinTimerRef = useRef(0);
+  // The primary button is down anywhere in the window, and where it went
+  // down. While it is held no selection pin is armed or fires (TSK-160).
+  const pointerHeldRef = useRef(false);
+  const pressTargetRef = useRef<Element | null>(null);
   const composerOpenRef = useRef(false);
   const pendingPinRef = useRef<PendingPin | null>(null);
   const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: PinOptions) => void>(() => undefined);
@@ -574,6 +580,31 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     };
   }, [captureMode, documentRoot, notes.length]);
 
+  // Held-button tracking lives outside the gesture effect, so a mode change
+  // mid-press cannot leave it stale. Capture on window runs before every
+  // other pointer listener, so a press cancels a pin that is about to fire.
+  useEffect(() => {
+    const press = (event: PointerEvent): void => {
+      if (event.button !== 0) return;
+      pointerHeldRef.current = true;
+      pressTargetRef.current = event.target instanceof Element ? event.target : null;
+      window.clearTimeout(selectionPinTimerRef.current);
+    };
+    const release = (): void => {
+      pointerHeldRef.current = false;
+    };
+    window.addEventListener("pointerdown", press, { capture: true });
+    window.addEventListener("pointerup", release, { capture: true });
+    window.addEventListener("pointercancel", release, { capture: true });
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("pointerdown", press, { capture: true });
+      window.removeEventListener("pointerup", release, { capture: true });
+      window.removeEventListener("pointercancel", release, { capture: true });
+      window.removeEventListener("blur", release);
+    };
+  }, []);
+
   /* ─── Pass10 default gestures while Comment is armed (no tool forced) ───
    * Prose (textual, no Shift): native selection only — never start a marquee.
    * Diagram / empty: drag draws a region. Shift+drag forces region anywhere.
@@ -595,12 +626,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         return;
       }
       setHintMode("text");
-      // A drag pins on release (onPointerUp), never mid-gesture: a float
+      // A press pins on release (onPointerUp), never mid-gesture: a float
       // opened under a held drag takes the rest of the drag (TSK-160).
-      if (dragGestureRef.current) return;
+      if (pointerHeldRef.current || dragGestureRef.current) return;
       selectionPinTimerRef.current = window.setTimeout(() => {
         // A composer opened since the selection (the Add text tool) owns it.
         if (!commentModeRef.current || captureModeRef.current || composerOpenRef.current) return;
+        if (pointerHeldRef.current) return;
         const live = captureSelection(documentRoot);
         const selection = window.getSelection();
         if (!live?.selector || live.selector.exact.length > config.review_limits.max_selector_utf16 || selection?.rangeCount !== 1) return;
@@ -705,7 +737,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     const onPointerUp = (event: PointerEvent): void => {
       const g = dragGestureRef.current;
       dragGestureRef.current = null;
-      if (!g) return;
+      if (!g) {
+        // A press that began outside the review text (the page margin) and
+        // selected into it pins on release too; a control's press does not.
+        const start = pressTargetRef.current;
+        if (start && !documentRoot.contains(start) && !start.closest(PRESS_OWNERS)) onSelection();
+        return;
+      }
       const w = Math.abs(event.clientX - g.x0);
       const h = Math.abs(event.clientY - g.y0);
       const dist = Math.hypot(w, h);
@@ -741,12 +779,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
       // Text selection wins — the selectionchange pin already owns the float.
       const sel = window.getSelection();
+      // Any selection the review text can hold pins, one character included.
+      if (sel && !sel.isCollapsed && captureSelection(documentRoot)?.selector) {
+        // The drag has ended, so the settled selection pins now.
+        onSelection();
+        return;
+      }
       if (sel && !sel.isCollapsed && String(sel).trim().length >= 2) {
-        if (captureSelection(documentRoot)?.selector) {
-          // The drag has ended, so the settled selection pins now.
-          onSelection();
-          return;
-        }
         // A selection the review text cannot hold, such as a figure's label,
         // pins the part the label names; it is never a dead gesture (QA
         // defect 5 in its figure form).
@@ -807,12 +846,15 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       dragGestureRef.current = null;
       regionDraftRef.current = null;
       setRegionDraft(null);
-      // A cancelled drag has no release to pin its selection.
+      // A cancelled or abandoned drag has no release to pin its selection.
       onSelection();
     };
     document.addEventListener("selectionchange", onSelection);
     documentRoot.addEventListener("dragstart", onDragStart);
     window.addEventListener("pointercancel", onPointerCancel);
+    // A release outside the window never arrives; leaving the window ends
+    // the gesture so the next selection can pin.
+    window.addEventListener("blur", onPointerCancel);
     document.addEventListener("keydown", onShift);
     document.addEventListener("keyup", onShift);
     documentRoot.addEventListener("pointerdown", onPointerDown);
@@ -820,9 +862,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     window.addEventListener("pointerup", onPointerUp);
     return () => {
       window.clearTimeout(selectionPinTimerRef.current);
+      dragGestureRef.current = null;
       document.removeEventListener("selectionchange", onSelection);
       documentRoot.removeEventListener("dragstart", onDragStart);
       window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("blur", onPointerCancel);
       document.removeEventListener("keydown", onShift);
       document.removeEventListener("keyup", onShift);
       documentRoot.removeEventListener("pointerdown", onPointerDown);
