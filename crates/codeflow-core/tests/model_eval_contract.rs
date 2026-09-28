@@ -3024,7 +3024,7 @@ type VisualEntry = (
     &'static [&'static str],
 );
 
-const VISUAL_INVENTORY: [VisualEntry; 19] = [
+const VISUAL_INVENTORY: [VisualEntry; 20] = [
     (
         "visual-doctrine",
         "checks-page-figure-matches-its-question",
@@ -3194,6 +3194,16 @@ const VISUAL_INVENTORY: [VisualEntry; 19] = [
         "visuals_as_decorative_text_cards",
         false,
         &[],
+    ),
+    // TSK-073: the EPC-017 flow reply case joins the method pack unchanged.
+    // It is blind and not a canary, so its prompt is checked like a new one.
+    (
+        "explanation-method",
+        "flow-reply-carries-figure",
+        "CF-OUT-003",
+        "prose_only_flow_explanation",
+        true,
+        &["figure", "diagram", "draw", "drawn", "picture", "chart"],
     ),
 ];
 
@@ -3365,4 +3375,141 @@ fn visual_requirements_are_hard_and_owned_by_the_grammar_and_method() {
     };
     assert_eq!(owned("CF-FIG-", "/resources/figure-grammar.md"), 8);
     assert_eq!(owned("CF-METH-", "/resources/explanation-method.md"), 4);
+}
+
+/// The copy-guide grading inventory (TSK-073, EPC-016): (case, owning
+/// requirement, faulty control, case added by this task, words that would
+/// name this case's rule in its prompt). The two EPC-017 cases join the pack
+/// unchanged; the operating-doctrine test checks their blind prompts.
+type CopyGuideEntry = (
+    &'static str,
+    &'static str,
+    &'static str,
+    bool,
+    &'static [&'static str],
+);
+
+const COPY_GUIDE_INVENTORY: [CopyGuideEntry; 3] = [
+    (
+        "operator-reply-is-plain-prose-and-bullets",
+        "CF-OUT-002",
+        "policy_character_in_reply",
+        false,
+        &[],
+    ),
+    (
+        "operator-reply-is-plain-prose-and-bullets",
+        "CF-OUT-002",
+        "summary_carries_details",
+        false,
+        &[],
+    ),
+    (
+        "identifier-only-title-gets-words",
+        "CF-OUT-005",
+        "identifier_only_title_kept",
+        false,
+        &[],
+    ),
+];
+
+/// Words that would name a copy guide rule inside any new blind prompt.
+const COPY_GUIDE_PROMPT_LEAKS: [&str; 24] = [
+    "guide",
+    "copy",
+    "copywriting",
+    "lead",
+    "caption",
+    "legend",
+    "summary",
+    "summarize",
+    "summarise",
+    "microcopy",
+    "exclamation",
+    "sentence",
+    "sentences",
+    "voice",
+    "tone",
+    "plain",
+    "imperative",
+    "slogan",
+    "slogans",
+    "dash",
+    "dashes",
+    "concise",
+    "short",
+    "verb-first",
+];
+
+/// TSK-073. The copy-guide pack registers exactly its graded inventory and
+/// says that registration is not behavioural evidence; native trials are.
+#[test]
+fn copy_guide_pack_registers_the_graded_inventory_and_disclaims_proof() {
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let pack = packs["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| pack["id"] == "copy-guide")
+        .expect("copy-guide pack");
+    let registered: BTreeSet<&str> = pack["cases"]
+        .as_array()
+        .expect("pack cases")
+        .iter()
+        .map(|case| case.as_str().expect("case id"))
+        .collect();
+    let graded: BTreeSet<&str> = COPY_GUIDE_INVENTORY.iter().map(|entry| entry.0).collect();
+    assert_eq!(registered, graded, "copy-guide: pack and inventory drifted");
+    assert!(
+        pack["description"]
+            .as_str()
+            .expect("pack description")
+            .contains("Registration proves nothing about live behaviour"),
+        "copy-guide must say registration is not behavioural evidence"
+    );
+}
+
+/// TSK-073. Each copy-guide case keeps its owning requirement and faulty
+/// control; a case this task adds is not a canary and its prompt names
+/// neither a copy guide rule nor its own rule.
+#[test]
+fn copy_guide_cases_keep_controls_and_blind_prompts() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    for (case_id, requirement, faulty, added, leaks) in COPY_GUIDE_INVENTORY {
+        let case = indexed
+            .get(case_id)
+            .unwrap_or_else(|| panic!("missing case {case_id}"));
+        assert!(
+            case["requirements"]
+                .as_array()
+                .expect("case requirements")
+                .iter()
+                .any(|linked| linked == requirement),
+            "{case_id} lost {requirement}"
+        );
+        assert!(
+            case["expected"]["must_not"]
+                .as_array()
+                .expect("must_not")
+                .iter()
+                .any(|guard| guard == faulty),
+            "{case_id} lost its faulty control {faulty}"
+        );
+        if added {
+            assert_eq!(case["canary"], false, "{case_id} is not a canary");
+            let prompt = case["prompt"].as_str().expect("prompt").to_lowercase();
+            for word in prompt.split(|c: char| !(c.is_alphanumeric() || c == '-')) {
+                assert!(
+                    !COPY_GUIDE_PROMPT_LEAKS.contains(&word) && !leaks.contains(&word),
+                    "{case_id} prompt names the rule under test: {word}"
+                );
+            }
+        }
+    }
 }

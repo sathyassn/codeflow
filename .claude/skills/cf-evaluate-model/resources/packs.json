@@ -317,7 +317,17 @@
         "readme-figure-uses-the-text-form",
         "three-unrelated-rules-take-the-smallest-carrier",
         "migration-review-leads-with-the-picture",
-        "complex-review-uses-declarative-presentation"
+        "complex-review-uses-declarative-presentation",
+        "flow-reply-carries-figure"
+      ]
+    },
+    {
+      "id": "copy-guide",
+      "description": "Blind diagnostics for the copy guide in cf-editorial-review: how each string is written, from a lead and caption around a figure to microcopy, a summary before a table, skill prose and an ADR, beside the reply and title cases of the written content policy. Each new case carries a faulty control that must fail, and the summary case a short-answer positive control that must pass. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "operator-reply-is-plain-prose-and-bullets",
+        "identifier-only-title-gets-words"
       ]
     }
   ]

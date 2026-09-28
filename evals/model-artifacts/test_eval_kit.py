@@ -146,6 +146,28 @@ EXPLANATION_METHOD_INVENTORY = {
     # The existing present case, registered in the pack unchanged.
     "complex-review-uses-declarative-presentation": (
         "CF-PRES-004", ("visuals_as_decorative_text_cards", "same_chat_answer_repackaged_in_panels"), ()),
+    # TSK-073: the existing flow reply case, registered in the pack unchanged.
+    "flow-reply-carries-figure": (
+        "CF-OUT-003",
+        ("prose_only_flow_explanation", "unrendered_figure_on_plain_text_surface", "mermaid_figure_in_reply"), ()),
+}
+# TSK-073 grading inventory for the copy-guide pack, in the same shape. The
+# two EPC-017 cases are registered unchanged beside the guide's own cases.
+COPY_GUIDE_INVENTORY = {
+    "operator-reply-is-plain-prose-and-bullets": (
+        "CF-OUT-002", ("policy_character_in_reply", "summary_carries_details"), ()),
+    "identifier-only-title-gets-words": ("CF-OUT-005", ("identifier_only_title_kept",), ()),
+}
+# Existing cases registered in the explanation-method pack that are exempt
+# from its committed answers, each with the reason: the tests named here
+# already grade their faulty and positive controls.
+EXISTING_CASES_WITH_OWN_CONTROLS = {
+    # The present case keeps the presentation-review controls.
+    "complex-review-uses-declarative-presentation",
+    # TSK-073: the EPC-017 flow reply case keeps the controls of
+    # test_operating_doctrine_cases_grade_faulty_and_positive_controls and
+    # test_flow_figure_status_computation_is_surface_neutral.
+    "flow-reply-carries-figure",
 }
 
 
@@ -532,7 +554,8 @@ class SuiteContractTests(unittest.TestCase):
         requirements = {item["id"]: item for item in requirements_doc["requirements"]}
         cases = {case["id"]: case for case in cases_doc["cases"]}
         for pack, inventory in (("visual-doctrine", VISUAL_DOCTRINE_INVENTORY),
-                                ("explanation-method", EXPLANATION_METHOD_INVENTORY)):
+                                ("explanation-method", EXPLANATION_METHOD_INVENTORY),
+                                ("copy-guide", COPY_GUIDE_INVENTORY)):
             selected = eval_kit.resolve_pack(pack)
             self.assertEqual(len(selected), len(set(selected)), pack)
             self.assertEqual(set(inventory), set(selected), pack)
@@ -584,9 +607,9 @@ class SuiteContractTests(unittest.TestCase):
         controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
         cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
         method = set(eval_kit.resolve_pack("explanation-method"))
-        # The existing present case keeps its own controls; nothing else is
-        # exempt, and an exemption never counts as a control.
-        self.assertEqual(method - {"complex-review-uses-declarative-presentation"}, set(controls["cases"]))
+        # The existing present and flow reply cases keep their own controls;
+        # nothing else is exempt, and an exemption never counts as a control.
+        self.assertEqual(method - EXISTING_CASES_WITH_OWN_CONTROLS, set(controls["cases"]))
         self.assertNotIn("not_practical", controls)
         for case_id, entries in controls["cases"].items():
             case = cases[case_id]
