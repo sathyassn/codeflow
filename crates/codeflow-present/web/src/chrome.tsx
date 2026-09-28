@@ -1706,18 +1706,34 @@ function noteQuote(note: PendingFeedback): string {
   return (note.target_summary ?? note.block_label).replace(/^(Text|Element|Area):\s*/, "").slice(0, 96);
 }
 
-/** Where a marker sits: its box in document coordinates and how it is placed. */
+/**
+ * Where a marker sits: its box in document coordinates, the side of its
+ * anchor it takes (the gutter to the left, the right of a narrow anchor, or
+ * above its line where there is no room beside it), and how far it may move
+ * away from its line and still read as that line's marker.
+ */
 interface MarkerSpot {
   left: number;
   top: number;
   width: number;
-  /** Beside its anchor (in the gutter or right of it), or above its line. */
-  beside: boolean;
+  side: "gutter" | "right" | "above";
+  reach: number;
+  /** For a marker above its line, the top it takes below the line on overflow. */
+  below: number;
 }
 
 /** The width of a marker whose number has as many digits as `index + 1`. */
 function markerWidth(index: number): number {
   return 38 + 8 * (String(index + 1).length - 1);
+}
+
+/** The height of one line of a text note's block, for how far its marker may move down. */
+function lineHeightOf(documentRoot: HTMLElement, blockId: string): number {
+  const block = documentRoot.querySelector<HTMLElement>(`[data-cf-block-id="${CSS.escape(blockId)}"]`);
+  if (!block) return 0;
+  const style = getComputedStyle(block);
+  const line = parseFloat(style.lineHeight);
+  return Number.isFinite(line) ? line : 1.2 * (parseFloat(style.fontSize) || 16);
 }
 
 /**
@@ -1742,22 +1758,32 @@ function markerPlacement(
   const top = rect.top - root.top;
   const width = markerWidth(index);
   const clamp = (x: number): number => Math.max(2 - root.left, Math.min(x, innerWidth - root.left - width * 1.03 - 8));
-  const line = targetKindOf(note) === "text" ? top + (meta?.ay ?? 0) * rect.height : top;
+  const text = targetKindOf(note) === "text";
+  const line = text ? top + (meta?.ay ?? 0) * rect.height : top;
+  // A marker beside its line may move down while it still covers 10 px of
+  // the line: of the selected line for a text note, else of its anchor.
+  const extent = text ? lineHeightOf(documentRoot, note.block_id) : rect.height;
+  const reach = Math.max(0, extent - 10);
   const gutter = left - width - 8;
-  if (gutter >= 2) return { left: clamp(gutter), top: Math.max(2, line - 2), width, beside: true };
+  if (gutter >= 2) return { left: clamp(gutter), top: Math.max(2, line - 2), width, side: "gutter", reach, below: 0 };
   const right = left + rect.width + 8;
-  if (right + width <= root.width - 2) return { left: clamp(right), top: Math.max(2, line - 2), width, beside: true };
+  if (right + width <= root.width - 2) return { left: clamp(right), top: Math.max(2, line - 2), width, side: "right", reach, below: 0 };
   const end = Math.min(left + rect.width, root.width - 2) - width;
-  return { left: clamp(Math.max(2, end)), top: Math.max(2, line - markerHeight() - 4), width, beside: false };
+  const above = Math.max(2, line - markerHeight() - 4);
+  return { left: clamp(Math.max(2, end)), top: above, width, side: "above", reach: 4, below: line + extent + 4 };
 }
 
 /**
- * Every note's marker, placed so that no two overlap (TSK-158). Markers
- * beside their anchors that would touch share their column: each run of
- * them stacks with a small gap, centred on the anchors it marks, so each
- * stays level with its own line or within a marker's height of it. A marker
- * above its line moves left along that line, past the markers it would
- * cover, while it stays on screen.
+ * Every note's marker, placed so that no two overlap (TSK-158) and each
+ * stays by its own line. Markers are placed top to bottom. One whose place is
+ * taken first moves along its line, down for a marker beside its anchor and
+ * up for one above it, within its reach. Where that is not enough it takes
+ * the next lane, one widest marker further from its anchor (left, or right of
+ * a narrow anchor), while the lane stays on screen. When every lane is full it
+ * overflows down its first lane to the first free place: down the gutter
+ * beside its line, or, for a marker above its line, from just below the line.
+ * Overflow never rises, so it never reaches under the page's fixed comment
+ * hint at the top.
  */
 function markerPlacements(
   documentRoot: HTMLElement,
@@ -1768,47 +1794,42 @@ function markerPlacements(
   const spots = notes.map((note, index) => markerPlacement(documentRoot, note, meta.get(note.client_id), index, markerEpoch));
   const height = markerHeight();
   const gap = 2;
-  const overlaps = (a: MarkerSpot, b: MarkerSpot): boolean =>
-    a.left < b.left + b.width + gap && b.left < a.left + a.width + gap && a.top < b.top + height + gap && b.top < a.top + height + gap;
-  // Beside: in each column, runs of touching markers stack, centred on the
-  // stretch their own places cover; a run that then meets the one above it
-  // joins it, and the two stack as one.
-  const columns = new Map<number, { spot: MarkerSpot; top: number }[]>();
-  for (const spot of spots) {
-    if (!spot?.beside) continue;
-    const key = Math.round(spot.left);
-    columns.set(key, [...(columns.get(key) ?? []), { spot, top: spot.top }]);
-  }
-  for (const column of columns.values()) {
-    column.sort((a, b) => a.top - b.top);
-    const runs: { items: { spot: MarkerSpot; top: number }[]; top: number }[] = [];
-    const bottom = (run: { items: unknown[]; top: number }): number => run.top + run.items.length * (height + gap);
-    for (const item of column) {
-      let lower = { items: [item], top: item.top };
-      let upper = runs.pop();
-      // A run that reaches the one above it joins it and restacks.
-      while (upper && lower.top < bottom(upper)) {
-        const items = [...upper.items, ...lower.items];
-        const first = items[0]?.top ?? 0;
-        const reach = (items[items.length - 1]?.top ?? first) + height - first;
-        const span = items.length * (height + gap) - gap;
-        lower = { items, top: Math.max(2, first + reach / 2 - span / 2) };
-        upper = runs.pop();
-      }
-      if (upper) runs.push(upper);
-      runs.push(lower);
+  const pitch = markerWidth(Math.max(0, notes.length - 1)) + gap;
+  const root = documentRoot.getBoundingClientRect();
+  const floor = 2 - root.left;
+  const ceiling = innerWidth - root.left - 8;
+  const placed: MarkerSpot[] = [];
+  const hit = (box: MarkerSpot): MarkerSpot | undefined =>
+    placed.find((other) => box.left < other.left + other.width + gap && other.left < box.left + box.width + gap && box.top < other.top + height + gap && other.top < box.top + height + gap);
+  // The free place nearest `spot` at `left`, moving up or down past each
+  // marker in the way, within `reach` of the line; else none.
+  const settle = (spot: MarkerSpot, left: number, reach: number, up: boolean): MarkerSpot | null => {
+    const box = { ...spot, left };
+    for (let other = hit(box); other; other = hit(box)) {
+      box.top = up ? other.top - height - gap : other.top + height + gap;
+      if (Math.abs(box.top - spot.top) > reach || box.top < 2) return null;
     }
-    for (const run of runs) run.items.forEach(({ spot }, i) => { spot.top = run.top + i * (height + gap); });
-  }
-  // Above: in note order, each moves left past any marker it would cover.
-  const placed = spots.filter((spot): spot is MarkerSpot => Boolean(spot?.beside));
-  for (const spot of spots) {
-    if (!spot || spot.beside) continue;
-    const floor = 2 - documentRoot.getBoundingClientRect().left;
-    for (let hit = placed.find((other) => overlaps(spot, other)); hit && hit.left - spot.width - gap >= floor; hit = placed.find((other) => overlaps(spot, other))) {
-      spot.left = hit.left - spot.width - gap;
+    return box;
+  };
+  const order = spots
+    .map((spot, index) => ({ spot, index }))
+    .filter((item): item is { spot: MarkerSpot; index: number } => item.spot !== null)
+    .sort((a, b) => a.spot.top - b.spot.top || a.index - b.index);
+  for (const { spot, index } of order) {
+    const up = spot.side === "above";
+    // Lanes share one pitch, so a wider marker lines up with its neighbours
+    // on the side away from its anchor.
+    const edge = spot.side === "right" ? spot.left : spot.left + spot.width;
+    let chosen: MarkerSpot | null = null;
+    for (let lane = 0; !chosen; lane += 1) {
+      const left = spot.side === "right" ? edge + lane * pitch : edge - lane * pitch - spot.width;
+      if (lane > 0 && (left < floor || left + spot.width > ceiling)) break;
+      chosen = settle(spot, left, spot.reach, up);
     }
-    placed.push(spot);
+    // Moving down past every marker in the way always ends at a free place.
+    chosen ??= settle(up ? { ...spot, top: spot.below } : spot, spot.left, Infinity, false) ?? spot;
+    spots[index] = chosen;
+    placed.push(chosen);
   }
   return spots;
 }

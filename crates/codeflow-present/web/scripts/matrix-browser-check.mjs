@@ -119,7 +119,7 @@ try {
   for (const shown of ["prose", "more", "views"]) assert.ok(listed.includes(`#${shown}`), `the sections list lacks ${shown}: ${listed.join(" ")}`);
   await phoneWidth(page);
   for (const width of [1280, 375]) await closeMarkers(page, width);
-  process.stdout.write("close markers passed: at 1280 and 375 px, notes on two adjacent diff lines, two adjacent code lines and twice on one prose line have markers that do not overlap, each level with its own line or just above it and off its anchor, and a click at each marker's centre opens its own note\n");
+  process.stdout.write("close markers passed: at 1280 and 375 px, thirteen notes (two adjacent diff lines, two adjacent code lines, nine on one prose line, three of them on the same words) have markers that do not overlap and sit off their anchors, each in the gutter level with its line on a desktop or just above it on a phone, leaving that row only once it is full, and a click at each marker's centre opens its own note\n");
   process.stdout.write("sections and phone width passed: no hidden block in the sections list; at 375 px the sheet stays closed on arming, a gesture, a save and a pin, the float keeps ESC on screen, markers stay off the heading and the selected line, Comment opens the sheet and dismisses the save hint, and Done leaves\n");
 
   const expected = [];
@@ -741,8 +741,10 @@ async function closeMarkers(page, width) {
       await save(body);
       notes.push({ body, anchor, what: `${block} ${click}` });
     }
-    // Twice on one prose line: two words of its first line.
-    for (const words of ["Every block", "runtime draws"]) {
+    // Nine on one prose line, three of them on the same words: the line's
+    // markers take a row, and the notes from the tenth on have two-digit,
+    // wider markers. At 375 px the row above the line fills and overflows.
+    for (const words of ["Every block", "runtime draws", "Every block", "block type", "the runtime", "Every block", "type the", "runtime", "draws"]) {
       await reveal(page, "prose");
       await gesture(page, { gesture: "text", block: "prose", recipe: { in: "p", words } });
       const line = await page.evaluate((words) => {
@@ -758,25 +760,60 @@ async function closeMarkers(page, width) {
       await save(body);
       notes.push({ body, anchor: line, what: `prose "${words}"` });
     }
-    assert.equal(notes[4].anchor.top, notes[5].anchor.top, where("the two prose words are not on one line"));
+    for (const note of notes.slice(5)) assert.equal(note.anchor.top, notes[4].anchor.top, where(`${note.what} is not on the first prose line`));
+    // Every check runs on the final layout, after all the notes are saved.
     const markers = await page.getByTestId("note-marker").evaluateAll((all) => all.map((marker) => {
       const rect = marker.getBoundingClientRect();
       return { left: rect.left + scrollX, top: rect.top + scrollY, right: rect.right + scrollX, bottom: rect.bottom + scrollY };
     }));
     assert.equal(markers.length, notes.length, where("a marker is missing"));
+    assert.ok(markers[9].right - markers[9].left > markers[0].right - markers[0].left, where("the tenth marker is not the wider two-digit one"));
     const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    // The placement rule for this width: the gutter left of the line on a
+    // desktop, level with it; above the line on a phone, in the row just
+    // above it. A marker leaves its line's row, down the gutter, or on a
+    // phone to below the line, only once that row is full.
+    const gutter = width >= 800;
+    const overflowed = [];
     for (const [i, marker] of markers.entries()) {
       const { anchor, what } = notes[i];
+      const name = `marker ${i + 1} (${what}) ${JSON.stringify(marker)}`;
       for (const [j, other] of markers.entries()) {
         if (j > i) assert.ok(!meets(marker, other), where(`markers ${i + 1} (${what}) and ${j + 1} (${notes[j].what}) overlap: ${JSON.stringify([marker, other])}`));
       }
-      const level = marker.top < anchor.bottom && anchor.top < marker.bottom;
-      const above = marker.bottom <= anchor.top && anchor.top - marker.bottom <= 8;
-      assert.ok(level || above, where(`marker ${i + 1} (${what}) ${JSON.stringify(marker)} is neither level with nor just above its line ${JSON.stringify(anchor)}`));
-      assert.ok(!meets(marker, anchor), where(`marker ${i + 1} (${what}) sits on its anchor`));
+      assert.ok(!meets(marker, anchor), where(`${name} sits on its anchor`));
+      if (gutter) {
+        assert.ok(marker.right <= anchor.left, where(`${name} is not in the gutter left of its line ${JSON.stringify(anchor)}`));
+        const level = marker.top < anchor.bottom && anchor.top < marker.bottom;
+        if (!level) {
+          assert.ok(marker.top >= anchor.bottom, where(`${name} is neither level with nor below its line ${JSON.stringify(anchor)}`));
+          overflowed.push(i);
+        }
+      } else if (marker.top >= anchor.bottom) {
+        // A full row above the line overflows below it.
+        overflowed.push(i);
+      } else {
+        assert.ok(marker.bottom <= anchor.top && anchor.top - marker.bottom <= 8, where(`${name} is neither just above nor below its line ${JSON.stringify(anchor)}`));
+      }
     }
+    // Only the nine-note prose row may overflow, and only once it is full.
+    const row = markers.filter((marker, i) => i >= 4 && !overflowed.includes(i));
+    const leftmost = Math.min(...row.map((marker) => marker.left));
+    const pageLeft = await page.evaluate(() => scrollX);
+    for (const i of overflowed) {
+      assert.ok(i >= 4, where(`marker ${i + 1} (${notes[i].what}) left its line's row`));
+      assert.ok(leftmost - pageLeft < markers[i].right - markers[i].left + 4, where(`marker ${i + 1} (${notes[i].what}) left its row while the row had room left of ${leftmost}`));
+    }
+    if (!gutter) assert.ok(overflowed.length > 0, where("nine markers on one line fit one phone row, so no overflow was exercised"));
+    const side = (i) => (markers[i].top >= notes[i].anchor.bottom ? "below" : "above");
+    console.log(`close markers at ${width} px: ${markers.length} disjoint, ${row.length} in the prose row, overflow ${overflowed.map((i) => `${i + 1} ${side(i)}`).join(", ") || "none"}`);
+    // A click at each marker's centre must reach that marker (Playwright
+    // clicks the centre and waits until the marker is the hit target there).
     for (const [i, { body, what }] of notes.entries()) {
-      await page.getByTestId("note-marker").nth(i).click({ timeout: 5000 }).catch((error) => { throw new Error(where(`marker ${i + 1} (${what}) takes no click at its centre: ${error.message.split("\n")[0]}`)); });
+      // Centred first, so the sticky comment hint never covers the marker.
+      const marker = page.getByTestId("note-marker").nth(i);
+      await marker.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
+      await marker.click({ timeout: 5000 }).catch((error) => { throw new Error(where(`marker ${i + 1} (${what}) takes no click at its centre: ${error.message.split("\n")[0]}`)); });
       await page.getByTestId("composer").waitFor();
       assert.equal(await page.getByTestId("composer-text").inputValue(), body, where(`marker ${i + 1} (${what}) opened another note`));
       await page.getByTestId("composer-cancel").click();
@@ -786,7 +823,9 @@ async function closeMarkers(page, width) {
     // The last marker drawn is on top, so it takes the click even where
     // markers overlap, and the first failure stays the one reported.
     while (await page.getByTestId("note-marker").count()) {
-      await page.getByTestId("note-marker").last().click();
+      const marker = page.getByTestId("note-marker").last();
+      await marker.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
+      await marker.click();
       await page.getByTestId("composer-delete").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });
     }
