@@ -1600,14 +1600,11 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
         .expect("git rev-parse");
     let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
     let stdin = format!("refs/heads/feat/x {head} refs/heads/feat/x {ZERO}\n");
+    answering_destination(dir.path(), "origin");
+    let url = push_url(dir.path(), "origin");
     let out = run_with_stdin(
         codeflow()
-            .args([
-                "git-hook",
-                "pre-push",
-                "origin",
-                "https://example.com/r.git",
-            ])
+            .args(["git-hook", "pre-push", "origin", &url])
             .current_dir(dir.path()),
         &stdin,
     );
@@ -3197,6 +3194,17 @@ fn rev(dir: &Path, rev: &str) -> String {
 
 /// The location git passes a pre-push hook for `remote`: its push URL (a
 /// `pushurl` when set), or the argument itself for a URL or path.
+/// Configure `name` as an empty bare destination inside `dir`'s git
+/// directory, so the pre-push hook can ask it what it holds (nothing).
+fn answering_destination(dir: &Path, name: &str) {
+    let bare = dir.join(".git").join(format!("{name}-destination.git"));
+    git(
+        dir,
+        &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+    );
+    git(dir, &["remote", "add", name, bare.to_str().unwrap()]);
+}
+
 fn push_url(dir: &Path, remote: &str) -> String {
     Command::new("git")
         .args(["remote", "get-url", "--push", remote])
@@ -3253,6 +3261,7 @@ fn sibling_repo() -> tempfile::TempDir {
     std::fs::write(dir.path().join("good.txt"), "good\n").unwrap();
     git(dir.path(), &["add", "good.txt"]);
     git(dir.path(), &["commit", "-m", "feat: add a good file"]);
+    answering_destination(dir.path(), "upstream");
     dir
 }
 
@@ -3730,7 +3739,8 @@ fn push_set_asks_the_push_location_not_the_fetch_location() {
     assert!(err.contains("Not conventional."), "{err}");
 
     // The push location cannot be asked, and the tracking refs describe the
-    // fetch location: the range is unresolved, never bounded by them.
+    // fetch location: the range is unresolved, never bounded by them, and
+    // with no answer the push is refused (SPC-013 R-120).
     let gone = local.path().join("no-such-destination");
     git(
         local.path(),
@@ -3743,10 +3753,10 @@ fn push_set_asks_the_push_location_not_the_fetch_location() {
         ],
     );
     let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &head)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.contains("`codeflow ci` did not run for 'feat/new': range unresolved")
-            && err.contains("asking it: `git ls-remote` failed"),
+        err.contains("the range of 'feat/new' is unresolved and the destination did not answer")
+            && err.contains("`git ls-remote` failed"),
         "{err}"
     );
 }
@@ -3807,7 +3817,7 @@ fn push_hook_over_http(
 fn push_set_never_prompts_and_bounds_the_destination_query() {
     // NB-2: a destination asking for credentials gets no askpass prompt, and
     // one that never answers is abandoned at the deadline; either way the
-    // hook says why and leaves the range to CI.
+    // hook says why, and refuses the unjudged push (SPC-013 R-120).
     use std::os::unix::fs::PermissionsExt;
     let scratch = tempfile::tempdir().unwrap();
     let marker = scratch.path().join("askpass-called");
@@ -3825,19 +3835,19 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
     let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(true), &askpass);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(!marker.exists(), "askpass was invoked: {err}");
     assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
     assert!(
-        err.contains("range unresolved") && err.contains("asking it: `git ls-remote` failed"),
+        err.contains("the destination did not answer") && err.contains("`git ls-remote` failed"),
         "{err}"
     );
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
     let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(false), &askpass);
-    assert_eq!(code, Some(0), "{err}");
-    assert!(err.contains("asking it: no answer within 10s"), "{err}");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("no answer within 10s"), "{err}");
     assert!(took < std::time::Duration::from_secs(30), "{took:?}");
 }
 
@@ -3908,6 +3918,7 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     // No destination sha and no tracking history: a note, never a pass.
     let lone = tempfile::tempdir().unwrap();
     init_repo(lone.path(), "feat/lone");
+    answering_destination(lone.path(), "origin");
     let head = rev(lone.path(), "HEAD");
     let (code, err) = push_hook(lone.path(), "origin", &[("feat/lone", &head)]);
     assert_eq!(code, Some(0), "{err}");
@@ -3915,6 +3926,12 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
         err.contains("`codeflow ci` did not run for 'feat/lone': range unresolved"),
         "{err}"
     );
+
+    // A destination that does not answer cannot say whether the name is a
+    // release branch under its policy: refused, whatever the name.
+    let (code, err) = push_hook(lone.path(), "nowhere", &[("feat/lone", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("the destination did not answer"), "{err}");
 }
 
 /// A repo on `feat/t` whose quick target is `command`, committed.
@@ -3935,6 +3952,7 @@ fn quick_repo(command: &str) -> tempfile::TempDir {
         dir.path(),
         &["commit", "-q", "-m", "chore: add a lint target"],
     );
+    answering_destination(dir.path(), "upstream");
     dir
 }
 

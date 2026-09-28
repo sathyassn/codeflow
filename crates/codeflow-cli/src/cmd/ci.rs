@@ -81,6 +81,19 @@ pub struct CiArgs {
     /// branch's current tip, since its base bounds every destination tip.
     #[arg(long, value_name = "REF", hide = true)]
     pub baseline_from: Option<String>,
+
+    /// The branch a pull request merges into (default: the CI-provided
+    /// target branch, else the branch an explicit `--base` names). A range
+    /// whose head or target matches the release pattern is judged as a
+    /// release range (SPC-013 R-120).
+    #[arg(long, value_name = "BRANCH")]
+    pub into: Option<String>,
+
+    /// Where the judged branch lives: the URL or path whose default target
+    /// supplies the release pattern (default: `origin`'s URL). The pre-push
+    /// hook passes the location pushed to.
+    #[arg(long, value_name = "URL", hide = true)]
+    pub destination: Option<String>,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -272,11 +285,21 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
+    let into = args
+        .into
+        .clone()
+        .or_else(|| detect_target(|k| std::env::var(k).ok().filter(|v| !v.is_empty())))
+        .or_else(|| args.base.as_deref().and_then(named_branch));
+    let destination = args.destination.clone().or_else(|| origin_url(&root));
     let tracked_claim = work_checks(
         &root,
         git,
         pr_body.as_deref(),
-        &branch,
+        &Names {
+            branch: &branch,
+            into: into.as_deref(),
+            destination: destination.as_deref(),
+        },
         &base_candidates,
         &head,
         &mut tagged,
@@ -330,7 +353,7 @@ fn work_checks<'a>(
     root: &Path,
     git: &GitPolicy,
     pr_body: Option<&str>,
-    branch: &str,
+    names: &Names<'_>,
     base_candidates: &'a [String],
     head: &str,
     tagged: &mut Vec<TaggedViolation>,
@@ -344,6 +367,7 @@ fn work_checks<'a>(
         base,
         head,
     });
+    let branch = names.branch;
     let class = pr_body.and_then(|body| {
         classification::dispatch(root, git, body, branch, range_parts.as_ref(), tagged, ran)
     });
@@ -351,7 +375,7 @@ fn work_checks<'a>(
         root,
         git,
         range_parts.as_ref(),
-        branch,
+        names,
         class.as_ref(),
         tagged,
         ran,
@@ -1137,6 +1161,51 @@ fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> 
         head: "HEAD".to_string(),
         source: "policy protected branches (fallback)".to_string(),
     }
+}
+
+/// The branch names a range is judged under (SPC-013 R-120): its head, the
+/// branch a pull request merges into, and the destination that holds them.
+pub(super) struct Names<'a> {
+    pub branch: &'a str,
+    pub into: Option<&'a str>,
+    pub destination: Option<&'a str>,
+}
+
+/// Auto-detect the target branch NAME of a pull request. Verified variable
+/// names: GitHub `GITHUB_BASE_REF`; GitLab
+/// `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`; Bitbucket
+/// `BITBUCKET_PR_DESTINATION_BRANCH`.
+fn detect_target<F: Fn(&str) -> Option<String>>(env: F) -> Option<String> {
+    env("GITHUB_BASE_REF")
+        .or_else(|| env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME"))
+        .or_else(|| env("BITBUCKET_PR_DESTINATION_BRANCH"))
+}
+
+/// The branch an explicit `--base` names (`origin/main` names `main`); a
+/// commit id names none.
+fn named_branch(base: &str) -> Option<String> {
+    let hex = base.len() >= 7 && base.chars().all(|c| c.is_ascii_hexdigit());
+    let name = base
+        .strip_prefix("refs/heads/")
+        .or_else(|| {
+            base.strip_prefix("refs/remotes/")
+                .and_then(|rest| rest.split_once('/').map(|(_, branch)| branch))
+        })
+        .or_else(|| base.strip_prefix("origin/"))
+        .unwrap_or(base);
+    (!hex && !name.is_empty() && !name.contains(['~', '^', ':', '@'])).then(|| name.to_string())
+}
+
+/// `origin`'s fetch URL, when the repository has that remote.
+fn origin_url(root: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()?;
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !url.is_empty()).then_some(url)
 }
 
 /// Auto-detect the head branch NAME to name-check. Verified variable names:

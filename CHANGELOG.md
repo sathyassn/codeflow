@@ -102,7 +102,8 @@ publication date._
   `codeflow ci`, now checks that the acceptance block's `reviewed` commit is
   the completing commit (a task pull request's head) or an ancestor after
   which only the record's status and Closeout changed, or the second parent
-  of a clean landing merge that only merges and planning records follow,
+  of a clean landing merge (or an ancestor of it followed only by the
+  record's status and Closeout) that only merges and planning records follow,
   and that each waiver names a planning-only amendment commit that changed
   that criterion, is in the completion's history and is on the task's own
   integration target. `task status complete` also
@@ -120,6 +121,35 @@ publication date._
   structure and binding only. An open task that changes product paths
   without a journey criterion gains one by a planning pull request, or the
   project sets `git.work_records: warn` while it catches up.
+
+<!-- codeflow:release-impact minor -->
+- **Release branches judged where each change was introduced.** A branch
+  whose name matches the new policy key `git.release_branch_pattern`, read
+  from the policy at the destination's default branch (default
+  `integration/release-*`), is a release branch. Pre-push, `codeflow ci`
+  and `task status complete` judge a push to it, a pull request into it and
+  its pull request into the default branch by where each change came from.
+  A merge whose other parents are on a verified epic line or the default
+  branch is an import: what it brings keeps the verdict of its line, and a
+  completion binds where it was introduced. A criteria change it brings is
+  judged again where it landed on its line, unless that landing is at or
+  before the cutoff of the line the task targets, on that line's
+  first-parent chain, recorded in the
+  `release_rule_baseline` table of project config on the default branch,
+  which lists it as information. Everything else, including a
+  merge resolution, is direct work: it may not change criteria (removing
+  or re-creating a task record counts as a change), and code
+  needs the one open task marked `role: release-integration`, completed at
+  the release head. The policy check refuses a pattern that matches the
+  default branch or an epic line, and the validator refuses a second open
+  holder of the role. When the default branch's policy file is missing or
+  unreadable, or the destination names a default branch it does not have,
+  the check fails closed instead of using the ordinary rules. A pushed
+  branch whose range the destination's tips do not resolve is judged from
+  the default branch's tip when it is a release branch, and refused when
+  the destination does not answer. `task status complete` judges a
+  completion whose task targets a release branch as CI judges that pull
+  request. `codeflow ci` gains `--into`.
 
 <!-- codeflow:release-impact minor -->
 - **Shared id registry.** With tracking on, `epic new`, `spec new` and

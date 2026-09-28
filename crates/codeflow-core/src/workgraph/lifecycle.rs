@@ -48,6 +48,9 @@ pub struct RecordView {
     pub supersedes: Vec<String>,
     pub superseded_by: Option<String>,
     pub integration_target: Option<String>,
+    /// A task's `role` frontmatter value (SPC-013 R-120:
+    /// `release-integration`), when set.
+    pub role: Option<String>,
     pub body: String,
     pub criteria: CriteriaList,
     /// A spec's `open_questions` frontmatter list (`None` when absent), or
@@ -101,6 +104,7 @@ impl RecordView {
             supersedes: list("supersedes"),
             superseded_by: field("superseded_by"),
             integration_target: field("integration_target"),
+            role: field("role"),
             id,
             path: path.to_string(),
             content: content.to_string(),
@@ -728,6 +732,32 @@ fn is_terminal(record: &RecordView, status: &str) -> bool {
     }
 }
 
+/// At most one open task owns direct release work (SPC-013 R-120): a
+/// second open `role: release-integration` holder is refused, naming the
+/// other.
+fn release_role_problem(record: &RecordView, graph: &Graph) -> Option<String> {
+    let open = |task: &RecordView| {
+        task.role.as_deref() == Some(super::release_line::RELEASE_ROLE)
+            && !TASK_TERMINAL.contains(&task.status.as_str())
+    };
+    if !open(record) {
+        return None;
+    }
+    let others: Vec<&str> = graph
+        .tasks()
+        .filter(|task| task.id != record.id && open(task))
+        .map(|task| task.id.as_str())
+        .collect();
+    (!others.is_empty()).then(|| {
+        format!(
+            "{} and {} are both open with `role: {}`; one open task owns direct release work",
+            record.id,
+            others.join(", "),
+            super::release_line::RELEASE_ROLE
+        )
+    })
+}
+
 /// Whether moving `before` to `after` is a legal transition (R-30, R-32 and
 /// the epic terminal acts of R-26). A record added in the change moves from
 /// the initial state: `todo`, `draft` or an open epic.
@@ -1225,6 +1255,9 @@ pub fn spec_state(graph: &Graph, spec_id: &str) -> Option<SpecState> {
 /// Supersession links (R-32). Relationship errors are never grandfathered.
 fn relationship_problems(record: &RecordView, graph: &Graph) -> Vec<String> {
     let mut problems = Vec::new();
+    if record.kind == RecordKind::Task {
+        problems.extend(release_role_problem(record, graph));
+    }
     if record.kind != RecordKind::Spec {
         return problems;
     }

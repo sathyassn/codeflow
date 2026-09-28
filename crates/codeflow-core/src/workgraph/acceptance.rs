@@ -45,13 +45,13 @@ pub struct Finding {
     pub message: String,
 }
 
-fn finding(rule: &'static str, message: String) -> Finding {
+pub(super) fn finding(rule: &'static str, message: String) -> Finding {
     Finding { rule, message }
 }
 
 /// The active (not superseded) acceptance block of a record, when exactly
 /// one parses. Structure is judged elsewhere; binding needs a parsed block.
-fn active_block(record: &RecordView) -> Option<AcceptanceBlock> {
+pub(super) fn active_block(record: &RecordView) -> Option<AcceptanceBlock> {
     let mut blocks = record
         .active_blocks()
         .into_iter()
@@ -72,7 +72,7 @@ fn is_ancestor_or_same(repo: &Repository, ancestor: Oid, of: Oid) -> bool {
     ancestor == of || repo.graph_descendant_of(of, ancestor).unwrap_or(false)
 }
 
-fn blob_at(repo: &Repository, commit: Oid, path: &str) -> Option<String> {
+pub(super) fn blob_at(repo: &Repository, commit: Oid, path: &str) -> Option<String> {
     let tree = repo.find_commit(commit).ok()?.tree().ok()?;
     let entry = tree.get_path(std::path::Path::new(path)).ok()?;
     let blob = repo.find_blob(entry.id()).ok()?;
@@ -131,7 +131,9 @@ impl Landing<'_> {
 ///
 /// 1. R is C or an ancestor of C, and R..C touches only this record's
 ///    status and Closeout; or
-/// 2. R is the second parent of a merge M on C's first-parent chain, M's
+/// 2. a merge M on C's first-parent chain brought R onto it, and R is M's
+///    second parent or an ancestor of it after which only this record's
+///    status and Closeout changed; M's
 ///    tree is the clean re-merge of its parents, every first-parent commit
 ///    from M to C is a merge or changes planning records only, and the
 ///    completion changes planning records only (several records may
@@ -150,6 +152,33 @@ pub fn bind_completion(
     landing: Landing<'_>,
     default_target: Option<Oid>,
 ) -> Vec<Finding> {
+    bind(repo, task, graph, landing, default_target, true)
+}
+
+/// [`bind_completion`] under its first rule alone: the reviewed commit is
+/// C or an ancestor after which only this record's status and Closeout
+/// changed. A completion made directly on a release line, and the
+/// release-integration task's completion, bind this way to the head both
+/// seats reviewed (SPC-013 R-120); no landing merge carries them.
+#[must_use]
+pub fn bind_completion_at_head(
+    repo: &Repository,
+    task: &RecordView,
+    graph: &Graph,
+    landing: Landing<'_>,
+    default_target: Option<Oid>,
+) -> Vec<Finding> {
+    bind(repo, task, graph, landing, default_target, false)
+}
+
+fn bind(
+    repo: &Repository,
+    task: &RecordView,
+    graph: &Graph,
+    landing: Landing<'_>,
+    default_target: Option<Oid>,
+    landing_merge: bool,
+) -> Vec<Finding> {
     let Some(block) = active_block(task) else {
         return Vec::new();
     };
@@ -161,7 +190,12 @@ pub fn bind_completion(
             task.id, block.reviewed
         )),
         Some(reviewed) => {
-            if let Some(problem) = unreviewed(repo, task, landing, reviewed) {
+            let problem = if landing_merge {
+                unreviewed(repo, task, landing, reviewed)
+            } else {
+                direct_problem(repo, task, landing, reviewed)
+            };
+            if let Some(problem) = problem {
                 bind(format!("{}: {problem}", task.id));
             }
         }
@@ -271,8 +305,9 @@ enum Landed {
     Refused(String),
 }
 
-/// Rule 2: `reviewed` is the second parent of a merge M on C's first-parent
-/// chain whose tree is the clean re-merge of its parents; only merges and
+/// Rule 2: a merge M on C's first-parent chain brought `reviewed` onto it,
+/// as its second parent or an ancestor of it followed only by this record's
+/// status and Closeout, and M's tree is the clean re-merge of its parents; only merges and
 /// planning-only commits follow M up to C, and the completion itself
 /// changes planning records only.
 fn landed_problem(
@@ -303,6 +338,8 @@ fn landed_problem(
     };
     let mut after_merge = None;
     let mut at = start;
+    // The landing merge is the commit of C's first-parent chain that brought
+    // `reviewed` onto it: its first parent does not hold `reviewed`.
     let merge = loop {
         let Some(oid) =
             at.filter(|oid| *oid != reviewed && is_ancestor_or_same(repo, reviewed, *oid))
@@ -312,8 +349,12 @@ fn landed_problem(
         let Ok(commit) = repo.find_commit(oid) else {
             return unreadable("the first-parent chain");
         };
-        if commit.parent_count() == 2 && commit.parent_id(1).ok() == Some(reviewed) {
-            break commit;
+        let first = commit.parent_id(0).ok();
+        if !first.is_some_and(|first| is_ancestor_or_same(repo, reviewed, first)) {
+            if commit.parent_count() == 2 {
+                break commit;
+            }
+            return Landed::NoMerge;
         }
         if commit.parent_count() < 2 && after_merge.is_none() {
             match non_planning_change(repo, commit.parent_id(0).ok(), oid) {
@@ -324,6 +365,20 @@ fn landed_problem(
         }
         at = commit.parent_id(0).ok();
     };
+    // The reviewed commit is the merge's second parent, or an ancestor of it
+    // after which only this record's status and Closeout changed (R-60).
+    let Ok(second) = merge.parent_id(1) else {
+        return unreadable("the landing merge");
+    };
+    if second != reviewed {
+        let landed = blob_at(repo, second, &task.path).unwrap_or_default();
+        if let Some(problem) = later_change(repo, &task.path, &landed, reviewed, second) {
+            return Landed::Refused(format!(
+                "the landing merge {} brings {second}, and {problem} between the reviewed commit {reviewed} and it; review the result that landed",
+                merge.id()
+            ));
+        }
+    }
     if let Some(path) = completion {
         return Landed::Refused(format!(
             "the completion also changes {path}; a completion after the landing merge {} of the reviewed commit {reviewed} changes planning records only",
@@ -502,7 +557,7 @@ fn waiver_problem(
 /// The first path the change from `parent` (none for a root commit) to
 /// `commit` touches outside the planning records; an error when a tree or
 /// the diff cannot be read.
-fn non_planning_change(
+pub(super) fn non_planning_change(
     repo: &Repository,
     parent: Option<Oid>,
     commit: Oid,
@@ -674,7 +729,12 @@ pub fn completions_in_range(
 /// parent before the second. It ends at the first commit whose parents do
 /// not hold it; the range's merge-base never does, or the range would not
 /// bind this completion.
-fn introduced_at(repo: &Repository, task: &RecordView, block: &AcceptanceBlock, head: Oid) -> Oid {
+pub(super) fn introduced_at(
+    repo: &Repository,
+    task: &RecordView,
+    block: &AcceptanceBlock,
+    head: Oid,
+) -> Oid {
     let holds = |oid: Oid| {
         blob_at(repo, oid, &task.path)
             .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok())

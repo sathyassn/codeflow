@@ -32,11 +32,12 @@
 //! level, with the check's own output printed above it.
 
 use std::cell::OnceCell;
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
+use codeflow_core::git::remote_query;
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
 use codeflow_core::hooks::policy::GitPolicy;
 use codeflow_core::hooks::Violation;
@@ -160,7 +161,9 @@ fn violation(policy: &GitPolicy, message: String, remedy: String) -> Violation {
     )
 }
 
-/// Run `codeflow ci` over each pushed ref's range, or note why it could not.
+/// Run `codeflow ci` over each pushed ref's range; a range the destination
+/// does not resolve is judged from the default target's tip, noted, or
+/// refused (see [`unresolved_base`]).
 fn run_ci_ranges(
     exe: &Path,
     root: &Path,
@@ -172,8 +175,14 @@ fn run_ci_ranges(
 ) {
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        if let Some(RangeBase { base, note }) = range_base(root, r, destination) {
-            report.notes.extend(note);
+        let base = match range_base(root, r, destination) {
+            Some(RangeBase { base, note }) => {
+                report.notes.extend(note);
+                Some(base)
+            }
+            None => unresolved_base(root, destination.url, branch, destination, policy, report),
+        };
+        if let Some(base) = base {
             let mut args = vec![
                 "ci",
                 "--base",
@@ -189,17 +198,12 @@ fn run_ci_ranges(
             if let Some(tip) = existing_tip(root, r) {
                 args.extend(["--baseline-from", tip]);
             }
+            // The release scope reads the policy at this destination's
+            // default target (SPC-013 R-120).
+            if let Some(url) = destination.url {
+                args.extend(["--destination", url]);
+            }
             run_check(exe, root, &args, policy, report, steps);
-        } else {
-            let why = destination
-                .failure()
-                .map(|why| format!("; asking it: {why}"))
-                .unwrap_or_default();
-            report.notes.push(format!(
-                "`codeflow ci` did not run for '{branch}': range unresolved (a new \
-                     branch, and neither the destination's advertised tips nor tracking \
-                     refs bound to it give a base{why}); CI checks it"
-            ));
         }
     }
 }
@@ -361,14 +365,92 @@ fn fetches_from(root: &Path, name: &str, url: &str) -> bool {
     git(root, &["remote", "get-url", name]).is_some_and(|fetch| fetch.trim() == url)
 }
 
-/// How long the destination may take to answer, and how much it may say.
-const LS_REMOTE_DEADLINE: Duration = Duration::from_secs(10);
-const LS_REMOTE_MAX_BYTES: usize = 16 << 20;
+/// The base for a pushed branch whose range the destination's tips do not
+/// resolve. The release scope never sits behind that discovery (SPC-013
+/// R-120): a release branch is judged from the default target's tip, which
+/// the scope check fetched; a release branch pushed where no default target
+/// exists yet, or to a destination that answers but whose scope cannot be
+/// read, is refused. When the destination does not answer, its policy
+/// cannot say which names are release branches, and a failed query does not
+/// prove the push itself fails, so every branch is refused. An ordinary
+/// branch whose scope was read keeps the note that CI checks it.
+fn unresolved_base(
+    root: &Path,
+    url: Option<&str>,
+    branch: &str,
+    destination: &Destination<'_>,
+    policy: &GitPolicy,
+    report: &mut StageReport,
+) -> Option<String> {
+    use codeflow_core::workgraph::release_line;
+    // The push set's own query already failed: asking again only waits.
+    let asked = match destination
+        .failure()
+        .map_or_else(|| release_line::ask(root, url), |why| Err(why.to_string()))
+    {
+        Ok(asked) => asked,
+        Err(why) => {
+            report.violations.push(violation(
+                policy,
+                format!(
+                    "the range of '{branch}' is unresolved and the destination did not answer, so whether it is a release branch cannot be read; it is not pushed unjudged (SPC-013 R-120): {why}"
+                ),
+                "push again when the destination answers".to_string(),
+            ));
+            return None;
+        }
+    };
+    let scoped = asked.and_then(|asked| {
+        release_line::scope(root, &asked, branch, None).map(|scope| (asked, scope))
+    });
+    match scoped {
+        Ok((_, scope)) if !scope.release() => {
+            report.notes.push(unresolved(branch, destination));
+            None
+        }
+        Ok((asked, _)) => {
+            if let Some((_, tip)) = asked.default {
+                return Some(tip.to_string());
+            }
+            report.violations.push(violation(
+                policy,
+                format!(
+                    "'{branch}' is a release branch, and the destination has no default target yet to judge it against (SPC-013 R-120)"
+                ),
+                "push the default branch first, then the release branch".to_string(),
+            ));
+            None
+        }
+        Err(why) => {
+            report.violations.push(violation(
+                policy,
+                format!(
+                    "whether '{branch}' is a release branch cannot be decided, so it is not pushed unjudged (SPC-013 R-120): {why}"
+                ),
+                "fix what the message names at the destination, then push again".to_string(),
+            ));
+            None
+        }
+    }
+}
+
+/// Why `codeflow ci` did not run for a pushed branch whose range has no base.
+fn unresolved(branch: &str, destination: &Destination<'_>) -> String {
+    let why = destination
+        .failure()
+        .map(|why| format!("; asking it: {why}"))
+        .unwrap_or_default();
+    format!(
+        "`codeflow ci` did not run for '{branch}': range unresolved (a new \
+             branch, and neither the destination's advertised tips nor tracking \
+             refs bound to it give a base{why}); CI checks it"
+    )
+}
 
 /// The branch and tag tips `url` advertises now (tags peeled), kept when the
 /// commit already exists here; nothing is fetched, even in a partial clone.
 fn advertised_commits(root: &Path, url: &str) -> Advertised {
-    let listed = match ls_remote(root, url) {
+    let listed = match remote_query::ls_remote(root, &["--heads", "--tags", url]) {
         Ok(listed) => listed,
         Err(why) => return Advertised::Failed(why),
     };
@@ -397,122 +479,6 @@ fn advertised_commits(root: &Path, url: &str) -> Advertised {
     commits.sort();
     commits.dedup();
     Advertised::Tips(commits)
-}
-
-/// `git ls-remote --heads --tags <url>`, never interactive and bounded: no
-/// terminal, askpass or SSH password prompt, at most [`LS_REMOTE_DEADLINE`]
-/// (then the whole process group is killed) and [`LS_REMOTE_MAX_BYTES`].
-fn ls_remote(root: &Path, url: &str) -> Result<String, String> {
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(root)
-        .args(["ls-remote", "--heads", "--tags", url])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "false")
-        .env("SSH_ASKPASS", "false")
-        .env("SSH_ASKPASS_REQUIRE", "never")
-        .env("GIT_SSH_COMMAND", batch_ssh_command(root))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("could not start git: {error}"))?;
-    let Some(stdout) = child.stdout.take() else {
-        kill_group(&mut child);
-        return Err("could not read its answer".to_string());
-    };
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let read = stdout
-            .take(LS_REMOTE_MAX_BYTES as u64 + 1)
-            .read_to_end(&mut bytes);
-        let _ = sender.send(read.map(|_| bytes));
-    });
-    let deadline = Instant::now() + LS_REMOTE_DEADLINE;
-    let timed_out = || format!("no answer within {}s", LS_REMOTE_DEADLINE.as_secs());
-    let bytes = loop {
-        match receiver.recv_timeout(Duration::from_millis(20)) {
-            Ok(Ok(bytes)) => break bytes,
-            Ok(Err(error)) => {
-                kill_group(&mut child);
-                return Err(format!("reading its answer failed: {error}"));
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
-            Err(_) => {
-                kill_group(&mut child);
-                return Err(timed_out());
-            }
-        }
-    };
-    if bytes.len() > LS_REMOTE_MAX_BYTES {
-        kill_group(&mut child);
-        return Err(format!(
-            "its answer is over {} MiB",
-            LS_REMOTE_MAX_BYTES >> 20
-        ));
-    }
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                kill_group(&mut child);
-                return Err(timed_out());
-            }
-        }
-    };
-    if !status.success() {
-        return Err(
-            "`git ls-remote` failed (unreachable, no credentials, or no such repository)"
-                .to_string(),
-        );
-    }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-/// The SSH command git would use, with password and host-key prompts off.
-/// A configured command is kept: `GIT_SSH_COMMAND`, then `core.sshCommand`,
-/// then `GIT_SSH`, then `ssh`.
-fn batch_ssh_command(root: &Path) -> String {
-    let configured = std::env::var("GIT_SSH_COMMAND")
-        .ok()
-        .filter(|command| !command.trim().is_empty())
-        .or_else(|| {
-            git(root, &["config", "--get", "core.sshCommand"])
-                .map(|command| command.trim().to_string())
-                .filter(|command| !command.is_empty())
-        })
-        .or_else(|| {
-            std::env::var("GIT_SSH")
-                .ok()
-                .filter(|program| !program.is_empty())
-                .map(|program| format!("'{}'", program.replace('\'', "'\\''")))
-        })
-        .unwrap_or_else(|| "ssh".to_string());
-    format!("{configured} -o BatchMode=yes")
-}
-
-/// Kill a child and, on Unix, the process group it leads (an SSH or
-/// credential helper it started), then reap it.
-fn kill_group(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    if let Ok(group) = i32::try_from(child.id()) {
-        // SAFETY: the child leads its own process group (`process_group(0)`),
-        // whose id is its pid; SIGKILL to it is best-effort.
-        unsafe {
-            libc::killpg(group, libc::SIGKILL);
-        }
-    }
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// The exclusive base of a pushed branch's range, and a note when the range

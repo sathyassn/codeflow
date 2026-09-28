@@ -212,10 +212,54 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
         head,
         changed: &changed,
     };
-    super::acceptance::bind_completion(&repo, task, graph, landing, default_target)
-        .into_iter()
-        .map(|finding| format!("{}: {}", finding.rule, finding.message))
-        .collect()
+    let shown = |findings: Vec<super::acceptance::Finding>| -> Vec<String> {
+        findings
+            .into_iter()
+            .map(|finding| format!("{}: {}", finding.rule, finding.message))
+            .collect()
+    };
+    // R-60's first rule holds on every branch. Only when it fails does the
+    // branch decide: a release branch binds a direct completion to its head
+    // (SPC-013 R-120), and any other branch also takes a landing merge.
+    let at_head =
+        super::acceptance::bind_completion_at_head(&repo, task, graph, landing, default_target);
+    if at_head.is_empty() {
+        return Vec::new();
+    }
+    // The release-integration task's completion binds to the head wherever
+    // it is made: on the release branch, on a fix branch whose pull request
+    // targets it, and in the release pull request (R-120). No landing merge
+    // carries it, so the branch name cannot relax it.
+    if task.role.as_deref() == Some(super::release_line::RELEASE_ROLE) {
+        return shown(at_head);
+    }
+    // The task's declared target is where its pull request goes: a
+    // completion into a release branch is judged as CI judges that pull
+    // request, whatever the task (R-120).
+    let into = task
+        .integration_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|target| !target.is_empty());
+    match super::release_line::checkout_scope(repo_root, into) {
+        Ok(scope) if scope.release() => shown(at_head),
+        Ok(_) => shown(super::acceptance::bind_completion(
+            &repo,
+            task,
+            graph,
+            landing,
+            default_target,
+        )),
+        Err(error) => {
+            let mut refused = shown(at_head);
+            refused.push(format!(
+                "{}: {}: cannot tell whether this branch is a release branch (SPC-013 R-120): {error}",
+                super::acceptance::BINDING_RULE,
+                task.id
+            ));
+            refused
+        }
+    }
 }
 
 /// Replace `path` with `content` only when its bytes still hash to
