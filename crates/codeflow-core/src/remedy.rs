@@ -191,8 +191,20 @@ catalog! {
     STANDALONE_SPLIT = Step::Edit("{path}"),
         "give {path} an `epic_id`: work that takes several pull requests belongs to an epic (SPC-013 R-66)";
     /// A documentation layer the project does not have.
-    DOCS_LAYER_ABSENT = Step::Edit("{path}"),
-        "create {path} to turn these checks on (`codeflow init --full` scaffolds the full layout)";
+    DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
+        "run `codeflow update`, which restores {path} at this project's tier";
+    /// References into an absent epics layer.
+    DOCS_EPICS_UNCHECKED = Step::Codeflow("codeflow epic new"),
+        "create each epic named with `codeflow epic new`, or remove the references to it";
+    /// References into an absent specs layer.
+    DOCS_SPECS_UNCHECKED = Step::Codeflow("codeflow spec new"),
+        "create each spec named with `codeflow spec new --for <id>`, or remove the references to it";
+    /// References into an absent decisions layer.
+    DOCS_ADRS_UNCHECKED = Step::Codeflow("codeflow adr new"),
+        "create each decision named with `codeflow adr new`, or remove the references to it";
+    /// References into an absent capability registry.
+    DOCS_CAPABILITIES_UNCHECKED = Step::Edit("docs/capabilities.md"),
+        "add each capability named to docs/capabilities.md, or remove the references to it";
     /// A task branch whose planning is not anchored on the target.
     WORK_START_RECONCILE = Step::Codeflow("codeflow work start"),
         "reconcile the target branch, then run `codeflow work start {id}`";

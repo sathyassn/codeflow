@@ -315,9 +315,14 @@ fn run_check(
         Ok(out) if out.status.success() => {
             // A passing check can still have degraded, or name what a human
             // reviews (a baseline list it introduces); keep that legible.
-            let stderr = String::from_utf8_lossy(&out.stderr);
+            // Validate prints its notes to stdout, ci to stderr.
+            let printed = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
             report.relayed.extend(
-                relayed_findings(&stderr)
+                relayed_findings(&printed)
                     .into_iter()
                     .map(|finding| format!("`{shown}`: {finding}")),
             );
