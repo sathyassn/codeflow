@@ -141,17 +141,21 @@ publication date._
   or re-creating a task record counts as a change), and code
   needs the one open task marked `role: release-integration`, completed at
   the release head. A completion made on the release branch, or brought
-  earlier, is superseded by a later one brought from the task's own line
-  that binds where the line landed it; the earlier one is never accepted.
+  earlier, is superseded only by a later one brought from the task's own
+  line that binds where the line landed it, ordered by where that line
+  landed each; the earlier one is never accepted. An octopus import is
+  judged as git merges it, so an older parent of a line adds nothing.
   The policy check refuses a pattern that matches the
   default branch or an epic line, and the validator refuses a second open
   holder of the role. When the default branch's policy file is missing or
   unreadable, or the destination names a default branch it does not have,
-  the check fails closed instead of using the ordinary rules. A new
-  release branch that imports several lines, and a pushed branch whose
-  range the destination's tips do not resolve, are judged from the default
-  branch's tip when they are release branches, as their pull request is; a
-  push the destination does not answer for is refused. `task status
+  the check fails closed instead of using the ordinary rules. A push
+  to a release branch is judged on everything it adds to the default
+  branch's tip, as its pull request is, however much of it the destination
+  already holds under other names. Where durable work is tracked, a push
+  whose scope the destination cannot say, because it does not answer or
+  its default branch has no readable policy, is refused, and so is any
+  push with an unresolved range to a destination that does not answer. `task status
   complete` judges a completion whose task targets a release branch as CI
   judges that pull request. `codeflow ci` gains `--into`.
 

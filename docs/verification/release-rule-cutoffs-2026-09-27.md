@@ -92,15 +92,17 @@ The candidate of TSK-145 AC-6 was rebuilt on a disposable authority
 - Each line is then imported at its cutoff tip, the records baseline names
   those tips, and TSK-010 completes at the head.
 
-| Run | Legacy notices | Blocking findings |
-|---|---|---|
-| Pre-push (`git push` from the release checkout)[^tree] | the seven | 2, the same as CI |
-| CI, release range from the authority's `main` | the seven | 2 |
-| Final pull request into `main` (`--into main`) | the seven | 2 |
+| Run | Exit | Legacy notices | Blocking findings |
+|---|---|---|---|
+| Pre-push (`git push` from the release checkout)[^tree] | 1, the ref not published | the seven | 2, the same as CI |
+| CI, release range from the authority's `main` | 1 | the seven | 2 |
+| Final pull request into `main` (`--into main`) | 1 | the seven | 2 |
 
-[^tree]: Pre-push judged the range from the authority's `main`. Its tree
-    checks (`validate --docs` and the quick targets) were kept out by a
-    changed tracked file: the replayed tree is not a buildable release.
+[^tree]: Pre-push judged everything the release branch adds to the
+    authority's `main`. Its tree checks (`validate --docs` and the quick
+    targets) were kept out by a changed tracked file, because the replayed
+    tree is not a buildable release. Its release preflight did not run: the
+    replayed tree's `release.py` has no `preflight` subcommand.
 
 The release-line judge reports no blocking finding. The TSK-101 waiver's
 refusal is gone because the EPC-020 import at its cutoff brings the
