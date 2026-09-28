@@ -101,7 +101,8 @@ records: decisions, epics, tasks and specs are pointed to as folders
 ```
 
 Keep navigation predictable. Match an established project voice;
-otherwise write copy by `cf-editorial-review/references/copy-guide.md`.
+otherwise write every string by the copy guide
+(`cf-editorial-review/references/copy-guide.md`).
 
 ### Visual craft (utility presentation system, mandatory)
 

@@ -50,7 +50,7 @@ description: Land finished work (docs and capability updates, then a PR through 
    macOS/Linux/Windows tests or installer canaries. Missing platform evidence
    blocks publication rather than becoming an inferred pass.
 5. Apply `cf-editorial-review` and its copy guide to substantial changed docs,
-   release notes, and the PR narrative. It refines the writing but cannot
+   release notes, and the PR narrative. They refine the writing but cannot
    weaken the template, evidence, policy, or no-emoji requirements below.
 6. Prepare the whole-branch PR using
    [references/pr-evidence.md](references/pr-evidence.md). Follow the project

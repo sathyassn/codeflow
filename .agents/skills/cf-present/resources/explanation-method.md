@@ -114,7 +114,7 @@ notes of stages 1 to 3.
 | Part | Drafted for | What it is |
 |---|---|---|
 | Declaration | a figure on the portal or in present | the stage 1 question is the figure's `question` and its one-sentence answer the `idea`; states, facts with their sources, the narrow composition and the twin follow `figure-grammar.md` section 6 |
-| Lead | every answer | one sentence saying what the reader is looking at, above the carrier when there is one |
+| Lead | every answer that has a carrier or a summary | one sentence saying what the reader is looking at, above the carrier when there is one; a short answer takes no lead |
 | Figure | a figure | drawn in the stage 3 family, one idea, every mark keyed |
 | Caption | a figure or a screenshot | one sentence saying what the reader takes from it |
 | Acting text | every answer | the sentences, steps or bullets the reader acts on |
@@ -124,7 +124,8 @@ The copy guide (`cf-editorial-review/references/copy-guide.md`) says how to
 write the words of each part. A chat form has no declaration file or twin, so
 its idea, states and facts stay in the notes. A table is its own carrier and
 needs no twin; a screenshot also takes the doctrine's capture rules and alt
-text. An answer with no carrier drafts only the lead and the acting text.
+text. An answer with no carrier drafts only the lead and the acting text, and
+a short answer drafts only the answer: it takes no lead.
 
 ## 5. Check
 

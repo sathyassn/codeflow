@@ -1841,11 +1841,19 @@ fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
     let universal_parts = named(&parts, "every answer");
     let universal_checks = named(&checks, "every answer");
     // An answer with no figure and a table lookup take only the universal rows.
+    // TSK-073: the lead is drafted only where there is a carrier or a summary,
+    // so a short answer, its own summary under the copy guide, takes no lead.
+    assert!(
+        parts.iter().any(|row| row[0] == "Lead"
+            && row[1] == "every answer that has a carrier or a summary"
+            && row[2].ends_with("a short answer takes no lead")),
+        "the lead is drafted for an answer with a carrier or a summary, never a short answer"
+    );
     for carrier in ["an answer with no figure", "a table lookup"] {
         assert_eq!(
             universal_parts,
-            BTreeSet::from(["Lead".to_string(), "Acting text".to_string()]),
-            "{carrier} must draft only the lead and the acting text"
+            BTreeSet::from(["Acting text".to_string()]),
+            "{carrier} takes only the acting text as a universal part"
         );
         assert_eq!(
             universal_checks,
@@ -1877,6 +1885,7 @@ fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
     let normalized = normalized_whitespace(&method);
     for marker in [
         "An answer with no figure, a table lookup included, passes on the universal checks alone",
+        "An answer with no carrier drafts only the lead and the acting text, and a short answer drafts only the answer: it takes no lead.",
         "a chat form: every pair of marks differs in glyph and each is keyed in the legend line",
         "A chat form has no declaration file or twin",
     ] {
