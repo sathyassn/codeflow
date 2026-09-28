@@ -738,10 +738,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const g = dragGestureRef.current;
       dragGestureRef.current = null;
       if (!g) {
-        // A press that began outside the review text (the page margin) and
-        // selected into it pins on release too; a control's press does not.
+        // An untracked press pins its selection on release too: one begun in
+        // the page margin, or one begun before this effect was installed
+        // (just after the composer closed). A control's press does not.
         const start = pressTargetRef.current;
-        if (start && !documentRoot.contains(start) && !start.closest(PRESS_OWNERS)) onSelection();
+        if (start && !start.closest(PRESS_OWNERS)) onSelection();
         return;
       }
       const w = Math.abs(event.clientX - g.x0);
