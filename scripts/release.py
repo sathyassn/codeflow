@@ -144,106 +144,388 @@ def lacks_migration_guidance(value: str) -> bool:
 
 
 # Markdown structure of a PR body, read the way the Rust PR-body check reads
-# it: fenced code, indented code and HTML comments are never fields, only
-# ATX headings at column zero open sections, and a section's fields end at
-# its first subsection. `scripts/fixtures/release_impact_cases.json` holds
-# the cases both parsers must agree on.
-FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-ATX_HEADING = re.compile(r"^(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
-LIST_ITEM = re.compile(r"^([ \t]*)([-*+]|\d{1,9}[.)])( {1,4}|\t|$)")
+# it through pulldown-cmark: a CommonMark block parser, ported from the
+# reference implementation (commonmark.js) and reduced to what the section
+# and field readers need. Only document-level ATX headings at column zero
+# open sections, and a section's fields end at its first subsection. Code,
+# HTML blocks and HTML comments are never fields. A comment that opens a
+# line is an HTML block, so it ends the paragraph or list it interrupts the
+# way CommonMark does. `scripts/fixtures/release_impact_cases.json` holds the
+# cases both parsers must agree on, and the Rust test
+# `release_impact_readers_agree_on_a_generated_corpus` compares them over a
+# generated corpus of structures.
+LINE_END = re.compile(r"\r\n|\r|\n")
+ATX_START = re.compile(r"#{1,6}(?:[ \t]+|$)")
+FENCE_START = re.compile(r"`{3,}(?!.*`)|~{3,}")
+FENCE_CLOSE = re.compile(r"(`{3,}|~{3,})[ \t]*$")
+THEMATIC_BREAK = re.compile(r"(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$")
+SETEXT_UNDERLINE = re.compile(r"(?:=+|-+)[ \t]*$")
+LIST_MARKER = re.compile(r"[*+-]|(\d{1,9})[.)]")
+RAW_TEXT_TAG = r"(?:script|pre|textarea|style)"
+TAG_NAME = r"[A-Za-z][A-Za-z0-9-]*"
+TAG_ATTRIBUTE = r"""(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^"'=<>`\x00-\x20]+|'[^']*'|"[^"]*"))?)"""
+BLOCK_TAG = (
+    r"address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|"
+    r"details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|"
+    r"h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|"
+    r"optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|"
+    r"track|ul"
+)
+# CommonMark's seven HTML block kinds, by start and (for kinds 1 to 5) end.
+HTML_BLOCK_START = [
+    re.compile(rf"<{RAW_TEXT_TAG}(?:\s|>|$)", re.I),
+    re.compile(r"<!--"),
+    re.compile(r"<\?"),
+    re.compile(r"<![A-Za-z]"),
+    re.compile(r"<!\[CDATA\["),
+    re.compile(rf"</?(?:{BLOCK_TAG})(?:\s|/?>|$)", re.I),
+    re.compile(
+        rf"(?:<(?!{RAW_TEXT_TAG}(?![A-Za-z0-9-])){TAG_NAME}{TAG_ATTRIBUTE}*\s*/?>"
+        rf"|</(?!{RAW_TEXT_TAG}(?![A-Za-z0-9-])){TAG_NAME}\s*>)\s*$",
+        re.I,
+    ),
+]
+HTML_BLOCK_END = [
+    re.compile(rf"</{RAW_TEXT_TAG}>", re.I),
+    re.compile(r"-->"),
+    re.compile(r"\?>"),
+    re.compile(r">"),
+    re.compile(r"\]\]>"),
+]
+INLINE_COMMENT = re.compile(r"<!--(?:-?>|[\s\S]*?-->)")
+CONTAINERS = {"document", "quote", "list", "item"}
+# The first characters that can open a block other than a paragraph.
+MAY_START_BLOCK = set("#`~*+_=<>-0123456789")
 
 
-def indent_columns(line: str) -> int:
-    """The columns of a line's leading whitespace, a tab reaching the next
-    multiple of four (CommonMark)."""
-    columns = 0
-    for char in line:
-        if char == " ":
-            columns += 1
-        elif char == "\t":
-            columns += 4 - columns % 4
-        else:
-            break
-    return columns
+class MarkdownBlock:
+    """One block of the CommonMark block tree and the source lines it took."""
+
+    def __init__(self, kind: str, parent: MarkdownBlock | None, **data: Any) -> None:
+        self.kind = kind
+        self.parent = parent
+        self.data = data
+        self.open = True
+        self.children: list[MarkdownBlock] = []
+        self.lines: list[str] = []
+
+    def quoted(self) -> bool:
+        block = self.parent
+        while block is not None:
+            if block.kind == "quote":
+                return True
+            block = block.parent
+        return False
 
 
-def markdown_lines(body: str, *, include_code: bool) -> list[tuple[str, tuple[int, str] | None]]:
-    """Visible lines, each with its (depth, name) when it is a heading."""
-    lines: list[tuple[str, tuple[int, str] | None]] = []
-    fence: str | None = None
-    in_comment = False
-    # Indented code: a line four columns past the open list item's content
-    # (or the margin) that no open paragraph can absorb, and what follows it
-    # at that depth.
-    code_indent: int | None = None
-    list_indent: int | None = None
-    paragraph = False
-    for raw in body.splitlines():
-        line = raw
-        if fence is not None:
-            closing = re.match(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*$", line)
-            if closing:
-                fence = None
-            elif include_code:
-                lines.append((line, None))
-            continue
-        if in_comment:
-            end = line.find("-->")
-            if end < 0:
-                continue
-            line, in_comment = line[end + 3 :], False
-        while (start := line.find("<!--")) >= 0:
-            end = line.find("-->", start + 4)
-            if end < 0:
-                line, in_comment = line[:start], True
+class MarkdownBlocks:
+    """CommonMark's two-phase block parse, first phase only: containers
+    (block quotes, lists, list items) and leaves (paragraphs, headings,
+    code, HTML blocks, breaks), with the spec's tab columns and lazy
+    continuation. Inline content stays text; `leaves` lists the finished
+    leaves in document order."""
+
+    def __init__(self, body: str) -> None:
+        self.document = MarkdownBlock("document", None)
+        self.tip = self.document
+        self.leaves: list[MarkdownBlock] = []
+        for line in LINE_END.split(body):
+            self.incorporate(line)
+        while self.tip is not None:
+            self.finalize(self.tip)
+
+    # Position within the current line, in characters and in columns.
+    def find_next_nonspace(self) -> None:
+        index, column = self.offset, self.column
+        while index < len(self.text) and self.text[index] in " \t":
+            column += 1 if self.text[index] == " " else 4 - column % 4
+            index += 1
+        self.blank = index == len(self.text)
+        self.next_nonspace, self.next_column = index, column
+        self.indent = column - self.column
+        self.indented = self.indent >= 4
+
+    def advance_next_nonspace(self) -> None:
+        self.offset, self.column, self.partial = self.next_nonspace, self.next_column, False
+
+    def advance(self, count: int, *, columns: bool) -> None:
+        while count > 0 and self.offset < len(self.text):
+            if self.text[self.offset] == "\t":
+                to_tab = 4 - self.column % 4
+                if columns:
+                    self.partial = to_tab > count
+                    step = min(to_tab, count)
+                    self.column += step
+                    self.offset += 0 if self.partial else 1
+                    count -= step
+                    continue
+                self.column += to_tab
+            else:
+                self.column += 1
+            self.partial = False
+            self.offset += 1
+            count -= 1
+
+    def peek(self, index: int) -> str:
+        return self.text[index : index + 1]
+
+    def spaced(self) -> bool:
+        return self.peek(self.offset) in (" ", "\t")
+
+    # Building the tree.
+    def add_child(self, kind: str, **data: Any) -> MarkdownBlock:
+        while not (
+            self.tip.kind == "list" and kind == "item"
+            or self.tip.kind in {"document", "quote", "item"} and kind != "item"
+        ):
+            self.finalize(self.tip)
+        block = MarkdownBlock(kind, self.tip, **data)
+        self.tip.children.append(block)
+        self.tip = block
+        return block
+
+    def add_line(self) -> None:
+        prefix = ""
+        if self.partial:
+            self.offset += 1
+            prefix = " " * (4 - self.column % 4)
+        self.tip.lines.append(prefix + self.text[self.offset :])
+
+    def finalize(self, block: MarkdownBlock) -> None:
+        block.open = False
+        self.tip = block.parent
+        if block.kind not in CONTAINERS:
+            self.leaves.append(block)
+
+    def close_unmatched(self) -> None:
+        if not self.all_closed:
+            while self.old_tip is not self.last_matched:
+                parent = self.old_tip.parent
+                self.finalize(self.old_tip)
+                self.old_tip = parent
+            self.all_closed = True
+
+    def continues(self, block: MarkdownBlock) -> int:
+        """Whether an open block takes this line: 0 it does, 1 it does not,
+        2 it took the whole line."""
+        if block.kind == "quote":
+            if self.indented or self.peek(self.next_nonspace) != ">":
+                return 1
+            self.advance_next_nonspace()
+            self.advance(1, columns=False)
+            if self.spaced():
+                self.advance(1, columns=True)
+        elif block.kind == "item":
+            width = block.data["marker_offset"] + block.data["padding"]
+            if self.blank:
+                if not block.children:
+                    return 1
+                self.advance_next_nonspace()
+            elif self.indent >= width:
+                self.advance(width, columns=True)
+            else:
+                return 1
+        elif block.kind == "code" and block.data["fence"]:
+            fence = block.data["fence"]
+            close = FENCE_CLOSE.match(self.text, self.next_nonspace)
+            if self.indent <= 3 and close and close.group(1)[0] == fence[0] and len(close.group(1)) >= len(fence):
+                self.finalize(block)
+                return 2
+            skip = block.data["fence_offset"]
+            while skip > 0 and self.spaced():
+                self.advance(1, columns=True)
+                skip -= 1
+        elif block.kind == "code":
+            if self.indent >= 4:
+                self.advance(4, columns=True)
+            elif self.blank:
+                self.advance_next_nonspace()
+            else:
+                return 1
+        elif block.kind == "html":
+            return int(self.blank and block.data["type"] >= 6)
+        elif block.kind == "paragraph":
+            return int(self.blank)
+        elif block.kind in {"heading", "break"}:
+            return 1
+        return 0
+
+    def start(self, container: MarkdownBlock) -> int:
+        """Opens a block at this position: 0 none, 1 a container, 2 a leaf."""
+        rest = self.text[self.next_nonspace :]
+        if not self.indented and rest[:1] not in MAY_START_BLOCK:
+            return 0
+        if self.indented:
+            if self.tip.kind == "paragraph" or self.blank:
+                return 0
+            self.advance(4, columns=True)
+            self.close_unmatched()
+            self.add_child("code", fence="")
+            return 2
+        if rest.startswith(">"):
+            self.advance_next_nonspace()
+            self.advance(1, columns=False)
+            if self.spaced():
+                self.advance(1, columns=True)
+            self.close_unmatched()
+            self.add_child("quote")
+            return 1
+        if match := ATX_START.match(rest):
+            column_zero = self.next_nonspace == 0
+            self.advance_next_nonspace()
+            self.advance(len(match.group(0)), columns=False)
+            self.close_unmatched()
+            content = re.sub(r"^[ \t]*#+[ \t]*$", "", self.text[self.offset :])
+            content = re.sub(r"[ \t]+#+[ \t]*$", "", content)
+            heading = self.add_child("heading", depth=len(match.group(0).strip()), column_zero=column_zero)
+            heading.lines.append(content)
+            self.offset = len(self.text)
+            return 2
+        if match := FENCE_START.match(rest):
+            self.close_unmatched()
+            self.add_child("code", fence=match.group(0), fence_offset=self.indent)
+            self.advance_next_nonspace()
+            self.advance(len(match.group(0)), columns=False)
+            return 2
+        if rest.startswith("<"):
+            lazy = not self.all_closed and not self.blank and self.tip.kind == "paragraph"
+            for kind, pattern in enumerate(HTML_BLOCK_START, start=1):
+                if pattern.match(rest) and (kind < 7 or container.kind != "paragraph" and not lazy):
+                    self.close_unmatched()
+                    self.add_child("html", type=kind)
+                    return 2
+        if container.kind == "paragraph" and SETEXT_UNDERLINE.match(rest):
+            self.close_unmatched()
+            container.kind = "heading"
+            container.data.update(setext=True)
+            self.offset = len(self.text)
+            return 2
+        if THEMATIC_BREAK.match(rest):
+            self.close_unmatched()
+            self.add_child("break")
+            self.offset = len(self.text)
+            return 2
+        return int(self.list_item(container, rest))
+
+    def list_item(self, container: MarkdownBlock, rest: str) -> bool:
+        match = LIST_MARKER.match(rest)
+        if not match:
+            return False
+        marker = match.group(0)
+        ordinal = match.group(1)
+        after = rest[len(marker) :]
+        if after[:1] not in ("", " ", "\t"):
+            return False
+        # Only a non-empty bullet or an ordered item starting at 1 may
+        # interrupt a paragraph.
+        if container.kind == "paragraph" and (
+            not after.strip(" \t") or ordinal is not None and int(ordinal) != 1
+        ):
+            return False
+        marker_offset = self.indent
+        self.advance_next_nonspace()
+        self.advance(len(marker), columns=True)
+        start_column, start_offset = self.column, self.offset
+        while True:
+            self.advance(1, columns=True)
+            if not (self.column - start_column < 5 and self.spaced()):
                 break
-            line = line[:start] + line[end + 3 :]
-        if not line.strip():
-            paragraph = False
-            if code_indent is None or include_code:
-                lines.append((line, None))
+        spaces = self.column - start_column
+        if spaces >= 5 or spaces < 1 or self.offset >= len(self.text):
+            # Content starts one column after the marker; the rest of the
+            # spaces belong to it (indented code, for five or more).
+            padding = len(marker) + 1
+            self.column, self.offset, self.partial = start_column, start_offset, False
+            if self.spaced():
+                self.advance(1, columns=True)
+        else:
+            padding = len(marker) + spaces
+        self.close_unmatched()
+        ordered = ordinal is not None
+        if self.tip.kind != "list" or self.tip.data["delimiter"] != marker[-1] or self.tip.data["ordered"] != ordered:
+            self.add_child("list", delimiter=marker[-1], ordered=ordered)
+        self.add_child("item", marker_offset=marker_offset, padding=padding)
+        return True
+
+    def incorporate(self, text: str) -> None:
+        self.text, self.offset, self.column, self.partial = text, 0, 0, False
+        self.old_tip = self.tip
+        container = self.document
+        while container.children and container.children[-1].open:
+            container = container.children[-1]
+            self.find_next_nonspace()
+            matched = self.continues(container)
+            if matched == 2:
+                return
+            if matched == 1:
+                container = container.parent
+                break
+        self.all_closed = container is self.old_tip
+        self.last_matched = container
+        leaf = container.kind in {"code", "html"}
+        while not leaf:
+            self.find_next_nonspace()
+            started = self.start(container)
+            if not started:
+                self.advance_next_nonspace()
+                break
+            container = self.tip
+            leaf = started == 2
+        if not self.all_closed and not self.blank and self.tip.kind == "paragraph":
+            self.add_line()  # lazy continuation
+            return
+        self.close_unmatched()
+        if container.kind in {"paragraph", "code", "html"}:
+            self.add_line()
+            kind = container.data.get("type", 0)
+            if container.kind == "html" and kind <= 5 and HTML_BLOCK_END[kind - 1].search(self.text, self.offset):
+                self.finalize(container)
+        elif self.offset < len(self.text) and not self.blank:
+            self.add_child("paragraph")
+            self.advance_next_nonspace()
+            self.add_line()
+
+
+def markdown_lines(
+    body: str, *, include_code: bool, include_quotes: bool
+) -> list[tuple[str, tuple[int, str] | None]]:
+    """Visible text lines, each with its (depth, name) when it is a section
+    heading. HTML blocks and comments are never visible; code and quoted
+    lines are visible only when included."""
+    blocks = MarkdownBlocks(body)
+    lines: list[tuple[str, tuple[int, str] | None]] = []
+    for leaf in blocks.leaves:
+        section = (
+            leaf.kind == "heading"
+            and not leaf.data.get("setext")
+            and leaf.parent is blocks.document
+            and leaf.data["column_zero"]
+        )
+        if section:
+            name = re.sub(r"[*_`]", "", INLINE_COMMENT.sub("", leaf.lines[0])).strip()
+            lines.append((leaf.lines[0], (leaf.data["depth"], name)))
+        elif leaf.quoted() and not include_quotes:
             continue
-        columns = indent_columns(line)
-        if code_indent is not None:
-            if columns >= code_indent:
-                if include_code:
-                    lines.append((line, None))
-                continue
-            code_indent = None
-        margin = list_indent or 0
-        if not paragraph and columns >= margin + 4:
-            code_indent = margin + 4
-            if include_code:
-                lines.append((line, None))
-            continue
-        opening = FENCE_OPEN.match(line)
-        if opening:
-            fence, paragraph = opening.group(1), False
-            continue
-        heading = ATX_HEADING.match(line)
-        if heading:
-            name = re.sub(r"[*_`]", "", heading.group(2) or "").strip()
-            lines.append((line, (len(heading.group(1)), name)))
-            list_indent, paragraph = None, False
-            continue
-        item = LIST_ITEM.match(line)
-        if item:
-            marker = indent_columns(item.group(1)) + len(item.group(2))
-            list_indent = marker + max(1, indent_columns(" " * marker + item.group(3)) - marker)
-        elif list_indent is not None and not paragraph and columns < list_indent:
-            list_indent = None
-        paragraph = True
-        lines.append((line, None))
+        elif leaf.kind in {"paragraph", "heading"}:
+            # Any other heading is text, as the Rust check renders it.
+            text = INLINE_COMMENT.sub("", "\n".join(leaf.lines))
+            lines.extend((line.strip(), None) for line in text.split("\n"))
+        elif leaf.kind == "code" and include_code:
+            code = leaf.lines[1:] if leaf.data["fence"] else leaf.lines
+            lines.extend((line, None) for line in code)
     return lines
 
 
-def markdown_section(body: str, name: str, *, include_code: bool, own_only: bool) -> list[list[str]]:
+def markdown_section(body: str, name: str, *, fields: bool, own_only: bool) -> list[list[str]]:
     """Each section named `name` (at depth 2, else depth 3) as its lines.
 
-    `own_only` stops at the first subsection; otherwise a section runs to the
-    next heading at its depth or above.
+    `fields` reads only the lines a field may come from, outside code and
+    quotes (the Rust check's `field_text`); otherwise code and quotes count
+    as content too (its `visible_text`). `own_only` stops at the first
+    subsection; otherwise a section runs to the next heading at its depth or
+    above.
     """
-    lines = markdown_lines(body, include_code=include_code)
+    lines = markdown_lines(body, include_code=not fields, include_quotes=not fields)
     headings = [
         (index, depth, title)
         for index, (_, heading) in enumerate(lines)
@@ -268,27 +550,44 @@ def markdown_section(body: str, name: str, *, include_code: bool, own_only: bool
 RELEASE_FIELDS = {
     "unit", "impact", "breaking", "contract", "rationale", "migration", "evidence", "withdrawal",
 }
-FIELD_LINE = re.compile(r"^\s*(?:[-*+]|\d+[.)])?\s*([A-Za-z*_ ]+?)[*_]*\s*:[*_]*\s*(.*?)\s*$")
+# A field is a visible text line whose label may be emphasised. List markers
+# and indentation are already gone, so a literal `10. Impact:` or `* Impact:`
+# continuing a paragraph is no field: a `*` or `_` run opens emphasis only
+# when a letter follows it.
+FIELD_LINE = re.compile(r"^\s*((?:[*_]+(?=[A-Za-z]))?[A-Za-z][A-Za-z ]*?)[*_]*\s*:[*_]*\s*(.*?)\s*$")
 
 
-def parse_release_impact(body: str) -> dict[str, str]:
-    sections = markdown_section(body, "Release impact", include_code=False, own_only=True)
+def release_impact_fields(body: str) -> list[tuple[str, str]] | None:
+    """The one Release impact section's own field lines, in order, as (key,
+    value) pairs; None without exactly one section. The Rust PR-body check
+    reads the same pairs (`pr_body::release_fields`), and its differential
+    test compares the two over a generated corpus."""
+    sections = markdown_section(body, "Release impact", fields=True, own_only=True)
     if len(sections) != 1:
-        fail("PR body must contain exactly one '## Release impact' section")
-    fields: dict[str, str] = {}
+        return None
+    pairs = []
     for line in sections[0]:
         match = FIELD_LINE.match(line)
         if not match:
             continue
         label = re.sub(r"[*_]", "", match.group(1)).strip()
-        if not label:
-            continue
-        key = label.casefold().replace(" ", "_")
+        if label:
+            value = normalize_value(re.sub(r"^[*_]+|[*_]+$", "", match.group(2)))
+            pairs.append((label.casefold().replace(" ", "_"), value))
+    return pairs
+
+
+def parse_release_impact(body: str) -> dict[str, str]:
+    pairs = release_impact_fields(body)
+    if pairs is None:
+        fail("PR body must contain exactly one '## Release impact' section")
+    fields: dict[str, str] = {}
+    for key, value in pairs:
         if key in fields:
             if key in RELEASE_FIELDS:
-                fail(f"release impact field {label} is duplicated")
+                fail(f"release impact field {key} is duplicated")
             continue
-        fields[key] = normalize_value(re.sub(r"^[*_]+|[*_]+$", "", match.group(2)))
+        fields[key] = value
     for key in ["impact", "breaking"]:
         if key in fields:
             fields[key] = fields[key].casefold()
@@ -331,7 +630,7 @@ MIGRATION_GUIDANCE = "_migration_guidance"
 
 def migration_guidance(body: str, migration: str) -> bool:
     if guidance_text(migration) == "see breaking change":
-        sections = markdown_section(body, "Breaking change", include_code=True, own_only=False)
+        sections = markdown_section(body, "Breaking change", fields=False, own_only=False)
         return len(sections) == 1 and substantive_text("\n".join(sections[0]), [])
     return not lacks_migration_guidance(migration)
 

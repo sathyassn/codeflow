@@ -150,6 +150,61 @@
       "name": "invalid_setext_heading",
       "valid": false,
       "body": "## Summary\n\nMake the command easier to use.\n\nRelease impact\n---\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_fields_as_indented_code_after_a_list_and_a_comment",
+      "valid": false,
+      "body": "Task: none: isolated review fixture\n\n## Summary\nAdds an item.\n\n## Changes\n- Add item.\n\n## Testing\n- Tests passed.\n\n## Reviews\nReview pending.\n\n## Release impact\n\n- example\n\n<!-- comment -->\n\n    Unit: codeflow\n    Impact: minor\n    Breaking: no\n    Rationale: Adds a function preserving all callers.\n    Migration: none\n    Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_fields_as_indented_code_after_a_three_digit_ordered_item",
+      "valid": false,
+      "body": "Task: none: isolated review fixture\n\n## Summary\nAdds an item.\n\n## Changes\n- Add item.\n\n## Testing\n- Tests passed.\n\n## Reviews\nReview pending.\n\n## Release impact\n\n123. example\n\n    Unit: codeflow\n    Impact: minor\n    Breaking: no\n    Rationale: Adds a function preserving all callers.\n    Migration: none\n    Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_field_on_a_line_a_comment_opens",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n<!-- note --> Impact: minor\n- Breaking: no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_field_after_a_multi_line_comment_closes",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n<!--\nnote\n--> Impact: minor\n- Breaking: no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_field_inside_an_html_block",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n<details>\n<summary>More</summary>\n- Impact: minor\n</details>\n\n- Breaking: no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_ordered_item_not_at_one_continuing_a_paragraph",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nUnit: codeflow\n10. Impact: minor\nBreaking: no\nRationale: Adds a function preserving all callers.\nMigration: none\nEvidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_bullet_left_of_the_item_content_continuing_it",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n   - Unit: codeflow\n    - Impact: minor\n   - Breaking: no\n   - Rationale: Adds a function preserving all callers.\n   - Migration: none\n   - Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_star_text_continuing_a_paragraph",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nUnit: codeflow\n    * Impact: minor\nBreaking: no\nRationale: Adds a function preserving all callers.\nMigration: none\nEvidence: cargo test passed.\n"
+    },
+    {
+      "name": "valid_fields_after_a_list_closed_by_a_comment",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- example\n\n<!-- comment -->\n\n- Impact: minor\n- Breaking: no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "valid_comments_inside_field_lines",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: minor <!-- chosen from the commits -->\n- Breaking: <!-- none found -->no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "valid_fields_with_blocks_nested_in_tight_items",
+      "valid": true,
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\n- Unit: codeflow\n  - Impact: minor\n    - Breaking: no\n- Rationale: Adds a function preserving all callers.\n  > quoted aside\n- Migration: none\n- Evidence: cargo test passed.\n"
     }
   ]
 }
