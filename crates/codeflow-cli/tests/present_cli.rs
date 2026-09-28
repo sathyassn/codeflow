@@ -1375,6 +1375,116 @@ fn form_fixtures_and_answer_lines_match_their_schemas() {
     );
 }
 
+fn post_answer(port: u16, authority: &str, cookie: &str, answer: &str) -> String {
+    http(
+        port,
+        &format!(
+            "POST /app/api/answers HTTP/1.1\r\nHost: {authority}\r\nOrigin: http://{authority}\r\nCookie: {cookie}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+            answer.len()
+        ),
+    )
+}
+
+fn response_json(response: &str) -> serde_json::Value {
+    serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+}
+
+/// TSK-119 end to end: the page the service renders carries each form's
+/// digest; answers posted to the real service are stored in the session's
+/// `responses.jsonl`, whose lines match the responses schema, and the v1
+/// `events.jsonl` and `feedback` stream stay as they were.
+#[test]
+fn answers_posted_to_the_service_are_stored_as_schema_lines() {
+    let fixture = setup_project();
+    let document = fixture.project.join("forms.json");
+    fs::write(&document, contract_fixture("documents/v2-forms.json")).unwrap();
+    let (session_id, opened) = open_no_launch(&fixture, &document);
+    let (port, authority, cookie) = bootstrap_cookie(&opened);
+    let page = application_page(port, &authority, &cookie);
+    let digest = |form: &str| {
+        let at = page
+            .find(&format!("data-cf-form=\"{form}\""))
+            .unwrap_or_else(|| panic!("no form {form} on the page"));
+        between(&page[at..], "data-cf-form-digest=\"", "\"").to_string()
+    };
+    let events_before = fs::read(session_dir(&fixture, &session_id).join("events.jsonl")).unwrap();
+    let answer = format!(
+        r#"{{"request_id":"3f2a0c11-0000-4000-8000-0000000000c1","session_id":"{session_id}","revision":1,"form_id":"store-choice","form_digest":"{}","outcome":"submit","values":{{"home":"local","keep-days":30,"channels":["rail"],"share":false}},"rationales":{{"home":"Answers can hold private text."}}}}"#,
+        digest("store-choice")
+    );
+    let stored = post_answer(port, &authority, &cookie, &answer);
+    assert!(stored.starts_with("HTTP/1.1 200 "), "{stored}");
+    let receipt = response_json(&stored);
+    assert_eq!(receipt["state"], "stored");
+    let amendment = format!(
+        r#"{{"request_id":"3f2a0c11-0000-4000-8000-0000000000c2","session_id":"{session_id}","revision":1,"form_id":"store-choice","form_digest":"{}","outcome":"submit","values":{{"home":"repo","keep-days":7}},"rationales":{{}},"amends":"{}"}}"#,
+        digest("store-choice"),
+        receipt["answer_id"].as_str().unwrap()
+    );
+    assert!(post_answer(port, &authority, &cookie, &amendment).starts_with("HTTP/1.1 200 "));
+    let decision = format!(
+        r#"{{"request_id":"3f2a0c11-0000-4000-8000-0000000000c3","session_id":"{session_id}","revision":1,"form_id":"d-scope","form_digest":"{}","outcome":"decline","values":{{}},"rationales":{{}},"reason":"Not my call."}}"#,
+        digest("d-scope")
+    );
+    assert!(post_answer(port, &authority, &cookie, &decision).starts_with("HTTP/1.1 200 "));
+    let refused = post_answer(
+        port,
+        &authority,
+        &cookie,
+        &answer.replace("\"keep-days\":30", "\"keep-days\":0"),
+    );
+    assert!(
+        refused.starts_with("HTTP/1.1 409 "),
+        "the reused request id: {refused}"
+    );
+
+    let directory = session_dir(&fixture, &session_id);
+    let ledger = fs::read_to_string(directory.join("responses.jsonl")).unwrap();
+    let registry = schema_registry();
+    let lines: Vec<serde_json::Value> = ledger
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 3);
+    for line in &lines {
+        assert_eq!(
+            registry.errors("urn:codeflow:schema:present:session-responses:1", line),
+            Vec::<String>::new(),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["answer", "amendment", "answer"]
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(directory.join("responses.jsonl"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    assert_eq!(
+        fs::read(directory.join("events.jsonl")).unwrap(),
+        events_before
+    );
+    let feedback = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "feedback", &session_id],
+    ));
+    assert!(
+        feedback.trim().is_empty(),
+        "answers are not v1 feedback: {feedback}"
+    );
+    close_and_clear(&fixture, &session_id);
+}
+
 #[test]
 fn a_v2_session_opens_renders_framing_and_prints_history_v2() {
     let fixture = setup_project();

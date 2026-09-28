@@ -284,6 +284,7 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         .route("/app/", get(application))
         .route("/app/assets/{*path}", get(asset))
         .route("/app/api/reviews", post(submit_review))
+        .route("/app/api/answers", post(submit_answer))
         .route("/app/api/events/poll", post(poll_events))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(limits::MAX_FEEDBACK_BYTES))
@@ -693,6 +694,67 @@ async fn submit_review(
         }) => typed_error(review_status(code), code, &message, &details),
         Err(error) => plain(StatusCode::BAD_REQUEST, &error.to_string()),
     }
+}
+
+/// `POST /app/api/answers` (SPC-014 B6, I3, I4): the page's answer to a
+/// form or v2 decision. The body is read raw, so the 64 KiB bound answers
+/// with the typed `answer_too_large` before any field is looked at, and the
+/// payload digest is taken over the bytes as received.
+async fn submit_answer(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response<Body> {
+    if let Err(response) = require_application_request(&state, &headers, true) {
+        return response;
+    }
+    let Ok(bytes) = axum::body::to_bytes(body, limits::MAX_ANSWER_REQUEST_BYTES + 1).await else {
+        return answer_too_large();
+    };
+    if bytes.len() > limits::MAX_ANSWER_REQUEST_BYTES {
+        return answer_too_large();
+    }
+    match state.store.submit_answer(state.session_id, &bytes) {
+        Ok(receipt) => {
+            state.last_activity.store(now_unix(), Ordering::Release);
+            let body = serde_json::to_vec(&receipt).unwrap_or_else(|_| b"{}".to_vec());
+            response_with_headers(
+                StatusCode::OK,
+                Body::from(body),
+                &[
+                    (header::CONTENT_TYPE, "application/json"),
+                    (header::CACHE_CONTROL, "no-store"),
+                    (HeaderName::from_static("x-content-type-options"), "nosniff"),
+                ],
+            )
+        }
+        Err(PresentError::SessionClosed(_)) => typed_error(
+            StatusCode::GONE,
+            "session_closed",
+            "session is closed",
+            &serde_json::json!({}),
+        ),
+        Err(PresentError::Review {
+            code,
+            message,
+            details,
+        }) => typed_error(review_status(code), code, &message, &details),
+        // Not a refusal of the answer: the store could not take it. The
+        // page keeps the draft and resends the same request.
+        Err(error) => plain(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("the answer was not stored: {error}"),
+        ),
+    }
+}
+
+fn answer_too_large() -> Response<Body> {
+    typed_error(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "answer_too_large",
+        "the answer request exceeds 64 KiB",
+        &serde_json::json!({ "limit_bytes": limits::MAX_ANSWER_REQUEST_BYTES }),
+    )
 }
 
 /// The HTTP status of a typed refusal (SPC-014 I3).
@@ -1244,21 +1306,23 @@ mod tests {
     }
 
     fn app_state() -> (tempfile::TempDir, AppState) {
+        app_state_with(ParsedDocument::Supported(PresentationDocument {
+            summary: None,
+            schema_version: 1,
+            title: "Review".to_string(),
+            language: None,
+            provenance: Provenance::default(),
+            blocks: vec![Block::Narrative {
+                id: "intro".to_string(),
+                markdown: "Hello".to_string(),
+            }],
+        }))
+    }
+
+    fn app_state_with(document: ParsedDocument) -> (tempfile::TempDir, AppState) {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::at_root(temp.path().join("project"), "key".to_string()).unwrap();
-        let session = store
-            .create(ParsedDocument::Supported(PresentationDocument {
-                summary: None,
-                schema_version: 1,
-                title: "Review".to_string(),
-                language: None,
-                provenance: Provenance::default(),
-                blocks: vec![Block::Narrative {
-                    id: "intro".to_string(),
-                    markdown: "Hello".to_string(),
-                }],
-            }))
-            .unwrap();
+        let session = store.create(document).unwrap();
         let runtime = store.runtime_dir(session.id).unwrap();
         let control = runtime.join("control");
         crate::state::create_private_dir_all(&control).unwrap();
@@ -1313,6 +1377,260 @@ mod tests {
             );
         }
         headers
+    }
+
+    /// The answer as the page sends it for `store-choice` of the forms
+    /// fixture, with a body change applied.
+    fn answer_body(state: &AppState, change: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+        let crate::state::RevisionContent::Supported { document } = state
+            .store
+            .current_revision(state.session_id)
+            .unwrap()
+            .content
+        else {
+            unreachable!()
+        };
+        let form = document
+            .walk()
+            .into_iter()
+            .find(|block| block.id() == "store-choice")
+            .unwrap();
+        let mut body = serde_json::json!({
+            "request_id": Uuid::new_v4(),
+            "session_id": state.session_id,
+            "revision": state.store.load(state.session_id).unwrap().current_revision,
+            "form_id": "store-choice",
+            "form_digest": crate::state::block_digest(form),
+            "outcome": "submit",
+            "values": { "home": "local", "keep-days": 30 },
+            "rationales": { "home": "Answers can hold private text." },
+        });
+        change(&mut body);
+        serde_json::to_vec(&body).unwrap()
+    }
+
+    async fn post_answer(
+        state: &AppState,
+        headers: HeaderMap,
+        body: Vec<u8>,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = submit_answer(State(state.clone()), headers, Body::from(body)).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into()));
+        (status, value)
+    }
+
+    fn ledger_bytes(state: &AppState) -> Option<Vec<u8>> {
+        std::fs::read(
+            state
+                .store
+                .session_dir(state.session_id)
+                .join(crate::responses::RESPONSES_FILE),
+        )
+        .ok()
+    }
+
+    /// AC-2, AC-3, AC-4 at the route: a stored answer gets a receipt, the
+    /// same request replays it after a lost response, and each refusal has
+    /// its I3 status and code and leaves the ledger unchanged.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn answers_route_stores_replays_and_refuses_with_typed_errors() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+
+        let body = answer_body(&state, |_| {});
+        let (status, receipt) = post_answer(&state, headers.clone(), body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        assert_eq!(receipt["state"], "stored");
+        assert_eq!(receipt["replayed"], false);
+        assert_eq!(receipt["sequence"], 1);
+        let stored = ledger_bytes(&state).unwrap();
+        let line: serde_json::Value =
+            serde_json::from_slice(stored.strip_suffix(b"\n").unwrap()).unwrap();
+        assert_eq!(line["actor"], "operator");
+        assert_eq!(line["created_at_unix"], receipt["stored_at_unix"]);
+        assert_eq!(line["payload_digest"], crate::form::sha256_hex(&body));
+
+        // The first response was lost; the page resends the same bytes.
+        let (status, replay) = post_answer(&state, headers.clone(), body.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["answer_id"], receipt["answer_id"]);
+        assert_eq!(ledger_bytes(&state).unwrap(), stored);
+
+        let request_id = receipt["request_id"].clone();
+        let reused = answer_body(&state, |body| {
+            body["request_id"] = request_id;
+            body["values"]["keep-days"] = 7.into();
+        });
+        let too_large = answer_body(&state, |body| {
+            body["values"]["notes"] = "x".repeat(70_000).into();
+        });
+        let mut one_over = answer_body(&state, |_| {});
+        one_over.resize(limits::MAX_ANSWER_REQUEST_BYTES + 1, b' ');
+        let cases: Vec<(&str, Vec<u8>, StatusCode, &str)> = vec![
+            (
+                "reused request id",
+                reused,
+                StatusCode::CONFLICT,
+                "request_id_conflict",
+            ),
+            (
+                "malformed JSON",
+                b"{\"request_id\":".to_vec(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "an actor from the page",
+                answer_body(&state, |body| body["actor"] = "agent".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "a time from the page",
+                answer_body(&state, |body| body["created_at_unix"] = 1.into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "a missing required field",
+                answer_body(&state, |body| {
+                    body["values"].as_object_mut().unwrap().remove("keep-days");
+                }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "another session",
+                answer_body(&state, |body| {
+                    body["session_id"] = serde_json::json!(Uuid::new_v4());
+                }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "a wrong digest",
+                answer_body(&state, |body| body["form_digest"] = "0".repeat(64).into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "form_digest_mismatch",
+            ),
+            (
+                "an unknown form",
+                answer_body(&state, |body| body["form_id"] = "nope".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unknown_form",
+            ),
+            (
+                "an unknown amendment",
+                answer_body(&state, |body| {
+                    body["amends"] = serde_json::json!(Uuid::new_v4());
+                }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_amendment",
+            ),
+            (
+                "a body over 64 KiB",
+                too_large,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "answer_too_large",
+            ),
+        ];
+        for (name, body, expected_status, expected_code) in cases {
+            let (status, error) = post_answer(&state, headers.clone(), body).await;
+            assert_eq!(
+                (status, error["error"].as_str()),
+                (expected_status, Some(expected_code)),
+                "{name}: {error}"
+            );
+            assert!(error["message"].is_string(), "{name}");
+            assert!(error["details"].is_object(), "{name}");
+            assert_eq!(
+                ledger_bytes(&state).unwrap(),
+                stored,
+                "{name}: ledger changed"
+            );
+        }
+        // Exactly 64 KiB is inside the bound: trailing whitespace keeps the
+        // JSON valid and the answer stores.
+        let mut at_limit = answer_body(&state, |_| {});
+        at_limit.resize(limits::MAX_ANSWER_REQUEST_BYTES, b' ');
+        let (status, at_limit_receipt) = post_answer(&state, headers.clone(), at_limit).await;
+        assert_eq!(status, StatusCode::OK, "{at_limit_receipt}");
+        assert_eq!(at_limit_receipt["sequence"], 2);
+        let stored = ledger_bytes(&state).unwrap();
+        let (_, missing) = post_answer(
+            &state,
+            headers.clone(),
+            answer_body(&state, |body| {
+                body["values"].as_object_mut().unwrap().remove("keep-days");
+            }),
+        )
+        .await;
+        assert_eq!(
+            missing["details"]["fields"],
+            serde_json::json!([{ "field": "keep-days", "code": "required" }])
+        );
+
+        // The v1 request checks hold: marker, origin, cookie, content type.
+        for (header_name, value) in [
+            (HeaderName::from_static("x-cf-present"), None),
+            (header::ORIGIN, Some("http://127.0.0.1:1")),
+            (header::COOKIE, None),
+            (header::CONTENT_TYPE, Some("text/plain")),
+        ] {
+            let mut changed = headers.clone();
+            match value {
+                Some(value) => {
+                    changed.insert(header_name.clone(), HeaderValue::from_static(value));
+                }
+                None => {
+                    changed.remove(&header_name);
+                }
+            }
+            let (status, _) = post_answer(&state, changed, answer_body(&state, |_| {})).await;
+            assert!(status.is_client_error(), "{header_name}: {status}");
+            assert_eq!(ledger_bytes(&state).unwrap(), stored, "{header_name}");
+        }
+
+        // A newer revision: the old one is stale, with what the page needs
+        // to confirm the answer against the current revision.
+        let older_revision = answer_body(&state, |_| {});
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(&forms).unwrap(),
+            )
+            .unwrap();
+        let (status, error) = post_answer(&state, headers.clone(), older_revision).await;
+        assert_eq!(
+            (status, error["error"].as_str()),
+            (StatusCode::CONFLICT, Some("stale_revision"))
+        );
+        assert_eq!(error["details"]["current_revision"], 2);
+        assert_eq!(error["details"]["form_present"], true);
+        assert!(error["details"]["current_form_digest"].is_string());
+        // The replay of the stored request still answers after the update.
+        let (status, replay) = post_answer(&state, headers.clone(), body).await;
+        assert_eq!(
+            (status, replay["replayed"].as_bool()),
+            (StatusCode::OK, Some(true))
+        );
+
+        state.store.close(state.session_id).unwrap();
+        let (status, error) = post_answer(&state, headers, answer_body(&state, |_| {})).await;
+        assert_eq!(
+            (status, error["error"].as_str()),
+            (StatusCode::GONE, Some("session_closed"))
+        );
+        assert_eq!(ledger_bytes(&state).unwrap(), stored);
     }
 
     #[test]
