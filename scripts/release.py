@@ -744,54 +744,6 @@ def entry_extent(text: str) -> str:
     return "\n".join(kept).strip()
 
 
-# A code span: a backtick run, its content, and the same run again.
-CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
-
-
-def prose_only(text: str) -> bool:
-    """Whether an entry is paragraphs of prose, where line breaks and spacing
-    never change what renders: no nested block (list, quote, heading, fence,
-    rule, table, marker), no indented code and no hard line break."""
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if line.endswith(("  ", "\\")) and stripped:
-            return False
-        if index == 0 or not stripped:
-            continue
-        if BLOCK_START.match(stripped) or stripped.startswith("|"):
-            return False
-        indent = len(line) - len(line.lstrip())
-        if indent >= 6 and not lines[index - 1].strip():
-            return False
-    return True
-
-
-def prose_words(paragraph: str) -> str:
-    """A prose paragraph with spacing and line breaks collapsed outside code
-    spans. Inside a code span only a line break with its indentation is
-    spacing; every other space is literal text."""
-    pieces, last = [], 0
-    for span in CODE_SPAN.finditer(paragraph):
-        pieces.append(re.sub(r"\s+", " ", paragraph[last : span.start()]))
-        pieces.append(span.group(1) + re.sub(r"\n[ \t]*", " ", span.group(2)) + span.group(1))
-        last = span.end()
-    pieces.append(re.sub(r"\s+", " ", paragraph[last:]))
-    return "".join(pieces).strip()
-
-
-def entry_words(text: str) -> str:
-    """The form in which two versions of an entry compare equal exactly when
-    one only rewraps the other's prose (R-92). A prose entry keeps its
-    paragraphs and code spans and loses its line breaks; any other entry, one
-    holding code or nested structure, is compared byte for byte, so a change
-    of indentation there is an edit."""
-    if not prose_only(text):
-        return text
-    paragraphs = re.split(r"\n[ \t]*\n", text.strip())
-    return "\n\n".join(prose_words(paragraph) for paragraph in paragraphs)
-
-
 def pending_items(section: ChangelogSection, config: dict[str, Any]) -> dict[str, PendingItem]:
     items: dict[str, PendingItem] = {}
     for impact, text in annotated_entries(section, config):
@@ -1110,7 +1062,7 @@ def check_pr(args: argparse.Namespace) -> None:
         fail(
             f"declared impact {fields['impact']} must equal the impact of the pending entries "
             f"this PR adds or edits ({assessed_impact}); an edit under an existing label is "
-            "assessed at its impact, and only rewrapping is not an edit"
+            "assessed at its impact, and any change to its text is an edit"
         )
     if assessed_impact == "major" and fields[MIGRATION_GUIDANCE] != "yes":
         fail("an added or edited major entry requires migration guidance")
@@ -1210,8 +1162,9 @@ def entry_change(
 ) -> EntryChange:
     """Pending entries matched by identity (R-92): a label new to the section
     is an addition, a label gone is a withdrawal, and a changed body or impact
-    under a kept label is an edit of that item. Only rewrapping prose is no
-    change (see `entry_words`)."""
+    under a kept label is an edit of that item. Entries compare byte for byte:
+    no whitespace change is treated as neutral, since in code and nested
+    Markdown it carries meaning."""
     added = [
         item
         for key, item in after.items()
@@ -1222,7 +1175,7 @@ def entry_change(
         (before[key], item)
         for key, item in after.items()
         if key in before
-        and (before[key].impact, entry_words(before[key].text)) != (item.impact, entry_words(item.text))
+        and (before[key].impact, before[key].text) != (item.impact, item.text)
     ]
     return EntryChange(added, removed, edited)
 

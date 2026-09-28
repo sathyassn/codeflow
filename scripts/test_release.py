@@ -1478,7 +1478,7 @@ class EntryEditTests(unittest.TestCase):
         self.repo.pending("2.1.0", [("minor", "Add a flag", "to the command and its alias")])
         self.repo.write("product.txt", "alias\n")
         head = self.repo.commit("chore: wire the alias")
-        with self.assertRaisesRegex(release.ReleaseError, "only rewrapping is not an edit"):
+        with self.assertRaisesRegex(release.ReleaseError, "any change to its text is an edit"):
             self.check(base, head, self.repo.body("none"))
         result = self.check(base, head, self.repo.body("minor"))
         self.assertEqual((result["added"], result["edited"]), ([], ["Add a flag."]))
@@ -1497,16 +1497,17 @@ class EntryEditTests(unittest.TestCase):
         result = self.check(base, head, self.repo.body("minor"))
         self.assertEqual(result["edited"], ["Publication."])
 
-    def test_rewrapping_an_entry_is_not_an_edit(self) -> None:
-        # The wording change the checker can prove: every word, the label and
-        # the impact stay; only line breaks and spacing move.
+    def test_rewrapping_an_entry_is_an_edit(self) -> None:
+        # F4: no whitespace change is neutral. Rewrapping is charged like any
+        # other edit of the entry, at its impact.
         self.repo.pending("2.1.0", [("minor", "Add a flag", "to the run command and its alias")])
         base = self.repo.commit("feat: add a flag")
         text = (self.repo.root / "CHANGELOG.md").read_text()
         self.repo.write("CHANGELOG.md", text.replace("the run command and", "the run\n  command  and"))
         head = self.repo.commit("docs: rewrap the entry")
-        result = self.check(base, head, self.repo.body("none"))
-        self.assertEqual((result["added"], result["edited"], result["withdrawn"]), ([], [], []))
+        with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(minor\)"):
+            self.check(base, head, self.repo.body("none"))
+        self.assertEqual(self.check(base, head, self.repo.body("minor"))["edited"], ["Add a flag."])
 
     def test_code_indentation_is_never_rewrapping(self) -> None:
         # F4 residual (Codex round 2 probe): the same words, but `publish()`
@@ -1522,25 +1523,38 @@ class EntryEditTests(unittest.TestCase):
             self.check(base, head, self.repo.body("none"))
         self.assertEqual(self.check(base, head, self.repo.body("minor"))["edited"], ["Publication."])
 
-    def test_only_prose_rewrapping_is_not_an_edit(self) -> None:
-        entry = "- **A.** run `x  y` now"
-        same = {
-            "- **A.** run\n  `x  y`   now",
-            "- **A.** run `x\n  y` now".replace("`x\n  y`", "`x  y`"),
+    def test_whitespace_that_changes_meaning_is_an_edit(self) -> None:
+        # F4, Codex rounds 2 and 3: each change keeps the words and alters
+        # what renders or runs. Every one is an edit at the entry's impact.
+        fence = "```"
+        cases = {
+            "code span spacing": ('Set `token = "human approved"`.', 'Set `token = "human\n    approved"`.'),
+            "fenced code": (
+                f"Run:\n  {fence}python\n  if approved:\n      audit()\n      publish()\n  {fence}",
+                f"Run:\n  {fence}python\n  if approved:\n      audit()\n  publish()\n  {fence}",
+            ),
+            "html pre block": (
+                "Run:\n\n  <pre>\n  if approved:\n      publish()\n  </pre>",
+                "Run:\n\n  <pre>\n  if approved:\n  publish()\n  </pre>",
+            ),
+            "pipe table": ("Modes:\n\n  scope | result\n  --- | ---\n  a | b", "Modes:\n\n  scope | result --- | --- a | b"),
         }
-        different = {
-            "- **A.** run `x y` now": "spacing inside a code span",
-            "- **A.** run\n\n  `x  y` now": "a new paragraph",
-            "- **A.** run\n  - `x  y` now": "a nested list",
-            "- **A.** run  \n  `x  y` now": "a hard line break",
-        }
-        for text in same:
-            with self.subTest(text=text):
-                self.assertEqual(release.entry_words(text), release.entry_words(entry))
-        for text, why in different.items():
+        for why, (before, after) in cases.items():
             with self.subTest(why=why):
-                self.assertNotEqual(release.entry_words(text), release.entry_words(entry))
-        self.assertEqual(release.entry_words("- **A.** `a\n  b`"), release.entry_words("- **A.** `a b`"))
+                repo = Repository()
+                try:
+                    repo.pending("2.1.0", [("minor", "Publication", before)])
+                    base = repo.commit("feat: publication")
+                    repo.pending("2.1.0", [("minor", "Publication", after)])
+                    head = repo.commit("docs: reformat the entry")
+                    self.repo, saved = repo, self.repo
+                    try:
+                        with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(minor\)"):
+                            self.check(base, head, repo.body("none"))
+                    finally:
+                        self.repo = saved
+                finally:
+                    repo.cleanup()
 
     def test_lazy_continuation_text_belongs_to_the_entry(self) -> None:
         # F3: an unindented line that continues the bullet's paragraph renders
@@ -1947,12 +1961,15 @@ class TypedRepairTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
             self.check(head)
 
-    def test_a_repair_may_rewrap_an_existing_entry(self) -> None:
+    def test_a_repair_cannot_rewrap_an_existing_entry(self) -> None:
+        # F4: a repair keeps every existing entry byte for byte. The one real
+        # repair on this line moves entries without touching their bytes.
         text = (self.repo.root / "CHANGELOG.md").read_text()
         self.repo.write("CHANGELOG.md", text.replace("- **Fix a crash.**", "- **Fix a\n  crash.**"))
         self.repo.write_stamps("2.0.1")
         head = self.repo.commit("chore(release): sync stamps")
-        self.assertEqual(self.check(head)["edited"], [])
+        with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
+            self.check(head)
 
 
 class PreflightTests(unittest.TestCase):
