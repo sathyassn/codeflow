@@ -495,14 +495,30 @@ const relationshipFields = [
   ["adrs", "decision"], ["related", "related"], ["superseded_by", "superseded_by"],
 ];
 
-export function extractRelationships(frontmatter, sourcePath = "frontmatter") {
-  return relationshipFields.flatMap(([field, kind]) => {
+// A record's depends_on entry is an id, or a research or decision input written
+// as a mapping whose `id` names it; validate --docs owns the other keys (kind,
+// pin), so they are not read here. Legacy `dependencies` is a task-record key:
+// it reads as depends_on only on a record whose id is a task id.
+const recordDependencyField = ["dependencies", "depends_on"];
+
+function dependencyTarget(item) {
+  return item !== null && typeof item === "object" && !Array.isArray(item) ? item.id : item;
+}
+
+export function extractRelationships(frontmatter, sourcePath = "frontmatter", { record = true } = {}) {
+  const task = record && typeof frontmatter.id === "string" && frontmatter.id.startsWith("TSK-") && strictId(frontmatter.id);
+  if (task && Object.hasOwn(frontmatter, "depends_on") && Object.hasOwn(frontmatter, "dependencies")) {
+    throw new Error(`${sourcePath}: declares both depends_on and legacy dependencies; keep only depends_on`);
+  }
+  const fields = task ? [...relationshipFields, recordDependencyField] : relationshipFields;
+  return fields.flatMap(([field, kind]) => {
     if (!Object.hasOwn(frontmatter, field)) return [];
     const value = frontmatter[field];
     if (value === null) return [];
     const values = Array.isArray(value) ? value : [value];
-    if (values.some((item) => typeof item !== "string" || !strictId(item))) throw new Error(`${sourcePath}: declared ${field} relationship is invalid`);
-    return values.map((target) => ({ type: kind, target }));
+    const targets = record && kind === "depends_on" && Array.isArray(value) ? values.map(dependencyTarget) : values;
+    if (targets.some((item) => typeof item !== "string" || !strictId(item))) throw new Error(`${sourcePath}: declared ${field} relationship is invalid`);
+    return targets.map((target) => ({ type: kind, target }));
   });
 }
 
@@ -510,10 +526,11 @@ export function extractPageRelationships(frontmatter, text, sourcePath) {
   const sourceId = typeof frontmatter.id === "string" && strictId(frontmatter.id) ? frontmatter.id : null;
   const relationships = extractRelationships(frontmatter, sourcePath).map((relationship) => ({ ...relationship, source_id: sourceId }));
   if (sourcePath !== "docs/capabilities.md") return relationships;
+  // Capability entries keep their own string-list schema (validate --docs).
   for (const block of yamlFences(text)) {
     const record = YAML.parse(block);
     if (record && typeof record === "object" && !Array.isArray(record) && strictId(record.id ?? "")) {
-      relationships.push(...extractRelationships(record, sourcePath).map((relationship) => ({ ...relationship, source_id: record.id })));
+      relationships.push(...extractRelationships(record, sourcePath, { record: false }).map((relationship) => ({ ...relationship, source_id: record.id })));
     }
   }
   return relationships;
