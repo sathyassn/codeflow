@@ -621,7 +621,8 @@ fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option
     }
     let note = match destination.advertised(root) {
         Advertised::Tips(tips) if !tips.is_empty() => {
-            return bounded_by(root, &r.local_sha, tips.iter())
+            let line = own_line_tip(root, r, destination);
+            return bounded_by(root, &r.local_sha, tips.iter(), line.as_deref())
                 .map(|base| RangeBase { base, note: None });
         }
         Advertised::Tips(_) => None,
@@ -674,10 +675,16 @@ fn existing_tip<'a>(root: &Path, r: &'a PushRef) -> Option<&'a str> {
 fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> RangeBase {
     let branch = r.remote_branch().unwrap_or_default();
     let old = &r.remote_sha;
+    let line = own_line_tip(root, r, destination);
     let (base, failed) = match destination.advertised(root) {
         Advertised::Tips(tips) => (
-            bounded_by(root, &r.local_sha, std::iter::once(old).chain(tips))
-                .unwrap_or_else(|| old.clone()),
+            bounded_by(
+                root,
+                &r.local_sha,
+                std::iter::once(old).chain(tips),
+                line.as_deref(),
+            )
+            .unwrap_or_else(|| old.clone()),
             None,
         ),
         Advertised::Failed(why) => (old.clone(), Some(why)),
@@ -714,13 +721,19 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
     RangeBase { base, note }
 }
 
-/// The base of the commits in `local_sha` not reachable from `known`: see
-/// [`boundary`]. `None` when git fails or no boundary exists (no shared
-/// history).
+/// The exclusive base of `local_sha` against the `known` commits the
+/// destination holds: the boundary of what is new. When several commits
+/// bound it, the newest of those on the pushed task's own integration line
+/// (`line`, its advertised tip) is the base: what the branch took from its
+/// line by a merge is the line's, already judged there, not the task's, so
+/// the range is the one its pull request into the line is judged on. The
+/// base is always a commit the destination holds, so nothing new is left
+/// out. Otherwise the first boundary is the base.
 fn bounded_by<'a>(
     root: &Path,
     local_sha: &str,
     known: impl Iterator<Item = &'a String>,
+    line: Option<&str>,
 ) -> Option<String> {
     let mut input = format!("{local_sha}\n");
     for sha in known {
@@ -729,7 +742,41 @@ fn bounded_by<'a>(
         input.push('\n');
     }
     let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
+    let bounds: Vec<&str> = listed.lines().filter_map(|l| l.strip_prefix('-')).collect();
+    if let (Some(line), [_, _, ..]) = (line, bounds.as_slice()) {
+        let on_line: Vec<&str> = bounds
+            .iter()
+            .copied()
+            .filter(|bound| git(root, &["merge-base", "--is-ancestor", bound, line]).is_some())
+            .collect();
+        if !on_line.is_empty() {
+            let mut args = vec!["merge-base", "--independent"];
+            args.extend(&on_line);
+            if let Some(newest) = git(root, &args) {
+                if let [only] = newest.split_whitespace().collect::<Vec<_>>().as_slice() {
+                    return Some((*only).to_string());
+                }
+            }
+        }
+    }
     boundary(&listed, local_sha, None).map(|found| found.base)
+}
+
+/// The advertised tip of the integration line the pushed branch's task
+/// declares, when the branch carries a task and the destination has that
+/// line.
+fn own_line_tip(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option<String> {
+    use codeflow_core::workgraph::{declared_work_target, task_id_from_branch};
+    let id = task_id_from_branch(root, r.remote_branch()?)?;
+    let target = declared_work_target(root, &id)?;
+    let Ok(Ok(asked)) = destination.answer(root) else {
+        return None;
+    };
+    asked
+        .heads
+        .iter()
+        .find(|(name, _)| *name == target)
+        .map(|(_, tip)| tip.to_string())
 }
 
 /// The base from `rev-list --boundary` output: its first boundary commit, or

@@ -992,6 +992,59 @@ fn pre_push_new(dir: &Path, url: &str, branch: &str, local: &str) -> (i32, Strin
     output(&child.wait_with_output().unwrap())
 }
 
+/// A task branch that merges its own line again after other work landed
+/// there pushes cleanly: what the faithful merges bring (another task's
+/// criteria amendment and completion) is the line's, not the task's, so the
+/// range starts at the newest line commit the destination holds, as its
+/// pull request does. The branch was published before the first merge, so
+/// the old head, the first merged line tip and the newest one all bound the
+/// push. A criteria edit made on the task branch itself is still refused.
+/// Both an update of the published branch and a first push are checked.
+#[test]
+fn a_task_branch_that_merges_its_line_is_judged_on_its_own_work() {
+    let fx = Fx::new(false);
+    let branch = "task/TSK-001-work";
+    fx.git(&["switch", "-q", "-C", branch, LINE_A]);
+    fx.write("src/one.rs", "// one\n");
+    let published = fx.commit("feat: build the work");
+    fx.git(&["push", "-q", "origin", branch]);
+
+    // The line moves; the task merges it, then works on.
+    fx.git(&["switch", "-q", "-C", "feat/line-work", LINE_A]);
+    fx.write("src/line.rs", "// line\n");
+    fx.commit("feat: line work");
+    fx.land(LINE_A, "feat/line-work");
+    fx.git(&["switch", "-q", branch]);
+    fx.merge(LINE_A);
+    fx.write("src/two.rs", "// two\n");
+    fx.commit("feat: more work");
+
+    // The line gains another task's criteria amendment and completion.
+    fx.amend_on_line(LINE_A, "TSK-003", STRONGER);
+    fx.build_and_complete(LINE_A, "TSK-003", "src/three.rs");
+    fx.land(LINE_A, "task/TSK-003-work");
+    fx.git(&["switch", "-q", branch]);
+    let merged = fx.merge(LINE_A);
+    let zeros = "0".repeat(40);
+    passes(
+        &fx.pre_push(branch, &merged, &published),
+        "an update after merging the line",
+    );
+    passes(
+        &fx.pre_push("task/TSK-001-again", &merged, &zeros),
+        "a first push after merging the line",
+    );
+
+    let current = std::fs::read_to_string(fx.root.join(path("TSK-001"))).unwrap();
+    fx.write(&path("TSK-001"), &current.replace(CRITERIA, LOOSER));
+    let edited = fx.commit("docs(records): loosen the criterion");
+    blocks(
+        &fx.pre_push(branch, &edited, &published),
+        "a criteria edit on the task branch",
+        &["work.criteria_frozen", "TSK-001"],
+    );
+}
+
 /// AC-5 (Codex round 4): a push of three branches asks the destination
 /// once. The hook reads one advertisement and hands it to each `codeflow
 /// ci` it runs, which does not ask again. A `git` shim on `PATH` counts the
