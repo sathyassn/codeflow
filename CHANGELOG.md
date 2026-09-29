@@ -242,6 +242,16 @@ publication date._
   raised pin has landed, naming the two-step order.
 
 <!-- codeflow:release-impact patch -->
+- **The Bitbucket template finds its destination without the commit
+  variable.** Atlassian does not list `BITBUCKET_PR_DESTINATION_COMMIT`,
+  and without it the step stopped at "no target commit". It now fetches
+  `BITBUCKET_PR_DESTINATION_BRANCH` from `origin` and judges by that
+  branch's current commit, failing with the branch's name when it cannot
+  fetch it. The template also records that Bitbucket runs `codeflow test`
+  and `validate --docs` on the merge of the destination into the source,
+  while `codeflow ci` judges `BITBUCKET_COMMIT`.
+
+<!-- codeflow:release-impact patch -->
 - **Commit subject separator.** The commit-msg hook and `codeflow ci` now
   require a blank line after the subject, since git reads a following line
   as part of the subject. Reword such commits before pushing them.
