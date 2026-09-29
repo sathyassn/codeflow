@@ -158,7 +158,6 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
 /// The range a pull request is judged on: the base as named and as a
 /// commit, and the head.
 pub(super) struct Range<'a> {
-    pub base_ref: &'a str,
     pub base: &'a str,
     pub head: &'a str,
     /// The branch the range lands on: `--into`, the host's pull request

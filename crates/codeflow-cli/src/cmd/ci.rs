@@ -519,11 +519,8 @@ fn work_checks<'a>(
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
 ) -> bool {
-    let base = base_candidates
-        .iter()
-        .find_map(|name| rev_parse(root, name).map(|sha| (name.as_str(), sha)));
-    let range_parts = base.as_ref().map(|(base_ref, base)| classification::Range {
-        base_ref,
+    let base = resolve_base(root, base_candidates);
+    let range_parts = base.as_deref().map(|base| classification::Range {
         base,
         head,
         target: line_target,
