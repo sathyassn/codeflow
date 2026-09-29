@@ -23,7 +23,9 @@
 //   from the service, never from browser storage, and a correction after
 //   it starts from them (TSK-176);
 // - a decline carries its reason, which the form shows read only once
-//   stored, after a reload too, and keeps in sight under Amend (TSK-176);
+//   stored, after a reload too; Amend on a decline corrects the decline
+//   with its reason as edited, and answering instead is a separate,
+//   explicit choice that sends nothing by itself (TSK-176);
 // - a session_closed refusal of an answer closes every form and the chrome,
 //   which drops the review draft; closure while answers are in flight stays
 //   closed when their replies arrive, stored or failed.
@@ -499,13 +501,37 @@ try {
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
     await page.getByTestId("toast").getByText(/Restored 1 unsent note/u).waitFor({ timeout: 20_000 });
-    // The reload shows the stored decline and its reason, read only; Amend
-    // keeps the reason in sight and editable, and a new choice starts there.
+    // The reload shows the stored decline and its reason, read only. Amend
+    // corrects the decline: the reason is editable and the main action sends
+    // it as a decline naming the original. Answering instead is its own
+    // button, which sends nothing and hides the reason.
     assert.equal((await stateOf(decision)).state, "stored", "reload: the stored decline is not shown");
     const declineReason = decision.locator("[data-cf-decline-reason]");
-    assert.deepEqual([await declineReason.isVisible(), await declineReason.isDisabled(), await declineReason.inputValue()], [true, true, "Not my call."], "reload: the sent decline reason is not shown read only");
+    const reasonShown = async () => [await declineReason.isVisible(), await declineReason.isDisabled(), await declineReason.inputValue()];
+    const actions = () => decision.locator("[data-cf-form-action]:visible").evaluateAll((buttons) => buttons.map((button) => [button.dataset.cfFormAction, button.textContent, button.classList.contains("cf-form__submit")]));
+    assert.deepEqual(await reasonShown(), [true, true, "Not my call."], "reload: the sent decline reason is not shown read only");
+    const declined = (await ledger()).at(-1);
     await decision.locator("[data-cf-form-action='amend']").click();
-    assert.deepEqual([await declineReason.isVisible(), await declineReason.isDisabled(), await declineReason.inputValue()], [true, false, "Not my call."], "reload, Amend: the sent decline reason is not offered for correction");
+    assert.deepEqual(await reasonShown(), [true, false, "Not my call."], "reload, Amend: the sent decline reason is not offered for correction");
+    assert.deepEqual(await actions(), [["submit", "Answer instead", false], ["decline", "Send corrected decline", true]], "reload, Amend: the actions of a decline correction");
+    await declineReason.fill("Need the evidence first");
+    await decision.locator("[data-cf-form-action='decline']").click();
+    await waitState(decision, "stored");
+    const reasonOnly = (await ledger()).at(-1);
+    assert.deepEqual(
+      [reasonOnly.event, reasonOnly.form_id, reasonOnly.outcome, reasonOnly.reason, reasonOnly.values, reasonOnly.amends],
+      ["amendment", "d-scope", "decline", "Need the evidence first", {}, declined.answer_id],
+      "reload, Amend: the edited decline reason was not sent as a corrected decline",
+    );
+    assert.deepEqual(await reasonShown(), [true, true, "Need the evidence first"], "corrected decline: the sent reason is not shown read only");
+    // Answering instead is explicit: it sends nothing, hides the reason and
+    // restores the ordinary correction.
+    const count = sent.length;
+    await decision.locator("[data-cf-form-action='amend']").click();
+    await decision.locator("[data-cf-form-action='submit']").click();
+    assert.equal(sent.length, count, "Answer instead: a request was sent");
+    assert.equal(await declineReason.isVisible(), false, "Answer instead: the discarded reason is still editable");
+    assert.deepEqual(await actions(), [["submit", "Send correction", true], ["decline", "Decline to answer", false], ["cancel", "Dismiss for now", false]], "Answer instead: the actions of an answer correction");
     await decision.locator("input[value='a']").check();
     await page.route(`**${ANSWERS}`, (route) => route.fulfill({
       status: 410,
@@ -518,6 +544,7 @@ try {
     await page.getByTestId("toast").getByText(/This review session is closed\./u).waitFor({ timeout: 20_000 });
     await page.waitForFunction((key) => sessionStorage.getItem(key) === null, draftKey, { timeout: 10_000 });
     assert.ok(await field("keep-days").locator("input").isDisabled(), "answer 410: a sibling form is editable");
+    passed.push("decline correction: after a reload, Amend on a decline sends the edited reason as a corrected decline naming the original, and Answer instead sends nothing and hides the reason");
     passed.push("answer 410: a session_closed refusal closes the form, its sibling and the chrome, and drops the restored review draft");
   }
 
@@ -531,6 +558,7 @@ try {
     await field("channels").locator("input[value='rail']").check();
     await field("contact").locator("input").fill("reviewer@example.org");
     await decision.locator("[data-cf-form-action='amend']").click();
+    await decision.locator("[data-cf-form-action='submit']").click();
     await decision.locator("input[value='a']").check();
     const before = (await ledger()).length;
     let release;

@@ -46,6 +46,7 @@ const ANSWERS_PATH = "/app/api/answers";
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const JSON_NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/u;
 const CONTROLS = "input, textarea, select, button";
+const AMEND_TEXT = "Correcting the stored answer. Sending adds a correction; the original stays readable.";
 const CLOSED_TEXT = "This session is closed. Your draft is kept here; nothing can be sent.";
 
 interface Receipt {
@@ -250,6 +251,13 @@ class FormController {
     if (this.closed || this.article.closest("[data-cf-commenting='true']")) return;
     switch (action) {
       case "submit":
+        // While declining, this is Answer instead: an explicit switch back to
+        // answering, which sends nothing and puts the reason out of reach.
+        if (this.declining) {
+          this.declining = false;
+          this.render(this.amending ? AMEND_TEXT : "", "editing");
+          return;
+        }
         void this.send("submit");
         return;
       case "decline":
@@ -271,9 +279,13 @@ class FormController {
         if (this.stale && this.sent) void this.send(this.sent.outcome, this.stale);
         return;
       case "amend":
+        // A correction keeps the stored answer's outcome: a decline is
+        // corrected as a decline, with its reason as the reviewer edits it.
         this.amending = true;
-        this.declining = false;
-        this.render("Correcting the stored answer. Sending adds a correction; the original stays readable.", "editing");
+        this.declining = this.declined;
+        this.render(this.declining
+          ? "Correcting the stored decline. Edit the reason and send the corrected decline, or choose Answer instead. The original stays readable."
+          : AMEND_TEXT, "editing");
         return;
     }
   }
@@ -595,7 +607,7 @@ class FormController {
     this.article.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-cf-value], [data-cf-rationale-input], [data-cf-decline-reason]")
       .forEach((control) => { control.disabled = !editable; });
     const show: Record<Action, boolean> = {
-      submit: editable && !this.stale && !this.declining,
+      submit: editable && !this.stale,
       decline: editable && !this.stale,
       cancel: editable && !this.stale && !this.declining,
       resend: state === "failed" && this.sent !== null,
@@ -606,11 +618,20 @@ class FormController {
       button.hidden = !show[action];
       button.disabled = state === "submitting";
     });
+    // The action that sends is the main one: the decline while declining,
+    // with Answer instead beside it, and otherwise the answer. The reason is
+    // in reach only while declining; a stored decline shows it read only.
     const decline = this.buttons.get("decline");
-    if (decline) decline.textContent = this.declining ? "Send decline" : "Decline to answer";
+    if (decline) {
+      decline.textContent = this.declining ? (this.amending ? "Send corrected decline" : "Send decline") : "Decline to answer";
+      decline.classList.toggle("cf-form__submit", this.declining);
+    }
     const submit = this.buttons.get("submit");
-    if (submit) submit.textContent = this.amending ? "Send correction" : "Submit answer";
-    if (this.declineArea) this.declineArea.hidden = !((this.declining && editable) || this.declined);
+    if (submit) {
+      submit.textContent = this.declining ? "Answer instead" : this.amending ? "Send correction" : "Submit answer";
+      submit.classList.toggle("cf-form__submit", !this.declining);
+    }
+    if (this.declineArea) this.declineArea.hidden = !(this.declining || (this.declined && !editable));
   }
 }
 
