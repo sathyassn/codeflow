@@ -5,10 +5,10 @@
     "family": "layering",
     "binding": "authored",
     "question": "Which layer holds which station of the traceability spine?",
-    "idea": "The spine runs from a capability through work and decisions to the ledger, four of the six layers hold its stations, and the pull request it crosses is held by none.",
+    "idea": "The spine runs from a capability through a work item and an ADR or spec to the ledger, four of the six layers hold its stations, and the pull request it crosses is held by none.",
     "title": "The six knowledge layers along the traceability spine",
     "kicker": "The knowledge model",
-    "description": "The axis is the five stations of the traceability spine: capability, epic and task, decision and spec, pull request, ledger. WHAT holds capability, WORK holds epic and task and also reaches decision and spec because specs live in project-management, HOW holds decision and spec, and TRACE holds the ledger. The spine enters each of those four layers at a disc and runs left to right in the source's order; it crosses the pull request station between HOW and TRACE, where no layer holds it. WHY and RULES hold no station and draw no bar. Each layer's pace is printed beside its name: WHY and RULES rarely, WHAT every ship, WORK daily, HOW per decision, TRACE automatically.",
+    "description": "The axis is the five stations of the traceability spine: capability, work item, ADR or spec, pull request, ledger. WHAT holds capability, WORK holds the work item and also reaches ADR or spec because specs live in project-management, HOW holds ADR or spec, and TRACE holds the ledger. The spine enters each of those four layers at a disc and runs left to right in the source's order; it crosses the pull request station between HOW and TRACE, where no layer holds it. WHY and RULES hold no station and draw no bar. Beside its name, WHY is marked human-owned and WHAT is marked as updated every ship.",
     "caption": "The spine runs through WHAT, WORK, HOW and TRACE in that order, and the pull request it crosses on the way to the ledger is held by no layer.",
     "states": [
       {
@@ -29,82 +29,92 @@
     ],
     "facts": [
       {
-        "claim": "the product layer changes rarely",
-        "source": "AGENTS.md#project-organization--six-layers",
-        "derive": "the WHY row",
+        "claim": "the product layer is human-owned",
+        "source": "AGENTS.md#where-things-live",
+        "derive": "the Why row",
         "check": {
           "kind": "contains",
-          "text": "`docs/product.md` | rarely; human-owned"
+          "text": "`docs/product.md` (human-owned)"
+        },
+        "value": true
+      },
+      {
+        "claim": "the rules live in AGENTS.md, .codeflow/rules/ and the skills",
+        "source": "AGENTS.md#where-things-live",
+        "derive": "the Rules row",
+        "check": {
+          "kind": "contains",
+          "text": "this map, `.codeflow/rules/` and the skills"
         },
         "value": true
       },
       {
         "claim": "the capability registry changes every ship",
-        "source": "AGENTS.md#project-organization--six-layers",
-        "derive": "the WHAT row",
+        "source": "AGENTS.md#where-things-live",
+        "derive": "the What row",
         "check": {
           "kind": "contains",
-          "text": "(CAP-### registry) | every ship"
+          "text": "`docs/capabilities.md` (CAP registry, every ship)"
         },
         "value": true
       },
       {
-        "claim": "architecture and ADRs change per decision",
-        "source": "AGENTS.md#project-organization--six-layers",
-        "derive": "the HOW row",
+        "claim": "planned and active work lives in project-management/",
+        "source": "AGENTS.md#where-things-live",
+        "derive": "the work sentence",
         "check": {
           "kind": "contains",
-          "text": "(ADRs) | per decision"
-        },
-        "value": true
-      },
-      {
-        "claim": "planned work changes daily",
-        "source": "AGENTS.md#project-organization--six-layers",
-        "derive": "the WORK row",
-        "check": {
-          "kind": "contains",
-          "text": "allocated by the CLI) | daily"
-        },
-        "value": true
-      },
-      {
-        "claim": "the ledger changes automatically",
-        "source": "AGENTS.md#project-organization--six-layers",
-        "derive": "the TRACE row",
-        "check": {
-          "kind": "contains",
-          "text": "ledger + `codeflow recall` | automatic"
-        },
-        "value": true
-      },
-      {
-        "claim": "the spine runs from capability through work and decisions to the ledger",
-        "source": "AGENTS.md#project-organization--six-layers",
-        "derive": "the spine sentence",
-        "check": {
-          "kind": "contains",
-          "text": "The traceability spine runs downward: capability"
-        },
-        "value": true
-      },
-      {
-        "claim": "the spine passes the pull request between the decision and the ledger",
-        "source": "AGENTS.md#project-organization--six-layers",
-        "derive": "the spine sentence",
-        "check": {
-          "kind": "contains",
-          "text": "ADR/spec → PR →"
+          "text": "Planned and active work lives in `project-management/`"
         },
         "value": true
       },
       {
         "claim": "specs live in the WORK layer",
-        "source": "AGENTS.md#project-organization--six-layers",
-        "derive": "the WORK row",
+        "source": "AGENTS.md#where-things-live",
+        "derive": "the work sentence",
         "check": {
           "kind": "contains",
           "text": "`project-management/` (epics, specs, tasks"
+        },
+        "value": true
+      },
+      {
+        "claim": "architecture and decisions live in docs/architecture.md and docs/decisions/",
+        "source": "AGENTS.md#where-things-live",
+        "derive": "the How row",
+        "check": {
+          "kind": "contains",
+          "text": "`docs/architecture.md` and `docs/decisions/`"
+        },
+        "value": true
+      },
+      {
+        "claim": "the trace layer is the ledger and codeflow recall",
+        "source": "AGENTS.md#where-things-live",
+        "derive": "the Trace row",
+        "check": {
+          "kind": "contains",
+          "text": "the ledger and `codeflow recall`"
+        },
+        "value": true
+      },
+      {
+        "claim": "the spine runs from capability through a work item",
+        "source": "AGENTS.md#where-things-live",
+        "derive": "the spine sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The traceability spine runs capability, work item,"
+        },
+        "value": true
+      },
+      {
+        "claim": "the spine passes the pull request between the ADR or spec and the ledger",
+        "source": "AGENTS.md#where-things-live",
+        "derive": "the spine sentence",
+        "check": {
+          "kind": "contains",
+          "text": "ADR or spec, PR, ledger"
         },
         "value": true
       }
@@ -121,14 +131,14 @@
           "style": "mute"
         },
         {
-          "text": "epic, task",
+          "text": "work item",
           "x": 350,
           "y": 22,
           "anchor": "middle",
           "style": "mute"
         },
         {
-          "text": "decision, spec",
+          "text": "ADR or spec",
           "x": 460,
           "y": 22,
           "anchor": "middle",
@@ -203,7 +213,7 @@
           "style": "strong"
         },
         {
-          "text": "rarely",
+          "text": "human-owned",
           "x": 58,
           "y": 64,
           "style": "mute"
@@ -221,13 +231,7 @@
           "style": "strong"
         },
         {
-          "text": "rarely",
-          "x": 58,
-          "y": 112,
-          "style": "mute"
-        },
-        {
-          "text": "AGENTS.md, skills",
+          "text": "AGENTS.md, rules, skills",
           "x": 0,
           "y": 133,
           "style": "mono"
@@ -287,15 +291,6 @@
           ]
         },
         {
-          "text": "daily",
-          "x": 58,
-          "y": 208,
-          "style": "mute",
-          "for": [
-            "b3"
-          ]
-        },
-        {
           "text": "project-management/",
           "x": 0,
           "y": 229,
@@ -332,16 +327,7 @@
           ]
         },
         {
-          "text": "per decision",
-          "x": 58,
-          "y": 256,
-          "style": "mute",
-          "for": [
-            "b4"
-          ]
-        },
-        {
-          "text": "architecture, ADRs",
+          "text": "architecture.md, decisions/",
           "x": 0,
           "y": 277,
           "style": "mono",
@@ -377,16 +363,7 @@
           ]
         },
         {
-          "text": "automatic",
-          "x": 58,
-          "y": 304,
-          "style": "mute",
-          "for": [
-            "b5"
-          ]
-        },
-        {
-          "text": "ledger",
+          "text": "ledger, codeflow recall",
           "x": 0,
           "y": 325,
           "style": "mono",
@@ -484,7 +461,7 @@
           "style": "strong"
         },
         {
-          "text": "rarely",
+          "text": "human-owned",
           "x": 72,
           "y": 43,
           "style": "mute"
@@ -502,13 +479,7 @@
           "style": "strong"
         },
         {
-          "text": "rarely",
-          "x": 72,
-          "y": 93,
-          "style": "mute"
-        },
-        {
-          "text": "AGENTS.md, skills",
+          "text": "AGENTS.md, rules, skills",
           "x": 8,
           "y": 114,
           "style": "mono"
@@ -568,15 +539,6 @@
           ]
         },
         {
-          "text": "daily",
-          "x": 72,
-          "y": 193,
-          "style": "mute",
-          "for": [
-            "b3"
-          ]
-        },
-        {
           "text": "project-management/",
           "x": 8,
           "y": 214,
@@ -613,16 +575,7 @@
           ]
         },
         {
-          "text": "per decision",
-          "x": 72,
-          "y": 243,
-          "style": "mute",
-          "for": [
-            "b4"
-          ]
-        },
-        {
-          "text": "architecture, ADRs",
+          "text": "architecture.md, decisions/",
           "x": 8,
           "y": 264,
           "style": "mono",
@@ -658,16 +611,7 @@
           ]
         },
         {
-          "text": "automatic",
-          "x": 72,
-          "y": 293,
-          "style": "mute",
-          "for": [
-            "b5"
-          ]
-        },
-        {
-          "text": "ledger",
+          "text": "ledger, codeflow recall",
           "x": 8,
           "y": 314,
           "style": "mono",
@@ -731,45 +675,45 @@
     "twin": {
       "columns": [
         "Layer",
+        "Holds",
         "Lives in",
-        "Changes",
         "Spine station"
       ],
       "rows": [
         [
           "WHY",
-          "docs/product.md",
-          "rarely",
+          "purpose, users, scope, non-goals",
+          "docs/product.md (human-owned)",
           "none"
         ],
         [
           "RULES",
-          "AGENTS.md, skills",
-          "rarely",
+          "how we work",
+          "AGENTS.md, .codeflow/rules/ and the skills",
           "none"
         ],
         [
           "WHAT",
-          "docs/capabilities.md",
-          "every ship",
+          "what the system does",
+          "docs/capabilities.md (CAP registry, every ship)",
           "capability"
         ],
         [
           "WORK",
-          "project-management/",
-          "daily",
-          "epic and task; also holds the spec"
+          "planned and active work",
+          "project-management/ (epics, specs, tasks, allocated by the CLI)",
+          "work item; also holds the spec"
         ],
         [
           "HOW",
-          "architecture, ADRs",
-          "per decision",
-          "decision and spec"
+          "structure and decisions",
+          "docs/architecture.md and docs/decisions/",
+          "ADR or spec"
         ],
         [
           "TRACE",
-          "ledger",
-          "automatic",
+          "what happened and why",
+          "the ledger and codeflow recall",
           "ledger"
         ]
       ]

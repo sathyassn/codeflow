@@ -44,7 +44,7 @@
       },
       {
         "claim": "four planes read one policy source",
-        "source": "AGENTS.md#git-rules",
+        "source": ".codeflow/rules/git-rules.md#enforcement",
         "derive": "the first sentence",
         "check": {
           "kind": "contains",
