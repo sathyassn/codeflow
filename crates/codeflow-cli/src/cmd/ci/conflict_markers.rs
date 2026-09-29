@@ -7,7 +7,9 @@
 
 use std::path::Path;
 
-use codeflow_core::hooks::conflict_markers::{self, AddedLines, AttrSource};
+use std::collections::BTreeSet;
+
+use codeflow_core::hooks::conflict_markers::{self, AddedLines, AttrError, AttrSource};
 use codeflow_core::hooks::GitPolicy;
 
 /// Run the check for `codeflow ci` over `base..head` and record its findings
@@ -31,11 +33,20 @@ pub(super) fn dispatch(
     ran.push("conflict-markers");
     let findings = match range_findings(root, git, base, head) {
         Ok(findings) => findings,
-        Err(error) => vec![conflict_markers::incomplete(
-            level,
-            &error,
-            codeflow_core::remedy::CI_RANGE_UNREADABLE.remedy(),
-        )],
+        Err(error) => {
+            // Fetching cannot add an option to an old git; upgrading can.
+            let remedy = match &error {
+                AttrError::SourceUnsupported(_) => {
+                    codeflow_core::remedy::GIT_ATTR_SOURCE_UNSUPPORTED.remedy()
+                }
+                AttrError::Failed(_) => codeflow_core::remedy::CI_RANGE_UNREADABLE.remedy(),
+            };
+            vec![conflict_markers::incomplete(
+                level,
+                &error.to_string(),
+                remedy,
+            )]
+        }
     };
     tagged.extend(
         findings
@@ -54,8 +65,8 @@ fn range_findings(
     git: &GitPolicy,
     base: &str,
     head: &str,
-) -> Result<Vec<codeflow_core::hooks::Violation>, String> {
-    let files = added_text_lines(root, base, head)?;
+) -> Result<Vec<codeflow_core::hooks::Violation>, AttrError> {
+    let files = added_text_lines(root, base, head).map_err(AttrError::Failed)?;
     let paths: Vec<&str> = files.keys().map(String::as_str).collect();
     let sizes = conflict_markers::marker_sizes(root, AttrSource::Revision(head), &paths)?;
     Ok(conflict_markers::check(
@@ -70,9 +81,14 @@ fn range_findings(
 /// skips no scaffold file; like it, `--text` stops an attribute from hiding
 /// a text addition, and a file is skipped as binary only by the content of
 /// its new-side blob. Without rename detection a moved file's lines count as
-/// added, as they do in the hook's staged diff.
+/// added, as they do in the hook's staged diff. Gitlinks are skipped before
+/// any blob is read: their object is a commit in the submodule's repository.
+/// `--ignore-submodules=none` lists every gitlink without reading
+/// `.gitmodules`, which git would otherwise parse and refuse when it holds a
+/// leftover marker.
 fn added_text_lines(root: &Path, base: &str, head: &str) -> Result<AddedLines, String> {
     let merge_base = super::git_stdout(root, &["merge-base", base, head])?;
+    let gitlinks = gitlinks(root, merge_base.trim(), head)?;
     let diff = super::git_stdout(
         root,
         &[
@@ -82,6 +98,7 @@ fn added_text_lines(root: &Path, base: &str, head: &str) -> Result<AddedLines, S
             "-r",
             "-p",
             "--no-renames",
+            "--ignore-submodules=none",
             "--unified=0",
             "--no-color",
             "--no-ext-diff",
@@ -94,7 +111,10 @@ fn added_text_lines(root: &Path, base: &str, head: &str) -> Result<AddedLines, S
             head,
         ],
     )?;
-    let lines = super::parse_added_lines(&diff);
+    let lines: Vec<super::AddedLine> = super::parse_added_lines(&diff)
+        .into_iter()
+        .filter(|added| !gitlinks.contains(&added.path))
+        .collect();
     let blobs: std::collections::BTreeSet<&str> =
         lines.iter().filter_map(|l| l.blob.as_deref()).collect();
     let contents = super::read_blobs(root, &blobs.into_iter().collect::<Vec<_>>())?;
@@ -113,6 +133,39 @@ fn added_text_lines(root: &Path, base: &str, head: &str) -> Result<AddedLines, S
         }
     }
     Ok(files)
+}
+
+/// The paths the diff from `from` to `to` leaves as gitlinks (mode 160000),
+/// read from `diff-tree --raw -z`: a `:old new old-id new-id status` record,
+/// then the path.
+fn gitlinks(root: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, String> {
+    let raw = super::git_stdout(
+        root,
+        &[
+            "diff-tree",
+            "-r",
+            "--no-renames",
+            "--ignore-submodules=none",
+            "--raw",
+            "-z",
+            from,
+            to,
+        ],
+    )?;
+    let mut out = BTreeSet::new();
+    let mut fields = raw.split('\0');
+    while let Some(header) = fields.next() {
+        let Some(header) = header.strip_prefix(':') else {
+            continue;
+        };
+        let Some(path) = fields.next() else {
+            break;
+        };
+        if header.split(' ').nth(1) == Some("160000") {
+            out.insert(path.to_string());
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -230,6 +283,104 @@ mod tests {
         assert!(!hook.iter().any(|m| m.contains("blob.bin")));
         assert!(!hook.iter().any(|m| m.contains("fixtures/a.txt")));
         assert!(!hook.iter().any(|m| m.contains("gone.md")));
+    }
+
+    fn stdout(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .expect("git runs");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn repo(root: &Path, seed: &str) {
+        std::fs::create_dir_all(root).unwrap();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        write(root, "seed.txt", seed);
+        git(root, &["add", "."]);
+        git(root, &["commit", "-q", "-m", "chore: seed"]);
+    }
+
+    /// TSK-170 review P2: a submodule added and then updated. The gitlink's
+    /// commit lives only in the child repository, so neither plane may read
+    /// it as a blob; `.gitmodules` is still judged, on both planes alike.
+    #[test]
+    fn gitlinks_are_skipped_and_gitmodules_judged_on_both_planes() {
+        let dir = tempfile::tempdir().unwrap();
+        let child = dir.path().join("child");
+        repo(&child, "child one\n");
+        let first = stdout(&child, &["rev-parse", "HEAD"]);
+        write(&child, "seed.txt", "child two\n");
+        git(&child, &["commit", "-q", "-am", "chore: move on"]);
+        let second = stdout(&child, &["rev-parse", "HEAD"]);
+        let root = dir.path().join("super");
+        repo(&root, "superproject\n");
+        git(&root, &["switch", "-q", "-c", "feat/x"]);
+        let policy = GitPolicy::default();
+        for oid in [&first, &second] {
+            let absent = Command::new("git")
+                .args(["cat-file", "-e", oid])
+                .current_dir(&root)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .status()
+                .unwrap();
+            assert!(
+                !absent.success(),
+                "{oid} must be absent from the superproject"
+            );
+        }
+
+        // Addition: a gitlink and a .gitmodules that still holds a marker.
+        write(
+            &root,
+            ".gitmodules",
+            &format!(
+                "{}\n[submodule \"vendor\"]\n\tpath = vendor\n\turl = {}\n",
+                marker('<', 7, " HEAD"),
+                child.display()
+            ),
+        );
+        git(&root, &["add", ".gitmodules"]);
+        let cacheinfo = format!("160000,{first},vendor");
+        git(&root, &["update-index", "--add", "--cacheinfo", &cacheinfo]);
+        let hook = messages(
+            &git_hook::pre_commit(&root, &policy, false)
+                .unwrap()
+                .violations,
+        );
+        git(&root, &["commit", "-q", "-m", "feat: add the dependency"]);
+        let ci = messages(&range_findings(&root, &policy, "main", "HEAD").unwrap());
+        assert_eq!(hook, ci);
+        assert_eq!(hook.len(), 1, "{hook:#?}");
+        assert!(
+            hook[0].contains(".gitmodules:1 adds an unresolved opening"),
+            "{hook:#?}"
+        );
+
+        // Update: the gitlink moves to another child commit.
+        let cacheinfo = format!("160000,{second},vendor");
+        git(&root, &["update-index", "--cacheinfo", &cacheinfo]);
+        let hook = messages(
+            &git_hook::pre_commit(&root, &policy, false)
+                .unwrap()
+                .violations,
+        );
+        assert!(hook.is_empty(), "{hook:#?}");
+        git(
+            &root,
+            &["commit", "-q", "-m", "feat: update the dependency"],
+        );
+        let ci = messages(&range_findings(&root, &policy, "HEAD~1", "HEAD").unwrap());
+        assert!(ci.is_empty(), "{ci:#?}");
     }
 
     #[test]

@@ -124,6 +124,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("COMMIT_POLICY_CHARACTER", Runs),
     ("FILE_POLICY_CHARACTER", Runs),
     ("CONFLICT_MARKER", Runs),
+    ("GIT_ATTR_SOURCE_UNSUPPORTED", Excluded(Network)),
     ("BREAKING_WATCH_PATH", Runs),
     ("PR_POLICY_CHARACTER", Runs),
     ("PR_AI_ATTRIBUTION", Runs),

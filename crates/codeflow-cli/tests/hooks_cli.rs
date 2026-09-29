@@ -4646,3 +4646,114 @@ fn installed_hooks_refuse_conflict_markers_and_ci_catches_what_they_cannot() {
         "{text}"
     );
 }
+
+/// A fresh `--minimal` project on `feat/x` with a clean tracked `work.txt`
+/// and `clean.txt`, its installed hooks running the binary under test.
+#[cfg(unix)]
+fn minimal_project(dir: &Path) -> std::path::PathBuf {
+    let root = dir.join("p");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        &root,
+        &["init", "--yes", "--minimal"],
+    );
+    ok("git", &root, &["switch", "-q", "-c", "feat/x"]);
+    std::fs::write(root.join("work.txt"), "plain\n").unwrap();
+    std::fs::write(root.join("clean.txt"), "one\n").unwrap();
+    ok("git", &root, &["add", "work.txt", "clean.txt"]);
+    ok("git", &root, &["commit", "-q", "-m", "feat: add the files"]);
+    root
+}
+
+#[cfg(unix)]
+fn leftover_markers() -> String {
+    format!(
+        "{}\nours\n{}\ntheirs\n{}\n",
+        marker_line('<', 7, " HEAD"),
+        marker_line('=', 7, ""),
+        marker_line('>', 7, " other")
+    )
+}
+
+/// TSK-170 review P1: `git commit -a` and `git commit <path>` commit a
+/// temporary index named by `GIT_INDEX_FILE`; the hook judges that index,
+/// not the ordinary one.
+#[cfg(unix)]
+#[test]
+fn installed_hook_judges_the_index_git_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = minimal_project(dir.path());
+    let head = ok("git", &root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("work.txt"), leftover_markers()).unwrap();
+
+    // Unstaged markers committed with `-a` are refused.
+    let all = with_installed_hooks("git", &root, &["commit", "-am", "fix: work"]);
+    let text = both_streams(&all);
+    assert!(!all.status.success(), "commit -a: {text}");
+    assert!(
+        text.contains("work.txt:1 adds an unresolved opening"),
+        "{text}"
+    );
+
+    // The same file named on the command line is refused too.
+    let path = with_installed_hooks("git", &root, &["commit", "work.txt", "-m", "fix: work"]);
+    let text = both_streams(&path);
+    assert!(!path.status.success(), "commit <path>: {text}");
+    assert!(
+        text.contains("work.txt:1 adds an unresolved opening"),
+        "{text}"
+    );
+    assert_eq!(ok("git", &root, &["rev-parse", "HEAD"]), head);
+
+    // A clean selected path commits while unrelated staged markers, which
+    // that commit leaves out, stay staged and are not judged.
+    ok("git", &root, &["checkout", "--", "work.txt"]);
+    std::fs::write(root.join("staged.txt"), leftover_markers()).unwrap();
+    ok("git", &root, &["add", "staged.txt"]);
+    std::fs::write(root.join("clean.txt"), "one\ntwo\n").unwrap();
+    let clean = with_installed_hooks("git", &root, &["commit", "clean.txt", "-m", "fix: clean"]);
+    assert!(clean.status.success(), "{}", both_streams(&clean));
+    let committed = ok("git", &root, &["show", "--name-only", "--format=", "HEAD"]);
+    assert_eq!(committed.trim(), "clean.txt");
+    let staged = ok("git", &root, &["diff", "--cached", "--name-only"]);
+    assert_eq!(staged.trim(), "staged.txt");
+}
+
+/// TSK-170 review P1: an index the hook cannot read is reported at the
+/// configured level, never passed.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_commit_index_is_reported_at_the_configured_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = minimal_project(dir.path());
+    let bad = dir.path().join("broken-index");
+    std::fs::write(&bad, "not an index").unwrap();
+    for (level, code, verdict) in [("block", 1, "BLOCKED"), ("warn", 0, "warning")] {
+        let mut policy: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".codeflow/policy.json")).unwrap(),
+        )
+        .unwrap();
+        policy["git"]["conflict_markers"] = level.into();
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+        let out = codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(&root)
+            .env("GIT_INDEX_FILE", &bad)
+            .output()
+            .unwrap();
+        let text = both_streams(&out);
+        assert_eq!(out.status.code(), Some(code), "{level}: {text}");
+        assert!(
+            text.contains(&format!(
+                "{verdict} — policy rule git.conflict_markers ({level})"
+            )),
+            "{level}: {text}"
+        );
+        assert!(text.contains("cannot read the index"), "{level}: {text}");
+    }
+}

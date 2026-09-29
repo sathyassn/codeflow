@@ -88,9 +88,47 @@ pub enum AttrSource<'a> {
         /// The repository's git directory, named so an inherited `GIT_DIR`
         /// never points the lookup at another repository.
         git_dir: &'a Path,
+        /// The index file the commit records, from [`effective_index`].
+        index_file: &'a Path,
     },
     /// The tree of this revision (`git check-attr --source`).
     Revision(&'a str),
+}
+
+/// Why the `conflict-marker-size` lookup failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttrError {
+    /// This git has no `check-attr --source` (it came in git 2.40).
+    SourceUnsupported(String),
+    /// Any other failure, with git's message.
+    Failed(String),
+}
+
+impl std::fmt::Display for AttrError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SourceUnsupported(message) | Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+/// The index file a commit in progress records: `GIT_INDEX_FILE` when git
+/// set it, as it does for `git commit -a` and `git commit <path>`, resolved
+/// against the working directory as git resolves it; otherwise the
+/// repository's own index.
+#[must_use]
+pub fn effective_index(repo: &git2::Repository) -> std::path::PathBuf {
+    match std::env::var_os("GIT_INDEX_FILE").filter(|value| !value.is_empty()) {
+        Some(value) => {
+            let path = std::path::PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir().map_or(path.clone(), |cwd| cwd.join(&path))
+            }
+        }
+        None => repo.path().join("index"),
+    }
 }
 
 /// The marker a line is at `size`, or `None`.
@@ -182,21 +220,28 @@ fn size_from(value: &str) -> usize {
 ///
 /// # Errors
 ///
-/// The message git printed when the lookup fails, such as a git older than
-/// 2.40 that has no `--source`.
+/// [`AttrError::SourceUnsupported`] for a git older than 2.40, which has no
+/// `--source`; [`AttrError::Failed`] with git's message otherwise.
 pub fn marker_sizes(
     root: &Path,
     source: AttrSource<'_>,
     paths: &[&str],
-) -> Result<BTreeMap<String, usize>, String> {
+) -> Result<BTreeMap<String, usize>, AttrError> {
+    let failed = |e: &dyn std::fmt::Display| AttrError::Failed(format!("git check-attr: {e}"));
     if paths.is_empty() {
         return Ok(BTreeMap::new());
     }
     let mut command = Command::new("git");
     command.arg("-C").arg(root);
     let from = match source {
-        AttrSource::Index { git_dir } => {
-            command.arg("--git-dir").arg(git_dir);
+        AttrSource::Index {
+            git_dir,
+            index_file,
+        } => {
+            command
+                .arg("--git-dir")
+                .arg(git_dir)
+                .env("GIT_INDEX_FILE", index_file);
             "--cached".to_string()
         }
         AttrSource::Revision(revision) => format!("--source={revision}"),
@@ -207,25 +252,28 @@ pub fn marker_sizes(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("git check-attr: {e}"))?;
-    let mut stdin = child.stdin.take().ok_or("git check-attr: no stdin")?;
+        .map_err(|e| failed(&e))?;
+    let mut stdin = child.stdin.take().ok_or_else(|| failed(&"no stdin"))?;
     let input: Vec<u8> = paths
         .iter()
         .flat_map(|path| path.bytes().chain(std::iter::once(0)))
         .collect();
     let writer = std::thread::spawn(move || stdin.write_all(&input));
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("git check-attr: {e}"))?;
+    let out = child.wait_with_output().map_err(|e| failed(&e))?;
     writer
         .join()
-        .map_err(|_| "git check-attr: input writer panicked".to_string())?
-        .map_err(|e| format!("git check-attr: {e}"))?;
+        .map_err(|_| failed(&"input writer panicked"))?
+        .map_err(|e| failed(&e))?;
     if !out.status.success() {
-        return Err(format!(
-            "git check-attr: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let message = format!("git check-attr: {stderr}");
+        return Err(
+            if matches!(source, AttrSource::Revision(_)) && stderr.contains("unknown option") {
+                AttrError::SourceUnsupported(message)
+            } else {
+                AttrError::Failed(message)
+            },
+        );
     }
     // `-z` output is path, attribute, value, each ended by a NUL.
     let text = String::from_utf8_lossy(&out.stdout);
@@ -267,8 +315,10 @@ pub fn check(
     out
 }
 
-/// The pre-commit plane's findings over the staged diff (index against
-/// `HEAD`), at `level`.
+/// The pre-commit plane's findings over the staged diff, at `level`: the
+/// index the commit records ([`effective_index`]) against `HEAD`. Gitlinks
+/// (submodule entries) are skipped: their object is a commit in another
+/// repository, never text here.
 #[must_use]
 pub fn staged(repo: &git2::Repository, level: PolicyLevel) -> Vec<Violation> {
     let fail = |error: &str| {
@@ -281,12 +331,22 @@ pub fn staged(repo: &git2::Repository, level: PolicyLevel) -> Vec<Violation> {
     let Some(root) = repo.workdir() else {
         return Vec::new();
     };
+    let index_file = effective_index(repo);
+    let index = match git2::Index::open(&index_file) {
+        Ok(index) => index,
+        Err(error) => {
+            return fail(&format!(
+                "cannot read the index {}: {error}",
+                index_file.display()
+            ))
+        }
+    };
     let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
     // Text is forced, as `codeflow ci` does with `--text`: a `binary` or
     // `-diff` attribute never hides a text addition; content decides.
     let mut options = git2::DiffOptions::new();
     options.force_text(true).context_lines(0);
-    let diff = match repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut options)) {
+    let diff = match repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut options)) {
         Ok(diff) => diff,
         Err(error) => return fail(&error.to_string()),
     };
@@ -297,7 +357,7 @@ pub fn staged(repo: &git2::Repository, level: PolicyLevel) -> Vec<Violation> {
         None,
         None,
         Some(&mut |delta, _hunk, line| {
-            if line.origin() == '+' {
+            if line.origin() == '+' && delta.new_file().mode() != git2::FileMode::Commit {
                 if let Some(path) = delta.new_file().path() {
                     let path = path.to_string_lossy().into_owned();
                     let number = line
@@ -327,10 +387,11 @@ pub fn staged(repo: &git2::Repository, level: PolicyLevel) -> Vec<Violation> {
     let paths: Vec<&str> = files.keys().map(String::as_str).collect();
     let source = AttrSource::Index {
         git_dir: repo.path(),
+        index_file: &index_file,
     };
     match marker_sizes(root, source, &paths) {
         Ok(sizes) => check(level, &files, &sizes),
-        Err(error) => fail(&error),
+        Err(error) => fail(&error.to_string()),
     }
 }
 
@@ -602,7 +663,11 @@ mod tests {
         .unwrap();
         // Written but not staged: the index does not have it yet.
         let git_dir = root.join(".git");
-        let index = AttrSource::Index { git_dir: &git_dir };
+        let index_file = git_dir.join("index");
+        let index = AttrSource::Index {
+            git_dir: &git_dir,
+            index_file: &index_file,
+        };
         let paths = ["fixtures/x.txt", "a.txt"];
         let unstaged = marker_sizes(root, index, &paths).unwrap();
         assert_eq!(unstaged.get("fixtures/x.txt"), Some(&DEFAULT_SIZE));

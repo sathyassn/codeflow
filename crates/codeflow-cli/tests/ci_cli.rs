@@ -1502,3 +1502,61 @@ fn ci_refuses_conflict_markers_one_finding_per_case() {
         );
     }
 }
+
+/// TSK-170 review P3: a git without `check-attr --source` (older than 2.40)
+/// leaves the check incomplete, and the remedy is to upgrade Git, not to
+/// fetch. The old git is simulated by a wrapper that refuses only that
+/// option; every other call reaches the real git.
+#[cfg(unix)]
+#[test]
+fn ci_names_a_git_upgrade_when_check_attr_has_no_source() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    repo_with_range(&root, "code");
+    let real = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
+    let wrapper = dir.path().join("old-git");
+    std::fs::create_dir(&wrapper).unwrap();
+    std::fs::write(
+        wrapper.join("git"),
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in --source=*) echo \"error: unknown option \\`source'\" >&2; exit 129;; esac\ndone\nexec {real} \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(wrapper.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(wrapper.clone()).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )),
+    )
+    .unwrap();
+    let out = codeflow()
+        .args([
+            "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+        ])
+        .current_dir(&root)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let all = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "{all}");
+    let at = all
+        .find("conflict-marker check incomplete")
+        .unwrap_or_else(|| panic!("{all}"));
+    let finding = &all[at..all[at..]
+        .find("policy file:")
+        .map_or(all.len(), |end| at + end)];
+    assert!(finding.contains("unknown option"), "{finding}");
+    assert!(
+        finding.contains("Git release build of 2.40 or later"),
+        "{finding}"
+    );
+    assert!(!finding.contains("fetch the whole range"), "{finding}");
+}
