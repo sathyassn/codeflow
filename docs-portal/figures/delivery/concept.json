@@ -366,7 +366,7 @@
         {
           "text": "one outcome",
           "x": 36,
-          "y": 74,
+          "y": 70,
           "style": "mute",
           "for": [
             "f1"
@@ -443,7 +443,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M180 178V198",
+          "d": "M160 178V198",
           "head": "end",
           "id": "f4"
         },
@@ -479,7 +479,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M180 258V282",
+          "d": "M180 262V282",
           "head": "end",
           "id": "f5"
         },
@@ -521,7 +521,7 @@
           "id": "bl"
         },
         {
-          "text": "plan again per task",
+          "text": "planning again",
           "x": 40,
           "y": 334,
           "style": "mute",

@@ -228,14 +228,14 @@
         {
           "state": "return",
           "shape": "path",
-          "d": "M532 110C532 205 420 205 332 104",
+          "d": "M532 112C532 156 420 156 332 100",
           "head": "end",
           "id": "r1"
         },
         {
           "text": "reopened: a defect after landing, one PR",
           "x": 400,
-          "y": 224,
+          "y": 172,
           "style": "mute",
           "for": [
             "r1"
@@ -351,7 +351,7 @@
         {
           "text": "unblocked",
           "x": 192,
-          "y": 150,
+          "y": 154,
           "anchor": "middle",
           "style": "mute",
           "for": [
