@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
+use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
     pull_request_findings, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
 };
@@ -87,21 +87,22 @@ fn criteria(
 /// Criteria frozen always blocks (R-80); the binding and journey rules take
 /// the `git.work_records` level.
 fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
-    let (level, remedy) = if found.rule == FROZEN_RULE {
-        (
-            PolicyLevel::Block,
-            "change criteria by a planning pull request on the target, then rebase".to_string(),
+    let violation = if found.rule == FROZEN_RULE {
+        Violation::always_blocking(
+            found.rule,
+            found.message,
+            "change criteria by a planning pull request on the target, then rebase",
         )
     } else {
-        (
+        Violation::new(
+            found.rule,
             git.work_records_level(),
-            format!(
-                "review the pull request head and record it in the acceptance block; a waiver names the planning amendment commit on the target ({SCOPE_NOTE})"
-            ),
+            found.message,
+            codeflow_core::remedy::ACCEPTANCE_BINDING.with(&[("note", SCOPE_NOTE)]),
         )
     };
     super::TaggedViolation {
         sha: None,
-        violation: Violation::new(found.rule, level, found.message, remedy),
+        violation,
     }
 }

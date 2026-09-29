@@ -576,7 +576,7 @@ pub fn pr_body_policy_character(policy: &GitPolicy, body: &str) -> Option<Violat
             "PR body line {line} contains an {}",
             policy_character_name(c)
         ),
-        POLICY_CHARACTER_FIX.to_string(),
+        crate::remedy::PR_POLICY_CHARACTER.remedy(),
     ))
 }
 

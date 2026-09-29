@@ -2773,7 +2773,11 @@ fn hook_session_summary_never_fails_outside_repo() {
         "{}",
     );
     assert_eq!(out.status.code(), Some(0), "must never fail the session");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("warning"));
+    // No repository, no session to record: nothing to clear, so no warning
+    // (TSK-147 review F5).
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("nothing to record"), "{stderr}");
+    assert!(!stderr.contains("warning"), "{stderr}");
 }
 
 // ---------------------------------------------------------------------------
@@ -4250,4 +4254,188 @@ fn a_new_branch_push_keeps_the_range_base_as_the_baseline_authority() {
     );
     assert!(!err.contains("--baseline-from"), "{err}");
     assert!(!err.contains("introduces work_records_baseline"), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// TSK-147 AC-2: a plane running another plane's check prints each finding at
+// its effective level (SPC-013 R-80).
+// ---------------------------------------------------------------------------
+
+/// A destination whose `stable` holds the seed, with `policy` in the local
+/// checkout and, when `tracking`, durable work tracking on. The local
+/// checkout is on a new `feat/x` from the destination's `stable`.
+fn gate_destination(policy: &str, tracking: bool) -> (tempfile::TempDir, tempfile::TempDir) {
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "--bare", "-q", "-b", "stable"]);
+    let local = tempfile::tempdir().unwrap();
+    init_repo(local.path(), "main");
+    if tracking {
+        std::fs::create_dir_all(local.path().join(".codeflow")).unwrap();
+        std::fs::write(local.path().join(".codeflow/project.toml"), RECORDS_STATE).unwrap();
+        git(local.path(), &["add", ".codeflow/project.toml"]);
+        git(local.path(), &["commit", "-q", "-m", "chore: full tier"]);
+    }
+    receive(bare.path(), local.path(), "main:stable");
+    git(
+        local.path(),
+        &["remote", "add", "dest", bare.path().to_str().unwrap()],
+    );
+    git(local.path(), &["fetch", "-q", "dest"]);
+    write_policy(local.path(), policy);
+    git(
+        local.path(),
+        &["checkout", "-q", "-b", "feat/x", "dest/stable"],
+    );
+    (bare, local)
+}
+
+const GATE_AT_WARN: &str =
+    r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "warn"}}"#;
+
+#[test]
+fn a_downgradable_ci_finding_prints_at_the_push_gate_level_warn() {
+    let (_bare, local) = gate_destination(GATE_AT_WARN, false);
+    let bad = commit_file(local.path(), "x.txt", "x\n", "Not conventional.");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("BLOCKED"), "{err}");
+    assert!(
+        err.contains("warning — policy rule git.commit_format (warn)"),
+        "{err}"
+    );
+    assert!(err.contains("codeflow pre-push: push not stopped"), "{err}");
+}
+
+#[test]
+fn a_downgradable_ci_finding_blocks_at_the_push_gate_level_block() {
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
+        false,
+    );
+    let bad = commit_file(local.path(), "x.txt", "x\n", "Not conventional.");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("BLOCKED — policy rule git.commit_format (block)"),
+        "{err}"
+    );
+    assert!(err.contains("codeflow pre-push: push stopped"), "{err}");
+}
+
+#[test]
+fn an_always_blocking_ci_finding_stops_the_push_at_warn() {
+    // Control: a registry rule has no level, so the push gate's warn cannot
+    // lower it.
+    let (_bare, local) = gate_destination(GATE_AT_WARN, true);
+    std::fs::create_dir_all(local.path().join("project-management/tasks")).unwrap();
+    let head = commit_file(
+        local.path(),
+        "project-management/tasks/TSK-001.md",
+        &legacy_task("TSK-001"),
+        "docs: add a task without a reservation",
+    );
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("BLOCKED — lifecycle invariant work.id_registry (block)"),
+        "{err}"
+    );
+    assert!(err.contains("codeflow pre-push: push stopped"), "{err}");
+}
+
+#[test]
+fn a_configured_block_on_a_never_exempt_rule_stops_the_push_at_warn() {
+    // Control: the project set `commit_emoji` to block itself, so the push
+    // gate's warn cannot lower it.
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "warn", "commit_emoji": "block"}}"#,
+        false,
+    );
+    let bad = commit_file(local.path(), "x.txt", "x\n", "feat: add x \u{1F680}");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("BLOCKED — policy rule git.commit_emoji (block)"),
+        "{err}"
+    );
+    assert!(err.contains("codeflow pre-push: push stopped"), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// TSK-147 AC-4: a commit on a watched contract path gets a local note.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn commit_msg_on_a_watched_path_notes_the_release_impact_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(
+        dir.path(),
+        r#"{"git": {"breaking_watch_paths": ["api/**"]}}"#,
+    );
+    std::fs::create_dir_all(dir.path().join("api")).unwrap();
+    std::fs::write(dir.path().join("api/v1.rs"), "pub fn f() {}\n").unwrap();
+    git(dir.path(), &["add", "api/v1.rs"]);
+    let msg = dir.path().join("MSG");
+    std::fs::write(&msg, "feat: add the v1 api\n").unwrap();
+    let out = codeflow()
+        .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    assert!(
+        err.contains(
+            "codeflow commit-msg: note: commit touches a declared contract surface (api/v1.rs)"
+        ),
+        "{err}"
+    );
+    assert!(
+        err.contains("`Breaking: no` with a `Rationale` under Release impact"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("warning"),
+        "a local run cannot settle it: {err}"
+    );
+    assert!(
+        err.contains("codeflow commit-msg: commit not stopped"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_configured_block_under_another_key_name_stops_the_push_at_warn() {
+    // The ticket rule prints as `git.commit_ticket` but its level is the
+    // `commit_ticket_required` key: a block set there keeps its level.
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "warn", "commit_ticket_required": "block", "commit_ticket_keys": ["Refs"], "commit_footer_tokens": ["Refs"]}}"#,
+        false,
+    );
+    let bad = commit_file(local.path(), "x.txt", "x\n", "feat: add x");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("BLOCKED — policy rule git.commit_ticket (block)"),
+        "{err}"
+    );
+    assert!(err.contains("codeflow pre-push: push stopped"), "{err}");
+}
+
+#[test]
+fn an_unconfigured_ticket_rule_prints_at_the_push_gate_level() {
+    // Control: the ticket rule at warn keeps the push going.
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "warn", "commit_ticket_required": "warn", "commit_ticket_keys": ["Refs"], "commit_footer_tokens": ["Refs"]}}"#,
+        false,
+    );
+    let bad = commit_file(local.path(), "x.txt", "x\n", "feat: add x");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("warning — policy rule git.commit_ticket (warn)"),
+        "{err}"
+    );
+    assert!(err.contains("codeflow pre-push: push not stopped"), "{err}");
 }

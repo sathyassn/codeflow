@@ -653,6 +653,60 @@ publication date._
   `.codeflow/policy.json`.
 
 <!-- codeflow:release-impact minor -->
+- **Every warning names the step that clears it.** Public behaviour change:
+  with `git.test_gate_on_push` at `warn`, a push whose `codeflow ci` finds an
+  always-blocking rule (such as the id registry) or a rule the project set
+  to `block` is now stopped; before, the hook printed `BLOCKED` and let the
+  push through. To let such a push through again, set that rule to `warn`
+  in `.codeflow/policy.json`; an always-blocking rule stays blocking. Other
+  findings print at the push gate's level, and the closing line of each
+  hook says whether the commit or push was stopped.
+  Each warning and note from `codeflow ci`, `validate --docs`, `doctor`, the
+  git hooks and the session guards now names the step that clears it: a
+  `codeflow` command, a named `git` command or a file edit; a test fails on
+  one printed without. `validate --docs` no longer warns for an approved spec
+  whose consumers are all accepted, its healthy derived `implemented` state,
+  and prints no note for a layer the project's tier does not install.
+  `doctor` reads Codex hook trust from `~/.codex/config.toml` (or
+  `$CODEX_HOME`) and Grok folder trust from `~/.grok/trusted_folders.toml`
+  (or `$GROK_HOME`). A static reading proves only that a hook does not run:
+  a Codex hook that is untrusted, disabled or changed (hashed as Codex
+  normalizes it), a folder Grok does not trust, or a Grok store it cannot
+  read is a warning. A configuration that matches is a note, "configured;
+  runtime not verified", naming the real hook event that verifies it;
+  doctor never reports these hooks as running. Where doctor cannot
+  reproduce the harness's decision (a matcher Codex rejects, an empty
+  command, a linked worktree whose hooks Codex takes from the main
+  checkout, Grok `version_overrides`, a relative `GROK_HOME`, a
+  Grok-managed worktree) the note says it cannot verify it.
+  `doctor --check hooks` warns when another hook manager's hook is missing,
+  not executable or names no codeflow shim outside a comment; when every
+  hook is executable and names its shim, it prints a note, "wiring not
+  verified", naming the commit with a bad subject that confirms the calls
+  run, since reading a hook cannot show that it runs the shim.
+  `doctor --check delegates` gives what this machine installs its own step,
+  apart from the Codex sign-in. The session summary names the path its
+  ledger write failed on and the repair that path needs, and outside a git
+  repository records nothing instead of warning. A guard input that is not
+  a JSON hook payload, or whose `tool_name`, `tool_input`, `command` or
+  `cwd` has the wrong type, names the field and the harness hook entry to
+  repair. A commit on
+  a `git.breaking_watch_paths` surface now prints a note, not a warning,
+  pointing at the pull request's Release impact, and `codeflow ci` and
+  `scripts/release.py` given a body that states `Breaking: no` with a
+  `Rationale`, outside code and quotes, report nothing for it.
+  `scripts/release.py` reads a pull request body through the `codeflow`
+  binary its caller names (`--codeflow-bin` or `CODEFLOW_BIN`), with the
+  parser `codeflow ci` uses, so the two cannot read a body differently; it
+  never takes a `codeflow` from `PATH`. The pre-push preflight passes the
+  `codeflow` running the hook, and the release impact job builds one from
+  the checked-out tree. A project that runs `release.py check-pr` itself
+  passes a `codeflow` built from its tree. The reader's answer carries a
+  protocol version, and `release.py` refuses a binary that answers another.
+  `codeflow ci` accepts the legacy `Contract` field as `release.py` does,
+  alone or agreeing with `Breaking`, so the two no longer disagree on it.
+
+<!-- codeflow:release-impact minor -->
 - **One full gate at a time, running the suite once.** Public behaviour
   change: `codeflow test --mode full` takes a gate lock before any target
   runs, and a second full gate on the machine refuses, naming the holder's
