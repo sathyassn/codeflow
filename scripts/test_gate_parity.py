@@ -3,7 +3,7 @@
 
 Each control mutates a copy of the real test config and checks the guard
 against the real CI workflow. The coverage and doctest pair stands for CI's
-`cargo test --workspace` only when both halves run in CI and run the whole
+raw nextest plus doctests only when both checks run in CI and run the whole
 suite, so every way of running less must read as drift.
 """
 
@@ -23,7 +23,7 @@ CONFIG = json.loads(parity.CONFIG.read_text())
 WORKFLOW = parity.WORKFLOW.read_text()
 CI = parity.ci_rust_job_commands(WORKFLOW)
 PORTAL = "docs-portal"
-PRESENT = "cf-present-qualification"
+PRESENT = "present-browser"
 
 
 def target(cfg: dict, name: str) -> dict:
@@ -100,7 +100,7 @@ class GateParityControls(unittest.TestCase):
     def test_a_changed_line_threshold_keeps_parity(self):
         def threshold(c):
             target(c, coverage_name())["modes"]["full"]["command"] = (
-                "cargo llvm-cov --workspace --summary-only --fail-under-lines 80")
+                "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 80 --profile codeflow")
         self.assert_parity(mutated(threshold))
 
     def test_any_disabled_rust_check_is_drift(self):
@@ -143,11 +143,11 @@ class NodePinControls(unittest.TestCase):
                             "docs-portal/.node-version", "24.18.0")
 
     def test_a_full_gate_job_without_the_pinned_node_is_refused(self):
-        gates, rest = WORKFLOW.split("\n  rust:\n", 1)
+        gates, rest = WORKFLOW.split("\n  windows:\n", 1)
         step = gates[gates.index("      - uses: actions/setup-node@"):]
         step = step[:step.index("\n      - ", 1) + 1]
         self.assertIn("docs-portal/package-lock.json", step)
-        workflow = gates.replace(step, "") + "\n  rust:\n" + rest
+        workflow = gates.replace(step, "") + "\n  windows:\n" + rest
         self.assert_problem(self.problems(CONFIG, workflow), "gates",
                             "24.18.0", "docs-portal")
 
@@ -184,14 +184,21 @@ class GateBinaryControls(unittest.TestCase):
         self.assertEqual(parity.gate_binary_problems(CONFIG), [])
 
     def test_a_real_browser_check_without_the_gate_binary_is_refused(self):
-        for replacement in ("", "CF_PRESENT_CODEFLOW=target/debug/codeflow "):
-            def drop(c, r=replacement):
-                modes = target(c, PRESENT)["modes"]["full"]
-                modes["command"] = modes["command"].replace(parity.GATE_BINARY + " ", r)
-            with self.subTest(replacement=replacement):
+        for field, value in (("requires", []), ("outputs", ["elsewhere/codeflow"])):
+            def drop(c, f=field, v=value):
+                target(c, PRESENT if f == "requires" else "codeflow-bin")[f] = v
+            with self.subTest(field=field):
                 problems = parity.gate_binary_problems(mutated(drop))
-                self.assertTrue(any(PRESENT in p and "CARGO_TARGET_DIR" in p
-                                    for p in problems), problems)
+                self.assertTrue(any(PRESENT in p and "CARGO_TARGET_DIR" in p for p in problems), problems)
+
+
+class WindowsRefereeControls(unittest.TestCase):
+    def test_every_raw_rust_floor_is_required(self):
+        for command in ["cargo fmt --all -- --check", parity.SUITE, parity.DOCTESTS,
+                        "cargo clippy --workspace --all-targets -- -D warnings",
+                        'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps']:
+            with self.subTest(command=command):
+                self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(WORKFLOW.replace("run: " + command, "run: echo removed")))
 
 
 if __name__ == "__main__":

@@ -261,3 +261,76 @@ fn the_gate_runs_on_the_linux_gate_job_and_the_windows_job() {
         "the runner reads the map"
     );
 }
+
+#[test]
+fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
+    let workflow = read(".github/workflows/codeflow-ci.yml");
+    let trigger = workflow.split("permissions:").next().unwrap();
+    assert!(trigger.contains("  pull_request:\n  push:"));
+    assert!(trigger.contains("integration/**"));
+    let condition = "github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || github.event_name == 'push'";
+    for id in ["gates", "windows"] {
+        assert!(
+            job(&workflow, id).contains(condition),
+            "{id} must run for protected-base PRs and line pushes"
+        );
+    }
+    for id in ["secret-scan", "security-review"] {
+        assert!(
+            !job(&workflow, id)
+                .lines()
+                .any(|line| line.starts_with("    if:")),
+            "{id} runs for every PR"
+        );
+    }
+    // Task PR: security only. Main PR, integration push and main push: all.
+    for (event, base, heavy) in [
+        ("pull_request", "integration/EPC-020-delivery-system", false),
+        ("pull_request", "main", true),
+        ("push", "integration/EPC-020-delivery-system", true),
+        ("push", "main", true),
+    ] {
+        assert_eq!(event == "push" || matches!(base, "main" | "master"), heavy);
+    }
+    assert!(!workflow.contains("  rust:\n"));
+    assert!(!workflow.contains("  coverage:\n"));
+}
+
+#[test]
+fn instrumented_suite_has_serial_membership_and_a_junit_consumer() {
+    let profile = read(".config/nextest.toml");
+    let parsed: toml::Value = toml::from_str(&profile).unwrap();
+    assert_eq!(
+        parsed["test-groups"]["serial"]["max-threads"].as_integer(),
+        Some(1)
+    );
+    assert_eq!(
+        parsed["profile"]["codeflow"]["fail-fast"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        parsed["profile"]["codeflow"]["junit"]["path"].as_str(),
+        Some("junit.xml")
+    );
+    for name in [
+        "present_cli",
+        "init_e2e",
+        "process_group",
+        "package(codeflow-present)",
+    ] {
+        assert!(profile.contains(name), "missing serial member {name}");
+    }
+    let config: serde_json::Value =
+        serde_json::from_str(&read(".codeflow/test-config.json")).unwrap();
+    let targets = config["targets"].as_array().unwrap();
+    let journey = targets
+        .iter()
+        .find(|t| t["name"] == "journey-gate")
+        .unwrap();
+    assert_eq!(journey["requires"], serde_json::json!(["rust-coverage"]));
+    assert!(journey["modes"]["full"]["command"]
+        .as_str()
+        .unwrap()
+        .contains("--results"));
+    assert!(job(&read(".github/workflows/codeflow-ci.yml"), "windows").contains("--results"));
+}

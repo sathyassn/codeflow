@@ -1,28 +1,9 @@
 #!/usr/bin/env python3
-"""Gate parity guard (Option B sync-guard).
+"""Compare the local instrumented Rust suite with the Windows raw referee.
 
-codeflow's own CI keeps a raw `rust (format + test + clippy)` job that runs cargo
-directly — an independent referee that catches a bug in codeflow's own test
-runner. That independence is worth a duplicate command list, but a duplicate can
-drift: the exact failure where CI ran clippy and the local gate did not.
-
-This guard makes drift fail LOUDLY instead of silently. It asserts that the
-Rust verification commands in the CI `rust` job exactly equal the `full`-mode
-commands in `.codeflow/test-config.json` (what local `codeflow test` and the CI
-`codeflow gates` job run). It runs as a `codeflow test` target, so it fires both
-locally and in CI.
-
-It also holds two local-gate pins to CI (TSK-142). Each target that runs
-Node does so through `scripts/with-node.py` and a version file, and every
-`actions/setup-node` step for that directory, including one in the job that
-runs the full gate, pins the same version (AC-1). The present real-browser
-check is handed the `codeflow` binary the gate built, wherever
-`CARGO_TARGET_DIR` points (AC-2).
-
-Scope note: only the `rust` job is compared. Other jobs (coverage llvm-cov and
-doc-graph validation) run different tooling by design and are out of scope here.
-The local full gate runs the suite once under coverage plus the doctests; that
-pair is compared as the `rust` job's plain `cargo test --workspace`.
+Windows independently runs fmt, nextest, doctests, clippy and rustdoc.
+Unix-only journeys and the ignored read benchmark remain Linux-only.
+Node versions and coordinator-owned binary paths are also checked.
 """
 
 import json
@@ -40,24 +21,13 @@ def norm(cmd: str) -> str:
 
 
 def is_rust_verification_command(cmd: str) -> bool:
-    return (
-        cmd.startswith("cargo ")
-        and not cmd.startswith("cargo llvm-cov ")
-    ) or cmd.startswith('RUSTDOCFLAGS="-D warnings" cargo ')
+    return cmd.startswith(("cargo fmt ", "cargo nextest ", "cargo clippy ", "cargo doc ", "cargo test --workspace")) or cmd.startswith('RUSTDOCFLAGS="-D warnings" cargo ')
 
 
-# The full gate runs the test suite once (TSK-134): under coverage, which
-# skips doctests, plus the doctests alone. Together they are the CI referee's
-# plain `cargo test --workspace`, so that pair stands for it here, but only in
-# exactly these forms: a coverage command with a test filter, a narrower
-# target selection or a feature change runs less than CI does. The line
-# threshold does not change what runs, so any value is accepted.
-SUITE = "cargo test --workspace"
+SUITE = "cargo nextest run --workspace --no-fail-fast --profile codeflow"
 DOCTESTS = "cargo test --workspace --doc"
-COVERAGE = re.compile(
-    r"^cargo llvm-cov --workspace --summary-only --fail-under-lines \d+$")
-COVERAGE_FORM = ("cargo llvm-cov --workspace --summary-only "
-                 "--fail-under-lines <N>")
+COVERAGE = re.compile(r"^cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines \d+ --profile codeflow$")
+COVERAGE_FORM = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines <N> --profile codeflow"
 
 
 def applicable(target: dict) -> bool:
@@ -87,28 +57,27 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
                     f"target '{target.get('name')}' runs coverage as {cmd!r}"
                     f"{' with its own cwd or env' if not plain(target) else ''}; "
                     f"only `{COVERAGE_FORM}` with no cwd or env stands for "
-                    f"half of `{SUITE}`")
+                    f"the complete `{SUITE}` and its doctests")
         if is_rust_verification_command(cmd):
             if cmd == DOCTESTS and not plain(target):
                 notes.append(f"target '{target.get('name')}' runs `{DOCTESTS}` "
                              "with its own cwd or env; it does not stand for "
-                             f"half of `{SUITE}`")
+                             f"the complete `{SUITE}` and its doctests")
                 cmd = f"{cmd} (with cwd or env)"
             out.add(cmd)
     if coverage and DOCTESTS in out:
-        out.discard(DOCTESTS)
         out.add(SUITE)
     return out
 
 
 def ci_rust_job_commands(workflow: str) -> set[str]:
-    """Rust verification `run:` commands inside the `rust:` job block only."""
+    """Rust verification `run:` commands inside the Windows raw referee job."""
     out = set()
     in_rust = False
     for line in workflow.splitlines():
         job = re.match(r"^ {2}([A-Za-z0-9_-]+):\s*$", line)
         if job:  # a top-level job key (2-space indent)
-            in_rust = job.group(1) == "rust"
+            in_rust = job.group(1) == "windows"
             continue
         if in_rust:
             run = re.match(r"^\s*run:\s*(.+?)\s*$", line)
@@ -231,21 +200,28 @@ def node_pin_problems(cfg: dict, workflow: str, root: Path = ROOT) -> list[str]:
 # directory is resolved from the repository root, where the gate runs cargo,
 # so a relative or absolute CARGO_TARGET_DIR both work.
 REAL_BROWSER = "npm run check:real-browser --prefix crates/codeflow-present/web"
-GATE_BINARY = ('CF_PRESENT_CODEFLOW="$(cd "${CARGO_TARGET_DIR:-target}" && pwd -P)'
-               '/debug/codeflow"')
 
 
 def gate_binary_problems(cfg: dict) -> list[str]:
     problems = []
-    for target in cfg.get("targets", []):
+    targets = {t["name"]: t for t in cfg.get("targets", [])}
+    def closure(name, seen=None):
+        seen = set() if seen is None else seen
+        if name in seen:
+            return seen
+        seen.add(name)
+        for required in targets.get(name, {}).get("requires", []):
+            closure(required, seen)
+        return seen
+    producer = targets.get("codeflow-bin", {})
+    for target in targets.values():
         cmd = norm(target.get("modes", {}).get("full", {}).get("command", ""))
         if not re.search(r"check:real-browser(\s|$)", cmd):
             continue
-        if f"{GATE_BINARY} {REAL_BROWSER}" not in cmd:
-            problems.append(
-                f"target '{target.get('name')}' runs the real-browser check without "
-                "the binary the gate built; prefix it with "
-                f"{GATE_BINARY} so it follows CARGO_TARGET_DIR")
+        if "codeflow-bin" not in closure(target["name"]) or producer.get("outputs") != ["target/debug/codeflow"] or not applicable(producer):
+            problems.append(f"target '{target['name']}' needs codeflow-bin's declared output; the coordinator sets its absolute path following CARGO_TARGET_DIR")
+        if "CF_PRESENT_CODEFLOW=" in cmd:
+            problems.append(f"target '{target['name']}' must use the coordinator's absolute binary path following CARGO_TARGET_DIR")
     return problems
 
 
@@ -269,22 +245,22 @@ def rust_parity() -> int:
     local = local_rust_commands(json.loads(CONFIG.read_text()), notes)
     ci = ci_rust_job_commands(WORKFLOW.read_text())
     if not ci:
-        print("gate-parity: could not find the CI `rust` job cargo commands — "
+        print("gate-parity: could not find the Windows `windows` job cargo commands — "
               "the workflow layout changed; update this guard.", file=sys.stderr)
         return 1
     if local != ci:
-        print("GATE PARITY DRIFT — local test gate and CI `rust` job disagree.",
+        print("GATE PARITY DRIFT — local test gate and Windows `windows` job disagree.",
               file=sys.stderr)
         print(f"  only in local (.codeflow/test-config.json, full): "
               f"{sorted(local - ci)}", file=sys.stderr)
-        print(f"  only in CI (.github/workflows/codeflow-ci.yml, rust job): "
+        print(f"  only in CI (.github/workflows/codeflow-ci.yml, windows job): "
               f"{sorted(ci - local)}", file=sys.stderr)
         for note in notes:
             print(f"  note: {note}", file=sys.stderr)
         print("  fix: make both run the same cargo commands so local "
               "`codeflow test` matches CI.", file=sys.stderr)
         return 1
-    print(f"gate-parity OK — local and CI `rust` job run the same: {sorted(local)}")
+    print(f"gate-parity OK — local and Windows `windows` job run the same: {sorted(local)}")
     return 0
 
 

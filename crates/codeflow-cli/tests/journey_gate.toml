@@ -120,9 +120,9 @@ control = ["codeflow-cli --test acceptance_journey a_completion_is_bound_to_the_
 fault = ["codeflow-cli --test acceptance_cli a_waiver_names_its_amendment_on_the_target"]
 
 [[journey]]
-text = "`Task: none` on a refused surface"
+text = "a PR that names no task and no epic is refused whatever it touches"
 control = ["codeflow-cli --test classification_cli each_class_passes_and_an_unclassified_pull_request_blocks"]
-fault = ["codeflow-cli --test classification_cli a_direct_change_blocks_on_every_protected_surface"]
+fault = ["codeflow-cli --test classification_cli a_pr_that_names_no_task_or_epic_is_refused_whatever_it_touches"]
 
 [[journey]]
 text = "a product PR with no classification"
@@ -311,5 +311,6 @@ fault = []
 text = "a benchmark of 10,000 records across ten lines and thousands of stale branches with a recorded baseline"
 platform = "unix"
 benchmark = true
+gate_target = "read-benchmark"
 control = ["codeflow-cli --test read_benchmark read_commands_on_ten_thousand_records_stay_within_their_budgets"]
 fault = ["codeflow-cli --test read_benchmark the_budget_check_flags_a_run_over_its_baseline"]
