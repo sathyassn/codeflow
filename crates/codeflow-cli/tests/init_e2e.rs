@@ -1431,6 +1431,76 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
     }
 }
 
+/// Run the stub delivery cases of `evals/herdr-delivery` against the
+/// `cf-herdr` installed at `skill`.
+fn run_herdr_delivery_cases(skill: &Path) -> Output {
+    Command::new("python3")
+        .arg("-B")
+        .arg(repo_root().join("evals/herdr-delivery/test_delivery.py"))
+        .arg("StubDeliveryTests")
+        .env("CF_HERDR_SKILL_DIR", skill)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env_remove("HERDR_ENV")
+        .output()
+        .expect("python3 runs the herdr delivery cases")
+}
+
+/// TSK-144 AC-5 (journey): a fresh standard and full project carries the
+/// confirmed Herdr delivery, the installed script passes the AC-1 and AC-2
+/// stub cases, and `codeflow update` brings it to a project installed before
+/// it.
+#[test]
+fn fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it() {
+    const SCRIPT: &str = "skills/cf-herdr/scripts/deliver.py";
+    const SKILL: &str = "skills/cf-herdr/SKILL.md";
+    let assets = repo_root().join("assets/base/agents");
+    for tier in ["--standard", "--full"] {
+        let (_tmp, root) = fresh(tier);
+        for tree in [".claude", ".agents"] {
+            for rel in [SCRIPT, SKILL] {
+                assert_eq!(
+                    normalize_crlf(&read(&root, &format!("{tree}/{rel}"))),
+                    normalize_crlf(&std::fs::read_to_string(assets.join(rel)).unwrap()),
+                    "{tier}: {tree}/{rel} differs from its asset"
+                );
+            }
+            let cases = run_herdr_delivery_cases(&root.join(tree).join("skills/cf-herdr"));
+            assert!(
+                cases.status.success(),
+                "{tier}: installed {tree} cf-herdr fails the delivery cases:\n{}",
+                output_text(&cases)
+            );
+        }
+        let fresh_skills = skill_tree_snapshot(&root);
+
+        // A project installed before TSK-144: no script, and the skill's
+        // delivery section as it read then, recorded as unmodified.
+        for tree in [".claude", ".agents"] {
+            record_as_installed(&root, &format!("{tree}/{SCRIPT}"), None);
+            let skill = read(&root, &format!("{tree}/{SKILL}"));
+            let older = skill.replace("scripts/deliver.py", "scripts/deliver-older.py");
+            record_as_installed(&root, &format!("{tree}/{SKILL}"), Some(&older));
+        }
+        assert!(!root.join(".agents").join(SCRIPT).exists());
+
+        let update = codeflow(&root, &["update"]);
+        let report = output_text(&update);
+        assert!(update.status.success(), "{tier}: update failed: {report}");
+        assert!(!report.contains("CONFLICT"), "{tier}: {report}");
+        assert_eq!(
+            skill_tree_snapshot(&root),
+            fresh_skills,
+            "{tier}: update left the skill trees different from a fresh scaffold"
+        );
+        let cases = run_herdr_delivery_cases(&root.join(".agents/skills/cf-herdr"));
+        assert!(
+            cases.status.success(),
+            "{tier}: updated cf-herdr fails the delivery cases:\n{}",
+            output_text(&cases)
+        );
+    }
+}
+
 /// Run one wired hook command (`codeflow hook <name>`) in `dir` with `payload`
 /// on stdin, the way a harness does, with `exe` standing in for `codeflow`.
 fn run_wired_hook_with(exe: &Path, dir: &Path, command: &str, payload: &str) -> Output {
