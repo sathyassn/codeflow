@@ -42,7 +42,8 @@ pub fn branch_name(refname: &str) -> &str {
 /// Whether a branch is a landing line: `main`, `master` or `integration/*`.
 #[must_use]
 pub fn is_landing_branch(name: &str) -> bool {
-    matches!(name, "main" | "master") || name.starts_with("integration/")
+    matches!(name, "main" | "master")
+        || name.starts_with(crate::hooks::policy::INTEGRATION_BRANCH_PREFIX)
 }
 
 /// Every local and remote-tracking code branch: the registry is excluded.

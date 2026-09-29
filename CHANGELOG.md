@@ -915,9 +915,13 @@ publication date._
 
 <!-- codeflow:release-impact patch -->
 - **Pre-push landing base.** Fast-forwards of protected and integration
-  branches check from their advertised tip. Other branches check from the
-  merge base with their advertised integration target and name that target,
-  preserving every commit the destination lacks in the checked range.
+  branches check from their advertised tip. Branches with a declared task
+  target check from the merge base with that target's advertised tip and
+  name the target, preserving every commit the destination lacks in the
+  checked range. Branches without a declared target keep the existing
+  advertised-history check. A landing from another line now checks that
+  line's records against the receiving line's baseline. A legacy record
+  missing from that baseline can block the push, as it would in PR CI.
 
 <!-- codeflow:release-impact patch -->
 - **The writing reference carries every reply duty.** The rule map sends an

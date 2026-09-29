@@ -1,5 +1,11 @@
 use super::*;
 
+struct SelectedRange {
+    base: String,
+    note: Option<Finding>,
+    notices: Vec<String>,
+}
+
 struct History {
     local: tempfile::TempDir,
     remote: tempfile::TempDir,
@@ -53,7 +59,7 @@ impl History {
         );
     }
 
-    fn range(&self, branch: &str, head: &str, old: &str) -> RangeBase {
+    fn range(&self, branch: &str, head: &str, old: &str) -> SelectedRange {
         let advertised = OnceCell::new();
         let destination = Destination {
             url: self.remote.path().to_str(),
@@ -67,7 +73,14 @@ impl History {
             remote_ref: format!("refs/heads/{branch}"),
             remote_sha: old.to_string(),
         };
-        range_base(self.local.path(), &pushed, &destination).unwrap()
+        let mut notices = Vec::new();
+        let RangeBase { base, note } =
+            range_base(self.local.path(), &pushed, &destination, &mut notices).unwrap();
+        SelectedRange {
+            base,
+            note,
+            notices,
+        }
     }
 }
 
@@ -137,7 +150,10 @@ fn push_set_task_that_merged_line_uses_target_not_previous_push() {
     std::fs::write(path, "---\nid: TSK-001\nintegration_target: main\n---\n").unwrap();
     let range = h.range("task/TSK-001-change", &head, &old);
     assert_eq!(range.base, target);
-    assert!(range.note.unwrap().text.contains("integration/line"));
+    assert!(range
+        .notices
+        .iter()
+        .any(|text| text.contains("integration/line")));
 }
 
 #[test]
@@ -154,7 +170,10 @@ fn push_set_new_task_with_multiple_boundaries_uses_declared_target() {
     let head = h.git(&["rev-parse", "HEAD"]);
     let range = h.range("task/TSK-001-change", &head, NEW);
     assert_eq!(range.base, target);
-    assert!(range.note.unwrap().text.contains("integration/line"));
+    assert!(range
+        .notices
+        .iter()
+        .any(|text| text.contains("integration/line")));
 }
 
 #[test]
@@ -180,20 +199,34 @@ fn push_set_target_base_keeps_every_destination_missing_commit() {
     assert!(checked.lines().any(|s| s == missing));
     assert!(absent.lines().all(|s| checked.lines().any(|c| c == s)));
     h.git(&["merge-base", "--is-ancestor", &range.base, &advertised]);
-    assert!(range.note.unwrap().text.contains("integration/line"));
+    assert!(range
+        .notices
+        .iter()
+        .any(|text| text.contains("integration/line")));
 }
 
 #[test]
-fn push_set_ordinary_branch_uses_policy_target() {
-    let h = History::new();
-    let target = h.git(&["rev-parse", "HEAD"]);
-    h.git(&["checkout", "-q", "-b", "feat/change"]);
-    let old = h.commit("old", "old", "feat: first push");
-    h.advertise(&old, "feat/change");
-    let head = h.commit("new", "new", "feat: second push");
-    let range = h.range("feat/change", &head, &old);
-    assert_eq!(range.base, target);
-    assert!(range.note.unwrap().text.contains("main"));
+fn push_set_undeclared_branch_keeps_advertised_history_fallback() {
+    for branch in ["feat/change", "plan/change", "task/TSK-001-change"] {
+        for existing in [false, true] {
+            let h = History::new();
+            let line = h.commit("line", "line", "Legacy line subject.");
+            h.advertise(&line, "integration/line");
+            h.git(&["checkout", "-q", "-b", branch]);
+            let old = h.commit("old", "old", "feat: first push");
+            if existing {
+                h.advertise(&old, branch);
+            }
+            let head = h.commit("new", "new", "feat: next push");
+            let range = h.range(branch, &head, if existing { &old } else { NEW });
+            assert_eq!(
+                range.base,
+                if existing { old } else { line },
+                "{branch} existing={existing}"
+            );
+            assert!(range.note.is_none());
+        }
+    }
 }
 
 #[test]
@@ -244,10 +277,9 @@ fn push_set_resolves_qualified_task_target_names() {
         let range = h.range("task/TSK-001-change", &head, NEW);
         assert_eq!(range.base, base);
         assert!(range
-            .note
-            .unwrap()
-            .text
-            .contains("advertised target 'integration/line'"));
+            .notices
+            .iter()
+            .any(|text| text.contains("advertised target 'integration/line'")));
     }
 }
 
@@ -266,10 +298,9 @@ fn push_set_task_target_ignores_unrelated_malformed_records() {
     let range = h.range("task/TSK-001-change", &head, NEW);
     assert_eq!(range.base, base);
     assert!(range
-        .note
-        .unwrap()
-        .text
-        .contains("advertised target 'integration/line'"));
+        .notices
+        .iter()
+        .any(|text| text.contains("advertised target 'integration/line'")));
 }
 
 #[test]
@@ -286,4 +317,101 @@ fn push_set_unreadable_task_target_keeps_advertised_history_fallback() {
     let range = h.range("task/TSK-001-change", &head, &old);
     assert_eq!(range.base, old);
     assert!(range.note.is_none());
+}
+
+#[test]
+fn push_set_clean_target_note_has_no_remedy_and_rewrite_uses_its_own() {
+    let h = History::new();
+    h.task("main");
+    let target = h.git(&["rev-parse", "HEAD"]);
+    h.advertise(&target, "main");
+    h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
+    let old = h.commit("old", "old", "feat: first work");
+    h.advertise(&old, "task/TSK-001-change");
+    let clean = h.range("task/TSK-001-change", &old, NEW);
+    assert!(clean.note.is_none());
+    assert!(clean
+        .notices
+        .iter()
+        .any(|text| text.contains("uses advertised target 'main'")));
+    h.git(&["checkout", "-q", "-b", "rewrite", &target]);
+    let head = h.commit("rewrite", "rewrite", "feat: replacement work");
+    let rewrite = h.range("task/TSK-001-change", &head, &old);
+    assert_eq!(rewrite.base, target);
+    assert_eq!(rewrite.note.unwrap().remedy, remedy::PUSH_REWRITE.remedy());
+}
+
+#[test]
+fn push_set_unfetched_declared_target_is_named_without_fetching() {
+    let h = History::new();
+    h.task("integration/line");
+    h.advertise("HEAD", "integration/line");
+    h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
+    let old = h.commit("old", "old", "feat: first work");
+    h.advertise(&old, "task/TSK-001-change");
+    let other = tempfile::tempdir().unwrap();
+    command(
+        other.path(),
+        &["clone", "-q", h.remote.path().to_str().unwrap(), "."],
+    );
+    command(other.path(), &["config", "user.name", "Test"]);
+    command(
+        other.path(),
+        &["config", "user.email", "test@example.invalid"],
+    );
+    command(other.path(), &["checkout", "-q", "integration/line"]);
+    std::fs::write(other.path().join("advance"), "advance").unwrap();
+    command(other.path(), &["add", "advance"]);
+    command(
+        other.path(),
+        &["commit", "-q", "-m", "feat: advance remote line"],
+    );
+    let tip = command(other.path(), &["rev-parse", "HEAD"]);
+    command(
+        h.remote.path(),
+        &[
+            "fetch",
+            "-q",
+            other.path().to_str().unwrap(),
+            "HEAD:refs/heads/integration/line",
+        ],
+    );
+    let head = h.commit("new", "new", "feat: next work");
+    let range = h.range("task/TSK-001-change", &head, &old);
+    assert_eq!(range.base, old);
+    assert!(range
+        .notices
+        .iter()
+        .any(|text| text.contains("declared target 'integration/line'")
+            && text.contains(&tip)
+            && text.contains("not fetched here")));
+    assert!(!is_commit(h.local.path(), &tip));
+
+    // With no usable advertised tip, the range stays unresolved but its
+    // missing-target notice must still reach the caller.
+    for branch in ["main", "task/TSK-001-change"] {
+        command(
+            h.remote.path(),
+            &["update-ref", "-d", &format!("refs/heads/{branch}")],
+        );
+    }
+    let advertised = OnceCell::new();
+    let destination = Destination {
+        url: h.remote.path().to_str(),
+        advertised: &advertised,
+        namespace: None,
+        policy: &GitPolicy::default(),
+    };
+    let pushed = PushRef {
+        local_ref: "refs/heads/task/TSK-001-change".into(),
+        local_sha: head,
+        remote_ref: "refs/heads/task/TSK-001-change".into(),
+        remote_sha: NEW.into(),
+    };
+    let mut notices = Vec::new();
+    assert!(range_base(h.local.path(), &pushed, &destination, &mut notices).is_none());
+    assert!(notices
+        .iter()
+        .any(|text| text.contains(&tip) && text.contains("not fetched here")));
+    assert!(!is_commit(h.local.path(), &tip));
 }

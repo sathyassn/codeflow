@@ -219,10 +219,10 @@ stack it is a real gate, re-run in CI. The pre-push hook runs the push set (the
 targets with a `quick` mode) plus `codeflow validate --docs` and `codeflow ci` on
 the pushed range, blocking by default under `test_gate_on_push`. An existing
 protected or `integration/` branch fast-forward starts at its advertised tip.
-Other branches use the merge base with their advertised integration target,
-read from the task record at the pushed commit or the policy default; the
-hook names that target. Line rewrites and unavailable targets retain the
-advertised-history fallback. It blocks on
+Branches with a declared target use the merge base with its advertised tip,
+reading the target from the task record at the pushed commit; the hook names
+that target. Line rewrites, undeclared branches and unavailable targets retain
+the advertised-history fallback. An advertised target missing locally is noted. It blocks on
 what it can see and names what it left to CI (an unresolved range, a sibling
 ref, a dirty, sparse or submodule-incomplete checkout); the test suite belongs
 to the full gate. One full gate runs at a time on a machine (a second refuses,

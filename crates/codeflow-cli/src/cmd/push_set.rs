@@ -40,7 +40,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
-use codeflow_core::hooks::policy::GitPolicy;
+use codeflow_core::hooks::policy::{GitPolicy, INTEGRATION_BRANCH_PREFIX};
 use codeflow_core::hooks::Violation;
 use codeflow_core::remedy::{self, Finding};
 
@@ -195,7 +195,12 @@ fn run_ci_ranges(
 ) {
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        if let Some(RangeBase { base, note }) = range_base(root, r, destination) {
+        let mut notices = Vec::new();
+        let range = range_base(root, r, destination, &mut notices);
+        report
+            .status
+            .extend(notices.into_iter().map(|text| format!("note: {text}")));
+        if let Some(RangeBase { base, note }) = range {
             report.notes.extend(note);
             let running = policy.test_gate_on_push.to_string();
             let mut args = vec![
@@ -433,7 +438,9 @@ struct Destination<'a> {
 }
 
 struct AdvertisedTips {
+    /// Advertised commits available locally, sorted for membership checks.
     commits: Vec<String>,
+    /// All advertised branch tips, including those not fetched here.
     branches: BTreeMap<String, String>,
 }
 
@@ -513,10 +520,8 @@ fn advertised_commits(root: &Path, url: &str) -> Advertised {
         .filter_map(|line| line.split_once('\t'))
         .filter_map(|(sha, reference)| {
             let branch = reference.strip_prefix("refs/heads/")?;
-            commits
-                .binary_search_by(|commit| commit.as_str().cmp(sha))
-                .ok()?;
-            Some((branch.to_string(), sha.to_string()))
+            (sha.len() >= 40 && sha.chars().all(|c| c.is_ascii_hexdigit()))
+                .then(|| (branch.to_string(), sha.to_string()))
         })
         .collect();
     Advertised::Tips(AdvertisedTips { commits, branches })
@@ -645,19 +650,31 @@ struct RangeBase {
     note: Option<Finding>,
 }
 
-/// Prefer the pull request's target: a protected/integration fast-forward
-/// starts at its own advertised tip; other branches start at their merge
-/// base with the advertised task target (or policy default). Both choices
-/// exclude only commits the destination already holds.
-///
-/// Preserve the historical fallback for line rewrites, unresolved targets
-/// and failed destination queries: bound by all advertised tips, including
-/// an existing branch's own sha. Without an answer, use that sha alone or
-/// protected tracking refs from the same destination. Otherwise leave the
-/// range unresolved for CI; never substitute a local branch.
-fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option<RangeBase> {
+/// Select a range without excluding any destination-missing commit:
+/// 1. An existing protected/integration fast-forward uses its advertised old
+///    tip when the destination can be asked.
+/// 2. A branch with a task target at its pushed commit uses the merge base
+///    with that target's advertised tip when the tip is available locally.
+///    An unfetched target is noted, even if the fallback finds no base.
+/// 3. An existing branch otherwise uses the historical boundary against all
+///    locally available advertised tips and its own old sha. A rewrite is
+///    noted; unrelated history uses the old sha so CI reports it unrelated.
+/// 4. If the destination cannot be asked, an existing branch uses its old
+///    sha alone, noted.
+/// 5. A new branch uses the historical boundary against available advertised
+///    tips, or its pushed sha when the destination already holds all its history.
+/// 6. With no locally available advertised tips or a failed query, a new branch
+///    uses protected tracking refs only from the same destination, noting failure.
+/// 7. Otherwise return `None` and leave the range unresolved for CI. Never
+///    substitute a policy default or a local branch for an undeclared target.
+fn range_base(
+    root: &Path,
+    r: &PushRef,
+    destination: &Destination<'_>,
+    notices: &mut Vec<String>,
+) -> Option<RangeBase> {
     if let Advertised::Tips(tips) = destination.advertised(root) {
-        if let Some(base) = target_base(root, r, destination.policy, tips) {
+        if let Some(base) = target_base(root, r, destination.policy, tips, notices) {
             return Some(base);
         }
     }
@@ -718,33 +735,41 @@ fn target_base(
     r: &PushRef,
     policy: &GitPolicy,
     tips: &AdvertisedTips,
+    notices: &mut Vec<String>,
 ) -> Option<RangeBase> {
     let branch = r.remote_branch()?;
-    let (base, target) = if policy.branch_is_protected(branch) || branch.starts_with("integration/")
-    {
-        let old = existing_tip(root, r)?;
-        git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?;
-        (old.to_string(), branch.to_string())
-    } else {
-        let target = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
-            root,
-            branch,
-            &r.local_sha,
-        )
-        .ok()?
-        .or_else(|| policy.default_base_branch().map(str::to_string))?;
-        if !codeflow_core::workgraph::is_stable_work_target(&target) {
-            return None;
-        }
-        let target = target.trim();
-        let tip = tips.branches.get(target)?;
-        let base = git(root, &["merge-base", &r.local_sha, tip])?;
-        (base.trim().to_string(), target.to_string())
-    };
-    let mut text = format!(
+    let (base, target) =
+        if policy.branch_is_protected(branch) || branch.starts_with(INTEGRATION_BRANCH_PREFIX) {
+            let old = existing_tip(root, r)?;
+            git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?;
+            (old.to_string(), branch.to_string())
+        } else {
+            let target = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
+                root,
+                branch,
+                &r.local_sha,
+            )
+            .ok()??;
+            if !codeflow_core::workgraph::is_stable_work_target(&target) {
+                return None;
+            }
+            let target = target.trim();
+            let tip = tips.branches.get(target)?;
+            if tips.commits.binary_search(tip).is_err() {
+                notices.push(format!(
+                    "declared target '{target}' advertised at {tip} is not fetched here; \
+                     falling back to advertised-history range selection for '{branch}'"
+                ));
+                return None;
+            }
+            let base = git(root, &["merge-base", &r.local_sha, tip])?;
+            (base.trim().to_string(), target.to_string())
+        };
+    notices.push(format!(
         "range of '{branch}' uses advertised target '{target}': `codeflow ci --base {base} --head {}`",
         r.local_sha
-    );
+    ));
+    let mut note = None;
     if let Some(old) = existing_tip(root, r) {
         if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha]).is_none()
             && git(root, &["merge-base", old, &r.local_sha]).is_some()
@@ -753,21 +778,17 @@ fn target_base(
                 root,
                 &["rev-list", "--count", &format!("{base}..{}", r.local_sha)],
             )?;
-            let _ = write!(text, "; '{branch}' rewrites the destination's {}: `codeflow ci` checks {} commit(s), leaving out history on the target", short(old), count.trim());
+            note = Some(Finding::new(
+                format!(
+                    "'{branch}' rewrites the destination's {}: `codeflow ci` checks {} commit(s), \
+                     leaving out history on the target",
+                    short(old),
+                    count.trim()
+                ),
+                remedy::PUSH_REWRITE.remedy(),
+            ));
         }
     }
-    let note = Some(Finding::new(
-        text,
-        check_remedy(&[
-            "ci",
-            "--base",
-            &base,
-            "--head",
-            &r.local_sha,
-            "--branch",
-            branch,
-        ]),
-    ));
     Some(RangeBase { base, note })
 }
 
