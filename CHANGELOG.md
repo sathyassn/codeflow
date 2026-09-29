@@ -1087,20 +1087,6 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
-- **An approved spec is amended until it ships.** The lifecycle guidance,
-  the spec template and the refusal of an approved spec moved back to
-  `draft` now agree with how specs change in practice. While a spec is
-  approved and not yet implemented, a change to it is amended in place
-  through a reviewed planning change, with a dated note for each change of
-  meaning and each bound consumer's disposition named; once implemented it
-  is frozen and a change is a new spec. They no longer say that approval
-  freezes the criteria. `codeflow update` brings the changed guidance and
-  template. The freeze is now checked: `validate --docs --since`,
-  `codeflow ci` and the pre-push hook refuse a change to the text of an
-  implemented spec, and `codeflow spec status <id> draft` gives the refusal
-  naming both routes instead of an argument error.
-
-<!-- codeflow:release-impact patch -->
 - **The secret scan reads the index a commit records (security).** `git
   commit -a` and `git commit <path>` record a temporary index that git names
   in `GIT_INDEX_FILE`. The pre-commit secret scan read the ordinary index
@@ -1314,6 +1300,21 @@ publication date._
   `pin: "70283613"`, since the text may well be a commit id.
 
 ### Changed
+
+<!-- codeflow:release-impact minor -->
+- **An approved spec is amended until it ships, and frozen after.** The
+  lifecycle guidance, the spec template and the refusal of an approved spec
+  moved back to `draft` now agree with how specs change in practice. While
+  a spec is approved and not yet implemented, a change to it is amended in
+  place through a reviewed planning change, with a dated note for each
+  change of meaning and each bound consumer's disposition named; once
+  implemented it is frozen and a change is a new spec. They no longer say
+  that approval freezes the criteria. The freeze is now checked:
+  `validate --docs --since`, `codeflow ci` and the pre-push hook refuse a
+  change to the text of an implemented spec, an edit they used to accept.
+  `codeflow spec status <id> draft` gives the refusal naming both routes
+  instead of an argument error. `codeflow update` brings the changed
+  guidance and template.
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
