@@ -419,7 +419,7 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "never Mermaid",
     ];
     let method_tiers = [
-        "Orchestration entry is decided by touched paths",
+        "Before any research or edit, decide entry by touched paths",
         "start with `/cf-model-orchestrator`",
         "when unsure, route",
         "research or analysis that will drive one",
@@ -478,6 +478,61 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         &repo_root().join("assets/base/rules/workflow-discipline.md"),
     ));
     assert!(discipline.contains("Review verdicts require `cf-reviewer`"));
+}
+
+/// TSK-184 routing gate: the route rule is the first always rule at the
+/// tiers that have an orchestrator, so every harness reads it before any
+/// inspection, and the CLAUDE template opens with the Claude trigger for it
+/// (invoke before you inspect) ahead of the notes. The gate points at the
+/// rule for what is routed instead of repeating the path list: the rule's
+/// substance has one home. The minimal tier has no orchestrator and no gate.
+#[test]
+fn the_route_rule_leads_the_map_and_claude_states_its_gate_first() {
+    let kernel = Kernel::shipped();
+    for tier in [Tier::Standard, Tier::Full] {
+        let rules = kernel.rules_for(tier);
+        assert_eq!(rules[0].id, "route", "{tier}: the route rule is not first");
+        let rendered = kernel.render(agents_output(tier));
+        let block = managed_block(&rendered).expect("managed markers");
+        let first_rule = block
+            .lines()
+            .find(|line| line.starts_with("- **"))
+            .expect("an always rule");
+        assert!(
+            first_rule.starts_with("- **Route by touched paths.** Before any research or edit,"),
+            "{tier}: the first rendered rule is not the routing imperative: {first_rule}"
+        );
+    }
+    let claude = kernel.render(&rule_map::Output {
+        asset: "CLAUDE.md.tmpl",
+        tier: Tier::Full,
+        file: File::Claude,
+    });
+    let gate = claude
+        .find("## Routing gate")
+        .expect("CLAUDE.md opens with the routing gate");
+    let notes = claude
+        .find("## Claude-specific notes")
+        .expect("CLAUDE.md keeps its notes");
+    assert!(gate < notes, "the routing gate must come before the notes");
+    let gate_text = normalized(&claude[gate..notes]);
+    for needle in [
+        "Invoke `/cf-model-orchestrator` (the Skill tool) before you inspect.",
+        "Do not inspect first and route later: its preflight and independent discovery are part of the work.",
+        "\"Route by touched paths\" rule decides",
+        "Skip it only for conversation or one obvious local check; when unsure, route.",
+    ] {
+        assert!(gate_text.contains(needle), "the routing gate lost: {needle}");
+    }
+    assert!(
+        !gate_text.contains("(product code, managed instructions"),
+        "the routing gate repeats the map rule's path list; the rule is its one home"
+    );
+    let minimal = kernel.render(&OUTPUTS[3]);
+    assert!(
+        !minimal.contains("Routing gate") && !minimal.contains("cf-model-orchestrator"),
+        "the minimal CLAUDE template must not carry the orchestrator gate"
+    );
 }
 
 /// TSK-108 AC-6 (SPC-013 R-117, ADR-0071): every tier's map carries the

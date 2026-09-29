@@ -935,13 +935,14 @@
         {
           "path": "AGENTS.md",
           "markers": [
-            "Orchestration entry is decided by touched paths",
+            "Before any research or edit, decide entry by touched paths",
             "when unsure, route"
           ]
         },
         {
           "path": "CLAUDE.md",
           "markers": [
+            "before you inspect",
             "are supporting or solo flows, not alternate entry points"
           ]
         },

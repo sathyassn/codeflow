@@ -264,7 +264,7 @@ fn agents_byte_efficiency_cannot_delete_semantic_duties() {
     let method_map_clauses = [
         (
             "path-decided orchestration route",
-            "Orchestration entry is decided by touched paths",
+            "Before any research or edit, decide entry by touched paths",
         ),
         ("orchestration when unsure", "when unsure, route"),
         ("materiality", "Find broadly; act by materiality"),
@@ -479,6 +479,7 @@ fn claude_byte_efficiency_cannot_delete_semantic_duties() {
             &[
                 ("common authority", "@AGENTS.md"),
                 ("routing gate", "`/cf-model-orchestrator`"),
+                ("routing gate before inspection", "before you inspect"),
                 ("native Codex peer", "official Codex plugin"),
                 ("qualified model bindings", "current-ensemble.json"),
                 ("bounded parallelism", "bounded fan-out"),

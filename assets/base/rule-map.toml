@@ -36,8 +36,8 @@ this repo. The block between the codeflow markers below is maintained by
 
 ## How to use this map
 
-Each always rule is one line with a pointer to its full text; each row names
-what to do, and a `MUST OPEN` pointer is read before acting.
+Each always rule is one line with a pointer; each row names what to do, and
+a `MUST OPEN` pointer is read before acting.
 Precedence: operator, nearest AGENTS.md, parent, skill defaults; safety
 floors and [enforced] rules hold under all.
 """
@@ -100,6 +100,17 @@ text = """
 """
 
 # --- always rules (one line each; the count is a reported guideline) --------
+#
+# The route rule comes first at the standard and full tiers: it is the one
+# home of what is routed, and a reader acts on it before any inspection.
+# CLAUDE.md states only the Claude trigger for it.
+
+[[rule]]
+id = "route"
+tiers = ["standard", "full"]
+title = "Route by touched paths."
+text = "Before any research or edit, decide entry by touched paths: a change to an adopter-facing path (product code, managed instructions, hooks, policy, CI, shipped templates, watched contracts), research or analysis that will drive one, and plan, design, security or irreversible work start with `/cf-model-orchestrator`, once per brief; conversation goes direct; when unsure, route."
+see = ["cf-model-orchestrator"]
 
 [[rule]]
 id = "outcome"
@@ -203,13 +214,6 @@ id = "writing"
 title = "Outcomes first, in words."
 text = "Replies, status and summaries lead with outcomes in plain words, with IDs and file names after: open with the result and where it stands, then what would change it and who resolves it, then what the reader must do; steps and tooling last. A summary anchors the reader in a few lines; titles name the subject in words; avoid em and en dashes in prose."
 see = [".codeflow/rules/writing.md"]
-
-[[rule]]
-id = "route"
-tiers = ["standard", "full"]
-title = "Route by touched paths."
-text = "Orchestration entry is decided by touched paths: a change to an adopter-facing path (product code, managed instructions, hooks, policy, CI, shipped templates, watched contracts), research or analysis that will drive one, and plan, design, security or irreversible work start with `/cf-model-orchestrator`, once per brief; conversation goes direct; when unsure, route."
-see = ["cf-model-orchestrator"]
 
 [[rule]]
 id = "route"
@@ -643,6 +647,16 @@ see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Changing 
 tiers = ["standard", "full"]
 text = """
 @AGENTS.md
+
+## Routing gate
+
+Invoke `/cf-model-orchestrator` (the Skill tool) before you inspect. For
+routed work, which the map's "Route by touched paths" rule decides, it comes
+before repository or external research, analysis, planning, design,
+substantive review or docs, implementation, or multi-step verification. Do
+not inspect first and route later: its preflight and independent discovery
+are part of the work. Skip it only for conversation or one obvious local
+check; when unsure, route.
 
 ## Claude-specific notes
 
