@@ -314,6 +314,26 @@ pub fn run(args: &CiArgs) -> i32 {
         .or_else(|| detect_target(|k| std::env::var(k).ok().filter(|v| !v.is_empty())))
         .or_else(|| args.base.as_deref().and_then(named_branch));
     let line_target = line_target(&root, into.as_deref());
+    let destination = args.destination.clone().or_else(|| origin_url(&root));
+    let advertisement = if args.advertisement_stdin {
+        let mut listed = String::new();
+        if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
+            eprintln!(
+                "codeflow ci: cannot read the destination's advertisement from stdin: {error}"
+            );
+            return 2;
+        }
+        Some(listed)
+    } else {
+        None
+    };
+    let names = Names {
+        branch: &branch,
+        into: into.as_deref(),
+        destination: destination.as_deref(),
+        advertisement: advertisement.as_deref(),
+        release: std::cell::OnceCell::new(),
+    };
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     record_checks(
@@ -322,6 +342,8 @@ pub fn run(args: &CiArgs) -> i32 {
         &head,
         args.baseline_from.as_deref(),
         verified_epic_line(&root, &branch, &base_candidates, &head, &line_target),
+        &names,
+        &line_target,
         &mut tagged,
         &mut ran,
     );
@@ -345,29 +367,11 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
-    let destination = args.destination.clone().or_else(|| origin_url(&root));
-    let advertisement = if args.advertisement_stdin {
-        let mut listed = String::new();
-        if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
-            eprintln!(
-                "codeflow ci: cannot read the destination's advertisement from stdin: {error}"
-            );
-            return 2;
-        }
-        Some(listed)
-    } else {
-        None
-    };
     let tracked_claim = work_checks(
         &root,
         git,
         pr_body.as_deref(),
-        &Names {
-            branch: &branch,
-            into: into.as_deref(),
-            destination: destination.as_deref(),
-            advertisement: advertisement.as_deref(),
-        },
+        &names,
         &base_candidates,
         &head,
         &line_target,
@@ -543,16 +547,44 @@ fn work_checks<'a>(
 
 /// The durable-record rows of the dispatch, in their append-only order
 /// (SPC-013 R-42): transitions, then the id registry's merge rule.
+#[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 fn record_checks(
     root: &Path,
     base_candidates: &[String],
     head: &str,
     authority: Option<&str>,
     on_line: bool,
+    names: &Names<'_>,
+    line_target: &str,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
-    work_records::dispatch(root, base_candidates, head, authority, on_line, tagged, ran);
+    // On a release range, the records it brings are judged where each was
+    // introduced on its line (SPC-013 R-120).
+    let brought = base_candidates
+        .iter()
+        .find_map(|name| rev_parse(root, name))
+        .and_then(|base| {
+            acceptance::brought(
+                root,
+                &classification::Range {
+                    base: &base,
+                    head,
+                    target: line_target,
+                },
+                names,
+            )
+        });
+    work_records::dispatch(
+        root,
+        base_candidates,
+        head,
+        authority,
+        on_line,
+        brought.as_ref(),
+        tagged,
+        ran,
+    );
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
 }
 
@@ -1388,6 +1420,16 @@ pub(super) struct Names<'a> {
     pub destination: Option<&'a str>,
     /// The destination's advertisement, when the caller already asked it.
     pub advertisement: Option<&'a str>,
+    /// The release scope, asked once per run and shared by the checks.
+    pub release: std::cell::OnceCell<
+        Result<
+            Option<(
+                codeflow_core::workgraph::release_line::Destination,
+                codeflow_core::workgraph::release_line::Scope,
+            )>,
+            String,
+        >,
+    >,
 }
 
 /// Auto-detect the target branch NAME of a pull request. Verified variable

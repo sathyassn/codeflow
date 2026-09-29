@@ -9,7 +9,12 @@ description: Land finished work — docs and capability updates, then a PR throu
    every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
    After review, a task PR's last commit runs `codeflow task status <id>
    complete --acceptance <file>`; its block names the reviewed code commit
-   (late: the clean landing merge's second parent), and CI binds it.
+   (late: the clean landing merge's second parent, or its reviewed ancestor
+   followed only by that record's status and Closeout), and CI binds it. A
+   fix of a complete task may use one PR: reopen with a reason and keep the
+   old block under `acceptance_superseded:`, fix the code, then complete
+   again against a reviewed head inside the fix PR. A reopened task keeps
+   its criteria; their amendment lands in a separate planning PR.
    After-release criteria stay `deferred`, never verified at build time.
    When a work item is planned, started, blocked, completed or cancelled,
    follow

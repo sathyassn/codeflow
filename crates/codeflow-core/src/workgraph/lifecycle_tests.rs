@@ -2876,3 +2876,55 @@ fn spec_approval_beside_template_edit_is_not_planning_only() {
         assert_eq!(problems.is_empty(), allowed, "{path}: {problems:?}");
     }
 }
+
+#[test]
+fn recompletion_preserves_the_anchored_acceptance_even_with_equal_active_block() {
+    let (repo, _) = project();
+    let old = repo.reviewed(&block(&["AC-1", "AC-2"], "verified | epic journey"));
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "complete", CRITERIA, &fenced(&old)),
+    );
+    let base = repo.commit("complete the task");
+    let archive = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: regression\n",
+    );
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", CRITERIA, &fenced(&archive)),
+    );
+    repo.commit("reopen the task");
+    for fault in ["valid", "dropped", "edited", "reason", "criteria"] {
+        let superseded = old.replace(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: regression\n",
+        );
+        let superseded = match fault {
+            "dropped" => String::new(),
+            "edited" => superseded.replace("cargo test AC-1", "invented evidence"),
+            "reason" => superseded.replace("  reason: regression\n", ""),
+            _ => superseded,
+        };
+        let criteria = if fault == "criteria" {
+            CRITERIA.replace("shall y", "may y")
+        } else {
+            CRITERIA.into()
+        };
+        repo.write(
+            TASK_PATH,
+            &task(
+                "TSK-001",
+                "complete",
+                &criteria,
+                &format!("{}\n{}", fenced(&superseded), fenced(&old)),
+            ),
+        );
+        let verdict = repo.judge(&base);
+        if fault == "valid" {
+            assert!(verdict.is_clean(), "{:?}", verdict.errors);
+        } else {
+            assert!(!verdict.is_clean(), "{fault} must refuse the recompletion");
+        }
+    }
+}

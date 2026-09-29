@@ -265,6 +265,24 @@ publication date._
   judges that pull request. `codeflow ci` gains `--into`.
 
 <!-- codeflow:release-impact minor -->
+- **Release records judged where they landed, and a one-time bridge.** On
+  a release range the records rule judges a spec approval brought from an
+  epic line at the merge that landed it there, and does not judge a
+  brought `uid` backfill again. A complete task brought without an
+  acceptance block, last changed on its line at or before that line's
+  cutoff in the new `release_records_baseline` table, is listed as a
+  legacy record. `codeflow init` and `update` write the adoption marker
+  `release_rules = 1` and never a table. Both tables are CodeFlow's own
+  2.x to 3.0 transition only, and a consuming project cannot use one:
+  each is honoured when it was added in one commit at or before
+  adoption, after project config without the marker, never changed
+  since, with every cutoff from before adoption, on its line's
+  first-parent chain and one of CodeFlow's approved cutoffs, which the
+  judge compiles in; otherwise every release check refuses, naming the
+  condition and the commit. No flag, variable
+  or policy key skips them.
+
+<!-- codeflow:release-impact minor -->
 - **Shared id registry.** With tracking on, `epic new`, `spec new` and
   `task new` reserve their number on the `codeflow/registry` data branch of
   `origin` by a non-forced push, so two clones can no longer take the same
@@ -1111,6 +1129,14 @@ publication date._
   section of `AGENTS.md` untouched.
 
 ### Fixed
+
+<!-- codeflow:release-impact minor -->
+- **Fix completed work in one PR.** A task can reopen with its old review
+  preserved and a reason, carry the fix, and complete again with a review
+  inside the same PR. The shared structural judge rejects copied or stale
+  reviews, changed criteria and damaged reopen history. Clean task landings
+  and verified release imports retain their source review; the separate
+  planning-reopen path remains valid.
 
 <!-- codeflow:release-impact patch -->
 - **An approved spec is amended until it ships, and frozen after.** The

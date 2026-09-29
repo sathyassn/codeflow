@@ -43,7 +43,7 @@ pub(super) fn dispatch(
     let found = match judge(root, range, names) {
         Some(judged) => judged,
         None => criteria(root, range, branch, class)
-            .and_then(|criteria| pull_request_findings(root, range.base, range.head, criteria)),
+            .and_then(|criteria| pull_request_findings(root, range.base, range.head, &criteria)),
     };
     match found {
         Ok(found) => {
@@ -85,21 +85,11 @@ fn judge(
     range: &Range<'_>,
     names: &super::Names<'_>,
 ) -> Option<Result<Vec<Finding>, String>> {
-    let asked = match (names.destination, names.advertisement) {
-        (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
-        _ => release_line::ask_destination(root, names.destination),
+    let (destination, scope) = match release_scope(root, names) {
+        Ok(Some(release)) => release,
+        Ok(None) => return None,
+        Err(error) => return Some(Err(unscoped(error))),
     };
-    let destination = match asked {
-        Ok(destination) => destination,
-        Err(error) => return Some(Err(unscoped(&error))),
-    };
-    let scope = match release_line::scope(root, &destination, names.branch, names.into) {
-        Ok(scope) => scope,
-        Err(error) => return Some(Err(unscoped(&error))),
-    };
-    if !scope.release() {
-        return None;
-    }
     // The scope this range is judged under: a result, not a finding. The
     // pre-push hook states a release push's scope itself.
     eprintln!(
@@ -112,16 +102,12 @@ fn judge(
         scope.pattern,
         scope.source
     );
-    let head = if scope.into {
-        match release_line::pull_request_merge(root, range.base, range.head) {
-            Ok(merge) => merge.to_string(),
-            Err(error) => return Some(Err(error)),
-        }
-    } else {
-        range.head.to_string()
+    let head = match release_head(root, range, scope) {
+        Ok(head) => head,
+        Err(error) => return Some(Err(error)),
     };
     Some(
-        release_line::release_findings(root, &destination, range.base, &head).map(|judged| {
+        release_line::release_findings(root, destination, range.base, &head).map(|judged| {
             for step in &judged.path {
                 println!("codeflow ci: acceptance: release path: {step}");
             }
@@ -136,6 +122,59 @@ fn judge(
             judged.findings
         }),
     )
+}
+
+/// The destination and scope of a release range, asked once per run and
+/// shared by the records rule and the acceptance check; `None` for an
+/// ordinary range.
+fn release_scope<'n>(
+    root: &Path,
+    names: &'n super::Names<'_>,
+) -> Result<Option<&'n (release_line::Destination, release_line::Scope)>, &'n str> {
+    names
+        .release
+        .get_or_init(|| {
+            let destination = match (names.destination, names.advertisement) {
+                (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
+                _ => release_line::ask_destination(root, names.destination),
+            }?;
+            let scope = release_line::scope(root, &destination, names.branch, names.into)?;
+            Ok(scope.release().then_some((destination, scope)))
+        })
+        .as_ref()
+        .map(Option::as_ref)
+        .map_err(String::as_str)
+}
+
+/// The head a release range is judged at: a pull request into a release
+/// branch is judged as the merge it would create.
+fn release_head(
+    root: &Path,
+    range: &Range<'_>,
+    scope: &release_line::Scope,
+) -> Result<String, String> {
+    if scope.into {
+        release_line::pull_request_merge(root, range.base, range.head)
+            .map(|merge| merge.to_string())
+    } else {
+        Ok(range.head.to_string())
+    }
+}
+
+/// On a release range, the records it brings from verified lines, for the
+/// records rule to judge where each was introduced (SPC-013 R-120). `None`
+/// on an ordinary range, and when the range cannot be judged, which the
+/// acceptance check refuses.
+pub(super) fn brought(
+    root: &Path,
+    range: &Range<'_>,
+    names: &super::Names<'_>,
+) -> Option<codeflow_core::workgraph::lifecycle::Brought> {
+    let (destination, scope) = release_scope(root, names).ok()??;
+    let head = release_head(root, range, scope).ok()?;
+    release_line::release_findings(root, destination, range.base, &head)
+        .ok()
+        .map(|judged| judged.brought)
 }
 
 fn unscoped(error: &str) -> String {

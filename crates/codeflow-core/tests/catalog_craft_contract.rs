@@ -244,7 +244,8 @@ fn reviewer_and_ship_state_the_acceptance_binding() {
         &[
             "a task PR's last commit runs `codeflow task status <id>",
             "complete --acceptance <file>`; its block names the reviewed code commit",
-            "(late: the clean landing merge's second parent)",
+            "(late: the clean landing merge's second parent, or its reviewed ancestor",
+            "followed only by that record's status and Closeout)",
             "stay `deferred`, never verified at build time",
         ],
     );

@@ -1295,11 +1295,39 @@ fn check_task_anchor(
     let (merge_base, mut records) = anchored_records(&repo, target, head_id)?;
     let at_base = records.contains_key(task_id);
     standalone_at_head(&repo, &mut records, task_id, branch, admission, head_id)?;
+    // A named fix may reopen a complete task in this range (TSK-140). Only
+    // its status is projected onto the anchored readiness core; every
+    // planning input and dependency still comes from the merge-base. The
+    // reopened record is read where the check reads the change: at the
+    // named head (CI admission), else in the checkout.
+    if records
+        .get(task_id)
+        .is_some_and(|task| task.status == "complete")
+    {
+        let base = super::lifecycle::Graph::from_revision(&repo, &merge_base)
+            .map_err(WorkStartError::InvalidGraph)?;
+        let current = match head {
+            Some(_) => super::lifecycle::Graph::from_revision(&repo, &head_id.to_string())
+                .map_err(WorkStartError::InvalidGraph)?,
+            None => super::lifecycle::Graph::from_worktree(repo_root),
+        };
+        if let (Some(old), Some(now)) = (base.records.get(task_id), current.records.get(task_id)) {
+            if now.status == "todo" || super::lifecycle::is_recompletion(Some(old), now) {
+                let problems = super::lifecycle::reopen_problems(Some(old), now);
+                if !problems.is_empty() {
+                    return Err(WorkStartError::InvalidGraph(problems.join("; ")));
+                }
+                if let Some(task) = records.get_mut(task_id) {
+                    task.status = "todo".into();
+                }
+            }
+        }
+    }
     let anchored = validate_task_structure(&repo, &records, task_id, target, pins, &mut None)?;
-    // The start gate judges the record as the merge base has it: a task
-    // already complete or cancelled there takes no further change. A
-    // standalone record arriving with its code (admission) has no base
-    // record; `standalone_at_head` judged it.
+    // The start gate judges the record as the merge base has it, with a
+    // reopen in this range projected above: a task complete or cancelled
+    // there takes no further change. A standalone record arriving with its
+    // code (admission) has no base record; `standalone_at_head` judged it.
     if !admission || at_base {
         start_gate(&records[task_id], task_id)?;
     }

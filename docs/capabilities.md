@@ -465,7 +465,7 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs", "codeflow-cli tests/acceptance_cli.rs", "codeflow-cli tests/acceptance_journey.rs", "codeflow-cli tests/release_line_cli.rs"]
 epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-020]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060]
 ```
@@ -633,6 +633,12 @@ Record status moves only by legal transitions (SPC-013 R-30 to R-35).
 only the sections the transition needs: a `## Blocker` with reason, owner and
 revisit for a blocked task, Closeout lines `- cancelled:` and `- scope:` for a
 cancelled record, and a fenced `yaml` acceptance block on completion.
+A complete task can be fixed in one PR: reopen with a reason, retain its
+old block under `acceptance_superseded:`, fix it, then complete again with a
+reviewed commit inside that PR. The old block and criteria are compared
+with the anchored target; copied review blocks and a stale review carried
+by an earlier landing merge are refused. The separate planning-reopen
+path remains valid (TSK-140).
 Reopening keeps the old block under `acceptance_superseded:` with its reason;
 a task completed before the migration, with no block, records a Closeout line
 `- reopened: <reason>` instead. Sections and blocks inside HTML comments or
@@ -672,11 +678,16 @@ the integration line whose tree equals the clean re-merge, and that each
 waiver names the commit that changed that criterion: a planning-only
 amendment on the target, or a record-only commit in the pull request's own
 range before the reviewed commit; the verb also refuses uncommitted changes
-outside the record. At a batch landing each completion binds at the commit
+outside the record. A clean task landing can carry that reviewed source onto
+its line, including when only status and Closeout changed between the review
+and the landed task head; unrelated line work before the landing does not
+invalidate that source. Direct work and transported work use the same
+binding predicate. At a batch landing each completion binds at the commit
 that introduced its block, so reviewed heads land together on one
 candidate. A task pull request may change its own criteria, and CI prints
-the change for the reviewer; another task's criteria change only in its own
-pull request, a planning-only change or a checked epic line. A range touching the
+the change for the reviewer; a reopened task keeps its criteria, and
+another task's criteria change only in its own pull request, a
+planning-only change or a checked epic line. A range touching the
 adopter-facing path set needs a `(journey)` criterion or one serving the
 epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a
@@ -695,14 +706,29 @@ tree entry is brought, and its completions bind where they were introduced
 (only a later completion from the task's own line that binds there, and
 that the line landed after the earlier ones, supersedes them; a direct
 completion is judged as it was made);
-a brought criteria change is judged again where it landed on its line,
-unless that landing is at or before the cutoff of the line the task
-targets, on that line's first-parent chain, in the project-config table
-`release_rule_baseline` read at the default target, which lists it as
-information. The adoption marker `release_rules = 1` in project config
-never decides whether these rules apply; once the default target carries
-it, removing it or changing its value, there or in the judged range,
-makes every release check refuse. The marker's history is read from the
+a brought criteria change is judged again where it landed on its line.
+The records rule judges a brought record where it was introduced too: a
+spec approved on its line counts where it landed there, which must have
+been planning-only, and a record whose only change is a `uid` backfill
+landed on its line is not judged again. Two project-config tables, read
+at the default target, exist only for the 2.x to 3.0 transition: a
+brought criteria change landed at or before the cutoff in
+`release_rule_baseline`, and a brought complete task without an
+acceptance block whose record last changed at or before the cutoff in
+`release_records_baseline`, each for the line the task targets and on its
+first-parent chain, are listed as information. `codeflow init` and
+`update` write the adoption marker `release_rules = 1` in project config
+and never a table. The marker never decides whether these rules apply;
+once the default target carries it, removing it or changing its value,
+there or in the judged range, makes every release check refuse. A table
+is honoured only as a one-time bridge for CodeFlow's own history: added in
+one commit and never changed, at or before the marker's first commit on
+the default target, after project config without the marker, with every
+cutoff from before the rule, on its line's first-parent chain and one of
+CodeFlow's approved cutoffs, which the judge compiles in; otherwise every
+release check refuses. A consuming project, a fork that keeps CodeFlow's
+root commit included, gains no relief for its own work. No flag, variable
+or policy key skips the rule or a table. The marker's history is read from the
 parents each commit records. History the check needs that it cannot read
 in full, cut by a shallow boundary or missing a config object, refuses as
 well: adoption is never inferred absent from it. A graft file or a replace
