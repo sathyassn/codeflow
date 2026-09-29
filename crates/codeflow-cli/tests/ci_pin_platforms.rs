@@ -791,3 +791,177 @@ fn a_branch_that_predates_a_raised_pin_does_not_lower_it() {
         );
     }
 }
+
+/// Run git in `dir` with the author and committer date set to `date`.
+fn git_at(dir: &Path, date: &str, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// How a criss-cross head is shaped and dated (Fable's review of the round
+/// 1 fix). `main` raises the pin from 1.2.3 to 1.2.4 on branch B while a
+/// feature C starts from the same 1.2.3 commit.
+#[derive(Clone, Copy, Debug)]
+enum CrissCross {
+    /// Both land on `main` by no-ff merges (D1 then D2); the head merges
+    /// D1 into C with `-s ours`, keeping 1.2.3, and adds a commit. C is
+    /// dated after D1, so `git merge-base` picks C, the 1.2.3 base.
+    NoFfFeatureNewer,
+    /// The same shape with C dated before B.
+    NoFfFeatureOlder,
+    /// The target merges C into B; the head is C's tree plus a file with
+    /// parents C and B. C is dated after B.
+    Plain,
+}
+
+/// Build `shape` on top of the fixture's 1.2.3 scaffold and return the
+/// target and the head, whose real merge lowers the pin to 1.2.3.
+fn criss_cross(fx: &Fixture, shape: CrissCross) -> (String, String) {
+    let repo = fx.repo();
+    let a = git(&repo, &["rev-parse", "main"]);
+    let (raise, feature) = match shape {
+        CrissCross::NoFfFeatureNewer => ("2030-01-02T10:00:00", "2030-01-04T10:00:00"),
+        CrissCross::NoFfFeatureOlder => ("2030-01-03T10:00:00", "2030-01-02T10:00:00"),
+        CrissCross::Plain => ("2030-01-02T10:00:00", "2030-01-03T10:00:00"),
+    };
+    git(&repo, &["checkout", "-q", "-B", "raise", &a]);
+    set_pin(&repo, "1.2.4");
+    git_at(
+        &repo,
+        raise,
+        &["commit", "-qam", "chore: raise the codeflow pin"],
+    );
+    let b = git(&repo, &["rev-parse", "HEAD"]);
+    git(&repo, &["checkout", "-q", "-B", "feat/x", &a]);
+    std::fs::write(repo.join("c.txt"), "c\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git_at(&repo, feature, &["commit", "-qm", "feat: add c"]);
+    let c = git(&repo, &["rev-parse", "HEAD"]);
+    let (target, head) = if let CrissCross::Plain = shape {
+        git(&repo, &["checkout", "-q", "--detach", &b]);
+        git_at(
+            &repo,
+            "2030-01-04T12:00:00",
+            &["merge", "-q", "--no-ff", "-m", "Merge feat", &c],
+        );
+        let target = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["checkout", "-q", "feat/x"]);
+        std::fs::write(repo.join("e.txt"), "e\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        let tree = git(&repo, &["write-tree"]);
+        let head = git_at(
+            &repo,
+            "2030-01-06T10:00:00",
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &c,
+                "-p",
+                &b,
+                "-m",
+                "chore: sync with main",
+            ],
+        );
+        (target, head)
+    } else {
+        git(&repo, &["checkout", "-q", "main"]);
+        git_at(
+            &repo,
+            "2030-01-03T12:00:00",
+            &["merge", "-q", "--no-ff", "-m", "Merge raise", &b],
+        );
+        let d1 = git(&repo, &["rev-parse", "HEAD"]);
+        git_at(
+            &repo,
+            "2030-01-05T10:00:00",
+            &["merge", "-q", "--no-ff", "-m", "Merge feat", &c],
+        );
+        let target = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["checkout", "-q", "feat/x"]);
+        git_at(
+            &repo,
+            "2030-01-06T10:00:00",
+            &[
+                "merge",
+                "-q",
+                "-s",
+                "ours",
+                "-m",
+                "chore: sync with main",
+                &d1,
+            ],
+        );
+        std::fs::write(repo.join("e.txt"), "e\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git_at(
+            &repo,
+            "2030-01-06T11:00:00",
+            &["commit", "-qm", "feat: add e"],
+        );
+        (target, git(&repo, &["rev-parse", "HEAD"]))
+    };
+    git(&repo, &["checkout", "-q", "--detach", &head]);
+    (target, head)
+}
+
+/// A head that reaches an old-pin merge base through a criss-cross merge
+/// cannot pass as having kept its pin: every merge base must carry the
+/// head's pin, since the real merge lowers it (Fable's review, P1).
+#[test]
+fn a_criss_cross_head_cannot_keep_a_lowered_pin() {
+    for shape in [
+        CrissCross::NoFfFeatureNewer,
+        CrissCross::NoFfFeatureOlder,
+        CrissCross::Plain,
+    ] {
+        for platform in PLATFORMS {
+            let fx = Fixture::new();
+            fx.project("1.2.3");
+            fx.publish("1.2.3", &Binary::Real);
+            fx.publish("1.2.4", &Binary::Real);
+            let (target, head) = criss_cross(&fx, shape);
+            // The fixture is what the review found: git's real merge lowers it.
+            let merged = git(&fx.repo(), &["merge-tree", "--write-tree", &target, &head]);
+            let tree = merged.lines().next().unwrap();
+            let state = git(
+                &fx.repo(),
+                &["show", &format!("{tree}:.codeflow/project.toml")],
+            );
+            assert!(
+                state.contains("scaffold_version = \"1.2.3\""),
+                "{shape:?}: {state}"
+            );
+
+            let out = fx.run(platform, Some(&target), &head);
+            assert!(
+                !out.status.success(),
+                "{shape:?} {platform:?}: {}",
+                text(&out)
+            );
+            assert!(
+                text(&out).contains("lowers scaffold_version from 1.2.4 to 1.2.3"),
+                "{shape:?} {platform:?}: {}",
+                text(&out)
+            );
+            let calls = fx.calls();
+            assert!(calls.iter().all(|c| c.starts_with("1.2.4 ")), "{calls:?}");
+        }
+    }
+}

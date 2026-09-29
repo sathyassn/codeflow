@@ -97,11 +97,14 @@ pin=$(codeflow_pin "$target")
 [ -n "$pin" ] || codeflow_fail "no scaffold_version pinned in .codeflow/project.toml at ${target}"
 head_pin=$(codeflow_pin "$head")
 # A head that kept the pin it branched from lowers nothing: merging it
-# keeps the target's pin, and the target's binary judges it.
-fork=$(git merge-base "$target" "$head") || fork=
-if [ -n "$fork" ] && [ "$head_pin" = "$(codeflow_pin "$fork")" ]; then
-  head_pin="$pin"
-fi
+# keeps the target's pin, and the target's binary judges it. Every merge
+# base must carry the head's pin, since a criss-cross head chooses which
+# single base `git merge-base` prints; no base at all fails closed.
+kept=
+for base in $(git merge-base --all "$target" "$head" || true); do
+  if [ "$head_pin" = "$(codeflow_pin "$base")" ]; then kept=yes; else kept=no; break; fi
+done
+[ "$kept" != yes ] || head_pin="$pin"
 bin=$(mktemp -d)
 codeflow_install "$pin" "$bin"
 PATH="${bin}:${PATH}"
