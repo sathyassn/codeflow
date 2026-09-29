@@ -255,7 +255,15 @@ fn run_gate_resolved(
             }
         }
     }
-    targets.retain(|t| !(crate::testing::runner::is_ci_environment() && t.ci_skip == Some(true)));
+    // A target CI skips is still owed locally: a run without it is not
+    // complete, so a later local run never takes it as a green base for
+    // that target (TSK-184 AC-5).
+    let ci_skipped: Vec<String> = targets
+        .iter()
+        .filter(|t| crate::testing::runner::is_ci_environment() && t.ci_skip == Some(true))
+        .map(|t| t.name.clone())
+        .collect();
+    targets.retain(|t| !ci_skipped.contains(&t.name));
     let tools = delivery::preflight(project_dir, &targets, &effective_mode)?;
     let run_id = uuid::Uuid::new_v4().to_string();
     let target_dir = delivery::target_dir(project_dir);
@@ -365,12 +373,21 @@ fn run_gate_resolved(
         Err(error) => vec![format!("repository unavailable: {error}")],
     };
     let clean = dirty_paths.is_empty();
-    let complete =
-        selection.skipped.is_empty() && results.len() == targets.len() && effective_mode == "full";
+    let complete = selection.skipped.is_empty()
+        && ci_skipped.is_empty()
+        && results.len() == targets.len()
+        && effective_mode == "full";
+    if !ci_skipped.is_empty() && effective_mode == "full" {
+        eprintln!(
+            "[codeflow test] not complete: skipped in CI and still owed locally: {}",
+            ci_skipped.join(", ")
+        );
+    }
     let artifact = serde_json::json!({
         "schema_version": 1, "run_id": run_id, "revision": revision,
         "tree": tree, "config_digest": config_digest, "mode": effective_mode,
         "selection": selection, "passed": passed, "complete": complete, "clean": clean,
+        "ci_skipped": ci_skipped,
         "generation_unchanged": generation_unchanged, "dirty_paths": dirty_paths,
         "results": results, "coverage": coverage,
         "targets": targets.iter().map(|t| serde_json::json!({"name":t.name,"command":t.modes[&effective_mode].command,"requires":t.requires,"env":t.env})).collect::<Vec<_>>(),

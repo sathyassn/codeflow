@@ -771,3 +771,62 @@ fn evidence_records_the_resolved_tool_path_and_version() {
     );
     assert!(cargo.contains("cargo "), "tool version: {cargo}");
 }
+
+/// TSK-184 AC-5 (Astra's A184-2): a target CI skips is still owed locally.
+/// The CI run's artifact is not complete, so a local `--since` run does not
+/// take it as a green base for that target and runs it.
+#[cfg(unix)]
+#[test]
+fn a_ci_skipped_target_is_never_proved_by_the_ci_run() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2},"targets":[
+      {"name":"always","runner":"custom","modes":{"full":{"command":"echo control"}}},
+      {"name":"local-required","runner":"custom","ci_skip":true,"ci_skip_reason":"local hardware check","narrow":["src/**"],"modes":{"full":{"command":"exit 19"}}}] }"#,
+    );
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/input.txt"), "unchanged\n").unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: fixture"]);
+    let base = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let base = String::from_utf8(base.stdout).unwrap().trim().to_owned();
+    let home = tempfile::tempdir().unwrap();
+
+    // CI: the skipped target is omitted, and the artifact says so.
+    let output = command(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "full", "--all"],
+    )
+    .env("CI", "true")
+    .output()
+    .unwrap();
+    let err = stderr(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(err.contains("still owed locally: local-required"), "{err}");
+    let artifact = err
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] durable artifact: "))
+        .unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    assert_eq!(raw["complete"], false, "{raw}");
+    assert_eq!(
+        raw["ci_skipped"],
+        serde_json::json!(["local-required"]),
+        "{raw}"
+    );
+
+    // Local: the CI run is no green base, so the owed target runs and fails.
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "full", "--since", &base],
+    );
+    let err = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{err}");
+    assert!(!err.contains("skipped local-required"), "{err}");
+}
