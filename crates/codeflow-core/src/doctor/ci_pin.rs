@@ -34,6 +34,84 @@ const TARGETS: [&str; 5] = [
 const STATE: &str = ".codeflow/project.toml";
 const POLICY: &str = ".codeflow/policy.json";
 
+/// Each shipped install doctor recognizes: the template, and the first and
+/// last lines of the span that chooses the target commit and installs the
+/// release it pins, verified against the release's `sha256.sum`. The
+/// GitLab, Bitbucket and generic spans end with the shared pinned run.
+const INSTALLS: [(&str, &str, &str); 5] = [
+    (
+        include_str!("../../../../assets/base/ci/codeflow-ci.yml"),
+        "- name: Install codeflow (target-pinned, checksum-verified)",
+        "installed and verified against sha256.sum",
+    ),
+    (
+        include_str!("../../../../assets/base/ci/codeflow-policy.yml"),
+        "- uses: actions/checkout@v6",
+        "installed and verified against sha256.sum",
+    ),
+    (
+        include_str!("../../../../assets/base/ci/.gitlab-ci.yml"),
+        "if [ \"${CI_PIPELINE_SOURCE:-}\" = merge_request_event ]; then",
+        "# <<< codeflow pinned run",
+    ),
+    (
+        include_str!("../../../../assets/base/ci/bitbucket-pipelines.yml"),
+        "BASE=\"${BITBUCKET_PR_DESTINATION_COMMIT:-}\"",
+        "# <<< codeflow pinned run",
+    ),
+    (
+        include_str!("../../../../assets/base/ci/ci-generic.sh"),
+        "BASE=\"${1:-${BASE:-}}\"",
+        "# <<< codeflow pinned run",
+    ),
+];
+
+/// Whether a CI file carries one of the shipped pinned installs unchanged,
+/// at any indentation. Doctor claims the pin only for such a file: marker
+/// text, a comment or an edited install says nothing about what CI runs.
+pub(super) fn recognized(content: &str) -> bool {
+    let lines: Vec<&str> = content.lines().map(|l| l.trim_end_matches('\r')).collect();
+    INSTALLS.iter().any(|(template, first, last)| {
+        let Some(span) = span(template, first, last) else {
+            return false;
+        };
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.trim() == span[0])
+            .any(|(at, line)| {
+                let indent = &line[..line.len() - line.trim_start().len()];
+                lines.len() >= at + span.len()
+                    && lines[at..at + span.len()]
+                        .iter()
+                        .zip(&span)
+                        .all(|(line, want)| dedent(line, indent) == Some(want.as_str()))
+            })
+    })
+}
+
+/// The lines of `template` from the one holding `first` to the next one
+/// holding `last`, without the first line's indentation.
+fn span(template: &str, first: &str, last: &str) -> Option<Vec<String>> {
+    let lines: Vec<&str> = template.lines().collect();
+    let start = lines.iter().position(|line| line.contains(first))?;
+    let end = start + lines[start..].iter().position(|line| line.contains(last))?;
+    let indent = &lines[start][..lines[start].len() - lines[start].trim_start().len()];
+    lines[start..=end]
+        .iter()
+        .map(|line| dedent(line, indent).map(str::to_string))
+        .collect()
+}
+
+/// `line` without `indent`; a blank line is empty, and a line indented
+/// less than `indent` does not belong to the span.
+fn dedent<'a>(line: &'a str, indent: &str) -> Option<&'a str> {
+    if line.trim().is_empty() {
+        return Some("");
+    }
+    line.strip_prefix(indent)
+}
+
 /// The pin state of the checkout at `root`.
 pub(super) fn report(root: &Path) -> PinReport {
     let read = |path: &str| std::fs::read_to_string(root.join(path)).ok();
