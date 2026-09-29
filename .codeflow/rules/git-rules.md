@@ -9,12 +9,12 @@ Four planes provide defense in depth: git hooks, the in-session `git-guard`
 and `exec-guard`, scaffolded CI, and configured remote branch protection.
 Hooks and CI share `.codeflow/policy.json` and the `codeflow ci` checks
 (CodeFlow ADR-0017). Every tier ships the same armed policy and all five
-git-hook shims: **pre-commit** refuses protected-branch commits and staged
-secrets, **commit-msg** checks the commit format, AI attribution and emoji,
-**pre-push** checks branch naming and refuses protected-branch pushes,
-force-pushes and deletes, and **pre-merge-commit** and
-**reference-transaction** are the protected-branch merge and ref
-backstops.
+git-hook shims: **pre-commit** refuses protected-branch commits, staged
+secrets and unresolved conflict markers, **commit-msg** checks the commit
+format, AI attribution and emoji, **pre-push** checks branch naming and
+refuses protected-branch pushes, force-pushes and deletes, and
+**pre-merge-commit** and **reference-transaction** are the protected-branch
+merge and ref backstops.
 
 Installed files do not prove active enforcement: verify hook execution,
 harness trust and event support (interactive Codex needs the one-time

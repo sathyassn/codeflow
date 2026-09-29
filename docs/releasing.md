@@ -360,6 +360,24 @@ prevent exact-source checks, workflow dispatch, drafts, uploads, or releases.
 Treat a zero-step or permission failure as absent evidence and repair the
 repository setting—never bypass the source and publication guards.
 
+### Ceremony check before a release
+
+Before the tag, run the ceremony report over the release's window, from a
+clone that has fetched every epic line:
+
+```sh
+codeflow report ceremony --since <the previous release's date>
+```
+
+Compare it with the recorded baseline in
+`docs/verification/ceremony-baseline-2026-09-28.md` (pull requests per
+logical change, the record status count, review rounds and refusals), and
+paste the output with a one-line comparison into the release checklist.
+This is information for the release decision and never blocks it. Review
+rounds print `unknown` when the host cannot answer or holds no review, and
+refusals print `unknown` for any part of the window before this clone began
+recording them; neither is estimated.
+
 ### Historical bridge into v3
 
 The live `v2.1.0` tag remains at

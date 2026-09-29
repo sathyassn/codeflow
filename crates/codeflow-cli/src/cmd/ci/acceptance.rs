@@ -14,6 +14,7 @@ use codeflow_core::workgraph::acceptance::{
     pull_request_findings, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::classify::is_planning_path;
+use codeflow_core::workgraph::release_line;
 use codeflow_core::workgraph::{check_epic_line, task_id_from_branch};
 
 use super::classification::{range_changes, Class, Range};
@@ -25,7 +26,7 @@ pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
     range: Option<&Range<'_>>,
-    branch: &str,
+    names: &super::Names<'_>,
     class: Option<&Class>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
@@ -38,8 +39,12 @@ pub(super) fn dispatch(
     }
     ran.push("acceptance");
     println!("codeflow ci: acceptance: {SCOPE_NOTE}");
-    let found = criteria(root, range, branch, class)
-        .and_then(|criteria| pull_request_findings(root, range.base, range.head, criteria));
+    let branch = names.branch;
+    let found = match judge(root, range, names) {
+        Some(judged) => judged,
+        None => criteria(root, range, branch, class)
+            .and_then(|criteria| pull_request_findings(root, range.base, range.head, criteria)),
+    };
     match found {
         Ok(found) => tagged.extend(found.into_iter().map(|found| violation(git, found))),
         Err(error) => tagged.push(violation(
@@ -50,6 +55,73 @@ pub(super) fn dispatch(
             },
         )),
     }
+}
+
+/// The release-range judgement (SPC-013 R-120), or `None` for an ordinary
+/// range. Scope comes from the head and target names under the policy at
+/// the destination's default target; when that cannot be read the check
+/// fails closed. A pull request into a release branch is judged as the
+/// merge it would create.
+fn judge(
+    root: &Path,
+    range: &Range<'_>,
+    names: &super::Names<'_>,
+) -> Option<Result<Vec<Finding>, String>> {
+    let asked = match (names.destination, names.advertisement) {
+        (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
+        _ => release_line::ask_destination(root, names.destination),
+    };
+    let destination = match asked {
+        Ok(destination) => destination,
+        Err(error) => return Some(Err(unscoped(&error))),
+    };
+    let scope = match release_line::scope(root, &destination, names.branch, names.into) {
+        Ok(scope) => scope,
+        Err(error) => return Some(Err(unscoped(&error))),
+    };
+    if !scope.release() {
+        return None;
+    }
+    // The scope this range is judged under: a result, not a finding. The
+    // pre-push hook states a release push's scope itself.
+    eprintln!(
+        "codeflow ci: acceptance: release range ('{}'{}) under pattern '{}' ({}); each change is judged where it was introduced (SPC-013 R-120)",
+        names.branch,
+        names
+            .into
+            .map(|into| format!(" into '{into}'"))
+            .unwrap_or_default(),
+        scope.pattern,
+        scope.source
+    );
+    let head = if scope.into {
+        match release_line::pull_request_merge(root, range.base, range.head) {
+            Ok(merge) => merge.to_string(),
+            Err(error) => return Some(Err(error)),
+        }
+    } else {
+        range.head.to_string()
+    };
+    Some(
+        release_line::release_findings(root, &destination, range.base, &head).map(|judged| {
+            for step in &judged.path {
+                println!("codeflow ci: acceptance: release path: {step}");
+            }
+            // A notice, so the pre-push hook shows it on a passing push too.
+            for note in &judged.notes {
+                let notice = codeflow_core::remedy::Finding::new(
+                    format!("acceptance: {note}"),
+                    codeflow_core::remedy::RELEASE_LEGACY_CHANGE.remedy(),
+                );
+                eprintln!("{}", notice.line("codeflow ci", "notice"));
+            }
+            judged.findings
+        }),
+    )
+}
+
+fn unscoped(error: &str) -> String {
+    format!("whether this is a release range cannot be decided, so nothing is judged under the ordinary rules instead (SPC-013 R-120): {error}")
 }
 
 /// Criteria may change only in a planning-only change or on a validated

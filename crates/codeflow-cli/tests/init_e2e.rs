@@ -1502,6 +1502,81 @@ fn fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it() {
     }
 }
 
+/// TSK-163 AC-4 (serves EPC-020 AC-13): fresh standard and full scaffolds
+/// install the lane and the turn adapter with each delegated turn rule stated
+/// once, in the adapter, before launch; `codeflow update` brings them to a
+/// project installed before TSK-163 and leaves none of the lane's old copies.
+#[test]
+fn fresh_scaffolds_install_the_turn_rules_in_the_adapter_and_update_brings_them() {
+    const LANE: &str = "skills/cf-delegate/resources/lane-lifecycle.md";
+    const ADAPTER: &str = "skills/cf-delegate/resources/claude-turn-completion.md";
+    // The lane's own copies before TSK-163: the launch, turn detection and a
+    // preflight run "before delivery".
+    const STALE: &[&str] = &[
+        "tmux new-session -d -s cf-run-42",
+        "**Turn detection is the lifecycle, not the pane.**",
+        "**Sibling Stop-hook preflight.** Before delivery",
+    ];
+    let assets = repo_root().join("assets/base/claude");
+    for tier in ["--standard", "--full"] {
+        let (_tmp, root) = fresh(tier);
+        for tree in [".claude", ".agents"] {
+            for rel in [LANE, ADAPTER] {
+                assert_eq!(
+                    normalize_crlf(&read(&root, &format!("{tree}/{rel}"))),
+                    normalize_crlf(&std::fs::read_to_string(assets.join(rel)).unwrap()),
+                    "{tier}: {tree}/{rel} differs from its asset"
+                );
+            }
+            let lane = read(&root, &format!("{tree}/{LANE}"));
+            for stale in STALE {
+                assert!(!lane.contains(stale), "{tier}: {tree} lane keeps {stale}");
+            }
+            let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(words(&lane).contains("before launching Claude, read and follow the shipped"));
+            let adapter = words(&read(&root, &format!("{tree}/{ADAPTER}")));
+            let preflight = adapter.find("Reject any sibling Stop hook").unwrap();
+            assert!(
+                preflight < adapter.find("tmux new-session").unwrap(),
+                "{tier}: {tree} adapter places the preflight after launch"
+            );
+        }
+        let fresh_skills = skill_tree_snapshot(&root);
+
+        // A project installed before TSK-163: the lane with its own copies,
+        // recorded as unmodified.
+        for tree in [".claude", ".agents"] {
+            let lane = read(&root, &format!("{tree}/{LANE}"));
+            let older = format!(
+                "{lane}\n```sh\ntmux new-session -d -s cf-run-42 -x 220 -y 50\n```\n\n\
+                 - **Turn detection is the lifecycle, not the pane.** `init` wires the hooks.\n\
+                 - **Sibling Stop-hook preflight.** Before delivery, enumerate the \
+                 effective Stop-hook set.\n"
+            );
+            record_as_installed(&root, &format!("{tree}/{LANE}"), Some(&older));
+        }
+
+        let update = codeflow(&root, &["update"]);
+        let report = output_text(&update);
+        assert!(update.status.success(), "{tier}: update failed: {report}");
+        assert!(!report.contains("CONFLICT"), "{tier}: {report}");
+        assert_eq!(
+            skill_tree_snapshot(&root),
+            fresh_skills,
+            "{tier}: update left the skill trees different from a fresh scaffold"
+        );
+        for tree in [".claude", ".agents"] {
+            let lane = read(&root, &format!("{tree}/{LANE}"));
+            for stale in STALE {
+                assert!(
+                    !lane.contains(stale),
+                    "{tier}: update left {tree} lane with {stale}"
+                );
+            }
+        }
+    }
+}
+
 /// Run one wired hook command (`codeflow hook <name>`) in `dir` with `payload`
 /// on stdin, the way a harness does, with `exe` standing in for `codeflow`.
 fn run_wired_hook_with(exe: &Path, dir: &Path, command: &str, payload: &str) -> Output {
@@ -2130,6 +2205,93 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
             && !err.contains("warning")
             && err.contains("codeflow pre-push: push not stopped"),
         "{err}"
+    );
+}
+
+/// The refusals line of `codeflow report ceremony` over every date.
+fn refusals_line(root: &Path) -> String {
+    let out = codeflow(root, &["report", "ceremony", "--since", "2000-01-01"]);
+    let text = output_text(&out);
+    assert!(out.status.success(), "{text}");
+    text.lines()
+        .find(|line| line.starts_with("Refusals hit by this clone's hooks and guards: "))
+        .unwrap_or_else(|| panic!("no refusals line in: {text}"))
+        .to_string()
+}
+
+/// TSK-149 AC-6 (journey): in a freshly scaffolded standard-tier project
+/// driven by the binary under test, a push the pre-push hook refuses shows
+/// in `codeflow report ceremony`, and a push it only warns about does not.
+#[test]
+fn a_refused_push_shows_in_the_ceremony_report_and_a_warned_push_does_not() {
+    let (tmp, root) = fresh("--standard");
+    let target = git_stdout(&root, &["branch", "--show-current"]);
+    let target = target.trim().to_string();
+
+    // The destination holds the seed, with commit format reported at warn.
+    git_with_binary(&root, &["switch", "-q", "-c", "chore/seed"]);
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    policy["git"]["commit_format"] = "warn".into();
+    std::fs::write(
+        &policy_path,
+        format!("{}\n", serde_json::to_string_pretty(&policy).unwrap()),
+    )
+    .unwrap();
+    git_with_binary(&root, &["add", ".codeflow/policy.json"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "chore: seed the journey"]);
+    let dest = tmp.path().join("dest.git");
+    let dest_str = dest.to_str().unwrap();
+    git_stdout(
+        tmp.path(),
+        &["init", "-q", "--bare", "-b", &target, dest_str],
+    );
+    git_with_binary(&root, &["remote", "add", "origin", dest_str]);
+    seed(&root, &dest, &target);
+    let base = format!("origin/{target}");
+    // The hooks that ran marked when recording began; nothing was refused.
+    let line = refusals_line(&root);
+    assert!(line.contains(": 0 since recording began at "), "{line}");
+
+    // A push straight to the protected target is refused.
+    git_with_binary(&root, &["switch", "-q", "-c", "feat/x", &base]);
+    std::fs::write(root.join("x.txt"), "x\n").unwrap();
+    git_with_binary(&root, &["add", "x.txt"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "feat: add x"]);
+    let refused = git_output_with_binary(
+        &root,
+        &["push", "-q", "origin", &format!("feat/x:{target}")],
+    );
+    let err = stderr_text(&refused);
+    assert!(!refused.status.success(), "{err}");
+    assert!(
+        err.contains("BLOCKED — policy rule git.push_to_protected (block)")
+            && err.contains("codeflow pre-push: push stopped"),
+        "{err}"
+    );
+    let line = refusals_line(&root);
+    assert!(
+        line.contains(": 1 since recording began at ") && line.ends_with(" (pre-push 1)"),
+        "{line}"
+    );
+
+    // A push with a finding at warn goes through and is not a refusal.
+    std::fs::write(root.join("y.txt"), "y\n").unwrap();
+    git_with_binary(&root, &["add", "y.txt"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "Not conventional."]);
+    let warned = git_output_with_binary(&root, &["push", "-q", "origin", "feat/x"]);
+    let err = stderr_text(&warned);
+    assert!(warned.status.success(), "{err}");
+    assert!(
+        err.contains("warning — policy rule git.commit_format (warn)")
+            && err.contains("codeflow pre-push: push not stopped"),
+        "{err}"
+    );
+    let line = refusals_line(&root);
+    assert!(
+        line.contains(": 1 since recording began at ") && line.ends_with(" (pre-push 1)"),
+        "{line}"
     );
 }
 

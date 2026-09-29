@@ -27,6 +27,9 @@ named human release decision.
       Recheck immediately before the human merge because clean is not fresh.
 - [ ] Every shipped behavior change links its capability/epic and accepted ADR;
       documentation describes current behavior, not an aspiration.
+- [ ] The ceremony report over the release's window is pasted here with a
+      one-line comparison against the recorded baseline (the runbook's
+      "Ceremony check before a release"). It is information and never blocks.
 
 ## 2. Source and security gates
 

@@ -23,56 +23,26 @@ subcommand when it conflicts with a working interactive session.
 
 CodeFlow's schema-v2 lifecycle proves what a terminal signal alone cannot:
 the session started cleanly, the delivered prompt was accepted as the armed
-turn, and the terminal event belongs to that turn. This is the one launch
-sequence:
+turn, and the terminal event belongs to that turn.
 
-```sh
-# Read the managed defaults, then any doctor-validated project override.
-CLAUDE_MODEL="<claude-primary native selector>"
-CLAUDE_EFFORT="<default effort>"
-codeflow delegate init --run-id run-42 --state-dir "$STATE" \
-  --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT"  # prints generated settings.json
-tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree \
-  "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
-# For consult/no-edit, use the same launch with --permission-mode auto.
-codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until ready --timeout-seconds 120
-printf '%s' "$PROMPT" > "$RUN_TMP/turn-1.prompt"   # outside the repo
-codeflow delegate arm --run-id run-42 --state-dir "$STATE" --turn-id turn-1 --prompt-file "$RUN_TMP/turn-1.prompt"
-tmux load-buffer -b cf-run-42-turn-1 "$RUN_TMP/turn-1.prompt"; tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
-sleep 0.3  # bounded input-settle; not completion detection
-# Only if the input shows a "[Pasted text" attachment:
-tmux send-keys -l -t cf-run-42 'Carry out the pasted instructions.'; sleep 0.3
-tmux send-keys -t cf-run-42 Enter
-codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until accepted --turn-id turn-1 --timeout-seconds 120
-codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --turn-id turn-1 --timeout-seconds 3600
-```
+On this Codex host lane, before launching Claude, read and follow the
+shipped [turn lifecycle adapter](claude-turn-completion.md), which states
+the launch sequence, turn detection and the sibling Stop-hook preflight;
+never improvise a parser, scrape transcripts, or use pane stability as
+completion.
 
-When `HERDR_ENV=1`, use the named Herdr tab per `cf-herdr` (launch-local task
-environment, `--settings`, model/effort, production `bypassPermissions`,
-consult auto); deliver the armed file with `herdr pane send-text` as that
-skill names, never `tmux load-buffer`. Lifecycle waits stay the completion
-signal.
+When `HERDR_ENV=1`, launch in the named Herdr tab per `cf-herdr` in place
+of the adapter's tmux session (launch-local task environment, `--settings`,
+model/effort, production `bypassPermissions`, consult auto); deliver the
+armed file with `herdr pane send-text` as that skill names, never
+`tmux load-buffer`. Lifecycle waits stay the completion signal.
 
-- **Turn detection is the lifecycle, not the pane.** `init` creates owner-only
-  state outside every Git worktree and wires `SessionStart`,
-  `UserPromptSubmit`, `Stop`, and `StopFailure` to `codeflow hook
-  delegate-turn --state-dir`; the generated settings file is immutable.
-  Turns are sequential, one outstanding armed turn per run; restarts,
-  mis-correlated events and interrupted waits after acceptance poison the
-  run, and recovery is a new run id in a fresh state directory. On this Codex host
-  lane, use the shipped [turn lifecycle adapter](claude-turn-completion.md)
-  for exact mechanics; never improvise a parser, scrape transcripts, or use
-  pane stability as completion.
-  The adapter holds the correlation contract: exact-byte delivery and
-  acceptance, the sibling Stop-hook preflight to run before delivery, task
-  notices and the stable exit states.
 - **Pane access is diagnosis-only.** Capture only the dedicated task pane,
   and only for bounded diagnosis when a wait times out or a result is
   malformed, to answer an explicit in-turn dialog, or once after a paste to
   see whether the input shows a paste attachment. Never enumerate or
   capture unrelated tmux sessions; they may contain secrets or other users'
-  work. If acceptance times out and the pane shows the prompt still waiting,
-  send Enter once more and re-wait once; never blind or repeated Enter.
+  work.
 - **Effective autonomy is layered:** invoke the Claude primary with the selector
   and default effort from
   `../../cf-model-orchestrator/resources/current-ensemble.json`. The primary owns
@@ -108,8 +78,6 @@ signal.
   questions are handled in the same dedicated session. They never authorize a
   write silently, and a visible dialog never substitutes for the terminal
   lifecycle result.
-- **Follow-ups:** the session keeps its context; arm the next turn and
-  deliver to the same pane.
 - **Cleanup:** after harvesting the bounded result and the evidence
   verification needs, kill the task session and remove the state directory
   and private prompt files.

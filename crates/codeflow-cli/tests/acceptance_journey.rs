@@ -495,3 +495,307 @@ fn a_journey_tag_reads_with_sentence_punctuation_on_a_fresh_project() {
         "TSK-003 changes the adopter-facing path set but has no `(journey)` criterion",
     );
 }
+
+/// An acceptance block for a one-criterion record (`AC-1` only).
+fn single_acceptance(dir: &Path, name: &str, reviewed: &str) -> String {
+    let body = format!(
+        "acceptance:\n  reviewed: {reviewed}\n  review: session:journey@sha256:00\n  criteria:\n    AC-1: verified | the release journey ran\n  journey: verified | crates/codeflow-cli/tests/acceptance_journey.rs\n  not_verified: none\n  follow_ups: none: journey fixture\n  verdict: approved\n"
+    );
+    let path = dir.join(format!("{name}.yaml"));
+    std::fs::write(&path, body).unwrap();
+    path.to_string_lossy().to_string()
+}
+
+/// `git push` through the installed hooks; returns (success, output).
+fn push(root: &Path, args: &[&str]) -> (bool, String) {
+    let out = with_env(&mut Command::new("git"))
+        .arg("push")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .expect("git runs");
+    (out.status.success(), text(&out))
+}
+
+/// Journey (TSK-145 AC-6, SPC-013 R-120): on a fresh `codeflow init --full`
+/// project two epic lines each land a task completed in its own pull
+/// request; a release branch named under the built-in pattern merges both,
+/// carries one direct fix and the release-integration task's completion at
+/// its head. A real `git push` passes the installed pre-push hook, and the
+/// release pull request into main is judged under R-120 and clean. Code
+/// after the completion is refused at push and in CI; with no task carrying
+/// the role the fix has no owner.
+#[test]
+#[allow(clippy::too_many_lines)] // One journey keeps the release in the order a project meets it.
+fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
+    const LINE_A: &str = "integration/EPC-001-first";
+    const LINE_B: &str = "integration/EPC-002-second";
+    const RELEASE: &str = "integration/release-1";
+    const HOLDER: &str = "project-management/tasks/TSK-003.md";
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    // The scaffold's default branch is the default target.
+    let start = git(&root, &["branch", "--show-current"]);
+    let main = start.as_str();
+    git(&root, &["branch", LINE_A]);
+    git(&root, &["branch", LINE_B]);
+
+    // Plan: two epics, a task on each line, and the release-integration
+    // task, landed on both lines by planning merges.
+    git(&root, &["switch", "-q", "-c", "plan/release"]);
+    ok(&codeflow(&root, &["epic", "new", "first"]), "epic new");
+    ok(&codeflow(&root, &["epic", "new", "second"]), "epic new");
+    for (epic, line, title) in [("EPC-001", LINE_A, "first"), ("EPC-002", LINE_B, "second")] {
+        let args = ["task", "new", "--epic", epic, "--into", line, title];
+        ok(&codeflow(&root, &args), "task new");
+    }
+    let args = [
+        "task",
+        "new",
+        "--standalone-reason",
+        "owns release integration",
+        "--into",
+        main,
+        "release integration",
+    ];
+    ok(&codeflow(&root, &args), "task new (holder)");
+    for record in [EPIC, "project-management/epics/EPC-002.md"] {
+        edit(
+            &root,
+            record,
+            "- AC-1\n",
+            "- AC-1 When used, the system shall work.\n",
+        );
+    }
+    for record in [TASK, SECOND, HOLDER] {
+        edit(
+            &root,
+            record,
+            "- AC-1\n",
+            "- AC-1 When run, the system shall work.\n",
+        );
+    }
+    edit(
+        &root,
+        HOLDER,
+        "created:",
+        "role: release-integration\ncreated:",
+    );
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
+    policy["git"]["product_paths"] = serde_json::json!(["src/**"]);
+    std::fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).unwrap() + "\n",
+    )
+    .unwrap();
+    commit(&root, "chore: plan the release journey");
+    for line in [LINE_A, LINE_B] {
+        git(&root, &["switch", "-q", line]);
+        git(
+            &root,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "plan/release",
+                "-m",
+                "chore: land the plan",
+            ],
+        );
+    }
+
+    // Each line lands a task completed in its own pull request.
+    for (line, id, file) in [
+        (LINE_A, "TSK-001", "src/first.rs"),
+        (LINE_B, "TSK-002", "src/second.rs"),
+    ] {
+        let branch = format!("task/{id}-work");
+        git(&root, &["switch", "-q", "-c", &branch, line]);
+        ok(&codeflow(&root, &["work", "start", id]), "work start");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join(file), "pub fn work() {}\n").unwrap();
+        let reviewed = commit(&root, "feat: build the work");
+        let block = single_acceptance(dir.path(), id, &reviewed);
+        ok(
+            &codeflow(
+                &root,
+                &["task", "status", id, "complete", "--acceptance", &block],
+            ),
+            "task status complete",
+        );
+        commit(&root, "chore: complete the task");
+        git(&root, &["switch", "-q", line]);
+        git(
+            &root,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                &branch,
+                "-m",
+                "chore: land the task",
+            ],
+        );
+    }
+
+    // The destination: a bare repository holding main (a push to a
+    // protected branch is refused), then both lines through the hooks.
+    let origin = dir.path().join("origin.git");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", "-b", main, "origin.git"],
+    );
+    git(
+        &origin,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("{main}:{main}"),
+        ],
+    );
+    git(
+        &root,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&root, &["fetch", "-q", "origin"]);
+    git(&root, &["switch", "-q", main]);
+    let (pushed, said) = push(&root, &["origin", LINE_A, LINE_B]);
+    assert!(pushed, "the lines push:\n{said}");
+    git(&root, &["fetch", "-q", "origin"]);
+
+    // The release branch: both imports, one direct fix, and the
+    // release-integration task's completion at its head.
+    git(&root, &["switch", "-q", "-c", RELEASE, main]);
+    for line in [LINE_A, LINE_B] {
+        let from = format!("origin/{line}");
+        git(
+            &root,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                &from,
+                "-m",
+                "chore: import a line",
+            ],
+        );
+    }
+    std::fs::write(root.join("src/release.rs"), "pub fn release() {}\n").unwrap();
+    let fix = commit(&root, "fix: integrate the lines");
+    let block = single_acceptance(dir.path(), "TSK-003", &fix);
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "status",
+                "TSK-003",
+                "complete",
+                "--acceptance",
+                &block,
+            ],
+        ),
+        "the release-integration task completes at the head",
+    );
+    let completed = commit(&root, "chore: complete the release integration");
+    git(&root, &["switch", "-q", main]);
+    let (pushed, said) = push(&root, &["origin", RELEASE]);
+    assert!(pushed, "the release branch pushes:\n{said}");
+    assert!(
+        said.contains(
+            "'integration/release-1' is a release branch: `codeflow ci` judges everything it adds to"
+        ),
+        "{said}"
+    );
+
+    // The release pull request into main, judged under R-120: clean.
+    let into_main = codeflow(
+        &root,
+        &[
+            "ci", "--base", main, "--head", &completed, "--branch", RELEASE, "--into", main,
+        ],
+    );
+    let judged = ok(&into_main, "the release pull request into main");
+    assert!(
+        judged.contains(&format!(
+            "release range ('integration/release-1' into '{main}')"
+        )),
+        "{judged}"
+    );
+
+    // Fault: code after the completion, refused at push and in CI.
+    git(
+        &root,
+        &["switch", "-q", "-c", "integration/release-2", &completed],
+    );
+    std::fs::write(root.join("src/late.rs"), "pub fn late() {}\n").unwrap();
+    let late = commit(&root, "fix: a late change");
+    git(&root, &["switch", "-q", main]);
+    let (pushed, said) = push(&root, &["origin", "integration/release-2"]);
+    assert!(!pushed, "code after the completion pushed:\n{said}");
+    // The push is judged on everything the release branch adds to main, as
+    // its pull request is: the late code follows the owner's completion.
+    assert!(
+        said.contains(&format!(
+            "TSK-003 (completed directly on the release line at {}): src/late.rs changed after the reviewed commit",
+            &completed[..9]
+        )),
+        "{said}"
+    );
+    fails(
+        &codeflow(
+            &root,
+            &[
+                "ci",
+                "--base",
+                main,
+                "--head",
+                &late,
+                "--branch",
+                "integration/release-2",
+                "--into",
+                main,
+            ],
+        ),
+        "code after the completion",
+        &format!(
+            "TSK-003 (completed directly on the release line at {}): src/late.rs changed after the reviewed commit",
+            &completed[..9]
+        ),
+    );
+
+    // Fault: no task carries the role, so the fix has no owner.
+    git(
+        &root,
+        &["switch", "-q", "-c", "integration/release-3", &fix],
+    );
+    edit(&root, HOLDER, "role: release-integration\n", "");
+    let unowned = commit(&root, "chore: drop the role");
+    git(&root, &["switch", "-q", main]);
+    fails(
+        &codeflow(
+            &root,
+            &[
+                "ci",
+                "--base",
+                main,
+                "--head",
+                &unowned,
+                "--branch",
+                "integration/release-3",
+                "--into",
+                main,
+            ],
+        ),
+        "no release-integration task",
+        "no release-integration task to own it",
+    );
+}

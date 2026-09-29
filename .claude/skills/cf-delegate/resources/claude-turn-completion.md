@@ -72,14 +72,39 @@ effective `stopReviewGate` is off through the plugin's own surface; then it
 may be treated as nonblocking. CodeFlow does not read or infer plugin-private
 state — this check is the operator's, made against the plugin's own
 configuration, and an unknown or unverified sibling fails the preflight.
+A session loads its hooks when it starts, so the preflight runs after
+`init` writes the task settings file and before launch; a check at
+delivery comes too late.
 
 ## Launch and drive one turn
 
-The host's lane names the launch and paste commands (the lifecycle lane's
-one launch sequence on a Codex host, `cf-herdr` in a Herdr tab): `init`,
-launch with the generated settings, `wait --until ready`, write the prompt
-file outside the repository, `arm`, deliver it as below, then
-`wait --until accepted` and `wait --until terminal`.
+```sh
+# Read the managed defaults, then any doctor-validated project override.
+CLAUDE_MODEL="<claude-primary native selector>"
+CLAUDE_EFFORT="<default effort>"
+codeflow delegate init --run-id run-42 --state-dir "$STATE" \
+  --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT"
+# Run the sibling Stop-hook preflight above now; launch only when it passes.
+tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /absolute/worktree \
+  "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
+# For consult/no-edit, use the same launch with --permission-mode auto.
+codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
+  --until ready --timeout-seconds 120
+printf '%s' "$PROMPT" > "$RUN_TMP/turn-1.prompt"   # outside the repo
+codeflow delegate arm --run-id run-42 --state-dir "$STATE" \
+  --turn-id turn-1 --prompt-file "$RUN_TMP/turn-1.prompt"
+tmux load-buffer -b cf-run-42-turn-1 "$RUN_TMP/turn-1.prompt"
+tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
+sleep 0.3  # bounded TUI input-settle; not a completion heuristic
+# Only when the input line shows a "[Pasted text" attachment:
+tmux send-keys -l -t cf-run-42 'Carry out the pasted instructions.'
+sleep 0.3
+tmux send-keys -t cf-run-42 Enter
+codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
+  --until accepted --turn-id turn-1 --timeout-seconds 120
+codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
+  --until terminal --turn-id turn-1 --timeout-seconds 3600
+```
 
 For an evaluator-pinned CodeFlow executable, a login shell can reset `PATH`.
 Set any task-scoped candidate `PATH` in the actual launched shell after login

@@ -466,6 +466,37 @@ pub fn durable_work_tracking_enabled(repo_root: &Path) -> Result<bool, DurableTr
     })
 }
 
+/// The blob of `.codeflow/project.toml` in `tree`, walked one name at a
+/// time: `None` only when a name is really absent (or `.codeflow` is not a
+/// directory). An object this clone lacks, or a config path that is not a
+/// file, is an error naming the revision and path, never "not present".
+fn committed_state_entry(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    revision: &str,
+) -> Result<Option<git2::Oid>, String> {
+    let path = crate::scaffold::state::PROJECT_TOML;
+    let Some(folder) = tree.get_name(".codeflow") else {
+        return Ok(None);
+    };
+    if folder.kind() != Some(git2::ObjectType::Tree) {
+        return Ok(None);
+    }
+    let folder = repo.find_tree(folder.id()).map_err(|error| {
+        format!(
+            "{revision}: .codeflow cannot be read, so {path} cannot be: {}",
+            error.message()
+        )
+    })?;
+    let Some(entry) = folder.get_name("project.toml") else {
+        return Ok(None);
+    };
+    if entry.kind() != Some(git2::ObjectType::Blob) {
+        return Err(format!("{revision}: {path} is not a file"));
+    }
+    Ok(Some(entry.id()))
+}
+
 /// Whether durable work tracking was on in the committed tree of `revision`:
 /// a full-tier `.codeflow/project.toml`, or a supported task record path.
 /// CI reads this at the target so a pull request cannot switch tracking off
@@ -481,14 +512,26 @@ pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Res
         .revparse_single(revision)
         .and_then(|object| object.peel_to_tree())
         .map_err(|error| format!("{revision}: {error}"))?;
-    if let Ok(entry) = tree.get_path(Path::new(crate::scaffold::state::PROJECT_TOML)) {
-        let blob = repo
-            .find_blob(entry.id())
-            .map_err(|_| format!("{revision}: .codeflow/project.toml is not a file"))?;
+    if let Some(entry) = committed_state_entry(&repo, &tree, revision)? {
+        let blob = repo.find_blob(entry).map_err(|error| {
+            format!(
+                "{revision}: {} cannot be read: {}",
+                crate::scaffold::state::PROJECT_TOML,
+                error.message()
+            )
+        })?;
         let text = std::str::from_utf8(blob.content())
             .map_err(|_| format!("{revision}: .codeflow/project.toml is not UTF-8"))?;
         let state: crate::scaffold::state::ProjectState = toml::from_str(text)
             .map_err(|error| format!("{revision}: .codeflow/project.toml: {error}"))?;
+        // As the working tree's reader: an unsupported version is state
+        // this binary cannot read, never an untracked project.
+        if state.schema_version != 1 {
+            return Err(format!(
+                "{revision}: {}",
+                DurableTrackingError::UnsupportedStateVersion(state.schema_version)
+            ));
+        }
         if state.tier == crate::scaffold::manifest::Tier::Full {
             return Ok(true);
         }
@@ -643,6 +686,45 @@ pub fn declared_work_target(repo_root: &Path, task_id: &str) -> Option<String> {
                 .is_some_and(|stem| stem == task_id)
         })
         .and_then(|path| declared_work_target_at(&path))
+}
+
+/// Read a work branch's target from the pushed revision, not the checkout.
+/// Uses readiness's bounded reader and supported layouts for the matching
+/// task only. Returns a logical branch name for destination resolution.
+///
+/// # Errors
+///
+/// Returns an error if the revision or matching task cannot be read, so a
+/// caller can distinguish an unavailable target from an absent declaration.
+pub fn declared_work_target_at_revision(
+    repo_root: &Path,
+    branch: &str,
+    revision: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let Some(suffix) = work_branch_suffix(repo_root, branch) else {
+        return Ok(None);
+    };
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let tree = repo
+        .revparse_single(revision)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let records = records_from_tree_matching(&repo, &tree, |path, kind| {
+        kind == RecordKind::Task
+            && path
+                .rsplit('/')
+                .next()
+                .and_then(markdown_stem)
+                .is_some_and(|id| suffix.starts_with(&format!("{id}-")))
+    })?;
+    Ok(records
+        .values()
+        .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
+        .max_by_key(|record| record.id.len())
+        .and_then(|record| record.integration_target.as_deref())
+        .filter(|target| !target.trim().is_empty())
+        .map(|target| logical_target(target.trim()).to_owned()))
 }
 
 /// The `integration_target` the task record at `path` declares.
@@ -1171,6 +1253,14 @@ pub(crate) fn records_from_tree(
     repo: &Repository,
     tree: &git2::Tree<'_>,
 ) -> Result<BTreeMap<String, Record>, WorkStartError> {
+    records_from_tree_matching(repo, tree, |_, _| true)
+}
+
+fn records_from_tree_matching(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    include: impl Fn(&str, RecordKind) -> bool,
+) -> Result<BTreeMap<String, Record>, WorkStartError> {
     #[cfg(test)]
     TREE_PARSES.with(|parses| parses.set(parses.get() + 1));
     let mut records = BTreeMap::new();
@@ -1198,6 +1288,9 @@ pub(crate) fn records_from_tree(
         let Some(kind) = record_kind_for_tree_path(&path) else {
             return TreeWalkResult::Ok;
         };
+        if !include(&path, kind) {
+            return TreeWalkResult::Ok;
+        }
         // A record's size is read from its object header before its bytes,
         // so a hostile tip cannot make every reader load it.
         if odb
@@ -1464,6 +1557,56 @@ mod tests {
             None
         );
         assert_eq!(record_kind_for_tree_path("docs/tasks/TSK-001.md"), None);
+    }
+
+    /// A committed config whose `.codeflow` tree or blob this clone lacks
+    /// is an error naming the revision and path, never an absent state.
+    #[test]
+    fn a_missing_committed_state_object_is_never_absent() {
+        for missing in [".codeflow", ".codeflow/project.toml"] {
+            let dir = tempfile::tempdir().unwrap();
+            git(dir.path(), &["init", "-q", "-b", "main"]);
+            fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+            fs::write(
+                dir.path().join(".codeflow/project.toml"),
+                "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n",
+            )
+            .unwrap();
+            git(dir.path(), &["add", "-A"]);
+            git(
+                dir.path(),
+                &[
+                    "-c",
+                    "user.name=T",
+                    "-c",
+                    "user.email=t@example.com",
+                    "commit",
+                    "-q",
+                    "-m",
+                    "state",
+                ],
+            );
+            assert_eq!(
+                durable_work_tracking_enabled_at(dir.path(), "HEAD"),
+                Ok(true)
+            );
+            let repo = Repository::open(dir.path()).unwrap();
+            let tree = repo.head().unwrap().peel_to_tree().unwrap();
+            let id = tree.get_path(Path::new(missing)).unwrap().id().to_string();
+            fs::remove_file(
+                dir.path()
+                    .join(".git/objects")
+                    .join(&id[..2])
+                    .join(&id[2..]),
+            )
+            .unwrap();
+            let error = durable_work_tracking_enabled_at(dir.path(), "HEAD").unwrap_err();
+            assert!(
+                error.starts_with("HEAD: ") && error.contains("cannot be read"),
+                "{missing}: {error}"
+            );
+            assert!(error.contains(".codeflow"), "{missing}: {error}");
+        }
     }
 
     fn git(root: &Path, args: &[&str]) {

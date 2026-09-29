@@ -94,7 +94,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 60] = [
+pub const SCHEMA: [KeySpec; 61] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -435,6 +435,18 @@ pub const SCHEMA: [KeySpec; 60] = [
                 is refused on.",
     },
     KeySpec {
+        path: "git.release_branch_pattern",
+        kind: KeyKind::String,
+        valid: "a branch glob (e.g. release/*); absent means integration/release-*",
+        purpose: "Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120).",
+        notes: "Read only from the policy at the default target's tip at the \
+                destination, so a pushed branch or a pull request cannot set \
+                its own scope; a change takes effect once it lands on the \
+                default target. A pattern that could match a protected branch \
+                or an epic line name (`integration/EPC-*`) is refused, so the \
+                default target and epic lines keep their own rules.",
+    },
+    KeySpec {
         path: "git.branch_naming",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
@@ -458,6 +470,18 @@ pub const SCHEMA: [KeySpec; 60] = [
         purpose: "Pre-commit scan for staged secrets and .env files.",
         notes: "Never suspended by bootstrap grace — but off/allow HERE does \
                 disable the scan (it is policy, not hardcoded); leave at block.",
+    },
+    KeySpec {
+        path: "git.conflict_markers",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170).",
+        notes: "Defaults to block. Only added lines are judged. A separator \
+                line counts only between an opening and a closing marker, so \
+                a Markdown heading underline passes. A file that must hold \
+                markers sets `conflict-marker-size` for its path in \
+                .gitattributes to a length its markers do not have. \
+                Suspended by bootstrap grace.",
     },
     KeySpec {
         path: "git.test_gate_on_push",
@@ -802,6 +826,8 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
         }
     }
 
+    release_pattern_errors(obj, &mut errors);
+
     // Backstop: catch anything the schema walk did not model (a structural
     // error, or a registry gap) rather than let the enforcement loader
     // silently default the file away.
@@ -815,6 +841,38 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+/// Refuse a `git.release_branch_pattern` that is not a glob or that could
+/// name the default target or an epic line (SPC-013 R-120), judged against
+/// the file's protected branches, or the defaults when it sets none.
+fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec<PolicyError>) {
+    let git = obj.get("git").and_then(Value::as_object);
+    let Some(pattern) = git
+        .and_then(|git| git.get("release_branch_pattern"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let protected: Vec<String> = git
+        .and_then(|git| git.get("protected_branches"))
+        .and_then(Value::as_array)
+        .map_or_else(
+            || Policy::default().git.protected_branches,
+            |items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            },
+        );
+    if let Some(problem) = crate::workgraph::release_line::pattern_problem(pattern, &protected) {
+        errors.push(PolicyError {
+            key: "git.release_branch_pattern".to_string(),
+            message: format!("invalid value '{pattern}' for git.release_branch_pattern; {problem}"),
+        });
     }
 }
 
@@ -1181,7 +1239,11 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 2] = ["git.pr_section_mapping", "security.headless_opt_in"];
+        const OPTIONAL: [&str; 3] = [
+            "git.pr_section_mapping",
+            "git.release_branch_pattern",
+            "security.headless_opt_in",
+        ];
         // The drift guard: every leaf the default Policy serializes must be in
         // the schema, and every schema path must be a real serde leaf — a new
         // field (or a renamed one) fails this test until the registry follows.
@@ -1281,6 +1343,17 @@ mod tests {
         let errs =
             validate_policy_str(r#"{"security":{"dangerous_commands":"nope"}}"#).unwrap_err();
         assert_eq!(errs[0].key, "security.dangerous_commands");
+    }
+
+    #[test]
+    fn test_conflict_markers_takes_every_level_and_refuses_others() {
+        // TSK-170 AC-5.
+        for level in ["block", "warn", "allow", "off"] {
+            let json = format!(r#"{{"git":{{"conflict_markers":"{level}"}}}}"#);
+            assert!(validate_policy_str(&json).is_ok(), "{level}");
+        }
+        let errs = validate_policy_str(r#"{"git":{"conflict_markers":"strict"}}"#).unwrap_err();
+        assert_eq!(errs[0].key, "git.conflict_markers");
     }
 
     #[test]

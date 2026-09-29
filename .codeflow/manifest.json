@@ -23,7 +23,7 @@
     ".agents/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "34165ed0927adde5ca645b0e632fd13770c8fbb9c8eea0c33f9987fcd060c429",
+      "sha256": "aa506d8d834eb4229d85824a219482344da37090ed54b51d7767a1aab266f134",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/agy.md": {
@@ -35,7 +35,7 @@
     ".agents/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "94c31ac1ff1b670f02db9de3ecf14b4c3d10afe88a5c05cd3a991f3e18b90393",
+      "sha256": "bad55624d09a79ef70eaa7c5fdff741925e263c1050d18b50758fef17935b4c0",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/edit-access.md": {
@@ -47,7 +47,7 @@
     ".agents/skills/cf-delegate/resources/lane-lifecycle.md": {
       "src": "claude/skills/cf-delegate/resources/lane-lifecycle.md",
       "ownership": "managed",
-      "sha256": "b750d696c38bcb20af701abe67804d02753c2499bcdb266c1f9b28bdca7c5a5e",
+      "sha256": "0789fc4f267c63a4ab06167c1775502381f0419daf64ba56c3e1e9e33bc2babd",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/lane-plugin.md": {
@@ -683,7 +683,7 @@
     ".claude/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "34165ed0927adde5ca645b0e632fd13770c8fbb9c8eea0c33f9987fcd060c429",
+      "sha256": "aa506d8d834eb4229d85824a219482344da37090ed54b51d7767a1aab266f134",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/agy.md": {
@@ -695,7 +695,7 @@
     ".claude/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "94c31ac1ff1b670f02db9de3ecf14b4c3d10afe88a5c05cd3a991f3e18b90393",
+      "sha256": "bad55624d09a79ef70eaa7c5fdff741925e263c1050d18b50758fef17935b4c0",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/edit-access.md": {
@@ -707,7 +707,7 @@
     ".claude/skills/cf-delegate/resources/lane-lifecycle.md": {
       "src": "claude/skills/cf-delegate/resources/lane-lifecycle.md",
       "ownership": "managed",
-      "sha256": "b750d696c38bcb20af701abe67804d02753c2499bcdb266c1f9b28bdca7c5a5e",
+      "sha256": "0789fc4f267c63a4ab06167c1775502381f0419daf64ba56c3e1e9e33bc2babd",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/lane-plugin.md": {
@@ -1349,13 +1349,13 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "224de39678278d087a7846ebcb50a152f5f70128750fbc3955023c30b98eff07",
+      "sha256": "f3d4f8ed4917bc455126e29364f8c918c163ec019a4b60575a54464575b678f8",
       "exec": false
     },
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "bda06b900e87ebf726abeba97403cb22bf8a8b3c7d6b20eef189919e85bfa3fc",
+      "sha256": "3cecd2dc2d2892afafbe1dcb90d96d12db81f574470444ede30b3f11e0cea705",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -1415,7 +1415,7 @@
     ".github/pull_request_template.md": {
       "src": "ci/pull_request_template.md",
       "ownership": "managed",
-      "sha256": "3bbe35bc3c8737f711cf7ba77c9837b139b4dba4c13f2cb1787ce0d140acf67a",
+      "sha256": "411716b38061b82127631c2a79b6f7528d436f93efb25b7ee6181fdbcad174d0",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {

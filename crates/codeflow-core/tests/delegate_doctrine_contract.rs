@@ -103,11 +103,11 @@ fn assert_ordered(relative: &str, markers: &[&str]) {
 
 #[test]
 fn lifecycle_sequence_is_ordered_across_delegate_assets() {
-    // TSK-184: the launch sequence is stated once, in the lifecycle lane; the
-    // adapter keeps the correlation contract and names the same order, and
-    // consult and customize point at cf-delegate instead of restating it.
+    // TSK-163: the sequence has one home, the adapter; the lane points there
+    // and `each_delegated_turn_rule_is_stated_once_in_the_adapter` fails when
+    // the lane states it again.
     assert_ordered(
-        DELEGATE_LIFECYCLE_LANE,
+        ADAPTER,
         &[
             "codeflow delegate init",
             "--until ready",
@@ -116,21 +116,6 @@ fn lifecycle_sequence_is_ordered_across_delegate_assets() {
             "Enter",
             "--until accepted",
             "--until terminal",
-        ],
-    );
-    assert_contains(
-        DELEGATE_LIFECYCLE_LANE,
-        &["This is the one launch sequence"],
-    );
-    assert_ordered(
-        ADAPTER,
-        &[
-            "`init`",
-            "`wait --until ready`",
-            "`arm`",
-            "deliver it as below",
-            "`wait --until accepted`",
-            "`wait --until terminal`",
         ],
     );
     assert_contains(
@@ -178,22 +163,22 @@ fn lifecycle_documents_stable_exits_immutability_turns_and_pane_discipline() {
             "recovery is a new run id in a fresh state directory",
         ],
     );
+    // TSK-163: immutability, sequential turns and the exit states moved with
+    // turn detection to the adapter; the lane keeps its pane rule.
     assert_contains(
-        DELEGATE_LIFECYCLE_LANE,
+        ADAPTER,
         &[
-            "the generated settings file is immutable",
-            "one outstanding armed turn per run",
-            "Pane access is diagnosis-only.",
-            "stable exit states",
+            "The generated settings file is immutable.",
+            "Each run permits one outstanding armed turn.",
+            "## Stable exit states",
         ],
     );
+    assert_contains(DELEGATE_LIFECYCLE_LANE, &["Pane access is diagnosis-only."]);
 }
 
 #[test]
 fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
-    // TSK-184: the canonical-prompt rule has one home, the adapter's
-    // correlation contract; the lifecycle lane keeps the bounded settle and
-    // the single retry in its one launch sequence.
+    // TSK-163: delivery and its bounded retry are stated once, in the adapter.
     assert_contains(
         ADAPTER,
         &[
@@ -209,19 +194,6 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
             "repeated Enter",
         ],
     );
-    assert_contains(
-        DELEGATE_LIFECYCLE_LANE,
-        &[
-            "exact-byte delivery and acceptance",
-            "sleep 0.3  # bounded input-settle; not completion detection",
-            "Carry out the pasted instructions.",
-            "send Enter once more",
-            "never blind or repeated Enter",
-        ],
-    );
-    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
-        assert_contains(asset, &["user scope"]);
-    }
     for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER, CONSULT] {
         assert!(
             !read(asset).contains("user or CLI scope"),
@@ -297,28 +269,196 @@ fn generic_claude_relay_never_counts_as_codex() {
     );
 }
 
-#[test]
-fn sibling_preflight_rejects_unknown_stop_hooks() {
-    // TSK-184: the preflight has one home, the adapter; the lifecycle lane
-    // names it as a step before delivery and consult points at cf-delegate.
-    assert_contains(
-        DELEGATE_LIFECYCLE_LANE,
-        &["the sibling Stop-hook preflight to run before delivery"],
-    );
-    assert_contains(
-        ADAPTER,
-        &[
+/// One rule of the delegated Claude turn that TSK-163 states once, in the
+/// adapter, as a step before launch.
+struct TurnRule {
+    name: &'static str,
+    /// The adapter's statement of the rule, in reading order.
+    adapter: &'static [&'static str],
+    /// Text that, found in the lifecycle lane, states the rule again.
+    restated_by: &'static [&'static str],
+}
+
+const TURN_RULES: &[TurnRule] = &[
+    TurnRule {
+        name: "launch sequence",
+        adapter: &[
+            "codeflow delegate init",
+            LAUNCH,
+            "--until ready",
+            "codeflow delegate arm",
+            "paste-buffer -p",
+            "--until accepted",
+            "--until terminal",
+        ],
+        restated_by: &[
+            "codeflow delegate init",
+            "codeflow delegate arm",
+            "codeflow delegate wait",
+            "tmux new-session",
+            "paste-buffer",
+            "send Enter once more",
+        ],
+    },
+    TurnRule {
+        name: "turn detection",
+        adapter: &[
+            "wires `SessionStart`, `UserPromptSubmit`, `Stop`, and `StopFailure`",
+            "The generated settings file is immutable.",
+            "Acceptance requires a `UserPromptSubmit` whose prompt matches the digest",
+            "Each run permits one outstanding armed turn.",
+        ],
+        restated_by: &[
+            "StopFailure",
+            "UserPromptSubmit",
+            "SHA-256",
+            "immutable",
+            "internal LF line endings",
+            "one outstanding armed turn",
+            "arm the next turn",
+        ],
+    },
+    TurnRule {
+        name: "sibling Stop-hook preflight",
+        adapter: &[
+            "Before launching, the operator enumerates the effective Stop-hook set",
             "Reject any sibling Stop hook you do not deterministically know to be nonblocking",
+            "stop-review-gate-hook.mjs",
             "an unknown or unverified sibling fails the preflight",
         ],
+        restated_by: &[
+            "Stop-hook set",
+            "Reject any sibling Stop hook",
+            "stop-review-gate-hook.mjs",
+            "stopReviewGate",
+        ],
+    },
+];
+
+/// The launch the preflight must come before: the adapter's first `claude`
+/// session start.
+const LAUNCH: &str = "tmux new-session";
+
+/// Every way `lane` and `adapter` break the one-home rule, each naming the
+/// rule: a rule the adapter lost or reordered, a rule the lane states again,
+/// and a preflight the adapter places after launch.
+fn turn_rule_faults(lane: &str, adapter: &str) -> Vec<String> {
+    let lane = normalized(lane);
+    let adapter = normalized(adapter);
+    let mut faults = Vec::new();
+    for rule in TURN_RULES {
+        let mut position = 0;
+        for marker in rule.adapter {
+            let needle = normalized(marker);
+            match adapter[position..].find(&needle) {
+                Some(found) => position += found + needle.len(),
+                None => faults.push(format!(
+                    "{}: the adapter lost it or states it out of order: {marker}",
+                    rule.name
+                )),
+            }
+        }
+        for marker in rule.restated_by {
+            if lane.contains(&normalized(marker)) {
+                faults.push(format!(
+                    "{}: the lifecycle lane states it again: {marker}",
+                    rule.name
+                ));
+            }
+        }
+    }
+    // A missing preflight or launch is already reported above.
+    let preflight = adapter.find("Reject any sibling Stop hook");
+    let launch = adapter.find(LAUNCH);
+    if let (Some(preflight), Some(launch)) = (preflight, launch) {
+        if preflight > launch {
+            faults.push(
+                "sibling Stop-hook preflight: the adapter places it after launch".to_string(),
+            );
+        }
+    }
+    faults
+}
+
+#[test]
+fn each_delegated_turn_rule_is_stated_once_in_the_adapter() {
+    let faults = turn_rule_faults(&read(DELEGATE_LIFECYCLE_LANE), &read(ADAPTER));
+    assert!(faults.is_empty(), "{}", faults.join("\n"));
+    // The lane keeps its pointer, read before launch.
+    assert_contains(
+        DELEGATE_LIFECYCLE_LANE,
+        &["before launching Claude, read and follow the shipped [turn lifecycle adapter](claude-turn-completion.md)"],
     );
+}
+
+#[test]
+fn a_restated_lost_or_late_turn_rule_fails_naming_it() {
+    let lane = read(DELEGATE_LIFECYCLE_LANE);
+    let adapter = read(ADAPTER);
+    // The lane stating each rule again, as it did before TSK-163.
+    for (rule, restatement) in [
+        (
+            "launch sequence",
+            "tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree",
+        ),
+        (
+            "turn detection",
+            "The generated settings file is **immutable** and bound to run id and state-dir spelling.",
+        ),
+        (
+            "sibling Stop-hook preflight",
+            "Before delivery, enumerate the effective Stop-hook set from every source the session loads.",
+        ),
+    ] {
+        let faults = turn_rule_faults(&format!("{lane}\n{restatement}\n"), &adapter);
+        assert!(
+            !faults.is_empty() && faults.iter().all(|f| f.starts_with(rule)),
+            "{rule}: {faults:?}"
+        );
+        assert!(faults.iter().all(|f| f.contains("states it again")));
+    }
+    // The adapter losing a rule.
+    let lost = adapter.replace("codeflow delegate arm", "codeflow delegate prime");
+    let faults = turn_rule_faults(&lane, &lost);
+    assert!(
+        faults
+            .iter()
+            .any(|f| f.starts_with("launch sequence: the adapter lost it")),
+        "{faults:?}"
+    );
+    // The adapter moving the preflight after launch.
+    let start = adapter
+        .find("## Sibling Stop-hook preflight")
+        .expect("preflight section");
+    let end = adapter
+        .find("## Launch and drive one turn")
+        .expect("launch section");
+    let moved = format!(
+        "{}{}\n{}",
+        &adapter[..start],
+        &adapter[end..],
+        &adapter[start..end]
+    );
+    let faults = turn_rule_faults(&lane, &moved);
+    assert!(
+        faults.contains(
+            &"sibling Stop-hook preflight: the adapter places it after launch".to_string()
+        ),
+        "{faults:?}"
+    );
+}
+
+#[test]
+fn sibling_preflight_rejects_unknown_stop_hooks() {
+    // TSK-163: the lane and adapter pins became the one guard above; the
+    // consult and customize pointers (TSK-184 wording) stay.
     assert_contains(CUSTOMIZE, &["sibling Stop-hook preflight"]);
     assert_contains(CONSULT, &["the preflight and the evidence contract"]);
 }
 
 #[test]
 fn sibling_preflight_permits_only_the_exact_known_safe_nonblocking_hook() {
-    // TSK-184: the preflight's one home is the adapter.
+    // TSK-163: stated once, in the adapter.
     assert_contains(
         ADAPTER,
         &[
@@ -327,7 +467,7 @@ fn sibling_preflight_permits_only_the_exact_known_safe_nonblocking_hook() {
             "plugin's own surface",
         ],
     );
-    // The check is the operator's, against the plugin's own configuration —
+    // The check is the operator's, against the plugin's own configuration;
     // CodeFlow ships no code that reads or infers plugin-private state.
     assert_contains(
         ADAPTER,
@@ -373,10 +513,12 @@ fn legacy_result_mode_is_compatibility_only_and_mutually_exclusive() {
     // TSK-184 removed the legacy-mode section from the shipped lanes (change
     // list WP5, cf-delegate row); the lanes offer only the schema-v2 lifecycle,
     // `delegate_cli.rs` keeps the never-fall-back rejection, and SPC-002 keeps
-    // the contract sentence.
+    // the contract sentence. TSK-163: the one launch sequence lives in the
+    // adapter, and the lane points there.
+    assert_contains(ADAPTER, &["## Launch and drive one turn"]);
     assert_contains(
         DELEGATE_LIFECYCLE_LANE,
-        &["This is the one launch sequence"],
+        &["read and follow the shipped [turn lifecycle adapter](claude-turn-completion.md)"],
     );
     for asset in [DELEGATE_SKILL, DELEGATE_LIFECYCLE_LANE, ADAPTER] {
         assert!(
@@ -499,12 +641,14 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
 
 #[test]
 fn tracked_claude_launch_uses_scoped_synchronous_task_mode() {
+    // TSK-163: the launch lines live in the adapter; the lane keeps the
+    // Herdr variant's launch-local environment.
+    assert_contains(DELEGATE_LIFECYCLE_LANE, &["launch-local task environment"]);
     assert_contains(
-        DELEGATE_LIFECYCLE_LANE,
+        ADAPTER,
         &[
             "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude",
             "For consult/no-edit, use the same launch with --permission-mode auto",
-            "launch-local task environment",
         ],
     );
     assert_contains(
