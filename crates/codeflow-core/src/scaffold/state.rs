@@ -43,6 +43,12 @@ pub struct ProjectState {
     pub permission_preset: String,
     #[serde(default)]
     pub product_one_liner: String,
+    /// The adoption marker of the release rule (SPC-013 R-120): `1`, written
+    /// by `init` and `update` of the release that brings the rule and never
+    /// rewritten after. It fixes where the transition tables stop; `init`
+    /// and `update` never write a table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_rules: Option<i64>,
 }
 
 impl ProjectState {
@@ -1071,6 +1077,7 @@ mod tests {
             git_hooks: GIT_HOOKS_WIRED.to_string(),
             permission_preset: "default".to_string(),
             product_one_liner: "demo".to_string(),
+            release_rules: None,
         };
         state.store(root).unwrap();
 
@@ -1181,6 +1188,7 @@ mod tests {
             git_hooks: GIT_HOOKS_UNWIRED.to_string(),
             permission_preset: "default".to_string(),
             product_one_liner: String::new(),
+            release_rules: None,
         };
         let error = state.store(dir.path()).unwrap_err().to_string();
         assert!(error.contains(PROJECT_TOML), "{error}");
@@ -1712,6 +1720,7 @@ mod tests {
             git_hooks: GIT_HOOKS_WIRED.to_string(),
             permission_preset: "default".to_string(),
             product_one_liner: "demo".to_string(),
+            release_rules: None,
         };
         let records: [(&str, Store); 3] = [
             (
