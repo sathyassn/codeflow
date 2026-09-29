@@ -68,12 +68,35 @@ pub const RECORDS_BASELINE_KEY: &str = "release_records_baseline";
 /// or whether it is there. Once the default target carries it, removing it
 /// or changing its value refuses every release check.
 pub const MARKER_KEY: &str = "release_rules";
-/// The root commit of `CodeFlow`'s own default target. The transition tables
-/// bridge only `CodeFlow`'s own 2.x to 3.0 history (operator ruling,
-/// 2026-09-28: no effect on consuming projects), so a default target whose
-/// first-parent history starts anywhere else is a consuming project, and a
-/// table there refuses every release check.
-const CODEFLOW_ROOT: &str = "f461c77bd411f5512b1fbfca3928ffee775ad869";
+/// `CodeFlow`'s approved release-rule cutoffs, one per epic line, each that
+/// line's tip on 2026-09-27 (`docs/verification/release-rule-cutoffs-2026-09-27.md`).
+/// The transition tables bridge only `CodeFlow`'s own 2.x to 3.0 history
+/// (operator ruling, 2026-09-28: no effect on consuming projects), so an
+/// entry of either table naming anything else refuses every release check.
+/// A repository can meet them only by holding `CodeFlow`'s own line history,
+/// and then they cover only `CodeFlow`'s own landings at or before them.
+const APPROVED_CUTOFFS: [(&str, &str); 5] = [
+    (
+        "integration/EPC-014-public-docs",
+        "d618075e229d49f706cf1c0e9ab5b10a3c9c69e3",
+    ),
+    (
+        "integration/EPC-015-engineering-bar",
+        "db55fc01c30f75d0eb1bd5f3df1de9dd8f9d1bff",
+    ),
+    (
+        "integration/EPC-016-visual-guide",
+        "51ee9374b506d9a359150ac15663c26c914b57cf",
+    ),
+    (
+        "integration/EPC-018-autonomy-roster",
+        "ccd56fa85160ac58d66828933e96c000357c4baa",
+    ),
+    (
+        "integration/EPC-020-delivery-system",
+        "2921df9f52a5e787f896146233a85201720591d3",
+    ),
+];
 /// Every epic line's name starts with this.
 const EPIC_PREFIX: &str = "integration/EPC-";
 
@@ -960,12 +983,24 @@ pub struct Judgement {
 ///
 /// Returns a message when a revision, a tree or an object the judge needs
 /// cannot be read or fetched.
-#[allow(clippy::too_many_lines)] // One pass over the path keeps the rules in the order R-120 states them.
 pub fn release_findings(
     repo_root: &Path,
     destination: &Destination,
     base: &str,
     head: &str,
+) -> Result<Judgement, String> {
+    judge(repo_root, destination, base, head, &APPROVED_CUTOFFS)
+}
+
+/// [`release_findings`] with the transition tables' entries limited to
+/// `approved`.
+#[allow(clippy::too_many_lines)] // One pass over the path keeps the rules in the order R-120 states them.
+fn judge(
+    repo_root: &Path,
+    destination: &Destination,
+    base: &str,
+    head: &str,
+    approved: &[(&str, &str)],
 ) -> Result<Judgement, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
@@ -999,7 +1034,7 @@ pub fn release_findings(
     let mut lines = Lines::new(repo_root, &repo, destination);
     // Read at the default target's tip, never from the range.
     let bridge = match &destination.default {
-        Some((name, tip)) => bridge(&repo, name, *tip, &path, &mut lines)?,
+        Some((name, tip)) => bridge(&repo, name, *tip, &path, &mut lines, approved)?,
         None => Bridge::default(),
     };
     let cutoffs = &bridge.rules;
@@ -1957,15 +1992,16 @@ struct Bridge {
 /// Its first appearance must be `1` as well. The marker never decides
 /// whether R-120 applies; it fixes the adoption point the tables stop at.
 ///
-/// Each table is honoured only as a one-time bridge: in `CodeFlow`'s own
-/// repository, whose default target starts at [`CODEFLOW_ROOT`]; added in
-/// one commit and never changed after it, at or before the adoption commit,
-/// with a commit carrying project config without the marker before
-/// adoption; and each cutoff's tree carrying project config without the
-/// marker, neither the adoption commit nor a descendant of it, and on its
-/// line's verified first-parent chain as the destination advertises it,
-/// whether or not a finding uses the entry. `lines` fetches the advertised
-/// lines, whose history holds the cutoffs, before they are read.
+/// Each table is honoured only as a one-time bridge: added in one commit
+/// and never changed after it, at or before the adoption commit, with a
+/// commit carrying project config without the marker before adoption; each
+/// cutoff's tree carrying project config without the marker, neither the
+/// adoption commit nor a descendant of it, and on its line's verified
+/// first-parent chain as the destination advertises it, whether or not a
+/// finding uses the entry; and, once every entry meets those, each entry
+/// one of the `approved` cutoffs, which [`release_findings`] fixes to
+/// [`APPROVED_CUTOFFS`]. `lines` fetches the advertised lines, whose
+/// history holds the cutoffs, before they are read.
 ///
 /// # Errors
 ///
@@ -1977,6 +2013,7 @@ fn bridge(
     tip: Oid,
     path: &[Oid],
     lines: &mut Lines<'_>,
+    approved: &[(&str, &str)],
 ) -> Result<Bridge, String> {
     let mut history = History::new(repo, default)?;
     let chain = history.chain(tip)?;
@@ -2058,6 +2095,21 @@ fn bridge(
             }
         }
     }
+    for (key, table) in TABLES.iter().zip(&tables) {
+        for (line, cutoff) in table {
+            let cutoff = cutoff.to_string();
+            if !approved.contains(&(line.as_str(), cutoff.as_str())) {
+                return Err(bridge_refusal(
+                    key,
+                    default,
+                    &format!(
+                        "names {} as the cutoff of {line}, which is not one of CodeFlow's approved cutoffs: the tables bridge only CodeFlow's own 2.x to 3.0 history, and no consuming project can use one",
+                        &cutoff[..9]
+                    ),
+                ));
+            }
+        }
+    }
     let records = tables.pop().unwrap_or_default();
     let rules = tables.pop().unwrap_or_default();
     Ok(Bridge { rules, records })
@@ -2069,9 +2121,8 @@ fn bridge_refusal(key: &str, default: &str, condition: &str) -> String {
     )
 }
 
-/// One table as the chain's configs hold it: on `CodeFlow`'s own default
-/// target, written once, at or before adoption, with project config without
-/// the marker before adoption.
+/// One table as the chain's configs hold it: written once, at or before
+/// adoption, with project config without the marker before adoption.
 fn table_on_chain(
     chain: &[Oid],
     configs: &[Config],
@@ -2099,13 +2150,6 @@ fn table_on_chain(
     let Some((first, value)) = added else {
         return Ok(BTreeMap::new());
     };
-    if chain.first().map(ToString::to_string).as_deref() != Some(CODEFLOW_ROOT) {
-        return Err(refuse(format!(
-            "is added at {}, but {default}'s history does not start at CodeFlow's root commit {}: the tables bridge only CodeFlow's own 2.x to 3.0 history, and no consuming project can use one",
-            short(chain[first]),
-            &CODEFLOW_ROOT[..9]
-        )));
-    }
     let table = parse_table(key, value)?;
     let Some(adoption) = adopted else {
         return Err(refuse(format!(
@@ -2196,3 +2240,7 @@ fn parse_table(key: &str, value: &toml::Value) -> Result<BTreeMap<String, Oid>, 
     }
     Ok(cutoffs)
 }
+
+#[cfg(test)]
+#[path = "release_line_tests.rs"]
+mod tests;

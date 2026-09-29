@@ -49,8 +49,9 @@ fn output(out: &std::process::Output) -> (i32, String) {
     )
 }
 
-/// `CodeFlow`'s own root commit, which the release judge compiles in: the
-/// transition tables bridge only a default target that starts at it.
+/// `CodeFlow`'s own root commit. Every fixture's main starts at it, so each
+/// fixture is a fork that keeps `CodeFlow`'s root, which still gets no relief
+/// from a transition table (Codex round 5).
 const CODEFLOW_ROOT: &str = "f461c77bd411f5512b1fbfca3928ffee775ad869";
 /// That commit's one file and the rest of its object after the tree line.
 const CODEFLOW_README: &str = "# CodeFlow\n\nAI-native development framework template for Claude Code.\n\n## Status\n\nPhase 1: Foundation - In Progress\n";
@@ -180,9 +181,8 @@ impl Fx {
         fx
     }
 
-    /// Start main at `CodeFlow`'s own root commit, rebuilt byte for byte, so
-    /// the fixture's default target is `CodeFlow`'s history, the only one the
-    /// transition tables bridge.
+    /// Start main at `CodeFlow`'s own root commit, rebuilt byte for byte, as a
+    /// fork that keeps it would.
     fn plant_codeflow_root(&self) {
         self.write("README.md", CODEFLOW_README);
         self.git(&["add", "README.md"]);
@@ -545,98 +545,48 @@ fn frozen_at(landing: &str) -> String {
     )
 }
 
-/// AC-10: a line's release-rule cutoff, read at the default target's tip,
-/// turns a brought criteria change landed with code at or before it into
-/// information naming the task, line, landing, cutoff and policy commit.
-#[test]
-fn a_criteria_change_at_or_before_the_line_cutoff_is_information() {
-    // At the cutoff.
-    let fx = Fx::new(false);
-    let landing = land_mixed(&fx, "src/mixed.rs");
-    let policy = record_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{landing}\"\n"));
-    fx.cut_release();
-    fx.import(LINE_A);
-    let result = agree(&fx, "at the cutoff");
-    passes(&result, "a landing at the cutoff");
-    let note = format!(
-        "legacy criteria change, landed before the release rule: TSK-003 on {LINE_A}, landing {}, cutoff {}, policy main at {}",
-        &landing[..9],
-        &landing[..9],
-        &policy[..9]
-    );
-    assert!(result.1.contains(&note), "{}", result.1);
-    let hook = fx.pre_push_release();
-    assert!(hook.1.contains(&note), "the hook shows it:\n{}", hook.1);
-
-    // Before the cutoff: a later planning landing on the line is the cutoff.
-    let fx = Fx::new(false);
-    let landing = land_mixed(&fx, "src/mixed.rs");
-    let cutoff = fx.amend_on_line(LINE_A, "TSK-004", STRONGER);
-    record_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{cutoff}\"\n"));
-    fx.cut_release();
-    fx.import(LINE_A);
-    let result = agree(&fx, "before the cutoff");
-    passes(&result, "a landing before the cutoff");
-    assert!(
-        result.1.contains(&format!(
-            "landing {}, cutoff {}",
-            &landing[..9],
-            &cutoff[..9]
-        )),
-        "{}",
-        result.1
-    );
+/// The refusal of a `key` entry naming `cutoff` for `line` that meets every
+/// other bridge condition but is not one of `CodeFlow`'s approved cutoffs.
+fn unapproved(key: &str, line: &str, cutoff: &str) -> String {
+    format!(
+        "`{key}` on main names {} as the cutoff of {line}, which is not one of CodeFlow's approved cutoffs",
+        &cutoff[..9]
+    )
 }
 
-/// AC-10 negative twins: after the cutoff, a topic made before the cutoff
-/// but landed after it, a cutoff recorded for another line, and a cutoff
-/// from another line's chain.
+/// AC-14 (operator ruling, 2026-09-28; Codex round 5): a fork that keeps
+/// `CodeFlow`'s root commit, as every fixture here does, and records a valid
+/// release-rule cutoff at a covered landing gets no relief: the shipped
+/// judge approves only `CodeFlow`'s own cutoffs, so CI and pre-push refuse
+/// and list no legacy criteria change. The relief itself is tested in
+/// `release_line_tests.rs` with the fixture's cutoffs approved.
 #[test]
-fn a_criteria_change_the_cutoff_does_not_cover_is_refused() {
-    // After the cutoff.
+fn a_fork_keeping_codeflows_root_gets_no_rule_relief() {
     let fx = Fx::new(false);
-    let before = fx.git(&["rev-parse", LINE_A]);
+    assert_eq!(
+        fx.git(&["rev-list", "--max-parents=0", "main"]),
+        CODEFLOW_ROOT
+    );
     let landing = land_mixed(&fx, "src/mixed.rs");
-    record_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{before}\"\n"));
+    record_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{landing}\"\n"));
     fx.cut_release();
     fx.import(LINE_A);
+    let result = agree(&fx, "a fork's rule table");
     blocks(
-        &agree(&fx, "after the cutoff"),
-        "a landing after the cutoff",
+        &result,
+        "a fork's rule table",
         &[
-            "work.criteria_frozen",
-            &frozen_at(&landing),
-            "release-rule cutoff",
+            &unapproved("release_rule_baseline", LINE_A, &landing),
+            "no consuming project can use one",
         ],
     );
+    assert!(!result.1.contains("legacy criteria change"), "{}", result.1);
+}
 
-    // A backdated topic: committed before the cutoff, landed after it.
-    let fx = Fx::new(false);
-    fx.git(&["switch", "-q", "-C", "task/TSK-001-early", LINE_A]);
-    fx.write("src/early.rs", "// early\n");
-    let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
-    fx.write(&path("TSK-003"), &current.replace(CRITERIA, LOOSER));
-    fx.git(&["add", "-A"]);
-    fx.git(&[
-        "-c",
-        "user.name=early",
-        "commit",
-        "-q",
-        "--date=2001-01-01T00:00:00",
-        "-m",
-        "feat: an early topic",
-    ]);
-    let cutoff = fx.amend_on_line(LINE_A, "TSK-004", STRONGER);
-    let landing = fx.land(LINE_A, "task/TSK-001-early");
-    record_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{cutoff}\"\n"));
-    fx.cut_release();
-    fx.import(LINE_A);
-    blocks(
-        &agree(&fx, "backdated"),
-        "a topic landed after the cutoff",
-        &["work.criteria_frozen", &frozen_at(&landing)],
-    );
-
+/// AC-10 negative twins: a cutoff recorded for another line, and a cutoff
+/// from another line's chain, each off its line's chain.
+#[test]
+fn a_criteria_change_the_cutoff_does_not_cover_is_refused() {
     // The wrong line: the cutoff is recorded for line B, off its chain.
     let fx = Fx::new(false);
     let landing = land_mixed(&fx, "src/mixed.rs");
@@ -666,112 +616,9 @@ fn a_criteria_change_the_cutoff_does_not_cover_is_refused() {
     );
 }
 
-/// AC-10 (Codex R145-R2-1): the cutoff is the one of the line the task
-/// targets. Another verified line whose first-parent chain holds the same
-/// landing (a shadow line advertised at it, or a line stacked on it) never
-/// lends its cutoff; a task's own line covers a landing it holds through
-/// stacking.
-#[test]
-fn the_cutoff_comes_from_the_line_the_task_targets() {
-    // A shadow line, sorted before line A, advertised at the landing with
-    // that landing as its cutoff; line A's own cutoff is earlier.
-    let fx = Fx::new(false);
-    let shadow = "integration/EPC-000-shadow";
-    fx.git(&["switch", "-q", "main"]);
-    fx.write("project-management/epics/EPC-000.md", &epic("EPC-000"));
-    fx.write(
-        &path("TSK-005"),
-        &task(
-            "TSK-005",
-            Some("EPC-000"),
-            shadow,
-            "todo",
-            CRITERIA,
-            "Pending.\n",
-            "",
-        ),
-    );
-    fx.commit("docs(records): plan the shadow line");
-    fx.git(&["push", "-q", "origin", "main"]);
-    let before = fx.git(&["rev-parse", LINE_A]);
-    let landing = land_mixed(&fx, "src/mixed.rs");
-    fx.git(&[
-        "push",
-        "-q",
-        "origin",
-        &format!("{landing}:refs/heads/{shadow}"),
-    ]);
-    record_cutoffs(
-        &fx,
-        &format!("\"{shadow}\" = \"{landing}\"\n\"{LINE_A}\" = \"{before}\"\n"),
-    );
-    fx.cut_release();
-    fx.import(LINE_A);
-    let result = agree(&fx, "a shadow line");
-    blocks(
-        &result,
-        "another line's cutoff on a shared chain",
-        &["work.criteria_frozen", &frozen_at(&landing)],
-    );
-    assert!(!result.1.contains("legacy criteria change"), "{}", result.1);
-    blocks(
-        &fx.ci("main", "HEAD", RELEASE, Some("main")),
-        "the final pull request",
-        &[&frozen_at(&landing)],
-    );
-
-    // Line B stacked on line A after the landing: line B's cutoff covers
-    // the landing on its chain, but the task targets line A.
-    let fx = Fx::new(false);
-    let before = fx.git(&["rev-parse", LINE_A]);
-    let landing = land_mixed(&fx, "src/mixed.rs");
-    fx.git(&[
-        "push",
-        "-q",
-        "--force",
-        "origin",
-        &format!("{landing}:refs/heads/{LINE_B}"),
-    ]);
-    record_cutoffs(
-        &fx,
-        &format!("\"{LINE_A}\" = \"{before}\"\n\"{LINE_B}\" = \"{landing}\"\n"),
-    );
-    fx.cut_release();
-    fx.import(LINE_B);
-    blocks(
-        &agree(&fx, "a stacked line"),
-        "a stacked line's cutoff",
-        &["work.criteria_frozen", &frozen_at(&landing)],
-    );
-
-    // The same stacking with line A's own cutoff at the landing: covered by
-    // the task's line, whichever line brings it.
-    let fx = Fx::new(false);
-    let landing = land_mixed(&fx, "src/mixed.rs");
-    fx.git(&[
-        "push",
-        "-q",
-        "--force",
-        "origin",
-        &format!("{landing}:refs/heads/{LINE_B}"),
-    ]);
-    record_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{landing}\"\n"));
-    fx.cut_release();
-    fx.import(LINE_B);
-    let result = agree(&fx, "stacked, own cutoff");
-    passes(&result, "a stacked import covered by the task's own line");
-    assert!(
-        result
-            .1
-            .contains(&format!("TSK-003 on {LINE_A}, landing {}", &landing[..9])),
-        "{}",
-        result.1
-    );
-}
-
 /// AC-10 negative twins, continued: a line rewritten so the cutoff left its
-/// chain, a cutoff written only on the release branch, a resolution
-/// changing criteria at a covered import, and a malformed entry.
+/// chain, a cutoff written only on the release branch, and a malformed
+/// entry.
 #[test]
 fn a_moved_or_malformed_cutoff_covers_nothing() {
     // A rewrite: line A is rebuilt, so the recorded cutoff left its chain.
@@ -804,32 +651,6 @@ fn a_moved_or_malformed_cutoff_covers_nothing() {
         &agree(&fx, "a spoofed cutoff"),
         "a cutoff on the pushed branch",
         &["work.criteria_frozen", &frozen_at(&landing)],
-    );
-
-    // A covered import whose resolution changes the criterion again.
-    let fx = Fx::new(false);
-    let landing = land_mixed(&fx, "src/mixed.rs");
-    record_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{landing}\"\n"));
-    fx.cut_release();
-    fx.git(&["switch", "-q", RELEASE]);
-    fx.git(&["fetch", "-q", "origin"]);
-    fx.git(&[
-        "merge",
-        "-q",
-        "--no-ff",
-        "--no-commit",
-        &format!("origin/{LINE_A}"),
-    ]);
-    let brought = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
-    fx.write(
-        &path("TSK-003"),
-        &brought.replace(LOOSER, &LOOSER.replace("sometimes", "rarely")),
-    );
-    fx.commit("merge: import line A, resolving TSK-003");
-    blocks(
-        &agree(&fx, "a direct resolution"),
-        "a resolution at a covered import",
-        &["TSK-003 changes its criteria directly on the release line (the resolution of merge"],
     );
 
     // A malformed entry at the default target fails closed.
@@ -3458,9 +3279,11 @@ fn bridged(fresh: bool, configs: &dyn Fn(&Fx) -> Vec<String>) -> ((i32, String),
 }
 
 /// AC-14 and AC-15 for `key`: a table added with the adoption marker,
-/// naming a line commit from before the rule, is honoured; every way of
-/// moving it or adding it outside that one commit refuses every release
-/// check through pre-push and CI, naming the condition and the commit.
+/// naming a line commit from before the rule, meets every structural
+/// condition and is refused only because the cutoff is not one of
+/// `CodeFlow`'s approved ones; every way of moving it or adding it outside
+/// that one commit refuses every release check through pre-push and CI,
+/// naming the condition and the commit.
 #[allow(clippy::too_many_lines)] // One fixture per loophole of planning resolution 29.
 fn the_table_is_a_one_time_bridge(key: &str) {
     let line_tip = |fx: &Fx| fx.git(&["rev-parse", LINE_A]);
@@ -3469,7 +3292,13 @@ fn the_table_is_a_one_time_bridge(key: &str) {
     let (result, _) = bridged(false, &|fx| {
         vec![format!("{PROJECT}{MARKER}{}", table(key, &line_tip(fx)))]
     });
-    passes(&result, &format!("{key}: added with the marker"));
+    blocks(
+        &result,
+        &format!("{key}: added with the marker"),
+        &[&format!(
+            "as the cutoff of {LINE_A}, which is not one of CodeFlow's approved cutoffs"
+        )],
+    );
 
     let (result, tips) = bridged(false, &|fx| {
         vec![
@@ -3601,8 +3430,9 @@ fn the_records_table_is_a_one_time_bridge() {
 }
 
 /// AC-14: a cutoff on a line this clone has never fetched is read after
-/// the judge fetches the advertised lines, so the bridge is honoured
-/// rather than refused as unreadable.
+/// the judge fetches the advertised lines: every entry passes the
+/// structural checks, which read line B's cutoff, before the refusal for
+/// an unapproved cutoff, so it is never refused as unreadable.
 #[test]
 fn a_cutoff_the_clone_lacks_is_fetched_before_it_is_read() {
     for key in ["release_rule_baseline", "release_records_baseline"] {
@@ -3664,9 +3494,10 @@ fn a_cutoff_the_clone_lacks_is_fetched_before_it_is_read() {
             ),
             "{key}: the clone must lack line B's cutoff"
         );
-        passes(
+        blocks(
             &fx.ci_release(),
             &format!("{key}: a cutoff on a line the clone never fetched"),
+            &[&unapproved(key, LINE_A, &line_tip)],
         );
     }
 }
@@ -3733,42 +3564,43 @@ fn as_consumer(fx: &Fx, config: &str) {
 
 /// AC-14 (operator ruling, 2026-09-28): no consuming project can use a
 /// table. A 2.x project that upgrades and a project initialized at 3.x,
-/// neither starting at `CodeFlow`'s root commit, each add a table with the
-/// marker in one commit, naming a legacy completion as its line's cutoff;
-/// every release check refuses and no legacy notice is given, for each
-/// table.
+/// each with a root of its own, and a fork that keeps `CodeFlow`'s root
+/// commit (Codex round 5) each add a table with the marker in one commit,
+/// naming a legacy completion as its line's cutoff; every release check
+/// refuses and no legacy notice is given, for each table.
 #[test]
 fn a_consuming_project_never_uses_a_table() {
     for key in ["release_rule_baseline", "release_records_baseline"] {
         for (what, config) in [
-            ("an upgraded 2.x project", PROJECT.replace("3.0.0", "2.0.0")),
-            ("a project initialized at 3.x", String::new()),
+            (
+                "an upgraded 2.x project",
+                Some(PROJECT.replace("3.0.0", "2.0.0")),
+            ),
+            ("a project initialized at 3.x", Some(String::new())),
+            ("a fork keeping CodeFlow's root", None),
         ] {
             let fx = Fx::new(false);
-            as_consumer(&fx, &config);
+            if let Some(config) = &config {
+                as_consumer(&fx, config);
+            }
             let landing = land_legacy_completion(&fx, "chore/consumer-legacy");
             fx.git(&["switch", "-q", "main"]);
             fx.write(
                 ".codeflow/project.toml",
                 &format!("{PROJECT}{MARKER}{}", table(key, &landing)),
             );
-            let added = fx.commit("chore: record the transition table");
+            fx.commit("chore: record the transition table");
             fx.git(&["push", "-q", "origin", "main"]);
             fx.cut_release();
             fx.import(LINE_A);
             let result = agree(&fx, what);
-            blocks(
-                &result,
-                &format!("{key}: {what}"),
-                &[
-                    &format!(
-                        "`{key}` on main is added at {}, but main's history does not start at CodeFlow's root commit {}",
-                        &added[..9],
-                        &CODEFLOW_ROOT[..9]
-                    ),
-                    "no consuming project can use one",
-                ],
-            );
+            let why = if what.contains("3.x") {
+                "no commit with project config without the marker precedes the adoption commit"
+                    .to_string()
+            } else {
+                unapproved(key, LINE_A, &landing)
+            };
+            blocks(&result, &format!("{key}: {what}"), &[&why]);
             assert!(
                 !result.1.contains("legacy record") && !result.1.contains("legacy criteria"),
                 "{key}: {what}: no relief:\n{}",
@@ -4024,28 +3856,31 @@ fn land_legacy_completion(fx: &Fx, branch: &str) -> String {
     )
 }
 
-/// AC-13: a brought complete task without an acceptance block, whose record
-/// last changed on its line at or before the line's records cutoff, is
-/// listed as information; after the cutoff, under another line's cutoff,
-/// with a cutoff off the line's chain, landed from an old base after the
-/// cutoff, or with a malformed entry, it is refused. No block is written.
+/// AC-13, AC-14: a brought complete task without an acceptance block gets
+/// no relief from a records cutoff the shipped judge does not approve, in a
+/// fork that keeps `CodeFlow`'s root commit as every fixture here does: CI
+/// and pre-push refuse it, naming the table and the record, and give no
+/// legacy notice. A cutoff under another line, off the line's chain, or
+/// malformed refuses as well. No block is written. The relief under an
+/// approved cutoff is tested in `release_line_tests.rs`.
 #[test]
-fn a_legacy_record_at_or_before_the_records_cutoff_is_information() {
+fn a_legacy_record_gets_no_relief_from_an_unapproved_records_cutoff() {
     let fx = Fx::new(false);
     let landing = land_legacy_completion(&fx, "chore/legacy");
-    let policy = record_records_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{landing}\"\n"));
+    record_records_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{landing}\"\n"));
     fx.cut_release();
     fx.import(LINE_A);
-    let result = agree(&fx, "a covered legacy record");
-    passes(&result, "a legacy record at its line's cutoff");
-    let note = format!(
-        "legacy record, completed before the release rule: TSK-003 on {LINE_A}, landing {}, cutoff {}, policy main at {}",
-        &landing[..9],
-        &landing[..9],
-        &policy[..9]
+    let result = agree(&fx, "a fork's records table");
+    blocks(
+        &result,
+        "a fork's records table",
+        &[
+            &unapproved("release_records_baseline", LINE_A, &landing),
+            "work.records",
+            "a complete record needs an acceptance block",
+        ],
     );
-    assert!(result.1.contains(&note), "{}", result.1);
-    assert!(fx.pre_push_release().1.contains(&note), "the hook shows it");
+    assert!(!result.1.contains("legacy record"), "{}", result.1);
     let written = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
     assert!(!written.contains("acceptance:"), "no block is written");
 
@@ -4059,15 +3894,6 @@ fn a_legacy_record_at_or_before_the_records_cutoff_is_information() {
             ],
         );
     };
-
-    // After the cutoff.
-    let fx = Fx::new(false);
-    let before = fx.git(&["rev-parse", LINE_A]);
-    land_legacy_completion(&fx, "chore/legacy");
-    record_records_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{before}\"\n"));
-    fx.cut_release();
-    fx.import(LINE_A);
-    refused(&fx, "a legacy record landed after the cutoff");
 
     // Another line's cutoff.
     let fx = Fx::new(false);
@@ -4087,26 +3913,6 @@ fn a_legacy_record_at_or_before_the_records_cutoff_is_information() {
     fx.cut_release();
     fx.import(LINE_A);
     refused(&fx, "a cutoff off the line's chain");
-
-    // A topic branched from an old base, landed after the cutoff.
-    let fx = Fx::new(false);
-    fx.git(&["switch", "-q", "-C", "chore/old-base", LINE_A]);
-    fx.write(
-        &path("TSK-003"),
-        &record(
-            "TSK-003",
-            "complete",
-            CRITERIA,
-            "Completed before the migration.\n",
-        ),
-    );
-    fx.commit("docs(records): an old completion");
-    let cutoff = fx.amend_on_line(LINE_A, "TSK-004", STRONGER);
-    fx.land(LINE_A, "chore/old-base");
-    record_records_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{cutoff}\"\n"));
-    fx.cut_release();
-    fx.import(LINE_A);
-    refused(&fx, "an old-base topic landed after the cutoff");
 
     // A malformed entry fails closed.
     let fx = Fx::new(false);
