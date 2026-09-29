@@ -195,6 +195,13 @@ fn criteria(
     if let Some(Class::Tracked { task_id, .. }) = class {
         return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, task_id);
     }
+    // Without a pull request body (a push), a task branch's only valid class
+    // is its own task, so it may change that task's criteria as its PR may.
+    if class.is_none() {
+        if let Some(task_id) = task_id_from_branch(root, branch) {
+            return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, &task_id);
+        }
+    }
     let amendable = match class {
         Some(Class::PlanningOnly | Class::EpicLine(_)) => true,
         Some(_) => false,

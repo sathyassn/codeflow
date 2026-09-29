@@ -201,6 +201,24 @@ fn ci_on(root: &Path, base: &str, branch: &str, task_line: &str) -> (i32, String
     )
 }
 
+/// `codeflow ci` from `main` to `HEAD` as `branch` with no pull request
+/// body, as the pre-push hook runs it.
+fn ci_push(root: &Path, branch: &str) -> (i32, String) {
+    let out = codeflow()
+        .args(["ci", "--base", "main", "--head", "HEAD", "--branch", branch])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
 fn assert_passes(result: &(i32, String), what: &str) {
     assert_eq!(result.0, 0, "{what}: {}", result.1);
 }
@@ -384,6 +402,14 @@ fn own_task_criteria_delta_is_printed_and_other_records_stay_frozen() {
         result.1
     );
     assert!(!result.1.contains("completion is bound"), "{}", result.1);
+    // A push has no body yet; the branch's own task still decides.
+    let pushed = ci_push(root, BRANCH);
+    assert_passes(&pushed, "own criteria amendment on push");
+    assert!(
+        pushed.1.contains("changes its own criteria"),
+        "{}",
+        pushed.1
+    );
 
     write(
         root,
@@ -394,6 +420,11 @@ fn own_task_criteria_delta_is_printed_and_other_records_stay_frozen() {
     assert_blocks(
         &ci(root, BRANCH, "TSK-001"),
         "other criteria remain frozen",
+        &["work.criteria_frozen", "TSK-002 changes its criteria"],
+    );
+    assert_blocks(
+        &ci_push(root, BRANCH),
+        "other criteria remain frozen on push",
         &["work.criteria_frozen", "TSK-002 changes its criteria"],
     );
 
