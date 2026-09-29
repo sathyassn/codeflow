@@ -23,7 +23,8 @@ come from the host through `gh`. Refusals come from the clone's own ledger.
 
 ## The report
 
-Run on 2026-09-28 in `.worktrees/tsk-149` at `dac6be863`, with `gh`
+Run on 2026-09-28 with a build of the report's commit, `2eb0301f1` (the
+later commits on the task branch change only tests and docs), with `gh`
 authenticated to `sathyassn/codeflow-archive`:
 
 ```text
