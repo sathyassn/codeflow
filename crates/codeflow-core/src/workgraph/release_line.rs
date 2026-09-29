@@ -1139,16 +1139,21 @@ fn judge(
                 }
                 let then = record_of(&repo, expected.get(*path), path);
                 let now = record_of(&repo, after.get(*path), path);
-                // The release side's identity, which the resolution may keep
-                // (a `uid` another line backfilled) but never replace.
+                // The resolution may keep a `uid` one side holds (one line's
+                // backfill), but never drop the release side's `uid` nor
+                // bring one that neither side held.
                 let ours = commit
                     .parent_id(0)
                     .ok()
-                    .and_then(|parent| record_at(&repo, parent, path));
-                let replaced = ours.as_ref().and_then(uid_of).is_some_and(|was| {
-                    let kept = now.as_ref().and_then(uid_of);
-                    kept.as_deref() != Some(was.as_str()) && kept != then.as_ref().and_then(uid_of)
-                });
+                    .and_then(|parent| record_at(&repo, parent, path))
+                    .as_ref()
+                    .and_then(uid_of);
+                let theirs = then.as_ref().and_then(uid_of);
+                let kept = now.as_ref().and_then(uid_of);
+                let replaced = match &kept {
+                    Some(kept) => ours.as_ref() != Some(kept) && theirs.as_ref() != Some(kept),
+                    None => ours.is_some(),
+                };
                 if replaced || direct_criteria_changed(then.as_ref(), now.as_ref()) {
                     findings.push(frozen(
                         now.as_ref().or(then.as_ref()),
