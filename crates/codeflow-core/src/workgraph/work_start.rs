@@ -486,6 +486,14 @@ pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Res
             .map_err(|_| format!("{revision}: .codeflow/project.toml is not UTF-8"))?;
         let state: crate::scaffold::state::ProjectState = toml::from_str(text)
             .map_err(|error| format!("{revision}: .codeflow/project.toml: {error}"))?;
+        // As the working tree's reader: an unsupported version is state
+        // this binary cannot read, never an untracked project.
+        if state.schema_version != 1 {
+            return Err(format!(
+                "{revision}: {}",
+                DurableTrackingError::UnsupportedStateVersion(state.schema_version)
+            ));
+        }
         if state.tier == crate::scaffold::manifest::Tier::Full {
             return Ok(true);
         }

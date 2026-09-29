@@ -166,9 +166,11 @@ publication date._
   tip, fetched when missing; a push is ordinary only when all three are
   read and none tracks. Pre-push now needs the destination to answer: a
   push is refused when it does not, when its default branch has no
-  readable policy or project state, or when its HEAD names no branch it
-  has, in every project, tracked or not. The hook asks the destination
-  once per push and passes the answer to each check it runs. A task
+  readable policy or project state (a state schema version this binary
+  does not support included), or when its HEAD names no branch it has, in
+  every project, tracked or not. The hook asks the destination once per
+  push and passes the answer to each check it runs; a check given that
+  hand-off is advisory only, and hosted CI never takes it. A task
   branch that merged its own line is judged from the newest line commit
   the destination holds, as its pull request is, so what the merge brought
   stays the line's. `task status

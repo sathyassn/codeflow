@@ -639,7 +639,9 @@ release branch on everything it adds to the default target's tip, as its
 pull request is. Whether the release rules apply is read at the checkout,
 the pushed commit and the default target's tip, fetched when missing; a
 push is refused when the destination does not answer or any of these
-cannot be read. The hook asks the destination once per push. When the
+cannot be read. The hook asks the destination once per push and hands
+that answer to its own `codeflow ci` through a hidden input; a run given
+that input is advisory only, and hosted CI, the authority, never takes it. When the
 default target's policy or objects cannot be read, the check fails
 closed. The check states that it proves structure and
 binding only, and cf-reviewer, cf-consult and cf-ship ask whether each

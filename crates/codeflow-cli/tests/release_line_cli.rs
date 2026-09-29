@@ -1144,6 +1144,33 @@ fn a_replace_ref_base_is_a_literal_prefix() {
     }
 }
 
+/// Codex R145-R5-1, accepted as a trust boundary: `--advertisement-stdin`
+/// is the pre-push hook's hand-off to its own `codeflow ci`, so no
+/// scaffolded CI workflow, template or skill passes it, and hosted CI
+/// always asks the destination itself.
+#[test]
+fn no_scaffolded_ci_passes_the_hooks_advertisement() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut pending = vec![repo.join("assets/base"), repo.join(".github")];
+    let mut read = 0;
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                read += 1;
+                assert!(
+                    !text.contains("advertisement-stdin"),
+                    "{} passes the hook's hand-off",
+                    path.display()
+                );
+            }
+        }
+    }
+    assert!(read > 50, "the scaffold was not found ({read} files)");
+}
+
 /// AC-3 (Codex R145-1): the freeze follows the record's identity, so
 /// deleting a task record and re-creating it with looser criteria in a
 /// later commit is refused, and so is the deletion alone.
@@ -1472,11 +1499,21 @@ fn a_push_asks_the_destination_once() {
 /// an ordinary branch, then pushes that head as a release branch without
 /// fetching: the hook fetches the default tip, reads tracking there and
 /// refuses. Where the project state there does not parse, the push is
-/// refused too: an unreadable state never counts as off. Where `main`
+/// refused too, and so is a state whose schema version this binary does
+/// not support: an unreadable state never counts as off. Where `main`
 /// never adopted durable work, the same push is ordinary.
 #[test]
 fn a_release_push_reads_tracking_at_a_default_tip_it_lacks() {
-    for (adopted, readable) in [(true, true), (true, false), (false, true)] {
+    let malformed = "tier = \"full\"\ntier = [\n";
+    // Codex R145-R5-3: a state whose schema this binary does not support is
+    // unsupported authority, never an untracked project.
+    let unsupported = "schema_version = 99\ntier = \"minimal\"\nscaffold_version = \"future\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n";
+    for (adopted, readable, broken) in [
+        (true, true, ""),
+        (true, false, malformed),
+        (true, false, unsupported),
+        (false, true, ""),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let origin = dir.path().join("origin.git");
         let url = origin.to_str().unwrap();
@@ -1504,7 +1541,7 @@ fn a_release_push_reads_tracking_at_a_default_tip_it_lacks() {
         run_git(dir.path(), &["clone", "-q", url, "client"]);
         let client = dir.path().join("client");
         if adopted && !readable {
-            write(&up, ".codeflow/project.toml", "tier = \"full\"\ntier = [\n");
+            write(&up, ".codeflow/project.toml", broken);
             run_git(&up, &["add", "-A"]);
             run_git(&up, &["commit", "-q", "-m", "chore: break the state"]);
             run_git(&up, &["push", "-q", url, "main"]);
@@ -1535,10 +1572,18 @@ fn a_release_push_reads_tracking_at_a_default_tip_it_lacks() {
 
         let pushed = pre_push_new(&client, url, "integration/release-unseen", &head);
         if !readable {
+            let why = if broken == unsupported {
+                "unsupported CodeFlow state schema version 99"
+            } else {
+                ".codeflow/project.toml"
+            };
             blocks(
                 &pushed,
                 "an unreadable state at the default tip",
-                &["whether the release rules apply to 'integration/release-unseen' cannot be read"],
+                &[
+                    "whether the release rules apply to 'integration/release-unseen' cannot be read",
+                    why,
+                ],
             );
         } else if adopted {
             blocks(

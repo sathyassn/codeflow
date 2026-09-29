@@ -97,7 +97,9 @@ pub struct CiArgs {
 
     /// Read the destination's advertisement (`git ls-remote --symref` of
     /// its HEAD, branches and tags) from stdin instead of asking it again.
-    /// The pre-push hook passes what it already asked.
+    /// The pre-push hook passes what it already asked. It is the hook's
+    /// hand-off, not an authority: a run given it is advisory only, and
+    /// hosted CI never passes it.
     #[arg(long, hide = true, requires = "destination")]
     pub advertisement_stdin: bool,
 }
