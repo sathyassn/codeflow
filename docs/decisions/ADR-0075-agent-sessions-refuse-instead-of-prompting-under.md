@@ -14,7 +14,8 @@ architecture_impact: "the permission presets for Claude, Codex and Grok become d
 ## Delivery note (2026-09-29)
 
 This record is still proposed; TSK-175 accepts it. Release 3.0.0 carries
-only TSK-171, the first of the five implementing tasks. The rest follows in
+TSK-171, the first of the five implementing tasks, and TSK-190's D1 spike
+and D2 launch text. The rest follows in
 3.1. Until then, the decisions below describe intended behavior, and the
 3.0.0 CHANGELOG entry is the account of what shipped.
 
@@ -53,6 +54,15 @@ Also in 3.0.0 (TSK-190):
   workspace root was denied, and a push to a hosted remote was not tried.
   Builder seats keep full access with that gap recorded, and `cf-builder`
   stays defined and unselected.
+- D7, observed on Codex 0.159.1 in a native capture for TSK-188: the
+  quoted form `-c 'projects."<worktree>".trust_level="trusted"'` did not
+  skip the folder-trust dialog (the argument reached Codex as written).
+  The unquoted `-c projects.<absolute path>.trust_level=trusted` did, and
+  works only for a path with no dots in it. Separately, Codex runs a
+  project's hooks only after a person grants a one-time hook-trust prompt,
+  stored as `hooks.state` with a `trusted_hash` in `~/.codex/config.toml`;
+  a changed `hooks.json` needs the grant again. Both stay operator steps
+  (decision 8) until TSK-174 and TSK-175 settle the launch form.
 
 Follows in 3.1:
 

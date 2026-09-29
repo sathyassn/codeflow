@@ -1228,15 +1228,16 @@ publication date._
   workspace root only. The `**/` forms made Codex deny deleting and
   renaming every directory, so `rmdir`, `cargo build` and `npm` builds
   failed. Nested secret files, such as `sub/.env` or a linked worktree's
-  `.env` under `.worktrees/`, are no longer denied; the config comment
-  records that gap. The network is unchanged: no unix sockets and no local
+  `.env` under `.worktrees/`, are no longer denied, so a seat can read,
+  change or delete them; the config comment records that gap. The network is unchanged: no unix sockets and no local
   binding. Reviewer seats launch with `--ask-for-approval never` and no
   `--sandbox` flag, which selects `cf-guard`; builder seats keep full
   access, because the `cf-builder` spike did not pass (a push to a remote
-  outside the workspace root is denied). Tested on Codex 0.159.1. Chromium,
-  and so Playwright, cannot start under any Codex sandbox profile on macOS,
-  since the sandbox denies its Mach port rendezvous; run browser tests
-  outside Codex (TSK-190).
+  outside the workspace root is denied). Tested on Codex 0.159.1. On macOS,
+  Playwright's Chromium did not start under the sandboxed profiles probed
+  (`cf-guard`, `cf-builder` and `:workspace`), since the sandbox denies its
+  Mach port rendezvous; it starts unsandboxed, so a full-access builder can
+  run browser tests (TSK-190).
 
 <!-- codeflow:release-impact patch -->
 - **`codeflow ci` accepts a workspace's root branch.** In workspace mode,
@@ -1245,8 +1246,10 @@ publication date._
   way a verified epic line is: it needs no `Task:` line and may change task
   criteria. Before, `ci` refused it as an unverified epic line and blocked
   any criteria change on it. The branch is read from the policy on the
-  target, and any other `integration/*` branch that is not a verified epic
-  line is still refused (TSK-190).
+  target. With durable tracking, a pull request from any other
+  `integration/*` branch that is neither a verified epic line nor a release
+  branch is refused whatever its `Task:` line; before, `Task: TSK-NNN` let
+  one through (TSK-190).
 
 <!-- codeflow:release-impact patch -->
 - **An approved spec is amended until it ships, and frozen after.** The
