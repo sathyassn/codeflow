@@ -62,15 +62,18 @@ publication date._
   earlier versions are unqualified). Grok gets `.grok/sandbox.toml`,
   written only when absent. `security.privilege_escalation` and
   `security.headless_peer_runs` default to `block`, and new policy keys
-  ship for the guard checks. This replaces the privilege ask rules
-  described under "Privilege escalation asks in both shells".
+  ship for the guard checks. exec-guard refuses a launcher run directly,
+  chained or wrapped in a shell `-c` string or `eval`; a shell string that
+  reaches no launcher, `source` and `LD_LIBRARY_PATH` are not refused.
   - Order: install the new `codeflow` on `PATH`, then run `codeflow
     update`. Update merges the permission arrays three ways against the
     last shipped copy: a rule the preset retired is removed, the 2.x ask
     rules included; a rule you removed stays removed and is reported on
     every run; your own rules stay. A policy value still equal to the
     previous shipped default moves to the new default and is reported; a
-    value you set is kept.
+    value you set is kept. Where no shipped copy was recorded, update
+    compares with the files 2.1.0 shipped, says so, and adds back every
+    shipped deny.
   - Relief: to let agents run one of these actions in a project, remove its
     deny entry from `.claude/settings.json`, or set its policy level in
     `.codeflow/policy.json`; update keeps both. A local ask rule cannot
@@ -664,19 +667,6 @@ publication date._
   No policy key restores the old behavior: `git.direct_changes` only allows
   or forbids direct changes, and classification is off only where durable
   work tracking is off.
-
-<!-- codeflow:release-impact patch -->
-- **Privilege escalation asks in both shells.** The scaffolded Claude
-  settings presets now ask before `pkexec`, `gsudo`, `runas` and
-  `Start-Process -Verb RunAs`, as well as `sudo`, `su` and `doas`, for both
-  the Bash and the PowerShell tool, including path-qualified launchers,
-  Windows `.exe` spellings and PowerShell elevation started from Bash. These
-  ask rules are a textual checkpoint, not a security boundary: they match
-  command text, so a command that merely contains `-Verb RunAs` also asks,
-  while other casings in Bash and renamed or indirect launchers are not
-  caught. The fail-closed sandbox remains the boundary, and exec-guard still
-  reports privilege escalation it detects. Deny rules are unchanged. `codeflow update` refreshes the managed region of
-  `.claude/settings.json` and keeps project-owned keys.
 
 <!-- codeflow:release-impact minor -->
 - **A pre-push gate under a minute that blocks.** Public behaviour change:

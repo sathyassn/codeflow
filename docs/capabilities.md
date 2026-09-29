@@ -105,7 +105,10 @@ adrs: [ADR-0011, ADR-0019]
 unmodified files are replaced, user-modified files get a 3-way merge from
 `.codeflow/.baseline/` (conflicts produce `.new` + report), managed regions
 (AGENTS.md markers, settings.json codeflow keys) are surgically updated, and
-user-owned schema-versioned files only gain new keys with defaults. It also
+user-owned schema-versioned files gain new keys with defaults; a policy scalar
+still equal to the prior shipped default moves to the new default and is
+reported, and a value that differs is kept. Where no baseline was recorded,
+the settings and policy are compared with the copies 2.1.0 shipped. It also
 installs any manifest entry that is in-tier but missing on disk — so a file that
 became in-tier since the last install (e.g. an old `--minimal` repo gaining the
 enforcement floor under ADR-0019) is reconciled into place and recorded, not just
