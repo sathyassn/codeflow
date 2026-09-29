@@ -18,6 +18,7 @@ pub mod light_paths;
 pub mod readiness;
 pub mod record_template;
 pub mod record_text;
+pub mod release_line;
 pub mod status_verb;
 pub mod store;
 pub mod work_start;

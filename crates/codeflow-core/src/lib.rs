@@ -5,6 +5,7 @@
 
 mod bounded_file;
 pub mod capability;
+pub mod ceremony;
 pub mod delegate;
 pub mod doctor;
 pub mod error;
