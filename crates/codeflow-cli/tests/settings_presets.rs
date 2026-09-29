@@ -1558,3 +1558,183 @@ fn rule_matcher_follows_the_documented_bash_rule_syntax() {
     assert!(rule_matches("git branch -D *", "git branch -D topic"));
     assert!(!rule_matches("rm -rf /*", "rm -rf ./build"));
 }
+
+// --- AC-7 journey: the 2.1.0 upgrade through the installed CLI -------------
+
+/// Runs the built binary as an adopter would: first on `PATH`, so the hooks
+/// the scaffold installs run it too, with an isolated home and host git
+/// configuration neutralized.
+fn run_codeflow(root: &Path, home: &Path, args: &[&str]) -> std::process::Output {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("joinable PATH");
+    std::process::Command::new(&exe)
+        .args(args)
+        .current_dir(root)
+        .env("CODEFLOW_HOME", home)
+        .env("PATH", path)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .output()
+        .expect("codeflow runs")
+}
+
+fn succeeded(out: &std::process::Output, what: &str) -> String {
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{what} failed:\n{all}");
+    all
+}
+
+/// Every file under `root` outside `.git`, with its content.
+fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = vec![];
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().is_some_and(|n| n == ".git") {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let content = std::fs::read(&path).unwrap();
+                files.push((path.strip_prefix(root).unwrap().to_path_buf(), content));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+const ADOPTER_DENY: &str = "Bash(terraform apply *)";
+const ADOPTER_COMMAND: &str = "terraform apply -auto-approve";
+
+/// A project made by `init --minimal`, holding the 2.1.0 Claude preset and
+/// policy as its files and, unless `with_settings_baseline` is false, as
+/// their baseline copies; the settings carry one deny of the adopter's own.
+fn planted_2_1_0_project(with_settings_baseline: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    succeeded(
+        &run_codeflow(&root, &home, &["init", "--yes", "--minimal"]),
+        "init --minimal",
+    );
+    let fixtures = repo_root().join("crates/codeflow-core/tests/fixtures/presets-2.1.0");
+    let settings = std::fs::read_to_string(fixtures.join("default.json")).unwrap();
+    let policy = std::fs::read_to_string(fixtures.join("policy.json")).unwrap();
+    let mut adopter: serde_json::Value = serde_json::from_str(&settings).unwrap();
+    adopter["permissions"]["deny"]
+        .as_array_mut()
+        .unwrap()
+        .push(ADOPTER_DENY.into());
+    let plant = |rel: &str, content: &str| {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    };
+    plant(
+        ".claude/settings.json",
+        &(serde_json::to_string_pretty(&adopter).unwrap() + "\n"),
+    );
+    plant(".codeflow/policy.json", &policy);
+    plant(".codeflow/.baseline/.codeflow/policy.json", &policy);
+    let settings_baseline = root.join(".codeflow/.baseline/.claude/settings.json");
+    if with_settings_baseline {
+        plant(".codeflow/.baseline/.claude/settings.json", &settings);
+    } else if settings_baseline.exists() {
+        std::fs::remove_file(settings_baseline).unwrap();
+    }
+    (dir, root, home)
+}
+
+/// The updated settings hold every deny of the new preset and the adopter's
+/// own, and the documented matcher of AC-1 refuses the adopter's command.
+fn assert_upgraded_denies(root: &Path, case: &str) -> serde_json::Value {
+    let text = std::fs::read_to_string(root.join(".claude/settings.json")).unwrap();
+    let updated: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let deny = perm_array(&updated, "deny");
+    for rule in perm_array(&load("default.json"), "deny") {
+        assert!(deny.contains(&rule), "{case}: missing new deny {rule}");
+    }
+    assert!(
+        deny.iter().any(|r| r == ADOPTER_DENY),
+        "{case}: lost {ADOPTER_DENY}"
+    );
+    assert!(
+        denied(&deny, "Bash", ADOPTER_COMMAND),
+        "{case}: {ADOPTER_COMMAND} is no longer refused"
+    );
+    updated
+}
+
+/// AC-7 journey: a project on the 2.1.0 preset and policy upgrades through
+/// the installed CLI. The first update retires the asks, adds the new
+/// denies, keeps the adopter's deny and moves `privilege_escalation` from
+/// warn to block, reporting both; a second update changes no file and
+/// `validate` is clean. Without the settings baseline, every new deny is
+/// still added and the adopter's command is still refused.
+#[test]
+fn a_2_1_0_project_upgrades_through_the_installed_cli() {
+    let (_dir, root, home) = planted_2_1_0_project(true);
+    let first = succeeded(&run_codeflow(&root, &home, &["update"]), "first update");
+    let updated = assert_upgraded_denies(&root, "with baseline");
+    assert!(
+        updated["permissions"].get("ask").is_none(),
+        "the shipped asks are retired:\n{first}"
+    );
+    assert!(
+        first.contains("removed retired permissions.ask entry \"Bash(sudo *)\""),
+        "the retired asks are reported:\n{first}"
+    );
+    let policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join(".codeflow/policy.json")).unwrap())
+            .unwrap();
+    assert_eq!(policy["security"]["privilege_escalation"], "block");
+    assert!(
+        first.contains("moved security.privilege_escalation from \"warn\" to \"block\""),
+        "the moved default is reported:\n{first}"
+    );
+
+    let before = snapshot(&root);
+    succeeded(&run_codeflow(&root, &home, &["update"]), "second update");
+    assert!(
+        snapshot(&root) == before,
+        "the second update changed a file"
+    );
+    let validate = succeeded(&run_codeflow(&root, &home, &["validate"]), "validate");
+    assert!(
+        !validate.to_lowercase().contains("warn"),
+        "validate is not clean:\n{validate}"
+    );
+
+    let (_dir, root, home) = planted_2_1_0_project(false);
+    let update = succeeded(
+        &run_codeflow(&root, &home, &["update"]),
+        "update without a settings baseline",
+    );
+    let updated = assert_upgraded_denies(&root, "without baseline");
+    assert!(
+        !update.contains("removed retired permissions")
+            && updated["permissions"].get("ask").is_some(),
+        "without a baseline no permission entry is removed:\n{update}"
+    );
+}
