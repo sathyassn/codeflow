@@ -14,7 +14,7 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-CYBSKVQ4.js",
+      "present.app": "/app/assets/app-7C4S5ID6.js",
       "present.style": "/app/assets/app-HLPORNRZ.css"
     },
     "inline": {
@@ -26,14 +26,14 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-CYBSKVQ4.js",
-        "stored_path": "service/app-CYBSKVQ4.js.br",
+        "request_path": "/app/assets/app-7C4S5ID6.js",
+        "stored_path": "service/app-7C4S5ID6.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 110757,
-        "encoded_bytes": 33000,
-        "sha256": "0ec92e3a373a3d6ca3cc44103c25eb9338cb942245584782f0025600d2d5a7fb",
-        "etag": "\"sha256-DskuOjc6PWyjzEQQPCXrkzjLlCJFWEeC8AJWANLVp/s=\"",
+        "raw_bytes": 111568,
+        "encoded_bytes": 33112,
+        "sha256": "9af681e3ca9f84f09998cdde2d7a2fe9d3bf7f71e6d01d8205c52170786e8a5f",
+        "etag": "\"sha256-mvaB48qfhPCZmM3eLXov6dO/f3Hm0B2CBcUhcHhuil8=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -315,20 +315,20 @@
     ],
     "metrics": {
       "asset_count": 15,
-      "raw_corpus_bytes": 1060917,
-      "brotli_corpus_bytes": 278160,
+      "raw_corpus_bytes": 1061728,
+      "brotli_corpus_bytes": 278272,
       "largest_raw_chunk_bytes": 186275,
       "largest_brotli_chunk_bytes": 131206
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-d1dc3a8fc7dd2d7b.js.gz",
+      "stored_path": "export/renderer-cd8c237f05d37aa9.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
       "raw_bytes": 967084,
-      "encoded_bytes": 270001,
-      "sha256": "d1dc3a8fc7dd2d7bc334a216d0f5af353b22093762c8289a7b839ef99d540d93"
+      "encoded_bytes": 269999,
+      "sha256": "cd8c237f05d37aa9a174c6b05e1d6b58ff5ef0748774404aa089f17f8dd5fecd"
     }
   },
   "budgets": {
@@ -338,5 +338,5 @@
     "largest_brotli_chunk_bytes": 145000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "8c853a27a928a273d440461d9b897786aa6a939dfeee43a5fa188c6ce6a495d7"
+  "corpus_sha256": "7ad989ede6059b272e32df3dee45c8bd77f0968ed5e873e0aaa938b1dd344962"
 }

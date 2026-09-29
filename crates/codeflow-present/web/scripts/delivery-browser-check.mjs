@@ -14,6 +14,8 @@
 // - the rail shows a review's delivery and its acknowledgment apart;
 // - after the service is killed and restarted, a pending answer is
 //   delivered once and a later wait finds nothing;
+// - after a reload, Amend starts from the last sent values: a correction
+//   that changes one field sends the others unchanged (TSK-176);
 // - a closure binds every form to its answer as a reload renders it, before
 //   the forms latch closed: a tab following an original the other tab
 //   corrected, a page that never saw an answer, and a state not yet seen;
@@ -321,6 +323,32 @@ try {
     assert.equal(second.status, 6, "restart: a later wait found an event");
     assert.equal(second.stdout, "");
     passed.push("restart: after the service is killed and show restarts it, the pending answer is delivered once and the next wait times out (exit 6)");
+  }
+
+  // Reload between send and Amend (TSK-176): the page loaded after the last
+  // correction was sent, and Amend starts from its values, so changing one
+  // field sends the others unchanged. Before the fix the controls opened
+  // empty and the page refused the correction ("Answer this question.").
+  {
+    const [original] = lines(run(["present", "responses", "list", sessionId, "--form", "store-choice"]));
+    await afterReload(form, "delivered");
+    await form.locator("[data-cf-form-action='amend']").click();
+    assert.ok(await field("home").locator("input[value='local']").isChecked(), "reload, Amend: the sent choice is not selected");
+    assert.equal(await field("keep-days").locator("input").inputValue(), "30", "reload, Amend: the sent number is not in its field");
+    await field("keep-days").locator("input").fill("31");
+    await form.locator("[data-cf-form-action='submit']").click();
+    const stored = await waitState(form, "stored");
+    assert.equal(stored.says, "Stored, waiting for agent");
+    const amended = lines(run(["present", "responses", "list", sessionId, "--form", "store-choice"])).at(-1);
+    assert.equal(amended.kind, "amendment");
+    assert.equal(amended.amends, original.event_id, "reload, Amend: the correction names another answer");
+    assert.deepEqual(amended.values, { home: "local", "keep-days": 31 }, "reload, Amend: the other fields did not go unchanged");
+    // Deliver it, so the form stands where the closure case below expects.
+    const waited = waitV2(10);
+    assert.equal(waited.status, 0, waited.stderr);
+    assert.deepEqual(lines(waited.stdout).map((line) => line.event_id), [amended.event_id]);
+    await waitState(form, "delivered");
+    passed.push("reload, then Amend: the controls start from the last sent values; changing one field stores an amendment with the others unchanged");
   }
 
   // Closure cases run on their own sessions. Tab A stores the original O

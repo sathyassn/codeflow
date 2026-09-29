@@ -6,7 +6,7 @@
 // is never written to any browser storage. Annotating a form never changes a
 // value and never sends.
 
-import { parseServiceError, REQUEST_HEADER, type AnswerDelivery, type AnswerStateEntry, type ChromeConfig, type FormAnswerEntry } from "./contracts";
+import { parseServiceError, REQUEST_HEADER, type AnswerDelivery, type AnswerStateEntry, type ChromeConfig, type FormAnswerEntry, type SentAnswer } from "./contracts";
 import {
   MAX_ANSWER_REQUEST_BYTES,
   MAX_DECLINE_REASON_BYTES,
@@ -171,13 +171,16 @@ class FormController {
     this.buttons.forEach((button, action) => button.addEventListener("click", () => this.act(action)));
     this.article.addEventListener("input", () => this.clearFieldError());
     // An answer stored before this page loaded: the service renders it with
-    // its state, so a reload keeps showing stored, delivered or acknowledged.
+    // its state, so a reload keeps showing stored, delivered or acknowledged,
+    // and with what it sent, which the controls show again and a correction
+    // starts from. It comes from the service, never from browser storage.
     const answered = article.dataset.cfAnswerState;
     const original = article.dataset.cfAnswerId;
     const latest = article.dataset.cfLatestAnswerId;
     if (original && latest && (answered === "stored" || answered === "delivered" || answered === "acknowledged")) {
       this.original = original;
       this.latest = latest;
+      fillSent(article, readSent(article));
       this.render(answered === "stored" ? STORED_TEXT : DELIVERY_TEXT[answered], answered);
     } else {
       this.render("");
@@ -642,6 +645,42 @@ function readRules(article: HTMLElement): FormRules {
   });
   const required = [...article.querySelectorAll<HTMLElement>("[data-cf-field][data-cf-required]")].map((field) => field.dataset.cfField ?? "");
   return { fields, required };
+}
+
+// The answer the service rendered on the form; none when it is missing or
+// not understood, and the controls then stay as they are.
+function readSent(article: HTMLElement): SentAnswer | null {
+  try {
+    const sent = JSON.parse(article.dataset.cfAnswerSent ?? "") as SentAnswer;
+    return sent && typeof sent.values === "object" && typeof sent.rationales === "object" ? sent : null;
+  } catch {
+    return null;
+  }
+}
+
+// Puts a sent answer back in the controls, as they were when it was sent: a
+// decline or cancel sent no values, and a decline's reason goes back in its box.
+function fillSent(article: HTMLElement, sent: SentAnswer | null): void {
+  if (!sent) return;
+  for (const field of article.querySelectorAll<HTMLElement>("[data-cf-field]")) {
+    const id = field.dataset.cfField ?? "";
+    const kind = field.dataset.cfFieldKind as FieldKind;
+    const value = Object.hasOwn(sent.values, id) ? sent.values[id] : undefined;
+    if (kind === "boolean" || kind === "choice" || kind === "choices") {
+      for (const input of field.querySelectorAll<HTMLInputElement>("input[data-cf-value]")) {
+        input.checked = kind === "choices"
+          ? Array.isArray(value) && value.includes(input.value)
+          : value !== undefined && String(value) === input.value;
+      }
+    } else {
+      const input = field.querySelector<HTMLInputElement | HTMLTextAreaElement>("[data-cf-value]");
+      if (input) input.value = value === undefined || value === null ? "" : String(value);
+    }
+    const rationale = field.querySelector<HTMLTextAreaElement>("[data-cf-rationale-input]");
+    if (rationale) rationale.value = sent.rationales[id] ?? "";
+  }
+  const reason = article.querySelector<HTMLTextAreaElement>("[data-cf-decline-reason]");
+  if (reason) reason.value = sent.outcome === "decline" ? sent.reason ?? "" : "";
 }
 
 function readValue(field: HTMLElement, kind: FieldKind): unknown {
