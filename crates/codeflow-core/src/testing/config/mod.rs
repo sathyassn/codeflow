@@ -286,8 +286,10 @@ pub enum RunnerType {
     Custom,
 }
 
-/// A public mode command: `full`, `essential`, or `quick`. The gate aliases a
-/// requested `quick` to `essential` only when no explicit quick mode exists.
+/// A public mode command: `full`, `essential`, or `quick`. `quick` is the push
+/// set: the pre-push hook runs exactly the targets that define it. A manual
+/// `codeflow test --mode quick` aliases to `essential` only when no explicit
+/// quick mode exists.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModeCommand {
     pub command: String,

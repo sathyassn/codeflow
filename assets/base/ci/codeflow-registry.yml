@@ -1,0 +1,124 @@
+# codeflow registry: the enforcing check of the shared id registry
+# (CodeFlow SPC-013 R-14, R-20, R-109; ADR-0072). Written by `codeflow init`
+# and managed by `codeflow update`.
+#
+# Why pull_request_target: GitHub then runs this workflow from the
+# repository's default branch, never from the pull request, so a pull request
+# cannot edit, skip or replace the check that judges it (under `pull_request`
+# a PR that rewrote this step went green on a damaged registry). The default
+# checkout for this event is the default branch too, whatever the pull
+# request targets, so the job checks out the pull request's base commit
+# explicitly; push, schedule and dispatch runs keep their own event's commit.
+# The job reads the PR head only as git data: it
+# never checks it out, builds it or runs anything from it. The token is read
+# only and no secret is used. Build and test jobs stay in codeflow-ci.yml on
+# `pull_request`.
+#
+# With durable work tracking off, `codeflow ids check` passes with a note.
+#
+# The codeflow binary is the version the checked-out target pins in
+# .codeflow/project.toml (`scaffold_version`), verified against the release's
+# published sha256.sum; a missing or wrong checksum fails the job closed
+# (SPC-013 R-113). The same install step runs in codeflow-policy.yml.
+name: codeflow-registry
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, master, "integration/**"]
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  registry:
+    name: id registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The target (never the PR head): for a pull request its base commit,
+      # otherwise the event's own commit. The binary, the pin and the policy
+      # all come from this checkout.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
+          fetch-depth: 0
+
+      - name: Install codeflow (target-pinned, checksum-verified)
+        env:
+          PIN_REF: HEAD
+        run: |
+          # SPC-013 R-113: install the codeflow version the target pins in
+          # .codeflow/project.toml (scaffold_version), verified against the
+          # release's published sha256.sum. A missing checksum file, a missing
+          # entry or a mismatch fails closed; nothing unverified is installed.
+          set -euo pipefail
+          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null) || {
+            echo "::error::cannot read .codeflow/project.toml at ${PIN_REF}; no pinned codeflow version"; exit 1; }
+          version=$(printf '%s\n' "$state" | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::no scaffold_version pinned in .codeflow/project.toml at ${PIN_REF}"; exit 1
+          fi
+          base="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v${version}"
+          asset=codeflow-cli-x86_64-unknown-linux-gnu.tar.xz
+          work=$(mktemp -d)
+          if ! curl -fsSL "${base}/sha256.sum" -o "${work}/sha256.sum"; then
+            echo "::error::codeflow ${version} has no published checksum file (sha256.sum); refusing an unverified binary"; exit 1
+          fi
+          expected=$(awk -v a="$asset" '{n=$2; sub(/^\*/, "", n)} n == a {print $1; exit}' "${work}/sha256.sum")
+          if [ -z "$expected" ]; then
+            echo "::error::sha256.sum for codeflow ${version} lists no checksum for ${asset}; refusing an unverified binary"; exit 1
+          fi
+          if ! curl -fsSL "${base}/${asset}" -o "${work}/${asset}"; then
+            echo "::error::cannot download ${asset} for codeflow ${version}"; exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "${work}/${asset}" | cut -d ' ' -f 1)
+          else
+            actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::checksum mismatch for ${asset} (codeflow ${version}): expected ${expected}, got ${actual}; refusing it"; exit 1
+          fi
+          tar -xJf "${work}/${asset}" -C "$work"
+          mkdir -p "$HOME/.codeflow/bin"
+          cp "${work}/codeflow-cli-x86_64-unknown-linux-gnu/codeflow" "$HOME/.codeflow/bin/codeflow"
+          chmod +x "$HOME/.codeflow/bin/codeflow"
+          echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          echo "codeflow ${version} installed and verified against sha256.sum"
+
+      # The registry is fetched explicitly with full history, never forced
+      # (R-20); the PR head is fetched as data only.
+      - name: Fetch the registry and the pull request head
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
+            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+          else
+            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
+          fi
+          if [ "$EVENT" = pull_request_target ]; then
+            git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          fi
+
+      - name: codeflow ids check
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if ! command -v codeflow >/dev/null 2>&1; then
+            echo "::error::codeflow not installed, so the registry check cannot run; failing red."
+            exit 1
+          fi
+          if [ "$EVENT" = pull_request_target ]; then
+            codeflow ids check --base "$BASE_SHA" --head refs/remotes/pr/head
+          else
+            codeflow ids check
+          fi

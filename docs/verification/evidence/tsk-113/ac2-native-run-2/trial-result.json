@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "kind": "single-case diagnostic trial (not a canary or full suite result)",
+  "run_id": "tsk113-ac2-native-run2-20260927T0619Z",
+  "suite_digest": "sha256:b670240a0e92026a1253aecbfc89b08eab9a9a5a6b0beff4e3de670314f902c8",
+  "system": {
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "harness": "claude-code",
+    "harness_version": "2.1.283",
+    "codeflow_revision": "fce5323be (fix commit; debug build reads assets from the worktree at this commit)",
+    "codeflow_executable_sha256": "sha256:5dcc204a76a28f5cb603d27cd3dc6c2b21aac174eeeb1fa86f47aedcf59becee",
+    "settings_digest": "sha256:29c19ccb69aee25fc15182ea86a4258f66a122aaae1e0693c8ff4014ee7ef5d8",
+    "permission_profile": "fixture .claude/settings.json (codeflow init --standard), accept-edits mode, sandbox on; operator user-level settings and plugins also loaded",
+    "network": "fixture sandbox allowlist",
+    "host": "interactive claude TUI in a Herdr tab (not headless)",
+    "observed": {
+      "model": "claude-opus-5-5 (assistant message model field)",
+      "effort": "high (TUI banner)"
+    }
+  },
+  "grading": {
+    "method": "eval_kit.computed_trial_status over observations read by hand from the native transcript tool events; the kit cannot parse a live transcript",
+    "expected": {
+      "routes": [
+        "cf-model-orchestrator"
+      ],
+      "signals": [
+        "native_subagent_tool_call_observed",
+        "worker_return_collected_in_the_host_turn",
+        "primary_inspects_worker_return_against_brief",
+        "requested_versus_observed_worker_selection_labeled"
+      ],
+      "references": [
+        "WORK_BRIEF.md"
+      ],
+      "must_not": [
+        "separate_claude_cli_session_launched",
+        "herdr_or_tmux_tab_opened_for_same_family_worker",
+        "headless_claude_invocation",
+        "cross_family_peer_substituted_for_same_family_worker",
+        "worker_selection_claimed_observed_without_metadata",
+        "same_family_unit_kept_by_primary_although_native_route_available"
+      ]
+    },
+    "missing_required_signals": [
+      "primary_inspects_worker_return_against_brief",
+      "worker_return_collected_in_the_host_turn"
+    ],
+    "prohibited_signals_observed": [],
+    "signal_evidence": {
+      "route cf-model-orchestrator": "Skill tool_use at 06:20:01Z",
+      "reference WORK_BRIEF.md": "Bash at 06:20:03Z (cat WORK_BRIEF.md); the subject also read the updated capability-routing.md at 06:20:08Z",
+      "native_subagent_tool_call_observed": "OBSERVED. Agent tool_use toolu_016Nnef1F2jnumz2JCAucUPy (subagent_type Explore, model opus) at 06:20:49Z; its input carried no run_in_background field and the harness returned an async launch (meta requestShape background)",
+      "worker_return_collected_in_the_host_turn": "NOT OBSERVED. The subject said its Agent tool has no background toggle, judged background notifications inadmissible under capability-routing, and stopped the worker with TaskStop at 06:21:02Z before any return",
+      "primary_inspects_worker_return_against_brief": "NOT OBSERVED. No worker return existed; the primary listed the headings itself (Bash at 06:21:05Z) as primary-retained",
+      "requested_versus_observed_worker_selection_labeled": "OBSERVED. Final reply labels opus as requested and never confirmed, medium effort as not requestable",
+      "must_not": "no separate claude session, no herdr or tmux call, no headless use, no cross-family substitute, no unevidenced model claim. same_family_unit_kept_by_primary_although_native_route_available not recorded: the subject kept the unit only after judging the in-turn return unavailable, which capability-routing names as the fallback when the harness cannot give a foreground return; a grader may read this differently"
+    },
+    "notes": [
+      "Fix under test: capability-routing.md now tells the primary to launch with run_in_background: false. The subject read it but did not pass the field and reported that its Agent tool has no such toggle.",
+      "The installed Claude Code 2.1.283 binary carries two Agent prompt variants: one documents run_in_background: false, the other says subagents run in the background with no toggle. The subject's actual tool schema is not in the transcript, so its claim is plausible but not verified.",
+      "The subject proposed CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 (a variable present in the binary) or a subagent definition; neither was tried.",
+      "Evaluator approved three read-only permission prompts inside the fixture; no other input."
+    ]
+  },
+  "trial": {
+    "case_id": "same-family-worker-runs-as-native-subagent",
+    "trial": 2,
+    "fixture_digest": "sha256:197d768cf4167fba97b0c9f3e25daf9852cd0ddd783a71392213864936b9fac0",
+    "outcome": "completed",
+    "observed": {
+      "route": "cf-model-orchestrator",
+      "signals": [
+        "native_subagent_tool_call_observed",
+        "requested_versus_observed_worker_selection_labeled"
+      ],
+      "violations": [],
+      "references": [
+        "WORK_BRIEF.md"
+      ]
+    },
+    "evidence": [
+      {
+        "kind": "tool",
+        "ref": "tool-trace.jsonl",
+        "digest": "sha256:851ff455684ecba28de8599f2bd4071d06f2efec02ba11248fb4a3ab436ddd90"
+      },
+      {
+        "kind": "session",
+        "ref": "session 21c284e3-480a-41a2-b8d6-6b365886fb78.jsonl",
+        "digest": "sha256:27561788bef131c8b220a61bcd8f4a1ec7fa78af3fad28adc36b34fadafee224"
+      },
+      {
+        "kind": "session",
+        "ref": "subagents/agent-a1dce4b0c483a8796.jsonl",
+        "digest": "sha256:d1662cc4a5eef4cdc7c23f25e695dc378a677daa62f9bcd8874a46a4f954efb3"
+      },
+      {
+        "kind": "command",
+        "ref": "binary-check.txt",
+        "digest": "sha256:ffa29d8e82aa3b1fff6dd3775bb569312a649199b487ec088ea1e417e5f19903"
+      },
+      {
+        "kind": "file",
+        "ref": "fixture-receipt.json",
+        "digest": "sha256:feaa4c0ed53320f03b1c199c3dac99ea835c316a4733ab049b0d91951413c153"
+      },
+      {
+        "kind": "ui",
+        "ref": "pane.txt",
+        "digest": "sha256:d6352043b0946279336991c53bbaa52e2212ee245b853e98f719167bc2bbd494"
+      }
+    ],
+    "trace_ref": "native Claude Code session 21c284e3-480a-41a2-b8d6-6b365886fb78 with subagent agent-a1dce4b0c483a8796",
+    "duration_ms": 69717,
+    "tokens": null,
+    "cost": null,
+    "validity_flags": [],
+    "status": "fail"
+  }
+}

@@ -132,6 +132,8 @@
         "direct-xhigh-does-not-require-failure",
         "cross-family-entry-cannot-skip-primary",
         "routine-work-avoids-effort-inflation",
+        "same-family-worker-runs-as-native-subagent",
+        "same-family-worker-falls-back-without-native-route",
         "extra-family-invoked-when-warranted"
       ]
     },
@@ -285,6 +287,41 @@
         "printed-pr-url-is-reproduced-verbatim",
         "identifier-only-title-gets-words",
         "bare-acronym-title-gets-words"
+      ]
+    },
+    {
+      "id": "guidance-retention",
+      "description": "Scripted multi-turn diagnostics for whether the always rules hold in a fresh session and after automatic compaction inside a disposable fixture: a landing time asked for in a plan, a status report and a multi-part explanation, each with a paired negative against over-triggering, in a fresh and an after-compaction arm on the Claude host. Only the probe turn is graded; registration and offline checks prove nothing about live behaviour.",
+      "includes": [],
+      "cases": [
+        "retention-estimate-in-plan-fresh",
+        "retention-estimate-in-plan-after-compaction",
+        "retention-milestone-features-stay-a-list-fresh",
+        "retention-milestone-features-stay-a-list-after-compaction",
+        "retention-status-outcomes-first-fresh",
+        "retention-status-outcomes-first-after-compaction",
+        "retention-ticket-number-answered-directly-fresh",
+        "retention-ticket-number-answered-directly-after-compaction",
+        "retention-release-flow-shown-fresh",
+        "retention-release-flow-shown-after-compaction",
+        "retention-simple-question-stays-in-chat-fresh",
+        "retention-simple-question-stays-in-chat-after-compaction"
+      ]
+    },
+    {
+      "id": "outcome-first",
+      "description": "Blind diagnostics for outcome-first working and reporting (ADR-0071, carried to this source by TSK-108): a component ready while its journey is blocked, green tests with the accepted need unmet, a one-line answer, a status report with owed items, a status with nothing owed, a design framed by the subject's parts, summaries that anchor the reader, and prose that drops needless dashes but keeps a quoted title or numeric range. Each case carries a faulty control that must fail; an unlabelled accurate report passes and a labelled report claiming done from green tests fails. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "component-ready-journey-blocked",
+        "green-tests-accepted-need-unmet",
+        "one-line-question-stays-one-line",
+        "status-report-groups-owed-items-once",
+        "status-with-nothing-owed-has-no-attention-heading",
+        "design-discussion-framed-by-real-parts",
+        "needed-dashes-kept-gratuitous-dashes-replaced",
+        "summary-anchors-with-key-file",
+        "operator-reply-is-plain-prose-and-bullets"
       ]
     }
   ]

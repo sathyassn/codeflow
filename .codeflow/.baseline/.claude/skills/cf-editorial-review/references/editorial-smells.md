@@ -3,7 +3,8 @@
 Use these as diagnostic prompts, not a checklist or blacklist. A pattern is a
 problem only when it weakens this artifact in its actual context. The one
 exception is project policy: the characters and shapes ADR-0067 names are
-defects in new text on the surfaces it names.
+defects in new text on the surfaces it names, except a dash that is really
+needed, such as a quoted title or a numeric range in data.
 
 ## Credibility
 
@@ -25,12 +26,13 @@ defects in new text on the surfaces it names.
 
 - The reader lacks the subject, stakes, prior decision, or requested action.
 - A summary repeats headings instead of giving the outcome.
-- A summary carries details where it should give context only. It fails when
-  it runs past three sentences. It is flagged when it holds any of these:
-  - a code span, file path, or identifier;
-  - a list of three or more items;
-  - a number other than a count in plain words;
-  - mechanism or caveats that belong in the bullets after it.
+- A summary does not anchor the reader: after it, the reader cannot tell what
+  this is, why it matters or where it stands, because the anchor is missing or
+  buried in detail. A key number, file name or caveat that is part of that
+  context is not a smell.
+- A reply or report opens with steps, gates, counts or tooling before the
+  result it serves and where the work stands, or forces status labels onto a
+  short answer.
 - Bullets alone, or a table alone, stand where a summary should open.
 - Details sit in prose paragraphs after the summary where bullets, one point
   each in a logical order, would carry them.
@@ -47,8 +49,10 @@ defects in new text on the surfaces it names.
 - Lists split a single thought into fragments, or prose hides genuinely
   enumerable material.
 - A reply or summary runs as a paragraph wall: one block of many sentences
-  where a short context summary and then bullets or a table would carry the
+  where a few anchoring lines and then bullets or a table would carry the
   facts.
+- New prose uses an em or en dash where a comma, colon, full stop or hyphen
+  serves. A quoted title or a numeric range in data keeps its dash.
 - Headings, bold text, tables, or callouts compete for attention instead of
   exposing hierarchy.
 - Titles, navigation, or action labels hide the actual subject or action behind
@@ -81,7 +85,7 @@ rewrite; the rewrite keeps the fact and drops the performance.
 | Ceremonial framing | "It is worth noting that the tests pass." | "The tests pass." |
 | Dash as drama | a pause marked with U+2014 before the point | a comma, a colon, or a new sentence |
 | Paragraph wall | eight sentences in one block carrying three facts | two sentences, then a three-row table |
-| Detail-laden summary | four sentences naming a file, a five-part list and a test guard | two sentences of context, then one bullet per detail |
+| Buried anchor | four sentences of mechanism before the reader learns what changed | one line on the result and where it stands, then one bullet per detail |
 
 The shape alone is not the smell. A list of three facts, a negation that
 draws a real distinction ("missing evidence, not a failed test"), or a colon
@@ -94,10 +98,11 @@ performance.
 Do not rewrite merely because text uses an em dash on a line that predates
 ADR-0067, or a semicolon, colon, heading, bold phrase, technical term,
 transition, list, or occasional emoji. Preserve such choices when they are
-grammatically sound and useful for this audience and medium. Where policy
-forbids it (new text in commit messages, pull request bodies, added lines
-under `docs/`, `project-management/` and the skill trees, and operator-facing
-replies), the em or en dash is not a protected choice: replace it on the line
-being written and leave unchanged lines alone. Do not replace an established
+grammatically sound and useful for this audience and medium. In new prose
+(commit messages, pull request bodies, added lines under `docs/`,
+`project-management/` and the skill trees, and operator-facing replies), an
+em or en dash is not a protected choice: replace it on the line being
+written unless it is really needed, such as a quoted title or a numeric
+range in data, and leave unchanged lines alone. Do not replace an established
 project voice with generic corporate prose, forced informality, or a model's
 preferred cadence.

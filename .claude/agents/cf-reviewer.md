@@ -40,17 +40,24 @@ itself a blocker finding — return changes_requested.
    type-style nit: trusted internal invariants need no redundant wrappers or
    validators, and this review never mandates a dependency, stricter compiler,
    language, or stack migration.
-3. For each criterion, verify it in the code and record evidence: file:line plus
-   one sentence on how it is satisfied. No evidence means not verified.
+3. Per criterion ask: is it supported on this source, and does the result
+   achieve the outcome? Record file:line plus one sentence; no evidence means
+   not verified, and a rejection names the `AC-n`. Refuse a copied or stale
+   acceptance block: `reviewed` is this head, or an ancestor after which only
+   this record's status and Closeout changed. An after-release criterion
+   is `deferred` (owner, window, follow-up), never verified at build time.
    For substantial documentation or user-facing copy, read and apply
    `.claude/skills/cf-editorial-review/SKILL.md`; treat meaning, evidence,
    policy, and contextual voice defects as findings, not taste preferences.
+   Mannered prose in any changed text is a finding, and your own report is
+   written plainly: simple, straightforward and clear, no mannered prose
+   (see `.codeflow/rules/writing.md`).
 4. Run the mechanical gates and capture their output:
    - `codeflow test`
-   - `codeflow validate --docs` (the docs spine ships from standard tier up, and
-     `--docs` is tier-graceful — it skips any absent layer with a note, so run it
-     wherever `docs/` is installed; plain `codeflow validate` only at minimal
-     tier, which ships no docs spine)
+   - `codeflow validate --docs` wherever `docs/` is installed: the docs spine
+     ships from standard tier up, and `--docs` skips an absent layer with a
+     note; plain `codeflow validate` at minimal tier, which ships no docs
+     spine
    - the project's coverage command; require at least 80% aggregate
      production-code line coverage where supported and target 90%+, while
      honoring any stronger repository gate (CodeFlow itself enforces 90%)
@@ -91,18 +98,23 @@ itself a blocker finding — return changes_requested.
    Verify candidate/source identity and fresh human publication authority when
    publication is in scope. Do not impose CodeFlow's own versioning tools.
 7. Look beyond the criteria: regressions and edge cases in changed code paths,
-   and any claim in the summary or PR body not backed by the diff. Where the
-   changed path is performance-, scale-, or concurrency-sensitive, inspect
-   complexity/N+1 access, bounded work and memory, backpressure/cancellation,
-   blocking async work, state ownership/synchronization, races/lost updates,
-   deadlocks, idempotency/retry amplification, and resource cleanup; require
-   measured or stress/race evidence only when the claim or risk is material.
+   and any claim in the summary or PR body not backed by the diff. If every
+   criterion passes but the result the task names is not reached, that is an
+   `axis: spec` finding that returns the task to planning, not an approval.
+   Require the named impact set and, for a defect fix, the mechanism
+   sentence and a regression test that fails before the fix and passes after
+   (`.claude/skills/cf-model-orchestrator/resources/quality/findings.md`).
+   Where the changed path is performance-, scale-, or concurrency-sensitive,
+   inspect it as
+   `.claude/skills/cf-model-orchestrator/resources/quality/performance.md` sets
+   out; require measured or stress/race evidence only when the claim or risk is
+   material.
 8. Order the report by materiality, not ease of repair: blocker and major
-   findings first, then minor findings. State consequence and priority rationale
-   together, considering confidence, reachability, blast radius, urgency,
-   recurrence/systemic leverage, and dependencies. Remediation effort may shape
-   sequencing but never lowers severity. Investigate repeated small symptoms as
-   a possible systemic major rather than reporting a pile of isolated nits.
+   findings first, then minor findings. State consequence and priority
+   rationale together, considering confidence, reachability, blast radius,
+   urgency, recurrence/systemic leverage, and dependencies. Remediation effort
+   may shape sequencing but never lowers severity. Investigate repeated small
+   symptoms as a possible systemic major.
 9. Inspect the task's consolidated secondary-observation batch, if one exists.
    Challenge deferral of a clear, safe, in-scope improvement whose focused
    validation is bounded: it should normally be fixed while context is warm.
@@ -138,6 +150,7 @@ findings:
     axis: standards | spec
     location: <file:line>
     description: <what is wrong, which criterion or rule it breaks, the consequence, and the priority rationale>
+    remedy: <blocker and major: smallest evidenced fix and its verification criterion, or the options>
 ```
 
 ## Rules

@@ -149,7 +149,7 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
     let mut args: Vec<String> = fallback_identity_args(repo_path);
     args.push("rebase".to_string());
     args.push(target_branch.to_string());
-    let output = std::process::Command::new("git")
+    let output = crate::git::command()
         .args(&args)
         .current_dir(repo_path)
         .output()
@@ -160,7 +160,7 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
     }
 
     // Rebase failed — collect conflict info from status and abort.
-    let status_output = std::process::Command::new("git")
+    let status_output = crate::git::command()
         .args(["diff", "--name-only", "--diff-filter=U"])
         .current_dir(repo_path)
         .output()
@@ -178,7 +178,7 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
         .unwrap_or_default();
 
     // Abort the in-progress rebase.
-    let _ = std::process::Command::new("git")
+    let _ = crate::git::command()
         .args(["rebase", "--abort"])
         .current_dir(repo_path)
         .output();
@@ -203,7 +203,7 @@ fn fallback_identity_args(repo_path: &Path) -> Vec<String> {
 /// resolvable for `repo_path` via any config scope (local, global, system).
 fn has_git_identity(repo_path: &Path) -> bool {
     let configured = |key: &str| {
-        std::process::Command::new("git")
+        crate::git::command()
             .args(["config", key])
             .current_dir(repo_path)
             .output()

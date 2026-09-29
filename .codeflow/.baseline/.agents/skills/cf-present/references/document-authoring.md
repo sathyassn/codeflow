@@ -49,7 +49,6 @@ still represents the same conceptual item.
 | verification state | `status` | pass, fail, pending, or not-run evidence |
 | source text | `code` / `diff` | inspectable code or a unified change |
 | hierarchy | `tree` | ownership, composition, or repository structure |
-| supporting relationship or sequence | `diagram` | Mermaid flow, sequence, timeline, state, class, ER, or mind map — a quick supporting form, not the primary carrier when the claim needs a true stage |
 | actual visual/audio evidence | `media` | bounded embedded PNG/JPEG/GIF/WebP/MP4/WebM/MP3/Ogg |
 | secondary depth | `disclosure` | detail that should not dominate the first read |
 | true peer views | `tabs` | one-at-a-time alternatives sharing the same context |
@@ -58,7 +57,7 @@ still represents the same conceptual item.
 
 Do not add a block category merely for variety. Repeat a block when the
 information warrants it, but consolidate fragments that form one thought. A
-diagram needs `acc_title` and `acc_description`; media needs meaningful `alt`.
+drawn `html` stage names its claim in `aria-label`; media needs meaningful `alt`.
 Colour is never the only carrier of state. Keep the first reading path complete
 without opening disclosures or switching tabs.
 
@@ -67,7 +66,7 @@ ordinary chat and choose one primary carrier for it. A successful first view
 lets the reader perceive the governing relationship before reading supporting
 paragraphs. A sequence of headings, prose, status pills, and text cards is still
 an illustrated document—not a visual explanation—when their geometry encodes
-nothing. Use diagrams, trees, tables, diffs, media, or a justified bounded HTML
+nothing. Use an `html` stage, trees, tables, diffs, media, or a justified bounded HTML
 composition only when their position, connection, scale, state, or actual image
 carries meaning. If removing the sentences leaves no useful relationship, the
 surface has not earned its visual claim.
@@ -110,7 +109,7 @@ as shape (carrier first)—not a narrative-only bar.
 {"type":"decision","id":"choice","title":"Recovery strategy","status":"open","markdown":"Choose after the failure canary."}
 ```
 
-### Status and diagram
+### Status
 
 ```json
 {
@@ -120,17 +119,6 @@ as shape (carrier first)—not a narrative-only bar.
     {"label":"Unit tests","state":"pass","detail":"184 passed"},
     {"label":"Native Windows canary","state":"not_run","detail":"Owned by release qualification"}
   ]
-}
-```
-
-```json
-{
-  "type": "diagram",
-  "id": "delivery-flow",
-  "kind": "flowchart",
-  "source": "flowchart LR\n  Plan --> Build --> Review --> Ship",
-  "acc_title": "Delivery flow",
-  "acc_description": "The approved plan proceeds through implementation and review before shipping."
 }
 ```
 
@@ -154,7 +142,32 @@ loads, reserved runtime identities, and top-layer controls are prohibited.
 Offline exports additionally place authored HTML in a sandboxed frame.
 Never use it as a component SDK, a way around the schema, or a
 place for product runtime code. Prefer a standard block over equivalent custom
-HTML, and never make Mermaid/ASCII stand in for a stage the claim deserves.
+HTML, and never make ASCII stand in for a stage the claim deserves.
+
+## Converting a diagram block
+
+The `diagram` block was removed with its Mermaid renderer, and Mermaid is
+not supported. `codeflow present open` and `update` refuse a document that
+holds one and name its replacement from this table. A session that a
+pre-release build stored with one still opens, read only: every other block
+renders as before, and each diagram shows its source beside its replacement
+until `codeflow present update` sends the converted document.
+
+| Former kind | Replacement |
+|---|---|
+| `flowchart` | an html block holding an inline SVG |
+| `sequence` | an html block holding an inline SVG, or a table of the messages in order |
+| `state` | an html block holding an inline SVG, or a table of the transitions |
+| `class` | a table, or an html block holding an inline SVG where a relationship must be seen |
+| `entity_relationship` | a table, or an html block holding an inline SVG where a relationship must be seen |
+| `mindmap` | a tree block |
+| `timeline` | a table |
+
+For a complete html block holding an inline SVG, start from the first block of
+`resources/present-document.example.json`: labeled nodes and named edges drawn
+with utility tokens, and an `aria-label` that states the claim. A note left on
+a diagram block stays in the history; after the update it is shown as
+orphaned, with the reason.
 
 ## Language and review quality
 
@@ -187,7 +200,11 @@ durable home; raw history is not replayed automatically.
 ## Utility tokens
 
 Optional primitive tokens are project-owned and explicitly configured through
-`.codeflow/present/config.toml`. Validate their JSON against
+`.codeflow/present/config.toml`. Use
+[config.example.toml](../assets/config.example.toml) and
+[primitive-tokens.example.json](../assets/primitive-tokens.example.json) only
+during an explicit `cf-customize` opt-in; they are examples, not files to
+copy automatically. Validate their JSON against
 `.codeflow/schemas/present/utility-tokens-v1.schema.json`. The closed import may
 set declared colours, font-family names, reading measure, spacing scale, radius,
 and an embedded PNG/WebP identity image. It cannot import CSS, paths, fonts,

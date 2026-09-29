@@ -1,0 +1,249 @@
+{
+ "schema_version": 1,
+ "title": "Session store migration: tradeoffs for review",
+ "language": "en",
+ "blocks": [
+  {
+   "type": "html",
+   "id": "constraint-grid",
+   "title": "Where each option strains a constraint",
+   "html": "<figure role='img' aria-label='Grid of five constraints against options A, B and C. A strains on downtime, rollback and failure history. B fits on downtime and rollback, strains on the unfixed backfill race, and depends on driver 4.2. C strains on downtime and schedule slack and depends on a new on-call rotation.' style='margin:0'><svg viewBox='0 0 1160 524' style='width:100%;height:auto;display:block' fill='none'><text x='264' y='38' fill='var(--cf-text)' font-size='15' font-weight='600' style='font-family:var(--cf-font-sans)'>A: in-place schema migration</text><text x='554' y='38' fill='var(--cf-text)' font-size='15' font-weight='600' style='font-family:var(--cf-font-sans)'>B: dual-write with backfill</text><text x='844' y='38' fill='var(--cf-text)' font-size='15' font-weight='600' style='font-family:var(--cf-font-sans)'>C: new service with cutover</text><text x='0' y='38' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)' letter-spacing='0.12em'>CONSTRAINT</text><line x1='0' y1='64' x2='1160' y2='64' stroke='var(--cf-border)' stroke-width='1'></line><text x='0' y='96' fill='var(--cf-text)' font-size='15' font-weight='600' style='font-family:var(--cf-font-sans)'>Planned downtime</text><text x='0' y='116' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-sans)'>Product approved none</text><rect x='260' y='72' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-danger)' stroke-width='1.5'></rect><text x='274' y='92' fill='var(--cf-danger)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>STRAIN</text><text x='274' y='110' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>40 min window</text><text x='274' y='127' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>needs Product approval</text><rect x='550' y='72' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-positive)' stroke-width='1.5'></rect><text x='564' y='92' fill='var(--cf-positive)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>FITS</text><text x='564' y='110' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>none</text><rect x='840' y='72' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-danger)' stroke-width='1.5'></rect><text x='854' y='92' fill='var(--cf-danger)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>STRAIN</text><text x='854' y='110' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>5 min cutover</text><text x='854' y='127' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>needs Product approval</text><line x1='0' y1='142' x2='1160' y2='142' stroke='var(--cf-border)' stroke-width='1'></line><text x='0' y='174' fill='var(--cf-text)' font-size='15' font-weight='600' style='font-family:var(--cf-font-sans)'>Schedule slack</text><text x='0' y='194' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-sans)'>before Q4 peak, 9 weeks out</text><rect x='260' y='150' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-positive)' stroke-width='1.5'></rect><text x='274' y='170' fill='var(--cf-positive)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>FITS</text><text x='274' y='188' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>7 weeks</text><rect x='550' y='150' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-warning)' stroke-width='1.5' stroke-dasharray='5 4'></rect><text x='564' y='170' fill='var(--cf-warning)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>WATCH</text><text x='564' y='188' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>4 weeks, only if</text><text x='564' y='205' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>driver 4.2 lands in time</text><rect x='840' y='150' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-danger)' stroke-width='1.5'></rect><text x='854' y='170' fill='var(--cf-danger)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>STRAIN</text><text x='854' y='188' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>1 week</text><line x1='0' y1='220' x2='1160' y2='220' stroke='var(--cf-border)' stroke-width='1'></line><text x='0' y='252' fill='var(--cf-text)' font-size='15' font-weight='600' style='font-family:var(--cf-font-sans)'>Rollback</text><text x='0' y='272' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-sans)'>what a rollback costs</text><rect x='260' y='228' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-danger)' stroke-width='1.5'></rect><text x='274' y='248' fill='var(--cf-danger)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>STRAIN</text><text x='274' y='266' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>snapshot restore</text><text x='274' y='283' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>loses writes since window</text><rect x='550' y='228' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-positive)' stroke-width='1.5'></rect><text x='564' y='248' fill='var(--cf-positive)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>FITS</text><text x='564' y='266' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>stop dual-write,</text><text x='564' y='283' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>old store still whole</text><rect x='840' y='228' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-warning)' stroke-width='1.5' stroke-dasharray='5 4'></rect><text x='854' y='248' fill='var(--cf-warning)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>WATCH</text><text x='854' y='266' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>DNS revert, loses sessions</text><text x='854' y='283' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>created after cutover</text><line x1='0' y1='298' x2='1160' y2='298' stroke='var(--cf-border)' stroke-width='1'></line><text x='0' y='330' fill='var(--cf-text)' font-size='15' font-weight='600' style='font-family:var(--cf-font-sans)'>Evidence of failure</text><text x='0' y='350' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-sans)'>already observed</text><rect x='260' y='306' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-danger)' stroke-width='1.5'></rect><text x='274' y='326' fill='var(--cf-danger)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>STRAIN</text><text x='274' y='344' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>2 outages last year from</text><text x='274' y='361' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>long-running migrations</text><rect x='550' y='306' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-danger)' stroke-width='1.5'></rect><text x='564' y='326' fill='var(--cf-danger)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>STRAIN</text><text x='564' y='344' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>0.3% backfill mismatches</text><text x='564' y='361' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>in staging, not fixed</text><rect x='840' y='306' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-positive)' stroke-width='1.5'></rect><text x='854' y='326' fill='var(--cf-positive)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>FITS</text><text x='854' y='344' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>none cited</text><line x1='0' y1='376' x2='1160' y2='376' stroke='var(--cf-border)' stroke-width='1'></line><text x='0' y='408' fill='var(--cf-text)' font-size='15' font-weight='600' style='font-family:var(--cf-font-sans)'>Outside dependency</text><text x='0' y='428' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-sans)'>not in the team&#x27;s control</text><rect x='260' y='384' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-positive)' stroke-width='1.5'></rect><text x='274' y='404' fill='var(--cf-positive)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>FITS</text><text x='274' y='422' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>none</text><rect x='550' y='384' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-warning)' stroke-width='1.5' stroke-dasharray='5 4'></rect><text x='564' y='404' fill='var(--cf-warning)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>WATCH</text><text x='564' y='422' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>driver 4.2,</text><text x='564' y='439' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>release date unconfirmed</text><rect x='840' y='384' width='270' height='62' rx='8' fill='var(--cf-surface-raised)' stroke='var(--cf-warning)' stroke-width='1.5' stroke-dasharray='5 4'></rect><text x='854' y='404' fill='var(--cf-warning)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)' letter-spacing='0.1em'>WATCH</text><text x='854' y='422' fill='var(--cf-text)' font-size='13' style='font-family:var(--cf-font-sans)'>new on-call rotation</text><line x1='0' y1='454' x2='1160' y2='454' stroke='var(--cf-border)' stroke-width='1'></line><text x='0' y='490' fill='var(--cf-danger)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)'>STRAIN</text><text x='62' y='490' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-sans)'>conflicts with a stated constraint, or failure already observed</text><text x='486.6' y='490' fill='var(--cf-warning)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)'>WATCH</text><text x='548.6' y='490' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-sans)'>depends on something not yet known</text><text x='793.4000000000001' y='490' fill='var(--cf-positive)' font-size='11' font-weight='700' style='font-family:var(--cf-font-mono)'>FITS</text><text x='855.4000000000001' y='490' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-sans)'>no issue stated in DECISION.md</text></svg></figure>"
+  },
+  {
+   "type": "narrative",
+   "id": "frame",
+   "markdown": "Each option gives up something different. **A** trades downtime and a risky rollback for speed. **B** avoids downtime but carries an unfixed defect and depends on a driver release outside the team's control. **C** is the cleanest on paper but has no schedule slack and still needs a short outage.\n\nThis page compares the options. It does not recommend one: the choice is yours. Every point has an ID (A1, G3, H2) so your notes can refer to it, and each point names the part of DECISION.md it comes from, or says it is inference."
+  },
+  {
+   "type": "html",
+   "id": "schedule",
+   "title": "Schedule against the Q4 peak",
+   "html": "<figure role='img' aria-label='Timeline of weeks 0 to 10 with Q4 peak starting at week 9. Option A ends at week 2 with 7 weeks slack. Option B ends at week 5, with a dashed extension for an unknown driver 4.2 slip. Option C ends at week 8 with 1 week slack.' style='margin:0'><svg viewBox='0 0 1160 250' style='width:100%;height:auto;display:block' fill='none'><defs><pattern id='dcx-hatch' width='8' height='8' patternUnits='userSpaceOnUse' patternTransform='rotate(45)'><line x1='0' y1='0' x2='0' y2='8' stroke='var(--cf-warning)' stroke-width='2'></line></pattern></defs><line x1='190' y1='34' x2='190' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='186' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>0</text><line x1='278' y1='34' x2='278' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='274' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>1</text><line x1='366' y1='34' x2='366' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='362' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>2</text><line x1='454' y1='34' x2='454' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='450' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>3</text><line x1='542' y1='34' x2='542' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='538' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>4</text><line x1='630' y1='34' x2='630' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='626' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>5</text><line x1='718' y1='34' x2='718' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='714' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>6</text><line x1='806' y1='34' x2='806' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='802' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>7</text><line x1='894' y1='34' x2='894' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='890' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>8</text><line x1='982' y1='34' x2='982' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='978' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>9</text><line x1='1070' y1='34' x2='1070' y2='196' stroke='var(--cf-border)' stroke-width='1'></line><text x='1066' y='214' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>10</text><text x='190' y='238' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-sans)'>weeks from decision (assumes work starts this week)</text><rect x='982' y='34' width='88' height='162' fill='var(--cf-danger)' fill-opacity='0.08'></rect><line x1='982' y1='26' x2='982' y2='196' stroke='var(--cf-danger)' stroke-width='2'></line><text x='990' y='24' fill='var(--cf-danger)' font-size='12' font-weight='600' style='font-family:var(--cf-font-sans)'>Q4 peak starts</text><text x='0' y='72' fill='var(--cf-text)' font-size='14' font-weight='600' style='font-family:var(--cf-font-sans)'>Option A</text><rect x='190' y='50' width='176' height='32' rx='6' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='202' y='71' fill='var(--cf-text)' font-size='12' style='font-family:var(--cf-font-mono)'>1 eng x 2 wks = 2 eng-wks</text><text x='376' y='71' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-mono)'>7 wk slack</text><text x='0' y='122' fill='var(--cf-text)' font-size='14' font-weight='600' style='font-family:var(--cf-font-sans)'>Option B</text><rect x='190' y='100' width='440' height='32' rx='6' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='202' y='121' fill='var(--cf-text)' font-size='12' style='font-family:var(--cf-font-mono)'>2 eng x 5 wks = 10 eng-wks</text><rect x='630' y='100' width='176' height='32' rx='6' fill='url(#dcx-hatch)' fill-opacity='0.35' stroke='var(--cf-warning)' stroke-dasharray='5 4'></rect><text x='816' y='121' fill='var(--cf-warning)' font-size='12' style='font-family:var(--cf-font-sans)'>driver 4.2 date unknown: slip size unknown</text><text x='0' y='172' fill='var(--cf-text)' font-size='14' font-weight='600' style='font-family:var(--cf-font-sans)'>Option C</text><rect x='190' y='150' width='704' height='32' rx='6' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='202' y='171' fill='var(--cf-text)' font-size='12' style='font-family:var(--cf-font-mono)'>3 eng x 8 wks = 24 eng-wks</text><text x='904' y='171' fill='var(--cf-text-muted)' font-size='12' style='font-family:var(--cf-font-mono)'>1 wk slack</text></svg></figure>"
+  },
+  {
+   "type": "table",
+   "id": "tradeoff-points",
+   "columns": [
+    "ID",
+    "Option",
+    "Point",
+    "Source in DECISION.md"
+   ],
+   "rows": [
+    [
+     "A1",
+     "A",
+     "Cheapest and fastest: 1 engineer for 2 weeks, no outside dependency, 7 weeks of slack.",
+     "Effort, Depends on rows"
+    ],
+    [
+     "A2",
+     "A",
+     "Needs a 40 minute window. Product has approved no customer-visible downtime, so A cannot be chosen as written unless Product approves.",
+     "Planned downtime row; Constraints"
+    ],
+    [
+     "A3",
+     "A",
+     "The table rates data loss low \"if the window holds\". The team's own history is two outages from long-running migrations, which is the case where the window does not hold.",
+     "Data-loss row; Evidence bullet 2 (link is inference)"
+    ],
+    [
+     "A4",
+     "A",
+     "Weakest rollback: a snapshot restore discards every write since the window opened. The later a problem is found, the more is lost.",
+     "Rollback row (detection-time point is inference)"
+    ],
+    [
+     "A5",
+     "A",
+     "It is not clear that an in-place schema migration moves the store off the single Postgres primary, which is the stated goal. See G1.",
+     "Title; option name (inference)"
+    ],
+    [
+     "B1",
+     "B",
+     "The only option with no planned downtime, so the only one that fits the Product constraint as it stands today.",
+     "Planned downtime row; Constraints"
+    ],
+    [
+     "B2",
+     "B",
+     "Best rollback: stop dual-writing and keep reading the old store, which stays complete until cutover. This rollback can be rehearsed before it is needed.",
+     "Rollback row (rehearsal point is inference)"
+    ],
+    [
+     "B3",
+     "B",
+     "A known correctness defect: the backfill race produced 0.3% mismatches in staging. It is understood but not fixed, and the 5 week estimate does not say whether the fix is included.",
+     "Data-loss row; Evidence bullet 3"
+    ],
+    [
+     "B4",
+     "B",
+     "The schedule looks roomy (4 weeks of slack) but depends on driver 4.2, whose release date is unconfirmed. That slip is outside the team's control.",
+     "Effort, Depends on rows"
+    ],
+    [
+     "B5",
+     "B",
+     "Backfill reads load the current primary, which is the resource already near saturation. When the backfill runs matters.",
+     "Evidence bullet 1 (inference)"
+    ],
+    [
+     "C1",
+     "C",
+     "Rated low data-loss risk on the way forward, with no observed failure cited against it.",
+     "Data-loss row"
+    ],
+    [
+     "C2",
+     "C",
+     "The 5 minute cutover is still planned downtime, so C also needs Product approval, though for a much shorter window than A.",
+     "Planned downtime row; Constraints"
+    ],
+    [
+     "C3",
+     "C",
+     "No schedule slack: 8 weeks of work against 9, finishing one week before peak. Any overrun puts the cutover at or inside the peak, or past it.",
+     "Effort row; Evidence bullet 4"
+    ],
+    [
+     "C4",
+     "C",
+     "Rollback by DNS revert loses every session created after cutover. DNS caching can also make the revert slower than a switch flip.",
+     "Rollback row (DNS caching point is inference)"
+    ],
+    [
+     "C5",
+     "C",
+     "Most expensive: 24 engineer-weeks against 10 for B and 2 for A, plus a new on-call rotation that must be staffed before go-live.",
+     "Effort, Depends on rows"
+    ],
+    [
+     "X1",
+     "All",
+     "If the forecast holds, the current primary survives Q4 even if the migration slips: 1.6x forecast against 1.8x saturation leaves about 12.5% margin. A slip becomes an outage only if traffic beats the forecast by more than that.",
+     "Evidence bullet 1 (arithmetic)"
+    ]
+   ]
+  },
+  {
+   "type": "table",
+   "id": "gaps-in-decision-doc",
+   "columns": [
+    "ID",
+    "Gap or inconsistency to raise with engineering"
+   ],
+   "rows": [
+    [
+     "G1",
+     "Does option A move sessions off the single Postgres primary? The name suggests it stays in place. If it does not, A misses the stated goal regardless of its other merits."
+    ],
+    [
+     "G2",
+     "The data-loss row and the rollback row measure different things. A and C are rated low, yet both rollbacks lose data; B is rated medium, yet its rollback loses nothing. The data-loss row appears to rate only the forward path."
+    ],
+    [
+     "G3",
+     "\"Data loss\" for a session is not defined. A lost session might mean a forced sign-in, or something worse such as a lost cart or a revoked session reappearing after a mismatch. How serious B3 and C4 are depends on this."
+    ],
+    [
+     "G4",
+     "B's estimate does not say whether it includes fixing the backfill race, or how long that fix would take."
+    ],
+    [
+     "G5",
+     "B's plan does not say when driver 4.2 is needed: from day one, or only near cutover. That decides how much of B can proceed while the date is unknown."
+    ],
+    [
+     "G6",
+     "The downtime figures do not say whether the window could fall in a low-traffic period, or how many users would notice. That is the material Product needs to rule on A2 and C2."
+    ],
+    [
+     "G7",
+     "All estimates are single points with no range or confidence, and they assume work starts this week."
+    ]
+   ]
+  },
+  {
+   "type": "table",
+   "id": "decision-hinges",
+   "columns": [
+    "ID",
+    "Question only you or Product can settle",
+    "How the answer shifts the tradeoff"
+   ],
+   "rows": [
+    [
+     "H1",
+     "Will Product approve any customer-visible downtime, and how much?",
+     "None: only B fits as written. About 5 minutes: C becomes eligible. 40 minutes or more: A becomes eligible too."
+    ],
+    [
+     "H2",
+     "Does A actually take sessions off the single primary? (G1)",
+     "If not, A drops out whatever the answers to the other questions."
+    ],
+    [
+     "H3",
+     "Is there a credible date for driver 4.2, early enough for B's plan? (G5)",
+     "A late or unknown date turns B's schedule advantage into its main risk."
+    ],
+    [
+     "H4",
+     "Can the backfill race be fixed with confidence, or is a mismatch harmless? (G3, G4)",
+     "Fixable or harmless: B's main risk shrinks. Neither: B's data risk dominates its other strengths."
+    ],
+    [
+     "H5",
+     "How much do you trust the 1.6x forecast? (X1)",
+     "Trusted: a slip is survivable, which softens C's zero slack and B's driver risk. Not trusted: schedule certainty weighs most."
+    ],
+    [
+     "H6",
+     "Can three engineers and a new on-call rotation be staffed for C without displacing other Q4 work?",
+     "If not, C is out on capacity alone."
+    ]
+   ]
+  },
+  {
+   "type": "callout",
+   "id": "outside-the-three",
+   "tone": "note",
+   "title": "Outside the three options (not evaluated by engineering)",
+   "markdown": "- **O1. Dual-write without a backfill.** If sessions expire within a short maximum lifetime, you could dual-write for one full lifetime and then switch reads. Every live session would already be in the new store, so there is no backfill and no backfill race. This depends on the session lifetime, which DECISION.md does not give, and still needs driver 4.2.\n- **O2. A capacity stopgap.** Temporary capacity on the current primary would widen the margin in X1. It does not meet the goal of moving off the primary; it only buys time if a schedule slips."
+  },
+  {
+   "type": "status",
+   "id": "assurance",
+   "items": [
+    {
+     "label": "Claude analysis of DECISION.md",
+     "state": "pass",
+     "detail": "Complete. Ran on the Opus fallback, not the designated Claude primary"
+    },
+    {
+     "label": "Independent Codex analysis",
+     "state": "not_run",
+     "detail": "Skipped at your direction; one model family only, so no cross-check"
+    },
+    {
+     "label": "Figures in DECISION.md",
+     "state": "not_run",
+     "detail": "Taken as stated; load test, staging race and estimates not re-verified"
+    },
+    {
+     "label": "Recommendation",
+     "state": "not_run",
+     "detail": "Not given, by request"
+    }
+   ]
+  },
+  {
+   "type": "feedback_prompt",
+   "id": "notes-request",
+   "prompt": "Mark any point you disagree with, think is missing, or want engineering to answer before you decide. Refer to IDs where useful, then Submit review. I will revise the page from your notes; I will not choose an option."
+  }
+ ]
+}

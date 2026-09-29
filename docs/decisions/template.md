@@ -2,7 +2,7 @@
 id: ADR-NNNN
 title: <short decision title>
 date: YYYY-MM-DD
-status: accepted          # proposed | accepted | superseded
+status: proposed          # proposed | accepted | superseded
 superseded_by: null       # ADR id — set on supersession; a dated Note may also be appended
 architecture_impact: none # none | one line naming what in architecture.md changes
 ---

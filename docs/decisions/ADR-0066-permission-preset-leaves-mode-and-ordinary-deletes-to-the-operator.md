@@ -1,5 +1,6 @@
 ---
 id: ADR-0066
+uid: 96736567-74d3-485c-b407-4e9d75a7eb79
 title: "Permission preset leaves the mode and ordinary deletes to the operator"
 status: accepted
 date: 2026-09-20

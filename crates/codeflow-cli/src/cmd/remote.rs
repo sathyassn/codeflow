@@ -51,7 +51,13 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
             policy_path.display()
         );
     }
-    let plan = ProtectionPlan::from_policy_file(&policy_path);
+    let mut plan = ProtectionPlan::from_policy_file(&policy_path);
+    // The registry's data profile (SPC-013 R-6, R-22) joins the plan where
+    // durable work is tracked; the rules of every other branch are unchanged.
+    let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(&root).unwrap_or(false);
+    if tracked {
+        plan = plan.with_registry_profile();
+    }
 
     let report = if *dry_run {
         plan.dry_run_report(provider)
@@ -61,5 +67,23 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     };
 
     print!("{}", report.render());
+    let registry = codeflow_core::ids::REGISTRY_BRANCH;
+    if tracked
+        && !*dry_run
+        && report
+            .lines
+            .iter()
+            .any(|line| line.contains(&format!("for {registry}:")))
+    {
+        let git = codeflow_core::ids::Git::new(&root);
+        let today = codeflow_core::ids::today();
+        if let Err(error) = codeflow_core::ids::state::update(&git, |state| {
+            state
+                .data_profile
+                .insert(codeflow_core::ids::AUTHORITY.to_string(), today);
+        }) {
+            eprintln!("warning: could not record the applied data profile: {error}");
+        }
+    }
     Ok(())
 }

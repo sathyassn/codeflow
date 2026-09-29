@@ -8,17 +8,28 @@ named human release decision.
 
 ## 1. Scope and version
 
-- [ ] The normal work PR contains reviewed pending notes, one adjacent impact
-      annotation per new entry, and all warranted coupled stamp changes.
+- [ ] The normal work PR contains reviewed pending notes, one labelled entry
+      with an adjacent impact annotation per item, and all warranted coupled
+      stamp changes. Every label is unique; a removed or lowered entry carries
+      its `Withdrawal`.
 - [ ] The cumulative version is the verified public baseline bumped once by
       the highest remaining pending impact. Conventional markers do not
       understate it; breaking changes and migrations are explicit.
 - [ ] `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, release notes, and the proposed
       `vX.Y.Z` tag agree.
+- [ ] The notes rendered from the final assembled source were read twice
+      before the tag: as a new user (what the release does) and as a user
+      upgrading from the last release (what to do, in order). Both reads and
+      their fixes are recorded here.
+- [ ] A correction to a published section is a dated `## Errata` entry; no
+      published section changed.
 - [ ] PR validation used the current target and actual proposed merge tree.
       Recheck immediately before the human merge because clean is not fresh.
 - [ ] Every shipped behavior change links its capability/epic and accepted ADR;
       documentation describes current behavior, not an aspiration.
+- [ ] The ceremony report over the release's window is pasted here with a
+      one-line comparison against the recorded baseline (the runbook's
+      "Ceremony check before a release"). It is information and never blocks.
 
 ## 2. Source and security gates
 
@@ -77,7 +88,7 @@ named human release decision.
 - [ ] The deliberately dispatched plan authority records `GITHUB_SHA` on
       `main`, checks current actor/rerunner permission, ordinary merged-PR
       provenance, source/version/notes and the configured latest exact-source
-      GitHub Actions main-push release-state, aggregate, Rust, Windows, secret-scan, and
+      GitHub Actions main-push release-state (`codeflow-release`), aggregate, Rust, Windows, secret-scan, and
       security-review checks. Its write-scoped token can see draft releases;
       read-scoped PR checks make no draft-absence claim. It fails closed on
       wrong tag, source, public release, foreign draft, or draft assets. It may

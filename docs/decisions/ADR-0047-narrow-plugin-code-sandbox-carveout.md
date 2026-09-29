@@ -1,5 +1,6 @@
 ---
 id: ADR-0047
+uid: f4e4c2db-b446-445d-9fcf-af4814471d94
 title: narrow plugin-code sandbox carveout
 date: 2026-08-01
 status: accepted

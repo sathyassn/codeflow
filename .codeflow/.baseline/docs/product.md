@@ -1,7 +1,7 @@
-# codeflow-lead-model-routing — product
+# codeflow-lead-model-routing: product
 
 <!-- WHY layer. Human-owned: agents propose changes here, the human accepts.
-     Keep it small and stable — this file should change rarely.
+     Keep it small and stable: this file should change rarely.
      The non-goals below are what planning is checked against. -->
 
 ## Purpose

@@ -199,6 +199,16 @@ fn init_minimal_installs_the_four_plane_floor_and_not_the_method() {
         exists(&root, ".grok/hooks/codeflow.json"),
         "minimal missing .grok/hooks/codeflow.json"
     );
+    // The command rules and sandbox profiles generated for Codex and Grok
+    // (ADR-0075).
+    assert!(
+        read(&root, ".codex/rules/codeflow.rules").contains("decision = \"forbidden\""),
+        "minimal missing the Codex command rules"
+    );
+    assert!(
+        read(&root, ".grok/sandbox.toml").contains("[profiles.cf-guard-worktree]"),
+        "minimal missing the Grok sandbox profiles"
+    );
     // Plane 4 — the armed policy, at block level.
     let policy = read(&root, ".codeflow/policy.json");
     for rule in [
@@ -284,6 +294,30 @@ fn init_standard_adds_the_method_and_not_pm() {
         !exists(&root, "project-management/templates/epic.md"),
         "standard must NOT install project-management"
     );
+}
+
+/// The starter docs a fresh scaffold writes must pass the doc-graph check
+/// they ship with, at every tier that writes them. Codex review round 2 of
+/// the dash-free starter templates: an unquoted `: ` in the ADR-0001 title
+/// made its frontmatter unparseable, and only the dash scan was tested.
+#[test]
+fn fresh_standard_and_full_starter_docs_validate() {
+    for tier in ["--standard", "--full"] {
+        let (_tmp, root) = project();
+        init(&root, tier);
+        let adr = read(&root, "docs/decisions/ADR-0001-stack-choice.md");
+        assert!(
+            !adr.contains('\u{2014}') && !adr.contains('\u{2013}'),
+            "{tier}: starter ADR carries a policy character:\n{adr}"
+        );
+        let out = codeflow(&root, &["validate", "--docs"]);
+        assert!(
+            out.status.success(),
+            "{tier}: validate --docs failed on a fresh scaffold:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 #[test]
@@ -414,6 +448,111 @@ fn minimal_floor_blocks_a_non_conventional_commit() {
         combined.contains("BLOCKED"),
         "commit rejection did not report a BLOCK:\n{combined}"
     );
+}
+
+/// Runs `git` and asserts success, naming the step on failure.
+fn git_ok(dir: &Path, args: &[&str], what: &str) {
+    let out = git(dir, args);
+    assert!(
+        out.status.success(),
+        "{what} failed:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Commits one file on a new branch cut from `from`.
+fn commit_on_branch(root: &Path, from: &str, branch: &str, file: &str, body: &str, msg: &[&str]) {
+    git_ok(root, &["checkout", "-q", from], "checkout base");
+    git_ok(root, &["checkout", "-q", "-b", branch], "checkout branch");
+    std::fs::write(root.join(file), body).unwrap();
+    git_ok(root, &["add", file], "add");
+    let mut args = vec!["commit", "-q"];
+    args.extend_from_slice(msg);
+    git_ok(root, &args, "commit");
+}
+
+/// Pushes a branch and returns (success, stderr).
+fn push(root: &Path, branch: &str) -> (bool, String) {
+    let out = git(root, &["push", "-q", "origin", branch]);
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+/// TSK-132: at every tier a fresh scaffold ships `test_gate_on_push` at
+/// block, and a real `git push` runs the fast push set: `codeflow ci` on the
+/// pushed range blocks a commit that slipped past commit-msg, a failing
+/// `quick` target blocks, and a clean push goes through with a timing note.
+#[test]
+fn push_set_blocks_a_bad_push_at_every_tier() {
+    for tier in ["--minimal", "--standard", "--full"] {
+        let (tmp, root) = project();
+        init(&root, tier);
+        let policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(
+            policy["git"]["test_gate_on_push"], "block",
+            "{tier}: fresh scaffold must block on a failed push set"
+        );
+        let remote = tmp.path().join("remote.git");
+        git_ok(
+            tmp.path(),
+            &["init", "--bare", "-q", "remote.git"],
+            "bare init",
+        );
+        git_ok(
+            &root,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+            "remote add",
+        );
+        let head = git(&root, &["branch", "--show-current"]);
+        let start = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        // The destination's landed history: the scaffold commit on its
+        // default branch, fetched into the destination (a push to a
+        // protected branch is refused). Only landed history bounds a new
+        // branch's range.
+        let refspec = format!("{start}:{start}");
+        git_ok(
+            &remote,
+            &["fetch", "-q", root.to_str().unwrap(), &refspec],
+            "seed the destination",
+        );
+        git_ok(&root, &["fetch", "-q", "origin"], "fetch the destination");
+
+        // `init` already committed the scaffold; add one reviewed change.
+        let good = ["-m", "chore: add a base file"];
+        commit_on_branch(&root, &start, "feat/base", "base.txt", "base\n", &good);
+        let (ok, err) = push(&root, "feat/base");
+        assert!(ok, "{tier}: clean push blocked:\n{err}");
+        assert!(err.contains("push set finished in"), "{tier}: {err}");
+
+        // A commit that skipped commit-msg is caught by `codeflow ci` on the
+        // pushed range.
+        let bad = ["--no-verify", "-m", "Not conventional."];
+        commit_on_branch(&root, "feat/base", "feat/bad", "a.txt", "a\n", &bad);
+        let (ok, err) = push(&root, "feat/bad");
+        assert!(!ok, "{tier}: bad push went through");
+        assert!(
+            err.contains("git.test_gate_on_push") && err.contains("codeflow ci"),
+            "{tier}: block did not name the push set check:\n{err}"
+        );
+
+        // A failing `quick` target blocks too.
+        let config = r#"{"schema_version": "1.0", "targets": [
+  {"name": "lint", "runner": "custom", "modes": {"quick": {"command": "false"}, "full": {"command": "true"}}}
+]}"#;
+        let msg = ["-m", "chore: add a failing lint target"];
+        let cfg = ".codeflow/test-config.json";
+        commit_on_branch(&root, "feat/base", "feat/quick-fails", cfg, config, &msg);
+        let (ok, err) = push(&root, "feat/quick-fails");
+        assert!(!ok, "{tier}: failing quick target pushed");
+        assert!(
+            err.contains("push set failed for: lint"),
+            "{tier}: block did not name the failing target:\n{err}"
+        );
+    }
 }
 
 /// The restored v1 commit standard (ADR-0020) is enforced by the floor: after
@@ -603,4 +742,218 @@ fn manifest_files(root: &Path) -> serde_json::Map<String, serde_json::Value> {
     let manifest: serde_json::Value =
         serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap();
     manifest["files"].as_object().cloned().unwrap_or_default()
+}
+
+/// TSK-137: at every tier the fresh policy has no `human_authorization` key
+/// and validates without a deprecation warning; an adopter's policy that
+/// still has the key validates with one warning.
+#[test]
+fn fresh_policy_has_no_human_authorization_at_every_tier() {
+    for tier in ["--minimal", "--standard", "--full"] {
+        let (_tmp, root) = project();
+        init(&root, tier);
+        let text = read(&root, ".codeflow/policy.json");
+        assert!(!text.contains("human_authorization"), "{tier}: {text}");
+        let out = codeflow(&root, &["validate"]);
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(out.status.success(), "{tier}: {err}");
+        assert!(!err.contains("deprecated"), "{tier}: {err}");
+
+        let mut policy: serde_json::Value = serde_json::from_str(&text).unwrap();
+        policy["human_authorization"] = serde_json::Value::from("none");
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+        let out = codeflow(&root, &["validate"]);
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(out.status.success(), "{tier}: {err}");
+        assert_eq!(
+            err.matches("human_authorization is deprecated").count(),
+            1,
+            "{tier}: {err}"
+        );
+    }
+}
+
+/// Every `PreToolUse` hook command in a harness wiring file.
+#[cfg(unix)]
+fn pretooluse_commands(root: &Path, rel: &str) -> Vec<String> {
+    let wiring: serde_json::Value = serde_json::from_str(&read(root, rel)).unwrap();
+    wiring["hooks"]["PreToolUse"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{rel}: no PreToolUse"))
+        .iter()
+        .flat_map(|entry| entry["hooks"].as_array().cloned().unwrap_or_default())
+        .filter_map(|hook| hook["command"].as_str().map(ToString::to_string))
+        .collect()
+}
+
+/// Run a wired hook command through the shell, as the harness does, with a
+/// Bash tool call for `command` on stdin.
+#[cfg(unix)]
+fn run_wired(root: &Path, hook: &str, command: &str) -> Output {
+    use std::io::Write as _;
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("joinable PATH");
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": root,
+    });
+    let mut child = Command::new("sh")
+        .args(["-c", hook])
+        .current_dir(root)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("PATH", path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("hook runs");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn headless_peer_runs_block_in_every_harness_wiring_at_every_tier() {
+    // TSK-136 AC-4 as amended by ADR-0075 D4: a fresh install at every tier
+    // ships the guard at `block`, and the Claude, Codex and Grok wiring each
+    // run it; a project that sets `warn` is advised only.
+    for tier in ["--minimal", "--standard", "--full"] {
+        let (_tmp, root) = project();
+        init(&root, tier);
+        let policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(
+            policy["security"]["headless_peer_runs"], "block",
+            "{tier}: fresh policy level"
+        );
+        for wiring in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".grok/hooks/codeflow.json",
+        ] {
+            let hook = pretooluse_commands(&root, wiring)
+                .into_iter()
+                .find(|command| command.contains("hook exec-guard"))
+                .unwrap_or_else(|| panic!("{tier} {wiring}: exec-guard not wired"));
+            let out = run_wired(&root, &hook, "codex exec 'review the diff'");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{tier} {wiring}: {stderr}");
+            assert!(
+                stderr.contains("headless peer run"),
+                "{tier} {wiring}: {stderr}"
+            );
+            let out = run_wired(&root, &hook, "codex --version");
+            assert!(out.stderr.is_empty(), "{tier} {wiring}: negative warned");
+        }
+
+        let mut policy = policy;
+        policy["security"]["headless_peer_runs"] = "warn".into();
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+        for wiring in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".grok/hooks/codeflow.json",
+        ] {
+            let hook = pretooluse_commands(&root, wiring)
+                .into_iter()
+                .find(|command| command.contains("hook exec-guard"))
+                .unwrap();
+            let out = run_wired(&root, &hook, "claude -p 'summarize'");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{tier} {wiring}: warn level");
+            assert!(
+                stderr.contains("headless peer run"),
+                "{tier} {wiring}: {stderr}"
+            );
+        }
+    }
+}
+
+#[path = "../../codeflow-core/src/security/guard_forms.rs"]
+#[allow(dead_code)]
+mod guard_forms;
+
+#[cfg(unix)]
+#[test]
+fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
+    // TSK-141 AC-5: at every tier, the Claude, Codex and Grok wiring refuse
+    // each composed deletion, pass each project deletion, and judge each
+    // help invocation and its data twin as the unit tests do. The guard
+    // only judges; nothing here runs the commands.
+    for tier in ["--minimal", "--standard", "--full"] {
+        let (_tmp, root) = project();
+        init(&root, tier);
+        for wiring in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".grok/hooks/codeflow.json",
+        ] {
+            let hook = pretooluse_commands(&root, wiring)
+                .into_iter()
+                .find(|command| command.contains("hook exec-guard"))
+                .unwrap_or_else(|| panic!("{tier} {wiring}: exec-guard not wired"));
+            for (form, _) in guard_forms::COMPOSED_PAIRS {
+                let out = run_wired(&root, &hook, form);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(
+                    out.status.code(),
+                    Some(2),
+                    "{tier} {wiring} {form}: {stderr}"
+                );
+                assert!(
+                    stderr.contains("security.dangerous_commands"),
+                    "{tier} {wiring} {form}: {stderr}"
+                );
+            }
+            for command in guard_forms::PROJECT_DELETIONS {
+                let out = run_wired(&root, &hook, command);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{tier} {wiring} {command}: {stderr}"
+                );
+                assert!(stderr.is_empty(), "{tier} {wiring} {command}: {stderr}");
+            }
+            for (help, twin) in guard_forms::HELP_PAIRS {
+                let out = run_wired(&root, &hook, help);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{tier} {wiring} {help}: {stderr}"
+                );
+                assert!(stderr.is_empty(), "{tier} {wiring} {help}: {stderr}");
+                // A fresh install blocks headless peer runs (ADR-0075 D4).
+                let out = run_wired(&root, &hook, twin);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(
+                    out.status.code(),
+                    Some(2),
+                    "{tier} {wiring} {twin}: {stderr}"
+                );
+                assert!(
+                    stderr.contains("headless peer run"),
+                    "{tier} {wiring} {twin}: {stderr}"
+                );
+            }
+        }
+    }
 }

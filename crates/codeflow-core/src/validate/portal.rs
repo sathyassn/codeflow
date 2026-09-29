@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -3018,7 +3018,7 @@ fn hardened_git(
     args: &[&str],
     piped_stdin: bool,
 ) -> std::io::Result<std::process::Child> {
-    let mut command = Command::new("git");
+    let mut command = crate::git::command();
     command
         .arg("--no-pager")
         .args(["-C"])
@@ -3454,22 +3454,39 @@ fn mapping_string<'a>(mapping: &'a serde_yaml::Mapping, key: &str) -> Option<&'a
         .and_then(serde_yaml::Value::as_str)
 }
 
+/// Derives a record's relationships from its frontmatter. A `depends_on`
+/// entry is an id, or a research or decision input written as a mapping whose
+/// `id` names it; `validate --docs` owns the other keys (`kind`, `pin`), so
+/// they are not read here. Legacy `dependencies` is a task-record key: it
+/// reads as `depends_on` only when `source_id` is a task id. A task depends
+/// only on tasks, as `validate --docs` requires.
 fn relationships_from_mapping(
     mapping: &serde_yaml::Mapping,
     source_id: Option<&str>,
 ) -> Result<BTreeSet<Relationship>, String> {
-    const FIELDS: [(&str, &str); 8] = [
+    const FIELDS: [(&str, &str); 9] = [
         ("epic_id", "epic"),
         ("epics", "epic"),
         ("specs", "spec"),
         ("depends_on", "depends_on"),
+        ("dependencies", "depends_on"),
         ("capabilities", "capability"),
         ("adrs", "decision"),
         ("related", "related"),
         ("superseded_by", "superseded_by"),
     ];
+    let task = source_id.is_some_and(|id| id.starts_with("TSK-") && strict_id(id));
+    let has = |key: &str| mapping.contains_key(serde_yaml::Value::String(key.to_string()));
+    if task && has("depends_on") && has("dependencies") {
+        return Err(
+            "declares both depends_on and legacy dependencies; keep only depends_on".into(),
+        );
+    }
     let mut relationships = BTreeSet::new();
     for (field, kind) in FIELDS {
+        if field == "dependencies" && !task {
+            continue;
+        }
         let Some(value) = mapping.get(serde_yaml::Value::String(field.to_string())) else {
             continue;
         };
@@ -3477,10 +3494,12 @@ fn relationships_from_mapping(
             serde_yaml::Value::Null => Vec::new(),
             serde_yaml::Value::String(target) => vec![target],
             serde_yaml::Value::Sequence(targets) => {
-                let parsed: Option<Vec<&str>> =
-                    targets.iter().map(serde_yaml::Value::as_str).collect();
+                let parsed: Option<Vec<&str>> = targets
+                    .iter()
+                    .map(|item| relationship_target(item, kind))
+                    .collect();
                 parsed
-                    .ok_or_else(|| format!("declared {field} relationship is not a string list"))?
+                    .ok_or_else(|| format!("declared {field} relationship is not a list of ids"))?
             }
             _ => {
                 return Err(format!(
@@ -3488,7 +3507,11 @@ fn relationships_from_mapping(
                 ))
             }
         };
-        if targets.iter().any(|target| !strict_id(target)) {
+        let task_dependency = task && kind == "depends_on";
+        if targets
+            .iter()
+            .any(|target| !strict_id(target) || (task_dependency && !target.starts_with("TSK-")))
+        {
             return Err(format!(
                 "declared {field} relationship has an invalid target"
             ));
@@ -3502,6 +3525,14 @@ fn relationships_from_mapping(
         }
     }
     Ok(relationships)
+}
+
+/// A relationship target: an id string, or for `depends_on` a mapping's `id`.
+fn relationship_target<'a>(item: &'a serde_yaml::Value, kind: &str) -> Option<&'a str> {
+    match item {
+        serde_yaml::Value::Mapping(entry) if kind == "depends_on" => mapping_string(entry, "id"),
+        _ => item.as_str(),
+    }
 }
 
 fn strict_id(value: &str) -> bool {
@@ -3787,7 +3818,7 @@ mod tests {
             &["add", "."][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(temp.path())
                 .args(args)
@@ -3888,7 +3919,7 @@ mod tests {
             &["add", "docs", "portal/portal.config.json"][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(temp.path())
                 .args(args)
@@ -4363,7 +4394,7 @@ mod tests {
             &["add", "docs", "portal/portal.config.json"][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(temp.path())
                 .args(args)
@@ -4682,7 +4713,7 @@ mod tests {
             &["add", "docs"][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(temp.path())
                 .args(args)
@@ -4788,7 +4819,7 @@ mod tests {
             &["add", "large.bin"][..],
             &["commit", "-q", "-m", "large fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(repository.path())
                 .args(args)
@@ -4806,7 +4837,7 @@ mod tests {
     #[test]
     fn git_authority_accepts_sha256_repositories_when_supported() {
         let repository = tempfile::tempdir().unwrap();
-        let initialized = Command::new("git")
+        let initialized = crate::git::command()
             .args(["-C"])
             .arg(repository.path())
             .args(["init", "-q", "--object-format=sha256"])
@@ -4822,7 +4853,7 @@ mod tests {
             &["add", "page.md"][..],
             &["commit", "-q", "-m", "sha256 fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(repository.path())
                 .args(args)
@@ -4861,7 +4892,7 @@ mod tests {
             &["add", "docs/guide.md"][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(repository.path())
                 .args(args)

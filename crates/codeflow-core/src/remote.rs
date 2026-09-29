@@ -102,6 +102,9 @@ pub struct BranchRule {
     pub require_status_checks: bool,
     pub block_force_push: bool,
     pub block_deletion: bool,
+    /// The registry data profile (SPC-013 R-6, R-22): applied as a ruleset
+    /// so it holds before the branch exists and never touches `main`.
+    pub data_profile: bool,
 }
 
 impl BranchRule {
@@ -112,8 +115,32 @@ impl BranchRule {
         self.pattern.contains(['*', '?', '['])
     }
 
+    /// Whether the rule is applied as a ruleset rather than classic branch
+    /// protection.
+    #[must_use]
+    pub fn uses_ruleset(&self) -> bool {
+        self.is_glob() || self.data_profile
+    }
+
+    /// The data profile for `codeflow/registry`: no deletion and no force
+    /// push; no pull-request requirement and no status checks.
+    #[must_use]
+    pub fn registry_data_profile() -> BranchRule {
+        BranchRule {
+            pattern: crate::ids::REGISTRY_BRANCH.to_string(),
+            require_pr: false,
+            require_status_checks: false,
+            block_force_push: true,
+            block_deletion: true,
+            data_profile: true,
+        }
+    }
+
     fn intent_lines(&self) -> Vec<String> {
         let mut v = Vec::new();
+        if self.data_profile {
+            v.push("data profile: no pull request and no status checks".to_string());
+        }
         if self.require_pr {
             v.push("require a pull request before merging".to_string());
         }
@@ -181,9 +208,18 @@ impl ProtectionPlan {
                 require_status_checks: push,
                 block_force_push: force,
                 block_deletion: delete,
+                data_profile: false,
             })
             .collect();
         Self { rules }
+    }
+
+    /// Add the registry data profile when the repository tracks durable
+    /// work; the rules for every other branch are unchanged.
+    #[must_use]
+    pub fn with_registry_profile(mut self) -> Self {
+        self.rules.push(BranchRule::registry_data_profile());
+        self
     }
 
     /// Render the dry-run report: the intended rules, nothing applied.
@@ -193,7 +229,9 @@ impl ProtectionPlan {
             "dry-run: intended remote protection ({provider}), nothing applied"
         )];
         for rule in &self.rules {
-            let mechanism = if rule.is_glob() {
+            let mechanism = if rule.data_profile {
+                "ruleset (data profile)"
+            } else if rule.is_glob() {
                 "ruleset (glob pattern)"
             } else {
                 "branch protection"
@@ -487,7 +525,7 @@ impl RemoteProvider for GithubProvider {
         let mut failed_rules = Vec::new();
 
         for rule in &plan.rules {
-            let result = if rule.is_glob() {
+            let result = if rule.uses_ruleset() {
                 self.run_gh(
                     &[
                         "api",
@@ -514,7 +552,7 @@ impl RemoteProvider for GithubProvider {
             };
             match result {
                 Ok(_) => {
-                    let mechanism = if rule.is_glob() {
+                    let mechanism = if rule.uses_ruleset() {
                         "ruleset"
                     } else {
                         "branch protection"
@@ -596,7 +634,31 @@ mod tests {
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).unwrap();
+        wait_until_executable(&path);
         path
+    }
+
+    /// A child forked by a concurrent test can briefly inherit the write
+    /// descriptor of a freshly written shim, and Linux then refuses to run it
+    /// (ETXTBSY). The provider would report that as an unresolvable repo, so
+    /// wait until one run succeeds. Nobody writes the shim again, so every
+    /// later run succeeds too.
+    #[cfg(unix)]
+    fn wait_until_executable(path: &Path) {
+        for _ in 0..200 {
+            match Command::new(path)
+                .arg("repo")
+                .stdout(Stdio::null())
+                .status()
+            {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => panic!("shim {} does not run: {e}", path.display()),
+                Ok(_) => return,
+            }
+        }
+        panic!("shim {} stayed busy for 2 s", path.display());
     }
 
     #[test]
@@ -681,7 +743,7 @@ mod tests {
         let report = provider.apply(&plan);
 
         assert_eq!(report.status, ProtectStatus::Degraded);
-        assert_eq!(report.limitations.len(), 2);
+        assert_eq!(report.limitations.len(), 2, "{:?}", report.limitations);
         assert!(
             report.limitations[0].contains("Upgrade to GitHub Pro"),
             "precise plan limitation expected: {}",
@@ -746,6 +808,40 @@ mod tests {
     }
 
     #[test]
+    fn registry_data_profile_is_a_ruleset_that_leaves_main_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_policy(dir.path(), r#"["main"]"#);
+        let before = ProtectionPlan::from_policy_file(&path);
+        let plan = ProtectionPlan::from_policy_file(&path).with_registry_profile();
+        assert_eq!(plan.rules.len(), before.rules.len() + 1);
+        let main = &plan.rules[0];
+        assert_eq!(main.pattern, "main");
+        assert!(main.require_pr && !main.data_profile && !main.uses_ruleset());
+        let registry = plan.rules.last().unwrap();
+        assert_eq!(registry.pattern, "codeflow/registry");
+        assert!(registry.uses_ruleset() && registry.block_force_push && registry.block_deletion);
+        assert!(!registry.require_pr && !registry.require_status_checks);
+        let body: serde_json::Value =
+            serde_json::from_str(&GithubProvider::ruleset_body(registry)).unwrap();
+        let kinds: Vec<&str> = body["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|rule| rule["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["non_fast_forward", "deletion"]);
+        assert_eq!(
+            body["conditions"]["ref_name"]["include"][0],
+            "refs/heads/codeflow/registry"
+        );
+        let report = plan.dry_run_report("github").render();
+        assert!(
+            report.contains("codeflow/registry [ruleset (data profile)]:"),
+            "{report}"
+        );
+    }
+
+    #[test]
     fn test_limitation_for_generic_error() {
         let msg = GithubProvider::limitation_for("main", "HTTP 502: oops", false);
         assert!(msg.contains("main: not applied"));
@@ -762,6 +858,7 @@ mod tests {
             require_status_checks: true,
             block_force_push: true,
             block_deletion: true,
+            data_profile: false,
         };
         let body: serde_json::Value =
             serde_json::from_str(&GithubProvider::branch_protection_body(&rule)).unwrap();

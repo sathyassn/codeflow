@@ -1,0 +1,48 @@
+  └──────┴───────┴───────────┘
+
+  I read the full file with line numbers and cross-checked with an awk scan that skips code fences; both gave the same four lines. git status
+  --porcelain is empty, so nothing was edited.
+
+  Routing evidence
+
+  ┌─────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │      Field      │                                                         Value                                                         │
+  ├─────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Primary         │ Me, running claude-opus-5-5. The ensemble binds this seat to Fable, so this is the documented Opus stand-in with      │
+  │                 │ reduced assurance.                                                                                                    │
+  ├─────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Planned worker  │ opus-medium-evidence (candidate), launched as the read-only Explore subagent.                                         │
+  │ route           │                                                                                                                       │
+  ├─────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Model and       │ Opus was requested through the Agent tool and never confirmed. Medium effort could not be requested at all: no loaded │
+  │ effort          │  subagent definition sets effort, and CLAUDE_CODE_EFFORT_LEVEL is unset.                                              │
+  ├─────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Launch          │ The Agent tool only confirmed a background launch. This Claude Code 2.1.283 session has no way to make it wait for    │
+  │                 │ the result.                                                                                                           │
+  ├─────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Return          │ None accepted. The contract only accepts a worker result collected before my turn ends. Background notifications and  │
+  │                 │ watchers, including Monitor, don't count.                                                                             │
+  ├─────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Failure         │ Clear and bounded: I stopped the worker myself, and the harness confirmed status killed with no result.               │
+  ├─────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Execution       │ primary-retained, the contract's fallback when no worker route can hand back a result in-turn. So I wrote this        │
+  │                 │ result, not a worker.                                                                                                 │
+  ├─────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Independent     │ Not run. The brief only asked the primary to check the return, and this is a read-only evidence task. A second-model  │
+  │ review          │ (Codex) review would be needed before anyone treats this as fully verified.                                           │
+  └─────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  To make this route work next time, add a small read-only worker definition with model: opus and effort: medium, and start the session with
+  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 so the Agent tool waits for the worker's result. I didn't make either change here because both touch
+  settings outside this task.
+
+✻ Churned for 1m 10s · done 2:21 AM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  fixture/same-family-native-subagent
+  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents
+
+  ⏺ main
+  ◯ Explore  List headings in guide.md                                                                                    12s · ↓ 23.5k tokens

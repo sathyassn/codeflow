@@ -1,5 +1,6 @@
 ---
 id: ADR-0009
+uid: 0b5a60b3-8474-4788-9c39-b217cd437035
 title: human authorization is out-of-band; local guards are the honest-agent floor
 date: 2026-07-02
 status: accepted
@@ -159,3 +160,13 @@ contains the residuals here is CI plus human-merged PRs, not armed remote branch
 protection. The "remote is the authoritative boundary" argument above is the
 general product design (charter D19); this repo cannot fully arm it while
 private, so the residuals are accepted only alongside the human-merge discipline.
+
+## Amendment: 2026-09-27 (appended, TSK-137)
+
+Removed: the top-level `human_authorization` policy key and its read at the
+override and integrate check-points. Why: it accepted only `none`, no adapter
+ever shipped, and an inert key in every scaffolded policy suggested a control
+that did not exist. The env-var human override and the rest of this decision
+are unchanged. A policy file that still has the key loads with one
+deprecation warning, and `codeflow update` removes it. A future out-of-band
+factor needs its own ADR and key.

@@ -65,6 +65,15 @@ pub struct Task {
 /// silently skips it, undercounting `codeflow status`. Partial store updates
 /// operate on the generic YAML mapping so fields outside this typed view
 /// remain intact.
+/// Read `depends_on` as predecessor ids: a bare id or the `id` of a
+/// `{id, kind, pin}` research or decision edge (SPC-013 R-112).
+fn dependency_ids<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+    crate::workgraph::deps::parse_dependencies(Some(&value))
+        .map(|deps| deps.into_iter().map(|dep| dep.id).collect())
+        .map_err(serde::de::Error::custom)
+}
+
 impl<'de> Deserialize<'de> for Task {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -91,7 +100,7 @@ impl<'de> Deserialize<'de> for Task {
             acceptance: Vec<String>,
             #[serde(default)]
             tests: Vec<String>,
-            #[serde(default, alias = "dependencies")]
+            #[serde(default, alias = "dependencies", deserialize_with = "dependency_ids")]
             depends_on: Vec<String>,
             #[serde(default)]
             integration_target: Option<String>,

@@ -4,7 +4,6 @@ const MAX_EAGER_ENHANCEMENT_MILLISECONDS = 5_000;
 export function enhanceDocument(root: HTMLElement, eager = false): () => void {
   const targets = [
     ...root.querySelectorAll<HTMLElement>("code[data-cf-language]"),
-    ...root.querySelectorAll<HTMLElement>("[data-cf-diagram='pending']"),
   ];
   if (eager || !("IntersectionObserver" in globalThis)) {
     void enhanceSequentially(targets, MAX_EAGER_ENHANCEMENT_MILLISECONDS);
@@ -31,31 +30,16 @@ export function enhanceDocument(root: HTMLElement, eager = false): () => void {
 
 async function enhanceSequentially(targets: HTMLElement[], budgetMilliseconds: number): Promise<void> {
   const started = performance.now();
-  for (const [index, target] of targets.entries()) {
-    if (performance.now() - started > budgetMilliseconds) {
-      for (const remaining of targets.slice(index)) markDeferredFailure(remaining);
-      return;
-    }
+  for (const target of targets) {
+    if (performance.now() - started > budgetMilliseconds) return;
     await enhance(target);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
-}
-
-function markDeferredFailure(target: HTMLElement): void {
-  if (!target.matches("[data-cf-diagram='pending']")) return;
-  target.dataset.cfDiagram = "failed";
-  const status = target.querySelector<HTMLElement>("[data-cf-diagram-status]");
-  if (status) status.textContent = "Diagram rendering stopped at the local time budget. Its source remains available.";
 }
 
 async function enhance(target: HTMLElement): Promise<void> {
   if (target.matches("code[data-cf-language]")) {
     const { highlightCode } = await import("./syntax");
     await highlightCode(target, target.dataset.cfLanguage ?? "");
-    return;
-  }
-  if (target.matches("[data-cf-diagram='pending']")) {
-    const { renderDiagram } = await import("./diagram");
-    await renderDiagram(target);
   }
 }

@@ -1,6 +1,25 @@
 #!/bin/sh
-# codeflow git-hook shim — managed by `codeflow update`.
-# No-ops gracefully when the codeflow binary is not on PATH; all policy lives
-# in .codeflow/policy.json and is evaluated by the binary, never here.
-command -v codeflow >/dev/null 2>&1 || exit 0
-exec codeflow git-hook pre-push "$@"
+# codeflow git-hook shim, managed by `codeflow update`.
+# All policy lives in .codeflow/policy.json and is evaluated by the binary,
+# never here.
+# A codeflow command that runs git names its own binary in
+# CODEFLOW_HOOK_BINARY, and the hook runs that binary; one that is missing or
+# not executable fails the hook (SPC-013 R-85). Git run outside codeflow uses
+# the codeflow on PATH, and no-ops gracefully when there is none.
+if [ -n "${CODEFLOW_HOOK_BINARY+set}" ]; then
+  codeflow_bin=$CODEFLOW_HOOK_BINARY
+  if [ ! -f "$codeflow_bin" ] || [ ! -x "$codeflow_bin" ]; then
+    echo "codeflow: the codeflow binary that ran this git command ($codeflow_bin) is missing or not executable" >&2
+    exit 1
+  fi
+else
+  command -v codeflow >/dev/null 2>&1 || exit 0
+  codeflow_bin=codeflow
+fi
+# Upgrade order (SPC-013 R-85): new binary first, then `codeflow update`. A
+# binary older than these shims lacks their capability: warn, then run the
+# checks it has.
+if ! "$codeflow_bin" git-hook capabilities </dev/null 2>/dev/null | grep -qx 'hooks 2'; then
+  echo "codeflow: the codeflow binary running this hook is older than these hooks; install the new binary first, then run \`codeflow update\` (running the checks this binary has)" >&2
+fi
+exec "$codeflow_bin" git-hook pre-push "$@"

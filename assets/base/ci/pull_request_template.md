@@ -1,15 +1,26 @@
 <!-- Linted by `codeflow ci`: no AI attribution, no emoji, no em or en dash.
-     The five sections below are always present, in this order. Conditional
-     sections are listed at the end. Aim for about 65 rows wrapped at 100
-     columns for a task PR, about 80 with Whole-flow evidence, and about 90
-     for an epic; never drop evidence to fit. A figure here is a fenced
-     ASCII block, never Mermaid. -->
+     Write it plainly: simple, straightforward and clear, no mannered prose
+     (see `.codeflow/rules/writing.md`).
+     The sections a PR needs follow what its range touches. A range with
+     code, config, scripts, shipped templates or agent instructions needs
+     all five sections below, in this order. A range of only Markdown under
+     docs/ or project-management/, outside product, watched contract and
+     template paths, needs Summary and Changes; Testing and Reviews are
+     optional there, and a missing Release impact reads as no impact.
+     Conditional sections are listed at the end. Aim for about 65 rows
+     wrapped at 100 columns for a task PR, about 80 with Whole-flow
+     evidence, and about 90 for an epic; never drop evidence to fit. A
+     figure here is a fenced ASCII block, never Mermaid. -->
+
+<!-- With durable work tracking: the task this delivers, or why it is a direct change. -->
+Task: `TSK-NNN | none: <reason>`
 
 ## Summary
 
-<!-- One to three short sentences of context: what this is, why, and the
-     outcome, for a reader with no context. No file names, identifiers,
-     numbers or caveats; details go in Changes. Cover the whole branch:
+<!-- A few lines of plain prose that anchor a reader with no context: the
+     result this gives its consumer, why it matters and where it stands. A
+     key file name or number belongs here when it is part of that context;
+     other details go in Changes. Cover the whole branch:
      derive from `git log --oneline <base>..<head>` and
      `git diff --stat <base>...<head>`, and inspect the full diff. Do not
      write from the last conversation turn, review round or commit. -->
@@ -29,9 +40,10 @@
      Coverage when the range is code: the measured TOTAL from the project's
      command; name revision, command, metric, and scope; CI PASS alone is
      insufficient; unmeasured is a stated gap. New tests: count and suites.
-     Missing required checks keep the PR draft. Docs only: say so and name
-     the doc checks run; scripts, hook settings, shipped templates and agent
-     instructions are not docs only. -->
+     Missing required checks keep the PR draft. Docs or planning only: the
+     section is optional; when kept, say so and name the doc checks run.
+     Scripts, hook settings, shipped templates and agent instructions are
+     not docs only. -->
 
 - Revision and command:
 

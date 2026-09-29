@@ -1,5 +1,6 @@
 ---
 id: ADR-0020
+uid: 3cb29038-ac1b-4d80-81a4-1f1635bf8856
 title: restore the original commit standard — 50/72 subject, bullet-only body, block-enforced
 date: 2026-07-12
 status: accepted

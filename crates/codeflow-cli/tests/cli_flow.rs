@@ -5,20 +5,18 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-/// Shared isolated `CODEFLOW_HOME` so no invocation's registry touch can
-/// reach the developer's real `~/.codeflow` (per the `recall_remote_cli.rs`
-/// pattern).
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
-
+/// Runs the binary with its own isolated `CODEFLOW_HOME` per call, so no
+/// registry touch reaches the developer's real `~/.codeflow` and parallel
+/// full gates never meet on one machine-wide gate lock (TSK-134). The
+/// harness's own `CARGO_TARGET_DIR` lies outside these temp repositories, so
+/// it is removed, as the gate would refuse it.
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
+    let home = tempfile::tempdir().expect("home tempdir");
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
         .args(args)
         .current_dir(dir)
-        .env("CODEFLOW_HOME", isolated_home())
+        .env("CODEFLOW_HOME", home.path())
+        .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("codeflow binary runs")
 }
@@ -314,14 +312,17 @@ fn validate_docs_superseded_adr_without_superseded_by_exits_one() {
 }
 
 #[test]
-fn validate_docs_absent_tiers_skip_with_notes() {
+fn validate_docs_on_an_unscaffolded_tree_is_quiet() {
+    // TSK-147: a tree no tier scaffolded never had the docs or record
+    // layers, so there is nothing to note and nothing to act on.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
     let output = codeflow(dir.path(), &["validate", "--docs"]);
     assert_eq!(output.status.code(), Some(0));
     let out = stdout(&output);
-    assert!(out.contains("note:"), "absent dirs must be noted: {out}");
+    assert!(!out.contains("note:"), "no layer was installed: {out}");
+    assert!(out.contains("doc graph clean"), "{out}");
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +531,58 @@ fn spec_new_allocates_and_links_from_its_consumer() {
     assert!(epic.contains("specs: [SPC-001]"), "{epic}");
 }
 
+/// TSK-103 AC-8: one spec, several consumers, each written in the same
+/// change; the spec keeps no consumer list; a missing consumer writes none.
+#[test]
+fn spec_new_links_every_consumer_or_none() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    codeflow(dir.path(), &["epic", "new", "Contracted work"]);
+    codeflow(
+        dir.path(),
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "a one-off",
+            "Side work",
+        ],
+    );
+    let output = codeflow(
+        dir.path(),
+        &[
+            "spec",
+            "new",
+            "--for",
+            "EPC-001",
+            "--for",
+            "TSK-001",
+            "Shared contract",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let read = |path: &str| std::fs::read_to_string(dir.path().join(path)).unwrap();
+    assert!(read("project-management/epics/EPC-001.md").contains("specs: [SPC-001]"));
+    assert!(read("project-management/tasks/TSK-001.md").contains("specs: [SPC-001]"));
+    let spec = read("project-management/specs/SPC-001.md");
+    assert!(
+        !spec.contains("EPC-001") && !spec.contains("TSK-001"),
+        "{spec}"
+    );
+
+    let before_epic = read("project-management/epics/EPC-001.md");
+    let output = codeflow(
+        dir.path(),
+        &["spec", "new", "--for", "EPC-001,TSK-404", "Half linked"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(read("project-management/epics/EPC-001.md"), before_epic);
+    assert!(!dir
+        .path()
+        .join("project-management/specs/SPC-002.md")
+        .exists());
+}
+
 #[test]
 fn work_start_proves_a_merged_planning_anchor_without_mutation() {
     let dir = tempfile::tempdir().unwrap();
@@ -561,6 +614,118 @@ fn work_start_proves_a_merged_planning_anchor_without_mutation() {
     assert!(porcelain.stdout.is_empty());
 }
 
+/// Make `remote` a configured remote and `main`'s upstream.
+fn set_upstream(dir: &Path, remote: &str) {
+    git(
+        dir,
+        &["config", &format!("remote.{remote}.url"), "/nowhere"],
+    );
+    git(
+        dir,
+        &[
+            "config",
+            "--replace-all",
+            &format!("remote.{remote}.fetch"),
+            &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+        ],
+    );
+    git(dir, &["config", "branch.main.remote", remote]);
+    git(dir, &["config", "branch.main.merge", "refs/heads/main"]);
+}
+
+fn rev_parse(dir: &Path, rev: &str) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", rev])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
+    // The planning record landed on the remote; local `main` was never
+    // fast-forwarded. Anchoring on it would miss the record.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    git(dir.path(), &["switch", "-c", "plan/anchor"]);
+    codeflow(dir.path(), &["epic", "new", "Anchored work"]);
+    codeflow(
+        dir.path(),
+        &[
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            "main",
+            "Implement",
+        ],
+    );
+    git(dir.path(), &["add", "project-management"]);
+    git(dir.path(), &["commit", "-m", "plan: anchor durable task"]);
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
+    git(dir.path(), &["switch", "-c", "task/TSK-001-implement"]);
+
+    // Without a configured upstream, local `main` stays the target.
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("not present at the merge-base"),
+        "{}",
+        stderr(&output)
+    );
+
+    // A fork: `main` tracks `upstream/main`, which lacks the planning. The
+    // fork's newer `origin/main` is not the target.
+    set_upstream(dir.path(), "upstream");
+    let base = rev_parse(dir.path(), "main");
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/upstream/main", &base],
+    );
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        !stderr(&output).contains("anchoring on"),
+        "{}",
+        stderr(&output)
+    );
+
+    // `main` tracks `origin/main`, where the planning landed.
+    set_upstream(dir.path(), "origin");
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("-> refs/remotes/origin/main"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("behind its upstream 'refs/remotes/origin/main'"),
+        "{}",
+        stderr(&output)
+    );
+
+    // Local `main` gains a commit the remote lacks: diverged, refused.
+    git(dir.path(), &["switch", "main"]);
+    git(
+        dir.path(),
+        &["commit", "--allow-empty", "-m", "chore: local only"],
+    );
+    git(dir.path(), &["switch", "task/TSK-001-implement"]);
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("'main' and 'refs/remotes/origin/main' have diverged"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn work_start_rejects_an_invalid_visible_workgraph() {
     let dir = tempfile::tempdir().unwrap();
@@ -582,7 +747,7 @@ fn work_start_rejects_an_invalid_visible_workgraph() {
     write(
         dir.path(),
         "project-management/epics/EPC-999.md",
-        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- [ ] fixed\n",
+        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
     );
 
     let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);

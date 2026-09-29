@@ -230,3 +230,51 @@ fn any_command_touches_registry() {
         "registry: {registry}"
     );
 }
+
+/// TSK-137 AC-4: hook, ci and read-only commands leave the registry alone,
+/// other commands still record the repo, and a home the process may not
+/// write (a sandbox, a read-only directory) is silent.
+#[cfg(unix)]
+#[test]
+fn registry_touch_skips_hooks_and_is_silent_in_a_read_only_home() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "proj");
+    let home = tempfile::tempdir().unwrap();
+    let registry = home.path().join("registry.json");
+
+    for args in [
+        &["git-hook", "commit-msg", "missing-file"][..],
+        &["ci", "--base", "HEAD", "--head", "HEAD"],
+        &["validate"],
+        &["work", "start", "TSK-001"],
+    ] {
+        run_in(repo.path(), home.path(), args);
+        assert!(!registry.exists(), "{args:?} touched the registry");
+    }
+    // The session-start orient is the main sign a repository is in use.
+    run_in(repo.path(), home.path(), &["orient"]);
+    assert!(registry.exists(), "orient records the repo");
+
+    let locked = tempfile::tempdir().unwrap();
+    let read_only = locked.path().join("home");
+    fs::create_dir_all(&read_only).unwrap();
+    fs::set_permissions(&read_only, fs::Permissions::from_mode(0o555)).unwrap();
+    let out = run_in(repo.path(), &read_only, &["recall", "anything"]);
+    fs::set_permissions(&read_only, fs::Permissions::from_mode(0o755)).unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("registry touch failed"), "{stderr}");
+    assert!(!read_only.join("registry.json").exists());
+
+    // A home used before keeps a writable lock; the denial then comes from
+    // the atomic registry write, and is just as quiet (T137-4).
+    fs::set_permissions(home.path(), fs::Permissions::from_mode(0o555)).unwrap();
+    assert!(home.path().join("registry.json.lock").exists());
+    let before = fs::read_to_string(&registry).unwrap();
+    let out = run_in(repo.path(), home.path(), &["recall", "anything"]);
+    fs::set_permissions(home.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("registry touch failed"), "{stderr}");
+    assert_eq!(fs::read_to_string(&registry).unwrap(), before);
+}

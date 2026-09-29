@@ -1,5 +1,6 @@
 ---
 id: ADR-0025
+uid: 98bc51f7-fefe-4b99-b585-a8fc687113a9
 title: effective harness autonomy with broad tools and guarded side effects
 date: 2026-07-16
 status: accepted

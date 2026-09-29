@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::file_lock::{locked_read, locked_rmw_typed};
+use crate::file_lock::{locked_read, locked_rmw_typed_io};
 
 /// Registry schema version written by this binary.
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
@@ -196,17 +196,19 @@ pub fn read_project_info(repo_root: &Path) -> ProjectInfo {
 /// concurrent invocations never lose entries. Entries whose recorded path
 /// no longer exists on disk (deleted or moved repos) are pruned in the same
 /// locked read-modify-write — the registry is a view, and stale rows make
-/// it lie. Returns `Ok(true)` when an entry was written.
+/// it lie. Returns `Ok(true)` when an entry was written, and `Ok(false)`
+/// when nothing was: the repo is not initialized, or this process may not
+/// write the registry (a sandbox or a read-only home), which is expected
+/// and not worth a warning.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` when the lock cannot be acquired or the registry
-/// file cannot be read, parsed, or written.
+/// file cannot be read, parsed, or written for another reason.
 pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
     if !is_initialized(repo_root) {
         return Ok(false);
     }
-
     let canonical = std::fs::canonicalize(repo_root)
         .map_err(|e| format!("canonicalize {}: {e}", repo_root.display()))?;
     let info = read_project_info(&canonical);
@@ -218,7 +220,7 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
         last_activity: rfc3339_now(),
     };
 
-    locked_rmw_typed(&registry_path(home), Registry::default, |reg| {
+    let written = locked_rmw_typed_io(&registry_path(home), Registry::default, |reg| {
         reg.schema_version = REGISTRY_SCHEMA_VERSION;
         // Prune stale rows: a cheap existence check per entry, inside the
         // same lock so concurrent touches never resurrect a pruned path.
@@ -233,9 +235,22 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
             None => reg.repos.push(entry.clone()),
         }
         Ok(())
-    })?;
+    });
+    match written {
+        Ok(()) => Ok(true),
+        // Any step, from the lock to the atomic write, may be denied.
+        Err(error) if error.io().is_some_and(is_denied) => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
+}
 
-    Ok(true)
+/// A permission denial or a read-only file system: the registry is not this
+/// process's to write, as in a sandbox.
+fn is_denied(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+    )
 }
 
 /// List registered repos. A missing registry file is an empty registry.

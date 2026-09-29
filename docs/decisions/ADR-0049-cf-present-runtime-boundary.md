@@ -1,5 +1,6 @@
 ---
 id: ADR-0049
+uid: 2317badb-5a08-4c38-904b-8c001e0a3fa8
 title: bounded cf-present runtime and renderer boundary
 date: 2026-08-01
 status: accepted
@@ -184,3 +185,33 @@ kill.
 `docs/architecture.md` gains the `cf-present` crate, immutable renderer-asset
 pipeline, per-session loopback service, tokenless browser bootstrap, isolated
 profile, sandbox document, platform-state authority, and cleanup boundaries.
+
+## Update 2026-09-28: Mermaid retired on the 3.0.0 source (TSK-114)
+
+Under operator decision 3a of 2026-09-26 (EPC-020), the figure runtime ships
+in 3.1, so TSK-114 ports TSK-087's removal of the diagram block to the 3.0.0
+source without it. 3.0.0 is the first release of present, so no released
+consumer holds a diagram document.
+
+- The `diagram` block, its Mermaid 11.16.1 renderer, the sanitizer and the
+  packages they bundled leave the build. The renderer paragraph above, which
+  lazy-loads Mermaid for diagram blocks, describes the runtime before this
+  update. The lazy chunks are now fonts and syntax, and the SBOM, license
+  inventory and size budgets were regenerated from the new build.
+- The v1 document schema narrows: the `diagram` definition leaves its block
+  catalog and the diagram count limit goes with it. New `present open` and
+  `update` input that carries a `diagram` block is refused before typed
+  parsing, with the replacement for its kind and the conversion section of
+  the `cf-present` authoring reference. Every replacement named is a block
+  this source has: an html block holding an inline SVG, a table or a tree
+  block.
+- A revision stored with a `diagram` block by a pre-release build still
+  loads, as the `retired` revision kind of the history schema. It is read
+  only and never rewritten: the page and a new export render every other
+  block as before and show a notice and each diagram's escaped source with
+  its conversion in the diagram's place, so a session too large for
+  `present history` still shows its whole document, and feedback on it is
+  refused until `present update` stores a converted revision. A record that
+  is broken in any other way keeps its own error.
+- The consequence above that export enhancement covers diagrams no longer
+  applies; export enhancement covers syntax highlighting.

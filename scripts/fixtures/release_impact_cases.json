@@ -1,0 +1,335 @@
+{
+  "description": "One fixture set for both checks of a pull request's Release impact block (SPC-013 R-96, TSK-106 AC-8): scripts/release.py (parse_release_impact) and the Rust PR-body check (codeflow ci, pr_body::release at the default policy). Both read the body with one parser, the codeflow binary (codeflow ci --read-release-impact, TSK-147 F4). Each case is a whole PR body and whether its block is valid. The cases cover the block's shared structure and field rules; The legacy Contract field is a transitional declaration both read alike (TSK-147 round 6): alone it maps to Breaking, and beside Breaking it must agree. CodeFlow's own rules (Unit and Evidence, and Breaking if and only if major) are tested by scripts/test_release.py alone, so every body carries Unit and Evidence.",
+  "cases": [
+    {
+      "name": "valid_patch",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_major_with_steps",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: Run `codeflow update`, then rename `old` to `new`.\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_emphasised_keys",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- **Impact:** minor\n- **Breaking**: no\n- __Rationale:__ Add a flag.\n- *Migration*: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_values_in_any_case",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: Patch\n- Breaking: No\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_plain_field_lines",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nImpact: patch\nBreaking: no\nRationale: Clarify the command output.\nMigration: none\nUnit: codeflow\nEvidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_depth_three_section",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n### Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_reference_to_a_populated_breaking_change",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Rename a policy key.\n- Migration: see Breaking change\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n## Breaking change\n\nRename `old` to `new` in `.codeflow/policy.json`, then run `codeflow update`.\n"
+    },
+    {
+      "name": "invalid_missing_section",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Testing\n\nRan 3 tests.\n"
+    },
+    {
+      "name": "invalid_two_sections",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_fields_only_in_a_code_fence",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n```text\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n```\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_fields_only_in_a_comment",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n<!--\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n-->\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_fields_only_in_a_quote",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nNot assessed yet; an example from another pull request:\n\n> - Impact: patch\n> - Breaking: no\n> - Rationale: Clarify the command output.\n> - Migration: none\n\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_fields_only_in_indented_code",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nNo assessment yet.\n\n    - Unit: codeflow\n    - Impact: minor\n    - Breaking: no\n    - Rationale: Adds a function preserving all callers.\n    - Migration: none\n    - Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_fields_only_in_tab_indented_code",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nNo assessment yet.\n\n\t- Unit: codeflow\n\t- Impact: minor\n\t- Breaking: no\n\t- Rationale: Adds a function preserving all callers.\n\t- Migration: none\n\t- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "valid_indented_continuation_inside_a_field_item",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n\n    The old output stays readable by the same parsers.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_migration_borrowed_from_a_subsection",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n### Notes\n\n- Migration: none\n"
+    },
+    {
+      "name": "invalid_duplicate_impact",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n- Impact: minor\n"
+    },
+    {
+      "name": "invalid_impact_value",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: medium\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_breaking_value",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: maybe\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_breaking_without_migration",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_breaking_below_major",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: minor\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: Use the new flag.\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_reference_without_a_breaking_change_section",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Rename a policy key.\n- Migration: see Breaking change\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_reference_to_an_empty_breaking_change",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Rename a policy key.\n- Migration: see Breaking change\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n## Breaking change\n\n<!-- steps go here -->\n"
+    },
+    {
+      "name": "invalid_template_alternatives_left_in_place",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: `none`, steps, or \"see Breaking change\"\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_empty_rationale",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale:\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_placeholder_rationale",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: TODO\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_empty_migration",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration:\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_quoted_placeholder_migration_on_a_break",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: \"none\"\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_whole_placeholder_migration_on_a_break",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: <steps>\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_setext_heading",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\nRelease impact\n---\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_fields_as_indented_code_after_a_list_and_a_comment",
+      "valid": false,
+      "body": "Task: none: isolated review fixture\n\n## Summary\nAdds an item.\n\n## Changes\n- Add item.\n\n## Testing\n- Tests passed.\n\n## Reviews\nReview pending.\n\n## Release impact\n\n- example\n\n<!-- comment -->\n\n    Unit: codeflow\n    Impact: minor\n    Breaking: no\n    Rationale: Adds a function preserving all callers.\n    Migration: none\n    Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_fields_as_indented_code_after_a_three_digit_ordered_item",
+      "valid": false,
+      "body": "Task: none: isolated review fixture\n\n## Summary\nAdds an item.\n\n## Changes\n- Add item.\n\n## Testing\n- Tests passed.\n\n## Reviews\nReview pending.\n\n## Release impact\n\n123. example\n\n    Unit: codeflow\n    Impact: minor\n    Breaking: no\n    Rationale: Adds a function preserving all callers.\n    Migration: none\n    Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_field_on_a_line_a_comment_opens",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n<!-- note --> Impact: minor\n- Breaking: no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_field_after_a_multi_line_comment_closes",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n<!--\nnote\n--> Impact: minor\n- Breaking: no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_field_inside_an_html_block",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n<details>\n<summary>More</summary>\n- Impact: minor\n</details>\n\n- Breaking: no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_ordered_item_not_at_one_continuing_a_paragraph",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nUnit: codeflow\n10. Impact: minor\nBreaking: no\nRationale: Adds a function preserving all callers.\nMigration: none\nEvidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_bullet_left_of_the_item_content_continuing_it",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n   - Unit: codeflow\n    - Impact: minor\n   - Breaking: no\n   - Rationale: Adds a function preserving all callers.\n   - Migration: none\n   - Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_star_text_continuing_a_paragraph",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nUnit: codeflow\n    * Impact: minor\nBreaking: no\nRationale: Adds a function preserving all callers.\nMigration: none\nEvidence: cargo test passed.\n"
+    },
+    {
+      "name": "valid_fields_after_a_list_closed_by_a_comment",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- example\n\n<!-- comment -->\n\n- Impact: minor\n- Breaking: no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "valid_comments_inside_field_lines",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: minor <!-- chosen from the commits -->\n- Breaking: <!-- none found -->no\n- Rationale: Adds a function preserving all callers.\n- Migration: none\n- Unit: codeflow\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "valid_fields_with_blocks_nested_in_tight_items",
+      "valid": true,
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\n- Unit: codeflow\n  - Impact: minor\n    - Breaking: no\n- Rationale: Adds a function preserving all callers.\n  > quoted aside\n- Migration: none\n- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_fields_only_inside_a_link_reference_title",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\n[example]: https://example.test \"\nUnit: codeflow\nImpact: minor\nBreaking: no\nRationale: Adds a function preserving all callers.\nMigration: none\nEvidence: cargo test passed.\n\"\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_fields_only_inside_a_multiline_link_reference_title",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\n[example]:\n  https://example.test\n  (\nUnit: codeflow\nImpact: minor\nBreaking: no\nRationale: Adds a function preserving all callers.\nMigration: none\nEvidence: cargo test passed.\n)\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_breaking_migration_is_a_linked_placeholder",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Adds a function preserving all callers.\nMigration: [none](https://example.test)\nEvidence: cargo test passed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_breaking_migration_is_an_entity_placeholder",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Adds a function preserving all callers.\nMigration: &#110;one\nEvidence: cargo test passed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_rationale_is_an_entity_placeholder",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nBreaking: no\nRationale: &#116;odo\nMigration: none\nEvidence: cargo test passed.\n",
+      "valid": false
+    },
+    {
+      "name": "valid_breaking_migration_with_linked_steps",
+      "body": "## Summary\n\nAdds an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Adds a function preserving all callers.\nMigration: follow [the upgrade steps](https://example.test)\nEvidence: cargo test passed.\n",
+      "valid": true
+    },
+    {
+      "name": "invalid_breaking_change_section_is_the_steps_alternative",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Remove the old command.\nMigration: see Breaking change\nEvidence: cargo test passed.\n\n## Breaking change\n\nsteps\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_breaking_change_section_refers_to_itself",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Remove the old command.\nMigration: see Breaking change\nEvidence: cargo test passed.\n\n## Breaking change\n\nsee Breaking change\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_breaking_change_section_keeps_the_template_alternatives",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Remove the old command.\nMigration: see Breaking change\nEvidence: cargo test passed.\n\n## Breaking change\n\nnone, steps, or see breaking change\n",
+      "valid": false
+    },
+    {
+      "name": "valid_breaking_change_section_gives_steps",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nBreaking: yes\nRationale: Remove the old command.\nMigration: see Breaking change\nEvidence: cargo test passed.\n\n## Breaking change\n\nRename old to new.\n",
+      "valid": true
+    },
+    {
+      "name": "invalid_breaking_key_spelled_with_a_kelvin_sign",
+      "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nBreaKing: no\nRationale: Remove the old command.\nMigration: none\nEvidence: cargo test passed.\n",
+      "valid": false
+    },
+    {
+      "name": "valid_legacy_contract_not_applicable_alone",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: none\nContract: not-applicable\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_legacy_contract_compatible_alone",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: compatible\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_legacy_contract_breaking_with_steps",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: breaking\nRationale: Clarify wording without a contract change.\nMigration: Rename old to new.\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_legacy_contract_alone_without_migration",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: none\nContract: not-applicable\nRationale: Clarify wording without a contract change.\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_legacy_contract_in_upper_case",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: Compatible\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "invalid_legacy_contract_breaking_refers_to_itself",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: breaking\nRationale: Clarify wording without a contract change.\nMigration: see Breaking change\nEvidence: Documentation reviewed.\n\n## Breaking change\n\nsee Breaking change\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_legacy_contract_breaking_without_migration",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: breaking\nRationale: Clarify wording without a contract change.\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_legacy_contract_of_an_unknown_state",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: maybe\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_legacy_contract_duplicated",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: compatible\nContract: compatible\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "valid_dual_fields_agree_on_no_break",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: none\nContract: not-applicable\nBreaking: no\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_dual_fields_agree_on_a_break",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: breaking\nBreaking: yes\nRationale: Clarify wording without a contract change.\nMigration: Rename old to new.\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "invalid_dual_fields_contract_breaking_says_no",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: breaking\nBreaking: no\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_dual_fields_contract_compatible_says_yes",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: compatible\nBreaking: yes\nRationale: Clarify wording without a contract change.\nMigration: Rename old to new.\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_dual_fields_contract_of_an_unknown_state",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: maybe\nBreaking: no\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    }
+  ]
+}

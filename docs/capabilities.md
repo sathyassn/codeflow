@@ -41,7 +41,7 @@ name: scaffold-init
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
-epics: [EPC-001, EPC-005, EPC-009, EPC-011, EPC-012]
+epics: [EPC-001, EPC-005, EPC-009, EPC-011, EPC-012, EPC-020]
 adrs: [ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055]
 ```
 
@@ -53,8 +53,12 @@ orient/summary hooks in `.claude/settings.json`, the `.codex/` starter, and
 `.grok/hooks/codeflow.json`, the armed `policy.json`, `.gitignore` including
 `.worktrees/`, and a lean `AGENTS.md` + `CLAUDE.md`);
 `--standard` adds the method (Claude/agent skills, reviewer agents, the pipeline)
-and the six-layer docs spine and full contract; `--full` adds
-project-management/. Idempotent, non-destructive, offline (assets embedded via
+and the six-layer docs spine; `--full` adds project-management/. Every tier's
+`AGENTS.md` is a moment-keyed rule map rendered from one kernel
+(`assets/base/rule-map.toml`): at most 12 one-line always rules, a "when you
+are about to" table and pointers one hop away to the references in
+`.codeflow/rules/`, leaving at least 16 KiB for the project section under
+Codex's 32 KiB limit. Idempotent, non-destructive, offline (assets embedded via
 rust-embed), with bootstrap grace, husky/hooksPath detection, and a printed
 per-file report. Standard/full reports close with `/cf-customize`, pointing at
 the consuming project's product, architecture, agent context, harness settings,
@@ -74,8 +78,10 @@ secret-bearing environment filter pinned on. Claude-hosted plugin turns pass
 the current ensemble's model and effort explicitly so they cannot inherit a
 different user default. Claude
 ships a fail-closed sandbox on macOS, Linux, and WSL2, public web/tool access,
-raw model/cloud credential removal for sandboxed Bash, and ask rules for
-destructive source-control operations. A sandbox failure may request an
+raw model/cloud credential removal for sandboxed Bash, and no ask rules:
+the actions the operator performs are denied by rules generated from one
+action table, which also generates the Codex command rules; Grok gets a
+sandbox profile (ADR-0075). A sandbox failure may request an
 auto-classified unsandboxed retry
 only for a trusted installed tool that needs host state; this enables the
 official Codex plugin without granting a general bypass. Project `acceptEdits`
@@ -91,7 +97,7 @@ name: scaffold-update
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::update", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
-epics: [EPC-001, EPC-005, EPC-012]
+epics: [EPC-001, EPC-005, EPC-012, EPC-020]
 adrs: [ADR-0011, ADR-0019]
 ```
 
@@ -99,7 +105,10 @@ adrs: [ADR-0011, ADR-0019]
 unmodified files are replaced, user-modified files get a 3-way merge from
 `.codeflow/.baseline/` (conflicts produce `.new` + report), managed regions
 (AGENTS.md markers, settings.json codeflow keys) are surgically updated, and
-user-owned schema-versioned files only gain new keys with defaults. It also
+user-owned schema-versioned files gain new keys with defaults; a policy scalar
+still equal to the prior shipped default moves to the new default and is
+reported, and a value that differs is kept. Where no baseline was recorded,
+the settings and policy are compared with the copies 2.1.0 shipped. It also
 installs any manifest entry that is in-tier but missing on disk — so a file that
 became in-tier since the last install (e.g. an old `--minimal` repo gaining the
 enforcement floor under ADR-0019) is reconciled into place and recorded, not just
@@ -115,14 +124,15 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs"]
-epics: [EPC-001, EPC-011, EPC-017]
-adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0067]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs"]
+epics: [EPC-001, EPC-011, EPC-017, EPC-020]
+adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
 
 Git discipline enforced across four planes reading one config (the `git`
 section of `.codeflow/policy.json`). Two give fast local feedback — the git
-client hooks (pre-commit secret scan + staged-.env, commit-msg
+client hooks (pre-commit secret scan + staged-.env and unresolved conflict
+markers, commit-msg
 format/attribution/emoji and the ADR-0067 em and en dash check,
 pre-merge-commit and reference-transaction protected-branch merge/ref rules,
 pre-push branch naming and protected-branch rules) and the Claude
@@ -144,11 +154,32 @@ HTML never hides a heading, and an unclosed HTML block warns instead of hiding
 later sections. Freshly scaffolded policy also requires Reviews and Release
 impact; without an explicit list the built-in default stays Summary and
 Changes, and existing consumers retain their configured section lists.
+The sections scale to the change class (TSK-135), read from one checked
+merge-base tree diff with merge resolutions, deletions, both rename sides
+and file modes: a range of only regular Markdown under `docs/` or
+`project-management/`, outside every shared path set (product and watched
+contract paths from the checkout and the target, shipped templates, the
+record schema, dependency manifests, hooks, instructions and CI), needs
+Summary and Changes, under a mapped heading where the project accepted a
+mapping, and an absent Release impact there reads as no impact unless a
+commit is marked breaking. A range that cannot be listed is code.
 Summary style, missing `Not tested:`, long fences, prose width and approximate
 rendered rows warn under `pr_sections`. The independent `pr_release_impact`
 check defaults to warn: it validates generic fields, compatibility consistency,
 migration guidance and breaking commit floors against `pr_breaking_level`
 (default major). It requires no release automation or project-specific fields.
+The ADR-0067 dash check (`policy_characters`) also defaults to warn; CodeFlow's
+own policy sets block. Its added-lines scan skips a file only when its bytes
+equal the whole-file managed asset the running binary ships for that path, so
+unmodified scaffold content never trips it and a project record proves nothing.
+The conflict-marker check (`git.conflict_markers`, default block, TSK-170)
+judges the lines a change adds to a text file, in pre-commit over the staged
+diff and in `codeflow ci` over the range, which also catches a marker left
+while resolving `git rebase --continue`. A separator line counts only
+between an opening and a closing marker, so a Markdown heading underline
+passes, and a file that must hold markers sets `conflict-marker-size` for
+its path in `.gitattributes` (tests: `hooks::conflict_markers`,
+`git_hook` pre-commit tests, `ci_cli.rs`, `hooks_cli.rs`).
 The generic PR template ships at every tier. The structural
 anti-bypass layer is not flippable, by design: the strict policy validator (an
 invalid file fails loud rather than silently reverting to defaults), the schema
@@ -165,9 +196,29 @@ effective values and their source; and a present-but-invalid file fails
 loudly — naming each offending key, its value, and the valid set — at the
 commit-msg hook, `codeflow ci`, and `codeflow validate`, instead of silently
 reverting every key to the built-in defaults.
+A project that adopted CodeFlow's release calculator (`release.backend =
+"codeflow"` with `scripts/release.py`) also gets its release state checked
+locally: pre-push runs the preflight for each pushed branch (a warning for a
+behaviour change with no pending entry, a block only for a push that breaks a
+tree its base kept valid), and `codeflow integrate` runs the structural state
+check in its test stage. Both say what was not checked against the host; the
+pull request's `release impact` job stays the gate. `codeflow ci` reads the
+Release impact block with the calculator's parser, and both pass one shared
+fixture set. The release jobs live in the project's own workflow, never in
+the managed CI file.
 Secret scanning fails closed if libgit2 cannot traverse the complete staged
 diff. Hook stdin read failures remain advisory but print an explicit degraded
 ref-check warning instead of passing silently.
+Each operation a git hook or session guard stops appends one `refusal` event
+to the clone's ledger, naming the plane, the effective level and the rules,
+never the command; a finding at warn stops nothing and is not written.
+`codeflow report ceremony` reads it with the merge history over a window of
+pull requests or dates: pull requests per logical change, record status pull
+requests on their own row, review rounds asked of the host (`unknown` when the
+host cannot answer, the one host-backed read of SPC-013 R-103) and refusals
+(`unknown` before the clone began recording). The baseline over pull requests
+568 to 644 is `docs/verification/ceremony-baseline-2026-09-28.md`, and the
+release checklist compares each release's window with it.
 
 ## CAP-004 — test-gate
 
@@ -183,12 +234,30 @@ adrs: [ADR-0021, ADR-0031]
 
 `codeflow test [--mode full|quick|essential] [--strict]` runs the generic test
 engine against configured targets (`.codeflow/test-config.json`) or runtime stack
-detection (`quick` is an alias for `essential`, the lighter mode). No stack
+detection (`quick` is the push set; a manual run aliases it to `essential`, the
+lighter mode, when no target defines it). No stack
 detected is a loud no-op (exit 0) so the bootstrap/early-setup path stays green;
 `--strict` escalates that no-op to a non-zero exit for scripted/unattended callers
 (CI, the pipeline verify gate) where "ran nothing" must not read as a pass. With a
-stack it is a real gate, wired into pre-push via the `test_gate_on_push` policy and
-re-run in CI. File and aggregate coverage thresholds all contribute to the gate
+stack it is a real gate, re-run in CI. The pre-push hook runs the push set (the
+targets with a `quick` mode) plus `codeflow validate --docs` and `codeflow ci` on
+the pushed range, blocking by default under `test_gate_on_push`. An existing
+protected or `integration/` branch fast-forward starts at its advertised tip.
+Branches with a declared target use the merge base with its advertised tip,
+reading the target from the task record at the pushed commit; the hook names
+that target. Line rewrites, undeclared branches and unavailable targets retain
+the advertised-history fallback. An advertised target missing locally is noted. It blocks on
+what it can see and names what it left to CI (an unresolved range, a sibling
+ref, a dirty, sparse or submodule-incomplete checkout); the test suite belongs
+to the full gate. One full gate runs at a time on a machine (a second refuses,
+naming the holder), a gate that runs cargo warns about a `CARGO_TARGET_DIR`
+outside the worktree, and each target prints a start line on stderr as it begins.
+A killed gate never lets a second one run beside its target: on Unix the lock
+stays held until the target's process group exits, and on Windows the target's
+job object ends its process tree with the gate.
+If Windows cannot put a suspended target in that job, it ends the target and
+reports a failed test before the target command runs.
+File and aggregate coverage thresholds all contribute to the gate
 verdict; `changed_files` rules are rejected until an explicit comparison base is
 available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
 `codeflow test setup` safely fills absent/empty root-detected configs, lists and
@@ -252,7 +321,7 @@ id: CAP-007
 name: orient-session-summary
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+verified_by: ["cargo test hooks::orient", "cargo test hooks::guidance", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "codeflow-cli tests/init_e2e.rs", "codeflow-core tests/rule_reinjection_update.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-001, EPC-004]
 adrs: [ADR-0013, ADR-0044]
 ```
@@ -270,6 +339,24 @@ no per-harness duplication. Headless `codex exec` does not fire project hooks
 (ADR-0008), so this is an interactive-session aid; the `codex_hooks` test pins the
 JSON wiring, while live firing rests on Codex's documented hooks contract.
 
+Rules come back where they were lost or where they apply (TSK-128). One
+advisory command, `session-orient`, is wired on `SessionStart` and
+`UserPromptSubmit` and reads the event from the payload. After a
+compaction, a resume or a Claude fork (source `compact`, `resume` or
+`fork`) it adds a guidance block after the digest: the always rules by
+title, the "when you are about to" moments with their first pointer, and
+every skill and agent the tier installs, from the rule-map kernel and the
+scaffold manifest. On a prompt that asks for a duration, a status or a
+complex explanation it adds one rule line, and nothing otherwise. Sizes
+are guidelines (about 1.5 KB and 300 bytes). It is advisory:
+`guidance.prompt_reminders` defaults to `warn`, `off` or `allow` silences
+it, and every path exits 0. An older binary receiving the prompt event
+prints its digest and exits 0, so a machine that has not upgraded loses
+the reminder, not the prompt. Claude and Codex carry the text to the
+model. Grok Build 1.0.41 has the events but ignores their output (events
+present, context injection unavailable), so the Grok hook file wires only
+the guards.
+
 `codeflow status` also emits a read-only cleanup inventory for linked
 worktrees and unattached local branches. Against the locally known target it
 distinguishes clean ancestry/patch-equivalent resources, dirty work, and
@@ -284,17 +371,18 @@ name: remote-protect-doctor
 area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
-epics: [EPC-001, EPC-002, EPC-003]
+epics: [EPC-001, EPC-002, EPC-003, EPC-020]
 adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
 ```
 
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` runs fifteen health checks — hooks, Claude wiring, Codex wiring, Grok wiring, config,
+`codeflow doctor` runs nineteen health checks: hooks, Claude wiring, Codex wiring, Grok wiring, config,
 permissions, network, delegates, qualified model bindings, delegate round-trip, repo integrity, CI
 perimeter, managed-region
-drift, consuming-project customization, and test config. The Grok check reports
+drift, consuming-project customization, always-loaded instruction size (a warning when the
+`AGENTS.md` chain Codex loads for any directory, root to nested, exceeds its 32 KiB limit), reading sizes (the kernel, the per-task reading chain and each shipped skill against guideline numbers: information within, a warning above that names moving detail behind a trigger, never a failure), test config, the id registry, and adopter fit. The Grok check reports
 structural `.grok/hooks` wiring and the one-time `/hooks-trust` step; it does
 not inspect trust state (ADR-0054). The customization
 check remains quiet for minimal/non-method repos, warns while product,
@@ -357,8 +445,8 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md"]
-epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs"]
+epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-020]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060]
 ```
 
@@ -469,11 +557,146 @@ guards. Task frontmatter keeps non-executable structural `depends_on` data.
 shape, parent-or-standalone ownership, spec readiness, stable integration
 targets, completed acceptance criteria, and malformed, dangling,
 self-referential, duplicate, or cyclic topology. Explicit `codeflow work start`
-always checks the assigned CodeFlow task branch's planning anchor. Pre-commit
-and detached CI apply that same read-only merge-base check when full-tier or
-recognizable historical CodeFlow task tracking is active. It proves validated
-planning is present on the declared stable target. Material graph or cross-task
-contract changes force Plan vN+1; in-node implementation detail does not.
+checks the planning anchor of the task the branch carries on any work prefix
+(`task/`, `fix/`, `feat/`, `spike/` and the rest; not `plan/` or
+`integration/`). CI applies the same read-only merge-base check once per pull
+request when full-tier or recognizable historical task tracking is active; the
+per-commit hook no longer does. It proves validated planning is present on the
+declared stable target. Both report at the `git.work_planning` level: `block`
+by default, or `warn`, which reports the finding and lets the work continue. A declared target whose local branch is strictly
+behind its configured upstream anchors on that upstream, with a note; a
+diverged pair is refused. With tracking on, `codeflow ci` classifies every pull
+request: tracked (`Task: TSK-NNN`, or the id the branch carries), direct change
+(`Task: none: <reason>`), planning-only (records and `docs/plan/` only), an
+epic's integration line (a task of the epic targets it, it lands on the
+default target, and it holds only merges), or an automation profile. The
+range is one diff from the merge-base, and tracking is read at the target
+as well as the head. An unclassified one, a
+mismatched `Task:` line, a pull request that adds the record it claims, and a
+spike that lands anything but `docs/research/` findings and its own record
+block. A direct change is refused on the floor of one embedded path table
+(policy, hooks, managed instructions, CI files, manifests, record schema,
+shipped templates) plus the project's own `git.product_paths` and
+`git.breaking_watch_paths`; `init` writes a stack default for
+`git.product_paths`, `update` adds it once, and `git.direct_changes: forbid`
+refuses direct changes entirely. `task new --follow-up-of`, `epic new
+--integration` and `adr new` (numbered, written `proposed`) are one command
+each. One readiness core judges a task for `work next`, `work claim`,
+`work start`, `status`, `orient` and CI: status `todo`, no Blocker, no
+`awaiting_selection`, specs approved, epic open or standalone, code
+dependencies complete in the execution base, and research or decision
+dependencies (`{id, kind, pin}`, the pin quoted) complete at their pinned
+commit; a pin YAML reads as a number or as null is refused with the quote
+remedy, and a pin left out keeps the edge unmet. `work
+next` lists ready, then waiting and blocked tasks with reasons from the
+refs as last fetched; `work claim` fetches, refuses a task a visible branch
+already carries, and pushes `task/TSK-NNN-<slug>` as an advisory claim.
+`status` shows derived active, ready, landed and conflicting branches and
+epic progress, and never calls a live integration line removable. A
+selection that removes `awaiting_selection` lands only from `plan/`, and
+`spec new --for` links every consumer in one change. Material graph or
+cross-task contract changes force Plan vN+1; in-node implementation detail
+does not.
+Record status moves only by legal transitions (SPC-013 R-30 to R-35).
+`codeflow task status`, `epic status` and `spec status` write the status and
+only the sections the transition needs: a `## Blocker` with reason, owner and
+revisit for a blocked task, Closeout lines `- cancelled:` and `- scope:` for a
+cancelled record, and a fenced `yaml` acceptance block on completion.
+Reopening keeps the old block under `acceptance_superseded:` with its reason;
+a task completed before the migration, with no block, records a Closeout line
+`- reopened: <reason>` instead. Sections and blocks inside HTML comments or
+enclosing fences never count. A spec is approved or superseded only in a
+planning-only change, and supersession adds its successor in that change.
+Approval reads the spec's `open_questions` frontmatter list and needs it
+present and empty; the `## Open questions` prose is context and is not
+parsed. A spec written before the field stays valid, but it is approved
+only once it carries the list; null or a value that is not a list is an
+error (TSK-135).
+An approved spec is amended in place until it is `implemented`; after that
+its text below the frontmatter is frozen and a change to it is refused, so a
+changed contract is a new spec. The judge reads the spec's history, so a
+later supersession or consumer reopen does not thaw it. `spec status <id> draft` is never written:
+it gets the same refusal as the hand edit, naming both routes (TSK-169).
+The verbs are safe editors, not the only writers: one core judge rules on a
+verb's proposal, on a hand edit (`validate --docs --since <ref>`) and on each
+record a pull request changes (`codeflow ci`). No verb writes `in_progress`,
+and spec `implemented` is derived from the consumers, so an approved spec
+whose consumers are done is healthy and draws no warning. A Closeout item
+`- acceptance: historical evidence unavailable; ...` that names the landing
+merge stands in for the acceptance block of a task completed before the
+migration baseline and never reopened since
+(SPC-013 R-101). Epic close needs every
+task terminal, every criterion verified and every consumed spec implemented
+or still consumed. New records list criteria as `- AC-n` without a checkbox.
+The rules apply from the `work_records_baseline` commit in project config,
+which `codeflow update` records once, and by transition: an unchanged older
+record keeps its exact-blob exemption. `git.work_records` accepts `block` or
+`warn`, never `off`. The ledger's producerless work-graph event types are
+retired.
+A completion is bound to the reviewed commit (SPC-013 R-52 to R-54, R-60 to
+R-62): `task status complete` and `codeflow ci` check that the block's
+`reviewed` commit, named by object id, is the head or an ancestor after
+which only the record's status and Closeout changed, and that each waiver
+names a planning-only amendment on the target that changed that criterion;
+the verb also refuses uncommitted changes outside the record. Only a
+planning-only change or a checked epic line can change a task's criteria;
+the pull request's class decides it, not the branch prefix. A range touching the
+adopter-facing path set needs a `(journey)` criterion or one serving the
+epic's journey, and a leaf serving it says what ran or its narrower path. A
+criterion tagged `(after release)` is `deferred` with owner, window and a
+listed follow-up. A tag opens or closes its criterion, trailing sentence
+punctuation included; a tag inside the text does not count. `git.work_records` sets the binding and journey rules;
+frozen criteria always block. A release branch (SPC-013 R-120) is one whose
+name matches `git.release_branch_pattern` in the policy at the
+destination's default target, or `integration/release-*` when the key is
+absent; the policy check refuses a pattern that matches the default target
+or an epic line. On a push to a release branch, a pull request into one, or
+its pull request into the default target, pre-push, `codeflow ci` and
+`task status complete` judge each change where it was introduced. A merge
+whose other parents lie on a verified epic line's or the default target's
+first-parent chain is an import: a path equal to the expected import's
+tree entry is brought, and its completions bind where they were introduced
+(only a later completion from the task's own line that binds there, and
+that the line landed after the earlier ones, supersedes them; a direct
+completion is judged as it was made);
+a brought criteria change is judged again where it landed on its line,
+unless that landing is at or before the cutoff of the line the task
+targets, on that line's first-parent chain, in the project-config table
+`release_rule_baseline` read at the default target, which lists it as
+information. The adoption marker `release_rules = 1` in project config
+never decides whether these rules apply; once the default target carries
+it, removing it or changing its value, there or in the judged range,
+makes every release check refuse. The marker's history is read from the
+parents each commit records. History the check needs that it cannot read
+in full, cut by a shallow boundary or missing a config object, refuses as
+well: adoption is never inferred absent from it. A graft file or a replace
+ref, which would change the commits a release check walks, refuses too.
+Anything else is direct work: it freezes criteria, and beyond planning
+records it belongs to the one open task with `role: release-integration`,
+whose completion binds to the release head. Pre-push judges a push to a
+release branch on everything it adds to the default target's tip, as its
+pull request is. Whether the release rules apply is read at the checkout,
+the pushed commit and the default target's tip, fetched when missing; a
+push is refused when the destination does not answer or any of these
+cannot be read. The hook asks the destination once per push and hands
+that answer to its own `codeflow ci` through a hidden input; a run given
+that input is advisory only, and hosted CI, the authority, never takes it. When the
+default target's policy or objects cannot be read, the check fails
+closed. The check states that it proves structure and
+binding only, and cf-reviewer, cf-consult and cf-ship ask whether each
+criterion is supported on this source and achieves the outcome.
+
+CodeFlow's repository-only release integration workflow loads its write-token
+job from the default branch after epic-line workflow completions and on a daily
+schedule. Each surviving run imports all verified epic-line tips, including
+landings whose pending runs were replaced. The `release_integration` example runner
+checks prospective merges with this judge and the shared reading-structure
+check before pushing. Conflicts and findings leave the release branch unchanged
+and name the open release-integration task from the destination's default tip
+plus a local reproduction command.
+The workflow is not a task-PR gate and is not installed for adopters. Its local
+fixtures are in `release_line_cli`; `init_e2e` checks the conditional ship guidance.
+
 Review-relevant bounded discoveries persist at task closeout; closeout cannot
 retroactively approve a
 material change. Project organization keeps one authoritative work-item home
@@ -541,7 +764,7 @@ name: scaffold-customize
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012]
+epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012, EPC-020]
 adrs: [ADR-0025, ADR-0044]
 ```
 
@@ -594,8 +817,8 @@ id: CAP-013
 name: model-binding-evaluation
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017]
+verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/live_eval_pack.rs (with the live delivery holdout checked out)", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "evals/model-artifacts/test_retention_pack.py", "codeflow-cli tests/retention_pack.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017, EPC-020]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060]
 ```
 
@@ -617,6 +840,36 @@ pressured incident/security work, and identity/fair decisions. Effectful cases
 use a finite loopback simulator; its journal stays outside the subject tree and
 setup records both materialized and configured tree digests. This is not a full
 promotion or a real-service authorization test.
+The `guidance-retention` pack uses the scripted multi-turn case kind: the
+fixture supplies warm-up turns, the case prompt is the probe, and only the
+probe turn is graded. Three hard probes (a landing time asked for in a plan,
+a status report, a multi-part explanation) and their paired negatives each
+run in a fresh arm and an after-compaction arm on the Claude host, where the
+materializer sets the auto-compaction window in the disposable fixture's
+local settings. The materializer refuses a scaffold without the rule map and
+re-injection hooks; `check-session` checks one session, the scripted turns
+and the compaction before extracting the probe turn, and `retention-report`
+applies the bar. Offline checks prove the kit, not live behaviour.
+
+A case may also carry `expected.files` and `expected.effects`, graded by
+`eval_kit.py grade` on the work a session left: file state, coherent reviews
+in the reviewer's verdict format, branches and their tracking, records
+consistent with the id registry, changed paths, judgements bound to the exact
+text from a judge whose calibration meets every labelled control (otherwise
+the assertion is ungraded and the trial never scores as a pass), confined
+product checks with expected output, and the shipped `codeflow validate
+--docs` and `codeflow ci`, which must finish their checks. It does not prove CLI use, readiness checks or
+review before completion; those need the harness's own record of the session
+(TSK-116), and a command's process record is reported as supporting evidence
+only. Graded cases live in a graded suite outside the shipped kit and binary:
+a public development suite in `evals/grader-dev/`, and the live delivery
+holdout of SPC-013 R-105 on the private archive's `test/live-delivery-holdout`
+ref, which is never merged; `evals/holdout.json` records its paths, digests
+and text fingerprints, and `holdout-check` keeps it out of the tracked tree.
+Subjects work in a separate subjects root under a fixture boundary that covers
+both roots. A trial's status is recomputed from a grade bound to the current
+case, fixture and grader; a timed-out or errored session is kept and graded as
+a failure, and a pack result must keep every trial (TSK-111).
 
 The kit separates durable doctrine from fast-changing bindings. A
 source-controlled harness catalog marks a harness `capability-supported` only
@@ -731,7 +984,7 @@ name: transport-neutral-delegate-lifecycle
 area: engine
 status: building
 verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "codeflow-cli tests/delegate_pty_stress.rs", "cargo test doctor::tests::test_delegate_roundtrip", "docs/verification/delegate-lifecycle-canary-2026-07-23.md", "docs/verification/delegate-lifecycle-canary-2026-07-24.md"]
-epics: [EPC-002]
+epics: [EPC-002, EPC-019]
 adrs: [ADR-0036, ADR-0037]
 ```
 
@@ -777,6 +1030,24 @@ without one takes the recorded pre-2.1.196 compatibility path, limited to a
 single turn. Native Windows fails closed (use WSL2). Poison is durable and
 write-once; recovery is a new run in a fresh directory.
 
+A task the turn backgrounds (a Workflow, a background Bash command) can finish
+after the turn's Stop, and Claude Code then submits a task notice as a new
+prompt. The hook admits it without an armed turn only as a continuation of the
+current turn: the prompt must be exactly one `<task-notification>` envelope,
+the turn must have stopped with no other continuation open, and the session
+transcript must show the tool call that launched that task within the turn or
+one of its continuations. The record under `turns/<turn>/continuations/<task>/`
+keeps the notice's `prompt_id` and the SHA-256 of its bytes. Claude Code
+2.1.283 gives the prompt hook nothing that tells a real notice from the same
+text typed into the session, so the proof waits for the Stop carrying that
+`prompt_id`: before it writes the continuation result, the transcript must
+record the prompt with origin `task-notification`, `promptSource` `system` and
+`turnOrigin` `task_notification`, bytes matching the digest, and an earlier
+queue enqueue of the same bytes. A typed copy, a changed body or a missing
+entry poisons the run and writes no result. The residual risk stands: the
+model may act on a forged notice within that continuation turn; the check
+keeps it from being recorded as a clean result.
+
 Status is building: the engine surface and its unit/CLI/doctor tests landed,
 and the `delegate-roundtrip` doctor check requires the rebuilt CLI to be
 installed before it can pass. The dated PR1 canary record covers the active
@@ -794,7 +1065,7 @@ name: interactive-presentation-review
 area: engine
 status: building
 verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
-epics: [EPC-005]
+epics: [EPC-005, EPC-020]
 adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
 ```
 
@@ -823,10 +1094,10 @@ CodeFlow-owned isolated browser profile against an authenticated loopback-only
 service. Host/Origin/CSP/path/body limits, inert revision-qualified HTML
 sandboxing, strict primitive-token import, crash recovery, bounded retention,
 and identity-scoped cleanup are code boundaries. Event parsing and partial-tail
-repair are self-bounded and operate through one opened handle. Mermaid input is
-capped per diagram and per document; browser enhancement is serialized, yields
-between diagrams, and fails remaining items to escaped source when the eager
-fallback exhausts its cumulative budget. Browser and auxiliary system-tool
+repair are self-bounded and operate through one opened handle. The `diagram`
+block was removed with Mermaid: new input carrying one is refused with its
+conversion named, and a revision stored with one loads read only with a notice
+and its escaped source. Browser and auxiliary system-tool
 children share one allowlist-only environment. Windows ACL mutation is confined
 to creation for every private file, including append and lease files; existing
 state uses native read-only owner/protected-DACL/trustee/inheritance
@@ -867,8 +1138,7 @@ asset/release checks, and fresh native interactive model trials. That matrix
 includes Windows Unicode known-folder/profile paths, creation-time ACL
 hardening plus read-only weakened-ACL rejection, trusted system tools, exact
 process-tree identity and file URLs; Linux/WSL2
-bounded `/proc` identity and group signaling; and a dense multi-diagram browser
-corpus with long-task evidence. Cross-builds alone do not claim native runtime
+bounded `/proc` identity and group signaling. Cross-builds alone do not claim native runtime
 support.
 
 ## CAP-015 — opt-in-documentation-portal
@@ -885,10 +1155,10 @@ adrs: [ADR-0048, ADR-0058]
 
 `codeflow portal setup --path <repository-relative-directory>` explicitly
 adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
-portal build requires Node 22.19.0 or newer. The aggregate CI gate runs on Node
-26.4.0, and its full strict target installs, checks, builds, and validates the
-dogfood portal; the portal-local `.node-version` and the Windows adapter-test
-lane pin Node 24.18.0.
+portal build requires Node 22.19.0 or newer. The full strict gate installs,
+checks, builds, and validates the dogfood portal on the Node 24.18.0 its
+`.node-version` pins, as the Windows adapter-test lane does, and runs the
+presentation renderer's target on the 26.4.0 its own `.node-version` pins.
 The starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
 replace-only updates without pristine runtime copies or source merges. Runtime

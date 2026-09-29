@@ -82,6 +82,9 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             template,
             source().read("base/ci/pull_request_template.md").unwrap()
         );
+        // The scaffold ships LF on every platform (.gitattributes); a CRLF
+        // checkout would leave the fill-ins below unmatched and the body empty.
+        assert!(!template.contains(&b'\r'), "template checked out with CRLF");
         let policy = read_policy(dir.path());
         assert_eq!(policy["git"]["pr_release_impact"], "warn");
         assert_eq!(policy["git"]["pr_breaking_level"], "major");
@@ -101,6 +104,12 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
         for section in policy["git"]["pr_required_sections"].as_array().unwrap() {
             assert!(headings.contains(&section.as_str().unwrap()));
         }
+        // The template carries the class line (TSK-104): full tier tracks
+        // work, so its pull request names its class; the line is inert where
+        // tracking is off.
+        assert!(std::str::from_utf8(&template)
+            .unwrap()
+            .contains("\nTask: `TSK-NNN | none: <reason>`\n"));
         assert_clean(
             dir.path(),
             &fill_installed_template(std::str::from_utf8(&template).unwrap()),
@@ -112,7 +121,10 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             template
         );
         assert_eq!(read_policy(dir.path()), policy);
-        assert_clean(dir.path(), BODY);
+        assert_clean(
+            dir.path(),
+            &format!("Task: none: clarify the result\n\n{BODY}"),
+        );
     }
 }
 
@@ -181,6 +193,16 @@ fn update_adds_keys_preserves_custom_and_default_equal_values_and_template() {
         let mut expected = policy;
         expected["git"]["pr_release_impact"] = json!("warn");
         expected["git"]["pr_breaking_level"] = json!("major");
+        expected["git"]["automation_profiles"] = json!([]);
+        if !custom {
+            // The kept template lacks the required headings: update records
+            // the diagnosis beside every preserved value (SPC-013 R-84).
+            expected["git"]["pr_section_mapping"] = json!({
+                "state": "diagnosed",
+                "headings": {"Summary": "Overview"},
+                "decided": "none",
+            });
+        }
         assert_eq!(after, expected);
         assert_eq!(
             std::fs::read_to_string(&template_path).unwrap(),
@@ -394,6 +416,10 @@ fn rendered_budget_detects_epic_target_and_markdown_failures_reach_cli() {
 /// missing heading: that would hide a template/default-policy mismatch.
 fn fill_installed_template(template: &str) -> String {
     template
+        .replace(
+            "Task: `TSK-NNN | none: <reason>`",
+            "Task: none: clarify the result",
+        )
         .replace(
             "## Summary\n",
             "## Summary\n\nClarify the command's result.\n",

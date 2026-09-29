@@ -1,0 +1,106 @@
+# codeflow policy: the enforcing CodeFlow check for pull requests. Written by
+# `codeflow init` and managed by `codeflow update`.
+#
+# It runs on `pull_request_target`, so GitHub runs this file from the
+# repository's default branch, never from the pull request: a pull request
+# that edits this workflow cannot change the job that judges it. GitHub's
+# default checkout for this event is also the default branch, whatever the
+# pull request targets, so the job checks out the pull request's base commit
+# explicitly. From that target checkout it installs the codeflow version the
+# target pins in .codeflow/project.toml (`scaffold_version`), verified against
+# the release's published sha256.sum (SPC-013 R-113), and reads the target's
+# policy. It fetches the pull request head only as git data and never runs
+# its code. The token is read-only and no secret is used. Builds and tests of
+# the head run in codeflow-ci.yml on `pull_request`.
+#
+# `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
+# breaking-footer, branch-naming and PR-body checks as the git hooks and the
+# Claude git-guard, reading the target's .codeflow/policy.json (CodeFlow
+# ADR-0017). `edited` reruns it when the PR body changes. Trusted automation
+# profiles (git.automation_profiles) apply only for the actor passed here, and
+# never on a fork pull request.
+name: codeflow-policy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  commit-lint:
+    name: commit standards
+    runs-on: ubuntu-24.04
+    steps:
+      # The pull request's target, by the base commit the event names: the
+      # binary, the pin and the policy all come from this checkout.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Install codeflow (target-pinned, checksum-verified)
+        env:
+          PIN_REF: HEAD
+        run: |
+          # SPC-013 R-113: install the codeflow version the target pins in
+          # .codeflow/project.toml (scaffold_version), verified against the
+          # release's published sha256.sum. A missing checksum file, a missing
+          # entry or a mismatch fails closed; nothing unverified is installed.
+          set -euo pipefail
+          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null) || {
+            echo "::error::cannot read .codeflow/project.toml at ${PIN_REF}; no pinned codeflow version"; exit 1; }
+          version=$(printf '%s\n' "$state" | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::no scaffold_version pinned in .codeflow/project.toml at ${PIN_REF}"; exit 1
+          fi
+          base="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v${version}"
+          asset=codeflow-cli-x86_64-unknown-linux-gnu.tar.xz
+          work=$(mktemp -d)
+          if ! curl -fsSL "${base}/sha256.sum" -o "${work}/sha256.sum"; then
+            echo "::error::codeflow ${version} has no published checksum file (sha256.sum); refusing an unverified binary"; exit 1
+          fi
+          expected=$(awk -v a="$asset" '{n=$2; sub(/^\*/, "", n)} n == a {print $1; exit}' "${work}/sha256.sum")
+          if [ -z "$expected" ]; then
+            echo "::error::sha256.sum for codeflow ${version} lists no checksum for ${asset}; refusing an unverified binary"; exit 1
+          fi
+          if ! curl -fsSL "${base}/${asset}" -o "${work}/${asset}"; then
+            echo "::error::cannot download ${asset} for codeflow ${version}"; exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "${work}/${asset}" | cut -d ' ' -f 1)
+          else
+            actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::checksum mismatch for ${asset} (codeflow ${version}): expected ${expected}, got ${actual}; refusing it"; exit 1
+          fi
+          tar -xJf "${work}/${asset}" -C "$work"
+          mkdir -p "$HOME/.codeflow/bin"
+          cp "${work}/codeflow-cli-x86_64-unknown-linux-gnu/codeflow" "$HOME/.codeflow/bin/codeflow"
+          chmod +x "$HOME/.codeflow/bin/codeflow"
+          echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          echo "codeflow ${version} installed and verified against sha256.sum"
+
+      - name: Fetch the pull request head as data
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
+          fetched=$(git rev-parse refs/codeflow/pr-head)
+          if [ "$fetched" != "$HEAD_SHA" ]; then
+            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); the newer run judges it"; exit 1
+          fi
+
+      # The PR body reaches `codeflow ci` through `env:`, never interpolated
+      # into the script, so an untrusted body cannot inject shell.
+      - name: codeflow ci (commit + branch + PR-body standards)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
+          ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
+        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"

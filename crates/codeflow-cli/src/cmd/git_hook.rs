@@ -6,15 +6,9 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use clap::Args;
 use codeflow_core::hooks::{git_hook, policy::Policy, policy_schema};
-use codeflow_core::validate::validate_workgraph;
-use codeflow_core::workgraph::{
-    check_work_start, declared_work_target, durable_work_tracking_enabled, resolve_work_target,
-    task_id_from_branch,
-};
 
 /// Which git client hook stage to run.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -24,7 +18,13 @@ pub enum StageName {
     PreMergeCommit,
     ReferenceTransaction,
     PrePush,
+    /// Print this binary's hook capability for the shims (SPC-013 R-85).
+    Capabilities,
 }
+
+/// The capability the current hook shims need. A shim whose probe does not
+/// print exactly this line warns that the binary is older than the shims.
+pub const HOOK_CAPABILITY: &str = "hooks 2";
 
 #[derive(Debug, Args)]
 pub struct GitHookArgs {
@@ -40,6 +40,10 @@ pub struct GitHookArgs {
 /// Run the stage; returns the process exit code.
 #[must_use]
 pub fn run(args: &GitHookArgs) -> i32 {
+    if let StageName::Capabilities = args.stage {
+        println!("{HOOK_CAPABILITY}");
+        return 0;
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let root = super::project_root(&cwd);
 
@@ -66,11 +70,8 @@ pub fn run(args: &GitHookArgs) -> i32 {
             );
             return 1;
         }
-    }
-
-    if matches!(args.stage, StageName::PreCommit) {
-        if let Some(exit) = durable_work_preflight(&root) {
-            return exit;
+        for warning in policy_schema::deprecation_warnings(&root) {
+            eprintln!("{}", warning.line("codeflow commit-msg", "warning"));
         }
     }
 
@@ -85,19 +86,11 @@ pub fn run(args: &GitHookArgs) -> i32 {
         StageName::CommitMsg => ("commit-msg", commit_msg(&root, &policy, &args.args)),
         StageName::PreMergeCommit => (
             "pre-merge-commit",
-            git_hook::pre_merge_commit(
-                &root,
-                &policy.git,
-                token,
-                // Out-of-band human-authorization check-point (ADR-0009): today
-                // `none` passes the env override through unchanged; a future
-                // adapter would require its factor here.
-                policy
-                    .human_authorization
-                    .authorizes_override(super::human_override_present()),
-            ),
+            git_hook::pre_merge_commit(&root, &policy.git, token, super::human_override_present()),
         ),
-        StageName::ReferenceTransaction => unreachable!("handled above"),
+        StageName::ReferenceTransaction | StageName::Capabilities => {
+            unreachable!("handled above")
+        }
         StageName::PrePush => {
             let stdin = match read_hook_input(std::io::stdin()) {
                 Ok(stdin) => stdin,
@@ -107,90 +100,87 @@ pub fn run(args: &GitHookArgs) -> i32 {
                 }
             };
             let refs = git_hook::parse_push_refs(&stdin);
-            (
-                "pre-push",
-                git_hook::pre_push(&root, &policy.git, &refs, token),
-            )
+            let mut result = git_hook::pre_push(&root, &policy.git, &refs, token);
+            if let Ok(report) = result.as_mut() {
+                let remote = args.args.first().map(String::as_str);
+                let url = args.args.get(1).map(String::as_str);
+                super::push_set::run(&root, &policy.git, &refs, remote, url, report);
+                sync_pending_ids(&root, remote, &refs, report);
+            }
+            ("pre-push", result)
         }
     };
 
     match result {
-        Ok(report) => super::render_outcome(plane, &report.violations, &report.notes, 1),
+        Ok(report) => super::render_stage(plane, &root, &report, 1),
         Err(e) => {
             // A hook that cannot evaluate must not block work invisibly:
             // report and pass (CI remains the hard line, charter D19).
-            eprintln!("codeflow {plane}: warning: {e} — check skipped");
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("{e}; check skipped"),
+                codeflow_core::remedy::HOOK_UNEVALUATED.remedy(),
+            );
+            eprintln!("{}", finding.line(&format!("codeflow {plane}"), "warning"));
             0
         }
     }
 }
 
-/// Enforce a valid visible workgraph and stable planning anchor on task branches.
-///
-/// Planning belongs on a `plan/` branch. Allowing task-local planning commits
-/// would let an implementation surface propose its own authorization and would
-/// disagree with the authoritative CI check.
-fn durable_work_preflight(root: &Path) -> Option<i32> {
-    let branch = current_branch(root)?;
-    if !branch.starts_with("task/") {
-        return None;
+/// `ids sync` in pre-push (SPC-013 R-15): publish pending reservations
+/// before code that may carry their records reaches the authority. It warns
+/// and continues when the authority is unreachable or is not the push
+/// target, blocks only on a number held by a different `uid`, and never runs
+/// for a push of the registry itself, so it cannot recurse (R-6).
+fn sync_pending_ids(
+    root: &Path,
+    remote: Option<&str>,
+    refs: &[git_hook::PushRef],
+    report: &mut git_hook::StageReport,
+) {
+    use codeflow_core::ids::{issue, IdsError, AUTHORITY, REGISTRY_BRANCH};
+    let pushes_code = refs.iter().any(|r| {
+        r.remote_branch()
+            .is_some_and(|branch| branch != REGISTRY_BRANCH)
+            && !r.is_delete()
+    });
+    if !pushes_code || !issue::has_pending(root) {
+        return;
     }
-    let staged = staged_files(root);
-    if staged.is_empty() {
-        return None;
+    if remote != Some(AUTHORITY) {
+        report.notes.push(codeflow_core::remedy::Finding::new(
+            format!(
+                "pending id reservations stay local: this push goes to {}, not the authority `{AUTHORITY}`",
+                remote.unwrap_or("an unnamed remote")
+            ),
+            codeflow_core::remedy::IDS_PENDING_LOCAL.remedy(),
+        ));
+        return;
     }
-    match durable_work_tracking_enabled(root) {
-        Ok(true) => {}
-        Ok(false) => return None,
-        Err(error) => {
-            eprintln!("codeflow pre-commit: cannot determine durable-work tracking: {error}");
-            return Some(1);
+    match issue::sync(root) {
+        Ok(synced) if !synced.published.is_empty() => report.status.push(format!(
+            "published pending id reservations: {}",
+            synced
+                .published
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        Ok(_) => {}
+        Err(IdsError::Clash(message)) => {
+            report
+                .violations
+                .push(codeflow_core::hooks::Violation::always_blocking(
+                "registry.sync",
+                message,
+                "renumber the unmerged record with `codeflow ids retarget <id>`, then push again",
+            ));
         }
+        Err(error) => report.notes.push(codeflow_core::remedy::Finding::new(
+            format!("ids sync skipped, reservations stay pending: {error}"),
+            codeflow_core::remedy::IDS_SYNC_FAILED.remedy(),
+        )),
     }
-    let workgraph = validate_workgraph(root);
-    if !workgraph.is_clean() {
-        for issue in workgraph.issues {
-            eprintln!("codeflow pre-commit: workgraph error: {issue}");
-        }
-        eprintln!(
-            "codeflow pre-commit: task work cannot proceed until `codeflow validate --docs` passes"
-        );
-        return Some(1);
-    }
-    let Some(task_id) = task_id_from_branch(root, &branch) else {
-        eprintln!(
-            "codeflow pre-commit: task implementation is not ready: task branch \
-             '{branch}' does not identify a visible durable task record\n\
-             create and merge the task record into its stable integration target \
-             before implementation"
-        );
-        return Some(1);
-    };
-    let declared = declared_work_target(root, &task_id);
-    let target =
-        resolve_work_target(root, declared.as_deref()).unwrap_or_else(|| "main".to_string());
-    match check_work_start(root, &task_id, &target) {
-        Ok(_) => None,
-        Err(error) => {
-            eprintln!(
-                "codeflow pre-commit: task implementation is not ready: {error}\n\
-                 run `codeflow work start {task_id}` after the planning record is merged into '{target}'"
-            );
-            Some(1)
-        }
-    }
-}
-
-fn current_branch(root: &Path) -> Option<String> {
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["branch", "--show-current"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|branch| !branch.is_empty())
 }
 
 /// Handle `git-hook reference-transaction <state>`. Exit 1 on the `prepared`
@@ -235,17 +225,9 @@ fn run_reference_transaction_with_reader(
 
     let (policy, _armed) = Policy::load_effective(root);
     let token = super::integrate_token_present();
-    // Out-of-band human-authorization check-point (ADR-0009): `none` is a no-op.
-    let human = policy
-        .human_authorization
-        .authorizes_override(super::human_override_present());
+    let human = super::human_override_present();
     match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
-        Ok(report) => super::render_outcome(
-            "reference-transaction",
-            &report.violations,
-            &report.notes,
-            1,
-        ),
+        Ok(report) => super::render_stage("reference-transaction", root, &report, 1),
         Err(e) => {
             eprintln!(
                 "codeflow reference-transaction: could not evaluate protected-ref transaction ({e}) — operation blocked"
@@ -262,10 +244,11 @@ fn read_hook_input(mut reader: impl Read) -> std::io::Result<String> {
 }
 
 fn degraded_hook_input_note(stage: &str, error: &std::io::Error) -> String {
-    format!(
-        "codeflow {stage}: warning: could not read hook stdin ({error}) — \
-         ref checks degraded; server-side CI remains authoritative"
+    codeflow_core::remedy::Finding::new(
+        format!("could not read hook stdin ({error}); ref checks degraded"),
+        codeflow_core::remedy::HOOK_STDIN_UNREAD.remedy(),
     )
+    .line(&format!("codeflow {stage}"), "warning")
 }
 
 fn commit_msg(
@@ -280,16 +263,24 @@ fn commit_msg(
             "commit-msg: missing message file argument".to_string(),
         )
     })?;
-    let message = std::fs::read_to_string(&msg_file)?;
+    let message = std::fs::read_to_string(&msg_file).map_err(|e| {
+        codeflow_core::error::HookError::Config(format!(
+            "commit-msg: cannot read the message file {}: {e}",
+            msg_file.display()
+        ))
+    })?;
     // The contract-surface tripwire needs the files this commit stages
     // (ADR-0020); empty on any error, so it simply does not fire.
-    Ok(git_hook::commit_msg_with_files(
+    let mut report = git_hook::commit_msg_with_files(
         &policy.git,
         &message,
         &staged_files(root),
         merge_in_progress(root),
         &git_hook::MessageSource::Pending(pending_cleanup(root)),
-    ))
+    );
+    // A commit has no pull request body to settle it with (TSK-147 AC-4).
+    git_hook::note_watched_paths(&mut report);
+    Ok(report)
 }
 
 /// The hook's best-effort inference of Git's cleanup of the commit-msg
@@ -318,7 +309,7 @@ fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
 /// The NUL-separated entries of one `git config -z` read in `root`, exact
 /// bytes, value text unchanged; empty when unset or unreadable.
 fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["config", "-z"])
@@ -340,7 +331,7 @@ fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
 /// the subject text, so a normal one-parent commit named `Merge ...` is still
 /// format- and body-checked.
 fn merge_in_progress(root: &Path) -> bool {
-    let git_dir = Command::new("git")
+    let git_dir = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -358,7 +349,7 @@ fn merge_in_progress(root: &Path) -> bool {
 /// the contract-surface tripwire. Empty on any error — the tripwire is advisory,
 /// so an unavailable file list simply means no nudge.
 fn staged_files(root: &Path) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["diff", "--cached", "--name-only"])
@@ -393,6 +384,7 @@ mod tests {
         let note = degraded_hook_input_note("pre-push", &error);
         assert!(note.contains("pre-push"), "{note}");
         assert!(note.contains("ref checks degraded"), "{note}");
+        assert!(note.contains("clear it: rerun `git push`"), "{note}");
     }
 
     #[test]

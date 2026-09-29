@@ -1,5 +1,6 @@
 ---
 id: ADR-0022
+uid: f66b7f46-7c9d-4ba1-addd-c84cd64b9bf0
 title: replace the unmaintained YAML parser
 date: 2026-07-14
 status: accepted

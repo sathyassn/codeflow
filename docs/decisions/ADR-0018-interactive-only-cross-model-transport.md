@@ -1,5 +1,6 @@
 ---
 id: ADR-0018
+uid: 20050cfd-8599-4daf-8a12-45df8beceafb
 title: interactive-only cross-model transport — one lane per direction
 date: 2026-07-11
 status: accepted

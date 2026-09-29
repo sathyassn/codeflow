@@ -1,5 +1,6 @@
 ---
 id: ADR-0055
+uid: 9cc0c4f2-3ef3-48a4-b17b-c5499cbf175b
 title: Medium-default effort, Astra Codex primary, contained worktrees, Herdr project cwd
 date: 2026-09-05
 status: accepted

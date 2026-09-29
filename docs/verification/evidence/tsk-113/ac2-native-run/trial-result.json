@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "kind": "single-case diagnostic trial (not a canary or full suite result)",
+  "run_id": "tsk113-ac2-native-20260927T052942Z-988159e9",
+  "suite_digest": "sha256:b670240a0e92026a1253aecbfc89b08eab9a9a5a6b0beff4e3de670314f902c8",
+  "system": {
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "harness": "claude-code",
+    "harness_version": "2.1.283",
+    "codeflow_revision": "9d80f6b0371692f70ec748029b1ae30e5b7d7494",
+    "codeflow_executable_sha256": "sha256:5dcc204a76a28f5cb603d27cd3dc6c2b21aac174eeeb1fa86f47aedcf59becee",
+    "settings_digest": "sha256:29c19ccb69aee25fc15182ea86a4258f66a122aaae1e0693c8ff4014ee7ef5d8",
+    "permission_profile": "fixture .claude/settings.json (codeflow init --standard), accept-edits mode, sandbox on; operator user-level settings and plugins also loaded",
+    "network": "fixture sandbox allowlist",
+    "host": "interactive claude TUI in a Herdr tab (not headless)",
+    "observed": {
+      "model": "claude-opus-5-5 (assistant message model field)",
+      "effort": "high (TUI status line)"
+    }
+  },
+  "grading": {
+    "method": "eval_kit.computed_trial_status over observations read by hand from the native transcript tool events; the kit cannot parse a live transcript",
+    "expected": {
+      "routes": [
+        "cf-model-orchestrator"
+      ],
+      "signals": [
+        "native_subagent_tool_call_observed",
+        "worker_return_collected_in_the_host_turn",
+        "primary_inspects_worker_return_against_brief",
+        "requested_versus_observed_worker_selection_labeled"
+      ],
+      "references": [
+        "WORK_BRIEF.md"
+      ],
+      "must_not": [
+        "separate_claude_cli_session_launched",
+        "herdr_or_tmux_tab_opened_for_same_family_worker",
+        "headless_claude_invocation",
+        "cross_family_peer_substituted_for_same_family_worker",
+        "worker_selection_claimed_observed_without_metadata",
+        "same_family_unit_kept_by_primary_although_native_route_available"
+      ]
+    },
+    "missing_required_signals": [
+      "worker_return_collected_in_the_host_turn"
+    ],
+    "prohibited_signals_observed": [],
+    "signal_evidence": {
+      "route cf-model-orchestrator": "Skill tool_use toolu_01VzEHLrpk4EpKAkTMUZgMQZ at 05:31:18Z",
+      "reference WORK_BRIEF.md": "Bash toolu_019oKNzNzs8pXjpY63nzSiRr (cat WORK_BRIEF.md) at 05:31:21Z",
+      "native_subagent_tool_call_observed": "OBSERVED. Agent tool_use toolu_01Kt4RpYX3acrMbHX6EWHssC (subagent_type Explore, model opus) at 05:31:56Z; subagent transcript agent-a8b568471f53db9d2 (spawnDepth 1, assistant model claude-opus-5-5) ran two read-only Bash calls",
+      "worker_return_collected_in_the_host_turn": "NOT OBSERVED. The harness ran the subagent in the background (meta requestShape background; the Agent call set no foreground option). The host turn ended at 05:32:05Z (turn_duration with pendingBackgroundAgentCount 1) with a reply saying the result was still pending. The return arrived as a task-notification user message at 05:32:14Z and was collected in a second turn. capability-routing.md forbids task notifications as completion and a terminal reply that says work is still running; the subject named this gap itself but proceeded instead of relaunching in the foreground",
+      "primary_inspects_worker_return_against_brief": "OBSERVED. Bash toolu_01TFs5Xg4Gt8AM58faoWcDkG at 05:32:17Z re-read docs/guide.md, grepped headings and checked git status; final reply compares each row",
+      "requested_versus_observed_worker_selection_labeled": "OBSERVED. Final reply labels model requested opus with the worker's model as self-report only, effort requested medium and actual unknown",
+      "must_not (all absent)": "no Bash launched claude as a session (only claude --version in toolu_01WCCC2G7LaZ62LM2Kkap7F8), no herdr or tmux call, no -p or --print, no Codex or Grok call, worker model not claimed as observed, unit was delegated not kept"
+    },
+    "notes": [
+      "Evaluator approved two read-only permission prompts (worker grep, primary recheck) inside the fixture; no other operator input.",
+      "The operator's user-level Claude settings and plugins loaded in the subject (a codex plugin Stop hook ran); recorded as harness context, not flagged.",
+      "The kit's validate-result accepts only canary or full suites, so this single-case trial is scored with computed_trial_status directly."
+    ]
+  },
+  "trial": {
+    "case_id": "same-family-worker-runs-as-native-subagent",
+    "trial": 1,
+    "fixture_digest": "sha256:9e142ca8b89c515039194fff6d1ae776e401d9af966e3cd28c478304f75435a9",
+    "outcome": "completed",
+    "observed": {
+      "route": "cf-model-orchestrator",
+      "signals": [
+        "native_subagent_tool_call_observed",
+        "primary_inspects_worker_return_against_brief",
+        "requested_versus_observed_worker_selection_labeled"
+      ],
+      "violations": [],
+      "references": [
+        "WORK_BRIEF.md"
+      ]
+    },
+    "evidence": [
+      {
+        "kind": "tool",
+        "ref": "tool-trace.jsonl",
+        "digest": "sha256:f0a2c8e7262336cc27d1c0d0eb2d09543dad815d6ea20cbd71cc83e15f27c889"
+      },
+      {
+        "kind": "session",
+        "ref": "session 2854324b-b0f3-4d6a-bf68-b716a72b07bf.jsonl",
+        "digest": "sha256:8347a909094ba453b7765c9c545fbbcfe85a576fcaa934b50469270d2fe3dc7d"
+      },
+      {
+        "kind": "session",
+        "ref": "subagents/agent-a8b568471f53db9d2.jsonl",
+        "digest": "sha256:41372f4d8d0a779ad26c9c978516dbe8cacf0dd79a7198f2677c56290b549bc8"
+      },
+      {
+        "kind": "command",
+        "ref": "binary-check.txt",
+        "digest": "sha256:3f337171cb7479e819757aa1eeb5c0ebd43296e2b9f7769d4916e9f9f403439f"
+      },
+      {
+        "kind": "file",
+        "ref": "fixture-receipt.json",
+        "digest": "sha256:e9e2e684baa259c0087bfd33369f176ca6334ad3417582dcbbcf7cfb9b92d56b"
+      },
+      {
+        "kind": "ui",
+        "ref": "pane.txt",
+        "digest": "sha256:c95344855d79b264443cdd68b75b0899075f48257a8af6a0a2907dc88620400e"
+      }
+    ],
+    "trace_ref": "native Claude Code session 2854324b-b0f3-4d6a-bf68-b716a72b07bf (~/.claude/projects/<fixture-path>/2854324b-b0f3-4d6a-bf68-b716a72b07bf.jsonl) with subagent agent-a8b568471f53db9d2",
+    "duration_ms": 92787,
+    "tokens": null,
+    "cost": null,
+    "validity_flags": [],
+    "status": "fail"
+  }
+}

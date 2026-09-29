@@ -1,5 +1,6 @@
 ---
 id: ADR-0013
+uid: f48d690f-3644-40dd-aace-573c75b913a0
 title: Codex gets the orient digest (SessionStart); compaction resilience is a disposition, not a snapshot
 date: 2026-07-05
 status: accepted

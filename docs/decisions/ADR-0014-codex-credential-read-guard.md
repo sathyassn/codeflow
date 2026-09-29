@@ -1,5 +1,6 @@
 ---
 id: ADR-0014
+uid: 842f1a32-5bb4-4edb-87c7-5b11a4823da5
 title: Codex credential read-guard via a named permission profile (cf-guard)
 date: 2026-07-05
 status: accepted

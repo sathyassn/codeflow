@@ -1,5 +1,6 @@
 ---
 id: ADR-0027
+uid: b5b8c7aa-96a2-4426-9ecc-ffc499f685d4
 title: qualify model and harness bindings with native-interactive evaluations
 date: 2026-07-17
 status: accepted

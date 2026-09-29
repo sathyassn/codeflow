@@ -1,5 +1,6 @@
 ---
 id: ADR-0008
+uid: 2266298b-4f1d-45f1-bdcd-cc581db309f5
 title: harness parity and the exec-guard security stage
 date: 2026-07-02
 status: accepted
@@ -143,3 +144,29 @@ bind an interactive Codex session through the byte-compatible payload contract
 (headless `codex exec` protection stays on the git-hook plane). The plane count
 is unchanged (the exec-guard is a second guard within the existing harness-guard
 plane, not a fifth plane); the doctor check count is unchanged.
+
+## Amendment: 2026-09-27 (appended, TSK-137)
+
+Removed: the v1 scanner modules that no guard ran, `security/path.rs`,
+`fileops.rs`, `branch.rs`, `tmp.rs` and `network.rs`, the git scanning in
+`security/git.rs` (only `is_on_protected_branch` stays, for the policy
+loader), the unused helpers in `security/pattern.rs`, and `SecurityChecker`
+with its module list, about 3,000 lines with their tests. Why: exec-guard runs
+only `dangerous.rs` and `privilege.rs` through its own stage, and git-guard
+has its own rules, so the removed code had no production caller: a second set
+of rules that never ran beside the ones the live guards own. Nothing an
+adopter configures or sees changes.
+
+Changed at the same time: recursive removal strictly below a temp root is
+no longer classified as a protected target. An agent's scratch space lives
+there, below the protected `/private` and `/var`. The roots are a fixed set:
+`/tmp`, `/var/tmp` (canonically `/private/tmp` and `/private/var/tmp` on
+macOS) and the macOS per-user `/private/var/folders/<xx>/<id>/T`.
+Containment is canonical: the operand's longest existing prefix is resolved
+through symlinks, and a `..` in the rest, a failed resolution or a glob
+before the last component grants nothing, so a link under temp space that
+leads to `/etc` stays blocked. A path that reads as temp space but whose
+target cannot be established, including an operand still holding an escape
+or quote, is refused through every spelling. `$TMPDIR` adds no root; one that canonically
+is or lies below a root is protected itself. The roots, a glob over one and
+every other system directory stay blocked.

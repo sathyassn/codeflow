@@ -73,6 +73,42 @@
       "yaml": "id: TSK-101\nepic_id: null\ndepends_on: []\nrelated: null",
       "ids": ["TSK-101"],
       "relationships": []
+    },
+    {
+      "source_path": "project-management/tasks/TSK-101.md",
+      "yaml": "id: TSK-101\ndepends_on: [{id: TSK-100, kind: research, pin: \"0123abcd\"}]",
+      "ids": ["TSK-101"],
+      "relationships": [["depends_on", "TSK-100"]]
+    },
+    {
+      "source_path": "project-management/tasks/TSK-101.md",
+      "yaml": "id: TSK-101\ndepends_on: [TSK-099, {id: TSK-100, kind: decision}]",
+      "ids": ["TSK-101"],
+      "relationships": [["depends_on", "TSK-099"], ["depends_on", "TSK-100"]]
+    },
+    {
+      "source_path": "project-management/tasks/TSK-101.md",
+      "yaml": "id: TSK-101\ndependencies: [TSK-100]",
+      "ids": ["TSK-101"],
+      "relationships": [["depends_on", "TSK-100"]]
+    },
+    {
+      "source_path": "docs/guide.md",
+      "yaml": "title: Guide\ndependencies: [serde, tokio]",
+      "ids": [],
+      "relationships": []
+    },
+    {
+      "source_path": "project-management/specs/SPC-101.md",
+      "yaml": "id: SPC-101\ndepends_on: [SPC-100]\ndependencies: [serde]",
+      "ids": ["SPC-101"],
+      "relationships": [["depends_on", "SPC-100"]]
+    },
+    {
+      "source_path": "project-management/specs/SPC-102.md",
+      "yaml": "id: SPC-102\ndepends_on: [{id: SPC-100, kind: research}]",
+      "ids": ["SPC-102"],
+      "relationships": [["depends_on", "SPC-100"]]
     }
     ],
     "rejected": [
@@ -80,7 +116,13 @@
       { "yaml": "id: CAP-001-002", "error": "invalid" },
       { "yaml": "id: TSK-101\ndepends_on: [TSK-100, 7]", "error": "relationship" },
       { "yaml": "id: TSK-101\nrelated: not-an-id", "error": "relationship" },
-      { "yaml": "id: TSK-101\nid: TSK-102", "error": "duplicate_key" }
+      { "yaml": "id: TSK-101\nid: TSK-102", "error": "duplicate_key" },
+      { "yaml": "id: TSK-101\ndepends_on: [{kind: research, pin: \"0123abcd\"}]", "error": "relationship" },
+      { "yaml": "id: TSK-101\ndepends_on: [{id: not-an-id, kind: decision}]", "error": "relationship" },
+      { "yaml": "id: TSK-101\ndepends_on: {id: TSK-100, kind: research}", "error": "relationship" },
+      { "yaml": "id: TSK-101\ndepends_on: [{id: CAP-100, kind: research}]", "error": "relationship" },
+      { "yaml": "id: TSK-101\ndepends_on: [CAP-100]", "error": "relationship" },
+      { "yaml": "id: TSK-101\ndepends_on: [TSK-100]\ndependencies: [TSK-100]", "error": "dependencies" }
     ]
   }
 }

@@ -58,6 +58,14 @@ pub fn launch_isolated(
     launch_url(store, session_id, &app_url, profile_dir)
 }
 
+/// The `file:` link to an owner-private bootstrap page, for an operator to
+/// open when `codeflow` does not launch the browser itself (for example from an
+/// agent sandbox). The page is single-use and expires with the bootstrap TTL.
+pub fn handoff_link(store: &SessionStore, bootstrap_path: &Path) -> Result<String> {
+    verify_runtime_descendant(store.runtime_root(), bootstrap_path)?;
+    file_url(bootstrap_path)
+}
+
 pub fn launch_application(
     store: &SessionStore,
     session_id: Uuid,
@@ -635,9 +643,23 @@ fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec
             "browser process inventory failed or exceeded its bound".to_string(),
         ));
     }
-    let output = std::str::from_utf8(&output.stdout).map_err(|_| {
-        PresentError::BrowserUnavailable("browser process inventory is not UTF-8".to_string())
-    })?;
+    macos_inventory_candidates(&output.stdout, instance_id, profile_dir)
+}
+
+/// The owned browser processes in a `ps -axww -o pid= -o command=` listing.
+#[cfg(any(target_os = "macos", test))]
+fn macos_inventory_candidates(
+    output: &[u8],
+    instance_id: Uuid,
+    profile_dir: &Path,
+) -> Result<Vec<u32>> {
+    // `ps` lists every user's processes, and one caught in the middle of
+    // `exec` can show bytes that are not UTF-8 (seen under a loaded full
+    // gate, TSK-142 AC-6). Refusing the whole listing for it would fail
+    // cleanup on any busy machine. Each invalid byte decodes to U+FFFD,
+    // which is neither whitespace nor part of an identity argument, so an
+    // owned line is still found and no other line can come to match.
+    let output = String::from_utf8_lossy(output);
     let profile = format!("--user-data-dir={}", profile_dir.display());
     let instance = format!("--cf-present-instance={instance_id}");
     let mut candidates = Vec::new();
@@ -1379,6 +1401,35 @@ mod tests {
         ));
     }
 
+    /// TSK-142 AC-6: under load, `ps` can list a process of any user in
+    /// the middle of `exec` with bytes that are not UTF-8. That line is not
+    /// ours, so it never fails the inventory, and an owned line is found
+    /// whatever else it or its neighbours hold.
+    #[test]
+    fn a_non_utf8_line_in_the_inventory_never_hides_or_fails_an_owned_process() {
+        let instance = Uuid::new_v4();
+        let profile = Path::new("/state/browser-profile");
+        let owned =
+            format!("--user-data-dir=/state/browser-profile --cf-present-instance={instance}");
+        let mut listing = b"  12 /bin/other \xff\xfe arg\n".to_vec();
+        listing.extend_from_slice(format!("  34 /bin/sh -c read value {owned}\n").as_bytes());
+        listing.extend_from_slice(b"  56 chrome \xc3 ");
+        listing.extend_from_slice(format!("{owned}\n").as_bytes());
+        listing
+            .extend_from_slice(b"  78 \xe2\x82 /bin/sh --user-data-dir=/state/browser-profile\n");
+        assert_eq!(
+            macos_inventory_candidates(&listing, instance, profile).unwrap(),
+            [34, 56]
+        );
+        // A line whose identity is split by a stray byte does not match.
+        let split = format!("  90 chrome --user-data-dir=/state/browser-profile\u{fffd} --cf-present-instance={instance}\n");
+        assert!(
+            macos_inventory_candidates(split.as_bytes(), instance, profile)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn linux_command_line_decoder_is_nul_exact_and_rejects_non_utf8() {
         assert_eq!(
@@ -1686,11 +1737,16 @@ mod tests {
         let profile = temp.path().join("browser-profile");
         fs::create_dir(&profile).unwrap();
         let instance = Uuid::new_v4();
+        // No TERM trap: macOS `/bin/sh` (bash 3.2) defers a trapped TERM
+        // that lands as the `read` builtin starts until `read` returns, so
+        // under load the fixture could miss the graceful signal and be
+        // escalated to SIGKILL (TSK-142 AC-6). The default action ends it
+        // on the signal itself, every time.
         let mut command = crate::platform::restricted_command("/bin/sh");
         command
             .args([
                 "-c",
-                "trap 'exit 0' TERM; read value",
+                "read value",
                 "cf-present-browser",
                 &format!("--user-data-dir={}", profile.display()),
                 &format!("--cf-present-instance={instance}"),
@@ -1723,7 +1779,8 @@ mod tests {
         terminate_qualified_process(pid, instance, &profile).unwrap();
         let status = waiter.join().unwrap();
         drop(stdin);
-        assert!(status.success() || status.signal() == Some(libc::SIGTERM));
+        // Ended by the graceful signal, never escalated to SIGKILL.
+        assert_eq!(status.signal(), Some(libc::SIGTERM), "{status:?}");
         assert!(owned_process_candidates(instance, &profile)
             .unwrap()
             .is_empty());

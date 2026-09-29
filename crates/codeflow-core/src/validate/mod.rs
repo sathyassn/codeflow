@@ -53,11 +53,22 @@ impl std::fmt::Display for ValidationError {
     }
 }
 
-/// A non-blocking validation warning.
+/// A non-blocking validation warning, with the step that clears it; a
+/// `{path}` in the remedy is the record's path.
 #[derive(Debug, Clone)]
 pub struct ValidationWarning {
     pub field: String,
     pub message: String,
+    pub clearing: &'static crate::remedy::Clearing,
+}
+
+impl ValidationWarning {
+    /// The warning for the record at `path`, with its remedy filled in.
+    #[must_use]
+    pub fn finding(&self, path: &Path) -> crate::remedy::Finding {
+        let display = path.display().to_string();
+        crate::remedy::Finding::new(self.to_string(), self.clearing.with(&[("path", &display)]))
+    }
 }
 
 impl std::fmt::Display for ValidationWarning {
@@ -88,8 +99,10 @@ pub struct ValidateOptions {
 pub struct WorkgraphValidationReport {
     pub checked_records: usize,
     pub issues: Vec<String>,
-    pub warnings: Vec<String>,
-    pub notes: Vec<String>,
+    /// Warnings, each with the step that clears it (R-80).
+    pub warnings: Vec<crate::remedy::Finding>,
+    /// Notes, each with the step that clears it (R-80).
+    pub notes: Vec<crate::remedy::Finding>,
 }
 
 impl WorkgraphValidationReport {
@@ -156,14 +169,18 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
                     );
                     report.warnings.extend(
                         warnings
-                            .into_iter()
-                            .map(|warning| format!("{display}: {warning}")),
+                            .iter()
+                            .map(|warning| warning.finding(Path::new(&display)).prefixed(&display)),
                     );
                 }
                 Err(error) => report.issues.push(format!("{display}: {error}")),
             }
         }
     }
+
+    let lifecycle = crate::workgraph::lifecycle::validate_lifecycle(repo_root);
+    report.issues.extend(lifecycle.errors);
+    report.warnings.extend(lifecycle.warnings);
 
     let docs = docs::lint_docs(repo_root);
     report
@@ -461,6 +478,7 @@ pub(crate) fn canonical_identity(
         warnings.push(ValidationWarning {
             field: "format_id".into(),
             message: "historical dual-identity record; new records use one stable id".into(),
+            clearing: &crate::remedy::DUAL_IDENTITY,
         });
         alias
     } else {
@@ -472,6 +490,15 @@ pub(crate) fn canonical_identity(
         }
         String::new()
     };
+    // The hidden record identity (SPC-013 R-1): optional until a line's
+    // backfill, and a lower-case UUIDv4 whenever present.
+    let uid = get_string_field(data, "uid");
+    if !uid.is_empty() && !crate::ids::is_uid(&uid) {
+        errors.push(ValidationError {
+            field: "uid".into(),
+            message: "must be the lower-case UUIDv4 `new` wrote; a uid is never edited".into(),
+        });
+    }
     let base = path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -572,6 +599,11 @@ pub fn validate_task(
     errs.extend(validate_enum(&data, "work_type", WORK_TYPE_VALUES));
     errs.extend(validate_optional_enum(&data, "priority", PRIORITY_VALUES));
     errs.extend(validate_optional_enum(&data, "estimate", ESTIMATE_VALUES));
+    errs.extend(validate_optional_enum(
+        &data,
+        "role",
+        &[crate::workgraph::release_line::RELEASE_ROLE],
+    ));
 
     // Array fields.
     errs.extend(validate_array_fields(&data, TASK_ARRAY_FIELDS));
@@ -579,8 +611,15 @@ pub fn validate_task(
     // Section checks.
     errs.extend(validate_sections(&body, &opts.task_required_sections));
 
+    // Legacy checkbox records keep this rule; a record whose Closeout carries
+    // an acceptance block records its results there instead (R-50, R-54).
+    let body_text = String::from_utf8_lossy(&body);
+    let has_acceptance_block = crate::workgraph::record_text::acceptance_blocks(&body_text)
+        .iter()
+        .any(|block| !block.is_superseded());
     if get_string_field(&data, "status") == "complete"
-        && String::from_utf8_lossy(&body).contains("- [ ]")
+        && body_text.contains("- [ ]")
+        && !has_acceptance_block
     {
         errs.push(ValidationError {
             field: "body".into(),
@@ -588,7 +627,105 @@ pub fn validate_task(
         });
     }
 
+    let repo_root = record_repo_root(path);
+    errs.extend(awaiting_selection_errors(
+        &data,
+        &body_text,
+        repo_root.as_deref(),
+    ));
+    if epic_id.is_empty() && get_string_field(&data, "status") == "complete" {
+        if let Some(root) = repo_root.as_deref() {
+            let pulls = landed_pull_requests(root, &id);
+            if pulls > 1 {
+                warns.push(ValidationWarning {
+                    field: "standalone_reason".into(),
+                    message: format!(
+                        "standalone task {id} was completed by {pulls} pull requests; a standalone task is one reviewable pull request (SPC-013 R-66)"
+                    ),
+                    clearing: &crate::remedy::STANDALONE_SPLIT,
+                });
+            }
+        }
+    }
+
     Ok((errs, warns))
+}
+
+/// The repository root of a record under `project-management/`.
+fn record_repo_root(record: &Path) -> Option<std::path::PathBuf> {
+    record
+        .ancestors()
+        .find(|dir| {
+            dir.file_name()
+                .is_some_and(|name| name == "project-management")
+        })
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+}
+
+/// A join awaiting selection (SPC-013 R-43) is a valid record that no
+/// context starts: it is `blocked` with the reason "awaiting selection" and
+/// the referenced plan or decision path as its revisit event, and that path
+/// exists.
+fn awaiting_selection_errors(
+    data: &std::collections::HashMap<String, serde_yaml::Value>,
+    body: &str,
+    repo_root: Option<&Path>,
+) -> Vec<ValidationError> {
+    let path = get_string_field(data, "awaiting_selection");
+    if path.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut errs = Vec::new();
+    let mut fail = |message: String| {
+        errs.push(ValidationError {
+            field: "awaiting_selection".into(),
+            message,
+        });
+    };
+    if get_string_field(data, "status") != "blocked" {
+        fail("a join awaiting selection is `blocked`".into());
+    }
+    let blocker = crate::workgraph::record_text::parse_blocker(body).unwrap_or_default();
+    if blocker.reason != "awaiting selection" {
+        fail("its `## Blocker` reason is `awaiting selection`".into());
+    }
+    if blocker.revisit.trim_matches('`') != path {
+        fail(format!("its `## Blocker` revisit event is `{path}`"));
+    }
+    if let Some(root) = repo_root {
+        let relative = Path::new(&path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+            || !root.join(relative).exists()
+        {
+            fail(format!(
+                "`{path}` must be a path that exists in the repository"
+            ));
+        }
+    }
+    errs
+}
+
+/// How many merged pull requests landed a branch carrying `task_id`, counted
+/// from merge commit subjects (`Merge pull request #N from <prefix>/TSK-NNN-...`
+/// or `Merge branch '<prefix>/TSK-NNN-...'`). Zero when git is unavailable.
+fn landed_pull_requests(repo_root: &Path, task_id: &str) -> usize {
+    let Ok(out) = crate::git::command()
+        .arg("-C")
+        .arg(repo_root)
+        .args(["log", "--merges", "--format=%s", "HEAD"])
+        .output()
+    else {
+        return 0;
+    };
+    let needle = format!("/{task_id}-");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|subject| subject.starts_with("Merge") && subject.contains(&needle))
+        .count()
 }
 
 // ---------------------------------------------------------------------------
@@ -603,6 +740,7 @@ const EPIC_STATUS_VALUES: &[&str] = &[
     "in_progress",
     "blocked",
     "complete",
+    "cancelled",
     "archived",
 ];
 
@@ -660,7 +798,9 @@ pub fn validate_epic(
 // ---------------------------------------------------------------------------
 
 const SPEC_REQUIRED_FIELDS: &[&str] = &["id", "title", "status"];
-const SPEC_STATUS_VALUES: &[&str] = &["draft", "approved", "implemented"];
+/// `implemented` stays readable on older specs; it is derived and never
+/// written on new ones (SPC-013 R-32, R-51).
+const SPEC_STATUS_VALUES: &[&str] = &["draft", "approved", "superseded", "implemented"];
 
 /// Validate a specification record.
 ///
@@ -682,93 +822,58 @@ pub fn validate_spec(
     warnings.extend(identity_warnings);
     errors.extend(validate_enum(&data, "status", SPEC_STATUS_VALUES));
     errors.extend(validate_sections(&body, &opts.spec_required_sections));
+    errors.extend(validate_array_fields(&data, &["supersedes"]));
 
-    if matches!(
-        get_string_field(&data, "status").as_str(),
-        "approved" | "implemented"
-    ) && section_has_unresolved_questions(&body)
-    {
-        errors.push(ValidationError {
-            field: "body".into(),
-            message: "approved or implemented spec must leave open questions \
-                      blank or use an explicit resolved marker"
-                .into(),
-        });
+    match open_questions(&data) {
+        Err(message) => errors.push(ValidationError {
+            field: "open_questions".into(),
+            message,
+        }),
+        Ok(Some(open))
+            if !open.is_empty()
+                && matches!(
+                    get_string_field(&data, "status").as_str(),
+                    "approved" | "implemented"
+                ) =>
+        {
+            errors.push(ValidationError {
+                field: "open_questions".into(),
+                message: format!(
+                    "an approved or implemented spec lists no open question; still open: {}",
+                    open.join("; ")
+                ),
+            });
+        }
+        Ok(_) => {}
     }
     Ok((errors, warnings))
 }
 
-#[cfg(test)]
-fn section_has_content(body: &[u8], heading: &str) -> bool {
-    !visible_section_text(body, heading).trim().is_empty()
-}
-
-fn section_has_unresolved_questions(body: &[u8]) -> bool {
-    let text = visible_section_text(body, "## Open questions");
-    let marker = text.trim().trim_end_matches(['.', ';']);
-    if marker.is_empty() {
-        return false;
+/// The questions a spec still leaves open, read from its `open_questions`
+/// frontmatter list (TSK-135). `None` when the field is absent: a spec
+/// written before the field existed stays readable, but approving one needs
+/// the list (see the lifecycle judge). The `## Open questions` section is
+/// prose and is never parsed. Null, a scalar, a map or a list item that is
+/// not a non-empty string is an error.
+pub(crate) fn open_questions(
+    data: &HashMap<String, serde_yaml::Value>,
+) -> Result<Option<Vec<String>>, String> {
+    let invalid =
+        || "open_questions must be a list of the questions still open, `[]` when none".to_string();
+    match data.get("open_questions") {
+        None => Ok(None),
+        Some(serde_yaml::Value::Sequence(items)) => items
+            .iter()
+            .map(|item| match item {
+                serde_yaml::Value::String(text) if !text.trim().is_empty() => {
+                    Ok(text.trim().to_string())
+                }
+                _ => Err(invalid()),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err(invalid()),
     }
-    let lower = marker.to_ascii_lowercase();
-    if matches!(
-        lower.as_str(),
-        "none" | "n/a" | "not applicable" | "all resolved"
-    ) {
-        return false;
-    }
-    let contradicts_resolution = marker.contains('?')
-        || [
-            "unresolved",
-            "except",
-            "pending",
-            "remaining",
-            "not resolved",
-        ]
-        .iter()
-        .any(|phrase| lower.contains(phrase));
-    if contradicts_resolution {
-        return true;
-    }
-    let none_with_resolution = lower.strip_prefix("none").is_some_and(|suffix| {
-        let suffix = suffix.trim_start();
-        suffix
-            .chars()
-            .next()
-            .is_some_and(|character| "-—:;".contains(character))
-            && suffix
-                .split(|character: char| !character.is_alphabetic())
-                .any(|word| word == "resolved")
-    });
-    let natural_resolution = ["all resolved", "no open questions", "resolved"]
-        .iter()
-        .any(|prefix| lower.starts_with(prefix));
-    !(none_with_resolution || natural_resolution)
-}
-
-fn visible_section_text(body: &[u8], heading: &str) -> String {
-    let text = String::from_utf8_lossy(body);
-    let Some(start) = text.find(heading) else {
-        return String::new();
-    };
-    let after = &text[start + heading.len()..];
-    let end = after
-        .find("\n## ")
-        .or_else(|| after.find("\r\n## "))
-        .unwrap_or(after.len());
-    let section = &after[..end];
-    let mut visible = String::new();
-    let mut remainder = section;
-    while let Some(comment_start) = remainder.find("<!--") {
-        visible.push_str(&remainder[..comment_start]);
-        let after_open = &remainder[comment_start + "<!--".len()..];
-        let Some(comment_end) = after_open.find("-->") else {
-            remainder = "";
-            break;
-        };
-        remainder = &after_open[comment_end + "-->".len()..];
-    }
-    visible.push_str(remainder);
-    visible
 }
 
 #[cfg(test)]
@@ -871,6 +976,46 @@ Criteria
         let (errs, warns) = validate_task(&path, &opts).unwrap();
         assert!(errs.is_empty(), "Expected no errors, got: {errs:?}");
         assert!(warns.is_empty(), "Expected no warnings, got: {warns:?}");
+    }
+
+    /// TSK-103 AC-5: a join awaiting selection is a valid blocked record
+    /// whose Blocker names the selection; anything less is an error.
+    #[test]
+    fn a_join_awaiting_selection_validates_only_when_held_by_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        std::fs::create_dir_all(root.join("docs/plan")).unwrap();
+        std::fs::write(root.join("docs/plan/choice.md"), "# Choice\n").unwrap();
+        let path = root.join("project-management/tasks/TSK-004.md");
+        let record = |status: &str, reason: &str, revisit: &str, path: &str| {
+            format!(
+                "---\nid: TSK-004\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: main\ntitle: join\nstatus: {status}\nwork_type: feat\ndepends_on: []\nawaiting_selection: {path}\ncreated: 2026-09-27\n---\n\n# TSK-004\n\n## Blocker\n\n- reason: {reason}\n- owner: primary\n- revisit: {revisit}\n"
+            )
+        };
+        let errors = |content: String| {
+            std::fs::write(&path, content).unwrap();
+            validate_task(&path, &ValidateOptions::default())
+                .unwrap()
+                .0
+                .into_iter()
+                .filter(|error| error.field == "awaiting_selection")
+                .map(|error| error.message)
+                .collect::<Vec<_>>()
+        };
+        let good = "docs/plan/choice.md";
+        assert!(errors(record("blocked", "awaiting selection", good, good)).is_empty());
+        assert!(errors(record("todo", "awaiting selection", good, good))[0].contains("`blocked`"));
+        assert!(errors(record("blocked", "wait", good, good))[0].contains("awaiting selection"));
+        assert!(
+            errors(record("blocked", "awaiting selection", "later", good))[0].contains("revisit")
+        );
+        let missing = "docs/plan/missing.md";
+        assert!(
+            errors(record("blocked", "awaiting selection", missing, missing))
+                .iter()
+                .any(|message| message.contains("exists"))
+        );
     }
 
     #[test]
@@ -1193,59 +1338,67 @@ Criteria
         assert!(!is_field_empty(&data, "filled"));
     }
 
-    #[test]
-    fn section_content_ignores_complete_and_unclosed_html_comments() {
-        assert!(!section_has_content(
-            b"## Open questions\n<!--\nplaceholder\nspans lines\n-->\n## Decisions\nDone\n",
-            "## Open questions"
-        ));
-        assert!(!section_has_content(
-            b"## Open questions\n<!-- unfinished placeholder\nstill a comment\n",
-            "## Open questions"
-        ));
+    fn spec_errors(status: &str, extra: &str, open_section: &str) -> Vec<ValidationError> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SPC-001.md");
+        std::fs::write(
+            &path,
+            format!(
+                "---\nid: SPC-001\ntitle: \"contract\"\nstatus: {status}\n{extra}---\n\n\
+                 # SPC-001\n\n## Summary\n\nS.\n\n## Behavior\n\nB.\n\n\
+                 ## Open questions\n\n{open_section}\n"
+            ),
+        )
+        .unwrap();
+        validate_spec(&path, &ValidateOptions::default()).unwrap().0
     }
 
     #[test]
-    fn section_content_detects_text_around_multiple_html_comments() {
-        assert!(section_has_content(
-            b"## Open questions\n<!-- first -->\nMaterial question\n<!-- second -->\n## Decisions\n",
-            "## Open questions"
-        ));
-        assert!(section_has_content(
-            b"## Open questions\n<!-- placeholder --> actual question\n## Decisions\n",
-            "## Open questions"
-        ));
+    fn open_questions_come_from_the_structured_field() {
+        let open = "open_questions:\n  - \"Which channel is authoritative?\"\n";
+        assert!(spec_errors("draft", open, "").is_empty());
+        let approved = spec_errors("approved", open, "");
+        assert!(
+            approved.iter().any(|e| e.field == "open_questions"
+                && e.message
+                    .contains("still open: Which channel is authoritative?")),
+            "{approved:?}"
+        );
+        assert!(!spec_errors("implemented", open, "").is_empty());
+        assert!(spec_errors("approved", "open_questions: []\n", "").is_empty());
     }
 
     #[test]
-    fn resolved_open_question_markers_are_not_unresolved_questions() {
-        for marker in [
-            "",
-            "None",
-            "N/A",
-            "Not applicable.",
-            "All resolved",
-            "All resolved during planning.",
-            "No open questions remain.",
-            "Resolved — see SPC-008.",
-            "None — all resolved during planning.",
+    fn an_existing_spec_without_the_field_stays_readable() {
+        // Reads stay compatible: a spec written before the field existed
+        // validates as it did, whatever its status. Approving a spec without
+        // the list is refused by the lifecycle judge, not here.
+        for status in ["draft", "approved", "implemented"] {
+            let errors = spec_errors(status, "", "None.");
+            assert!(errors.is_empty(), "{status}: {errors:?}");
+        }
+        // The prose is context and is never parsed, in either direction.
+        assert!(spec_errors("approved", "open_questions: []\n", "Settled? Yes.").is_empty());
+    }
+
+    #[test]
+    fn a_malformed_open_questions_value_is_an_error() {
+        for bad in [
+            "open_questions:\n",
+            "open_questions: null\n",
+            "open_questions: \"one question\"\n",
+            "open_questions: [1]\n",
+            "open_questions: [\"\"]\n",
+            "open_questions: {a: b}\n",
         ] {
-            let body =
-                format!("## Open questions\n{marker}\n<!-- placeholder -->\n## Decisions\nDone\n");
+            let errors = spec_errors("draft", bad, "");
             assert!(
-                !section_has_unresolved_questions(body.as_bytes()),
-                "{marker:?} must describe a resolved section"
+                errors
+                    .iter()
+                    .any(|e| e.field == "open_questions" && e.message.contains("must be a list")),
+                "{bad:?}: {errors:?}"
             );
         }
-        assert!(section_has_unresolved_questions(
-            b"## Open questions\nWhich recovery channel is authoritative?\n## Decisions\n"
-        ));
-        assert!(section_has_unresolved_questions(
-            b"## Open questions\nNone are resolved yet.\n## Decisions\n"
-        ));
-        assert!(section_has_unresolved_questions(
-            b"## Open questions\nAll resolved except the recovery channel.\n## Decisions\n"
-        ));
     }
 
     // -- enum consts stay in lockstep with the model enums --

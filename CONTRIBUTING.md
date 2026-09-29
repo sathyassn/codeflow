@@ -46,10 +46,12 @@ Open an issue using the templates. For security issues see
 
 ## Releasing
 
-Releases are conventional-commit driven (git-cliff for the version + changelog,
-cargo-dist for the binaries) and human-gated. See [docs/releasing.md](docs/releasing.md)
-for the runbook — and for how a project that *consumes* codeflow should handle
-its own versioning.
+Each work PR carries its release state: a labelled pending `CHANGELOG.md`
+entry with its impact marker and the coupled version stamps, which
+`scripts/release.py` checks. Conventional commit markers set a floor, not
+the version. cargo-dist builds the binaries, and a human dispatches every
+publication. See [docs/releasing.md](docs/releasing.md) for the runbook and
+for how a project that *consumes* codeflow should handle its own versioning.
 
 ## License
 

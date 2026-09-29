@@ -292,25 +292,25 @@ fn representative_stack_templates_execute_and_produce_declared_artifacts() {
         (
             "example-go.json",
             "go",
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" > .observed-command\nprintf 'mode: set\\nsrc/app.go:1.1,2.1 1 1\\n' > coverage.out\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> .observed-command\nprintf 'mode: set\\nsrc/app.go:1.1,2.1 1 1\\n' > coverage.out\n",
             "-coverprofile=coverage.out",
         ),
         (
             "example-rust.json",
             "cargo",
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" > .observed-command\nmkdir -p target/llvm-cov\nprintf 'SF:src/lib.rs\\nDA:1,1\\nend_of_record\\n' > target/llvm-cov/lcov.info\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> .observed-command\nmkdir -p target/llvm-cov\nprintf 'SF:src/lib.rs\\nDA:1,1\\nend_of_record\\n' > target/llvm-cov/lcov.info\n",
             "llvm-cov nextest --workspace --lcov --output-path target/llvm-cov/lcov.info",
         ),
         (
             "example-python.json",
             "pytest",
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" > .observed-command\nprintf '<testsuite name=\"pytest\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0\"><testcase name=\"ok\" time=\"0\"/></testsuite>\\n' > report.xml\nprintf '<coverage><class filename=\"src/app.py\"><line number=\"1\" hits=\"1\"/></class></coverage>\\n' > coverage.xml\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> .observed-command\nprintf '<testsuite name=\"pytest\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\" time=\"0\"><testcase name=\"ok\" time=\"0\"/></testsuite>\\n' > report.xml\nprintf '<coverage><class filename=\"src/app.py\"><line number=\"1\" hits=\"1\"/></class></coverage>\\n' > coverage.xml\n",
             "--cov-report=xml --junitxml=report.xml",
         ),
         (
             "example-node.json",
             "pnpm",
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" > .observed-command\nmkdir -p coverage ctrf\nprintf '{\"src/app.ts\":{\"lines\":{\"total\":1,\"covered\":1}}}\\n' > coverage/coverage-summary.json\nprintf '{\"results\":{\"tool\":{\"name\":\"vitest\"},\"summary\":{\"total\":1,\"passed\":1,\"failed\":0,\"skipped\":0},\"tests\":[{\"name\":\"ok\",\"status\":\"passed\",\"duration\":0}]}}\\n' > ctrf/ctrf-report.json\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> .observed-command\nmkdir -p coverage ctrf\nprintf '{\"src/app.ts\":{\"lines\":{\"total\":1,\"covered\":1}}}\\n' > coverage/coverage-summary.json\nprintf '{\"results\":{\"tool\":{\"name\":\"vitest\"},\"summary\":{\"total\":1,\"passed\":1,\"failed\":0,\"skipped\":0},\"tests\":[{\"name\":\"ok\",\"status\":\"passed\",\"duration\":0}]}}\\n' > ctrf/ctrf-report.json\n",
             "--coverage --reporter=vitest-ctrf-json-reporter",
         ),
     ];
@@ -331,6 +331,8 @@ fn representative_stack_templates_execute_and_produce_declared_artifacts() {
                 coverage,
                 results,
             } => {
+                // The Rust and Go templates also carry a lint target, which
+                // calls the same fixture binary; the log is appended to.
                 assert!(passed, "{template}: {results:?} {coverage:?}");
                 assert_eq!(coverage.len(), 1, "{template}");
                 assert_eq!(coverage[0].thresholds_failed, 0, "{template}");
@@ -485,6 +487,67 @@ fn shipped_templates_match_the_public_mode_and_artifact_contract() {
             .and_then(|report| report.derive_from.as_deref()),
         None
     );
+}
+
+/// The push set (TSK-132): a template's `quick` mode lives only on a
+/// format/lint target, never on the test suite, so the pre-push hook stays
+/// under a minute and the suite belongs to the full gate.
+#[test]
+fn rust_and_go_templates_push_set_is_lint_only() {
+    for (file, lint, suite) in [
+        ("example-rust.json", "rust-lint", "rust-core"),
+        ("example-go.json", "go-lint", "go-service"),
+    ] {
+        let config = config::load_test_config(&assets_template_dir().join(file)).unwrap();
+        let quick: Vec<&str> = config
+            .targets
+            .iter()
+            .filter(|t| t.modes.contains_key("quick"))
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(quick, vec![lint], "{file}");
+        let suite_target = config.targets.iter().find(|t| t.name == suite).unwrap();
+        assert!(!suite_target.modes.contains_key("quick"), "{file}");
+    }
+}
+
+/// TSK-134: no shipped template runs a package's test suite twice in its
+/// full mode (a plain run beside a coverage run of the same suite).
+#[test]
+fn templates_run_each_suite_once_in_full_mode() {
+    let runs_suite = |command: &str| {
+        let c = command;
+        (c.contains("cargo test") && !c.contains("--doc"))
+            || c.contains("nextest")
+            || c.contains("llvm-cov")
+            || c.contains("go test")
+            || c.contains("pytest")
+            || c.contains("pnpm test")
+            || c.contains("npm test")
+            || c.contains("run-tests.sh")
+    };
+    for entry in std::fs::read_dir(assets_template_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let config = config::load_test_config(&path).unwrap();
+        let mut per_package: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for target in &config.targets {
+            let Some(full) = target.modes.get("full") else {
+                continue;
+            };
+            if runs_suite(&full.command) {
+                *per_package
+                    .entry(target.cwd.clone().unwrap_or_else(|| ".".into()))
+                    .or_default() += 1;
+            }
+        }
+        for (package, runs) in per_package {
+            assert_eq!(runs, 1, "{}: package {package}", path.display());
+        }
+    }
 }
 
 #[test]

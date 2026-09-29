@@ -14,6 +14,56 @@ fn read(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
 
+/// TSK-129: the quality contract loads by section from an index, so a pin on
+/// "the quality contract" reads the index and every section file together.
+fn read_quality_contract() -> String {
+    let resources = "assets/base/agents/skills/cf-model-orchestrator/resources";
+    let mut sections: Vec<_> = std::fs::read_dir(repo_root().join(resources).join("quality"))
+        .expect("quality sections")
+        .map(|entry| entry.expect("section entry").path())
+        .collect();
+    sections.sort();
+    let mut contract = read(&format!("{resources}/quality-contract.md"));
+    for section in sections {
+        contract.push('\n');
+        contract.push_str(&std::fs::read_to_string(&section).expect("read section"));
+    }
+    contract
+}
+
+/// TSK-129: the orchestrator skill keeps what every task needs and moves
+/// trigger-only text to `references/`; a pin on the skill reads both.
+fn read_orchestrator_skill() -> String {
+    let skill = "assets/base/agents/skills/cf-model-orchestrator";
+    let mut references: Vec<_> = std::fs::read_dir(repo_root().join(skill).join("references"))
+        .expect("orchestrator references")
+        .map(|entry| entry.expect("reference entry").path())
+        .collect();
+    references.sort();
+    let mut text = read(&format!("{skill}/SKILL.md"));
+    for reference in references {
+        text.push('\n');
+        text.push_str(&std::fs::read_to_string(&reference).expect("read reference"));
+    }
+    text
+}
+
+/// TSK-129: capability-routing also loads by section from an index.
+fn read_routing_contract() -> String {
+    let resources = "assets/base/agents/skills/cf-model-orchestrator/resources";
+    let mut sections: Vec<_> = std::fs::read_dir(repo_root().join(resources).join("routing"))
+        .expect("routing sections")
+        .map(|entry| entry.expect("section entry").path())
+        .collect();
+    sections.sort();
+    let mut contract = read(&format!("{resources}/capability-routing.md"));
+    for section in sections {
+        contract.push('\n');
+        contract.push_str(&std::fs::read_to_string(&section).expect("read section"));
+    }
+    contract
+}
+
 fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -151,12 +201,8 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
 
 #[test]
 fn orchestrator_is_host_neutral_with_capability_routed_execution() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
-    let capability_routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
+    let capability_routing = normalize_whitespace(&read_routing_contract());
 
     for required in [
         "Detect capabilities, not model identity.",
@@ -167,7 +213,8 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "never a silent third vote",
         "Name extra families on trigger if available",
         "strongest capable permitted reasoning route",
-        "[detail](resources/grok-host.md)",
+        // TSK-150 (H24): the Grok host detail is a named read before launch.
+        "Before a Grok preflight or launch, also read [the Grok host detail](../resources/grok-host.md)",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
@@ -229,9 +276,7 @@ fn grok_hosted_duo_canary_record_exists_and_stays_unqualified() {
 
 #[test]
 fn cross_family_entry_preserves_receiving_primary_ownership() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let routing = normalize_whitespace(&read_routing_contract());
     for required in [
         "The first line of every cross-family task declares `ROLE: peer`",
         "qualified primary at its default effort",
@@ -248,9 +293,7 @@ fn cross_family_entry_preserves_receiving_primary_ownership() {
 
 #[test]
 fn current_ensemble_and_routing_pin_grok_catalog() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let routing = normalize_whitespace(&read_routing_contract());
     let ensemble = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
     ));
@@ -340,9 +383,7 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
 
 #[test]
 fn orchestrator_skill_avoids_superseded_roles_and_model_pins() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
     for superseded in ["**Codex implements.**", "Fixed role binding"] {
         assert!(
             !skill.contains(superseded),
@@ -359,12 +400,8 @@ fn orchestrator_skill_avoids_superseded_roles_and_model_pins() {
 
 #[test]
 fn accountable_execution_preserves_design_and_evidence_boundaries() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
-    let quality = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
-    ));
+    let routing = normalize_whitespace(&read_routing_contract());
+    let quality = normalize_whitespace(&read_quality_contract());
     let design = normalize_whitespace(&read("assets/base/agents/skills/cf-design/SKILL.md"));
     let cases = read("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     let packs = read("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
@@ -381,6 +418,9 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
         "Full primary-binding promotion still requires the existing complete suite",
         "Savings or economical-default recommendations separately require measured all-attempt",
         "review lineage is opposite the session that authored the work",
+        // TSK-129: the unknown-usage duty's one home is capability-routing.
+        "Unknown usage is advisory while task fit, capability and quality still decide the route",
+        "It blocks only when the brief declares an explicit hard limit",
     ] {
         assert!(
             routing.contains(required),
@@ -391,7 +431,6 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
     for required in [
         "Primary responsibility and actual execution are separate",
         "does not become its author",
-        "unknown and advisory unless an explicit hard limit depends on it",
     ] {
         assert!(
             quality.contains(required),
@@ -433,8 +472,7 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
 
 #[test]
 fn independent_planning_cannot_degrade_to_plan_then_critique() {
-    let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
-    let agents = read("assets/base/AGENTS.md.tmpl");
+    let skill = read_orchestrator_skill();
     let capabilities = read("docs/capabilities.md");
     let normalized = normalize_whitespace(&skill);
 
@@ -463,24 +501,25 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
         );
     }
 
+    // TSK-127 moved the entry-point cell's doctrine into the owning skill.
     assert!(
-        normalize_whitespace(&agents).contains(
-            "both independently research/analyze/plan; Claude leads design; the host assigns each task"
+        normalized.contains(
+            "Both families independently research, analyze, and plan; Claude owns design and integrated judgment; the host assigns"
         ),
-        "always-loaded AGENTS contract must expose independent planning"
+        "the orchestrator skill must expose independent planning in its description"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("fifteen health checks"),
-        "CAP-008 must count the grok doctor check"
+        normalize_whitespace(&capabilities).contains("nineteen health checks"),
+        "CAP-008 must count the grok and reading doctor checks"
     );
     let readme = normalize_whitespace(&read("README.md"));
     let architecture = normalize_whitespace(&read("docs/architecture.md"));
     assert!(
-        readme.contains("Health checks (15): hooks, claude, codex, grok, config"),
+        readme.contains("Health checks (19): hooks, claude, codex, grok, config"),
         "README must list the grok doctor check"
     );
     assert!(
-        architecture.contains("15 checks — hooks, claude, codex, grok, config"),
+        architecture.contains("19 checks: hooks, claude, codex, grok, config"),
         "architecture must list the grok doctor check"
     );
     assert!(
@@ -537,11 +576,10 @@ fn readme_distinguishes_installed_and_effective_discipline() {
 
 #[test]
 fn design_review_and_security_roles_cannot_silently_drift() {
-    let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
+    let skill = read_orchestrator_skill();
     let reviewer = read("assets/base/claude/agents/cf-reviewer.md");
     let security = read("assets/base/claude/agents/cf-security-reviewer.md");
-    let quality =
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md");
+    let quality = read_quality_contract();
     let normalized = normalize_whitespace(&skill);
 
     for required in [
@@ -550,7 +588,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
         "a lineage different from the actual author's reviews it independently. Self-review is never independent.",
         "The Claude judgment primary owns integrated Claude judgment.",
         "they do not replace the required other-lineage review or primary judgment.",
-        "separate interactive Claude session in auto mode under the same fail-closed sandbox—not plan or bypass mode",
+        "separate interactive Claude session in auto mode under the same fail-closed sandbox (not plan or bypass mode)",
     ] {
         assert!(
             normalized.contains(required),
@@ -607,9 +645,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
 
 #[test]
 fn responsible_autonomy_has_detailed_quality_and_security_owners() {
-    let quality = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
-    ));
+    let quality = normalize_whitespace(&read_quality_contract());
     let security = normalize_whitespace(&read("assets/base/claude/agents/cf-security-reviewer.md"));
 
     for required in [
@@ -647,7 +683,26 @@ fn responsible_autonomy_has_detailed_quality_and_security_owners() {
 
 #[test]
 fn always_loaded_reasoning_and_output_contract_survives_refactors() {
-    let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+    // TSK-127: the map keeps the one-line kernel; the full text is one hop
+    // away in the shared references every tier installs.
+    let map = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+    for required in [
+        "Evidence and honest analysis outrank agreement",
+        "Find broadly; act by materiality.",
+        "Prove it where it runs.",
+        ".codeflow/rules/workflow-discipline.md",
+        ".codeflow/rules/writing.md",
+    ] {
+        assert!(
+            map.contains(required),
+            "rule map lost its kernel line: {required}"
+        );
+    }
+    let agents = normalize_whitespace(&format!(
+        "{}\n{}",
+        read("assets/base/rules/workflow-discipline.md"),
+        read("assets/base/rules/writing.md")
+    ));
 
     for required in [
         "then the best current external sources",
@@ -668,32 +723,28 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
     ] {
         assert!(
             agents.contains(required),
-            "always-loaded contract lost a load-bearing duty: {required}"
+            "workflow and writing references lost a load-bearing duty: {required}"
         );
     }
 }
 
 #[test]
 fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
     let agents = read("assets/base/AGENTS.md.tmpl");
     // Git may materialize text assets with CRLF on Windows. This contract
     // pins the authored line break, not the checkout's newline convention.
     let claude = read("assets/base/CLAUDE.md.tmpl").replace("\r\n", "\n");
     let ensemble =
         read("assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
-    let capability_routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let capability_routing = normalize_whitespace(&read_routing_contract());
     let herdr = normalize_whitespace(&read("assets/base/agents/skills/cf-herdr/SKILL.md"));
     let claude_completion = normalize_whitespace(&read(
         "assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md",
     ));
 
     for required in [
-        "Use the duo for every non-trivial repository task.",
+        "Use the duo for routed work, decided by touched paths as AGENTS.md states; when unsure, route.",
         "## Outcome modes",
         "**Research/analysis:**",
         "**Plan/design:**",
@@ -743,16 +794,28 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         );
     }
 
+    // TSK-127: entry is decided by touched paths (operator decision of
+    // 2026-09-26); the map states it, CLAUDE.md carries the stage detail.
+    let agents = normalize_whitespace(&agents);
     for required in [
-        "Every non-trivial repository task **must begin with**",
+        "Orchestration entry is decided by touched paths",
         "`/cf-model-orchestrator`",
-        "research- or planning-only task stops before implementation",
-        "supporting flows, not",
-        "When uncertain whether work is trivial, treat",
+        "when unsure, route",
     ] {
         assert!(
             agents.contains(required),
-            "AGENTS template lost duo entry-point marker: {required}"
+            "AGENTS map lost duo entry-point marker: {required}"
+        );
+    }
+    let claude_normalized = normalize_whitespace(&claude);
+    for required in [
+        "Research or planning-only work exits after joint settlement",
+        "are supporting or solo flows, not alternate entry points",
+        "when unsure, route",
+    ] {
+        assert!(
+            claude_normalized.contains(required),
+            "CLAUDE template lost duo entry-point marker: {required}"
         );
     }
     for required in [
@@ -771,9 +834,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
 
 #[test]
 fn solo_fallback_requires_fresh_context_independent_review() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
     let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
 
     for (owner, contract, alternate) in [
@@ -797,8 +858,8 @@ fn solo_fallback_requires_fresh_context_independent_review() {
 fn quality_contract_pins_evidence_coverage_and_ui() {
     let contract = normalize_whitespace(&format!(
         "{}\n{}",
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md"),
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md")
+        read_quality_contract(),
+        read_routing_contract()
     ));
 
     for required in [
@@ -849,9 +910,7 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
 
 #[test]
 fn task_graph_and_verification_strength_are_proportionate_contracts() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
     let plan = normalize_whitespace(&read("assets/base/agents/skills/cf-plan/SKILL.md"));
     let develop = normalize_whitespace(&read("assets/base/agents/skills/cf-develop/SKILL.md"));
     let graph = normalize_whitespace(&read(
@@ -968,8 +1027,9 @@ fn project_organization_has_one_authority_and_honest_closeout() {
 
 #[test]
 fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
-    let full_agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
-    let minimal_agents = normalize_whitespace(&read("assets/base/AGENTS.minimal.md.tmpl"));
+    // TSK-127: one writing reference serves every tier.
+    let full_agents = normalize_whitespace(&read("assets/base/rules/writing.md"));
+    let minimal_agents = full_agents.clone();
     let lifecycle = normalize_whitespace(&read(
         "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
     ));
@@ -1037,16 +1097,24 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
 
 #[test]
 fn reverse_lane_uses_hook_completion_not_pane_stability() {
-    let delegate = normalize_whitespace(&read("assets/base/claude/skills/cf-delegate/SKILL.md"));
+    // TSK-129: the reverse lane lives in the lifecycle lane file; the core is
+    // read too so the legacy-protocol negatives still cover the whole skill.
+    let delegate = normalize_whitespace(&format!(
+        "{}\n{}",
+        read("assets/base/claude/skills/cf-delegate/SKILL.md"),
+        read("assets/base/claude/skills/cf-delegate/resources/lane-lifecycle.md")
+    ));
     let adapter = read("assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md");
 
-    assert!(delegate.contains("codeflow delegate init"));
-    assert!(delegate.contains("StopFailure"));
-    assert!(delegate.contains("--until terminal"));
-    assert!(delegate.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT"));
-    assert!(
-        delegate.contains("For consult/no-edit, use the same launch with --permission-mode auto")
-    );
+    // TSK-163: the launch sequence and turn detection are stated once, in the
+    // adapter; the lane points there before launch.
+    assert!(delegate.contains("before launching Claude, read and follow the shipped"));
+    let launch = normalize_whitespace(&adapter);
+    assert!(launch.contains("codeflow delegate init"));
+    assert!(launch.contains("StopFailure"));
+    assert!(launch.contains("--until terminal"));
+    assert!(launch.contains("--model $CLAUDE_MODEL --effort $CLAUDE_EFFORT"));
+    assert!(launch.contains("For consult/no-edit, use the same launch with --permission-mode auto"));
     assert!(delegate.contains("Launch with default effort"));
     assert!(delegate.contains("workers take escalation"));
     assert!(delegate.contains("current-ensemble.json"));
@@ -1095,4 +1163,588 @@ fn batch_workflow_is_honestly_single_vendor_and_validates_edges() {
         );
     }
     assert!(!source.contains("duo: ['plan-align'"));
+}
+
+// TSK-131: the holistic-fix doctrine salvaged from the EPC-015 line (D19 to
+// D23) and the working method of 2026-09-25, each sentence in its one home on
+// this line. The classification of every EPC-015 pin (present, carried or
+// dropped with a reason) is in `docs/verification/tsk-131-duty-map.md`.
+const TSK131_FINDINGS: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/quality/findings.md";
+const TSK131_BLOCKERS: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md";
+const TSK131_DESIGN: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md";
+const TSK131_QUALITY_INDEX: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md";
+const TSK131_ORCHESTRATOR: &str = "assets/base/agents/skills/cf-model-orchestrator/SKILL.md";
+const TSK131_DEVELOP: &str = "assets/base/agents/skills/cf-develop/SKILL.md";
+const TSK131_REVIEWER: &str = "assets/base/claude/agents/cf-reviewer.md";
+const TSK131_CONSULT: &str = "assets/base/agents/skills/cf-consult/SKILL.md";
+const TSK131_DISCIPLINE: &str = "assets/base/rules/workflow-discipline.md";
+const TSK131_MAP: &str = "assets/base/AGENTS.md.tmpl";
+const TSK131_EVAL_REQUIREMENTS: &str =
+    "assets/base/agents/skills/cf-evaluate-model/resources/requirements.json";
+
+/// (EPC-015 pin, owner sentence on this line, owner file): one row per D19
+/// to D23 obligation that is present or carried.
+const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
+    ("D19 mechanism", "states the evidenced mechanism, the relevant conditions and the remaining uncertainty in one sentence", TSK131_FINDINGS),
+    ("D19 regression", "adds a regression test that fails before the fix and passes after (Required verification, regression tests for each fixed defect)", TSK131_FINDINGS),
+    ("D19 probe", "that probe is one command already run that fails on the **exact reported symptom** before hypothesising", TSK131_BLOCKERS),
+    ("D19 sufficiency", "cause counts as found only when the evidenced conditions are sufficient to produce the failure", TSK131_FINDINGS),
+    ("D19 reproduction", "reproduce safely where feasible, otherwise record the strongest evidence and the reproduction limit", TSK131_FINDINGS),
+    ("D19 no masking", "Never mask a violated contract to make a check pass: a catch, fallback, weakened or skipped test, or retry is a fix only when it implements the contract's required failure behavior.", TSK131_FINDINGS),
+    ("D19 probe citation", "For a defect that resists a first glance, run the probe in [blocker navigation](blockers-and-gates.md) before hypothesising.", TSK131_FINDINGS),
+    ("D19 develop", "When the change fixes a defect, apply Repair in `cf-model-orchestrator/resources/quality/findings.md`: state the evidenced mechanism and add a regression test that fails before the fix and passes after", TSK131_DEVELOP),
+    ("D19 develop probe", "for a defect that resists a first glance, first run one command that fails on the exact reported symptom", TSK131_DEVELOP),
+    ("D19 reviewer", "the mechanism sentence and a regression test that fails before the fix and passes after", TSK131_REVIEWER),
+    ("D20 every task", "Before selecting a fix or a design, name the bounded impact set (callers, consumers, inputs, effects, same-mechanism siblings, data, configuration, tests, docs)", TSK131_DESIGN),
+    ("D20 adjacent", "verify the adjacent behavior the change could disturb as well as the changed path.", TSK131_DESIGN),
+    ("D20 candidate set", "candidate impact set (callers, consumers, upstream inputs, downstream effects, sibling code with the same mechanism, data and schema, configuration, tests, docs)", TSK131_FINDINGS),
+    ("D20 actual set", "refine it during verification into the actual impact set", TSK131_FINDINGS),
+    ("D20 classification", "classify analogous occurrences by mechanism and materiality", TSK131_FINDINGS),
+    ("D20 siblings", "Same-cause occurrences inside the authorized scope are repaired together", TSK131_FINDINGS),
+    ("D20 discovery", "other discoveries route through `fix now`, `track once` or `drop` under [materiality](materiality.md)", TSK131_FINDINGS),
+    ("D20 stacking", "separately authorized work stacks only where a dependency justifies it", TSK131_FINDINGS),
+    ("D20 selection body", "Run the tests of the change's dependents and consumers and of the journey the change sits in", TSK131_FINDINGS),
+    ("D20 selection scope", "verify each same-mechanism sibling repaired with it", TSK131_FINDINGS),
+    ("D20 agents pointer", "what it touches upstream and downstream", TSK131_MAP),
+    ("D20 develop", "name the bounded impact set (quality contract)", TSK131_DEVELOP),
+    ("D20 reviewer", "Require the named impact set", TSK131_REVIEWER),
+    ("D21 pre-apply", "Before applying a change that newly departs from the approved contract, scope, authority or risk boundary (a public contract break, a moved security boundary, scope growth, an irreversible action)", TSK131_BLOCKERS),
+    ("D21 form", "stop and surface it in the departure form: situation with evidence, the boundary crossed, options with cost and reversibility, and one recommendation", TSK131_BLOCKERS),
+    ("D21 withheld", "The dependent action waits for the answer while authorized independent work continues.", TSK131_BLOCKERS),
+    ("D21 reuse", "An already approved departure is reused and not asked again.", TSK131_BLOCKERS),
+    ("D21 compatibility", "Compatibility is judged by the git rules' breaking-change rule and the cf-ship release-policy reference (affected consumers, migration or deprecation, mixed-version operation, recovery).", TSK131_BLOCKERS),
+    ("D21 trigger", "| when a step is blocked or would depart from what was approved, or a check or CI job is red or did not finish |", TSK131_QUALITY_INDEX),
+    ("D21 minimal", "Before applying a change that newly departs from the approved contract, scope, authority, or risk boundary, stop and surface it in that form first", TSK131_DISCIPLINE),
+    ("D22 remedy", "Every blocker or major finding carries the smallest evidenced remedy and its verification criterion", TSK131_FINDINGS),
+    ("D22 uncertain", "when the remedy is uncertain, the required outcome and a bounded diagnostic next step", TSK131_FINDINGS),
+    ("D22 options", "a finding that is an operator decision or a design question carries the options instead", TSK131_FINDINGS),
+    ("D22 read-only", "The reviewer stays read-only, never writes a redesign or a new `DESIGN_INTENT` to fill the field, and never reopens settled design without a demonstrated defect", TSK131_FINDINGS),
+    ("D22 minor", "A missing remedy on a minor is not incompleteness.", TSK131_FINDINGS),
+    ("D22 no second flag", "Blocking is derived from the existing severity, confidence and gate policy; no second flag.", TSK131_FINDINGS),
+    ("D22 security", "The security reviewer's `remediation` field is the same duty under its existing name.", TSK131_FINDINGS),
+    ("D22 reviewer field", "remedy: <blocker and major: smallest evidenced fix and its verification criterion", TSK131_REVIEWER),
+    ("D22 routing brief", "the remedy expected on every blocker and major finding, and the provenance the reply must carry", TSK131_FINDINGS),
+    ("D22 routing return", "returns the verdict, the findings with their remedy, what was verified and what was not verified", TSK131_FINDINGS),
+    ("D22 routing scope", "Cross-lineage and Herdr briefs follow this contract.", TSK131_FINDINGS),
+    ("D22 consult", "the smallest evidenced remedy and its verification criterion, or the options when the fix is an operator decision", TSK131_CONSULT),
+    ("D23 batch", "collects the round's findings into one dependency-ordered batch with provenance preserved, deduplicates them by mechanism", TSK131_FINDINGS),
+    ("D23 evaluation", "evaluates each proposed remedy against the diagnosed mechanism and the impact set", TSK131_FINDINGS),
+    ("D23 disposition", "records accept, modify or reject with the reason", TSK131_FINDINGS),
+    ("D23 rejection", "Rejecting a remedy never closes the finding or waives a gate; a disputed finding returns with evidence to the reviewer who raised it.", TSK131_FINDINGS),
+    ("D23 conflict", "Conflicting remedies are investigated against the mechanism, the impact evidence and the accepted contract.", TSK131_FINDINGS),
+    ("D23 escalation", "One consolidated decision goes to the operator in the departure form under [blocker navigation](blockers-and-gates.md) only when resolution needs operator-owned intent, authority or risk acceptance.", TSK131_FINDINGS),
+    ("D23 one cycle", "Apply the accepted batch as one apply-and-verify cycle (stacked dependents from Change impact stay separate) and re-verify the impact set.", TSK131_FINDINGS),
+    ("D23 re-review", "confirms that finding on the affected scope, widened when the impact or the prior evidence is uncertain", TSK131_FINDINGS),
+    ("D23 failed round", "A round that introduces an attributable regression is a failed round.", TSK131_FINDINGS),
+    ("D23 gates unchanged", "The required gates and the [completion gate](completion.md) are unchanged.", TSK131_FINDINGS),
+    ("D23 cycle definition", "One cycle is repair plus its affected verification and review.", TSK131_FINDINGS),
+    ("D23 bound", "post-review repair is bounded to two evidence-moving cycles, and the count carries across route changes.", TSK131_FINDINGS),
+    ("D23 strategic", "diagnose the persistent constraint and take an approved-outcome-preserving strategic route or surface the genuine external or owner block, never a third tactical repair.", TSK131_FINDINGS),
+    ("D23 develop", "Maximum 2 evidence-moving cycles for code", TSK131_DEVELOP),
+    ("D23 develop owner", "act on the round's findings as `cf-model-orchestrator/resources/quality/findings.md` sets out", TSK131_DEVELOP),
+    ("D23 eval kit", "\"Maximum 2 evidence-moving cycles for code\"", TSK131_EVAL_REQUIREMENTS),
+];
+
+/// TSK-131 AC-1: every present or carried D19 to D23 obligation keeps its
+/// owner sentence.
+#[test]
+fn holistic_fix_doctrine_keeps_one_owner_sentence_each() {
+    let mut owners: BTreeMap<&str, String> = BTreeMap::new();
+    for (pin, needle, file) in HOLISTIC_FIX_PINS {
+        let text = owners
+            .entry(file)
+            .or_insert_with(|| normalize_whitespace(&read(file)));
+        assert!(
+            text.contains(&normalize_whitespace(needle)),
+            "{pin}: owner sentence missing in {file}: {needle}"
+        );
+    }
+}
+
+/// Deleting any pinned duty from its owner text fails the pin: each needle
+/// is removed in memory and the owner text is checked again.
+#[test]
+fn holistic_fix_pins_fail_when_a_duty_is_deleted() {
+    for (pin, needle, file) in HOLISTIC_FIX_PINS {
+        let wanted = normalize_whitespace(needle);
+        let mutated = normalize_whitespace(&read(file)).replacen(&wanted, "", 1);
+        assert!(
+            !mutated.contains(&wanted),
+            "{pin}: deleting the duty from {file} left the pin satisfied"
+        );
+    }
+}
+
+/// TSK-131 AC-2: the shipped skills state the working method, and every
+/// round bound agrees with the change-class bound in the findings section.
+#[test]
+fn working_method_rounds_agree_across_the_shipped_skills() {
+    let findings = normalize_whitespace(&read(TSK131_FINDINGS));
+    for required in [
+        "A review round runs every assigned reviewer in parallel on one revision.",
+        "Each reviewer whose blocker or major finding was fixed confirms that finding",
+        "A fix for a minor finding or a nit needs no confirmation round.",
+        "Rounds are bounded by change class.",
+        "Code, configuration and other executable changes: post-review repair is bounded to two evidence-moving cycles",
+        "Docs and records: two review rounds per submitted version; the count resets once when an edit changes the duties or claims the text states.",
+    ] {
+        assert!(
+            findings.contains(required),
+            "findings section lost the working method: {required}"
+        );
+    }
+    let orchestrator = normalize_whitespace(&read(TSK131_ORCHESTRATOR));
+    for required in [
+        "Use the duo for routed work, decided by touched paths as AGENTS.md states; when unsure, route.",
+        "Plan reconciliation is bounded to at most two rounds.",
+        "When review findings are acted on, a round runs every reviewer in parallel and [findings](resources/quality/findings.md) bounds rounds by change class.",
+        "within the [findings](resources/quality/findings.md) round bounds.",
+    ] {
+        assert!(
+            orchestrator.contains(required),
+            "orchestrator lost the working method: {required}"
+        );
+    }
+    assert!(
+        normalize_whitespace(&read(TSK131_DEVELOP)).contains(
+            "Maximum 2 evidence-moving cycles for code; docs and records follow that section's bound."
+        ),
+        "cf-develop lost the change-class bound"
+    );
+    // Fable review of d60ce13f0: the defect-fix duty is stated where every
+    // build happens, not only after a review bounces the change.
+    let develop = normalize_whitespace(&read(TSK131_DEVELOP));
+    let build = develop
+        .split_once("a. **Build**")
+        .and_then(|(_, rest)| rest.split_once("b. **Review**"))
+        .map(|(build, _)| build)
+        .expect("cf-develop step 5a");
+    for required in [
+        "When the change fixes a defect",
+        "a regression test that fails before the fix and passes after",
+        "exact reported symptom",
+    ] {
+        assert!(
+            build.contains(required),
+            "cf-develop Build lost the defect-fix duty: {required}"
+        );
+    }
+    assert!(
+        normalize_whitespace(&read(TSK131_DISCIPLINE)).contains(
+            "Run one review round at a time with every reviewer in parallel; a reviewer whose blocker or major finding was fixed confirms it, and a fix for a minor finding needs no new round."
+        ),
+        "the discipline reference lost the review round rule"
+    );
+    assert!(
+        normalize_whitespace(&read(TSK131_QUALITY_INDEX)).contains(
+            "| [Review findings and repair](quality/findings.md) | when a defect is fixed, or review findings are briefed, written or acted on |"
+        ),
+        "the quality index lost the findings row"
+    );
+
+    // Agreement: no shipped instruction keeps a superseded round bound.
+    let mut files = Vec::new();
+    collect_markdown(&repo_root().join("assets/base"), &mut files);
+    for superseded in [
+        "Maximum 3 evidence-moving cycles",
+        "rework are each bounded to at most two rounds",
+        "Rework is bounded to two rounds",
+        "post-review repair is bounded to two evidence-moving cycles in every route",
+    ] {
+        let holders: Vec<String> = files
+            .iter()
+            .filter(|path| {
+                normalize_whitespace(&std::fs::read_to_string(path).unwrap()).contains(superseded)
+            })
+            .map(|path| path.display().to_string())
+            .collect();
+        assert!(
+            holders.is_empty(),
+            "superseded round bound `{superseded}` still shipped in {holders:?}"
+        );
+    }
+}
+
+fn collect_markdown(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read dir") {
+        let path = entry.expect("dir entry").path();
+        if path.is_dir() {
+            collect_markdown(&path, out);
+        } else if path
+            .extension()
+            .is_some_and(|ext| ext == "md" || ext == "tmpl" || ext == "json")
+        {
+            out.push(path);
+        }
+    }
+}
+
+/// TSK-131 AC-3: the copy guide sections of TSK-073, in order, in the one
+/// writing reference.
+const COPY_GUIDE_SECTIONS: &[&str] = &[
+    "Voice",
+    "Sentences",
+    "Words",
+    "Titles and headings",
+    "Leads",
+    "Captions",
+    "Summaries",
+    "Bullets and tables",
+    "Microcopy",
+    "Replies",
+];
+
+/// Each copy guide section's example: the named source and the quoted text,
+/// or every section that has none, several, or a quote its source lacks.
+fn copy_guide_examples(writing: &str) -> Result<Vec<(String, String, String)>, Vec<String>> {
+    const EXAMPLE: &str = "Example, from CodeFlow's `";
+    let guide = writing
+        .split_once("\n## Copy guide\n")
+        .map(|(_, guide)| guide)
+        .ok_or_else(|| vec!["no `## Copy guide` section".to_string()])?;
+    let guide = guide.split("\n## ").next().unwrap_or_default();
+    let mut errors = Vec::new();
+    let mut examples = Vec::new();
+    let sections: Vec<&str> = guide.split("\n### ").skip(1).collect();
+    let titles: Vec<&str> = sections
+        .iter()
+        .map(|section| section.lines().next().unwrap_or_default())
+        .collect();
+    if titles != COPY_GUIDE_SECTIONS {
+        errors.push(format!("copy guide sections {titles:?}"));
+    }
+    for (title, section) in titles.iter().zip(&sections) {
+        let found: Vec<&str> = section
+            .match_indices(EXAMPLE)
+            .map(|(i, _)| &section[i..])
+            .collect();
+        if found.len() != 1 {
+            errors.push(format!("{title}: {} examples, want one", found.len()));
+            continue;
+        }
+        let rest = &found[0][EXAMPLE.len()..];
+        let (source, after) = rest.split_once("`:").expect("example source");
+        let quote: Vec<&str> = after
+            .lines()
+            .skip_while(|line| line.trim().is_empty())
+            .take_while(|line| line.starts_with('>'))
+            .map(|line| line.trim_start_matches('>').trim())
+            .collect();
+        let quote = quote.join(" ");
+        if quote.is_empty() {
+            errors.push(format!("{title}: the example quotes nothing"));
+            continue;
+        }
+        let text = std::fs::read_to_string(repo_root().join(source))
+            .map(|text| normalize_whitespace(&text))
+            .unwrap_or_default();
+        if !text.contains(&normalize_whitespace(&quote)) {
+            errors.push(format!("{title}: `{quote}` is not in {source}"));
+        }
+        examples.push(((*title).to_string(), source.to_string(), quote));
+    }
+    if errors.is_empty() {
+        Ok(examples)
+    } else {
+        Err(errors)
+    }
+}
+
+#[test]
+fn writing_reference_carries_the_copy_guide_with_sourced_examples() {
+    let writing = read("assets/base/rules/writing.md");
+    let examples = copy_guide_examples(&writing).unwrap_or_else(|errors| panic!("{errors:#?}"));
+    assert_eq!(examples.len(), COPY_GUIDE_SECTIONS.len());
+    let guide = writing.split_once("\n## Copy guide\n").unwrap().1;
+    assert!(
+        !guide.contains(['\u{2013}', '\u{2014}']),
+        "the copy guide carries a policy dash"
+    );
+    let normalized = normalize_whitespace(guide);
+    for required in [
+        "none asks a short answer for a lead, a heading or a sentence about its own format",
+        "A short answer is its own summary and takes no lead.",
+        "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.",
+    ] {
+        assert!(
+            normalized.contains(required),
+            "copy guide lost the short-answer rule: {required}"
+        );
+    }
+
+    // Negative controls: a quote its source lacks, a missing example and a
+    // reordered section each fail.
+    let (_, _, quote) = &examples[0];
+    let altered = writing.replacen(&format!("> {quote}"), &format!("> {quote} Always."), 1);
+    let errors = copy_guide_examples(&altered).expect_err("an altered quote must fail");
+    assert!(errors.iter().any(|e| e.starts_with("Voice:")), "{errors:?}");
+    let missing = writing.replacen("Example, from CodeFlow's `docs/adoption.md`:", "", 1);
+    let errors = copy_guide_examples(&missing).expect_err("a missing example must fail");
+    assert!(
+        errors.iter().any(|e| e.starts_with("Titles and headings:")),
+        "{errors:?}"
+    );
+    let reordered = writing.replacen("### Leads", "### Lead paragraphs", 1);
+    assert!(copy_guide_examples(&reordered).is_err());
+}
+
+/// Every shipped Markdown or template text under `assets/base`, whitespace
+/// normalised, keyed by its path.
+fn shipped_texts() -> BTreeMap<String, String> {
+    fn walk(dir: &std::path::Path, out: &mut BTreeMap<String, String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext == "md" || ext == "tmpl")
+            {
+                let rel = path
+                    .strip_prefix(repo_root())
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.insert(
+                    rel,
+                    normalize_whitespace(&std::fs::read_to_string(&path).unwrap()),
+                );
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(&repo_root().join("assets/base"), &mut out);
+    out
+}
+
+/// The `## The work lifecycle` section of cf-method's project-organization
+/// reference, up to the next level-two heading.
+fn lifecycle_section(text: &str) -> String {
+    let start = text
+        .find("\n## The work lifecycle\n")
+        .expect("cf-method has one work lifecycle section");
+    let rest = &text[start + 1..];
+    let end = rest[3..].find("\n## ").map_or(rest.len(), |at| at + 3);
+    rest[..end].to_string()
+}
+
+/// R-63, R-65, R-66: each rule is stated in one place across every
+/// shipped text, and that place is the lifecycle reference. Each rule is
+/// matched by the phrasings a restatement would use, case-insensitively,
+/// so a paraphrase elsewhere counts as a second statement (Codex review of
+/// TSK-108: cf-method once restated the standalone test in its own words).
+fn each_rule_is_stated_once(texts: &BTreeMap<String, String>) {
+    for (rule, phrasings) in [
+        (
+            "research folder",
+            &["one file per question", "a file per question"][..],
+        ),
+        ("spec and epic", &["many to many", "many-to-many"][..]),
+        (
+            "standalone test",
+            &[
+                "reviewable pull request",
+                "reviewable pr",
+                "one pull request",
+                "single pull request",
+            ][..],
+        ),
+    ] {
+        let holders: Vec<&String> = texts
+            .iter()
+            .filter(|(_, text)| {
+                let text = text.to_lowercase();
+                phrasings.iter().any(|phrase| text.contains(phrase))
+            })
+            .map(|(path, _)| path)
+            .collect();
+        assert_eq!(
+            holders,
+            vec!["assets/base/claude/skills/cf-method/references/project-organization.md"],
+            "the {rule} rule must be stated once, in the lifecycle reference"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_guidance_is_one_section_the_skills_follow() {
+    // TSK-108 AC-1 to AC-3 (SPC-013 R-34, R-43, R-63, R-65, R-66, R-112).
+    let organization =
+        read("assets/base/claude/skills/cf-method/references/project-organization.md");
+    assert_eq!(
+        organization.matches("\n## The work lifecycle\n").count(),
+        1,
+        "cf-method holds exactly one work lifecycle section"
+    );
+    let section = normalize_whitespace(&lifecycle_section(&organization));
+    for required in [
+        // The verbs of R-34 as shipped.
+        "codeflow epic new",
+        "--integration",
+        "codeflow spec new --for",
+        "codeflow task new --epic",
+        "--standalone-reason",
+        "--follow-up-of",
+        "codeflow adr new",
+        "codeflow work next",
+        "codeflow work claim",
+        "codeflow work start",
+        "codeflow task status",
+        "--acceptance",
+        "--owner",
+        "--revisit",
+        "--scope",
+        "codeflow spec status",
+        "codeflow epic status",
+        // Planning and dependency rules.
+        "planning PR",
+        "kind: research",
+        "pin:",
+        "awaiting_selection",
+        "execution base",
+        // Status rules.
+        "in_progress",
+        "`implemented` is derived",
+    ] {
+        assert!(
+            section.contains(required),
+            "the work lifecycle section lost: {required}"
+        );
+    }
+
+    let texts = shipped_texts();
+    each_rule_is_stated_once(&texts);
+    for stale in [
+        "`status: implemented` when",
+        "frozen (`status: implemented`)",
+        "It lists every direct candidate predecessor, including mutually exclusive guarded candidates",
+    ] {
+        let holders: Vec<&String> = texts
+            .iter()
+            .filter(|(_, text)| text.contains(stale))
+            .map(|(path, _)| path)
+            .collect();
+        assert!(holders.is_empty(), "stale lifecycle text `{stale}` in {holders:?}");
+    }
+
+    // AC-2: the stage skills follow the section instead of restating it.
+    for skill in [
+        "assets/base/claude/skills/cf-method/SKILL.md",
+        "assets/base/agents/skills/cf-plan/SKILL.md",
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        "assets/base/agents/skills/cf-customize/SKILL.md",
+    ] {
+        let text = normalize_whitespace(&read(skill));
+        assert!(
+            text.contains("project-organization.md#the-work-lifecycle"),
+            "{skill} must point to the work lifecycle section"
+        );
+    }
+    let customize = normalize_whitespace(&read("assets/base/agents/skills/cf-customize/SKILL.md"));
+    assert!(
+        customize.contains("A change to `.codeflow/policy.json` needs a human"),
+        "cf-customize states that policy edits need a human"
+    );
+    let graph = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/task-graph.md",
+    ));
+    for required in [
+        "Only the selected branch of a decision is written into `depends_on`",
+        "awaiting_selection",
+        "kind: research | decision",
+        "lands only by a planning PR",
+    ] {
+        assert!(graph.contains(required), "task-graph.md lost: {required}");
+    }
+}
+
+/// TSK-169: the two texts that state how an approved spec changes, each
+/// with every duty of the rule: Plan vN+1 amended in place, a dated note
+/// naming its resolution with the editorial exception, the superseded
+/// decision kept, each bound consumer's disposition, and the `implemented`
+/// boundary with both later routes.
+const SPEC_RULE_OWNERS: &[(&str, &[&str])] = &[
+    (
+        "assets/base/claude/skills/cf-method/references/project-organization.md",
+        &[
+            "a change to it is Plan vN+1, amended in place through a reviewed planning change",
+            "each change of meaning gets a dated note naming its resolution",
+            "(an editorial change needs none)",
+            "the superseded decision stays visible as history",
+            "names each consumer bound to a changed requirement and its disposition: unaffected, criteria amended in the same change, or reopened",
+            "An `implemented` spec is frozen, so a later change gets a new spec or an explicit superseding record",
+        ],
+    ),
+    (
+        "assets/base/pm/spec.md.tmpl",
+        &[
+            "a change to an approved spec is Plan vN+1, amended in place through a reviewed planning change",
+            "each change of meaning gets a dated note naming its resolution",
+            "(an editorial change needs none)",
+            "the superseded decision stays visible as history",
+            "names each consumer bound to a changed requirement and its disposition: unaffected, criteria amended in the same change, or reopened",
+            "Once implemented the spec is frozen, so a later change gets a new spec that lists `supersedes: [SPC-old]`",
+            "`codeflow spec status SPC-old superseded --by SPC-new`, or an explicit superseding record",
+        ],
+    ),
+];
+
+/// Text an owner must not carry: approval freezing the criteria, or a new
+/// spec for any later change without the `implemented` boundary.
+const SPEC_RULE_FORBIDDEN: &[&str] = &[
+    "freezes the criteria",
+    "Later semantic change gets a new spec",
+];
+
+fn spec_rule_gaps(text: &str, needles: &[&str]) -> Vec<String> {
+    let text = normalize_whitespace(text);
+    let mut gaps: Vec<String> = needles
+        .iter()
+        .filter(|needle| !text.contains(&normalize_whitespace(needle)))
+        .map(|needle| format!("missing: {needle}"))
+        .collect();
+    gaps.extend(
+        SPEC_RULE_FORBIDDEN
+            .iter()
+            .filter(|phrase| text.contains(*phrase))
+            .map(|phrase| format!("forbidden: {phrase}")),
+    );
+    gaps
+}
+
+/// TSK-169 AC-4: an approved spec is amended in place until it is
+/// `implemented` and frozen after, in the lifecycle guidance and the spec
+/// template, and neither says approval freezes the criteria.
+#[test]
+fn an_approved_spec_is_amended_until_implemented_and_frozen_after() {
+    for (file, needles) in SPEC_RULE_OWNERS {
+        let gaps = spec_rule_gaps(&read(file), needles);
+        assert!(gaps.is_empty(), "{file}: {gaps:?}");
+    }
+}
+
+/// The negative control: removing the rule or its boundary from each file,
+/// or restoring the approval freeze, fails the pin.
+#[test]
+fn the_spec_amendment_pin_fails_when_the_rule_is_lost() {
+    for (file, needles) in SPEC_RULE_OWNERS {
+        let text = normalize_whitespace(&read(file));
+        for needle in *needles {
+            let removed = text.replacen(&normalize_whitespace(needle), "", 1);
+            assert!(
+                !spec_rule_gaps(&removed, needles).is_empty(),
+                "{file}: removing {needle:?} left the pin satisfied"
+            );
+        }
+        let frozen = format!("{text} Approval freezes the criteria.");
+        assert!(
+            !spec_rule_gaps(&frozen, needles).is_empty(),
+            "{file}: an approval freeze left the pin satisfied"
+        );
+    }
 }

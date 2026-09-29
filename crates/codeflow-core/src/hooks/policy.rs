@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 use crate::security::git::is_on_protected_branch;
 use crate::security::SecurityPolicy;
 
+/// Branch prefix for integration lines shared by policy and range checks.
+pub const INTEGRATION_BRANCH_PREFIX: &str = "integration/";
+
 /// Enforcement level for a policy rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +48,22 @@ impl PolicyLevel {
     pub fn is_active(self) -> bool {
         matches!(self, Self::Block | Self::Warn)
     }
+
+    /// The lower of two levels, in the order block, warn, allow, off.
+    #[must_use]
+    pub fn lower(self, other: Self) -> Self {
+        let rank = |level: Self| match level {
+            Self::Block => 3,
+            Self::Warn => 2,
+            Self::Allow => 1,
+            Self::Off => 0,
+        };
+        if rank(other) < rank(self) {
+            other
+        } else {
+            self
+        }
+    }
 }
 
 impl fmt::Display for PolicyLevel {
@@ -56,6 +75,83 @@ impl fmt::Display for PolicyLevel {
             Self::Off => f.write_str("off"),
         }
     }
+}
+
+/// One trusted automation profile (SPC-013 R-82): the bot actors or app ids
+/// it trusts, the branch pattern its pull requests use, and content for the
+/// PR sections its bot body omits (heading to content).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationProfile {
+    pub name: String,
+    pub actors: Vec<String>,
+    pub branch_pattern: String,
+    #[serde(default)]
+    pub sections: std::collections::BTreeMap<String, String>,
+}
+
+impl AutomationProfile {
+    /// `true` when `actor` is one of the profile's actors and `branch`
+    /// matches its pattern. The actor `unknown` (a local run, a fork pull
+    /// request, or no actor passed) never matches.
+    #[must_use]
+    pub fn matches(&self, actor: &str, branch: &str) -> bool {
+        actor != UNKNOWN_ACTOR
+            && !actor.is_empty()
+            && self.actors.iter().any(|a| a == actor)
+            && self.branch_matches(branch)
+    }
+
+    /// `true` when `branch` matches the profile's glob pattern.
+    #[must_use]
+    pub fn branch_matches(&self, branch: &str) -> bool {
+        glob::Pattern::new(&self.branch_pattern).is_ok_and(|p| p.matches(branch))
+    }
+}
+
+/// The actor `codeflow ci` reports when no trusted actor was passed.
+pub const UNKNOWN_ACTOR: &str = "unknown";
+
+/// The four states of a kept brownfield PR template (SPC-013 R-84).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MappingState {
+    /// Found and proposed; no operator decision yet.
+    Diagnosed,
+    /// The operator accepted the heading mapping.
+    Accepted,
+    /// The operator refused it; the missing headings go into the template.
+    Refused,
+    /// The project sets its own section list in policy.
+    Custom,
+}
+
+impl fmt::Display for MappingState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Diagnosed => "diagnosed",
+            Self::Accepted => "accepted",
+            Self::Refused => "refused",
+            Self::Custom => "custom",
+        })
+    }
+}
+
+/// `git.pr_section_mapping`: the state, the proposed or accepted heading
+/// mapping (required heading to the template's heading), and the decision
+/// date (`none` while diagnosed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrSectionMapping {
+    pub state: MappingState,
+    #[serde(default)]
+    pub headings: std::collections::BTreeMap<String, String>,
+    #[serde(default = "decided_none")]
+    pub decided: String,
+}
+
+fn decided_none() -> String {
+    "none".to_string()
 }
 
 /// The `git` section of `.codeflow/policy.json` (charter §6.1, verbatim
@@ -101,6 +197,24 @@ pub struct GitPolicy {
     /// stay the hard line (charter D19). Suspended only in the
     /// pre-first-commit bootstrap window.
     pub hook_integrity: PolicyLevel,
+    /// The branch the root checkout holds: the repository's main working
+    /// tree, where no task work happens. Empty (the default) means the
+    /// repository's default branch. Change it only for an umbrella
+    /// repository whose root is a working checkout; the convention is
+    /// [`WORKSPACE_ROOT_BRANCH`](crate::root_checkout::WORKSPACE_ROOT_BRANCH),
+    /// which `codeflow init --workspace` sets.
+    pub root_branch: String,
+    /// A commit at the root checkout on any branch other than
+    /// [`root_branch`](GitPolicy::root_branch). Level; default `block`.
+    /// git-guard applies the level to agents; the git hooks apply it when a
+    /// harness marker is set and warn otherwise, so a human at their own
+    /// terminal is never stopped. Suspended in the bootstrap window.
+    pub root_checkout_commits: PolicyLevel,
+    /// Folders where linked worktrees may live: a path relative to the root
+    /// checkout, an absolute path, `~/...`, or `$CODEX_HOME/...` or
+    /// `$GROK_HOME/...`. The default covers `.worktrees` and the folders the
+    /// harnesses manage; `doctor` reports a linked worktree outside them.
+    pub worktree_locations: Vec<String>,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
     /// Max length of the commit *description* — the text after `type(scope): `.
@@ -174,8 +288,11 @@ pub struct GitPolicy {
     /// The policy characters of ADR-0067, U+2013 (en dash) and U+2014 (em
     /// dash), in new text: commit subjects and bodies (commit-msg hook), PR
     /// bodies, and lines a `codeflow ci` range adds under the written-content
-    /// trees. Level (off/warn/allow/block); default `block`. Existing bytes
-    /// are grandfathered: `codeflow ci` judges added lines, never the tree.
+    /// trees. Level (off/warn/allow/block); default `warn`, a writing
+    /// guideline that review and evaluation judge (this repository sets
+    /// `block`). Existing bytes are grandfathered: `codeflow ci` judges added
+    /// lines, never the tree, and skips a file whose bytes are exactly the
+    /// whole-file managed asset the running binary ships for that path.
     pub policy_characters: PolicyLevel,
     /// Structure of the PR/MR body — the section check `codeflow ci` runs when
     /// a PR body is provided (`--pr-body`, `--pr-body-file`, or
@@ -204,12 +321,69 @@ pub struct GitPolicy {
     /// range — counts as code). Default `["Testing"]`. Enforced under
     /// `pr_sections`.
     pub pr_code_sections: Vec<String>,
+    /// The level of the adjustable work-record rules of SPC-013 R-80: the
+    /// acceptance block bound to the reviewed commit and the journey
+    /// criterion for adopter-facing ranges. Accepts `block` or `warn` only;
+    /// `off` does not exist (R-81). Default `block`. The transition rules
+    /// (Blocker, cancellation, acceptance block on completion) always block
+    /// and are not governed by this key. Read it through
+    /// [`GitPolicy::work_records_level`].
+    pub work_records: PolicyLevel,
+    /// The level of the planning checks `work start` and `codeflow ci` run
+    /// once per task, on any work prefix (TSK-133): the visible workgraph is
+    /// valid, the branch's task has a record, and that record is anchored on
+    /// its target. Accepts `block` or `warn`; default `block`. Read it
+    /// through [`GitPolicy::work_planning_level`].
+    pub work_planning: PolicyLevel,
+    /// Globs naming the project's product code (SPC-013 R-71, R-114). A
+    /// range touching one is tracked work, never a direct change
+    /// (`Task: none`). `codeflow init` writes the default for the detected
+    /// stack and `codeflow update` adds it once, keeping any value the
+    /// project set. Absent (`null`), the binary assumes the stack default
+    /// recorded in `.codeflow/project.toml`.
+    pub product_paths: Option<Vec<String>>,
+    /// Whether a pull request may be a direct change (`Task: none: <reason>`)
+    /// at all: `allow` (default) or `forbid`. Forbidding never narrows the
+    /// surfaces a direct change is refused on (R-71).
+    pub direct_changes: String,
+    /// Trusted automation profiles (SPC-013 R-82). A profile applies in
+    /// `codeflow ci` only when the actor the workflow passes and the head
+    /// branch both match, and only as read from the target side of the
+    /// range. It skips branch naming and the commit message shape rules and
+    /// supplies content for the PR sections its bot omits; it never changes
+    /// a level. Default empty.
+    pub automation_profiles: Vec<AutomationProfile>,
+    /// The decision about a kept brownfield PR template (SPC-013 R-84,
+    /// R-115). Absent by default; `init` and `update` write `diagnosed`
+    /// when a kept template's headings do not match the required sections.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_section_mapping: Option<PrSectionMapping>,
+    /// The glob naming release branches (SPC-013 R-120). Read only from the
+    /// policy at the default target's tip at the destination, never from a
+    /// local ref or the range being judged; absent there, the built-in
+    /// `integration/release-*` applies. A pattern that could match the
+    /// default target or an epic line (`integration/EPC-*`) is refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_branch_pattern: Option<String>,
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
+    /// Unresolved conflict markers on the lines a change adds to a text
+    /// file (TSK-170): the pre-commit hook judges the staged diff and
+    /// `codeflow ci` the range. Level (off/warn/allow/block); default
+    /// `block`. A file that must hold markers sets `conflict-marker-size`
+    /// for its path in `.gitattributes`. Suspended by bootstrap grace.
+    pub conflict_markers: PolicyLevel,
     pub test_gate_on_push: PolicyLevel,
     pub security_review: PolicyLevel,
     pub dep_audit: PolicyLevel,
+    /// Discarding locally unique uncommitted work (`checkout -- .`, `reset
+    /// --hard`, `clean`, `stash drop`), judged by git-guard (TSK-172).
+    /// Default `block`.
+    pub discard_uncommitted: PolicyLevel,
+    /// Regenerable directories `git clean` may remove without refusal
+    /// (TSK-172).
+    pub clean_regenerable: Vec<String>,
 }
 
 impl Default for GitPolicy {
@@ -226,6 +400,12 @@ impl Default for GitPolicy {
             pr_merge_to_protected: PolicyLevel::Block,
             local_ref_protection: PolicyLevel::Block,
             hook_integrity: PolicyLevel::Block,
+            root_branch: String::new(),
+            root_checkout_commits: PolicyLevel::Block,
+            worktree_locations: crate::root_checkout::DEFAULT_WORKTREE_LOCATIONS
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             commit_format: PolicyLevel::Block,
             commit_types: [
                 "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert",
@@ -251,12 +431,19 @@ impl Default for GitPolicy {
             breaking_watch_paths: Vec::new(),
             ai_attribution: PolicyLevel::Block,
             commit_emoji: PolicyLevel::Block,
-            policy_characters: PolicyLevel::Block,
+            policy_characters: PolicyLevel::Warn,
             pr_sections: PolicyLevel::Block,
             pr_release_impact: PolicyLevel::Warn,
             pr_breaking_level: "major".into(),
             pr_required_sections: vec!["Summary".into(), "Changes".into()],
             pr_code_sections: vec!["Testing".into()],
+            work_records: PolicyLevel::Block,
+            work_planning: PolicyLevel::Block,
+            product_paths: None,
+            direct_changes: "allow".to_string(),
+            automation_profiles: Vec::new(),
+            pr_section_mapping: None,
+            release_branch_pattern: None,
             branch_naming: PolicyLevel::Block,
             branch_prefixes: [
                 "feat/",
@@ -271,20 +458,57 @@ impl Default for GitPolicy {
                 "task/",
                 "spike/",
                 "experiment/",
-                "integration/",
+                INTEGRATION_BRANCH_PREFIX,
             ]
             .iter()
             .map(ToString::to_string)
             .collect(),
             secret_scan: PolicyLevel::Block,
-            test_gate_on_push: PolicyLevel::Warn,
+            conflict_markers: PolicyLevel::Block,
+            test_gate_on_push: PolicyLevel::Block,
             security_review: PolicyLevel::Warn,
             dep_audit: PolicyLevel::Warn,
+            discard_uncommitted: PolicyLevel::Block,
+            clean_regenerable: [
+                "target/",
+                "node_modules/",
+                "dist/",
+                "build/",
+                ".venv/",
+                "__pycache__/",
+                "coverage/",
+            ]
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
         }
     }
 }
 
 impl GitPolicy {
+    /// The effective `work_records` level: `warn` when the policy says so,
+    /// `block` otherwise. A value outside `block | warn` (the strict
+    /// validator rejects it) never switches the rules off.
+    #[must_use]
+    pub fn work_records_level(&self) -> PolicyLevel {
+        if self.work_records == PolicyLevel::Warn {
+            PolicyLevel::Warn
+        } else {
+            PolicyLevel::Block
+        }
+    }
+
+    /// The effective `work_planning` level: `warn` when the policy says so,
+    /// `block` otherwise, so no value switches the planning checks off.
+    #[must_use]
+    pub fn work_planning_level(&self) -> PolicyLevel {
+        if self.work_planning == PolicyLevel::Warn {
+            PolicyLevel::Warn
+        } else {
+            PolicyLevel::Block
+        }
+    }
+
     /// `true` when `branch` matches the protected list (names and globs).
     /// Reuses the security plane's matcher so all planes agree (D7).
     #[must_use]
@@ -347,10 +571,12 @@ impl GitPolicy {
 }
 
 /// The `security` section of `.codeflow/policy.json` — the exec-guard posture
-/// (ADR-0008). Separate from the `git` section: `dangerous_commands` is accepted
-/// only as the explicit `block` marker and remains enforced as a block despite
-/// a stale or hand-edited weaker value.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// (ADR-0008, amended by ADR-0075). Separate from the `git` section:
+/// `dangerous_commands` is accepted only as the explicit `block` marker and
+/// remains enforced as a block despite a stale or hand-edited weaker value.
+/// The keys after `headless_peer_runs` are read by the guard families of
+/// TSK-172 to TSK-174; this unit ships their defaults (TSK-171).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecuritySection {
     /// Destructive commands the `dangerous` module catches (rm -rf on `/`, `~`,
@@ -359,54 +585,149 @@ pub struct SecuritySection {
     /// project, so no sanctioned path exists — the guard is the hard line.
     pub dangerous_commands: PolicyLevel,
     /// Privilege escalation the `privilege` module catches (Unix and Windows
-    /// launchers, shell `-c` chains, `LD_PRELOAD`/PATH injection). Default `warn`, NOT
-    /// block: a hook exit-2 here would override even an explicit human
-    /// ask-approval, and the settings `ask` tier is what owns sudo prompting.
-    /// The exec-guard only surfaces in-session feedback; it never vetoes the
-    /// human decision the ask tier exists to capture.
+    /// launchers, direct, chained or wrapped in a shell `-c` string or
+    /// `eval`; `LD_PRELOAD` and a `PATH` through `/tmp`). Default
+    /// `block` (operator decision D5 of 2026-09-28, ADR-0075): the presets
+    /// deny the plain forms without a prompt and the guard refuses the
+    /// wrapped ones; the operator runs privileged commands.
     pub privilege_escalation: PolicyLevel,
+    /// A headless peer run (`claude -p`, `codex exec`, `grok -p`), TSK-136.
+    /// Peer seats run interactively; a headless run has no verified native
+    /// session or recheckable thread. Default `block` (D4, ADR-0075); a
+    /// project that needs one names its family in `headless_opt_in`.
+    pub headless_peer_runs: PolicyLevel,
+    /// The families whose headless runs a project opts into, with its reason
+    /// (D4). Absent by default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headless_opt_in: Option<HeadlessOptIn>,
+    /// Findings in a script file a command runs (TSK-172). Default `warn`.
+    pub script_bypass: PolicyLevel,
+    /// Outward actions the text rules cannot spell: publishing, releases,
+    /// tag pushes and account changes behind flags or wrappers (TSK-172).
+    /// Default `block`.
+    pub outward_actions: PolicyLevel,
+    /// Interpreter-embedded forms of the refused actions (TSK-172). Default
+    /// `block`.
+    pub interpreter_scan: PolicyLevel,
+    /// Shell reads of the secret stores (TSK-172). Default `block`.
+    pub secret_reads: PolicyLevel,
+    /// Commits and ref moves whose enforcement entries match no approved
+    /// identity of the enforcement baseline (TSK-172). Default `block`.
+    pub enforcement_baseline: PolicyLevel,
+    /// A push that introduces a `.github/workflows/` change: `queue` refuses
+    /// it and queues it for the operator, `allow` lets it through for an
+    /// agent credential with workflow rights (D9, TSK-172 AC-23).
+    pub workflow_pushes: String,
+    /// Claude's unsandboxed retry: `allowlist` permits only an argument
+    /// vector an entry of `sandbox_retry_allow` spells out, `block` refuses
+    /// every retry (TSK-174).
+    pub sandbox_retry: String,
+    /// The argument-bound retry entries (TSK-174). The shipped entry is the
+    /// Codex plugin companion; its qualification fields are filled by
+    /// TSK-174.
+    pub sandbox_retry_allow: Vec<serde_json::Value>,
+}
+
+/// `security.headless_opt_in`: the catalog families (`claude`, `codex`,
+/// `grok`) whose headless runs this project allows, and why (D4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeadlessOptIn {
+    /// Catalog family ids: `claude`, `codex` or `grok`.
+    pub families: Vec<String>,
+    /// Why this project needs headless runs.
+    pub reason: String,
+}
+
+/// The catalog family ids `security.headless_opt_in.families` accepts.
+pub const HEADLESS_FAMILIES: [&str; 3] = ["claude", "codex", "grok"];
+
+/// The shipped retry entry: the Codex plugin companion, argument-bound. The
+/// placeholders are replaced by the values TSK-174 records at qualification;
+/// until then no command can match the entry, since its program path is not
+/// absolute.
+fn default_retry_allow() -> Vec<serde_json::Value> {
+    let flags_review = serde_json::json!(["--wait", "--background", "--json"]);
+    let values_review = serde_json::json!({
+        "--base": "git-ref",
+        "--scope": ["auto", "working-tree", "branch"],
+        "--model": "word"
+    });
+    vec![serde_json::json!({
+        "program": "node",
+        "script": "~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs",
+        "program_options": [],
+        "cwd": "project",
+        "refuse_if_env": ["NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE"],
+        "subcommands": {
+            "review": {"flags": flags_review, "values": values_review, "positionals": 0},
+            "adversarial-review": {
+                "flags": flags_review,
+                "values": values_review,
+                "positionals": "text"
+            },
+            "task": {
+                "flags": ["--background", "--write", "--resume-last", "--resume", "--fresh", "--json"],
+                "values": {
+                    "--model": "word",
+                    "--effort": ["none", "minimal", "low", "medium", "high", "xhigh"]
+                },
+                "positionals": "text"
+            },
+            "status": {
+                "flags": ["--all", "--wait", "--json"],
+                "values": {"--timeout-ms": "integer", "--poll-interval-ms": "integer"},
+                "positionals": "job-id"
+            },
+            "result": {"flags": ["--json"], "values": {}, "positionals": "job-id"},
+            "cancel": {"flags": ["--json"], "values": {}, "positionals": "job-id"}
+        },
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>",
+        "script_digest": {
+            "scripts/codex-companion.mjs": "<sha256 at qualification>",
+            "scripts/lib/*.mjs": "<sha256 per file at qualification>"
+        },
+        "child_executables": {"codex": "<absolute path recorded at qualification>"},
+        "refuse_writable_path_entries": true
+    })]
 }
 
 impl Default for SecuritySection {
     fn default() -> Self {
         Self {
             dangerous_commands: PolicyLevel::Block,
-            privilege_escalation: PolicyLevel::Warn,
+            privilege_escalation: PolicyLevel::Block,
+            headless_peer_runs: PolicyLevel::Block,
+            headless_opt_in: None,
+            script_bypass: PolicyLevel::Warn,
+            outward_actions: PolicyLevel::Block,
+            interpreter_scan: PolicyLevel::Block,
+            secret_reads: PolicyLevel::Block,
+            enforcement_baseline: PolicyLevel::Block,
+            workflow_pushes: "queue".to_string(),
+            sandbox_retry: "allowlist".to_string(),
+            sandbox_retry_allow: default_retry_allow(),
         }
     }
 }
 
-/// How a genuine *human* authorization of an irreversible/security action is
-/// established (ADR-0009). The principle: an agent sharing the host shares any
-/// in-band credential (an env var, a token file, the TTY), so real human-only
-/// authorization needs an OUT-OF-BAND factor on a channel the agent cannot
-/// reach. Today the de-facto out-of-band factor is the remote PR-merge
-/// (server-enforced, agent-unreachable) — which is why remote+CI is the
-/// authoritative boundary and the local env-var override is only a convenience.
-///
-/// This is an inert seam: only `None` exists, the future adapters
-/// (`totp`/`push`/`webauthn`) are deferred. The guards read it as a no-op
-/// check-point so an adapter can slot in without re-threading the call sites.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HumanAuthorization {
-    /// No additional out-of-band factor is required — current behavior. The
-    /// env-var human override stands on its own, contained because the
-    /// authoritative boundary is the remote (ADR-0009).
-    #[default]
-    None,
+/// The `guidance` section of `.codeflow/policy.json`: advisory rule
+/// reminders the session hooks add to the agent's context (TSK-128). They
+/// never block: an active level adds text, an inactive one adds nothing.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GuidanceSection {
+    /// The one-line rule reminder the prompt-submit hook adds when a prompt
+    /// asks for a duration, a status or a complex explanation. Default
+    /// `warn`; `off` or `allow` turns it off. `block` is refused by
+    /// validation and acts as `warn`: a reminder never stops a prompt.
+    pub prompt_reminders: PolicyLevel,
 }
 
-impl HumanAuthorization {
-    /// Whether a claimed human override is honored under this mode. The single
-    /// no-op check-point the future out-of-band adapter replaces: today `None`
-    /// simply passes the in-band env override through unchanged; an adapter
-    /// would additionally require its out-of-band factor here before returning
-    /// `true`. See ADR-0009.
-    #[must_use]
-    pub fn authorizes_override(self, human_override_env: bool) -> bool {
-        match self {
-            Self::None => human_override_env,
+impl Default for GuidanceSection {
+    fn default() -> Self {
+        Self {
+            prompt_reminders: PolicyLevel::Warn,
         }
     }
 }
@@ -418,8 +739,7 @@ pub struct Policy {
     pub schema_version: u32,
     pub git: GitPolicy,
     pub security: SecuritySection,
-    /// Out-of-band human-authorization mode (ADR-0009). Default `none`.
-    pub human_authorization: HumanAuthorization,
+    pub guidance: GuidanceSection,
 }
 
 /// Where [`Policy::load`] sources the effective policy from — for callers that
@@ -537,6 +857,7 @@ impl GitPolicy {
         self.pr_merge_to_protected = PolicyLevel::Off;
         self.local_ref_protection = PolicyLevel::Off;
         self.hook_integrity = PolicyLevel::Off;
+        self.root_checkout_commits = PolicyLevel::Off;
         self.commit_format = PolicyLevel::Off;
         self.commit_body = PolicyLevel::Off;
         // Neutralize the footer/ticket opt-ins so the scaffold commit is never
@@ -550,6 +871,7 @@ impl GitPolicy {
         self.pr_sections = PolicyLevel::Off;
         self.pr_release_impact = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
+        self.conflict_markers = PolicyLevel::Off;
         self.test_gate_on_push = PolicyLevel::Off;
         self.security_review = PolicyLevel::Off;
         self.dep_audit = PolicyLevel::Off;
@@ -618,22 +940,25 @@ mod tests {
         assert!(g.breaking_watch_paths.is_empty());
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
         assert_eq!(g.commit_emoji, PolicyLevel::Block);
-        assert_eq!(g.policy_characters, PolicyLevel::Block);
+        // A writing guideline: it reports, and only a project that opts in
+        // (CodeFlow itself) blocks on it.
+        assert_eq!(g.policy_characters, PolicyLevel::Warn);
         // PR-body structure gate: the doctrine sections ship block-enforced.
         assert_eq!(g.pr_sections, PolicyLevel::Block);
         // The built-in default must not grow: a repository without an explicit
         // list would start blocking on a binary upgrade alone.
         assert_eq!(g.pr_required_sections, vec!["Summary", "Changes"]);
         assert_eq!(g.pr_release_impact, PolicyLevel::Warn);
+        assert_eq!(g.work_records, PolicyLevel::Block);
         assert_eq!(g.pr_breaking_level, "major");
         assert_eq!(g.pr_code_sections, vec!["Testing"]);
         assert_eq!(g.branch_naming, PolicyLevel::Block);
         assert_eq!(g.branch_prefixes.len(), 13);
         assert_eq!(g.secret_scan, PolicyLevel::Block);
-        assert_eq!(g.test_gate_on_push, PolicyLevel::Warn);
+        assert_eq!(g.test_gate_on_push, PolicyLevel::Block);
         // Security / red-team gates bootstrap at `warn` (ADR-0016); they
-        // harden to `block` in a later slice, matching the test_gate_on_push
-        // precedent above.
+        // harden to `block` in a later slice, as test_gate_on_push did once
+        // its push set became fast (TSK-132).
         assert_eq!(g.security_review, PolicyLevel::Warn);
         assert_eq!(g.dep_audit, PolicyLevel::Warn);
     }
@@ -725,18 +1050,32 @@ mod tests {
 
     #[test]
     fn test_security_section_defaults() {
-        // Owner posture (ADR-0008): destructive commands are the hard line,
-        // privilege escalation is advisory (the settings `ask` tier prompts).
+        // ADR-0075: agent sessions refuse instead of prompting, so the
+        // operator's action families default to block (D4, D5).
         let s = SecuritySection::default();
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
-        assert_eq!(s.privilege_escalation, PolicyLevel::Warn);
+        assert_eq!(s.privilege_escalation, PolicyLevel::Block);
+        assert_eq!(s.headless_peer_runs, PolicyLevel::Block);
+        assert!(s.headless_opt_in.is_none());
+        assert_eq!(s.script_bypass, PolicyLevel::Warn);
+        for level in [
+            s.outward_actions,
+            s.interpreter_scan,
+            s.secret_reads,
+            s.enforcement_baseline,
+        ] {
+            assert_eq!(level, PolicyLevel::Block);
+        }
+        assert_eq!(s.workflow_pushes, "queue");
+        assert_eq!(s.sandbox_retry, "allowlist");
+        assert_eq!(s.sandbox_retry_allow.len(), 1);
     }
 
     #[test]
     fn test_policy_default_carries_security_section() {
         let p = Policy::default();
         assert_eq!(p.security.dangerous_commands, PolicyLevel::Block);
-        assert_eq!(p.security.privilege_escalation, PolicyLevel::Warn);
+        assert_eq!(p.security.privilege_escalation, PolicyLevel::Block);
     }
 
     #[test]
@@ -745,21 +1084,27 @@ mod tests {
         // struct-level serde default must fill it with the strict baseline.
         let p: Policy = serde_json::from_str(r#"{"schema_version":1,"git":{}}"#).unwrap();
         assert_eq!(p.security.dangerous_commands, PolicyLevel::Block);
-        assert_eq!(p.security.privilege_escalation, PolicyLevel::Warn);
+        assert_eq!(p.security.privilege_escalation, PolicyLevel::Block);
     }
 
     #[test]
     fn test_shipped_asset_security_matches_defaults() {
         let asset = include_str!("../../../../assets/base/policy.json");
         let from_asset: Policy = serde_json::from_str(asset).unwrap();
-        let defaults = SecuritySection::default();
+        // Every shipped security value is the built-in default, so a project
+        // without the section is judged exactly as a fresh install.
         assert_eq!(
-            from_asset.security.dangerous_commands,
-            defaults.dangerous_commands
+            serde_json::to_value(&from_asset.security).unwrap(),
+            serde_json::to_value(SecuritySection::default()).unwrap()
         );
+        assert_eq!(from_asset.git.discard_uncommitted, PolicyLevel::Block);
         assert_eq!(
-            from_asset.security.privilege_escalation,
-            defaults.privilege_escalation
+            from_asset.git.clean_regenerable,
+            GitPolicy::default().clean_regenerable
+        );
+        assert!(
+            asset.contains("\"headless_peer_runs\": \"block\""),
+            "the shipped policy states the headless peer level"
         );
     }
 
@@ -916,6 +1261,17 @@ mod tests {
     }
 
     #[test]
+    fn test_policy_with_the_removed_human_authorization_key_still_loads() {
+        // TSK-137: the key is gone from the schema; an older file that still
+        // carries it loads (serde ignores it) instead of failing every hook.
+        let p: Policy = serde_json::from_str(
+            r#"{"human_authorization":"none","git":{"commit_format":"warn"}}"#,
+        )
+        .unwrap();
+        assert_eq!(p.git.commit_format, PolicyLevel::Warn);
+    }
+
+    #[test]
     fn test_load_effective_armed_is_strict() {
         let dir = tempfile::tempdir().unwrap();
         let (policy, armed) = Policy::load_effective(dir.path());
@@ -927,7 +1283,7 @@ mod tests {
     /// the given `policy_armed` value.
     fn committed_repo_with_armed(dir: &Path, armed: bool) {
         let run = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
+            let ok = crate::git::command()
                 .args(args)
                 .current_dir(dir)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -975,7 +1331,7 @@ mod tests {
         // repo with an unborn HEAD (no commit yet) and policy_armed=false is
         // graced, so the first scaffold commit is not walled.
         let dir = tempfile::tempdir().unwrap();
-        std::process::Command::new("git")
+        crate::git::command()
             .args(["init", "-b", "main"])
             .current_dir(dir.path())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -1001,21 +1357,15 @@ mod tests {
     }
 
     #[test]
-    fn test_human_authorization_default_none_is_noop() {
-        let p = Policy::default();
-        assert_eq!(p.human_authorization, HumanAuthorization::None);
-        // `none` passes the in-band env override straight through (no-op seam).
-        assert!(HumanAuthorization::None.authorizes_override(true));
-        assert!(!HumanAuthorization::None.authorizes_override(false));
-    }
-
-    #[test]
-    fn test_human_authorization_parses_and_defaults() {
-        let p: Policy = serde_json::from_str(r#"{"human_authorization":"none"}"#).unwrap();
-        assert_eq!(p.human_authorization, HumanAuthorization::None);
-        // Missing key falls back to the default `none`.
-        let p: Policy = serde_json::from_str(r#"{"schema_version":1}"#).unwrap();
-        assert_eq!(p.human_authorization, HumanAuthorization::None);
+    fn test_conflict_markers_default_block_and_suspended_by_grace() {
+        // TSK-170 AC-5.
+        assert_eq!(GitPolicy::default().conflict_markers, PolicyLevel::Block);
+        let mut g = GitPolicy::default();
+        g.suspend_for_bootstrap();
+        assert_eq!(g.conflict_markers, PolicyLevel::Off);
+        let shipped: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../assets/base/policy.json")).unwrap();
+        assert_eq!(shipped["git"]["conflict_markers"], "block");
     }
 
     #[test]

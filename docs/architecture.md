@@ -77,23 +77,27 @@ Core modules grouped by responsibility:
 - **Scaffold** (`scaffold/`): `init`, `update`, manifest, 3-way merge, and the
   ownership classes below; sourced from the rust-embed asset provider.
 - **Enforcement** (`hooks/`, `security/`, `git/`, `delegate.rs`,
-  `integrate.rs`, `remote.rs`): the `git-guard` and `exec-guard` PreToolUse
+  `integrate.rs`, `remote.rs`, `root_checkout.rs`): the `git-guard` and `exec-guard` PreToolUse
   handlers and git-client hook stages, the dual-mode `delegate-turn` adapter
   (legacy `--result` record-and-signal plus the schema-v2 lifecycle backed by
   the transport-neutral `delegate.rs` state machine — ADR-0036), the secret
   scanner, git conflict detection + CI wait, the flock-guarded `integrate`
-  primitive with its gate-context token, and the GitHub remote-protect
-  adapter.
+  primitive with its gate-context token, the GitHub remote-protect
+  adapter, and the root checkout's root branch, the actor read from harness
+  markers, and workspace mode (ADR-0074).
 - **Records / knowledge** (`models/`, `ledger/`, `workgraph/`, `validate/`,
   `capability.rs`, `recall.rs`, `registry.rs`): frontmatter models, the JSONL
   ledger, the work graph, `validate` (+ the `--docs` referential-integrity
   lint, including structural task dependency identity/reference/cycle checks),
   the capability registry parser, FTS5 recall, and the cross-repo registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (15 checks — hooks, claude, codex, grok, config,
+  `error.rs`, `reading.rs`): the doctor check table (19 checks: hooks, claude, codex, grok, config,
   permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity,
   ci-perimeter, managed-drift,
-  customization, test-config), including bidirectional delegate readiness
+  customization, instructions, reading, test-config, id-registry, adopter-fit), with the progressive
+  reading map (`reading.rs`: the per-task reading chain, the conditional reads and their triggers,
+  the orphan check and the size guideline numbers, shared with `artifact_budget_contract`),
+  including bidirectional delegate readiness
   (Codex auth/MCP, Claude plugin/MCP, and tmux prerequisites; live interactive
   canaries remain outside the binary) and a sentinel-based consuming-project
   customization nudge, structured settings merge,
@@ -166,15 +170,38 @@ ADR-0026 from arbitrary Bash while leaving brokered tools and MCP processes
 available. The deterministic shell plane accepts both Bash and PowerShell
 payloads and keeps its catastrophic classifier non-relaxable across Unix/macOS
 roots and Windows drive, system, profile, disk, recovery, and permission
-operations. macOS and Linux use native harness sandboxes; WSL2 follows the
-Linux path. Native Windows Codex selects its elevated sandbox, while native
-Windows Claude has no equivalent OS sandbox and therefore moves
-high-blast-radius work to WSL2 or a container (ADR-0033). Beyond the
+operations. A composed deletion is read as scoped shell: each variable,
+positional parameter and the working directory carry every value they may
+hold through subshells, branches, loops and function calls, and the deletion
+is refused when any of them reaches a protected location. The reader is
+closed-world: its module doc lists the grammar it models, traps and zsh
+hook functions included, and anything else in command position or between
+commands (a sourced file, a name reference, an unmodelled builtin or
+option, zsh-only syntax, a command named by an unknown value) makes the
+state unknown, so a deletion that depends on it is refused as unproven
+(TSK-141).
+macOS and Linux use native harness
+sandboxes; WSL2 follows the Linux path. Native Windows Codex selects its
+elevated sandbox, while native Windows Claude has no equivalent OS sandbox
+and therefore moves high-blast-radius work to WSL2 or a container (ADR-0033). Beyond the
 guards, `session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
 interactive Codex session opens with — and re-orients after a compaction from —
-the same orientation digest Claude gets. PR-content checks (attribution/emoji,
+the same orientation digest Claude gets. The same command is the advisory
+entry for `UserPromptSubmit` too: it reads the payload's event and adds the
+kernel guidance block after a compaction, resume or fork, or one rule line
+to a prompt that asks for a duration, a status or a complex explanation
+(`hooks/guidance.rs`, TSK-128). One command for both events means an older
+binary still exits 0 on a prompt. The guards never pass through it. Grok
+Build ignores these events' output, so it wires only the guards.
+PR-content checks (attribution/emoji,
 `gh pr merge` base) are git-guard/CI concerns by design — git hooks cannot see
 PR creation.
+
+A git-hook shim runs the `codeflow` binary whose command started git: that
+command names itself in `CODEFLOW_HOOK_BINARY` for its git children only, and
+the shim fails when the named binary is missing or not executable. Git run
+outside codeflow uses the `codeflow` on PATH, and the shim is a no-op when there
+is none (SPC-013 R-85).
 
 Delegation has two engine surfaces. The legacy `delegate-turn --result`
 adapter writes immutable `0600` terminal evidence and signals its scoped tmux
@@ -191,7 +218,14 @@ acceptance — serializes on a single bounded run lock; a duplicate or
 digest-mismatched prompt submission is blocked (hook exit 2, run state
 preserved); and every true ambiguity (non-startup session source,
 mis-correlated terminal event, ambiguous retry, interrupt after acceptance)
-fails closed via a durable poison record. The `delegate-roundtrip` doctor
+fails closed via a durable poison record. A Claude Code task notice for work
+the turn backgrounded is admitted as a continuation of that turn when the
+session transcript shows the turn launched the task; its record keeps the
+notice's `prompt_id` and byte digest, and the Stop that closes it writes a
+result only after the transcript proves the prompt was a native task notice
+with those bytes (a typed copy poisons the run). The model may still act on a
+forged notice within that turn; the check keeps it from being recorded as a
+clean result. The `delegate-roundtrip` doctor
 check drives the installed binary through the full synthetic lifecycle at
 Fail severity.
 Rationale, the full invariant set, and the canonical prompt-boundary amendment:
@@ -219,6 +253,25 @@ display-only. Ledger compaction syncs the directory after installing the merged
 base and again after deleting fragments so crash ordering preserves the base.
 Task records carry an `integration_target` and canonical `depends_on`
 metadata; the historical `dependencies` spelling is a read alias.
+Ids come from a shared registry (ADR-0072, SPC-013): the data branch
+`codeflow/registry` on the authority remote holds one file per issued id,
+`ids/<KIND>/<N>.toml`, binding the number to the record's hidden `uid`.
+`epic new`, `spec new` and `task new` fetch the branch without force, take one
+more than the highest id ever added in its history or present on any ref,
+push the new file without force (the host's tip check is the compare-and-swap;
+a moved tip is retried at most five times), then create the record with that
+`uid`. Offline, the reservation is a pending local commit that `ids sync`
+publishes. The `codeflow_core::ids` module owns the protocol, the ledger of
+the registry's history (append-only rule, current and repaired damage, typed
+restore), the record inventory on every ref, seeding with provenance, and the
+read-only judgements: `ids check`, the merge rule that binds every added
+record to its `uid`, and a uniqueness scan over all refs that holds even
+without a registry. Pre-push and git-guard refuse deletion, force and
+non-additive ranges on the registry; the enforcing CI job runs on
+`pull_request_target` (the `codeflow-registry` workflow from the default
+branch) and checks out the pull request's base commit;
+`remote protect` applies the branch's data profile; `doctor` reports damage,
+unplaced ids and host assurance. Claims stay advisory (ADR-0072).
 Documentation validation checks the
 non-executable structural graph for well-formed IDs, filenames, references,
 duplicates, parent/standalone exclusivity, spec readiness, self-edges, and
@@ -241,8 +294,8 @@ copying their status or dependency graph. Its narrow native allocation checker
 has a separate read-only data boundary; it neither runs the method nor schedules
 work. Minimal receives no method files or automatic planning upgrade.
 
-`cf-model-orchestrator` is the stage-aware harness-neutral default for every
-non-trivial repository task in standard/full scaffolds. Claude Code reaches
+`cf-model-orchestrator` is the stage-aware harness-neutral entry for routed
+work in standard/full scaffolds, decided by touched paths as the root map states. Claude Code reaches
 Codex through the official plugin/app-server; Grok reaches Codex through the
 official `codex` CLI and local app-server daemon (Herdr, tmux degraded); Codex
 reaches Claude through Herdr (tmux degraded) plus schema-v2. Primaries default
@@ -418,7 +471,9 @@ resources for retention, and never deletes. The owner check remains explicit:
 even a clean landed resource is removable only after confirming no active task
 owns it.
 
-`assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
+`assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates
+rendered from the `rule-map.toml` kernel by `scaffold::rule_map`, the
+`.codeflow/rules/` references, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the
 engine manages it by three ownership classes (charter §4.3): **fully-managed**
 files (agents, skills, hook shims, CI) refresh by hash and 3-way merge from

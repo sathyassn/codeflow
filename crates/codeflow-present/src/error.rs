@@ -28,6 +28,15 @@ pub enum PresentError {
         removed: Vec<String>,
         failures: Vec<String>,
     },
+    #[error(
+        "the cf-present state directory {path} is missing and could not be created ({source}); \
+         run `codeflow update` once outside the agent sandbox to create it"
+    )]
+    StateRootUnavailable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("I/O error at {path}: {source}")]
     Io {
         path: PathBuf,

@@ -135,6 +135,34 @@ impl GateOutcome {
 /// Returns `TestingError` when a present config file cannot be loaded —
 /// a broken config is a failure, never a silent skip.
 pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingError> {
+    run_gate_resolved(project_dir, mode, true)
+}
+
+/// Run only the targets that define `mode` themselves, with no `quick` to
+/// `essential` alias. The pre-push hook uses this for its push set: a target
+/// is in the push set exactly when it defines a `quick` mode, so a config
+/// whose `essential` mode runs the whole test suite never turns into a slow
+/// blocking push (TSK-132).
+///
+/// # Errors
+///
+/// Returns `TestingError` when a present config file cannot be loaded.
+pub fn run_gate_exact(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingError> {
+    run_gate_resolved(project_dir, mode, false)
+}
+
+fn run_gate_resolved(
+    project_dir: &Path,
+    mode: &str,
+    alias_quick: bool,
+) -> Result<GateOutcome, TestingError> {
+    let resolve = |targets: &[TargetConfig]| {
+        if alias_quick {
+            resolve_mode(mode, targets)
+        } else {
+            mode.to_string()
+        }
+    };
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 
     let (targets, parallel, fail_fast, effective_mode) = if config_path.exists() {
@@ -144,7 +172,7 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
                 reason: format!("{TEST_CONFIG_PATH} defines no targets"),
             });
         }
-        let effective = resolve_mode(mode, &config.targets);
+        let effective = resolve(&config.targets);
         (
             config.targets,
             config.execution.parallel,
@@ -159,7 +187,7 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
             });
         }
         let targets: Vec<TargetConfig> = detected.into_iter().map(|d| d.config).collect();
-        let effective = resolve_mode(mode, &targets);
+        let effective = resolve(&targets);
         (targets, false, false, effective)
     };
 
@@ -235,6 +263,35 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
         passed,
         coverage,
     })
+}
+
+/// Whether a gate run in `mode` would run cargo: an enabled target that
+/// defines the mode (after the `quick` alias) uses the cargo runner or names
+/// `cargo` in its command, or, with no config, a Rust stack is detected. An
+/// unreadable config reads as `false`; [`run_gate`] reports that error itself.
+#[must_use]
+pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
+    let config_path = project_dir.join(TEST_CONFIG_PATH);
+    let targets: Vec<TargetConfig> = if config_path.exists() {
+        match load_test_config(&config_path) {
+            Ok(config) => config.targets,
+            Err(_) => return false,
+        }
+    } else {
+        detect_stacks(project_dir)
+            .into_iter()
+            .map(|d| d.config)
+            .collect()
+    };
+    let effective = resolve_mode(mode, &targets);
+    targets
+        .iter()
+        .filter(|t| t.enabled)
+        .filter_map(|t| t.modes.get(&effective).map(|m| (t, m)))
+        .any(|(t, m)| {
+            matches!(t.runner, crate::testing::config::RunnerType::Cargo)
+                || m.command.split_whitespace().any(|word| word == "cargo")
+        })
 }
 
 /// The gate verdict: every target's tests pass AND, for every coverage report,

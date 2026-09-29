@@ -105,6 +105,41 @@ not silently rewritten by a later work PR. These checks
 cover actual state, not a second release ledger or a mandatory extra approval
 role. The independent reviewer still judges the meaning of the change.
 
+## Keep pending entries checkable
+
+Give each pending entry a stable identity, such as a unique bold label, so a
+checker can tell an addition, an edit and a withdrawal apart. An edit under
+an existing label is assessed at its impact like an addition, whatever the
+PR declares: a checker cannot prove that a change keeps the meaning, so
+compare entries byte for byte, whitespace included, since in code and nested
+Markdown it is meaning. The entry is the whole
+rendered bullet, continuation lines included. Renaming a label withdraws the
+old entry and adds a new one.
+
+Check release state as early as it is cheap, and keep the pull request check
+authoritative:
+
+- Before push, warn when behavior paths change with no entry added or edited
+  and no declared `none`; block only a push that breaks state its base kept
+  valid, so work in progress can still be backed up.
+- On an integration line, check the structure of the release state before
+  each landing and say what was not checked against the host.
+- When the base itself fails its release state, accept only a repair that
+  changes the changelog and coupled version stamps, judged by the base's
+  configuration, keeps every existing entry's words, and leaves each stamp,
+  baseline and recorded hash consistent; refuse other work until it lands.
+  A pull request runs the checker in its own merge tree, so ship this repair
+  path before the state can break: a checker without it cannot pass a repair.
+
+A published section stays byte-identical. Correct it with a dated erratum
+that names the version, never by editing the section. Before the tag, render
+the notes from the final source and read them twice: as a new user and as a
+user upgrading from the last release, in the order they would act.
+
+Release jobs belong to the project, outside any CI file a tool manages for
+its adopters, so an update never installs or removes another project's
+release process.
+
 ## Assess each change
 
 Judge compatibility against the released contract and actual target-relative
@@ -138,9 +173,9 @@ four fields, then the project's own fields (unit, changelog entry, evidence):
 - `Rationale`: the consumer-visible effect and the evidence for the level.
 - `Migration`: always present. It is normally `none` for nonbreaking work.
   When Breaking is yes, give steps or a pointer to a Breaking change section.
-  A nonbreaking PR that refines or reconciles a pending breaking entry, such
-  as a wording-only edit declared `none`, still carries that entry's
-  migration reference.
+  A PR that refines or reconciles a pending breaking entry carries that
+  entry's migration reference; a checker that assesses edits at the entry's
+  impact also requires the break to be declared.
 - A value is chosen, never left as the template's alternatives.
 
 In stable SemVer, as CodeFlow uses it, Breaking is yes if and only if Impact
@@ -174,6 +209,12 @@ together. A moving branch, tag-shaped string, green syntax check, old review or
 ordinary merged PR is not release authorization. Revalidate the exact source
 that will be published using the project's supported merge strategy. Keep
 untrusted PR code/text away from publication credentials and shell interpolation.
+For a multi-platform binary or installer release, keep native Windows and
+WSL2/Linux evidence separate: the native Windows installer must select its
+Windows binary, while WSL2 uses the Linux installer and binary. Cross-build
+success proves compilation and linking only; it never replaces native
+macOS/Linux/Windows tests or installer canaries. Missing platform evidence
+blocks publication rather than becoming an inferred pass.
 
 Stage assets before declaring success. Retry only the same candidate; compare
 existing tag targets and asset hashes, and reject conflicts rather than

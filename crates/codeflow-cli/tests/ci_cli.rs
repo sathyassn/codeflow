@@ -9,6 +9,8 @@
 //! repo (the `policy_cli.rs` pattern), pinning the exit-code and message
 //! contracts a consumer of the binary (no source) relies on.
 
+#[path = "ci_cli/change_class_probes.rs"]
+mod change_class_probes;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
 
@@ -149,7 +151,7 @@ fn ci_blocks_an_invalid_visible_workgraph_on_a_task_branch() {
     std::fs::create_dir_all(&tasks).unwrap();
     std::fs::write(
         tasks.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- [ ] repair verified\n",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
     )
     .unwrap();
     git(dir.path(), &["add", "."]);
@@ -160,7 +162,7 @@ fn ci_blocks_an_invalid_visible_workgraph_on_a_task_branch() {
     std::fs::create_dir_all(&epics).unwrap();
     std::fs::write(
         epics.join("EPC-999.md"),
-        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- [ ] fixed\n",
+        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
     )
     .unwrap();
     std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
@@ -256,7 +258,7 @@ fn ci_recognizes_nested_only_historical_task() {
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(
         nested.join("TSK-001-001.md"),
-        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- [ ] anchored first\n",
+        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- AC-1 anchored first\n",
     )
     .unwrap();
 
@@ -345,6 +347,62 @@ fn ci_docs_only_range_does_not_require_code_sections() {
         Some(0),
         "docs-only range must not require Testing"
     );
+}
+
+/// TSK-135 AC-1: the PR body a range needs is scaled to its change class.
+/// The shipped required list is configured and Release impact is set to
+/// block, so an absent section would fail the run.
+#[test]
+fn ci_scales_the_pr_body_sections_to_the_change_class() {
+    const LIGHT: &str = "## Summary\n\n- reword the guide\n\n## Changes\n\n- one file\n";
+    let blocking = |dir: &Path| {
+        let cf = dir.join(".codeflow");
+        std::fs::create_dir_all(&cf).unwrap();
+        std::fs::write(
+            cf.join("policy.json"),
+            r#"{"schema_version":1,"git":{"pr_release_impact":"block","pr_required_sections":["Summary","Changes","Reviews","Release impact"]}}"#,
+        )
+        .unwrap();
+    };
+    // Markdown under docs/ (a guide) or a plan under docs/plan/, on a
+    // branch cut from the base commit.
+    let light_range = |dir: &Path, path: &str| {
+        repo_with_range(dir, "docs");
+        git(dir, &["reset", "-q", "--hard", "main"]);
+        let file = dir.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "# Notes\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-m", "docs: add notes"]);
+    };
+    // Docs-only and planning-only ranges: Summary and Changes suffice, and
+    // an absent Release impact reads as none.
+    for (class, path) in [
+        ("docs-only", "docs/guide.md"),
+        ("planning-only", "docs/plan/roadmap.md"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        light_range(dir.path(), path);
+        blocking(dir.path());
+        let out = ci_with_body(dir.path(), LIGHT);
+        let all = combined(&out);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{class}: {all}");
+        assert!(!stderr.contains("git.pr_sections"), "{class}: {all}");
+        assert!(!stderr.contains("git.pr_release_impact"), "{class}: {all}");
+    }
+    // A code range is unchanged: every configured section, Testing, and a
+    // Release impact declaration.
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    blocking(dir.path());
+    let out = ci_with_body(dir.path(), LIGHT);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    for section in ["'## Reviews'", "'## Release impact'", "'## Testing'"] {
+        assert!(stderr.contains(section), "{section}: {stderr}");
+    }
+    assert!(stderr.contains("git.pr_release_impact"), "{stderr}");
 }
 
 #[test]
@@ -437,13 +495,25 @@ fn ci_full_body_on_code_range_is_clean() {
 
 // -- policy characters (ADR-0067) --------------------------------------------
 
+/// Set `git.policy_characters` to `block`, the level this repository uses;
+/// the shipped default is `warn`, which never fails a run.
+fn block_policy_characters(dir: &Path) {
+    std::fs::create_dir_all(dir.join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.join(".codeflow/policy.json"),
+        r#"{"schema_version":1,"git":{"policy_characters":"block"}}"#,
+    )
+    .unwrap();
+}
+
 /// A repo whose `main` already carries `docs/old.md` with an em dash on its
-/// second line (grandfathered bytes), then a `feat/x` branch; the caller adds
-/// the branch commit.
+/// second line (grandfathered bytes) and a policy that blocks the character,
+/// then a `feat/x` branch; the caller adds the branch commit.
 fn repo_with_grandfathered_dash(dir: &Path) {
     git(dir, &["init", "-b", "main"]);
     git(dir, &["config", "user.email", "t@example.com"]);
     git(dir, &["config", "user.name", "t"]);
+    block_policy_characters(dir);
     std::fs::create_dir_all(dir.join("docs")).unwrap();
     std::fs::write(
         dir.join("docs/old.md"),
@@ -545,6 +615,7 @@ fn ci_changed_line_keeping_a_policy_character_blocks() {
 fn ci_pr_body_policy_character_blocks() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
+    block_policy_characters(dir.path());
     let body = FULL_BODY.replace("adds a thing", "adds a thing \u{2014} and more");
     let out = ci_with_body(dir.path(), &body);
     assert_eq!(out.status.code(), Some(1));
@@ -689,4 +760,803 @@ fn ci_committed_hash_line_and_merge_message_are_scanned() {
     assert_eq!(code, Some(1), "{all}");
     assert!(all.contains("commit subject contains an em dash"), "{all}");
     assert!(all.contains("1 merge(s)"), "{all}");
+}
+
+// Operator direction 2026-09-25 (ADR-0067 note): the dash rule is a writing
+// guideline. Without a policy file the built-in default warns and passes.
+#[test]
+fn ci_default_level_warns_on_an_added_dash_and_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "docs");
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(
+        dir.path().join("docs/notes.md"),
+        "# Notes\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add notes"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(
+        all.contains("policy rule git.policy_characters (warn)"),
+        "{all}"
+    );
+    assert!(all.contains("warning(s) only"), "{all}");
+    assert!(
+        all.contains("docs/notes.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
+}
+
+// -- managed content is CodeFlow's (ADR-0067 note, 2026-09-25) ----------------
+
+/// Run a git command with the binary under test first on `PATH`, so the
+/// hooks `codeflow init` wires run this build.
+fn git_with_binary(dir: &Path, args: &[&str]) {
+    let exe = Path::new(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A `trunk` commit, then `codeflow init --standard` committed on
+/// `feat/x`, with the scaffolded policy raised to `block` so any finding
+/// would fail the run. The range `trunk..HEAD` is the scaffold pull request.
+fn scaffolded_standard(dir: &Path) {
+    git(dir, &["init", "-b", "trunk"]);
+    git(dir, &["config", "user.email", "t@example.com"]);
+    git(dir, &["config", "user.name", "t"]);
+    std::fs::write(dir.join("README.md"), "# sample\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "chore: init"]);
+    git(dir, &["checkout", "-b", "feat/x"]);
+    let out = run_in(dir, &["init", "--standard", "--yes"]);
+    assert!(
+        out.status.success(),
+        "init: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git_with_binary(dir, &["add", "-A"]);
+    git_with_binary(dir, &["commit", "-q", "-m", "chore: scaffold codeflow"]);
+    let path = dir.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    policy["git"]["policy_characters"] = "block".into();
+    std::fs::write(&path, serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
+}
+
+fn ci_scaffold_range(dir: &Path) -> (Option<i32>, String) {
+    let out = run_in(
+        dir,
+        &[
+            "ci", "--base", "trunk", "--head", "HEAD", "--branch", "feat/x",
+        ],
+    );
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code(), all)
+}
+
+#[test]
+fn ci_scaffold_range_skips_unmodified_managed_files() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffolded_standard(dir.path());
+    // The fixture must really carry a dash, or the skip proves nothing.
+    let skill =
+        std::fs::read_to_string(dir.path().join(".agents/skills/cf-consult/SKILL.md")).unwrap();
+    assert!(skill.contains('\u{2014}'), "fixture lost its em dash");
+    // The managed skills are exactly what this binary ships for those paths,
+    // and the user-owned starter docs carry no policy character, so the
+    // scaffold range is clean even when the policy blocks.
+    let (code, all) = ci_scaffold_range(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+    assert!(all.contains("added-lines"), "{all}");
+}
+
+#[test]
+fn ci_adopter_edited_managed_file_is_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffolded_standard(dir.path());
+    let path = dir.path().join(".agents/skills/cf-consult/SKILL.md");
+    let mut skill = std::fs::read_to_string(&path).unwrap();
+    skill.push_str("\nA local note, added by the adopter.\n");
+    std::fs::write(&path, skill).unwrap();
+    git_with_binary(dir.path(), &["add", "."]);
+    git_with_binary(
+        dir.path(),
+        &["commit", "-m", "docs: note the consult skill"],
+    );
+    let (code, all) = ci_scaffold_range(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains(".agents/skills/cf-consult/SKILL.md:6 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    // The untouched mirror is still CodeFlow's bytes.
+    assert!(!all.contains(".claude/skills/cf-consult/SKILL.md"), "{all}");
+}
+
+#[test]
+fn ci_non_managed_docs_file_in_a_scaffolded_repo_is_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffolded_standard(dir.path());
+    std::fs::write(
+        dir.path().join("docs/notes.md"),
+        "# Notes\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git_with_binary(dir.path(), &["add", "."]);
+    git_with_binary(dir.path(), &["commit", "-m", "docs: add notes"]);
+    let (code, all) = ci_scaffold_range(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("docs/notes.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    assert!(!all.contains("skills/"), "{all}");
+}
+
+/// Codex R1 and Grok D1 on the first cut: the change writes
+/// `.codeflow/manifest.json` itself, so a record in it proves nothing. An
+/// authored page with a dash and a matching forged record, for every
+/// ownership value, is still reported under `block`.
+#[test]
+fn ci_forged_manifest_record_does_not_hide_an_authored_dash() {
+    for ownership in ["managed", "managed-region", "user-owned"] {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_grandfathered_dash(dir.path());
+        let page = "# Notes\n\nA line \u{2014} added.\n";
+        std::fs::write(dir.path().join("docs/notes.md"), page).unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        let digest = codeflow_core::scaffold::sha256_hex(page.as_bytes());
+        let manifest = serde_json::json!({
+            "schema_version": 1,
+            "scaffold_version": "3.0.0",
+            "files": {
+                "docs/notes.md": {
+                    "src": "agents/skills/cf-consult/SKILL.md",
+                    "ownership": ownership,
+                    "sha256": digest,
+                    "exec": false
+                }
+            }
+        });
+        std::fs::write(
+            dir.path().join(".codeflow/manifest.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "docs: add notes"]);
+        let (code, all) = ci_range_output(dir.path());
+        assert_eq!(code, Some(1), "{ownership}: {all}");
+        assert!(
+            all.contains("docs/notes.md:3 adds an em dash (U+2014)"),
+            "{ownership}: {all}"
+        );
+    }
+}
+
+/// The exemption is the shipped asset itself: a real managed skill at its
+/// shipped path passes with no installed-file record at all, while the same
+/// bytes at a path the scaffold does not install are scanned.
+#[test]
+fn ci_shipped_skill_bytes_are_exempt_only_at_their_shipped_path() {
+    let shipped = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/base/agents/skills/cf-consult/SKILL.md"),
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8_lossy(&shipped).contains('\u{2014}'),
+        "fixture lost its em dash"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    let skill = dir.path().join(".agents/skills/cf-consult");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), &shipped).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add the consult skill"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+
+    std::fs::write(dir.path().join("docs/consult.md"), &shipped).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(
+        dir.path(),
+        &["commit", "-m", "docs: copy the consult skill"],
+    );
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("docs/consult.md:6 adds an em dash"), "{all}");
+    assert!(!all.contains(".agents/skills/cf-consult"), "{all}");
+}
+
+/// A task record under `project-management/tasks/`, valid on its own, with
+/// the journey criterion a product-path range needs (TSK-105).
+fn planned_task(id: &str, depends_on: &str) -> String {
+    format!(
+        "---\nid: {id}\nepic_id: null\nstandalone_reason: bounded work\nintegration_target: main\ntitle: work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: [{depends_on}]\ncreated: 2026-07-29\n---\n\n## Description\nWork.\n\n## Acceptance Criteria\n- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the command shall succeed.\n"
+    )
+}
+
+/// TSK-133 AC-2: the planning checks run for every work prefix that
+/// carries a task id, at the `git.work_planning` level, never a hard-coded
+/// block. The target holds the policy and two planned tasks; TSK-001 waits
+/// on the open TSK-002, so its anchored preflight fails on `task/`, `fix/`
+/// and `feat/` alike.
+#[test]
+fn ci_runs_the_planning_checks_on_every_work_prefix_at_the_policy_level() {
+    for level in ["block", "warn"] {
+        for prefix in ["task", "fix", "feat"] {
+            let dir = tempfile::tempdir().unwrap();
+            git(dir.path(), &["init", "-b", "main"]);
+            git(dir.path(), &["config", "user.email", "t@example.com"]);
+            git(dir.path(), &["config", "user.name", "t"]);
+            std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+            std::fs::write(
+                dir.path().join(".codeflow/policy.json"),
+                format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+            )
+            .unwrap();
+            let tasks = dir.path().join("project-management/tasks");
+            std::fs::create_dir_all(&tasks).unwrap();
+            std::fs::write(tasks.join("TSK-001.md"), planned_task("TSK-001", "TSK-002")).unwrap();
+            std::fs::write(tasks.join("TSK-002.md"), planned_task("TSK-002", "")).unwrap();
+            git(dir.path(), &["add", "."]);
+            git(dir.path(), &["commit", "-m", "chore: plan two tasks"]);
+            let branch = format!("{prefix}/TSK-001-early");
+            git(dir.path(), &["switch", "-c", &branch]);
+            std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
+            git(dir.path(), &["add", "."]);
+            git(
+                dir.path(),
+                &["commit", "-m", "feat: start before the dependency"],
+            );
+            let output = run_in(
+                dir.path(),
+                &[
+                    "ci", "--base", "main", "--head", "HEAD", "--branch", &branch,
+                ],
+            );
+            let out = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let shown = format!("work.stable_planning_anchor ({level})");
+            assert!(out.contains(&shown), "{branch} at {level}: {out}");
+            assert!(out.contains("TSK-002"), "{branch} at {level}: {out}");
+            let expected = i32::from(level == "block");
+            assert_eq!(
+                output.status.code(),
+                Some(expected),
+                "{branch} at {level}: {out}"
+            );
+        }
+    }
+}
+
+/// TSK-133 AC-2: a pull request naming its task with `Task:` from a branch
+/// that carries no task id gets the same anchored preflight, at the same
+/// `git.work_planning` level; classification itself still blocks.
+#[test]
+fn ci_reports_a_named_task_anchor_at_the_policy_level() {
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        git(dir.path(), &["config", "user.email", "t@example.com"]);
+        git(dir.path(), &["config", "user.name", "t"]);
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+        )
+        .unwrap();
+        let tasks = dir.path().join("project-management/tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        std::fs::write(tasks.join("TSK-001.md"), planned_task("TSK-001", "TSK-002")).unwrap();
+        std::fs::write(tasks.join("TSK-002.md"), planned_task("TSK-002", "")).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "chore: plan two tasks"]);
+        git(dir.path(), &["switch", "-c", "feat/early-work"]);
+        std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(
+            dir.path(),
+            &["commit", "-m", "feat: start before the dependency"],
+        );
+        let body = format!("Task: TSK-001\n\n{FULL_BODY}");
+        let output = run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/early-work",
+                "--pr-body",
+                &body,
+            ],
+        );
+        let out = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            out.contains("pull request class: tracked TSK-001"),
+            "{level}: {out}"
+        );
+        let shown = format!("work.stable_planning_anchor ({level})");
+        assert!(out.contains(&shown), "{level}: {out}");
+        assert_eq!(
+            output.status.code(),
+            Some(i32::from(level == "block")),
+            "{level}: {out}"
+        );
+    }
+}
+
+/// A repository whose target holds the `work_planning` level, a planned
+/// TSK-001 (waiting on the open TSK-002 when `waits`), and, when `bad_graph`,
+/// an unrelated epic file whose id does not match its name; the branch
+/// `fix/TSK-001-work` adds code. Returns the branch head.
+fn planning_repo(dir: &Path, level: &str, waits: bool, bad_graph: bool) -> String {
+    git(dir, &["init", "-b", "main"]);
+    git(dir, &["config", "user.email", "t@example.com"]);
+    git(dir, &["config", "user.name", "t"]);
+    std::fs::create_dir_all(dir.join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.join(".codeflow/policy.json"),
+        format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+    )
+    .unwrap();
+    let tasks = dir.join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    let dep = if waits { "TSK-002" } else { "" };
+    std::fs::write(tasks.join("TSK-001.md"), planned_task("TSK-001", dep)).unwrap();
+    if waits {
+        std::fs::write(tasks.join("TSK-002.md"), planned_task("TSK-002", "")).unwrap();
+    }
+    if bad_graph {
+        let epics = dir.join("project-management/epics");
+        std::fs::create_dir_all(&epics).unwrap();
+        std::fs::write(
+            epics.join("EPC-999.md"),
+            "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
+        )
+        .unwrap();
+    }
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "chore: anchor planning"]);
+    git(dir, &["switch", "-c", "fix/TSK-001-work"]);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/lib.rs"), "fn work() {}\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "fix: implement work"]);
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn combined(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+/// TSK-133 review R1: tracked work gets the visible-workgraph check once,
+/// at the `git.work_planning` level, whether the task comes from the branch
+/// (`fix/TSK-001-work`) or only from the `Task:` line (`fix/work`), and from
+/// the target checkout as the shipped workflow runs it.
+#[test]
+fn ci_checks_the_visible_graph_once_for_any_tracked_context() {
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        let head = planning_repo(dir.path(), level, false, true);
+        let body = format!("Task: TSK-001\n\n{FULL_BODY}");
+        let run = |branch: &str, head: &str| {
+            run_in(
+                dir.path(),
+                &[
+                    "ci",
+                    "--base",
+                    "main",
+                    "--head",
+                    head,
+                    "--branch",
+                    branch,
+                    "--pr-body",
+                    &body,
+                ],
+            )
+        };
+        let shown = format!("work.valid_graph ({level})");
+        let mut cases = vec![
+            ("own", run("fix/TSK-001-work", "HEAD")),
+            ("named", run("fix/work", "HEAD")),
+        ];
+        git(dir.path(), &["checkout", "-q", "--detach", "main"]);
+        cases.push(("target checkout", run("fix/work", &head)));
+        for (case, output) in cases {
+            let out = combined(&output);
+            assert!(
+                out.contains("pull request class: tracked TSK-001"),
+                "{case} {level}: {out}"
+            );
+            assert_eq!(
+                out.matches("work.valid_graph (").count(),
+                1,
+                "{case} {level}: {out}"
+            );
+            assert!(
+                out.contains(&shown) && out.contains("EPC-999.md"),
+                "{case} {level}: {out}"
+            );
+            assert_eq!(
+                output.status.code(),
+                Some(i32::from(level == "block")),
+                "{case} {level}: {out}"
+            );
+        }
+    }
+}
+
+/// TSK-133 review R2: an unreadable tracking state blocks `work start` and
+/// CI alike, whatever `git.work_planning` says; with the state readable, a
+/// genuine planning finding still only warns at `warn`.
+#[test]
+fn an_unreadable_tracking_state_blocks_work_start_and_ci_at_any_level() {
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        planning_repo(dir.path(), level, true, false);
+        std::fs::write(dir.path().join(".codeflow/project.toml"), "not valid [").unwrap();
+        let start = run_in(dir.path(), &["work", "start", "TSK-001"]);
+        let out = combined(&start);
+        assert_eq!(start.status.code(), Some(1), "{level}: {out}");
+        assert!(
+            out.contains("cannot determine durable-work tracking"),
+            "{level}: {out}"
+        );
+        assert!(!out.contains("continuing"), "{level}: {out}");
+        assert!(!out.contains("not valid ["), "state is not echoed: {out}");
+        let ci = run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--branch",
+                "fix/TSK-001-work",
+            ],
+        );
+        let out = combined(&ci);
+        assert_eq!(ci.status.code(), Some(1), "{level}: {out}");
+        assert!(
+            out.contains("work.tracking_state (block)"),
+            "{level}: {out}"
+        );
+
+        std::fs::remove_file(dir.path().join(".codeflow/project.toml")).unwrap();
+        let start = run_in(dir.path(), &["work", "start", "TSK-001"]);
+        let out = combined(&start);
+        assert_eq!(
+            start.status.code(),
+            Some(i32::from(level == "block")),
+            "{level}: {out}"
+        );
+        assert!(out.contains("TSK-002"), "{level}: {out}");
+    }
+}
+
+// -- watched contract paths (TSK-147 AC-4) -----------------------------------
+
+/// A code range whose commit touches `thing.rs`, which the policy watches as a
+/// contract surface.
+fn repo_touching_a_watched_path(dir: &Path) {
+    repo_with_range(dir, "code");
+    std::fs::create_dir_all(dir.join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.join(".codeflow/policy.json"),
+        r#"{"git": {"breaking_watch_paths": ["thing.rs"]}}"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_body_declaring_no_break_with_a_rationale_settles_a_watched_path() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let out = ci_with_body(dir.path(), FULL_BODY);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(!text.contains("contract surface"), "{text}");
+    assert!(!text.contains("git.breaking_watch_paths"), "{text}");
+}
+
+#[test]
+fn a_bodyless_run_notes_a_watched_path_and_points_at_release_impact() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let out = ci_range(dir.path());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(
+        text.contains("codeflow ci: note: commit touches a declared contract surface (thing.rs)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("`Breaking: no` with a `Rationale` under Release impact"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("warning — policy rule git.breaking_watch_paths"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_quoted_example_of_the_fields_keeps_the_watched_path_warning() {
+    // TSK-147 F4: fields quoted from another pull request are an example,
+    // not this change's assessment.
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let fields = "- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n";
+    let quoted = fields.replace("- ", "> - ");
+    let body = FULL_BODY.replace(
+        fields,
+        &format!("Not assessed yet; an example from another pull request:\n\n{quoted}\n"),
+    );
+    assert_ne!(body, FULL_BODY);
+    let out = ci_with_body(dir.path(), &body);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("warning — policy rule git.breaking_watch_paths (warn)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_body_without_the_declaration_keeps_the_watched_path_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let body = FULL_BODY.replace("- Rationale: Preserve public behavior.\n", "");
+    let out = ci_with_body(dir.path(), &body);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("warning — policy rule git.breaking_watch_paths (warn)"),
+        "{text}"
+    );
+}
+
+// -- conflict markers (TSK-170) ------------------------------------------------
+
+/// A marker line built at run time, so this file holds none itself.
+fn marker(fill: char, size: usize, label: &str) -> String {
+    format!("{}{label}", fill.to_string().repeat(size))
+}
+
+fn output_text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// TSK-170 AC-4: `codeflow ci` judges the lines a range adds to every text
+/// path with the hook's matcher, level, messages and attribute rule, and
+/// names the check it ran. One finding per case of AC-1 and AC-3.
+#[test]
+fn ci_refuses_conflict_markers_one_finding_per_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    repo_with_range(root, "code");
+    // A clean range names the check among those that passed.
+    let clean = ci_range(root);
+    let text = output_text(&clean);
+    assert_eq!(clean.status.code(), Some(0), "{text}");
+    assert!(text.contains("conflict-markers"), "{text}");
+    let cases = [
+        ("opening.txt", marker('<', 7, " HEAD")),
+        ("opening-bare.txt", marker('<', 7, "")),
+        ("closing.txt", marker('>', 7, " feat/y")),
+        ("closing-bare.txt", marker('>', 7, "")),
+        ("base.txt.d", marker('|', 7, " merged common ancestors")),
+        ("base-bare.txt.d", marker('|', 7, "")),
+        ("fixtures/sized.txt", marker('<', 32, " HEAD")),
+    ];
+    for (path, line) in &cases {
+        let full = root.join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, format!("before\n{line}\nafter\n")).unwrap();
+    }
+    // A separator between an opening and a closing marker.
+    std::fs::write(
+        root.join("separator.md"),
+        format!("text\n{}\n", marker('=', 7, "")),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pair.md"),
+        format!(
+            "{}\nours\n{}\ntheirs\n{}\n",
+            marker('<', 7, " a"),
+            marker('=', 7, ""),
+            marker('>', 7, " b")
+        ),
+    )
+    .unwrap();
+    // Seven-character markers under a path whose attribute sets 32.
+    std::fs::write(
+        root.join("fixtures/seven.txt"),
+        format!("{}\nx\n{}\n", marker('<', 7, " a"), marker('>', 7, " b")),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".gitattributes"),
+        "fixtures/** conflict-marker-size=32\n",
+    )
+    .unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "feat: add the fixtures"]);
+
+    let out = ci_range(root);
+    let all = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "{all}");
+    for (path, _) in &cases {
+        assert_eq!(
+            all.matches(&format!("{path}:2 adds an unresolved")).count(),
+            1,
+            "{path}: {all}"
+        );
+    }
+    // The setext underline alone is text; the pair's three lines are found.
+    assert!(!all.contains("separator.md"), "{all}");
+    assert!(
+        all.contains("pair.md:1 adds an unresolved opening"),
+        "{all}"
+    );
+    assert!(
+        all.contains("pair.md:3 adds an unresolved separator"),
+        "{all}"
+    );
+    assert!(
+        all.contains("pair.md:5 adds an unresolved closing"),
+        "{all}"
+    );
+    assert!(!all.contains("fixtures/seven.txt"), "{all}");
+    assert_eq!(
+        all.matches("policy rule git.conflict_markers (block)")
+            .count(),
+        cases.len() + 3,
+        "{all}"
+    );
+    assert!(
+        all.contains(
+            "resolve the conflict and restage, or set conflict-marker-size for the path in .gitattributes"
+        ),
+        "{all}"
+    );
+
+    // At warn the same findings warn and the run passes; at off it is silent.
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    for (level, code) in [("warn", 0), ("off", 0)] {
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            format!(r#"{{"schema_version":1,"git":{{"conflict_markers":"{level}"}}}}"#),
+        )
+        .unwrap();
+        let out = ci_range(root);
+        let all = output_text(&out);
+        assert_eq!(out.status.code(), Some(code), "{level}: {all}");
+        let expected = if level == "warn" { cases.len() + 3 } else { 0 };
+        assert_eq!(
+            all.matches("policy rule git.conflict_markers (warn)")
+                .count(),
+            expected,
+            "{level}: {all}"
+        );
+    }
+}
+
+/// TSK-170 review P3: a git without `check-attr --source` (older than 2.40)
+/// leaves the check incomplete, and the remedy is to upgrade Git, not to
+/// fetch. The old git is simulated by a wrapper that refuses only that
+/// option; every other call reaches the real git.
+#[cfg(unix)]
+#[test]
+fn ci_names_a_git_upgrade_when_check_attr_has_no_source() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    repo_with_range(&root, "code");
+    let real = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
+    let wrapper = dir.path().join("old-git");
+    std::fs::create_dir(&wrapper).unwrap();
+    std::fs::write(
+        wrapper.join("git"),
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in --source=*) echo \"error: unknown option \\`source'\" >&2; exit 129;; esac\ndone\nexec {real} \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(wrapper.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(wrapper.clone()).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )),
+    )
+    .unwrap();
+    let out = codeflow()
+        .args([
+            "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+        ])
+        .current_dir(&root)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let all = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "{all}");
+    let at = all
+        .find("conflict-marker check incomplete")
+        .unwrap_or_else(|| panic!("{all}"));
+    let finding = &all[at..all[at..]
+        .find("policy file:")
+        .map_or(all.len(), |end| at + end)];
+    assert!(finding.contains("unknown option"), "{finding}");
+    assert!(
+        finding.contains("Git release build of 2.40 or later"),
+        "{finding}"
+    );
+    assert!(!finding.contains("fetch the whole range"), "{finding}");
 }

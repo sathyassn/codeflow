@@ -6,45 +6,52 @@ loop. Every claim here reflects current behavior; nothing aspirational.
 
 ## Install the binary
 
-`codeflow` is a single binary. The latest verified published release is
-v2.1.0. Its assets are `.tar.xz` archives with `.sha256` files for
-`aarch64-apple-darwin`, `x86_64-apple-darwin`, and `x86_64-unknown-linux-gnu`,
-a `sha256.sum`, the shell installer, and a source archive. It has no Windows
-archive and no PowerShell installer. The workspace on `main` is the pending
-3.0.0 source; its distribution targets add `x86_64-pc-windows-msvc` and a
-PowerShell installer, but no 3.0.0 assets exist until a release is published.
-
-The anonymous installer one-liner works once codeflow's releases are public;
-while the repo is private, use the `gh release download` path or the checkout
-build below (both authenticate as a collaborator):
+`codeflow` is a single binary. From 3.0.0 on, each release publishes
+`.tar.xz` archives for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
+`x86_64-unknown-linux-gnu`, a `.zip` archive for `x86_64-pc-windows-msvc`, a
+`.sha256` file for each archive, a `sha256.sum`, a shell installer, a
+PowerShell installer and a source archive. Install the latest release on macOS
+or Linux:
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
 ```
 
-Or build the pending 3.0.0 source from a checkout, with a Rust toolchain:
+On native Windows, in PowerShell (Git for Windows is required):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex"
+```
+
+Or build from a checkout, with a Rust toolchain:
 
 ```sh
 cargo install --path crates/codeflow-cli
 ```
 
-To install one published platform archive directly (to pin a version or script
-the install), use `gh`. This example pins the published legacy v2.1.0 release;
-substitute `x86_64-apple-darwin` or `x86_64-unknown-linux-gnu` for the other
-published archives. Each archive unpacks to a directory of the same name
-containing the `codeflow` binary:
+To pin a version or script the install, download one platform archive and
+check it against its `.sha256` file. Substitute the version you pin and your
+platform's target (the Windows archive is a `.zip`). Releases before 3.0.0
+publish fewer assets, so check a release's asset list before pinning it. Each
+archive unpacks to a directory of the same name containing the `codeflow`
+binary. The commands run in a subshell that stops at the first failure, so
+nothing is extracted or installed unless the download and the checksum pass;
+`D` must be a directory on your `PATH`:
 
 ```sh
-A=codeflow-cli-aarch64-apple-darwin
-gh release download v2.1.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
-tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
-install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
+V=v3.0.0 A=codeflow-cli-aarch64-apple-darwin D="$HOME/.cargo/bin"
+B=https://github.com/sathyassn/codeflow/releases/download/$V
+(
+  set -e
+  mkdir -p /tmp/cf && cd /tmp/cf
+  curl -fsSLO "$B/$A.tar.xz"
+  curl -fsSLO "$B/$A.tar.xz.sha256"
+  shasum -a 256 -c "$A.tar.xz.sha256"
+  tar -xf "$A.tar.xz"
+  mkdir -p "$D"
+  install "$A/codeflow" "$D/"
+)
 ```
-
-That v2.1.0 binary predates parts of this guide: the commands and workflows
-documented here describe the pending 3.0.0 source, and some of them are not
-available in the published release. To follow the current guide, build the
-pending source checkout above.
 
 Upgrading the binary improves every repo at once, because hooks call `codeflow`
 from `PATH` (see "The update story").
@@ -73,6 +80,15 @@ resolved automatically.
 Unrelated files occupying a parsed CodeFlow record home can still make an
 explicit `validate --docs` report a collision even when automatic durable-work
 tracking is inactive; resolve the conflict rather than claiming graph validity.
+
+The root checkout stays on its root branch and takes no task work, which
+happens in linked worktrees under `.worktrees/`. The root branch is the
+default branch unless `git.root_branch` in `.codeflow/policy.json` names
+another; `git.root_checkout_commits` sets how a commit there on another
+branch is judged, and `git.worktree_locations` lists where linked worktrees
+may live. An umbrella repository that holds several projects, each its own
+repository, uses workspace mode instead: see
+[workspace-mode.md](workspace-mode.md) and `codeflow init --workspace`.
 
 ## What each tier installs
 
@@ -203,6 +219,94 @@ When you add the standard/full method, run `/cf-customize` before treating the
 generated product, architecture, commands, or tool posture as project truth;
 `codeflow doctor` keeps a reminder visible while scaffold sentinels remain.
 
+### Bots, kept PR templates and release tools
+
+`init` reports what it finds that CodeFlow's checks would otherwise break.
+None of it changes a policy level.
+
+**Dependency and release bots.** Dependabot, Renovate and release actions
+open pull requests whose branch names and commit messages fail CodeFlow's
+rules. Add a trusted profile per bot to `git.automation_profiles` in
+`.codeflow/policy.json`:
+
+```json
+"automation_profiles": [
+  {
+    "name": "dependabot",
+    "actors": ["dependabot[bot]"],
+    "branch_pattern": "dependabot/**",
+    "sections": {
+      "Summary": "Automated dependency update opened by Dependabot.",
+      "Changes": "- the dependency bump named in the title",
+      "Testing": "The full CI suite runs on this pull request.",
+      "Reviews": "None: automated update, reviewed at merge.",
+      "Release impact": "- Impact: patch\n- Breaking: no\n- Rationale: dependency update.\n- Migration: none"
+    }
+  }
+]
+```
+
+A profile applies in `codeflow ci` only when the actor the workflow passes
+(`--actor`) and the branch both match, and only as the target branch's policy
+states it, so a pull request cannot add a profile for itself. It skips branch
+naming and the commit message shape rules. Tests, the secret scan, AI
+attribution, emoji, the dash rule and the release declaration still run, and
+PR sections are still checked at their configured level: `sections` only
+supplies the headings the bot body leaves out. The actor is trusted only in a
+GitHub Actions pull request event from the same repository, and only as that
+event's own actor. In a local run, in another CI and on a fork pull request
+the actor is `unknown`, whatever `--actor` says, and no profile applies.
+
+**A PR template you already have.** `init` keeps it and installs no second
+template; `update` never merges into it or writes a `.new` beside it. When its
+headings differ from `git.pr_required_sections`, the run records
+`git.pr_section_mapping` as `diagnosed` with a proposed mapping (for example
+`Summary -> Description`) and asks you to decide:
+
+| Decision | What happens |
+|---|---|
+| accepted | the check reads your template's headings in place of the mapped ones |
+| refused | the missing required headings are appended to your template |
+| custom | you set `git.pr_required_sections` and `git.pr_code_sections` yourself in a reviewed change |
+
+Whatever the decision, a pull request that changes only Markdown under
+`docs/` or `project-management/`, outside your product and watched contract
+paths and the other shared contract surfaces, needs just Summary and Changes
+of your required list, under the template's headings when the mapping is
+accepted, and may leave out Release impact.
+
+A run without a terminal (`--yes`, CI) leaves the state `diagnosed`, and
+`codeflow doctor` repeats it. While it is diagnosed the PR-section check runs
+at `warn` only on a fresh install whose policy file `init` created; a
+`pr_sections` value already in your policy file stays in force, even when it
+equals the default. `codeflow ci` prints each check's effective level and
+where it comes from (`configured`, `shipped default` or `diagnosed`). These
+policy edits, and the keys `codeflow update` adds, are spliced into the file
+as you wrote it, so no other byte changes; a policy with no `git` object
+gains one. A template reached through a symlink out of the repository is
+never read or written.
+
+**Release tools.** `release.backend` in `.codeflow/project.toml` names who owns
+the version of each release unit:
+
+| Value | Meaning |
+|---|---|
+| `none` (default at every tier) | CodeFlow checks only the PR's Release impact declaration (`git.pr_release_impact`, warn by default); it calculates no version |
+| `external` | another tool owns versions (release-please, Changesets, semantic-release, cargo-release, GoReleaser); CodeFlow checks the declaration and `breaking_watch_paths` only |
+| `codeflow` | you adopted CodeFlow's release calculator explicitly |
+
+Keep one version authority per release unit: `init`, `codeflow ci` and
+`doctor` say so when a release tool's configuration sits beside `none` or
+`codeflow`. Keeping the PR template is not consent to a calculator. The
+calculator CodeFlow ships, `scripts/release.py`, serves CodeFlow's own
+repository: one Rust workspace versioned from `Cargo.toml`, with its
+`CHANGELOG.md` in Keep a Changelog form. Other projects use `none` or
+`external`.
+
+**Minimal tier.** The minimal tier installs no release process. Declare each
+PR's Release impact in its body; if you publish releases, let your own tool
+own the version and set `backend = "external"`.
+
 ## Ownership model — who owns what on update
 
 | Class | Examples | What `update` does |
@@ -249,6 +353,88 @@ Keep the order: upgrade the `codeflow` on `PATH` before `codeflow update`. The
 hooks run that binary, and one older than a new key rejects the policy file,
 which blocks every commit until the binary is upgraded (for example
 `git.policy_characters`, ADR-0067).
+
+CI pins its binary too. The scaffolded workflows install the release named by
+`scaffold_version` in the target branch's `.codeflow/project.toml` and verify it
+against that release's `sha256.sum`; a missing or wrong checksum fails the job
+and nothing unverified is installed. The commit and PR-body standards run in
+`codeflow-policy.yml` on `pull_request_target`. GitHub runs that workflow from
+the default branch, so a pull request cannot edit the job that judges it, and
+the job checks out the pull request's base commit, so a pull request into an
+integration branch is judged by that branch's pin and policy, not the default
+branch's. An upgrade therefore takes two pull requests, in order:
+
+1. Install the new binary locally, then land a pull request that raises only
+   `scaffold_version`. The target's current binary judges it, and the
+   `candidate codeflow` job tests the new one.
+2. On a new branch, run `codeflow update` and land its new keys and files; the
+   new binary judges them.
+
+A pull request that adds policy keys before step 1 has landed fails with a
+message naming this order: the enforcing job reads the head's policy as data
+and fails when the pinned binary cannot read it. A pull request that lowers
+the pin is still judged by the target's binary. `codeflow doctor` reports
+which state a checkout is in: the version CI installs, a raise alone (step
+1), a lowered pin, or new policy keys or schema carried before the raise has
+landed, with this order. The git hook shims check the binary first and warn
+when it is older than they are, then run the checks it has.
+
+The other CI templates carry the same pin. `.gitlab-ci.yml`,
+`bitbucket-pipelines.yml` and `ci-generic.sh` (in `assets/base/ci/` of the
+CodeFlow repository; copy the one your host needs) run one shared script: it
+reads the pin from the target branch's current commit, installs that
+release with the same checksum verification, and runs `codeflow ci` from a
+checkout of that commit, so the target's policy judges the change. On GitLab
+the target is `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` in a merged results
+pipeline; an ordinary merge request pipeline leaves that empty, so the job
+fetches `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` from the merge request's
+project and fails when it cannot. It never uses
+`CI_MERGE_REQUEST_DIFF_BASE_SHA`, the diff's base, which stays behind when
+the target advances. Bitbucket uses `BITBUCKET_PR_DESTINATION_COMMIT`;
+Atlassian does not list that variable, so when it is unset the step fetches
+`BITBUCKET_PR_DESTINATION_BRANCH` from `origin` and fails when it cannot.
+Bitbucket merges the destination branch into the working tree before the
+step, so `codeflow test` and `validate --docs` run on that merge while
+`codeflow ci` judges `BITBUCKET_COMMIT` against the target. `ci-generic.sh`
+takes the target commit as its first argument and refuses to
+run without it. A raised pin's release is installed separately and only
+tested; a lowered pin is judged by the target's binary and then fails the
+job. A branch that started before the target raised its pin, and kept the
+pin it started from, lowers nothing and is judged by the new binary.
+
+The pin does not defend the CI file itself. On a GitHub `pull_request` event,
+and on every GitLab and Bitbucket pipeline, the job file runs from the pull
+request, so a pull request that edits it can change its own install step.
+Only `codeflow-policy.yml` and `codeflow-registry.yml` run from the default
+branch. Require review of your CI files (`.github/workflows/`,
+`.gitlab-ci.yml`, `bitbucket-pipelines.yml`) and `.codeflow/` in your host's
+rules, for example with a code owners file and a branch rule that requires
+code owner review; CodeFlow does not configure those settings.
+
+Work records follow the same order. `codeflow update` adds
+`git.work_records` (`block` or `warn`; an `off` from an unreleased build is
+rewritten to `warn` with a notice) and, in a project that already has epic,
+spec or task records, records `work_records_baseline` in
+`.codeflow/project.toml` once, as the current commit. Records whose bytes are
+unchanged since that commit keep the rules they were written under; a status
+change, a criteria change or a new record follows the status verbs' rules.
+A task completed before that commit, with no acceptance block, reopens with
+`codeflow task status <id> todo --reason <text>`, which keeps its Closeout and
+adds the line `- reopened: <text>`.
+
+`codeflow update` also adds `git.work_planning` (`block` or `warn`, default
+`block`), the level at which `work start` and `codeflow ci` report the
+planning checks: a valid workgraph, a record for the task the branch
+carries, and that record anchored on its target. Pre-commit does not run
+them. A value the project set is kept.
+
+`codeflow update` also adds `git.conflict_markers` (default `block`) and
+reports the added key. The pre-commit hook and `codeflow ci` then refuse an
+unresolved conflict marker on a line a change adds to a text file; existing
+lines are not judged. A file that must hold markers, such as a test fixture
+or a page about git, sets `conflict-marker-size` for its path in
+`.gitattributes` to a length its markers do not have. A team that wants a
+softer start sets the key to `warn` or `off` in a reviewed policy change.
 
 ## Optional repository guide portal
 
@@ -327,18 +513,17 @@ pages once and serves them through Astro's dev server for authoring; it reads
 the same committed snapshot. `npm run browser:verify` runs the isolated
 headless journey matrix when Playwright browsers are installed.
 
-The home page names the exact repository commit the guide was built from and
-no release version. That is deliberate: the workspace source identifies as
-3.0.0, which is pending and unpublished, while `v2.1.0` remains the latest
-verified published release (see the
-[historical bridge into v3](releasing.md#historical-bridge-into-v3)). A
-`release_version` value renders as a release label, so it stays `null` until a
-verified published release exists for the built commit.
+The home page names the exact repository commit the guide was built from. A
+`release_version` value renders as a release label, so it stays `null` unless
+a verified published release exists for the built commit.
 
-Node roles differ by lane, and neither pin changes here: the aggregate CI gate
-runs on Node 26.4.0, and its full strict target installs, checks, builds, and
-validates this portal; the portal-local `.node-version` and the Windows
-adapter-test lane use 24.18.0; the starter itself accepts 22.19.0 or newer.
+Each Node target runs on the version its own version file pins, locally and
+in CI: the portal's full strict target installs, checks, builds, and validates
+this portal on the 24.18.0 in `docs-portal/.node-version`, as the Windows
+adapter-test lane does, and the presentation renderer's target runs on the
+26.4.0 in `crates/codeflow-present/web/.node-version`. `scripts/with-node.py`
+selects each version for its target, and `gate-parity` holds the CI pins to
+those files. The starter itself accepts 22.19.0 or newer.
 
 ## Optional interactive review documents
 
@@ -668,7 +853,7 @@ permissions. Local checks are required feedback, but remain editable.
 | Push / force-push / delete to protected | pre-push | git-guard | — | yes |
 | `gh pr merge` into a protected base | — (hooks can't see a PR) | git-guard | — | yes |
 | Destructive command (`rm -rf /`, `mkfs`, fork bomb) | — | exec-guard (block) | — | — |
-| Privilege escalation (`sudo`, `LD_PRELOAD`) | — | exec-guard (warn) | — | — |
+| Privilege escalation (`sudo`, `LD_PRELOAD`) | no | preset deny rules, exec-guard (block) | no | no |
 | Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | — |
 | Override-token laundering, `--no-verify` bypass | — | git-guard (structural) | — | — |
 
@@ -728,7 +913,7 @@ both sides; the release checklist
 
 ## Delegation quickstart
 
-Standard/full projects use the duo for non-trivial work; standalone consults
+Standard/full projects use the duo for routed work; standalone consults
 are available when an outside opinion is useful. Minimal does not install the
 method. Transport remains interactive-only, with preferred lanes and qualified
 native fallback (ADR-0059). One-time setup: authenticate Codex manually, enable

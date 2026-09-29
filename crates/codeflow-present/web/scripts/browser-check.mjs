@@ -8,6 +8,7 @@ import { checkSelectionOccurrences } from "./selection-browser-check.mjs";
 import { checkDocumentExcerpts } from "./excerpt-browser-check.mjs";
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
+import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const assetsRoot = resolve(webRoot, "../assets");
@@ -21,6 +22,8 @@ const exportFallback = await readFile(join(webRoot, "src/export-fallback.css"), 
 const projectUtilityCss = ":root[data-cf-theme]{--cf-reading-measure:68ch;}";
 const applicationCsp = `default-src 'none'; script-src 'self' '${manifest.service.inline["present.prepaint"].csp_sha256}'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; font-src data:; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 const reviewPosts = [];
+// Each fixture review gets its own event id, so a wait can name its response.
+let reviewEvents = 0;
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -80,8 +83,9 @@ const server = createServer(async (request, response) => {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
       reviewPosts.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      reviewEvents += 1;
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end('{"event_id":"evt-browser-check","state":"received"}');
+      response.end(JSON.stringify({ event_id: `evt-browser-check-${reviewEvents}`, state: "received" }));
       return;
     }
     response.writeHead(404, { "Content-Type": "text/plain" });
@@ -110,7 +114,7 @@ try {
   await checkIframeComments(browser, origin);
   await checkInteractiveSurface(browser, origin, reviewPosts);
   await checkStaticExportModes(browser, origin);
-  process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, diagrams, axe, and 320 px reflow\n");
+  process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, an html stage with no diagram hook, zero CSP violations, axe, and 320 px reflow\n");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
@@ -148,6 +152,7 @@ async function checkStaticExportModes(browser, origin) {
 async function checkProseLazyPath(browser, origin) {
   const context = await browser.newContext({ colorScheme: "dark" });
   const page = await context.newPage();
+  await recordPolicyViolations(page);
   const requests = [];
   page.on("request", (request) => requests.push(new URL(request.url())));
   await page.goto(`${origin}/app?case=prose`, { waitUntil: "networkidle" });
@@ -158,14 +163,15 @@ async function checkProseLazyPath(browser, origin) {
     manifest.service.assets
       .find((asset) => asset.request_path === appPath)
       // The small offline font module is intentionally available on prose
-      // pages; heavyweight syntax/diagram renderers must remain lazy.
+      // pages; the syntax renderer must remain lazy.
       .imports.filter((item) => item.kind === "dynamic-import" && !/\/chunk-fonts-[^/]+\.js$/u.test(item.request_path))
       .map((item) => item.request_path),
   );
   if (requests.some((request) => dynamicPaths.has(request.pathname))) {
-    throw new Error("A prose-only page requested a syntax or Mermaid entry path");
+    throw new Error("A prose-only page requested a syntax entry path");
   }
   assertLoopbackOnly(requests);
+  await assertNoPolicyViolations(page, "prose page");
   await context.close();
 }
 
@@ -179,22 +185,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       consoleErrors.push(message.text());
     }
   });
-  await page.addInitScript(() => {
-    globalThis.__cfPolicyViolations = [];
-    globalThis.__cfLongTasks = [];
-    document.addEventListener("securitypolicyviolation", (event) => {
-      globalThis.__cfPolicyViolations.push({
-        directive: event.effectiveDirective,
-        blocked: event.blockedURI,
-        sample: event.sample,
-      });
-    });
-    if ("PerformanceObserver" in globalThis) {
-      new PerformanceObserver((entries) => {
-        globalThis.__cfLongTasks.push(...entries.getEntries().map((entry) => entry.duration));
-      }).observe({ type: "longtask", buffered: true });
-    }
-  });
+  await recordPolicyViolations(page);
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
   await assertBundledFonts(page);
@@ -207,49 +198,16 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   const code = page.locator("code[data-cf-language='rust']");
   await code.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready");
-  const diagram = page.locator("[data-cf-diagram-title='Request flow']");
-  await diagram.scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector("[data-cf-diagram]")?.getAttribute("data-cf-diagram") !== "pending");
-  if (await diagram.getAttribute("data-cf-diagram") !== "ready") {
-    throw new Error(`Diagram did not render: ${await diagram.locator("[data-cf-diagram-status]").textContent()}`);
+  const stage = page.locator("[data-cf-block-id='block-flow'] figure[role='img'] svg");
+  await stage.scrollIntoViewIfNeeded();
+  const stageLabels = await stage.evaluate((svg) => [...svg.querySelectorAll("text")]
+    .filter((label) => label.getBoundingClientRect().width > 0)
+    .map((label) => label.textContent?.trim() ?? ""));
+  if (!stageLabels.includes("Input") || !stageLabels.includes("Review")) {
+    throw new Error(`The html stage lost its visible labels: ${JSON.stringify(stageLabels)}`);
   }
-  const diagramSvg = diagram.locator("svg[role='img']");
-  await diagramSvg.waitFor();
-  const diagramEvidence = await diagramSvg.evaluate((svg) => ({
-    text: svg.textContent?.replace(/\s+/gu, " ").trim() ?? "",
-    foreignObjects: svg.querySelectorAll("foreignObject").length,
-    scripts: svg.querySelectorAll("script").length,
-    externalLinks: [...svg.querySelectorAll("a")].filter((link) => {
-      const href = link.getAttribute("href") ?? link.getAttribute("xlink:href") ?? "";
-      return /^(?:https?:)?\/\//iu.test(href);
-    }).length,
-    visibleLabels: [...svg.querySelectorAll("text")].filter((label) => {
-      const box = label.getBoundingClientRect();
-      const style = getComputedStyle(label);
-      return box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-    }).map((label) => label.textContent?.trim() ?? ""),
-  }));
-  if (!diagramEvidence.text.includes("Input") || !diagramEvidence.text.includes("Review")) {
-    throw new Error(`Diagram lost its semantic labels during rendering: ${JSON.stringify(diagramEvidence)}`);
-  }
-  if (!diagramEvidence.visibleLabels.includes("Input") || !diagramEvidence.visibleLabels.includes("Review")) {
-    throw new Error(`Diagram labels are present but not visibly rendered: ${JSON.stringify(diagramEvidence)}`);
-  }
-  if (diagramEvidence.foreignObjects || diagramEvidence.scripts || diagramEvidence.externalLinks) {
-    throw new Error(`Diagram hardening left an unsafe node: ${JSON.stringify(diagramEvidence)}`);
-  }
-  const denseDiagram = page.locator("[data-cf-diagram-title='Dense flow']");
-  const denseStarted = Date.now();
-  await denseDiagram.scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector("[data-cf-diagram-title='Dense flow']")?.getAttribute("data-cf-diagram") !== "pending", null, { timeout: 15_000 });
-  if (await denseDiagram.getAttribute("data-cf-diagram") !== "ready") {
-    throw new Error(`Dense diagram did not render: ${await denseDiagram.locator("[data-cf-diagram-status]").textContent()}`);
-  }
-  const denseMetrics = await page.evaluate(() => ({
-    longestTask: Math.max(0, ...globalThis.__cfLongTasks),
-  }));
-  if (Date.now() - denseStarted > 10_000 || denseMetrics.longestTask > 5_000) {
-    throw new Error(`Dense diagram exceeded the responsiveness envelope: ${JSON.stringify(denseMetrics)}`);
+  if (await page.locator("[data-cf-diagram], [data-cf-diagram-source]").count()) {
+    throw new Error("The review surface still carries a diagram hook");
   }
   await page.frameLocator("iframe[title='Sandbox fixture']").getByText("Static sandbox content").waitFor();
   const attackFrame = page.frameLocator("iframe[title='Attack sandbox']");
@@ -266,7 +224,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       .map((element) => ({ tag: element.tagName, id: element.id, className: element.className, right: element.getBoundingClientRect().right, width: element.scrollWidth }))
       .filter((item) => item.right > document.documentElement.clientWidth + 1)
       .slice(0, 8),
-    diagram: (() => {
+    localScroll: (() => {
       const element = document.querySelector(".cf-local-scroll");
       if (!element) return null;
       const style = getComputedStyle(element);
@@ -296,43 +254,139 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
 
   // Drag starting on the prose wrapper (padding around the paragraph) must stay
   // Text. Missing that hit-test is how region marquees steal text selection.
-  for (const steps of [1, 10]) {
+  const glyphs = (from, to) => page.locator("#gesture-target").evaluate((el, [from, to]) => {
+    const range = document.createRange();
+    range.setStart(el.firstChild, from);
+    range.setEnd(el.firstChild, to);
+    const rect = range.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, y: rect.top + rect.height / 2 };
+  }, [from, to]);
+  // Each pin reopens the notes panel, which covers the prose at this width.
+  async function proseDrag(label, { from, to, hold = 0, steps = 10, quote }) {
+    await revealDocumentForGestures();
+    const end = await glyphs(0, to);
+    const target = { x: end.right, y: end.y };
+    const hits = await page.evaluate(({ from, target }) => ({
+      start: document.elementFromPoint(from.x, from.y)?.id,
+      end: document.elementFromPoint(target.x, target.y)?.id,
+      startElement: document.elementFromPoint(from.x, from.y)?.outerHTML.slice(0, 200),
+      endElement: document.elementFromPoint(target.x, target.y)?.outerHTML.slice(0, 200),
+    }), { from, target });
+    const expectedStart = from.onGlyph ? "gesture-target" : "gesture-root";
+    if (hits.start !== expectedStart || hits.end !== "gesture-target") {
+      throw new Error(`${label} is obscured or off-screen: ${JSON.stringify({ from, target, hits })}`);
+    }
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    if (hold) await page.waitForTimeout(hold);
+    await page.mouse.move(target.x, target.y, { steps });
+    const marquee = await page.locator(".cf-region-draft").count();
+    await page.mouse.up();
+    const selected = await page.evaluate(() => String(getSelection()));
+    if (selected !== quote) throw new Error(`${label} selected ${JSON.stringify(selected)}, expected ${quote}`);
+    await waitForTextChip(page, label);
+    await page.waitForFunction(
+      (quote) => document.querySelector("[data-testid=float-chip] .q")?.textContent === quote,
+      quote,
+      { timeout: 5000 },
+    ).catch(() => {});
+    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
+    if (marquee !== 0) throw new Error(`${label} drew a region marquee`);
+    if (kind !== "Text") throw new Error(`${label} opened ${kind}, expected Text`);
+    const pinned = await page.getByTestId("float-chip").locator(".q").innerText();
+    if (pinned !== quote) throw new Error(`${label} pinned ${JSON.stringify(pinned)}, expected ${quote}`);
+  }
+  async function prepareProse() {
     await revealDocumentForGestures();
     const prose = page.locator("#gesture-root");
     await prose.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
     const box = await prose.boundingBox();
     if (!box) throw new Error("Prose review-text-root has no box");
-    const endpoint = await page.locator("#gesture-target").evaluate((el) => {
-      const range = document.createRange();
-      range.setStart(el.firstChild, 0);
-      range.setEnd(el.firstChild, 6);
-      const rect = range.getBoundingClientRect();
-      return { x: rect.right, y: rect.top + rect.height / 2 };
-    });
-    const start = { x: box.x + 4, y: endpoint.y };
-    const hits = await page.evaluate(({ start, endpoint }) => ({
-      start: document.elementFromPoint(start.x, start.y)?.id,
-      end: document.elementFromPoint(endpoint.x, endpoint.y)?.id,
-      startElement: document.elementFromPoint(start.x, start.y)?.outerHTML.slice(0, 200),
-      endElement: document.elementFromPoint(endpoint.x, endpoint.y)?.outerHTML.slice(0, 200),
-    }), { start, endpoint });
-    if (hits.start !== "gesture-root" || hits.end !== "gesture-target") {
-      throw new Error(`Prose drag is obscured or off-screen: ${JSON.stringify({ box, hits })}`);
+    const review = await glyphs(0, 6);
+    // Inside the "e" of "Review": a press there lands on the captured highlight
+    // and a drag from it starts a new selection at offset 1.
+    const e = await glyphs(1, 2);
+    return {
+      padding: { x: box.x + 4, y: review.y },
+      glyph: { x: e.left + 1, y: e.y, onGlyph: true },
+    };
+  }
+  // The press under test must meet a live highlight with its chip showing.
+  async function expectHighlighted(label) {
+    await revealDocumentForGestures();
+    const live = await page.evaluate(() => String(getSelection()));
+    const chips = await page.getByTestId("float-chip").count();
+    if (live !== "Review" || chips !== 1) {
+      throw new Error(`${label} has no live capture: ${JSON.stringify({ live, chips })}`);
     }
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    await page.mouse.move(endpoint.x, endpoint.y, { steps });
-    const marquee = await page.locator(".cf-region-draft").count();
-    await page.mouse.up();
-    const quote = await page.evaluate(() => String(getSelection()));
-    if (quote !== "Review") throw new Error(`Prose drag (${steps} steps) selected ${JSON.stringify(quote)}, expected Review`);
-    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
-    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
-    if (marquee !== 0) throw new Error("Prose drag drew a region marquee");
-    if (kind !== "Text") throw new Error(`Prose drag opened ${kind}, expected Text`);
-    if ((await page.getByTestId("float-chip").locator(".q").innerText()) !== "Review") throw new Error("Prose drag pinned a stale quote");
+  }
+  async function expectReleased(label) {
+    const kept = await page.evaluate(() => String(getSelection()));
+    if (kept) throw new Error(`${label} kept the discarded capture highlighted: ${JSON.stringify(kept)}`);
+  }
+  async function dismissChip() {
     await page.keyboard.press("Escape");
     await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
+  }
+  for (const steps of [1, 10]) {
+    const { padding } = await prepareProse();
+    await proseDrag(`Prose drag (${steps} steps)`, { from: padding, steps, to: 6, quote: "Review" });
+    await dismissChip();
+  }
+
+  // Dropping a text capture must release its highlight. Chromium turns a press
+  // on a live highlight into a native text drag, not a new selection: at once
+  // on Linux and Windows, after 150 ms on macOS. The 200 ms holds below take
+  // that path on every platform. Presses start inside the "e" of the captured
+  // "Review", and the new selection must read "eview me", which a leftover
+  // "Review" cannot satisfy.
+  {
+    const { padding, glyph } = await prepareProse();
+    const reselect = (label) => proseDrag(label, { from: padding, to: 6, quote: "Review" });
+
+    // A held press on the highlight while its chip shows selects anew.
+    await reselect("Prose drag before a held press on the chip's highlight");
+    await expectHighlighted("Held press on the chip's highlight");
+    await proseDrag("Held press on the chip's highlight", { from: glyph, to: 9, hold: 200, quote: "eview me" });
+    await dismissChip();
+    await expectReleased("Escape");
+
+    // Escape releases the highlight, so a held press on those glyphs selects.
+    await reselect("Prose drag before Escape");
+    await dismissChip();
+    await expectReleased("Escape");
+    await proseDrag("Held press after Escape", { from: glyph, to: 9, hold: 200, quote: "eview me" });
+    await dismissChip();
+
+    // A click on the highlight only dismisses its Text chip. It must not fall
+    // through to an Element pin once the press has cleared the highlight.
+    await reselect("Prose drag before a click on its highlight");
+    await expectHighlighted("Click on the captured highlight");
+    const clicked = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.id, glyph);
+    if (clicked !== "gesture-target") throw new Error(`The highlight click would land on ${clicked}`);
+    await page.mouse.click(glyph.x, glyph.y);
+    await page.waitForTimeout(400);
+    const chip = page.getByTestId("float-chip");
+    if (await chip.count()) {
+      const kind = (await chip.locator(".lab").innerText()).trim();
+      throw new Error(`A click on the captured highlight opened ${kind}, expected no chip`);
+    }
+
+    // Composer Cancel leaves no highlight. Chromium already moves the
+    // selection into the focused composer, so this locks the outcome only.
+    await reselect("Prose drag before composer Cancel");
+    await page.getByTestId("float-comment").click();
+    await page.getByTestId("composer").waitFor();
+    await page.getByTestId("composer-cancel").click();
+    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 5000 });
+    await expectReleased("Composer Cancel");
+    // Gesture listeners remount in an effect after the composer closes.
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 50))));
+    // The chip's esc button must release the highlight itself.
+    await reselect("Prose drag before the chip esc button");
+    await page.getByTestId("float-esc").click();
+    await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
+    await expectReleased("The chip esc button");
   }
 
   // Words on an authored SVG stage must pin as Text (same as HTML prose).
@@ -346,7 +400,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       selection?.removeAllRanges();
       selection?.addRange(range);
     });
-    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    await waitForTextChip(page, "Stage label selection");
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
     if (kind !== "Text") throw new Error(`Stage label selection opened ${kind}, expected Text`);
     await page.keyboard.press("Escape");
@@ -442,8 +496,11 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Harness excerpts: intercept the actual review POST, not the rail labels.
   async function submitCapturedReview() {
     capturedReviews.length = 0;
+    // The previous review's toast can still be showing, so wait for the
+    // toast that names this response before reading the captured POST.
+    const received = `Review received (evt-browser-check-${reviewEvents + 1}).`;
     await page.getByTestId("submit-all").click();
-    await page.getByTestId("toast").getByText(/Review received/).waitFor({ timeout: 10000 });
+    await page.getByTestId("toast").getByText(received, { exact: true }).waitFor({ timeout: 10000 });
     if (capturedReviews.length !== 1) {
       throw new Error(`Expected one review POST, got ${capturedReviews.length}`);
     }
@@ -613,6 +670,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     const violations = await page.evaluate(() => globalThis.__cfPolicyViolations);
     throw new Error(`Browser console errors: ${consoleErrors.join(" | ")}; CSP: ${JSON.stringify(violations)}`);
   }
+  await assertNoPolicyViolations(page, "interactive surface");
   assertNetworkStayedLoopback(network);
   await context.close();
 }
@@ -678,7 +736,6 @@ function assertNetworkStayedLoopback({ responses, externalRoutes }) {
 }
 
 function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
-  const denseSource = denseDiagramSource(300);
   const enhancements = proseOnly
     ? ""
     : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation" data-cf-block-digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
@@ -687,19 +744,9 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
         <figure role="img" aria-label="Stage fixture"><svg viewBox="0 0 280 36" width="280" height="36"><text id="stage-label" x="8" y="24">Stage words</text></svg></figure></div>
         <pre tabindex="0" role="region" aria-label="Rust example"><code data-cf-language="rust">fn main() { println!("safe"); }</code></pre>
       </section>
-      <section class="block block--diagram" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
+      <section class="block block--html" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
         <h2 id="flow">Flow</h2>
-        <div class="cf-local-scroll" tabindex="0" role="region" aria-label="Request flow diagram" data-cf-diagram="pending" data-cf-diagram-title="Request flow" data-cf-diagram-description="A request moves from input to review.">
-          <template data-cf-diagram-source>flowchart LR
-            A[Input] --> B[Review]</template>
-          <div data-cf-diagram-output></div>
-          <p data-cf-diagram-status aria-live="polite">Rendering diagram…</p>
-        </div>
-        <div class="cf-local-scroll" tabindex="0" role="region" aria-label="Dense flow diagram" data-cf-diagram="pending" data-cf-diagram-title="Dense flow" data-cf-diagram-description="A bounded dense flow exercises the renderer responsiveness envelope.">
-          <template data-cf-diagram-source>${denseSource}</template>
-          <div data-cf-diagram-output></div>
-          <p data-cf-diagram-status aria-live="polite">Rendering diagram…</p>
-        </div>
+        <figure class="stage"><div class="cf-stage-host"><figure role="img" aria-label="A request moves from input to review"><svg viewBox="0 0 600 60" style="width:100%;height:auto"><text x="8" y="36">Input</text><text x="300" y="36">Review</text></svg></figure></div></figure>
       </section>`;
   const sandbox = iframeOnly
     ? `<section data-cf-block-id="frame-block" data-cf-block-label="Embedded view" data-cf-block-digest="${"e".repeat(64)}">
@@ -797,10 +844,6 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
 </html>`;
 }
 
-function denseDiagramSource(edges) {
-  return ["flowchart LR", ...Array.from({ length: edges }, (_, index) => `N${index}-->N${index + 1}`)].join("\n");
-}
-
 function exportFixture(mode) {
   const resolved = mode === "dark" ? "dark" : "light";
   return `<!doctype html><html data-cf-theme="editorial" data-cf-mode="${mode}" data-cf-mode-resolved="${resolved}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src data:; frame-src 'self' blob:; form-action 'none'"><style>${sourceStyles}\n${exportFallback}</style></head><body><main id="cf-present-document"><h1>Static export</h1><iframe sandbox title="Static export sandbox" srcdoc="&lt;p&gt;Static export sandbox content&lt;/p&gt;"></iframe><iframe sandbox title="Static export attack" style="width:1px;height:1px;position:fixed;left:0;top:0;opacity:0" srcdoc="&lt;meta http-equiv='refresh' content='0;url=https://example.invalid/export-escape'&gt;&lt;img src='https://example.invalid/export-pixel.png'&gt;&lt;p&gt;Static export attack stayed local&lt;/p&gt;"></iframe></main></body></html>`;
@@ -809,6 +852,33 @@ function exportFixture(mode) {
 function assertLoopbackOnly(requests) {
   const remote = requests.find((request) => request.hostname !== "127.0.0.1");
   if (remote) throw new Error(`Non-loopback request observed: ${remote.href}`);
+}
+
+// A text selection opens the chip only after the page maps it into one review
+// text root. Name the selection and the page's status when that never happens.
+async function waitForTextChip(page, label) {
+  try {
+    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+  } catch (error) {
+    const state = await page.evaluate(() => {
+      const selection = getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      const where = (node, offset) => {
+        const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+        const textRoot = element?.closest("[data-cf-review-text-root]");
+        return { node: node?.nodeName, id: element?.id || null, offset, textRoot: textRoot?.id ?? null };
+      };
+      return {
+        quote: String(selection),
+        ranges: selection?.rangeCount ?? 0,
+        start: range && where(range.startContainer, range.startOffset),
+        end: range && where(range.endContainer, range.endOffset),
+        status: document.querySelector(".cf-status")?.textContent?.trim() ?? null,
+        hint: document.querySelector("[data-testid=comment-hint]")?.textContent?.trim() ?? null,
+      };
+    });
+    throw new Error(`${label} opened no comment chip; page state ${JSON.stringify(state)}`, { cause: error });
+  }
 }
 
 async function findBrowser() {

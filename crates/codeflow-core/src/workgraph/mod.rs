@@ -7,9 +7,19 @@
 //! [`is_valid_task_format_id`]) is the single source of truth reused by
 //! `validate` for frontmatter checks.
 
+pub mod acceptance;
 pub mod allocate;
+pub mod classify;
+pub mod deps;
 mod format_id;
 pub(crate) mod layout;
+pub mod lifecycle;
+pub mod light_paths;
+pub mod readiness;
+pub mod record_template;
+pub mod record_text;
+pub mod release_line;
+pub mod status_verb;
 pub mod store;
 pub mod work_start;
 
@@ -22,14 +32,21 @@ pub use format_id::{
 };
 pub use store::{MarkdownStore, RecordStore, StoreError};
 pub use work_start::{
-    check_work_start, check_work_start_for_branch, declared_work_target, default_work_target,
-    durable_work_tracking_enabled, is_stable_work_target, resolve_work_target, task_id_from_branch,
-    work_target_resolves, DurableTrackingError, WorkStartError, WorkStartReport,
+    branch_claims_task_id, check_epic_line, check_work_start, check_work_start_anchored,
+    check_work_start_for_branch, declared_work_target, default_work_target,
+    durable_work_tracking_enabled, durable_work_tracking_enabled_at, is_stable_work_target,
+    resolve_work_target, resolve_work_target_checked, task_id_from_branch, work_target_resolves,
+    DurableTrackingError, RecordKind, ResolvedWorkTarget, WorkStartError, WorkStartReport,
 };
 
 /// Generate an RFC 3339 UTC timestamp string.
 pub(crate) fn now_rfc3339() -> String {
-    let duration = std::time::SystemTime::now()
+    rfc3339_at(std::time::SystemTime::now())
+}
+
+/// An RFC 3339 UTC timestamp for `time`.
+pub(crate) fn rfc3339_at(time: std::time::SystemTime) -> String {
+    let duration = time
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     let secs = duration.as_secs();

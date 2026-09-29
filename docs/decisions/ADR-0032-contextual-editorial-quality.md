@@ -1,5 +1,6 @@
 ---
 id: ADR-0032
+uid: 596a84e9-53f5-4535-88f4-bbcc7992728f
 title: make editorial quality contextual and on demand
 date: 2026-07-18
 status: accepted

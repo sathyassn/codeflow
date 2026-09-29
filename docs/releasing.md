@@ -24,16 +24,176 @@ One publisher remains:
 PRs carry one `Release impact` section with `Impact`, `Breaking`,
 `Rationale`, `Migration`, `Unit` and `Evidence`. `Breaking: yes` holds if and
 only if `Impact: major`, and a break needs substantive migration guidance.
-A nonbreaking refinement of a pending major entry still carries its migration
-reference, and a field left at the template's alternatives fails.
+An edit of a pending major entry is assessed at major, so it declares the
+break and keeps its migration guidance, and a field left at the template's
+alternatives fails.
 The legacy `Contract` field is accepted during the transition and must agree
-with `Breaking` when both appear. `scripts/release.py check-pr` compares
+with `Breaking` when both appear. Alone, `not-applicable` and `compatible`
+mean `Breaking: no` and `breaking` means `Breaking: yes`, with `Migration`
+then needed only for a break; `codeflow ci` and `release.py` read it alike.
+`scripts/release.py check-pr` compares
 the declaration with the current target, actual proposed merge tree, pending
 annotations, coupled stamps, and conventional-marker floor. It checks known
-contradictions and watched contracts; it does not infer compatibility. Put one
+contradictions and watched contracts; it does not infer compatibility. It
+reads the body with the `codeflow` binary its caller names
+(`--codeflow-bin`, or `CODEFLOW_BIN`), the same reader `codeflow ci` uses,
+and never takes one from `PATH`: CI builds it from the checked-out tree, and
+the pre-push preflight passes the `codeflow` running the hook. CI's reader
+is therefore current; the pre-push reader is as current as the installed
+`codeflow` enforcing the push. The answer carries a protocol version, and
+`release.py` refuses a binary that answers another, but a binary answering
+the same version is trusted to read with its semantics. Put one
 `codeflow:release-impact patch|minor|major` HTML marker directly before
 each new pending entry. A withdrawal removes the affected entry/marker and
 explains in the PR body why the remaining net contract permits the lower target.
+
+### Integration after an epic-line landing
+
+The repository's `codeflow-release-integration.yml` runs after a
+`codeflow-release` push run completes on an epic line, and daily at 03:17 UTC.
+Its `workflow_run` trigger loads the privileged job's YAML from the default
+branch, including for an older line without the integration job. The job checks
+out that event's default-branch commit and builds its runner and judge there.
+The triggering line is passed through an environment variable for reporting;
+its workflow, artifacts and scripts do not define or execute the privileged job.
+See [GitHub's workflow_run contract](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run).
+
+`RELEASE_BRANCH` in the integration job selects an existing branch that matches
+the default target's release pattern. Every run checks all verified epic lines,
+not only the triggering line. GitHub can replace a pending concurrency job;
+the surviving run catches up those landings too, and running jobs are not
+cancelled. See [GitHub's concurrency rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+The runner verifies each epic line with the core line check and makes clean
+merges in a disposable clone.
+It runs `codeflow ci` under R-120 and the reading-structure checks on the combined
+result before one normal push. A batch with any failure pushes nothing.
+Reading sizes remain guidelines; structural reading faults block integration.
+
+The result is reported after the landing. Task pull requests do not depend on
+it. Inspect the integration job with `gh run view <run-id> --log-failed`; select
+the run with `gh run list --workflow codeflow-release-integration.yml`. For a
+replaced pending run, inspect the later surviving run's result for the line tip.
+A failure names the open task carrying `role: release-integration` at the
+destination's fetched default-branch commit, even when the release branch
+predates its assignment, or reports that none owns it.
+TSK-010 resolves conflicts and findings in the release pull request. Automation
+never resolves conflicts or changes a task's status.
+
+Reproduce the current integration locally without pushing, with the current
+`codeflow` binary on PATH:
+
+```sh
+cargo run -p codeflow-cli --example release_integration -- --release integration/release-3-0-0-r2
+```
+
+Omit `--line` to reproduce the workflow's complete catch-up; add
+`--line integration/EPC-NNN-slug` only to narrow a local investigation to one
+line. The workflow alone passes `--push`; the runner's default is a check.
+Without a configured release argument
+and the repository workflow, it reports no configured integration and does
+nothing. The runner and workflow are repository-owned and absent from adopter
+scaffolds. Hosted authentication and scheduling still require a live workflow
+run; fixture tests prove the local merge, judge, failure and push paths.
+
+The integration workflow must first land on the default branch. Per-landing
+notifications require the epic line's existing read-only `codeflow-release`
+push workflow; a line missing that workflow is included by the next surviving
+integration run or daily backstop. Upstream completion is a notification, not
+approval: the integration runner checks the current tips itself even when the
+notifying run failed.
+
+#### Rotating the release branch
+
+When the next release uses a new branch, a maintainer coordinates these steps:
+
+1. Disable `codeflow-release-integration.yml` in Actions and let running jobs
+   finish or cancel them. Confirm no running or pending integration job remains;
+   an already queued job still carries its old `RELEASE_BRANCH` value.
+2. Create the next release branch through the reviewed release process. Check
+   that the default target's `git.release_branch_pattern` covers it. Land the
+   planning record for exactly one open task with `role: release-integration`
+   and that branch as its `integration_target` on the default branch. Keep the
+   preceding release's completed task as history; use the new release's task.
+3. In one reviewed PR to the default branch, change the integration workflow's
+   `RELEASE_BRANCH` and this runbook's reproduction command to that same branch.
+   Keep the shared concurrency group. Confirm the branch exists at the remote
+   and the open owner record agrees with it before enabling automation.
+4. From the updated default checkout, build the runner and current `codeflow`,
+   put that binary on PATH, and run the reproduction command without `--push`
+   or `--line`. Resolve any finding in the release PR, then repeat the preview.
+5. Re-enable the integration workflow. Inspect the next eligible completion or
+   daily run and verify its reported release branch, owner and integrated line
+   tips. Record that run in the release checklist. Rotation is not verified by
+   changing YAML alone.
+
+### Pending entries, local checks and repairs
+
+A pending entry is identified by its bold label (`- **Label.** text`), which
+is unique among pending entries; a duplicate or an unlabelled entry blocks.
+The bounded legacy group keeps its explicit identity (`legacy:pre-policy-v3`).
+`check-pr` matches entries by label: a new label is an addition, a missing
+label is a withdrawal (it needs the `Withdrawal` field), and a changed body
+or impact under a kept label is an edit of that item. An entry is the whole
+bullet as Markdown renders it, including unindented lines that continue its
+paragraph. An edit is assessed at its impact like an addition, whatever the
+declaration: the checker cannot prove that a change keeps the entry's
+meaning, so entries compare byte for byte and a rewrap is an edit too (in
+code and nested Markdown, whitespace carries meaning). Moving an entry under
+another heading, which leaves its bytes alone, is not an edit.
+Lowering an entry's impact needs `Withdrawal`, and a renamed label is a
+withdrawal plus an addition. Notes outside entries, such as the upgrade steps,
+carry no impact and are judged in review.
+
+Three planes check release state, from cheapest to authoritative:
+
+| Plane | What runs | Blocks |
+|---|---|---|
+| Pre-push | `release.py preflight` for each pushed branch | only a push that breaks a release tree its base kept valid |
+| `codeflow integrate` | `release.py check-state --structural` in the test stage | an invalid tree |
+| CI, `codeflow-release.yml` | `release impact` (full `check-pr`) on pull requests; `release state` on pushes to `main` and `integration/**` | yes |
+
+The first two run only in a project whose `.codeflow/project.toml` sets
+`release.backend = "codeflow"` and that carries `scripts/release.py`. They
+judge the tree against the recorded bootstrap and the local stable tags and
+say "not checked against the host"; every local stable tag counts as
+published, so a pending version never reuses one. The preflight compares the
+branch with its pull request target (a task branch's `integration_target`,
+else `main`) and warns when that range touches behaviour paths with no
+pending entry added or edited and no `Impact: none` in the local PR draft
+named by `CODEFLOW_PR_DRAFT`. A work-in-progress push is never blocked by a
+missing entry. On a base whose release tree is already invalid the
+preflight only warns, so it does not catch every new break there; the pull
+request job does. Behaviour is every path outside `docs/`,
+`project-management/` and the record templates, with the skill trees always
+included; the table is `crates/codeflow-core/src/workgraph/path_sets.toml`,
+which `codeflow ci` reads for the adopter-facing set as well.
+
+**Typed repair.** When the base fails its own release state and the
+proposed merge passes, `check-pr` accepts a PR that changes only
+`CHANGELOG.md` and the version stamps of the coupled files (`Cargo.toml`,
+`Cargo.lock`, `.codeflow/project.toml`, `.codeflow/manifest.json`,
+`AGENTS.md`, `CLAUDE.md`, the managed baselines of the last two and their
+manifest hashes, which `sync` writes together). The configuration comes from
+the base, so a repair that changes `.release/config.json` is refused; the
+output names the invariant repaired. A repair keeps every existing pending
+entry byte for byte; an edit waits for its own PR.
+When a repair touches a managed baseline or the manifest, each baseline must
+carry the one managed stamp of the release version and the manifest must
+record its exact hash. Published sections are held to their exact public
+source, and version non-reuse and the impact floors still apply. Any other
+PR onto a broken base is refused until the repair lands. The base is always
+judged by the configuration it carries; a PR never supplies the authority for
+the history it is judged against. One older shape is read: a bootstrap record
+without its comparison tree (as `main` carries), whose tree is derived from
+the recorded comparison commit when the tag carries the same tree, and the
+output says so. Any other configuration the checker cannot read refuses the
+PR. The checker a PR runs is the one in its own merge tree,
+so a line whose checker predates the typed repair cannot take a green repair
+PR; the TSK-106 review record replays that case.
+
+**Errata.** Published sections stay byte-frozen. A correction is a dated
+note in the `## Errata` block before the first version section:
+`- YYYY-MM-DD, X.Y.Z: note`, naming a published version.
 
 Use a plain `revert:` only when the resulting change has no shipped release
 impact. A revert that changes supported behavior or a public contract must use
@@ -180,18 +340,26 @@ the key to make the hook pass.
    that they can; draft absence is checked later inside the write-scoped,
    read-only-in-behavior publisher guards.
 2. Refresh against the current target before merge. PR CI checks the actual
-   proposed merge tree, not conflict absence. Main-push CI repeats the state
-   check without writing. Without strict branch protection a stale clean merge
+   proposed merge tree, not conflict absence. Main-push and integration-line
+   CI repeat the state check without writing. These release jobs live in
+   `codeflow-release.yml`, outside the managed `codeflow-ci.yml` that every
+   adopter receives; no scaffold installs them. Without strict branch protection a stale clean merge
    remains possible, so the human merger must require the fresh check.
-3. When evidence is complete, a human with current write, maintain, or admin
+3. Before the tag, render the notes from the final assembled source with
+   `python3 scripts/release.py release-notes --ref <source> --source <source>
+   --tag vX.Y.Z --output notes.md` and read them twice: as a new user (what
+   the release does) and as a user upgrading from the last release (what
+   to do, in order). Record both reads in the release checklist.
+4. When evidence is complete, a human with current write, maintain, or admin
    permission explicitly dispatches cargo-dist's generated Release workflow
    with `--ref main` and the `vX.Y.Z` tag. The actor and rerunning actor
    must both be GitHub Users with effective permission. `GITHUB_SHA` must
    still equal current main and be the result of an ordinary PR human-merged
    into this repository's main. Contributor forks remain valid. No static
    allowlist or second-human role is implied.
-4. The supported local-artifact job checks source/version/notes, the latest
-   exact-source GitHub Actions main-push results for `release state`, `codeflow gates`,
+5. The supported local-artifact job checks source/version/notes, the latest
+   exact-source GitHub Actions main-push results of `codeflow-ci` and
+   `codeflow-release` (`publication_workflows`) for `release state`, `codeflow gates`,
    Rust, Windows, secret scan, and security review, plus write-visible host collisions,
    then creates or resumes only an exact empty draft.
    The supported global-artifact job rechecks main after platform builds.
@@ -201,7 +369,7 @@ the key to make the hook pass.
    authority job, not the whole generated workflow, so operate one deliberate
    publication at a time; no-clobber and partial-attempt checks remain the
    safety boundary if runs overlap.
-5. cargo-dist uploads without `--clobber` and announces last. Its
+6. cargo-dist uploads without `--clobber` and announces last. Its
    post-announce verifier compares tag/source and every asset name, size, and
    SHA-256 digest to the same-run files.
 
@@ -267,6 +435,24 @@ prevent exact-source checks, workflow dispatch, drafts, uploads, or releases.
 Treat a zero-step or permission failure as absent evidence and repair the
 repository setting—never bypass the source and publication guards.
 
+### Ceremony check before a release
+
+Before the tag, run the ceremony report over the release's window, from a
+clone that has fetched every epic line:
+
+```sh
+codeflow report ceremony --since <the previous release's date>
+```
+
+Compare it with the recorded baseline in
+`docs/verification/ceremony-baseline-2026-09-28.md` (pull requests per
+logical change, the record status count, review rounds and refusals), and
+paste the output with a one-line comparison into the release checklist.
+This is information for the release decision and never blocks it. Review
+rounds print `unknown` when the host cannot answer or holds no review, and
+refusals print `unknown` for any part of the window before this clone began
+recording them; neither is estimated.
+
 ### Historical bridge into v3
 
 The live `v2.1.0` tag remains at
@@ -276,7 +462,13 @@ commit `3c3efdb91009361e18b0fabad699b5e875d4e4dd` and has SHA-256
 `1501e0d81716dadd3aa4dc1c56348dd7321abd9cdca90b8f5deb89ea20d54beb`.
 The release target and published source agree with each other, not with the
 current tag. The bootstrap records all three facts, does not move the tag, and
-accepts the already-staged `3.0.0` pending section. After that version is
+accepts the already-staged `3.0.0` pending section. Those commit ids belong to
+the original repository. The public repository's history is a path-filtered
+copy, so its `v2.1.0` tag has a different commit id with the same tree
+`c00d62202df12d8aab2caf4ff90a81491f294a8f`. The check therefore requires the
+tag to resolve to that tree, the host tag to match the local tag, and the
+public release to carry `source.tar.gz` with the recorded SHA-256. A tag moved
+to other content still fails. After that version is
 published, the verified public release—not this bootstrap record—becomes the
 automatic baseline.
 

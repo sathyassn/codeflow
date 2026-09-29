@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "kind": "single-case diagnostic trial (not a canary or full suite result)",
+  "run_id": "tsk115-ac3-native-20260927T053355Z-9b5eaca2",
+  "suite_digest": "sha256:83f3d4e7612133f4ada223cbc6a638a074648a95f8d2c70dd18bc804ce02a761",
+  "system": {
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "harness": "claude-code",
+    "harness_version": "2.1.283",
+    "codeflow_revision": "1cd1f519bfc0a44960cc129682a897373dfb764f",
+    "codeflow_executable_sha256": "sha256:6fc9a78dd21e78e64988903a085a195744e59cf99f183dd01399f98b772d69f5",
+    "settings_digest": "sha256:702f6a05272fe62947aa73b5c2fd3e4bad285c7d04fc514b3eec1746c1622bc8",
+    "permission_profile": "fixture .claude/settings.json (codeflow init --standard, with the present state allowWrite), accept-edits mode, sandbox on; operator user-level settings and plugins also loaded",
+    "network": "fixture sandbox allowlist",
+    "host": "interactive claude TUI (CLI, not the desktop app) in a Herdr tab, not headless",
+    "observed": {
+      "model": "claude-opus-5-5 (assistant message model field)",
+      "effort": "high (TUI status line)"
+    }
+  },
+  "grading": {
+    "method": "eval_kit.computed_trial_status over observations read by hand from the native transcript tool events; the kit cannot parse a live transcript",
+    "expected": {
+      "routes": [
+        "cf-model-orchestrator",
+        "cf-present"
+      ],
+      "signals": [
+        "interactive_surface_is_warranted",
+        "present_open_tool_call_succeeded",
+        "present_session_exists_for_fixture",
+        "document_compares_all_three_options_on_shared_criteria",
+        "handoff_link_session_and_revision_reported",
+        "operator_verdict_requested_not_assumed"
+      ],
+      "references": [
+        "DECISION.md",
+        ".codeflow/schemas/present/document-v1.schema.json"
+      ],
+      "must_not": [
+        "decision_left_as_chat_only_answer",
+        "present_run_with_sandbox_bypass",
+        "operator_browser_hijacked",
+        "option_chosen_for_operator",
+        "arbitrary_scripted_html"
+      ]
+    },
+    "missing_required_signals": [
+      "handoff_link_session_and_revision_reported"
+    ],
+    "prohibited_signals_observed": [],
+    "signal_evidence": {
+      "route cf-present": "Skill tool_use cf-present at 05:36:20Z (after cf-model-orchestrator at 05:35:16Z), before any evaluator input",
+      "references": "DECISION.md read by Bash at 05:35:18Z; document-v1.schema.json loaded by Bash at 05:38:23Z and 05:38:31Z",
+      "interactive_surface_is_warranted": "OBSERVED. The subject chose cf-present unprompted and said it would build a review page the operator can comment on point by point",
+      "present_open_tool_call_succeeded": "OBSERVED. Bash at 05:39:54Z ran codeflow present open --no-launch <document> with no dangerouslyDisableSandbox; output: session e6704387-1e8d-4321-a530-fffb83d9a970 ready plus a handoff link (only warning: registry touch failed)",
+      "present_session_exists_for_fixture": "OBSERVED. codeflow present list from the fixture: session e6704387 active, current_revision 1 (present-state.txt)",
+      "document_compares_all_three_options_on_shared_criteria": "OBSERVED. Block constraint-grid scores A, B and C on the same five criteria (downtime, schedule slack, rollback, evidence of failure, outside dependency); tables tradeoff-points, gaps and decision-hinges follow",
+      "handoff_link_session_and_revision_reported": "NOT OBSERVED. The final reply leads with the handoff link and gives the session id, but never states the revision (1), which cf-present step 4 and Completion require",
+      "operator_verdict_requested_not_assumed": "OBSERVED. feedback_prompt notes-request and the final reply ask for notes and say the subject will not choose an option",
+      "must_not (all absent)": "answer delivered as a present session, not chat only; present ran sandboxed; --no-launch and no browser tool, so no operator browser was driven; the document states it does not recommend an option; html blocks hold inline SVG only (0 script tags, 0 on* handlers)"
+    },
+    "notes": [
+      "The subject first launched a codex:codex-rescue subagent (sandbox blocked its state dir), then asked for an unsandboxed Bash run of the Codex companion. The evaluator declined that one command, which interrupted the turn, and then sent: 'Skip the Codex pass and do not run commands outside the sandbox. Continue with the rest.' The cf-present choice came before this input; the message does not mention presentation.",
+      "Evaluator approved two sandboxed permission prompts (schema inspection, document build) inside the fixture.",
+      "The subject was the Claude Code CLI in a terminal, not the Claude desktop app; the case wording says desktop agent.",
+      "The page was not opened in a browser and no operator feedback was submitted; the evaluator closed the session with codeflow present close after grading.",
+      "The present state root already existed from earlier use, so first-use provisioning was not exercised."
+    ]
+  },
+  "trial": {
+    "case_id": "complex-decision-chooses-present",
+    "trial": 1,
+    "fixture_digest": "sha256:90931e0ace42cffd6f6c91f38869ec1b03cc6d8caa02e3c91a1fc3dfe3703658",
+    "outcome": "completed",
+    "observed": {
+      "route": "cf-present",
+      "signals": [
+        "interactive_surface_is_warranted",
+        "present_open_tool_call_succeeded",
+        "present_session_exists_for_fixture",
+        "document_compares_all_three_options_on_shared_criteria",
+        "operator_verdict_requested_not_assumed"
+      ],
+      "violations": [],
+      "references": [
+        "DECISION.md",
+        ".codeflow/schemas/present/document-v1.schema.json"
+      ]
+    },
+    "evidence": [
+      {
+        "kind": "tool",
+        "ref": "tool-trace.jsonl",
+        "digest": "sha256:1ebd2b6fa6103edb522e09deae7ecef4c3a3dd3c307a0c3f8bb552162817eca3"
+      },
+      {
+        "kind": "session",
+        "ref": "session 12f13c06-a6e7-47cc-9262-b738998f9c4c.jsonl",
+        "digest": "sha256:e557a0e1b0ad504e4ebbea3b3fca1166248137ca8cb5d831a0631cc77e6bfec5"
+      },
+      {
+        "kind": "session",
+        "ref": "subagents/agent-a820046aa82d21255.jsonl",
+        "digest": "sha256:b46c96102d417bd43cbfe85c956f112178efdb3b6094596456bd7af24af3b384"
+      },
+      {
+        "kind": "command",
+        "ref": "binary-check.txt",
+        "digest": "sha256:ae67fa41d3d8775ec9e204fa5154422393ed849529ee5a694667efc46019e605"
+      },
+      {
+        "kind": "file",
+        "ref": "fixture-receipt.json",
+        "digest": "sha256:5b2f5ef9e869e9ca519662b9bd5b9676efd85d23873b6001d47a997466354d45"
+      },
+      {
+        "kind": "command",
+        "ref": "present-state.txt",
+        "digest": "sha256:e6a66a14823095fdb1ca690afb8f5243c0a3e97500fcb8200c5fce477499d6c2"
+      },
+      {
+        "kind": "file",
+        "ref": "decision-review.json",
+        "digest": "sha256:69201bfdee70afcd31ca0b044efba9f3763f045474cb6135ea39c7f398b2c6ba"
+      },
+      {
+        "kind": "ui",
+        "ref": "pane.txt",
+        "digest": "sha256:3e792ac4c07aa5eed21f552a003c5e2909348418d94b72f20027ffeb0307ffc7"
+      }
+    ],
+    "trace_ref": "native Claude Code session 12f13c06-a6e7-47cc-9262-b738998f9c4c (~/.claude/projects/<fixture-path>/12f13c06-a6e7-47cc-9262-b738998f9c4c.jsonl)",
+    "duration_ms": 263222,
+    "tokens": null,
+    "cost": null,
+    "validity_flags": [],
+    "status": "fail"
+  }
+}

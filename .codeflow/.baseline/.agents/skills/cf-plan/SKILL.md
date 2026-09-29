@@ -1,13 +1,13 @@
 ---
 name: cf-plan
-description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground both seats already settled; still ask live operator-owned questions. Direct non-trivial use routes through cf-model-orchestrator first.
+description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground both seats already settled; still ask live operator-owned questions. Routed work (decided by touched paths; when unsure, route) goes through cf-model-orchestrator first.
 ---
 
 # cf-plan — plan work, do not build it
 
 You are clarifying and materializing planned work, not building it.
 
-1. Confirm routing. If this non-trivial task did not arrive from an active
+1. Confirm routing. If this routed task did not arrive from an active
    `cf-model-orchestrator` run and has no recorded solo degradation, invoke the
    orchestrator first. Do not recurse when the orchestrator already supplied
    the immutable brief and plan version. Then load `cf-method` for artifact
@@ -55,22 +55,23 @@ You are clarifying and materializing planned work, not building it.
    `resources/task-graph.md` and put the approved topology in `depends_on` task
    frontmatter. A node, edge, decision guard, ownership, acceptance/interface,
    or safety-boundary mutation creates Plan vN+1; an in-node step does not.
-6. For CodeFlow execution, draft on a `plan/` branch. Partition a task set by
+6. For CodeFlow execution, draft on a `plan/` branch. Write each record
+   plainly: simple, straightforward and clear, no mannered prose (see
+   `.codeflow/rules/writing.md`), in short prose and bullets, with a fenced
+   ASCII figure where a flow or structure carries the point. Partition a
+   task set by
    coherent durable outcomes and direct dependencies. Related tasks may form
    epics; unrelated or standalone tasks keep separate landing routes. A batch
-   is not an epic boundary. An
-   **epic** (in
-   `project-management/epics/`) is warranted only for a body of work that is >1
-   PR, >1 session, or spans multiple capabilities; anything smaller is a single
-   durable task with a non-empty `standalone_reason`; challenge standalone use
-   when the task is actually one node of a broader outcome. Add a spec only
-   where interfaces, formats, or behavior need pinning down, and an ADR draft if
-   a Tier-3 decision is involved (new dependency, schema change, boundary
-   change). Allocate with `codeflow epic new`, `codeflow spec new --for
-   EPC-NNN|TSK-NNN`, and `codeflow task new --epic EPC-NNN` or
-   `--standalone-reason "..."`. For each multi-task epic, first create one shared
-   `integration/<epic-id>-<slug>` branch from the intended protected target,
-   then pass it with `--into` for every task in that body. This is the default,
+   is not an epic boundary. When a work item is planned, started, blocked,
+   completed or cancelled, follow
+   [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle):
+   its standalone test decides between an epic and a standalone task, and it
+   names the allocation verbs, dependency forms and planning-PR rule. Add a
+   spec only where interfaces, formats, or behavior need pinning down, and an
+   ADR draft if a Tier-3 decision is involved (new dependency, schema change,
+   boundary change). For each multi-task epic, the shared
+   `integration/<epic-id>-<slug>` branch is passed with `--into` for every
+   task in that body. This is the default,
    not an optional optimization: task branches land there in graph order and
    only the integrated body reaches the protected target through one final
    human-reviewed PR. Select this shape autonomously when the clarity gate,
@@ -79,18 +80,14 @@ You are clarifying and materializing planned work, not building it.
    mechanism. Honor an explicit operator request when it fits that evidence,
    but never let it bypass planning, safety, or protected-branch boundaries. A
    different landing shape needs an explicit Plan vN rationale and approval
-   from both primary seats before task allocation. A task branch is never an
-   integration target; it cannot authorize its own planning record.
-   The target must be a real local or remote-tracking branch, not `HEAD`, a
-   tag, an object ID, or another Git revision expression.
-   Do not hand-invent IDs. If another method owns product specs or task
+   from both primary seats before task allocation. Do not hand-invent IDs. If another method owns product specs or task
    decomposition, link the settled source in epic/task template `external_refs`
    metadata or an SPC body with its revision; `specs` arrays contain only SPC
    IDs. Do not mirror status or copy its tree. Active full/historical tracking
    nevertheless requires distinct anchored repository-execution tasks; an
    external artifact cannot satisfy or waive those gates.
 7. Record the execution contract — `/cf-model-orchestrator` is the default for
-   every non-trivial repository task: both seats plan independently, Claude leads
+   routed work (decided by touched paths): both seats plan independently, Claude leads
    design, and each implementation task uses the canonical assignment record in
    `cf-model-orchestrator/resources/capability-routing.md` to separate its
    responsible primary from actual execution and cross-lineage review. A
@@ -123,7 +120,6 @@ Failure paths are explicit: repair allocation collisions and links on the
 planning branch; resolve cycles, missing parents, draft specs, and incomplete
 predecessors rather than bypassing validation; return a material discovery to
 Plan vN+1 and both seats; record a proved unavailable seat as reduced assurance,
-never as dual approval. If a CodeFlow task is cancelled, stop product work and
-record `cancelled`, its reason, preserved evidence, and resource disposition
-through a reviewed non-task planning/closeout change; never label cancellation
-complete or shipped. Close or cancel other work at its declared authority.
+never as dual approval. If a CodeFlow task is cancelled, stop product work,
+preserve its evidence and cancel it as the work lifecycle states; never label
+cancellation complete or shipped. Close or cancel other work at its declared authority.

@@ -283,7 +283,9 @@ mod tests {
         assert!(has_task_record_path(pm, 4).unwrap());
         fs::remove_file(pm.join("epics/EPC-002/tasks/TSK-002-001.md")).unwrap();
         fs::write(pm.join("tasks/TSK-001.md"), "not YAML").unwrap();
-        assert!(has_task_record_path(pm, 1).unwrap());
+        // Directory order is platform-defined (NTFS lists notes.md first), so
+        // budget both flat entries rather than depend on enumeration order.
+        assert!(has_task_record_path(pm, 2).unwrap());
     }
 
     #[test]

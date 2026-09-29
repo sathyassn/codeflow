@@ -38,14 +38,18 @@ restates a standard quality, security, review, or test gate is invalid
 duplication and a review finding. An observed outcome that matches no approved
 guard is a graph mutation; do not improvise a third branch.
 
-Guarded alternatives are resolved in the approved Plan, not in task metadata.
-The matching edge becomes active. Every unselected alternative records
-`not_selected` plus the guard evidence in the execution ledger; when a durable
-task already exists, its ordinary task status becomes `cancelled` and the
-ledger remains the source of the selection reason. A downstream join becomes
-eligible only after every alternative guard is resolved and all active bare or
-selected guarded predecessors have landed. An ambiguous or unresolved guard
-blocks the join and creates Plan vN+1 rather than inviting a guess.
+Guarded alternatives are resolved in the approved Plan, and the matching edge
+becomes active. Only the selected branch of a decision is written into
+`depends_on`. Until the selection is approved on the target, the join task
+carries `awaiting_selection: <plan or decision path>`, is `blocked` with the
+reason "awaiting selection", and may have an empty `depends_on`. The selection
+lands only by a planning PR that removes `awaiting_selection`, writes the
+selected dependencies and unblocks the join; it never lands on a task branch.
+Every unselected alternative records `not_selected` plus the guard evidence in
+the execution ledger; when a durable task already exists, it is cancelled, and
+a cancelled, unselected alternative never blocks a join. An ambiguous or
+unresolved guard blocks the join and creates Plan vN+1 rather than inviting a
+guess.
 
 ## Well-formed graph
 
@@ -77,19 +81,22 @@ T3 -> T4
 Each durable task records its direct non-synthetic predecessors:
 
 ```yaml
-depends_on: [TSK-003-001]
+depends_on: [TSK-003, {id: TSK-002, kind: research, pin: "<commit sha>"}]
 ```
 
-`depends_on` preserves non-executable structural topology. It lists every
-direct candidate predecessor, including mutually exclusive guarded candidates
-at a later join; Plan guards and ledger evidence own activation and readiness.
+`depends_on` preserves non-executable structural topology: every direct
+predecessor on the selected branch, each a bare task id for a code dependency
+or `{id: TSK-NNN, kind: research | decision, pin: "<commit sha>"}` for an
+input read at a pinned commit. The work lifecycle in `cf-method` says when
+each is met; Plan guards and ledger evidence own activation.
 Assignment rows own responsible primary, actual execution and reviewer; the
 task body owns acceptance criteria. Do not duplicate those fields into edge
 labels. CodeFlow accepts the
 historical `dependencies` spelling when reading older records, but new work
-writes `depends_on`; defining both is invalid. `validate --docs` checks only
-identity, references, duplicates, and acyclicity. It never interprets guards,
-readiness, completion, or scheduling.
+writes `depends_on`; defining both is invalid. `validate --docs` checks
+identity, references, duplicates, acyclicity, dependency shape, and that an
+`awaiting_selection` path exists. It never interprets guards, readiness,
+completion, or scheduling.
 
 ## Mutation and settlement
 

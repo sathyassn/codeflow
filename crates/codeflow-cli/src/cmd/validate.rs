@@ -23,6 +23,11 @@ pub struct ValidateArgs {
     /// Verify a portal evidence manifest without executing project code.
     #[arg(long, value_name = "DIR", conflicts_with = "path")]
     pub portal: Option<PathBuf>,
+
+    /// Also judge every record changed since REF (a commit or branch)
+    /// against the lifecycle transition rules, as CI judges a pull request.
+    #[arg(long, value_name = "REF", conflicts_with_all = ["path", "portal"])]
+    pub since: Option<String>,
 }
 
 pub fn run(args: &ValidateArgs) -> i32 {
@@ -37,6 +42,12 @@ pub fn run(args: &ValidateArgs) -> i32 {
         }
     } else if args.docs && args.path.is_none() {
         failed |= !run_workgraph_validation(&root);
+        if let Some(since) = &args.since {
+            failed |= !run_transition_validation(&root, since);
+        }
+    } else if let Some(since) = &args.since {
+        failed |= !validate_records(&root, None);
+        failed |= !run_transition_validation(&root, since);
     } else {
         failed |= !validate_records(&root, args.path.as_deref());
         if args.docs {
@@ -67,10 +78,10 @@ fn run_portal_validation(root: &Path, portal: &Path) -> bool {
 fn run_workgraph_validation(root: &Path) -> bool {
     let report = validate_workgraph(root);
     for note in &report.notes {
-        println!("validate --docs: note: {note}");
+        println!("{}", note.line("validate --docs", "note"));
     }
     for warning in &report.warnings {
-        eprintln!("validate --docs: warning: {warning}");
+        eprintln!("{}", warning.line("validate --docs", "warning"));
     }
     for issue in &report.issues {
         eprintln!("validate --docs: error: {issue}");
@@ -88,11 +99,39 @@ fn run_workgraph_validation(root: &Path) -> bool {
     }
 }
 
+/// Judge each record changed since `since` by the transition rules.
+fn run_transition_validation(root: &Path, since: &str) -> bool {
+    match codeflow_core::workgraph::lifecycle::judge_range(root, since, None) {
+        Ok(verdict) => {
+            for notice in &verdict.notices {
+                eprintln!("{}", notice.line("validate --since", "notice"));
+            }
+            for warning in &verdict.warnings {
+                eprintln!("{}", warning.line("validate --since", "warning"));
+            }
+            for error in &verdict.errors {
+                eprintln!("validate --since: error: {error}");
+            }
+            if verdict.is_clean() {
+                println!("validate --since {since}: record transitions clean");
+            }
+            verdict.is_clean()
+        }
+        Err(error) => {
+            eprintln!("validate --since: error: {error}");
+            false
+        }
+    }
+}
+
 /// Strictly validate `.codeflow/policy.json` — an invalid value would
 /// otherwise silently default away a gate. Returns `true` when clean or absent.
 fn validate_policy(root: &Path) -> bool {
     match policy_schema::validate_policy(root) {
         Ok(()) => {
+            for warning in policy_schema::deprecation_warnings(root) {
+                eprintln!("{}", warning.line("validate", "warning"));
+            }
             if root.join(".codeflow").join("policy.json").exists() {
                 println!("validate: .codeflow/policy.json clean");
             } else {
@@ -107,6 +146,11 @@ fn validate_policy(root: &Path) -> bool {
             eprintln!(
                 "validate: .codeflow/policy.json is invalid — see `codeflow policy explain` for every key's valid values"
             );
+            if let Some(hint) =
+                policy_schema::upgrade_order_hint(&errors, env!("CARGO_PKG_VERSION"))
+            {
+                eprintln!("validate: {hint}");
+            }
             false
         }
     }
@@ -174,7 +218,11 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
                     eprintln!("{}: error: {e}", file.display());
                 }
                 for w in &warnings {
-                    eprintln!("{}: warning: {w}", file.display());
+                    eprintln!(
+                        "{}",
+                        w.finding(&file)
+                            .line(&file.display().to_string(), "warning")
+                    );
                 }
                 if !errors.is_empty() {
                     clean = false;
@@ -222,7 +270,7 @@ fn run_docs_lint(root: &Path) -> bool {
     let report = lint_docs(root);
 
     for note in &report.notes {
-        println!("validate --docs: note: {note}");
+        println!("{}", note.line("validate --docs", "note"));
     }
     for issue in &report.issues {
         eprintln!("{issue}");

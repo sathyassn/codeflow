@@ -1,5 +1,6 @@
 ---
 id: ADR-0051
+uid: 742bd00b-4861-4c7c-a7ba-0a77f040c94d
 title: extend product design with bounded variation, trustworthy sourcing, and revision provenance
 date: 2026-08-01
 status: accepted

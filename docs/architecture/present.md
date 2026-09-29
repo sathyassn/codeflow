@@ -55,7 +55,7 @@ primitive-token, and public-history contracts are represented by matching Rust
 types and managed JSON Schemas installed under `.codeflow/schemas/present/`.
 Rust owns validation, immutable revisions, append-only feedback, retention,
 export, and the per-session loopback service. The service embeds one
-content-addressed Preact/Shiki/Mermaid distribution built reproducibly from its
+content-addressed Preact/Shiki distribution built reproducibly from its
 exact lockfile, SBOM, license inventory, integrity manifest, audit, and size
 budgets; consumer builds and runtime use require no Node toolchain.
 
@@ -68,7 +68,7 @@ feedback transitions, and runtime identity publication reserve exact bounded
 disk headroom before publication; they never commit over quota and then invoke
 retention. A control reserve and separate non-growth path keep close, runtime
 identity release, and clear available for recovery even when legacy active
-state is already over its configured bound. Block, diagram, per-collection,
+state is already over its configured bound. Block, per-collection,
 and whole-document collection cardinalities bound renderer amplification in
 addition to encoded byte limits.
 
@@ -102,12 +102,12 @@ resolution before delivery, and every post-terminal transition; exact receipt,
 delivery, and identical terminal retries append nothing, while conflicts remain
 loud. Event tails are read from the same opened
 handle used for size and repair decisions; aggregate history,
-records, revisions, media, and state entries have explicit limits. A document
-may contain at most 24 Mermaid diagrams of at most 64 KiB each. The browser pins
-Mermaid's text and edge limits, enhances diagrams serially, yields between
-items, and gives the eager fallback a cumulative time budget. One accepted
-residual remains explicit: Mermaid rendering is synchronous within one bounded
-diagram, so TSK-007 must qualify a dense adversarial corpus in real browsers.
+records, revisions, media, and state entries have explicit limits. The
+`diagram` block was removed with Mermaid (ADR-0049, update of 2026-09-28): new
+`open` and `update` input with one is refused with its conversion named, and a
+revision stored with one loads read only, as the `retired` history kind: every
+other block renders as before, each diagram shows a notice and its escaped
+source in its place, and the revision is never rewritten.
 
 ### Platform boundaries
 
@@ -121,7 +121,9 @@ allowlist-only environment, so provider-secret environment variables are not
 inherited.
 Linux/WSL2 reads bounded, no-follow `/proc` identity and terminates only the
 proven process group; macOS uses delimiter-aware identity and the same ownership
-rule, and Unix state-root inputs must be absolute. A session lease serializes
+rule, and Unix state-root inputs must be absolute. On macOS a listed process
+whose command line is not UTF-8, such as one caught mid-start, neither fails the
+inventory nor matches an owned identity. A session lease serializes
 each browser launch from exact per-attempt recovery publication through durable
 registration; close, show, and later launch consume interrupted evidence. If a
 recorded PID disappears or is reused, the native adapter searches for the exact

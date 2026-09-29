@@ -78,7 +78,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "923c444e49d1e20d3f08cbc224f57a1d2f08e29b518e4c2a77e239f96da63756"
+      "pristine_sha256": "f8aac35f86863f7dab2146d71cb0a292da6f123ab41f5cc1e17e5290f6483954"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -142,7 +142,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "453e2eb6d425f48de40b7434494db99bd9fc61c3e3d9af378e67e1845c38ef21"
+      "pristine_sha256": "ec7fb15d634b489338c748877a4b90544543efd475727025616ae8b6e1f93e5e"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
@@ -150,7 +150,7 @@
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
-      "pristine_sha256": "1260843bdef478478c9cf5791571749724142eb9ef9c1cfd32a89c362489528d"
+      "pristine_sha256": "f0779d7c8cd35c104797c2cba7354e1aa3de0b8137bda83b1dc4dde5d3f82790"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",

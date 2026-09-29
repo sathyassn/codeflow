@@ -94,6 +94,24 @@ pub fn check_commit_format(subject: &str, allowed_types: &[String]) -> Option<St
     None
 }
 
+/// Git reads a commit message's first paragraph as its subject, so a second
+/// line that is not blank silently joins the subject in `git log --oneline`,
+/// changelogs and PR titles. Require a blank line between the subject (the
+/// first non-blank line) and anything after it. A subject-only message
+/// passes. Returns `None` when the separator is present, otherwise the reason.
+#[must_use]
+pub fn check_subject_separator(message: &str) -> Option<String> {
+    let mut lines = message.lines().skip_while(|l| l.trim().is_empty());
+    lines.next()?;
+    match lines.next() {
+        Some(second) if !second.trim().is_empty() => Some(format!(
+            "the line after the subject must be blank; git reads {:?} as part of the subject",
+            second.trim_end()
+        )),
+        _ => None,
+    }
+}
+
 /// A Conventional-Commits breaking-change footer must be exactly
 /// `BREAKING CHANGE:` or `BREAKING-CHANGE:` (uppercase) to be recognized by
 /// versioning tooling (git-cliff, release-please, ...). A mis-cased footer
@@ -558,7 +576,7 @@ pub fn pr_body_policy_character(policy: &GitPolicy, body: &str) -> Option<Violat
             "PR body line {line} contains an {}",
             policy_character_name(c)
         ),
-        POLICY_CHARACTER_FIX.to_string(),
+        crate::remedy::PR_POLICY_CHARACTER.remedy(),
     ))
 }
 
@@ -660,6 +678,18 @@ mod tests {
     }
 
     // -- breaking-change footer --
+
+    #[test]
+    fn test_subject_separator_requires_blank_second_line() {
+        assert!(check_subject_separator("feat: add x").is_none());
+        assert!(check_subject_separator("feat: add x\n").is_none());
+        assert!(check_subject_separator("feat: add x\n\n- bullet").is_none());
+        assert!(check_subject_separator("\nfeat: add x\n\n- bullet").is_none());
+        let reason = check_subject_separator("feat: add x\n- bullet").unwrap();
+        assert!(reason.contains("must be blank"), "{reason}");
+        assert!(check_subject_separator("feat: add x\r\n- bullet\r\n").is_some());
+        assert!(check_subject_separator("").is_none());
+    }
 
     #[test]
     fn test_breaking_footer_exact_forms_pass() {

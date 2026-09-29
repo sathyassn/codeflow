@@ -7,14 +7,14 @@ description: Create, open, revise, and close a structured local CodeFlow review 
 
 Turn substantial session content into one inspectable, feedback-aware document
 from CodeFlow's declarative blocks and bounded local runtime; never a new
-page application per response.
+page app per response.
 
 Each invocation **reuses the utility design system**. Author **this session's**
 subject into catalog blocks; the runtime owns chrome, themes, and Comment. Do
 not clone the design-exploration board, rebuild Comment UI, or invent a second
 visual language.
 
-A supporting flow inside `cf-model-orchestrator` for non-trivial repository
+A supporting flow inside `cf-model-orchestrator` for routed repository
 work: it changes how a result is reviewed, never the accepted plan, model
 seats, producer/reviewer duties, or evidence requirements. Invoke it at the
 material task checkpoint where an interactive surface helps; batch or
@@ -42,9 +42,11 @@ present chrome or Comment.
 ## 2. Shape the information before encoding it
 
 Anchor purpose, audience, decision/action, verified evidence, uncertainty, and
-needed depth. Apply `cf-editorial-review` to substantial prose. Keep language
-plain, direct, calm, faithful to the session and project voice; preserve exact
-identifiers and technical terms; invent no personality, certainty,
+needed depth. Apply `cf-editorial-review` to substantial prose. Write the
+page plainly: simple, straightforward and clear, no mannered prose (see
+`.codeflow/rules/writing.md`), in short prose and bullets. Keep it faithful
+to the session and project voice; preserve exact identifiers and technical
+terms; invent no personality, certainty,
 familiarity, research, or decorative emoji.
 
 ### How to think (mandatory)
@@ -81,12 +83,13 @@ as a **shape** (carrier first), not a form to pad.
    let `codeflow present open <document.json>` perform authoritative semantic
    and byte-bound validation (schema alone cannot enforce unique IDs, byte
    limits, or cross-field invariants).
-3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is an
-   explicit recovery or automation path, not permission to attach to the
-   operator's browser or active view.
-4. **Handoff:** lead with the owner-private **bootstrap file path / openable
-   link** CodeFlow printed, then session ID, revision, and the decision
-   sought — never ports and cookie recipes as the primary path.
+3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is for
+   recovery, automation, or an agent sandbox (run in the project tree); it
+   never attaches to the operator's browser or active view.
+4. **Handoff:** always give this line first, then the decision sought:
+   `Review: <handoff link> (session <id>, revision <n>)`, with the link
+   CodeFlow printed (single use; the session closes if unopened for 120 s).
+   No ports or cookies.
 5. Do not claim the document was seen or approved until feedback or other
    direct evidence proves it.
 
@@ -145,6 +148,6 @@ or project document. The presentation history is not a second work authority.
 
 ## Completion
 
-Return the session ID, revision, purpose, requested decision, durable outcomes
-promoted, cleanup state, and anything not verified. Keep the chat handoff
-concise; the interactive document carries the detail.
+Return the handoff line, purpose, requested decision, durable outcomes
+promoted, cleanup state, and anything not verified. Keep chat concise; the
+page carries the detail.

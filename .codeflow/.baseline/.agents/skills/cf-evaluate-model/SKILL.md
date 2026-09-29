@@ -87,9 +87,10 @@ limits of catalog support in consuming scaffolds.
    endpoints follow [bounded effects](resources/fake-effects.md), retain both
    digests, and hide owner state.
 5. **Run the subject naturally.** Open the native interactive harness in the
-   fixture and give only `TASK.md` as the task. Match actual CodeFlow and hook
-   executables to the external receipt per [protocol](resources/protocol.md);
-   `PATH` or version is not proof. Preserve session and scoped evidence. Duo
+   fixture and give only `TASK.md`, or a scripted case's turns in order, as
+   the task. Match actual CodeFlow and hook executables to the external
+   receipt per [protocol](resources/protocol.md); `PATH` or version is not
+   proof. Preserve session and scoped evidence. Duo
    cases require real native seats; a missing seat is observed degradation, not simulation.
 6. **Record raw observations.** Use the result shape in the protocol. Record the
    route, signals actually observed, violations, references consulted, evidence
@@ -98,7 +99,9 @@ limits of catalog support in consuming scaffolds.
 7. **Grade in layers.** Run deterministic validation first. Have the other
    vendor independently grade qualitative evidence with the case rubric, then
    reconcile. A human reviews every hard failure, disagreement, security case,
-   and promotion decision. Do not majority-vote away divergent evidence.
+   and promotion decision. Write grader notes plainly: simple,
+   straightforward and clear, no mannered prose (see
+   `.codeflow/rules/writing.md`). Do not majority-vote away divergent evidence.
 8. **Compare and decide.** Compare the candidate result with the pinned baseline.
    For a controlled promotion, declare one variable and use `compare --variable`.
    Promotion requires no hard-case regression, no unresolved validity threat,

@@ -22,10 +22,10 @@ use super::report::{Action, Report};
 use super::settings_merge::merge_settings;
 use super::state::{
     guard_beneath_root, set_exec, write_file, Baseline, InstalledFile, InstalledManifest,
-    ProjectState, GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
+    ProjectState, SyncBatch, GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
 };
 use super::template::TemplateContext;
-use super::{gitutil, hash, should_skip_initial_stack_adr, ScaffoldError};
+use super::{gitutil, hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 
 /// Answers to init's at-most-three questions (charter §4.1: product
 /// one-liner, areas, permission preset). `None` = use the default / the
@@ -57,8 +57,20 @@ pub struct InitOptions {
 /// Fails on unreadable/unwritable project state, an invalid scaffold
 /// manifest, or git plumbing failures. Missing individual assets are NOT
 /// errors — they are skipped and warned in the report.
-#[allow(clippy::too_many_lines)] // linear phase orchestration; splitting hurts legibility
 pub fn init(
+    source: &dyn super::AssetSource,
+    root: &Path,
+    opts: &InitOptions,
+) -> Result<Report, ScaffoldError> {
+    // One run flushes each touched directory and the device once (TSK-153).
+    let batch = SyncBatch::begin();
+    let report = init_writes(source, root, opts)?;
+    batch.finish()?;
+    Ok(report)
+}
+
+#[allow(clippy::too_many_lines)] // linear phase orchestration; splitting hurts legibility
+fn init_writes(
     source: &dyn super::AssetSource,
     root: &Path,
     opts: &InitOptions,
@@ -159,6 +171,9 @@ pub fn init(
 
     // Phase 2: install manifest entries for this tier + preset.
     let mut installed = InstalledManifest::load_or_default(root, &opts.binary_version)?;
+    let policy_created = !root.join(".codeflow/policy.json").exists();
+    let kept_template = read_text(source, "base/ci/pull_request_template.md")
+        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
     let mut written: Vec<String> = vec![PROJECT_TOML.to_string()];
     for entry in &manifest.entries {
         if !entry.applies(tier, &preset) {
@@ -172,6 +187,20 @@ pub fn init(
                     "brownfield repository already has ADRs; starter stack decision not added"
                         .to_string(),
                 ],
+            );
+            continue;
+        }
+        if let Some(kept) = kept_template
+            .as_ref()
+            .filter(|k| entry.dest == pr_template::MANAGED_TEMPLATE && k.path != entry.dest)
+        {
+            report.file_with_notes(
+                &entry.dest,
+                Action::Skipped,
+                vec![format!(
+                    "the project's PR template {} is kept; no second template installed",
+                    kept.path
+                )],
             );
             continue;
         }
@@ -191,6 +220,20 @@ pub fn init(
     installed.scaffold_version.clone_from(&opts.binary_version);
     installed.store(root)?;
     state.store(root)?;
+    if let Some(kept) = &kept_template {
+        let diagnosis = pr_template::diagnose(root, kept, policy_created)?;
+        if let Some(line) = pr_template::describe(kept, &diagnosis, policy_created) {
+            report.notes.push(line);
+        }
+        if matches!(
+            diagnosis,
+            pr_template::Diagnosis::Diagnosed { .. }
+                | pr_template::Diagnosis::Recorded(crate::hooks::policy::MappingState::Diagnosed)
+        ) {
+            report.pending_pr_template = Some(kept.clone());
+        }
+    }
+    report.notes.extend(pr_template::automation_notes(root));
     written.push(super::state::INSTALLED_MANIFEST.to_string());
     written.push(super::state::BASELINE_DIR.to_string());
 
@@ -256,13 +299,14 @@ pub fn init(
 
     // Harness honesty (ADR-0008): the permission preset above configures
     // Claude Code only. Codex has its own guarded workspace profile, live
-    // search, public egress, and automatic approval review. Hook trust state is
-    // codex-internal and not inspectable here, so this is a pointer, not a
-    // claim that the one-time trust step has happened.
+    // search, public egress, and automatic approval review. Hook trust is a
+    // one-time step inside codex, so this is a pointer, not a claim that it
+    // has happened; `codeflow doctor --check codex` reads the trust Codex
+    // records (TSK-147).
     let codex_dir = root.join(".codex");
     if codex_dir.join("hooks.json").exists() || codex_dir.join("config.toml").exists() {
         report.notes.push(
-            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and high default effort — production launch also passes --sandbox danger-full-access; in-session guards activate after one-time `/hooks` trust inside interactive codex (git hooks + CI enforce regardless)"
+            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and high default effort — production launch also passes --sandbox danger-full-access; in-session guards activate after one-time `/hooks` trust inside interactive codex, which `codeflow doctor --check codex` confirms (git hooks + CI enforce regardless)"
                 .to_string(),
         );
     }
@@ -324,6 +368,10 @@ pub(crate) fn build_context(
     ctx.set("TIER", tier.as_str());
     ctx.set("SCAFFOLD_VERSION", version);
     ctx.set("DATE", today_utc());
+    ctx.set(
+        "WORKSPACE_ROOT_BRANCH",
+        crate::root_checkout::WORKSPACE_ROOT_BRANCH,
+    );
     ctx
 }
 
@@ -357,7 +405,40 @@ pub(crate) fn render_entry(
     } else {
         text
     };
+    if entry.dest == POLICY_DEST {
+        return Ok(Some(with_stack_product_paths(
+            &rendered,
+            ctx.get("STACK").unwrap_or_default(),
+        )));
+    }
     Ok(Some(rendered))
+}
+
+const POLICY_DEST: &str = ".codeflow/policy.json";
+
+/// Write the stack's default `git.product_paths` into the shipped policy, as
+/// the first key of `git`, unless the shipped policy already names it. The
+/// same rendered text is the default `update` compares against, so an
+/// existing install gains the key once and keeps any value it sets.
+fn with_stack_product_paths(policy: &str, stack: &str) -> String {
+    const GIT_OPEN: &str = "\n  \"git\": {\n";
+    if policy.contains("\"product_paths\"") {
+        return policy.to_string();
+    }
+    let Some(at) = policy.find(GIT_OPEN) else {
+        return policy.to_string();
+    };
+    let globs = crate::workgraph::classify::stack_product_paths(stack)
+        .iter()
+        .map(|glob| format!("\"{glob}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let split = at + GIT_OPEN.len();
+    format!(
+        "{}    \"product_paths\": [{globs}],\n{}",
+        &policy[..split],
+        &policy[split..]
+    )
 }
 
 fn record(installed: &mut InstalledManifest, entry: &ManifestEntry, sha256: String) {
@@ -575,7 +656,7 @@ fn install_entry(
 }
 
 /// Today as `YYYY-MM-DD` (UTC), no chrono dependency.
-fn today_utc() -> String {
+pub(crate) fn today_utc() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -607,6 +688,20 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shipped_policy_gains_the_stack_product_paths_once() {
+        let shipped = include_str!("../../../../assets/base/policy.json");
+        for stack in ["rust", "node", "python", "unset"] {
+            let rendered = with_stack_product_paths(shipped, stack);
+            let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+            let expected: Vec<&str> =
+                crate::workgraph::classify::stack_product_paths(stack).to_vec();
+            assert_eq!(value["git"]["product_paths"], serde_json::json!(expected));
+            assert!(crate::hooks::policy_schema::validate_policy_str(&rendered).is_ok());
+            assert_eq!(with_stack_product_paths(&rendered, "node"), rendered);
+        }
+    }
 
     #[test]
     fn civil_date_known_values() {

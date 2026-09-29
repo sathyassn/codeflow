@@ -259,8 +259,10 @@ dependencies = [
  "libc",
  "portable-pty",
  "pulldown-cmark",
+ "regex",
  "rust-embed",
  "serde_json",
+ "serde_yaml_ng",
  "tempfile",
  "tokio",
  "toml",
@@ -292,6 +294,7 @@ dependencies = [
  "toml",
  "ulid",
  "unicode-normalization",
+ "uuid",
  "which",
  "windows-sys",
 ]

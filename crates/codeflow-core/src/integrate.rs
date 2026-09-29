@@ -13,7 +13,6 @@
 //! the hard line (charter §6.5).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use thiserror::Error;
 
@@ -209,8 +208,10 @@ pub fn integrate(
     // below only guards the target ref, not the branch).
     let tested_oid = resolve_branch(&repo, branch)?;
 
-    // Stage 3: test gate (full mode).
+    // Stage 3: test gate (full mode), then the release structure of a
+    // project that adopted CodeFlow's calculator (SPC-013 R-94).
     let test_gate = run_test_stage(repo_root, &original)?;
+    run_release_structure(repo_root, &original, &tested_oid.to_string())?;
 
     // The branch must still point at the exact commit that was tested, and the
     // target must be an ancestor of it (a real fast-forward), before we advance.
@@ -247,7 +248,7 @@ pub fn integrate(
     // `update-ref` advances the ref in place — compare-and-swap against the
     // pre-rebase oid (safe under concurrency), with the gate token set so the
     // reference-transaction hook admits this sanctioned landing.
-    let update = Command::new("git")
+    let update = crate::git::command()
         .args([
             "update-ref",
             &format!("refs/heads/{target}"),
@@ -317,6 +318,26 @@ fn finish_integration(
 }
 
 /// Run the full-mode test gate; restores `original` checkout on failure.
+/// The structural release check of a project that adopted `CodeFlow`'s
+/// calculator, on the tested commit; any other project runs nothing.
+fn run_release_structure(
+    repo_root: &Path,
+    original: &str,
+    tested: &str,
+) -> Result<(), IntegrateError> {
+    if !crate::release_local::adopted(repo_root) {
+        return Ok(());
+    }
+    crate::release_local::structural(repo_root, tested).map_err(|message| {
+        let _ = restore_checkout(repo_root, original);
+        IntegrateError::TestGateFailed {
+            summary: format!(
+                "  release state (structural, not checked against the host): {message}"
+            ),
+        }
+    })
+}
+
 fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, IntegrateError> {
     match run_gate(repo_root, "full") {
         Ok(GateOutcome::NoTargets { reason }) => Ok(TestGateSummary::SkippedNoTargets { reason }),
@@ -373,7 +394,7 @@ fn resolve_branch(repo: &git2::Repository, name: &str) -> Result<git2::Oid, Inte
 /// Tracked-file modifications that block integrate (untracked files are
 /// permitted — they survive checkout/rebase untouched).
 fn dirty_files(repo_root: &Path) -> Result<Vec<String>, IntegrateError> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(["status", "--porcelain", "--untracked-files=no"])
         .current_dir(repo_root)
         .output()
@@ -392,7 +413,7 @@ fn dirty_files(repo_root: &Path) -> Result<Vec<String>, IntegrateError> {
 }
 
 fn checkout(repo_root: &Path, name: &str) -> Result<(), IntegrateError> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(["checkout", name])
         .current_dir(repo_root)
         .output()
@@ -411,7 +432,7 @@ fn checkout(repo_root: &Path, name: &str) -> Result<(), IntegrateError> {
 }
 
 fn restore_checkout(repo_root: &Path, name: &str) -> Result<(), String> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(["checkout", name])
         .current_dir(repo_root)
         .output()
@@ -424,7 +445,7 @@ fn restore_checkout(repo_root: &Path, name: &str) -> Result<(), String> {
 }
 
 fn current_checkout(repo_root: &Path) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(["symbolic-ref", "--short", "HEAD"])
         .current_dir(repo_root)
         .output()
@@ -442,7 +463,7 @@ fn refresh_target_worktrees(
     tested_oid: git2::Oid,
 ) -> Vec<String> {
     let mut warnings = Vec::new();
-    let Ok(output) = Command::new("git")
+    let Ok(output) = crate::git::command()
         .args(["worktree", "list", "--porcelain"])
         .current_dir(repo_root)
         .output()
@@ -476,7 +497,7 @@ fn refresh_target_worktrees(
         }
         match worktree_clean_at(&path, old_target_oid) {
             Ok(true) => {
-                let reset = Command::new("git")
+                let reset = crate::git::command()
                     .args([
                         "-C",
                         path.to_string_lossy().as_ref(),
@@ -507,7 +528,7 @@ fn refresh_target_worktrees(
 
 fn worktree_clean_at(path: &Path, old_target_oid: git2::Oid) -> Result<bool, ()> {
     let git = |args: &[&str]| {
-        Command::new("git")
+        crate::git::command()
             .arg("-C")
             .arg(path)
             .args(args)
@@ -560,9 +581,10 @@ fn count_commits(repo: &git2::Repository, old: git2::Oid, new: git2::Oid) -> usi
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) -> std::process::Output {
-        let output = Command::new("git")
+        let output = crate::git::command()
             .args(args)
             .env("GIT_AUTHOR_NAME", "Test")
             .env("GIT_AUTHOR_EMAIL", "test@example.com")
@@ -857,6 +879,57 @@ mod tests {
         // Restored to the original checkout.
         let head = git(dir.path(), &["rev-parse", "--abbrev-ref", "HEAD"]);
         assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), "main");
+    }
+
+    /// A project that adopted `CodeFlow`'s release calculator, with a stub
+    /// `release.py` that records its arguments and exits with `code`.
+    fn adopt_release_calculator(dir: &Path, code: i32) {
+        fs::write(
+            dir.join(".codeflow/project.toml"),
+            "scaffold_version = \"3.0.0\"\n\n[release]\nbackend = \"codeflow\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::write(
+            dir.join("scripts/release.py"),
+            format!(
+                "import sys\nopen('release-args.txt', 'w').write(' '.join(sys.argv[1:]))\n\
+                 sys.stderr.write('release error: coupled stamps disagree')\nsys.exit({code})\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// SPC-013 R-94: `codeflow integrate` runs the release structure check in
+    /// its test stage, on the exact commit it would land.
+    #[test]
+    fn integrate_runs_the_structural_release_check_in_its_test_stage() {
+        if Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = repo_with_feature_branch();
+        write_test_config(dir.path(), "exit 0");
+        adopt_release_calculator(dir.path(), 2);
+        let before = branch_oid(dir.path(), "main");
+        let tested = branch_oid(dir.path(), "feat/x");
+        let err = integrate(dir.path(), "feat/x", "main").unwrap_err();
+        assert!(
+            matches!(err, IntegrateError::TestGateFailed { .. }),
+            "expected TestGateFailed, got {err}"
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains("release state (structural, not checked against the host)"),
+            "{text}"
+        );
+        assert!(text.contains("coupled stamps disagree"), "{text}");
+        assert_eq!(branch_oid(dir.path(), "main"), before, "main untouched");
+        let args = fs::read_to_string(dir.path().join("release-args.txt")).unwrap();
+        assert_eq!(args, format!("check-state --structural --ref {tested}"));
+
+        adopt_release_calculator(dir.path(), 0);
+        integrate(dir.path(), "feat/x", "main").expect("a valid release tree lands");
+        assert_eq!(branch_oid(dir.path(), "main"), tested);
     }
 
     #[test]

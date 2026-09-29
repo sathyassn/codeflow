@@ -1,26 +1,21 @@
-# codeflow CI — the perimeter. Re-runs every gate that matters so nothing
+# codeflow CI: the perimeter. Re-runs every gate that matters so nothing
 # depends on local state. Written by `codeflow init` and managed by `codeflow
-# update` (charter §4.3): an unmodified copy is replaced on update; your edits
-# are preserved via 3-way merge, never clobbered.
+# update` (charter section 4.3): an unmodified copy is replaced on update; your
+# edits are preserved via 3-way merge, never clobbered.
 #
-# IMPORTANT: the "Install codeflow" step below is a PLACEHOLDER. Until you
-# replace it with the release installer (or a from-source build), the codeflow
-# `test`/`validate` gates FAIL RED by design — a missing binary is an unarmed
-# perimeter, not a pass. This is a loud, honest signal that the gate is not yet
-# enforcing; wire the install step to turn it green. Do NOT "fix" the red by
-# making a missing binary skip — that hands branch protection a job that ran
-# nothing. The secret-scan and security-review jobs work out of the box
-# (external pinned tools); the commit-standards job now runs the same
-# `codeflow ci` binary as the gates, so it shares the Install-codeflow step and
-# fails RED until that step is wired (CodeFlow ADR-0017 — one source of truth,
-# no drift).
+# The codeflow binary is the version your target branch pins in
+# .codeflow/project.toml (`scaffold_version`), downloaded from the release and
+# verified against its published sha256.sum; a missing or wrong checksum fails
+# the job (SPC-013 R-113). Until that release is published the jobs fail red:
+# an unverified binary is never installed. An upgrade takes two pull requests:
+# first raise only `scaffold_version`, then run `codeflow update`.
+#
+# The commit, branch and PR-body standards run in codeflow-policy.yml on
+# `pull_request_target`, so a pull request cannot edit the job that judges it.
 name: codeflow-ci
 
 on:
-  # `edited` reruns the checks when the PR body changes after it opens, so an
-  # edited body is linted again (a bare `pull_request:` would skip edits).
   pull_request:
-    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main, master]
 
@@ -28,44 +23,148 @@ permissions:
   contents: read
 
 jobs:
+  # Ubuntu jobs pin the runner image (ubuntu-24.04), so a move of the
+  # ubuntu-latest label to a new Ubuntu release cannot change the toolchain
+  # under these jobs without a commit here. Move the label deliberately, after
+  # a green run on the new image. Actions are on the node24 runtime.
   gates:
     name: codeflow gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Install codeflow
+      - name: Install codeflow (target-pinned, checksum-verified)
+        env:
+          PIN_REF: ${{ github.event.pull_request.base.sha || github.sha }}
         run: |
-          # PLACEHOLDER: replace with the release installer once published, e.g.
-          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
-          #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
-          echo "::error::codeflow install step is an unwired PLACEHOLDER — the test/validate gates below fail RED until you replace this with the real installer. The perimeter is intentionally not armed."
+          # SPC-013 R-113: install the codeflow version the target pins in
+          # .codeflow/project.toml (scaffold_version), verified against the
+          # release's published sha256.sum. A missing checksum file, a missing
+          # entry or a mismatch fails closed; nothing unverified is installed.
+          set -euo pipefail
+          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null) || {
+            echo "::error::cannot read .codeflow/project.toml at ${PIN_REF}; no pinned codeflow version"; exit 1; }
+          version=$(printf '%s\n' "$state" | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::no scaffold_version pinned in .codeflow/project.toml at ${PIN_REF}"; exit 1
+          fi
+          base="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v${version}"
+          asset=codeflow-cli-x86_64-unknown-linux-gnu.tar.xz
+          work=$(mktemp -d)
+          if ! curl -fsSL "${base}/sha256.sum" -o "${work}/sha256.sum"; then
+            echo "::error::codeflow ${version} has no published checksum file (sha256.sum); refusing an unverified binary"; exit 1
+          fi
+          expected=$(awk -v a="$asset" '{n=$2; sub(/^\*/, "", n)} n == a {print $1; exit}' "${work}/sha256.sum")
+          if [ -z "$expected" ]; then
+            echo "::error::sha256.sum for codeflow ${version} lists no checksum for ${asset}; refusing an unverified binary"; exit 1
+          fi
+          if ! curl -fsSL "${base}/${asset}" -o "${work}/${asset}"; then
+            echo "::error::cannot download ${asset} for codeflow ${version}"; exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "${work}/${asset}" | cut -d ' ' -f 1)
+          else
+            actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::checksum mismatch for ${asset} (codeflow ${version}): expected ${expected}, got ${actual}; refusing it"; exit 1
+          fi
+          tar -xJf "${work}/${asset}" -C "$work"
+          mkdir -p "$HOME/.codeflow/bin"
+          cp "${work}/codeflow-cli-x86_64-unknown-linux-gnu/codeflow" "$HOME/.codeflow/bin/codeflow"
+          chmod +x "$HOME/.codeflow/bin/codeflow"
+          echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          echo "codeflow ${version} installed and verified against sha256.sum"
 
       - name: codeflow test
-        run: |
-          if command -v codeflow >/dev/null 2>&1; then
-            codeflow test --strict
-          else
-            echo "::error::codeflow not installed — test gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
-            exit 1
-          fi
+        run: codeflow test --strict
 
       - name: codeflow validate --docs
+        run: codeflow validate --docs
+
+  # R-113 upgrade step one: a pull request that raises the pinned version is
+  # judged by the target's binary above; this job tests the candidate binary
+  # the head pins, verified the same way, without enforcing with it.
+  candidate:
+    name: candidate codeflow
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compare the target and head pins
+        id: pins
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if command -v codeflow >/dev/null 2>&1; then
-            codeflow validate --docs
+          pin() { git show "$1:.codeflow/project.toml" 2>/dev/null | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1; }
+          if [ "$(pin "$BASE_SHA")" = "$(pin "$HEAD_SHA")" ]; then
+            echo "pinned codeflow version unchanged; the gates job already covers it"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::codeflow not installed — validate gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
-            exit 1
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Install candidate codeflow (head-pinned, checksum-verified)
+        if: steps.pins.outputs.changed == 'true'
+        env:
+          PIN_REF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # SPC-013 R-113: install the codeflow version the target pins in
+          # .codeflow/project.toml (scaffold_version), verified against the
+          # release's published sha256.sum. A missing checksum file, a missing
+          # entry or a mismatch fails closed; nothing unverified is installed.
+          set -euo pipefail
+          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null) || {
+            echo "::error::cannot read .codeflow/project.toml at ${PIN_REF}; no pinned codeflow version"; exit 1; }
+          version=$(printf '%s\n' "$state" | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::no scaffold_version pinned in .codeflow/project.toml at ${PIN_REF}"; exit 1
+          fi
+          base="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v${version}"
+          asset=codeflow-cli-x86_64-unknown-linux-gnu.tar.xz
+          work=$(mktemp -d)
+          if ! curl -fsSL "${base}/sha256.sum" -o "${work}/sha256.sum"; then
+            echo "::error::codeflow ${version} has no published checksum file (sha256.sum); refusing an unverified binary"; exit 1
+          fi
+          expected=$(awk -v a="$asset" '{n=$2; sub(/^\*/, "", n)} n == a {print $1; exit}' "${work}/sha256.sum")
+          if [ -z "$expected" ]; then
+            echo "::error::sha256.sum for codeflow ${version} lists no checksum for ${asset}; refusing an unverified binary"; exit 1
+          fi
+          if ! curl -fsSL "${base}/${asset}" -o "${work}/${asset}"; then
+            echo "::error::cannot download ${asset} for codeflow ${version}"; exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "${work}/${asset}" | cut -d ' ' -f 1)
+          else
+            actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::checksum mismatch for ${asset} (codeflow ${version}): expected ${expected}, got ${actual}; refusing it"; exit 1
+          fi
+          tar -xJf "${work}/${asset}" -C "$work"
+          mkdir -p "$HOME/.codeflow/bin"
+          cp "${work}/codeflow-cli-x86_64-unknown-linux-gnu/codeflow" "$HOME/.codeflow/bin/codeflow"
+          chmod +x "$HOME/.codeflow/bin/codeflow"
+          echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          echo "codeflow ${version} installed and verified against sha256.sum"
+
+      - name: codeflow validate --docs with the candidate
+        if: steps.pins.outputs.changed == 'true'
+        run: |
+          codeflow --version
+          codeflow validate --docs
 
   secret-scan:
     name: secret scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -83,9 +182,9 @@ jobs:
 
   security-review:
     name: security review
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -142,43 +241,4 @@ jobs:
             exit 1
           else
             echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
-          fi
-
-  commit-lint:
-    name: commit standards
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install codeflow
-        run: |
-          # PLACEHOLDER: replace with the release installer once published, e.g.
-          #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
-          #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
-          echo "::error::codeflow install step is an unwired PLACEHOLDER — the commit-standards gate below fails RED until you replace this with the real installer. The perimeter is intentionally not armed."
-
-      # One source of truth: `codeflow ci` runs the SAME commit-format,
-      # no-AI-attribution, no-emoji, breaking-footer, and branch-naming checks as
-      # the git-client hooks and the Claude git-guard, reading .codeflow/policy.json
-      # for the level of each (block/warn/off), plus the PR-body structure check
-      # (git.pr_sections: required sections present and non-empty, test evidence
-      # when the range touches code). No inline regex to drift
-      # (CodeFlow ADR-0017).
-      # The PR body is passed via CODEFLOW_PR_BODY in `env:` (not interpolated into
-      # the script), so an untrusted body cannot inject shell.
-      - name: codeflow ci (commit + branch + PR-body standards)
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          if command -v codeflow >/dev/null 2>&1; then
-            codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF"
-          else
-            echo "::error::codeflow not installed — commit-standards gate cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
-            exit 1
           fi

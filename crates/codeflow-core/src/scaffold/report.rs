@@ -73,6 +73,9 @@ pub struct Report {
     /// Non-file findings: hook wiring, bootstrap notes, next steps.
     pub notes: Vec<String>,
     pub warnings: Vec<String>,
+    /// A kept PR template whose mapping awaits the operator's decision
+    /// (SPC-013 R-84); an interactive caller asks before it reports.
+    pub pending_pr_template: Option<super::pr_template::KeptTemplate>,
 }
 
 impl Report {

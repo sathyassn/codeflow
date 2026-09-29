@@ -14,6 +14,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "cargo fmt --all -- --check"
+        },
         "essential": {
           "command": "cargo fmt --all -- --check"
         },
@@ -29,9 +32,16 @@
       "modes": {
         "essential": {
           "command": "cargo test --workspace --quiet"
-        },
+        }
+      }
+    },
+    {
+      "name": "rust-doctest",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
         "full": {
-          "command": "cargo test --workspace"
+          "command": "cargo test --workspace --doc"
         }
       }
     },
@@ -40,6 +50,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "cargo clippy --workspace --all-targets -- -D warnings"
+        },
         "essential": {
           "command": "cargo clippy --workspace --all-targets -- -D warnings"
         },
@@ -69,7 +82,8 @@
         "full": {
           "command": "cargo llvm-cov --workspace --summary-only --fail-under-lines 90"
         }
-      }
+      },
+      "timeout_seconds": 1800
     },
     {
       "name": "release-automation",
@@ -89,11 +103,14 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py"
+        },
         "essential": {
-          "command": "python3 scripts/gate-parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py"
         },
         "full": {
-          "command": "python3 scripts/gate-parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py"
         }
       }
     },
@@ -103,10 +120,10 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "python3 -B evals/model-artifacts/test_eval_kit.py"
+          "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py"
         },
         "full": {
-          "command": "python3 -B evals/model-artifacts/test_eval_kit.py"
+          "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py"
         }
       }
     },
@@ -115,6 +132,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "python3 -B evals/skill-triggers/test_triggers.py"
+        },
         "essential": {
           "command": "python3 -B evals/skill-triggers/test_triggers.py"
         },
@@ -128,6 +148,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "python3 -B evals/herdr-delivery/test_delivery.py"
+        },
         "essential": {
           "command": "python3 -B evals/herdr-delivery/test_delivery.py"
         },
@@ -150,12 +173,23 @@
       }
     },
     {
+      "name": "journey-gate",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "python3 -B scripts/test_journey_gate.py && python3 -B scripts/journey-gate.py"
+        }
+      },
+      "timeout_seconds": 3600
+    },
+    {
       "name": "cf-present-qualification",
       "enabled": true,
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "npm ci --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web && npm run supply-chain --prefix crates/codeflow-present/web && npm run check --prefix crates/codeflow-present/web && npm run check:browser --prefix crates/codeflow-present/web && npm run check:windows-profile-confinement --prefix crates/codeflow-present/web && cargo test -p codeflow-present -- --test-threads=1 && cargo test -p codeflow-cli --test present_cli --test init_e2e -- --test-threads=1 && node scripts/check-present-binary-delta.mjs && cargo build -p codeflow-cli && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web"
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm ci --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web && npm run supply-chain --prefix crates/codeflow-present/web && npm run check --prefix crates/codeflow-present/web && npm run check:browser --prefix crates/codeflow-present/web && npm run check:windows-profile-confinement --prefix crates/codeflow-present/web && cargo test -p codeflow-present -- --test-threads=1 && cargo test -p codeflow-cli --test present_cli --test init_e2e -- --test-threads=1 && node scripts/check-present-binary-delta.mjs && cargo build -p codeflow-cli && CF_PRESENT_CODEFLOW=$(python3 -B scripts/gate-binary.py) npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web\""
         }
       },
       "timeout_seconds": 900
@@ -166,7 +200,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "npm run deps:install --prefix docs-portal && npm run check --prefix docs-portal && npm run build --prefix docs-portal && cargo run --quiet -p codeflow-cli -- validate --portal docs-portal"
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal && npm run check --prefix docs-portal && npm run build --prefix docs-portal && cargo run --quiet -p codeflow-cli -- validate --portal docs-portal\""
         }
       },
       "timeout_seconds": 300

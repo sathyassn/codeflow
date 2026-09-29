@@ -28,29 +28,29 @@ hooks, harness integration, CI requirements, and remote rules.
 
 ## Install
 
-The latest verified published release is v2.1.0: macOS arm64/x64 and Linux x64
-archives with a shell installer, and no Windows archive or PowerShell
-installer. The workspace on `main` is the pending 3.0.0 source, whose release
-targets add Windows x64 and a PowerShell installer; no 3.0.0 assets exist until
-a release is published. The anonymous installer works once codeflow's releases
-are public; for private or early access use the `gh release download` path in
-the adoption guide or the checkout build below:
+From 3.0.0 on, each release publishes archives for macOS (arm64 and x64),
+Linux x64 and Windows x64, each with a `.sha256` file, plus a shell installer
+and a PowerShell installer. Install the latest release on macOS or Linux:
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
 ```
 
-Or build the pending source from a checkout, with a Rust toolchain:
+On native Windows, in PowerShell (Git for Windows is required):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex"
+```
+
+Or build from a checkout, with a Rust toolchain:
 
 ```sh
 cargo install --path crates/codeflow-cli
 ```
 
-On native Windows, build with Cargo: the PowerShell installer is a pending
-3.0.0 release target, not a published asset. Git for Windows is required.
-WSL2 uses the Linux installer and is the
-preferred Windows route for Linux-native tooling or Claude sandboxing. See the
-platform-assurance section in the adoption guide before high-blast-radius work.
+WSL2 uses the Linux installer and is the preferred Windows route for
+Linux-native tooling or Claude sandboxing. See the platform-assurance section
+in the adoption guide before high-blast-radius work.
 
 See [docs/adoption.md](docs/adoption.md) for the full install and adoption guide.
 
@@ -84,7 +84,7 @@ ordinary task execution and adds no model-running CLI command.
 | `portal setup --path <dir>` | Adopt or reconcile the offline documentation-portal starter (same utility craft as present; durable docs; no Comment) |
 | `portal transfer --confirm` | Take responsibility for the adopted runtime while preserving edits and intentional deletions |
 | `present` | Open, revise, review, export, close, and clear a this-session catalog review (runtime owns chrome and Comment; not a docs portal) |
-| `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`) |
+| `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`; `prompt-reminder` for manual use) |
 | `git-hook` | Git client hook target the `.codeflow/git-hooks` shims exec (wired via `core.hooksPath`) |
 | `orient` | Print the session-start digest (pointers, not content) |
 | `test` | Run the test gate; `test setup` safely detects root stacks, lists/applies embedded templates, or appends explicit targets |
@@ -92,7 +92,7 @@ ordinary task execution and adds no model-running CLI command.
 | `ci` | Portable, binary-sourced CI check: verify a commit range + branch name against policy (auto-detects the platform's range); exit 2 on a violation or invalid policy |
 | `status` | Generated view: branch, worktrees, in-flight work, capabilities; `--delivery` shows the capability-delivery rollup |
 | `integrate` | Land a branch into a target: flock(rebase → test → ff-merge) |
-| `doctor` | Health checks (15): hooks, claude, codex, grok, config, permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, test-config |
+| `doctor` | Health checks (19): hooks, claude, codex, grok, config, permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit |
 | `policy` | Inspect `.codeflow/policy.json`: `explain` renders every key's type, default, and valid values from the binary; `show` prints the effective values, their source, and flags invalid ones |
 | `recall` | Search project memory: ledger, session summaries, ADRs, epics/tasks/specs, capabilities |
 | `remote` | Remote provider operations (branch protection) |
@@ -173,9 +173,8 @@ npm run build          # derive pages and evidence, build site
 npm run preview        # serve the built site on loopback
 ```
 
-The guide names the exact commit it was built from and carries no release
-version, because the source is the pending 3.0.0 while v2.1.0 remains the
-latest verified published release. See
+The guide names the exact commit it was built from; it shows a release
+version only when a verified published release exists for that commit. See
 [reading the CodeFlow guide locally](docs/adoption.md#reading-the-codeflow-guide-locally)
 for the check, validate, preview, and cleanup details.
 

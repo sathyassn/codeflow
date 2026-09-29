@@ -10,7 +10,7 @@ use std::path::Path;
 use git2::Repository;
 
 use crate::error::HookError;
-use crate::testing::gate::{run_gate, GateOutcome};
+use crate::testing::gate::{run_gate_exact, GateOutcome, GateTargetResult};
 
 use super::policy::{GitPolicy, PolicyLevel};
 use super::repo::current_branch;
@@ -22,13 +22,20 @@ use super::{standards, Violation};
 pub struct StageReport {
     /// Policy violations (block and warn level).
     pub violations: Vec<Violation>,
-    /// Non-violation diagnostics (skipped gates, degraded checks) — printed
-    /// so degradation stays legible (charter principle 8).
-    pub notes: Vec<String>,
+    /// Non-violation diagnostics (skipped gates, degraded checks), each with
+    /// the step that clears it, printed so degradation stays legible
+    /// (charter principle 8, SPC-013 R-80).
+    pub notes: Vec<crate::remedy::Finding>,
+    /// Progress lines that report something done or passed: nothing to
+    /// clear, so no remedy (a timing, a check that passed).
+    pub status: Vec<String>,
+    /// Findings another plane printed when this one ran its check, as it
+    /// printed them, each with the remedy lines under it.
+    pub relayed: Vec<String>,
+    /// The rules another plane's check blocked on when this one ran it
+    /// (pre-push's `codeflow ci`), named in the refusal record (TSK-149).
+    pub refused_by: Vec<String>,
 }
-
-const SANCTIONED: &str =
-    "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
 
 // ---------------------------------------------------------------------------
 // pre-commit
@@ -58,12 +65,26 @@ pub fn pre_commit(
             "git.commit_to_protected",
             policy.commit_to_protected,
             format!("commit on protected branch '{branch}'"),
-            SANCTIONED.to_string(),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
+    report
+        .violations
+        .extend(crate::root_checkout::hook_violation(
+            root,
+            policy,
+            &crate::root_checkout::process_env,
+        ));
 
     if policy.secret_scan.is_active() {
         scan_staged(&repo, policy, &mut report, false);
+    }
+
+    if policy.conflict_markers.is_active() {
+        report.violations.extend(super::conflict_markers::staged(
+            &repo,
+            policy.conflict_markers,
+        ));
     }
 
     Ok(report)
@@ -76,11 +97,31 @@ fn scan_staged(
     report: &mut StageReport,
     abort_traversal_for_test: bool,
 ) {
+    // The index git commits: `commit -a` and `commit <path>` name a
+    // temporary one in GIT_INDEX_FILE, so the ordinary index would miss a
+    // secret they record. An index that cannot be read fails closed.
+    let index_file = super::conflict_markers::effective_index(repo);
+    let index = match git2::Index::open(&index_file) {
+        Ok(index) => index,
+        Err(error) => {
+            report.violations.push(Violation::new(
+                "git.secret_scan",
+                policy.secret_scan,
+                format!(
+                    "staged secret scan incomplete: cannot read the index {}: {error}",
+                    index_file.display()
+                ),
+                crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
+            ));
+            return;
+        }
+    };
     let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), None, None) else {
-        report
-            .notes
-            .push("secret scan skipped: could not read the staged diff".to_string());
+    let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), None) else {
+        report.notes.push(crate::remedy::Finding::new(
+            "secret scan skipped: could not read the staged diff",
+            crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
+        ));
         return;
     };
 
@@ -100,8 +141,7 @@ fn scan_staged(
                 "git.secret_scan",
                 policy.secret_scan,
                 format!("dotenv file staged for commit: {path_str}"),
-                "keep env files out of git (.gitignore covers them); commit a .env.example instead"
-                    .to_string(),
+                crate::remedy::ENV_FILE_STAGED.remedy(),
             ));
         }
     }
@@ -137,7 +177,7 @@ fn scan_staged(
             "git.secret_scan",
             policy.secret_scan,
             format!("staged secret scan incomplete: {error}"),
-            "retry the commit after the staged diff can be scanned completely".to_string(),
+            crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
         ));
         return;
     }
@@ -149,8 +189,7 @@ fn scan_staged(
                 "possible secret ({}) staged at {}:{}",
                 hit.pattern, hit.file, hit.line
             ),
-            "remove the secret from the staged content; rotate it if it was ever committed"
-                .to_string(),
+            crate::remedy::SECRET_STAGED.remedy(),
         ));
     }
 }
@@ -174,10 +213,7 @@ fn push_format_violations(
             "git.commit_format",
             policy.commit_format,
             reason,
-            format!(
-                "use `type(scope): description` with type one of: {}",
-                policy.commit_types.join(", ")
-            ),
+            crate::remedy::COMMIT_TYPE.with(&[("types", &policy.commit_types.join(", "))]),
         ));
     }
     if let Some(reason) = standards::check_subject_length(
@@ -189,10 +225,18 @@ fn push_format_violations(
             "git.commit_format",
             policy.commit_format,
             reason,
-            format!(
-                "keep the description ≤ {} chars and the whole subject line ≤ {} chars",
-                policy.commit_desc_max_len, policy.commit_subject_max_len
-            ),
+            crate::remedy::COMMIT_LENGTH.with(&[
+                ("description", &policy.commit_desc_max_len.to_string()),
+                ("subject", &policy.commit_subject_max_len.to_string()),
+            ]),
+        ));
+    }
+    if let Some(reason) = standards::check_subject_separator(cleaned) {
+        report.violations.push(Violation::new(
+            "git.commit_format",
+            policy.commit_format,
+            reason,
+            crate::remedy::COMMIT_BLANK_LINE.remedy(),
         ));
     }
     if let Some(reason) = standards::check_breaking_footer(subject, cleaned) {
@@ -200,9 +244,7 @@ fn push_format_violations(
             "git.commit_format",
             policy.commit_format,
             reason,
-            "signal a breaking change with `type!: description` or the exact footer \
-             `BREAKING CHANGE:` (uppercase)"
-                .to_string(),
+            crate::remedy::COMMIT_BREAKING_FOOTER.remedy(),
         ));
     }
 }
@@ -371,12 +413,10 @@ pub fn commit_msg_from(
                 "git.commit_body",
                 policy.commit_body,
                 reason,
-                format!(
-                    "the body is `- ` bullets (max {}, each ≤ {} chars) and an optional \
-                     `BREAKING CHANGE:` footer; blank lines are fine, prose paragraphs are not. \
-                     Other trailers are allowed only when opted in via git.commit_footer_tokens",
-                    policy.commit_body_max_bullets, policy.commit_body_bullet_max_len
-                ),
+                crate::remedy::COMMIT_BODY.with(&[
+                    ("bullets", &policy.commit_body_max_bullets.to_string()),
+                    ("length", &policy.commit_body_bullet_max_len.to_string()),
+                ]),
             ));
         }
         if let Some(reason) =
@@ -386,10 +426,8 @@ pub fn commit_msg_from(
                 "git.commit_body",
                 policy.commit_body,
                 reason,
-                format!(
-                    "every commit must carry these footer trailers: {}",
-                    policy.commit_required_footers.join(", ")
-                ),
+                crate::remedy::COMMIT_REQUIRED_FOOTERS
+                    .with(&[("footers", &policy.commit_required_footers.join(", "))]),
             ));
         }
     }
@@ -410,10 +448,8 @@ pub fn commit_msg_from(
                 "git.commit_ticket",
                 level,
                 reason,
-                format!(
-                    "add a ticket-reference footer trailer (key one of: {})",
-                    policy.commit_ticket_keys.join(", ")
-                ),
+                crate::remedy::COMMIT_TICKET
+                    .with(&[("keys", &policy.commit_ticket_keys.join(", "))]),
             ));
         }
     }
@@ -424,8 +460,7 @@ pub fn commit_msg_from(
                 "git.ai_attribution",
                 policy.ai_attribution,
                 format!("commit message contains AI attribution ({which})"),
-                "remove it — project policy forbids AI attribution in commits and PR bodies (charter §6.4)"
-                    .to_string(),
+                crate::remedy::COMMIT_AI_ATTRIBUTION.remedy(),
             ));
         }
     }
@@ -436,7 +471,7 @@ pub fn commit_msg_from(
                 "git.commit_emoji",
                 policy.commit_emoji,
                 format!("commit subject contains emoji ('{c}')"),
-                "remove emoji from the commit subject (charter §6.4)".to_string(),
+                crate::remedy::COMMIT_EMOJI.remedy(),
             ));
         }
     }
@@ -483,7 +518,7 @@ fn policy_character_violation(policy: &GitPolicy, scanned: &str) -> Option<Viola
         "git.policy_characters",
         policy.policy_characters,
         format!("{place} contains an {name}"),
-        standards::POLICY_CHARACTER_FIX.to_string(),
+        crate::remedy::COMMIT_POLICY_CHARACTER.remedy(),
     ))
 }
 
@@ -518,15 +553,31 @@ pub fn commit_msg_with_files(
     }
     if let Some(path) = standards::first_watched_path(changed_files, &policy.breaking_watch_paths) {
         report.violations.push(Violation::new(
-            "git.breaking_watch_paths",
+            WATCHED_PATH_RULE,
             PolicyLevel::Warn,
             format!("commit touches a declared contract surface ({path})"),
-            "confirm it is not a breaking change, or mark it with `type!:` and a \
-             `BREAKING CHANGE:` footer with the migration path"
-                .to_string(),
+            crate::remedy::BREAKING_WATCH_PATH.remedy(),
         ));
     }
     report
+}
+
+/// The rule of the contract-surface tripwire.
+pub const WATCHED_PATH_RULE: &str = "git.breaking_watch_paths";
+
+/// Move each contract-surface finding into the notes (TSK-147 AC-4). A run
+/// with no pull request body cannot state the Release impact that settles
+/// it, so it is a note there that points at those fields, never a warning.
+pub fn note_watched_paths(report: &mut StageReport) {
+    let (watched, kept): (Vec<Violation>, Vec<Violation>) = std::mem::take(&mut report.violations)
+        .into_iter()
+        .partition(|v| v.rule == WATCHED_PATH_RULE);
+    report.violations = kept;
+    report.notes.extend(
+        watched
+            .into_iter()
+            .map(|v| crate::remedy::Finding::new(v.message, v.remedy)),
+    );
 }
 
 /// Drop the verbose-commit scissors section and `#` comment lines.
@@ -584,9 +635,16 @@ pub fn pre_merge_commit(
             "git.merge_to_protected",
             policy.merge_to_protected,
             format!("merge commit on protected branch '{branch}'"),
-            SANCTIONED.to_string(),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
+    report
+        .violations
+        .extend(crate::root_checkout::hook_violation(
+            root,
+            policy,
+            &crate::root_checkout::process_env,
+        ));
 
     Ok(report)
 }
@@ -646,7 +704,7 @@ pub fn reference_transaction(
     let sanctioned = integrate_token || human_override;
 
     for line in stdin.lines() {
-        let Some((_old_oid, new_oid, refname)) = parse_ref_line(line) else {
+        let Some((old_oid, new_oid, refname)) = parse_ref_line(line) else {
             continue;
         };
         let Some(branch) = refname.strip_prefix("refs/heads/") else {
@@ -654,6 +712,11 @@ pub fn reference_transaction(
         };
         if !policy.branch_is_protected(branch) {
             continue; // feature branches stay fully free (rebase, force, etc.)
+        }
+        // Storage housekeeping (`git pack-refs`, run by `git gc`) rewrites
+        // where a ref is kept, not what it points to: not an update.
+        if keeps_value(&repo, refname, old_oid, new_oid) {
+            continue;
         }
 
         // Deletion (new-oid all zeros): governed by delete_protected, which
@@ -664,7 +727,7 @@ pub fn reference_transaction(
                     "git.delete_protected",
                     policy.delete_protected,
                     format!("deleting protected branch '{branch}' via a local ref update"),
-                    "protected branches are never deleted; remove the entry from git.protected_branches first if truly intended".to_string(),
+                    crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
             continue;
@@ -688,10 +751,42 @@ pub fn reference_transaction(
             "git.local_ref_protection",
             policy.local_ref_protection,
             format!("local update of protected branch '{branch}' that is not a sync from origin"),
-            SANCTIONED.to_string(),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
     Ok(report)
+}
+
+/// `true` when a transaction line leaves `refname` resolving to the commit it
+/// resolves to now, so it moves nothing. Two such lines come from
+/// `git pack-refs` (and so `git gc`) in the files backend:
+/// - the write into packed-refs, `<zero or old> <X>`, where X is the ref's
+///   current value;
+/// - the prune of the loose copy, `<X> <zero>`, while packed-refs holds the
+///   same X and is not locked for rewriting. A real deletion always locks
+///   packed-refs to drop the entry there too, and its packed transaction
+///   reports `<zero> <zero>`, so it still reaches the deletion rule.
+fn keeps_value(repo: &Repository, refname: &str, old_oid: &str, new_oid: &str) -> bool {
+    let current = repo.refname_to_id(refname).ok();
+    if !is_zero_sha(new_oid) {
+        return git2::Oid::from_str(new_oid).is_ok_and(|new| current == Some(new));
+    }
+    let Ok(old) = git2::Oid::from_str(old_oid) else {
+        return false;
+    };
+    let common = repo.commondir();
+    if is_zero_sha(old_oid) || current != Some(old) || common.join("packed-refs.lock").exists() {
+        return false;
+    }
+    let loose = std::fs::read_to_string(common.join(refname)).ok();
+    let packed = std::fs::read_to_string(common.join("packed-refs")).ok();
+    loose.is_some_and(|loose| loose.trim() == old_oid)
+        && packed.is_some_and(|packed| {
+            packed.lines().any(|line| {
+                line.split_once(' ')
+                    .is_some_and(|(sha, name)| sha == old_oid && name.trim() == refname)
+            })
+        })
 }
 
 /// Parse one `<old-oid> <new-oid> <ref-name>` reference-transaction line.
@@ -781,7 +876,7 @@ pub fn parse_push_refs(input: &str) -> Vec<PushRef> {
 }
 
 /// The pre-push stage: protected-branch push/delete/force checks, branch
-/// naming against `branch_prefixes`, and the optional quick test gate.
+/// naming against `branch_prefixes`. The push set runs separately.
 ///
 /// # Errors
 ///
@@ -800,6 +895,12 @@ pub fn pre_push(
         let Some(branch) = r.remote_branch() else {
             continue; // tags and other refs are out of scope
         };
+        if branch == crate::ids::REGISTRY_BRANCH {
+            // The registry is a data branch with its own profile (SPC-013
+            // R-6): no branch naming, no test gate, and the append-only rule.
+            registry_push(root, &repo, r, &mut report);
+            continue;
+        }
         let protected = policy.branch_is_protected(branch);
 
         if r.is_delete() {
@@ -808,7 +909,7 @@ pub fn pre_push(
                     "git.delete_protected",
                     policy.delete_protected,
                     format!("push would delete protected branch '{branch}'"),
-                    "protected branches are never deleted remotely; adjust git.protected_branches first if truly intended".to_string(),
+                    crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
             continue;
@@ -819,7 +920,7 @@ pub fn pre_push(
                 "git.push_to_protected",
                 policy.push_to_protected,
                 format!("direct push to protected branch '{branch}'"),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
 
@@ -830,7 +931,7 @@ pub fn pre_push(
                         "git.force_push_protected",
                         policy.force_push_protected,
                         format!("non-fast-forward (force) push to protected branch '{branch}'"),
-                        SANCTIONED.to_string(),
+                        crate::remedy::PROTECTED_BRANCH.remedy(),
                     ));
                 }
             } else if policy.force_push_unprotected.is_active() {
@@ -838,8 +939,7 @@ pub fn pre_push(
                     "git.force_push_unprotected",
                     policy.force_push_unprotected,
                     format!("non-fast-forward (force) push to branch '{branch}'"),
-                    "policy git.force_push_unprotected restricts force-pushes in this repo"
-                        .to_string(),
+                    crate::remedy::FORCE_PUSH.remedy(),
                 ));
             }
         }
@@ -849,22 +949,61 @@ pub fn pre_push(
                 "git.branch_naming",
                 policy.branch_naming,
                 format!("branch '{branch}' does not match `{{prefix}}/{{kebab-name}}`"),
-                format!(
-                    "rename with a sanctioned prefix: {}",
-                    policy.branch_prefixes.join(" ")
-                ),
+                crate::remedy::BRANCH_NAME.with(&[("prefixes", &policy.branch_prefixes.join(" "))]),
             ));
         }
     }
 
-    let pushes_branches = refs
-        .iter()
-        .any(|r| r.remote_branch().is_some() && !r.is_delete());
-    if pushes_branches && policy.test_gate_on_push.is_active() {
-        run_test_gate(root, policy, &mut report);
-    }
+    // The push set (`test_gate_on_push`) is run by the CLI hook, which binds
+    // each check to the pushed commits: see `run_push_targets`.
 
     Ok(report)
+}
+
+/// The registry's push rule (SPC-013 R-8, R-108, R-109): never deleted or
+/// force-pushed, and every commit in the pushed range adds new `ids/` files
+/// only or is a typed restore. It blocks whatever the policy says, and a
+/// range that cannot be read blocks too.
+fn registry_push(root: &Path, repo: &Repository, r: &PushRef, report: &mut StageReport) {
+    let block = |message: String| {
+        Violation::always_blocking(
+            "registry.append_only",
+            message,
+            "issue ids with `codeflow task|epic|spec new`; repair damage with `codeflow ids restore <id>...`",
+        )
+    };
+    if r.is_delete() {
+        report.violations.push(block(
+            "push would delete `codeflow/registry`; the registry only grows (R-8)".to_string(),
+        ));
+        return;
+    }
+    if is_force_update(repo, r) {
+        report.violations.push(block(
+            "non-fast-forward (force) push to `codeflow/registry`; the registry only grows (R-8)"
+                .to_string(),
+        ));
+        return;
+    }
+    let git = crate::ids::Git::new(root);
+    let exclude =
+        (!is_zero_sha(&r.remote_sha) && !r.remote_sha.is_empty()).then_some(r.remote_sha.as_str());
+    let findings = crate::ids::Ledger::read(&git, &r.local_sha)
+        .and_then(|ledger| ledger.range_violations(&git, exclude));
+    match findings {
+        Ok(findings) => {
+            for finding in findings {
+                report.violations.push(block(format!(
+                    "registry commit {}: {}",
+                    crate::ids::ledger::short(&finding.commit),
+                    finding.message
+                )));
+            }
+        }
+        Err(error) => report.violations.push(block(format!(
+            "cannot read the pushed registry range: {error}"
+        ))),
+    }
 }
 
 /// `true` when the remote ref exists and the local sha does not descend from
@@ -889,30 +1028,57 @@ fn is_force_update(repo: &Repository, r: &PushRef) -> bool {
     }
 }
 
-/// Run the quick test gate (charter §6.1 `test_gate_on_push`), honoring the
-/// absence of a configured stack gracefully (AC #7: no stack = loud no-op).
-fn run_test_gate(root: &Path, policy: &GitPolicy, report: &mut StageReport) {
+/// Time budget for the whole pre-push set. A push set that takes longer still
+/// runs to its verdict, but the hook names the slowest step (TSK-132).
+pub const PUSH_SET_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// One timed step of the push set.
+#[derive(Debug, Clone)]
+pub struct PushStep {
+    /// A test-config target name, or the built-in command.
+    pub name: String,
+    pub duration: std::time::Duration,
+    /// `true` for a test-config target, which its `modes.quick` key moves
+    /// out of the push set; `false` for a built-in check.
+    pub configurable: bool,
+}
+
+/// Run the test-config targets that define a `quick` mode, and only those
+/// (charter §6.1 `test_gate_on_push`). The test suite belongs to the full
+/// gate, so there is no `quick` to `essential` alias here. A missing config or
+/// an empty set is a loud note, never a violation. Returns each target's
+/// timing for the push-set budget.
+pub fn run_push_targets(
+    root: &Path,
+    policy: &GitPolicy,
+    report: &mut StageReport,
+) -> Vec<PushStep> {
     let cfg_path = root.join(".codeflow").join("test-config.json");
     if !cfg_path.exists() {
-        report.notes.push(
-            "test gate skipped: no .codeflow/test-config.json (run /cf-stack to add a stack, \
-             or create .codeflow/test-config.json)"
-                .to_string(),
-        );
-        return;
+        report.notes.push(crate::remedy::Finding::new(
+            "quick targets skipped: no .codeflow/test-config.json",
+            crate::remedy::PUSH_TARGETS_UNCONFIGURED.remedy(),
+        ));
+        return Vec::new();
     }
-    // Delegate to the shared gate so `quick` resolves to the `essential` mode
-    // that shipped test-configs actually define (see `gate::run_gate`).
-    match run_gate(root, "quick") {
+    match run_gate_exact(root, "quick") {
         Ok(GateOutcome::NoTargets { reason }) => {
-            report.notes.push(format!("test gate skipped: {reason}"));
+            report.notes.push(crate::remedy::Finding::new(
+                format!(
+                    "quick targets skipped: {reason} (the push set runs the targets with a \
+                     `quick` mode)"
+                ),
+                crate::remedy::PUSH_TARGETS_NONE.remedy(),
+            ));
+            Vec::new()
         }
         Ok(GateOutcome::Completed {
             results, passed, ..
         }) => {
             if passed {
-                report.notes.push(format!(
-                    "quick test gate passed ({} target(s))",
+                report.status.push(format!(
+                    "quick targets passed on the working checkout ({} target(s); untracked \
+                     files there can influence them, CI checks the pushed commit)",
                     results.len()
                 ));
             } else {
@@ -924,34 +1090,79 @@ fn run_test_gate(root: &Path, policy: &GitPolicy, report: &mut StageReport) {
                 report.violations.push(Violation::new(
                     "git.test_gate_on_push",
                     policy.test_gate_on_push,
-                    format!("quick test gate failed for: {}", failed.join(", ")),
-                    "fix the failing tests, or run `codeflow test --mode quick` to reproduce"
-                        .to_string(),
+                    format!("push set failed for: {}", failed.join(", ")),
+                    crate::remedy::PUSH_SET_FAILED.remedy(),
                 ));
             }
+            results.iter().map(target_step).collect()
         }
         Err(e) => {
             report.violations.push(Violation::new(
                 "git.test_gate_on_push",
                 policy.test_gate_on_push,
-                format!("quick test gate could not load test-config.json: {e}"),
-                "repair .codeflow/test-config.json, then run `codeflow test --mode quick`"
-                    .to_string(),
+                format!("push set could not load test-config.json: {e}"),
+                crate::remedy::TEST_CONFIG_REPAIR.remedy(),
             ));
+            Vec::new()
         }
     }
+}
+
+fn target_step(result: &GateTargetResult) -> PushStep {
+    PushStep {
+        name: result.name.clone(),
+        duration: std::time::Duration::from_millis(result.duration_ms),
+        configurable: true,
+    }
+}
+
+/// When the whole push set took longer than `budget`, the note naming its
+/// slowest step and what moves it: the `modes.quick` key for a test-config
+/// target, or the push-set rule for a built-in check.
+#[must_use]
+pub fn over_budget_note(
+    steps: &[PushStep],
+    total: std::time::Duration,
+    budget: std::time::Duration,
+) -> Option<crate::remedy::Finding> {
+    if total <= budget {
+        return None;
+    }
+    let head = format!(
+        "push set took {:.1}s, over its {}s budget",
+        total.as_secs_f64(),
+        budget.as_secs()
+    );
+    Some(match steps.iter().max_by_key(|s| s.duration) {
+        Some(slow) if slow.configurable => crate::remedy::Finding::new(
+            format!(
+                "{head}; slowest step: target '{}' ({:.1}s)",
+                slow.name,
+                slow.duration.as_secs_f64()
+            ),
+            crate::remedy::PUSH_OVER_BUDGET_TARGET.with(&[("target", &slow.name)]),
+        ),
+        Some(slow) => crate::remedy::Finding::new(
+            format!(
+                "{head}; slowest step: built-in `{}` ({:.1}s), which has no push-set key",
+                slow.name,
+                slow.duration.as_secs_f64()
+            ),
+            crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy(),
+        ),
+        None => crate::remedy::Finding::new(head, crate::remedy::PUSH_OVER_BUDGET_BUILTIN.remedy()),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::process::Command;
 
     use super::super::policy::PolicyLevel;
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -993,14 +1204,34 @@ mod tests {
         }
     }
 
+    /// The scan fixtures commit at the root checkout on `feat/x`; they judge
+    /// the secret scan alone, so the root-checkout rule (TSK-165) is off.
+    fn scan_policy() -> GitPolicy {
+        GitPolicy {
+            root_checkout_commits: PolicyLevel::Off,
+            ..GitPolicy::default()
+        }
+    }
+
+    /// A repository on `main` with a linked worktree on `feat/x`, where
+    /// feature work belongs; returns the worktree.
+    fn feature_worktree(dir: &Path) -> std::path::PathBuf {
+        init_repo(dir, "main");
+        git(
+            dir,
+            &["worktree", "add", "-q", ".worktrees/x", "-b", "feat/x"],
+        );
+        dir.join(".worktrees/x")
+    }
+
     // -- pre-commit --
 
     #[test]
     fn test_pre_commit_clean_on_feature_branch() {
         let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        stage(dir.path(), "src/lib.rs", "pub fn hello() {}\n");
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let wt = feature_worktree(dir.path());
+        stage(&wt, "src/lib.rs", "pub fn hello() {}\n");
+        let report = pre_commit(&wt, &GitPolicy::default(), false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
@@ -1083,7 +1314,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env", "DB_PASSWORD=hunter2hunter2\n");
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
         assert!(
             report
                 .violations
@@ -1096,7 +1327,7 @@ mod tests {
             &["commit", "-m", "chore: pre-adoption env file"],
         );
         git(dir.path(), &["rm", ".env"]);
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
         assert!(
             report.violations.is_empty(),
             "deleting a tracked dotenv file must pass: {:?}",
@@ -1109,7 +1340,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env.example", "DB_PASSWORD=\n");
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
         assert!(report.violations.is_empty());
     }
 
@@ -1122,7 +1353,7 @@ mod tests {
             "src/config.rs",
             "let key = \"AKIAIOSFODNN7EXAMPLF\";\n",
         );
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].rule, "git.secret_scan");
         assert!(report.violations[0].message.contains("src/config.rs"));
@@ -1136,7 +1367,7 @@ mod tests {
         stage(dir.path(), ".env", "X=1\n");
         let policy = GitPolicy {
             secret_scan: PolicyLevel::Off,
-            ..GitPolicy::default()
+            ..scan_policy()
         };
         let report = pre_commit(dir.path(), &policy, false).unwrap();
         assert!(report.violations.is_empty());
@@ -1146,6 +1377,124 @@ mod tests {
     fn test_pre_commit_outside_repo_is_config_error() {
         let dir = tempfile::tempdir().unwrap();
         assert!(pre_commit(dir.path(), &GitPolicy::default(), false).is_err());
+    }
+
+    /// A marker line built at run time, so this file holds none itself.
+    fn marker(fill: char, size: usize, label: &str) -> String {
+        format!("{}{label}", fill.to_string().repeat(size))
+    }
+
+    fn leftover_conflict() -> String {
+        format!(
+            "{}\nours\n{}\ntheirs\n{}\n",
+            marker('<', 7, " HEAD"),
+            marker('=', 7, ""),
+            marker('>', 7, " feat/y")
+        )
+    }
+
+    fn marker_findings(report: &StageReport) -> Vec<&Violation> {
+        report
+            .violations
+            .iter()
+            .filter(|v| v.rule == "git.conflict_markers")
+            .collect()
+    }
+
+    #[test]
+    fn test_pre_commit_conflict_markers_at_each_level() {
+        // TSK-170 AC-1: block by default, warn at warn, silent at off.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        stage(dir.path(), "notes.md", &leftover_conflict());
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let found = marker_findings(&report);
+        assert_eq!(found.len(), 3, "{:?}", report.violations);
+        assert!(found.iter().all(|v| v.level == PolicyLevel::Block));
+        assert!(
+            found[0].message.starts_with("notes.md:1 "),
+            "{}",
+            found[0].message
+        );
+        assert!(
+            found[1].message.starts_with("notes.md:3 "),
+            "{}",
+            found[1].message
+        );
+        assert!(found[0]
+            .remedy
+            .contains("resolve the conflict and restage, or set conflict-marker-size"));
+        for (level, expected) in [(PolicyLevel::Warn, 3), (PolicyLevel::Off, 0)] {
+            let policy = GitPolicy {
+                conflict_markers: level,
+                ..GitPolicy::default()
+            };
+            let report = pre_commit(dir.path(), &policy, false).unwrap();
+            let found = marker_findings(&report);
+            assert_eq!(found.len(), expected, "{level:?}");
+            assert!(found.iter().all(|v| v.level == level));
+        }
+    }
+
+    #[test]
+    fn test_pre_commit_conflict_markers_skip_headings_binaries_and_deletions() {
+        // TSK-170 AC-2.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        stage(dir.path(), "old.md", &leftover_conflict());
+        git(
+            dir.path(),
+            &["commit", "-q", "-m", "chore: a file before adoption"],
+        );
+        git(dir.path(), &["rm", "-q", "old.md"]);
+        stage(
+            dir.path(),
+            "README.md",
+            &format!("Title\n{}\n\ntext\n", marker('=', 7, "")),
+        );
+        let binary = format!("\0{}\n", leftover_conflict());
+        stage(dir.path(), "blob.bin", &binary);
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        assert!(
+            marker_findings(&report).is_empty(),
+            "{:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn test_pre_commit_reads_the_staged_conflict_marker_size() {
+        // TSK-170 AC-3: a fixture and its attribute staged together commit;
+        // markers of the set size in that path are still found.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        stage(dir.path(), "fixtures/merge.txt", &leftover_conflict());
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        assert_eq!(marker_findings(&report).len(), 3);
+        stage(
+            dir.path(),
+            ".gitattributes",
+            "fixtures/** conflict-marker-size=32\n",
+        );
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        assert!(
+            marker_findings(&report).is_empty(),
+            "{:?}",
+            report.violations
+        );
+        stage(
+            dir.path(),
+            "fixtures/real.txt",
+            &format!(
+                "{}\nx\n{}\n",
+                marker('<', 32, " HEAD"),
+                marker('>', 32, " b")
+            ),
+        );
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let found = marker_findings(&report);
+        assert_eq!(found.len(), 2, "{:?}", report.violations);
+        assert!(found[0].message.starts_with("fixtures/real.txt:1 "));
     }
 
     // -- commit-msg --
@@ -1208,14 +1557,15 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_msg_policy_character_in_subject_blocked() {
+    fn test_commit_msg_policy_character_in_subject_warns_by_default() {
         let report = commit_msg(&GitPolicy::default(), "feat: a \u{2014} b\n", false);
         let v = report
             .violations
             .iter()
             .find(|v| v.rule == "git.policy_characters")
             .expect("a policy_characters violation");
-        assert_eq!(v.level, PolicyLevel::Block);
+        // A writing guideline by default: reported, never a refusal.
+        assert_eq!(v.level, PolicyLevel::Warn);
         assert!(v.message.contains("commit subject"), "{}", v.message);
         assert!(v.message.contains("em dash (U+2014)"), "{}", v.message);
         assert!(v.remedy.contains("a comma, colon"), "{}", v.remedy);
@@ -1224,12 +1574,17 @@ mod tests {
     #[test]
     fn test_commit_msg_policy_character_in_body_blocked() {
         let msg = "feat: add ranges\n\n- pages 1\u{2013}3\n";
-        let report = commit_msg(&GitPolicy::default(), msg, false);
+        let policy = GitPolicy {
+            policy_characters: PolicyLevel::Block,
+            ..GitPolicy::default()
+        };
+        let report = commit_msg(&policy, msg, false);
         let v = report
             .violations
             .iter()
             .find(|v| v.rule == "git.policy_characters")
             .expect("a policy_characters violation");
+        assert_eq!(v.level, PolicyLevel::Block);
         assert!(v.message.contains("line 3"), "{}", v.message);
         assert!(v.message.contains("en dash (U+2013)"), "{}", v.message);
     }
@@ -1761,8 +2116,8 @@ mod tests {
     #[test]
     fn test_pre_merge_commit_feature_branch_clean() {
         let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        let report = pre_merge_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
+        let wt = feature_worktree(dir.path());
+        let report = pre_merge_commit(&wt, &GitPolicy::default(), false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
@@ -1839,6 +2194,18 @@ mod tests {
         );
     }
 
+    /// A commit one ahead of `main`, made on a side branch so `main` itself
+    /// stays where it is, as it does when the hook sees the move prepared.
+    fn commit_ahead_of_main(dir: &Path) -> String {
+        git(dir, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(dir.join("f.txt"), "x\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-m", "feat: local"]);
+        let ahead = rev_parse(dir, "HEAD");
+        git(dir, &["checkout", "-q", "main"]);
+        ahead
+    }
+
     const ZERO40: &str = "0000000000000000000000000000000000000000";
     const FAKE40: &str = "1111111111111111111111111111111111111111";
 
@@ -1849,10 +2216,7 @@ mod tests {
         init_repo(dir.path(), "main");
         let base = rev_parse(dir.path(), "HEAD");
         set_origin_ref(dir.path(), "main", &base);
-        std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
-        git(dir.path(), &["add", "."]);
-        git(dir.path(), &["commit", "-m", "feat: local"]);
-        let ahead = rev_parse(dir.path(), "HEAD");
+        let ahead = commit_ahead_of_main(dir.path());
         let stdin = format!("{base} {ahead} refs/heads/main\n");
         let report =
             reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
@@ -1936,10 +2300,7 @@ mod tests {
         init_repo(dir.path(), "main");
         let base = rev_parse(dir.path(), "HEAD");
         set_origin_ref(dir.path(), "main", &base); // "poisoned"/stale at base
-        std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
-        git(dir.path(), &["add", "."]);
-        git(dir.path(), &["commit", "-m", "feat: local"]);
-        let ahead = rev_parse(dir.path(), "HEAD");
+        let ahead = commit_ahead_of_main(dir.path());
         let stdin = format!("{base} {ahead} refs/heads/main\n");
         let report =
             reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
@@ -2045,7 +2406,7 @@ mod tests {
             let _ = p;
         };
         let git_try = |args: &[&str]| {
-            Command::new("git")
+            crate::git::command()
                 .args(args)
                 .current_dir(dir.path())
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -2304,7 +2665,7 @@ mod tests {
     }
 
     fn rev_parse(dir: &Path, what: &str) -> String {
-        let out = Command::new("git")
+        let out = crate::git::command()
             .args(["rev-parse", what])
             .current_dir(dir)
             .output()
@@ -2312,17 +2673,36 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
-    // -- test gate --
+    // -- push set: quick targets (the CLI hook binds them to the pushed tree) --
+
+    fn run_targets(dir: &Path, policy: &GitPolicy) -> (StageReport, Vec<PushStep>) {
+        let mut report = StageReport::default();
+        let steps = run_push_targets(dir, policy, &mut report);
+        (report, steps)
+    }
+
+    #[test]
+    fn pre_push_ref_checks_never_run_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_test_config(dir.path(), "false");
+        let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
 
     #[test]
     fn test_gate_skips_without_config() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
-        let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
         assert!(report.violations.is_empty());
+        assert!(steps.is_empty());
         assert!(
-            report.notes.iter().any(|n| n.contains("test gate skipped")),
+            report
+                .notes
+                .iter()
+                .any(|n| n.text.contains("quick targets skipped")),
             "absence must be loud: {:?}",
             report.notes
         );
@@ -2347,52 +2727,7 @@ mod tests {
         std::fs::write(cf.join("test-config.json"), config).unwrap();
     }
 
-    #[test]
-    fn test_gate_failure_blocks_when_policy_blocks() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_test_config(dir.path(), "false");
-        let policy = GitPolicy {
-            test_gate_on_push: PolicyLevel::Block,
-            ..GitPolicy::default()
-        };
-        let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
-        let report = pre_push(dir.path(), &policy, &refs, false).unwrap();
-        let gate: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.rule == "git.test_gate_on_push")
-            .collect();
-        assert_eq!(gate.len(), 1);
-        assert_eq!(gate[0].level, PolicyLevel::Block);
-    }
-
-    #[test]
-    fn test_gate_pass_is_quiet() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_test_config(dir.path(), "true");
-        let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
-        assert!(report.violations.is_empty(), "{:?}", report.violations);
-    }
-
-    #[test]
-    fn test_gate_off_does_not_run() {
-        let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        write_test_config(dir.path(), "false");
-        let policy = GitPolicy {
-            test_gate_on_push: PolicyLevel::Off,
-            ..GitPolicy::default()
-        };
-        let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
-        let report = pre_push(dir.path(), &policy, &refs, false).unwrap();
-        assert!(report.violations.is_empty());
-    }
-
-    /// Write raw bytes to `.codeflow/test-config.json` (bypasses the enabled
-    /// happy-path config that `write_test_config` produces).
+    /// Write raw bytes to `.codeflow/test-config.json`.
     fn write_raw_test_config(dir: &Path, body: &str) {
         let cf = dir.join(".codeflow");
         std::fs::create_dir_all(&cf).unwrap();
@@ -2400,50 +2735,108 @@ mod tests {
     }
 
     #[test]
+    fn push_set_blocks_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_test_config(dir.path(), "false");
+        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
+        let gate: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|v| v.rule == "git.test_gate_on_push")
+            .collect();
+        assert_eq!(gate.len(), 1, "{:?}", report.violations);
+        assert_eq!(gate[0].level, PolicyLevel::Block);
+        assert!(gate[0].message.contains("push set failed for: demo"));
+        assert_eq!(steps.len(), 1);
+        assert!(steps[0].configurable);
+    }
+
+    #[test]
+    fn test_gate_pass_is_quiet() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_test_config(dir.path(), "true");
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    #[test]
     fn test_gate_no_targets_is_a_skip_note() {
-        // The config's only target is disabled, so no enabled target defines the
-        // requested mode → run_gate returns NoTargets. The gate must record a
-        // loud skip note, never a violation (charter principle 8: degradation
-        // stays legible).
+        // The only target is disabled, so NoTargets: a loud note, never a
+        // violation (charter principle 8: degradation stays legible).
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         write_raw_test_config(
             dir.path(),
-            r#"{
-  "schema_version": "1.0",
-  "targets": [
-    {
-      "name": "demo",
-      "runner": "custom",
-      "enabled": false,
-      "modes": { "quick": { "command": "true" } }
-    }
-  ]
-}"#,
+            r#"{"schema_version": "1.0", "targets": [
+  {"name": "demo", "runner": "custom", "enabled": false,
+   "modes": { "quick": { "command": "true" } } }]}"#,
         );
-        let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
         assert!(report.violations.is_empty(), "{:?}", report.violations);
         assert!(
             report
                 .notes
                 .iter()
-                .any(|n| n.contains("test gate skipped") && n.contains("no enabled target")),
-            "no-targets must be a loud skip naming the NoTargets reason: {:?}",
+                .any(|n| n.text.contains("quick targets skipped")
+                    && n.text.contains("no enabled target")),
+            "{:?}",
+            report.notes
+        );
+    }
+
+    #[test]
+    fn push_set_runs_only_quick_targets_and_never_aliases_essential() {
+        // TSK-132: a target without a `quick` mode is out of the push set even
+        // when its `essential` mode would fail.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_raw_test_config(
+            dir.path(),
+            r#"{"schema_version": "1.0", "targets": [
+    { "name": "lint", "runner": "custom",
+      "modes": { "quick": { "command": "true" }, "essential": { "command": "true" } } },
+    { "name": "suite", "runner": "custom",
+      "modes": { "essential": { "command": "false" }, "full": { "command": "false" } } }
+]}"#,
+        );
+        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+        let names: Vec<&str> = steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["lint"]);
+    }
+
+    #[test]
+    fn push_set_is_empty_for_an_essential_only_config() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_raw_test_config(
+            dir.path(),
+            r#"{"schema_version": "1.0", "targets": [
+    { "name": "suite", "runner": "custom",
+      "modes": { "essential": { "command": "false" }, "full": { "command": "false" } } }
+]}"#,
+        );
+        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+        assert!(steps.is_empty());
+        assert!(
+            report.notes.iter().any(
+                |n| n.text.contains("quick targets skipped") && n.text.contains("`quick` mode")
+            ),
+            "{:?}",
             report.notes
         );
     }
 
     #[test]
     fn test_gate_unreadable_config_is_a_violation() {
-        // A populated but malformed config is a broken gate, not absence. If
-        // parsing fails, pre-push must preserve the policy level and refuse to
-        // turn the configured gate into a skip.
+        // A populated but malformed config is a broken gate, not absence.
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         write_raw_test_config(dir.path(), "{ not json");
-        let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
         let gate: Vec<_> = report
             .violations
             .iter()
@@ -2452,8 +2845,59 @@ mod tests {
         assert_eq!(gate.len(), 1, "{:?}", report.violations);
         assert!(gate[0].message.contains("could not load"));
         assert!(gate[0].message.contains("invalid test config"));
-        assert!(!report.notes.iter().any(|n| n.contains("test gate skipped")));
+        assert!(!report.notes.iter().any(|n| n.text.contains("skipped")));
     }
+
+    fn step(name: &str, secs: u64, configurable: bool) -> PushStep {
+        PushStep {
+            name: name.into(),
+            duration: std::time::Duration::from_secs(secs),
+            configurable,
+        }
+    }
+
+    #[test]
+    fn over_budget_names_a_slow_target_and_its_key() {
+        let steps = [
+            step("rust-format", 1, true),
+            step("rust-clippy", 50, true),
+            step("codeflow validate --docs", 2, false),
+        ];
+        let total = std::time::Duration::from_secs(61);
+        let note = over_budget_note(&steps, total, PUSH_SET_BUDGET)
+            .unwrap()
+            .to_string();
+        assert!(note.contains("61.0s, over its 60s budget"), "{note}");
+        assert!(note.contains("target 'rust-clippy'"), "{note}");
+        assert!(note.contains("`modes.quick`"), "{note}");
+        assert!(over_budget_note(&steps, PUSH_SET_BUDGET, PUSH_SET_BUDGET).is_none());
+    }
+
+    #[test]
+    fn over_budget_names_a_slow_built_in_check_without_a_quick_hint() {
+        // Built-in work takes the total over budget while every configured
+        // target is fast (T132-5).
+        let steps = [
+            step("lint", 2, true),
+            step("codeflow ci --head abc --branch feat/x", 70, false),
+        ];
+        let note = over_budget_note(&steps, std::time::Duration::from_secs(72), PUSH_SET_BUDGET)
+            .unwrap()
+            .to_string();
+        assert!(note.contains("built-in `codeflow ci"), "{note}");
+        assert!(!note.contains("modes.quick"), "{note}");
+        // No configured targets at all still gets a diagnosis.
+        let only_builtin = [step("codeflow validate --docs", 65, false)];
+        let note = over_budget_note(
+            &only_builtin,
+            std::time::Duration::from_secs(65),
+            PUSH_SET_BUDGET,
+        )
+        .unwrap()
+        .to_string();
+        assert!(note.contains("validate --docs"), "{note}");
+    }
+
     // Regression: a one-parent commit named `Merge ...` is checked; a real
     // merge (is_merge = true) stays exempt (codex pre-flip review).
     #[test]

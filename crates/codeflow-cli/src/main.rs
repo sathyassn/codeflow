@@ -7,6 +7,7 @@ mod prompts;
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Parser, Subcommand};
+use codeflow_core::root_checkout;
 use codeflow_core::scaffold;
 
 const BINARY_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -38,6 +39,11 @@ enum Command {
         /// Overwrite existing files (never the default).
         #[arg(long)]
         force: bool,
+        /// Set up an umbrella workspace: put the root checkout on its root branch
+        /// (created from the default branch if missing), write `git.root_branch`,
+        /// and ignore every nested git repository. Refuses over uncommitted changes.
+        #[arg(long)]
+        workspace: bool,
     },
     /// Refresh managed scaffold files (3-way merge; never clobbers).
     Update {
@@ -71,7 +77,7 @@ enum Command {
     Integrate(cmd::integrate::IntegrateArgs),
     /// Health checks: hooks, Claude, Codex, config, permissions, network,
     /// delegates, repo integrity, CI perimeter, managed drift, customization,
-    /// and test config — `doctor --list` names them all.
+    /// instruction size, and test config; `doctor --list` names them all.
     Doctor(cmd::doctor::DoctorArgs),
     /// Inspect .codeflow/policy.json: `explain` the full key schema from the
     /// binary; `show` the effective values, their source, and invalid keys.
@@ -88,13 +94,96 @@ enum Command {
     Task(cmd::new::TaskArgs),
     /// Durable-work lifecycle checks.
     Work(cmd::work::WorkArgs),
+    /// Create an ADR: number the next ADR-NNNN and write it as proposed.
+    Adr(cmd::new::AdrArgs),
+    /// The shared id registry: seed, backfill, sync, admit, retarget, restore, check.
+    Ids(cmd::ids::IdsArgs),
     /// Check explicit forecast allocations and pinned evidence without writes.
     Estimate(cmd::estimate::EstimateArgs),
     /// Review this session on the utility presentation surface (catalog JSON, Comment).
     Present(cmd::present::PresentArgs),
+    /// Read-only reports: `ceremony`, the process cost over merged pull requests.
+    Report(cmd::report::ReportArgs),
+}
+
+/// Whether a command records its repository in the user registry. Hook
+/// entry points, `ci` and the read-only checks (`validate`, `work`,
+/// `estimate`, `report`) do not; `orient` and `status` do, since the session-start
+/// orient is the main sign that a repository is in use.
+fn touches_registry(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::Hook(_)
+            | Command::GitHook(_)
+            | Command::Ci(_)
+            | Command::Validate(_)
+            | Command::Work(_)
+            | Command::Estimate(_)
+            | Command::Report(_)
+    )
+}
+
+/// Ask and record the decision for a kept PR template (SPC-013 R-84)
+/// before the report says setup is done. End of input leaves it diagnosed.
+fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> anyhow::Result<()> {
+    let Some(kept) = report.pending_pr_template.clone() else {
+        return Ok(());
+    };
+    if let Some(decision) = prompts::decide_pr_template(&mut std::io::stdin().lock(), &kept.path)? {
+        let line = scaffold::pr_template::record_decision(
+            root,
+            &kept,
+            decision,
+            &scaffold::pr_template::today(),
+        )?;
+        report.notes.push(line);
+        report.pending_pr_template = None;
+    }
+    Ok(())
+}
+
+/// Plain `init` and `update` switch nothing in a folder that holds nested
+/// repositories; they name `codeflow init --workspace` instead.
+fn print_workspace_hint(root: &std::path::Path) {
+    let policy = codeflow_core::hooks::policy::Policy::load(root).git;
+    if let Some(hint) = root_checkout::workspace_hint(root, &policy) {
+        println!("{hint}");
+    }
+}
+
+/// `init --workspace` switches the root checkout before anything is
+/// written, so a refusal over uncommitted changes leaves the folder untouched.
+fn prepare_workspace(
+    root: &std::path::Path,
+    workspace: bool,
+) -> anyhow::Result<Option<root_checkout::BranchStep>> {
+    if !workspace {
+        return Ok(None);
+    }
+    let policy = codeflow_core::hooks::policy::Policy::load(root).git;
+    Ok(Some(root_checkout::prepare_branch(root, &policy)?))
+}
+
+/// After `init`: what `--workspace` set up, or the hint for plain `init`.
+fn report_workspace(
+    root: &std::path::Path,
+    step: Option<root_checkout::BranchStep>,
+) -> anyhow::Result<()> {
+    match step {
+        Some(step) => println!("{}", root_checkout::finish(root, step)?),
+        None => print_workspace_hint(root),
+    }
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
+    // A hook git fires during this command runs this binary (SPC-013 R-85):
+    // the path goes only into git children's environment, so an inherited
+    // value is dropped here and no other child ever sees one.
+    std::env::remove_var(codeflow_core::git::HOOK_BINARY_ENV);
+    if let Ok(binary) = std::env::current_exe() {
+        codeflow_core::git::designate_calling_binary(binary);
+    }
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
 
@@ -106,9 +195,10 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Forecast checking is strictly read-only, including the user registry.
-    // Other commands retain their existing best-effort upkeep (charter §7).
-    if !matches!(cli.command, Command::Estimate(_)) {
+    // Hooks, CI and read-only commands leave the user registry alone: they
+    // run in sandboxes and CI, and forecast checking is strictly read-only.
+    // Other commands keep their best-effort upkeep (charter §7).
+    if touches_registry(&cli.command) {
         cmd::touch_registry_best_effort();
     }
 
@@ -120,7 +210,9 @@ fn main() -> anyhow::Result<()> {
             full,
             yes,
             force,
+            workspace,
         } => {
+            let workspace_step = prepare_workspace(&cwd, workspace)?;
             let tier = if minimal {
                 Some(scaffold::Tier::Minimal)
             } else if full {
@@ -141,8 +233,13 @@ fn main() -> anyhow::Result<()> {
                 binary_version: BINARY_VERSION.to_string(),
                 answers,
             };
-            let report = scaffold::init(&assets, &cwd, &options)?;
+            let mut report = scaffold::init(&assets, &cwd, &options)?;
+            if !yes {
+                decide_pr_template(&cwd, &mut report)?;
+            }
             print!("{report}");
+            cmd::present::provision_state_root_or_warn();
+            report_workspace(&cwd, workspace_step)?;
         }
         Command::Update { diff, force } => {
             let options = scaffold::UpdateOptions {
@@ -150,8 +247,13 @@ fn main() -> anyhow::Result<()> {
                 binary_version: BINARY_VERSION.to_string(),
                 diff_out: diff,
             };
-            let report = scaffold::update(&assets, &cwd, &options)?;
+            let mut report = scaffold::update(&assets, &cwd, &options)?;
+            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                decide_pr_template(&cwd, &mut report)?;
+            }
             print!("{report}");
+            cmd::present::provision_state_root_or_warn();
+            print_workspace_hint(&cwd);
             let portal_report = scaffold::portal::update_adopted_portal(&assets, &cwd)?;
             if let Some(portal_report) = &portal_report {
                 print!("{portal_report}");
@@ -179,8 +281,11 @@ fn main() -> anyhow::Result<()> {
         Command::Spec(args) => std::process::exit(cmd::new::run_spec(&args)),
         Command::Task(args) => std::process::exit(cmd::new::run_task(&args)),
         Command::Work(args) => std::process::exit(cmd::work::run(&args)),
+        Command::Adr(args) => std::process::exit(cmd::new::run_adr(&args)),
+        Command::Ids(args) => std::process::exit(cmd::ids::run(&args)),
         Command::Estimate(args) => std::process::exit(cmd::estimate::run(&args)),
         Command::Present(args) => std::process::exit(cmd::present::run(&args)),
+        Command::Report(args) => std::process::exit(cmd::report::run(&args)),
     }
     Ok(())
 }

@@ -45,7 +45,7 @@ fn develop_and_quality_contract_require_a_failing_symptom_command() {
         &["named interfaces first", "exact reported symptom"],
     );
     assert_contains(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
         &["exact reported symptom"],
     );
 }
@@ -187,6 +187,18 @@ fn repository_policy_requires_the_always_present_pr_sections() {
     );
 }
 
+/// The dash rule (ADR-0067, note of 2026-09-25) is a writing guideline that
+/// ships at warn, while this repository keeps blocking its own new text.
+#[test]
+fn repository_policy_blocks_policy_characters_while_the_shipped_default_warns() {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(".codeflow/policy.json")).expect("policy JSON");
+    assert_eq!(policy["git"]["policy_characters"], "block");
+    let shipped: serde_json::Value =
+        serde_json::from_str(&read("assets/base/policy.json")).expect("shipped policy JSON");
+    assert_eq!(shipped["git"]["policy_characters"], "warn");
+}
+
 #[test]
 fn ship_returns_failures_to_their_owner_without_waiving_configured_gates() {
     assert_contains(
@@ -208,6 +220,34 @@ fn reviewer_labels_axis_and_disposition() {
         "assets/base/claude/agents/cf-reviewer.md",
         &["axis: standards", "axis: spec", "fix now", "track once"],
     );
+}
+
+/// TSK-105 (review round 1, T105-6): the reviewer refuses a block reviewed
+/// before a later change; ship states the default completion in the task's
+/// own pull request and the late completion the checker's merge rule takes.
+#[test]
+fn reviewer_and_ship_state_the_acceptance_binding() {
+    assert_contains(
+        "assets/base/claude/agents/cf-reviewer.md",
+        &[
+            "`reviewed` is this head, or an ancestor after which only this record's status and Closeout changed",
+        ],
+    );
+    assert_contains(
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        &[
+            "a task PR's last commit runs `codeflow task status <id>",
+            "complete --acceptance <file>`; its block names the reviewed code commit",
+            "(late: the clean landing merge's second parent)",
+            "stay `deferred`, never verified at build time",
+        ],
+    );
+    for path in [
+        "assets/base/claude/agents/cf-reviewer.md",
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+    ] {
+        assert!(!read(path).contains("must be this head"), "{path}");
+    }
 }
 
 #[test]

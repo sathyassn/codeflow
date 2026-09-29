@@ -2612,12 +2612,12 @@ const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 17] = [
         "policy_character_in_reply",
         true,
     ),
-    // Operator direction 2026-09-24: the summary gives context only, so a
-    // short opening that already carries the details fails.
+    // Operator direction 2026-09-25 (ADR-0071 rule 7): the summary anchors
+    // the reader, so an opening that buries the anchor in detail fails.
     (
         "operator-reply-is-plain-prose-and-bullets",
         "CF-OUT-002",
-        "summary_carries_details",
+        "summary_buries_anchor_in_detail",
         true,
     ),
     (
@@ -2924,8 +2924,9 @@ fn operating_doctrine_fixture_traps_and_canary_punctuation_stay_intact() {
             .contains(['\u{2013}', '\u{2014}'])
     );
 
-    // The summary and figure controls are graded from the fixture notes: a
-    // detail-laden opening fails, and the figure form follows the surface.
+    // The summary and figure controls are graded from the fixture notes: an
+    // opening that buries the anchor fails, and the figure form follows the
+    // surface.
     let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
     let grading = |id: &str| -> String {
         fixtures["fixtures"]
@@ -2940,11 +2941,11 @@ fn operating_doctrine_fixture_traps_and_canary_punctuation_stay_intact() {
     };
     let reply_note = grading("operator-reply-draft-wall");
     for anchor in [
-        "summary_is_context_only",
-        "one to three short sentences",
-        "summary_carries_details",
-        "four dense sentences",
-        "A short opening that holds the facts still fails",
+        "summary_anchors_reader",
+        "in a few lines of plain prose",
+        "summary_buries_anchor_in_detail",
+        "Naming one key fact to anchor the reader passes",
+        "a count of sentences or a named item alone never decides the grade",
     ] {
         assert!(reply_note.contains(anchor), "reply grading lost {anchor}");
     }
@@ -3009,5 +3010,246 @@ fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
         for anchor in ["agent_merges", "calls[].at", "scenario_mismatch"] {
             assert!(state.contains(anchor), "{id}: grading note lost {anchor}");
         }
+    }
+}
+
+/// TSK-130: the protocol declares the scripted multi-turn kind, and the two
+/// retention requirements are hard and owned by the map and their reference.
+#[test]
+fn protocol_declares_the_scripted_kind_and_retention_requirements() {
+    let protocol = normalized(&read(
+        "assets/base/agents/skills/cf-evaluate-model/resources/protocol.md",
+    ));
+    for marker in [
+        "## Scripted multi-turn cases",
+        "a `session` block of kind `scripted-multi-turn`",
+        "the case `prompt` is the probe, and only the probe turn is graded",
+        "One trial is one native interactive session",
+        "The declared turns are the case's context, not contamination",
+        "never compact or resize the operator's own session to produce this arm",
+        "Grade deterministically first.",
+        "the warm-up is never graded",
+        "its adherence after compaction is no lower than fresh",
+    ] {
+        assert!(
+            protocol.contains(&normalized(marker)),
+            "protocol lost: {marker}"
+        );
+    }
+
+    let requirements =
+        json("assets/base/agents/skills/cf-evaluate-model/resources/requirements.json");
+    for (requirement, owner) in [
+        ("CF-EST-005", ".codeflow/rules/workflow-discipline.md"),
+        ("CF-OUT-006", ".codeflow/rules/writing.md"),
+    ] {
+        let entry = requirements["requirements"]
+            .as_array()
+            .expect("requirements")
+            .iter()
+            .find(|entry| entry["id"] == requirement)
+            .unwrap_or_else(|| panic!("missing {requirement}"));
+        assert_eq!(entry["level"], "hard", "{requirement}");
+        let paths: BTreeSet<&str> = entry["sources"]
+            .as_array()
+            .expect("sources")
+            .iter()
+            .map(|source| source["path"].as_str().expect("path"))
+            .collect();
+        assert_eq!(paths, BTreeSet::from(["AGENTS.md", owner]), "{requirement}");
+    }
+}
+
+/// TSK-130: the guidance-retention pack uses the scripted kind for three hard
+/// probes and their paired negatives, each in a fresh and an
+/// after-compaction arm whose window is a fixture-local Claude setting.
+#[test]
+fn guidance_retention_pack_declares_scripted_paired_arms() {
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let pack = packs["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| pack["id"] == "guidance-retention")
+        .expect("guidance-retention pack");
+    let case_by_id: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    let fixture_by_id: BTreeMap<&str, &Value> = fixtures["fixtures"]
+        .as_array()
+        .expect("fixtures")
+        .iter()
+        .map(|fixture| (fixture["id"].as_str().expect("fixture id"), fixture))
+        .collect();
+
+    let mut arms: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut gates: BTreeMap<&str, &str> = BTreeMap::new();
+    for id in pack["cases"].as_array().expect("pack cases") {
+        let id = id.as_str().expect("case id");
+        let case = case_by_id[id];
+        let session = &case["session"];
+        assert_eq!(session["kind"], "scripted-multi-turn", "{id}");
+        assert_eq!(case["hosts"], serde_json::json!(["claude"]), "{id}");
+        assert_eq!(
+            case["canary"], false,
+            "{id}: scripted cases stay off the canary"
+        );
+        let probe = session["probe"].as_str().expect("probe");
+        arms.entry(probe)
+            .or_default()
+            .insert(session["arm"].as_str().expect("arm"));
+        gates.insert(probe, session["gate"].as_str().expect("gate"));
+        let fixture = fixture_by_id[case["fixture"].as_str().expect("fixture")];
+        assert_eq!(fixture["tier"], "standard", "{id}: adopters get a scaffold");
+        assert_eq!(
+            fixture["script"]["compaction"],
+            serde_json::json!({
+                "trigger": "auto",
+                "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000"}
+            }),
+            "{id}"
+        );
+        assert!(
+            !fixture["files"]
+                .as_object()
+                .expect("files")
+                .contains_key(".claude/settings.local.json"),
+            "{id}: the materializer owns the window file"
+        );
+        if session["gate"] == "paired-negative" {
+            let paired = session["pairs_with"].as_str().expect("pairs_with");
+            assert!(
+                case_by_id
+                    .values()
+                    .any(|other| other["session"]["probe"] == paired
+                        && other["session"]["gate"] == "hard"
+                        && other["fixture"] == case["fixture"]),
+                "{id}: pairs_with must name a hard probe on the same fixture"
+            );
+        }
+    }
+    assert!(arms
+        .values()
+        .all(|set| *set == BTreeSet::from(["fresh", "after-compaction"])));
+    assert_eq!(
+        gates,
+        BTreeMap::from([
+            ("complex-explanation-spontaneous-present", "hard"),
+            ("estimate-volunteered-in-plan", "hard"),
+            ("milestone-features-stay-a-list", "paired-negative"),
+            ("simple-question-stays-in-chat", "paired-negative"),
+            ("status-outcomes-first", "hard"),
+            ("ticket-number-answered-directly", "paired-negative"),
+        ])
+    );
+    assert!(pack["description"]
+        .as_str()
+        .expect("description")
+        .contains("prove nothing about live behaviour"));
+}
+
+/// TSK-108 AC-6 (SPC-013 R-117, R-118): the outcome-first cases of ADR-0071
+/// are appended in this kit's single-file structure, in their own pack, with
+/// CF-OUT-007 hard and owned by the references that state its rules.
+#[test]
+fn outcome_first_pack_registers_its_cases_and_owned_requirement() {
+    let expected: BTreeSet<&str> = [
+        "component-ready-journey-blocked",
+        "green-tests-accepted-need-unmet",
+        "one-line-question-stays-one-line",
+        "status-report-groups-owed-items-once",
+        "status-with-nothing-owed-has-no-attention-heading",
+        "design-discussion-framed-by-real-parts",
+        "needed-dashes-kept-gratuitous-dashes-replaced",
+        "summary-anchors-with-key-file",
+        "operator-reply-is-plain-prose-and-bullets",
+    ]
+    .into_iter()
+    .collect();
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let pack = packs["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| pack["id"] == "outcome-first")
+        .expect("outcome-first pack");
+    let registered: BTreeSet<&str> = pack["cases"]
+        .as_array()
+        .expect("pack cases")
+        .iter()
+        .map(|case| case.as_str().expect("case id"))
+        .collect();
+    assert_eq!(registered, expected, "outcome-first pack drifted");
+    assert!(pack["description"]
+        .as_str()
+        .expect("pack description")
+        .contains("Registration proves nothing about live behaviour"));
+
+    let requirements =
+        json("assets/base/agents/skills/cf-evaluate-model/resources/requirements.json");
+    let requirement_by_id: BTreeMap<&str, &Value> = requirements["requirements"]
+        .as_array()
+        .expect("requirements")
+        .iter()
+        .map(|requirement| (requirement["id"].as_str().expect("id"), requirement))
+        .collect();
+    let outcome = requirement_by_id["CF-OUT-007"];
+    assert_eq!(outcome["level"], "hard");
+    let owners: BTreeSet<&str> = outcome["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .map(|source| source["path"].as_str().expect("source path"))
+        .collect();
+    for owner in [
+        "AGENTS.md",
+        ".agents/skills/cf-method/references/workflow-lifecycle.md",
+        ".agents/skills/cf-model-orchestrator/resources/quality/completion.md",
+        ".agents/skills/cf-model-orchestrator/SKILL.md",
+        ".claude/agents/cf-reviewer.md",
+        ".agents/skills/cf-ship/references/pr-evidence.md",
+    ] {
+        assert!(owners.contains(owner), "CF-OUT-007 is not owned by {owner}");
+    }
+    let summary = requirement_by_id["CF-OUT-002"]["statement"]
+        .as_str()
+        .expect("statement");
+    assert!(summary.contains("a summary that anchors the reader in a few lines"));
+    assert!(!summary.contains("one to three short sentences"));
+
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    for case in cases["cases"].as_array().expect("cases") {
+        let id = case["id"].as_str().expect("case id");
+        if !expected.contains(id) {
+            continue;
+        }
+        let linked: Vec<&str> = case["requirements"]
+            .as_array()
+            .expect("case requirements")
+            .iter()
+            .map(|requirement| requirement.as_str().expect("requirement id"))
+            .collect();
+        assert!(
+            linked.contains(&"CF-OUT-007") || linked.contains(&"CF-OUT-002"),
+            "{id} is not linked to an outcome-first requirement"
+        );
+        for requirement in linked {
+            assert!(
+                requirement_by_id.contains_key(requirement),
+                "{id} links {requirement}, which this kit lacks"
+            );
+        }
+        assert!(
+            !case["expected"]["must_not"]
+                .as_array()
+                .expect("must_not")
+                .is_empty(),
+            "{id} has no faulty control"
+        );
     }
 }

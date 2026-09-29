@@ -7,6 +7,12 @@ description: Land finished work — docs and capability updates, then a PR throu
 
 1. Preconditions: the applicable independent review verdict is `approved` and
    every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
+   After review, a task PR's last commit runs `codeflow task status <id>
+   complete --acceptance <file>`; its block names the reviewed code commit
+   (late: the clean landing merge's second parent). After-release criteria
+   stay `deferred`, never verified at build time. When a work item is planned,
+   started, blocked, completed or cancelled, follow
+   [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle).
    `codeflow test` and `codeflow validate --docs` remain required wherever the
    installed/project ship gate requires them, including for docs-only changes;
    report such a run as repository-gate evidence, not invented code coverage or
@@ -23,38 +29,33 @@ description: Land finished work — docs and capability updates, then a PR throu
      `validate --docs` stays clean — it does not gate epic close);
    - an ADR finalized if a Tier-3 decision was made; `docs/architecture.md`
      updated when the ADR declares architecture impact;
-   - an approved spec transitioned to frozen (`status: implemented`) when its
-     consuming work ships; already-frozen specs remain historical; epic and
-     task statuses updated through their applicable change control.
+   - no spec status is written at ship: `implemented` is derived once every
+     consumer is complete, and already-frozen specs remain historical; epic
+     and task statuses change only as the work lifecycle states.
 3. Re-run `codeflow validate --docs` after the doc updates — it must pass.
    If `.codeflow/docs-portal.json` exists and this change materially affects
    authoritative docs, relationships, version context, portal configuration,
    or starter behavior, also run the adopted portal's locked check/build and
    `codeflow validate --portal <adopted-root>`; add rendered/browser checks
    matched to UX impact. Non-adopters receive no portal gate.
-4. Assess release impact using the project's adopted policy and
-   [references/release-policy.md](references/release-policy.md). Sweep API,
-   CLI flags, config, formats, defaults and managed instructions for actual
-   compatibility changes. A touched contract is not automatically breaking;
-   a misleading commit type is not proof of compatibility. Mark an actual
-   break with `type!:` and a `BREAKING CHANGE:` migration footer, and reconcile
-   the project's authoritative release input and PR explanation. Use its one
-   version calculator; `breaking_watch_paths` only warns. Where the project
-   adopts same-PR preparation, include the warranted notes and coupled version
-   updates now, reconciled with the current target and published baseline.
+4. Assess release impact under the project's adopted policy and the Release
+   impact rules in `references/pr-evidence.md`, which say when to read the
+   release policy. Judge compatibility as the git rules' breaking-change rule
+   says; a misleading commit type is not proof of compatibility. Reconcile
+   the project's authoritative release input and PR explanation. Where the
+   project adopts same-PR preparation, include the warranted notes and coupled
+   version updates now, reconciled with the current target and published
+   baseline.
    A reviewed merge is not permission to publish or deploy.
-   For a multi-platform binary or installer release, keep native Windows and
-   WSL2/Linux evidence separate: the native Windows installer must select its
-   Windows binary, while WSL2 uses the Linux installer and binary. Cross-build
-   success proves compilation and linking only; it never replaces native
-   macOS/Linux/Windows tests or installer canaries. Missing platform evidence
-   blocks publication rather than becoming an inferred pass.
 5. Apply `cf-editorial-review` to substantial changed docs, release notes, and
    the PR narrative. It refines the writing but cannot weaken the template,
    evidence, policy, or no-emoji requirements below.
 6. Prepare the whole-branch PR using
-   [references/pr-evidence.md](references/pr-evidence.md). Follow the project
-   template and conventional-commit policy; attribute measured evidence to its
+   [references/pr-evidence.md](references/pr-evidence.md). Write the body and
+   release notes plainly: simple, straightforward and clear, no mannered
+   prose (see `.codeflow/rules/writing.md`), in short prose and bullets.
+   Follow the project template and conventional-commit policy; attribute
+   measured evidence to its
    revision and scope. Missing required evidence keeps the PR draft. Lint the
    body with `codeflow ci` before pushing and opening the PR. No AI attribution
    or emoji.
@@ -75,7 +76,10 @@ description: Land finished work — docs and capability updates, then a PR throu
    into a protected base, no by-hand merge, never `gh pr merge --delete-branch`.
    Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 9. Confirm the landed state with `codeflow status`; report the final epic and
-   capability state.
+   capability state. After an epic-line landing, only when the project
+   configures a release branch matching its release pattern, R-120, and a workflow
+   integrating into it, follow [release integration](references/pr-evidence.md#release-integration-after-landing).
+   Otherwise skip that step.
 10. Clean up after the human merge, with proof. From outside the task worktree:
     - fetch, then use `codeflow status` as the local worktree/branch inventory;
       its removable/dirty/unproven classification is evidence, not deletion or

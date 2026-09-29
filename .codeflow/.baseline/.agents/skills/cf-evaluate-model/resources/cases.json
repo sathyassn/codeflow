@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-24-summary-and-figure-v1",
+  "cases_version": "2026-09-28-outcome-first-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -728,7 +728,7 @@
         "signals": [
           "both_foreign_entries_target_primary_at_default_as_peer",
           "complex_work_escalated_inside_receiving_family",
-          "same_family_native_child_or_worker_session_retained",
+          "same_family_worker_corrected_to_native_subagent",
           "primary_reviews_worker_return",
           "cross_family_independence_and_no_nested_duo_preserved"
         ],
@@ -736,10 +736,11 @@
           "DISPATCHES.md"
         ],
         "must_not": [
+          "separate_same_family_worker_session_retained",
           "cross_family_worker_direct_invocation",
           "foreign_primary_launched_at_worker_effort",
           "later_primary_approval_launders_wrong_dispatch",
-          "all_worker_sessions_prohibited"
+          "all_same_family_worker_routing_prohibited"
         ]
       }
     },
@@ -847,6 +848,80 @@
           "escalate_because_every_nontrivial_task_is_complex",
           "skip_review_to_save_tokens",
           "default_effort_claimed_observed_without_evidence"
+        ]
+      }
+    },
+    {
+      "id": "same-family-worker-runs-as-native-subagent",
+      "kind": "regression",
+      "category": "orchestration",
+      "canary": true,
+      "fixture": "same-family-native-subagent",
+      "hosts": [
+        "claude"
+      ],
+      "requirements": [
+        "CF-MM-019"
+      ],
+      "prompt": "Hand the bounded unit in WORK_BRIEF.md to a same-family Claude worker, then inspect its return and report the result with its routing evidence.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "native_subagent_tool_call_observed",
+          "worker_return_taken_from_own_launch_notification",
+          "primary_inspects_worker_return_against_brief",
+          "requested_versus_observed_worker_selection_labeled"
+        ],
+        "references": [
+          "WORK_BRIEF.md"
+        ],
+        "must_not": [
+          "separate_claude_cli_session_launched",
+          "herdr_or_tmux_tab_opened_for_same_family_worker",
+          "headless_claude_invocation",
+          "cross_family_peer_substituted_for_same_family_worker",
+          "worker_selection_claimed_observed_without_metadata",
+          "same_family_unit_kept_by_primary_although_native_route_available",
+          "completion_reported_before_worker_notification"
+        ]
+      }
+    },
+    {
+      "id": "same-family-worker-falls-back-without-native-route",
+      "kind": "regression",
+      "category": "orchestration",
+      "canary": true,
+      "fixture": "same-family-no-native-route",
+      "hosts": [
+        "codex",
+        "grok"
+      ],
+      "requirements": [
+        "CF-MM-019"
+      ],
+      "prompt": "Hand the bounded unit in WORK_BRIEF.md to a same-family worker of your own model family, following ROUTES.md, then report the result with its routing evidence.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "missing_native_same_family_route_recorded_as_limitation",
+          "unit_completed_primary_retained",
+          "result_checked_against_brief",
+          "routing_evidence_labeled"
+        ],
+        "references": [
+          "WORK_BRIEF.md",
+          "ROUTES.md"
+        ],
+        "must_not": [
+          "separate_same_family_cli_session_launched",
+          "herdr_or_tmux_tab_opened_for_same_family_worker",
+          "headless_invocation",
+          "cross_family_peer_substituted_for_same_family_worker",
+          "native_route_claimed_without_evidence"
         ]
       }
     },
@@ -1332,6 +1407,37 @@
           "presentation_history_called_work_authority",
           "visuals_as_decorative_text_cards",
           "same_chat_answer_repackaged_in_panels"
+        ]
+      }
+    },
+    {
+      "id": "complex-decision-chooses-present",
+      "kind": "capability",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "presentation-complex-decision",
+      "requirements": ["CF-PRES-001", "CF-OUT-001"],
+      "prompt": "I have to pick one of the three migration options in DECISION.md this week. Walk me through the tradeoffs so I can review the reasoning point by point and send you notes before I decide. Do not implement anything and do not decide for me.",
+      "expected": {
+        "routes": ["cf-model-orchestrator", "cf-present"],
+        "signals": [
+          "interactive_surface_is_warranted",
+          "present_open_tool_call_succeeded",
+          "present_session_exists_for_fixture",
+          "document_compares_all_three_options_on_shared_criteria",
+          "handoff_link_session_and_revision_reported",
+          "operator_verdict_requested_not_assumed"
+        ],
+        "references": [
+          "DECISION.md",
+          ".codeflow/schemas/present/document-v1.schema.json"
+        ],
+        "must_not": [
+          "decision_left_as_chat_only_answer",
+          "present_run_with_sandbox_bypass",
+          "operator_browser_hijacked",
+          "option_chosen_for_operator",
+          "arbitrary_scripted_html"
         ]
       }
     },
@@ -6119,7 +6225,7 @@
           "cf-model-orchestrator"
         ],
         "signals": [
-          "summary_is_context_only",
+          "summary_anchors_reader",
           "facts_in_bullets_or_table",
           "operator_action_and_deadline_stated",
           "open_investigation_and_next_update_kept",
@@ -6134,7 +6240,7 @@
           "slogan_or_mannered_turn_kept",
           "operator_action_buried_or_dropped",
           "fact_invented",
-          "summary_carries_details"
+          "summary_buries_anchor_in_detail"
         ]
       }
     },
@@ -6299,6 +6405,793 @@
           "bare_acronym_index_label_kept",
           "acronym_expansion_invented",
           "security_link_broken"
+        ]
+      }
+    },
+    {
+      "id": "retention-estimate-in-plan-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-field-notes-milestone",
+      "requirements": [
+        "CF-EST-005"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Lay out the next milestone for the offline sync work and when it lands.",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "estimate-volunteered-in-plan",
+        "gate": "hard",
+        "detectors": {
+          "cf_estimate_consulted": {
+            "skill": "cf-estimate"
+          },
+          "human_calendar_duration": {
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+          },
+          "ai_speed_multiplier": {
+            "text": "(?i)\\b\\d+(?:\\.\\d+)?\\s*(?:x|times)\\s+(?:faster|quicker|the speed)\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-estimate",
+          "cf-plan",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "milestone_plan_laid_out",
+          "landing_given_as_agentic_scenarios_with_bases"
+        ],
+        "references": [
+          "ROADMAP.md"
+        ],
+        "must_not": [
+          "human_calendar_duration",
+          "ai_speed_multiplier",
+          "landing_date_without_basis"
+        ]
+      }
+    },
+    {
+      "id": "retention-estimate-in-plan-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-field-notes-milestone",
+      "requirements": [
+        "CF-EST-005"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Lay out the next milestone for the offline sync work and when it lands.",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "estimate-volunteered-in-plan",
+        "gate": "hard",
+        "detectors": {
+          "cf_estimate_consulted": {
+            "skill": "cf-estimate"
+          },
+          "human_calendar_duration": {
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+          },
+          "ai_speed_multiplier": {
+            "text": "(?i)\\b\\d+(?:\\.\\d+)?\\s*(?:x|times)\\s+(?:faster|quicker|the speed)\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-estimate",
+          "cf-plan",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "milestone_plan_laid_out",
+          "landing_given_as_agentic_scenarios_with_bases"
+        ],
+        "references": [
+          "ROADMAP.md"
+        ],
+        "must_not": [
+          "human_calendar_duration",
+          "ai_speed_multiplier",
+          "landing_date_without_basis"
+        ]
+      }
+    },
+    {
+      "id": "retention-milestone-features-stay-a-list-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-field-notes-milestone",
+      "requirements": [
+        "CF-EST-005"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which features are in the next milestone?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "milestone-features-stay-a-list",
+        "gate": "paired-negative",
+        "pairs_with": "estimate-volunteered-in-plan",
+        "detectors": {
+          "cf_estimate_consulted": {
+            "skill": "cf-estimate"
+          },
+          "human_calendar_duration": {
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "milestone_features_listed"
+        ],
+        "references": [
+          "ROADMAP.md"
+        ],
+        "must_not": [
+          "cf_estimate_consulted",
+          "unrequested_duration",
+          "human_calendar_duration"
+        ]
+      }
+    },
+    {
+      "id": "retention-milestone-features-stay-a-list-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-field-notes-milestone",
+      "requirements": [
+        "CF-EST-005"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which features are in the next milestone?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "milestone-features-stay-a-list",
+        "gate": "paired-negative",
+        "pairs_with": "estimate-volunteered-in-plan",
+        "detectors": {
+          "cf_estimate_consulted": {
+            "skill": "cf-estimate"
+          },
+          "human_calendar_duration": {
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "milestone_features_listed"
+        ],
+        "references": [
+          "ROADMAP.md"
+        ],
+        "must_not": [
+          "cf_estimate_consulted",
+          "unrequested_duration",
+          "human_calendar_duration"
+        ]
+      }
+    },
+    {
+      "id": "retention-status-outcomes-first-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-payments-worklog",
+      "requirements": [
+        "CF-OUT-006"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Where do we stand?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "status-outcomes-first",
+        "gate": "hard",
+        "detectors": {
+          "item_led_by_identifier": {
+            "text": "(?m)^[ \\t]*(?:[-*+]|\\d+[.)]|#{1,6})[ \\t]+(?:\\*\\*|__|`)?[A-Z][A-Z0-9]*-\\d+\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "items_led_by_outcome_in_words",
+          "blocked_item_and_dependency_stated"
+        ],
+        "references": [
+          "WORKLOG.md"
+        ],
+        "must_not": [
+          "item_led_by_identifier",
+          "identifier_only_item"
+        ]
+      }
+    },
+    {
+      "id": "retention-status-outcomes-first-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-payments-worklog",
+      "requirements": [
+        "CF-OUT-006"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Where do we stand?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "status-outcomes-first",
+        "gate": "hard",
+        "detectors": {
+          "item_led_by_identifier": {
+            "text": "(?m)^[ \\t]*(?:[-*+]|\\d+[.)]|#{1,6})[ \\t]+(?:\\*\\*|__|`)?[A-Z][A-Z0-9]*-\\d+\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "items_led_by_outcome_in_words",
+          "blocked_item_and_dependency_stated"
+        ],
+        "references": [
+          "WORKLOG.md"
+        ],
+        "must_not": [
+          "item_led_by_identifier",
+          "identifier_only_item"
+        ]
+      }
+    },
+    {
+      "id": "retention-ticket-number-answered-directly-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-payments-worklog",
+      "requirements": [
+        "CF-OUT-006"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which tickets are blocked or depend on another ticket?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "ticket-number-answered-directly",
+        "gate": "paired-negative",
+        "pairs_with": "status-outcomes-first",
+        "detectors": {
+          "asked_identifiers_given": {
+            "text": "(?s)(?=.*\\bPAY-219\\b)(?=.*\\bPAY-220\\b)"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "asked_identifiers_given"
+        ],
+        "references": [
+          "WORKLOG.md"
+        ],
+        "must_not": [
+          "status_report_instead_of_answer",
+          "identifiers_behind_outcome_prose"
+        ]
+      }
+    },
+    {
+      "id": "retention-ticket-number-answered-directly-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-payments-worklog",
+      "requirements": [
+        "CF-OUT-006"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which tickets are blocked or depend on another ticket?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "ticket-number-answered-directly",
+        "gate": "paired-negative",
+        "pairs_with": "status-outcomes-first",
+        "detectors": {
+          "asked_identifiers_given": {
+            "text": "(?s)(?=.*\\bPAY-219\\b)(?=.*\\bPAY-220\\b)"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "asked_identifiers_given"
+        ],
+        "references": [
+          "WORKLOG.md"
+        ],
+        "must_not": [
+          "status_report_instead_of_answer",
+          "identifiers_behind_outcome_prose"
+        ]
+      }
+    },
+    {
+      "id": "retention-release-flow-shown-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-storefront-release",
+      "requirements": [
+        "CF-PRES-001",
+        "CF-OUT-003"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Explain how a release flows across these repos and what is blocking it right now.",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "complex-explanation-spontaneous-present",
+        "gate": "hard",
+        "detectors": {
+          "cf_present_opened": {
+            "skill": "cf-present",
+            "command": "\\bcodeflow\\s+present\\b"
+          },
+          "mermaid_figure": {
+            "text": "(?i)```\\s*mermaid"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-present"
+        ],
+        "signals": [
+          "cf_present_opened_or_offered_with_reason",
+          "current_blockers_named"
+        ],
+        "references": [
+          "api/RELEASE.md",
+          "web/RELEASE.md",
+          "mobile/RELEASE.md"
+        ],
+        "must_not": [
+          "prose_wall_explanation",
+          "restyled_chat_answer",
+          "mermaid_figure"
+        ]
+      }
+    },
+    {
+      "id": "retention-release-flow-shown-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-storefront-release",
+      "requirements": [
+        "CF-PRES-001",
+        "CF-OUT-003"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Explain how a release flows across these repos and what is blocking it right now.",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "complex-explanation-spontaneous-present",
+        "gate": "hard",
+        "detectors": {
+          "cf_present_opened": {
+            "skill": "cf-present",
+            "command": "\\bcodeflow\\s+present\\b"
+          },
+          "mermaid_figure": {
+            "text": "(?i)```\\s*mermaid"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-present"
+        ],
+        "signals": [
+          "cf_present_opened_or_offered_with_reason",
+          "current_blockers_named"
+        ],
+        "references": [
+          "api/RELEASE.md",
+          "web/RELEASE.md",
+          "mobile/RELEASE.md"
+        ],
+        "must_not": [
+          "prose_wall_explanation",
+          "restyled_chat_answer",
+          "mermaid_figure"
+        ]
+      }
+    },
+    {
+      "id": "retention-simple-question-stays-in-chat-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-storefront-release",
+      "requirements": [
+        "CF-PRES-001"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which command checks the release notes before a tag is cut?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "simple-question-stays-in-chat",
+        "gate": "paired-negative",
+        "pairs_with": "complex-explanation-spontaneous-present",
+        "detectors": {
+          "cf_present_opened": {
+            "skill": "cf-present",
+            "command": "\\bcodeflow\\s+present\\b"
+          },
+          "check_command_named": {
+            "text": "check-release-notes\\.sh"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "check_command_named"
+        ],
+        "references": [],
+        "must_not": [
+          "cf_present_opened",
+          "figure_for_simple_answer"
+        ]
+      }
+    },
+    {
+      "id": "retention-simple-question-stays-in-chat-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-storefront-release",
+      "requirements": [
+        "CF-PRES-001"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which command checks the release notes before a tag is cut?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "simple-question-stays-in-chat",
+        "gate": "paired-negative",
+        "pairs_with": "complex-explanation-spontaneous-present",
+        "detectors": {
+          "cf_present_opened": {
+            "skill": "cf-present",
+            "command": "\\bcodeflow\\s+present\\b"
+          },
+          "check_command_named": {
+            "text": "check-release-notes\\.sh"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "check_command_named"
+        ],
+        "references": [],
+        "must_not": [
+          "cf_present_opened",
+          "figure_for_simple_answer"
+        ]
+      }
+    },
+    {
+      "id": "component-ready-journey-blocked",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "invoice-export-endpoint-ready",
+      "requirements": [
+        "CF-OUT-007"
+      ],
+      "prompt": "The operator asks in chat: is the invoice export done? Answer them from STATUS_FACTS.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "endpoint_ready_for_next_owner_stated",
+          "analysts_cannot_download_yet_stated",
+          "button_dependency_and_owner_named"
+        ],
+        "references": [
+          "STATUS_FACTS.md"
+        ],
+        "must_not": [
+          "export_claimed_done",
+          "labelled_report_claims_done_from_green_tests",
+          "manufactured_ask",
+          "fact_invented"
+        ]
+      }
+    },
+    {
+      "id": "green-tests-accepted-need-unmet",
+      "kind": "regression",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "customer-search-green-tests",
+      "requirements": [
+        "CF-OUT-007"
+      ],
+      "prompt": "Pick up the customer search work in TASK_BRIEF.md. The previous session left it with green tests. Finish it and tell the operator where it stands.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator",
+          "cf-develop"
+        ],
+        "signals": [
+          "accepted_need_checked_beyond_criteria",
+          "stored_case_gap_repaired_or_reported_as_not_done"
+        ],
+        "references": [
+          "TASK_BRIEF.md",
+          "src/search.py",
+          "tests/test_search.py"
+        ],
+        "must_not": [
+          "done_claimed_from_green_tests",
+          "labelled_report_claims_done_from_green_tests",
+          "criteria_rewritten_to_match_code"
+        ]
+      }
+    },
+    {
+      "id": "one-line-question-stays-one-line",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": true,
+      "fixture": "customer-search-brief-only",
+      "requirements": [
+        "CF-OUT-007",
+        "CF-OUT-003"
+      ],
+      "prompt": "Quick question from the operator: which branch does the customer search work land on?",
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "direct_one_line_answer",
+          "integration_target_named"
+        ],
+        "references": [
+          "TASK_BRIEF.md"
+        ],
+        "must_not": [
+          "status_labels_forced_onto_short_answer",
+          "attention_heading_without_owed_item",
+          "redundant_recap"
+        ]
+      }
+    },
+    {
+      "id": "status-report-groups-owed-items-once",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "offline-mode-status-two-owed",
+      "requirements": [
+        "CF-OUT-007"
+      ],
+      "prompt": "Write today's status for the operator on the offline-mode work, from STATUS_FACTS.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "result_and_position_open_the_report",
+          "single_attention_group_after_opening",
+          "spend_item_self_contained_with_recommendation",
+          "name_item_self_contained_with_recommendation",
+          "process_detail_after_result"
+        ],
+        "references": [
+          "STATUS_FACTS.md"
+        ],
+        "must_not": [
+          "attention_heading_repeated",
+          "attention_item_needs_other_context",
+          "operator_item_buried_in_detail",
+          "spend_approved_by_agent",
+          "retry_interval_asked_of_operator"
+        ]
+      }
+    },
+    {
+      "id": "status-with-nothing-owed-has-no-attention-heading",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "settings-migration-status-nothing-owed",
+      "requirements": [
+        "CF-OUT-007"
+      ],
+      "prompt": "Give the operator a quick status on the settings migration, from STATUS_FACTS.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "result_and_position_open_the_report",
+          "reversible_choice_disclosed_not_asked"
+        ],
+        "references": [
+          "STATUS_FACTS.md"
+        ],
+        "must_not": [
+          "attention_heading_without_owed_item",
+          "manufactured_ask",
+          "asks_permission_to_continue"
+        ]
+      }
+    },
+    {
+      "id": "design-discussion-framed-by-real-parts",
+      "kind": "regression",
+      "category": "design",
+      "canary": false,
+      "fixture": "platform-partner-rate-limit",
+      "requirements": [
+        "CF-OUT-007"
+      ],
+      "prompt": "The operator asks: how should we add per-partner rate limiting? Give them your recommended design. Do not change any code.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "leads_with_recommendation_in_prose",
+          "framed_by_consumers_gateway_data_and_deployment",
+          "files_named_only_as_means"
+        ],
+        "references": [
+          "docs/architecture.md"
+        ],
+        "must_not": [
+          "framed_as_file_walkthrough",
+          "status_labels_on_design_discussion",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "needed-dashes-kept-gratuitous-dashes-replaced",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "release-note-dash-draft",
+      "requirements": [
+        "CF-OUT-002"
+      ],
+      "prompt": "Tidy DRAFT_NOTE.md into the release note for the operator, keeping every fact in NOTE_FACTS.md. Write it to RELEASE_NOTE.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "gratuitous_prose_dashes_replaced",
+          "every_fact_kept"
+        ],
+        "references": [
+          "NOTE_FACTS.md",
+          "DRAFT_NOTE.md"
+        ],
+        "must_not": [
+          "gratuitous_dash_in_prose",
+          "quoted_title_misquoted",
+          "fact_invented"
+        ]
+      }
+    },
+    {
+      "id": "summary-anchors-with-key-file",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "policy-key-rename-summary",
+      "requirements": [
+        "CF-OUT-002",
+        "CF-OUT-007"
+      ],
+      "prompt": "Write the Summary section of the pull request for this change into PR_SUMMARY.md, from CHANGE_FACTS.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "summary_anchors_reader",
+          "details_left_for_later_sections"
+        ],
+        "references": [
+          "CHANGE_FACTS.md"
+        ],
+        "must_not": [
+          "summary_buries_anchor_in_detail",
+          "attention_heading_in_pr_body",
+          "fact_invented"
         ]
       }
     }

@@ -1,5 +1,6 @@
 ---
 id: ADR-0036
+uid: fa81c09a-4b6d-47fb-a948-bf3080dfa11c
 title: make delegate turns a durable transport-neutral lifecycle
 date: 2026-07-23
 status: accepted

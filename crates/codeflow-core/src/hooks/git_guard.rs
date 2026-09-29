@@ -8,14 +8,22 @@
 //! gives instant in-session feedback; CI + remote protection stay the hard
 //! line (D19).
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
 
 use crate::security::pattern::is_path_targeted;
 
+use super::git_target::{
+    self, assignment, expand_word, flat_top_level, has_substitution, join_path, launcher_env,
+    map_top_level, substitution_placeholder, Cwd, Join, ShellState, Val, GIT_LOCATION_VARS,
+    SUBSTITUTED_BARE,
+};
 use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
+use crate::root_checkout::RootCheckout;
 
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
 /// empty means the current branch's PR) to its base branch name, when it can
@@ -24,14 +32,173 @@ use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 /// bounded `gh pr view` implementation; tests inject a stub.
 pub type PrBaseLookup<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
 
-/// Resolves a directory (a `-C`/`--git-dir`/`GIT_DIR`/`cd` target, possibly
-/// relative to the session cwd) to the branch checked out there, so a git op
-/// retargeted at another repository is evaluated against *that* repo's branch,
-/// not the session's (charter §6.1; the review's wrong-dir evasion). `None`
-/// means the branch could not be read; the guard then falls back to the session
-/// branch (documented residual — the git-hook plane in the target repo is the
-/// backstop). The CLI wires a `.git/HEAD` reader; tests inject a stub.
-pub type DirBranchLookup<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
+/// A repository location a git op was moved to by `cd`, `-C`, `--git-dir` or
+/// `GIT_DIR`: a path relative to the session cwd, or absolute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retarget<'s> {
+    /// The path, relative to the session cwd or absolute.
+    pub path: &'s str,
+    /// `true` when the path names a git directory (`--git-dir`, `GIT_DIR`)
+    /// rather than a directory inside a working tree.
+    pub git_dir: bool,
+}
+
+/// What the resolver reads from a retargeted repository.
+#[derive(Debug, Clone)]
+pub struct TargetRepo {
+    /// The branch checked out there (empty on a detached HEAD).
+    pub branch: String,
+    /// The repository's own git policy, or `None` when it is the session
+    /// repository (same common git dir), whose policy is already in force. A
+    /// repository with no policy file carries the defaults, which protect
+    /// `main` and `master`.
+    pub policy: Option<GitPolicy>,
+    /// The repository's root checkout when the location is one, judged by
+    /// its own policy; `None` in a linked worktree (TSK-165).
+    pub root: Option<RootCheckout>,
+}
+
+/// Resolves a retargeted repository location to its branch and policy, so a
+/// git op aimed at another repository is judged by *that* repository's
+/// branch and rules, not the session's (charter §6.1; TSK-112). `None` means
+/// the repository could not be read; the guard then keeps its earlier
+/// reading, which includes the session branch and policy, and says so (SPC-013
+/// planning resolution 13). The CLI wires a git2 reader; tests inject a stub.
+pub type DirTargetLookup<'a> = Option<&'a dyn Fn(&Retarget<'_>) -> Option<TargetRepo>>;
+
+/// An alias lookup for a git subcommand that is not a git builtin (TSK-112).
+#[derive(Debug, Clone, Copy)]
+pub struct AliasQuery<'s> {
+    /// Where git would run: `None` for the session's working directory.
+    pub target: Option<Retarget<'s>>,
+    /// The command's own `-c <name>=<value>` settings, in order. They can
+    /// define the alias or an `include.path` that does.
+    pub config: &'s [String],
+    /// The subcommand as written.
+    pub name: &'s str,
+}
+
+/// What an alias lookup found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AliasAnswer {
+    /// No `alias.<name>` is set: git runs no alias.
+    NotAlias,
+    /// The alias value, as `git config --get` prints it.
+    Expansion(String),
+    /// The configuration could not be read; the reason.
+    Unreadable(String),
+}
+
+/// Resolves a git alias the way git reads it: `git config --get
+/// alias.<name>` in the target repository with the command's own `-c`
+/// settings, so `include.path` and conditional includes apply. The CLI wires
+/// [`read_alias`]; tests inject a stub. `None` resolves nothing, so any
+/// subcommand that is not a builtin is unclassifiable.
+pub type AliasLookup<'a> = Option<&'a dyn Fn(&AliasQuery<'_>) -> AliasAnswer>;
+
+/// Read `alias.<name>` for the guard by running `git config --get` where the
+/// command would run (`query.target`, relative to `cwd`), with the command's
+/// own `-c` settings. Exit 1 means the key is not set; any other failure is
+/// [`AliasAnswer::Unreadable`].
+#[must_use]
+pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer {
+    let mut cmd = crate::git::command();
+    cmd.current_dir(cwd).stdin(std::process::Stdio::null());
+    match query.target {
+        Some(t) if t.git_dir => {
+            cmd.arg(format!("--git-dir={}", t.path));
+        }
+        Some(t) => {
+            cmd.arg("-C").arg(t.path);
+        }
+        None => {}
+    }
+    for setting in query.config {
+        cmd.arg("-c").arg(setting);
+    }
+    cmd.args(["config", "--get", &format!("alias.{}", query.name)]);
+    match cmd.output() {
+        Ok(out) if out.status.success() => AliasAnswer::Expansion(
+            String::from_utf8_lossy(&out.stdout)
+                .trim_end_matches(['\n', '\r'])
+                .to_string(),
+        ),
+        Ok(out) if out.status.code() == Some(1) => AliasAnswer::NotAlias,
+        Ok(out) => AliasAnswer::Unreadable(format!(
+            "`git config` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+        Err(e) => AliasAnswer::Unreadable(format!("git could not run: {e}")),
+    }
+}
+
+/// Read a retargeted repository for the guard: its branch and, unless it
+/// shares the session repository's common git dir (`session_common`), its own
+/// effective git policy, which is the defaults when it has no policy file.
+/// A relative `spec.path` is taken from `cwd`. A git-dir spec opens exactly
+/// that git directory, as git does with `--git-dir`/`GIT_DIR`; any other
+/// path is discovered upward, as `-C` and `cd` are. `None` when the path does
+/// not exist or is not in a repository.
+#[must_use]
+pub fn read_target(
+    cwd: &std::path::Path,
+    session_common: Option<&std::path::Path>,
+    spec: &Retarget<'_>,
+) -> Option<TargetRepo> {
+    let p = std::path::Path::new(spec.path);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
+    };
+    if !abs.exists() {
+        return None;
+    }
+    let repo = if spec.git_dir {
+        git2::Repository::open_ext(
+            &abs,
+            git2::RepositoryOpenFlags::NO_SEARCH,
+            std::iter::empty::<&std::ffi::OsStr>(),
+        )
+        .ok()?
+    } else {
+        let start = if abs.file_name().is_some_and(|n| n == ".git") {
+            abs.parent()
+                .map_or(abs.clone(), std::path::Path::to_path_buf)
+        } else {
+            abs
+        };
+        git2::Repository::discover(&start).ok()?
+    };
+    // Empty on a detached HEAD, which no branch rule protects.
+    let branch = super::repo::current_branch(&repo);
+    let same = session_common.is_some_and(|s| same_path(s, repo.commondir()));
+    let policy = if same {
+        None
+    } else {
+        Some(repo.workdir().map_or_else(GitPolicy::default, |root| {
+            super::policy::Policy::load_effective(root).0.git
+        }))
+    };
+    let root = repo
+        .workdir()
+        .filter(|_| crate::root_checkout::is_root_checkout(&repo))
+        .and_then(|dir| {
+            RootCheckout::read(&repo, &super::policy::Policy::load_effective(dir).0.git)
+        });
+    Some(TargetRepo {
+        branch,
+        policy,
+        root,
+    })
+}
+
+fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
 
 /// Parsed `PreToolUse` hook payload (the fields the guard reads).
 ///
@@ -54,14 +221,46 @@ pub struct ToolInput {
     pub command: Option<String>,
 }
 
+/// Why a hook payload was not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PayloadError {
+    /// The input is not a JSON object, or a field the guard reads has the
+    /// wrong type: the harness entry that runs the guard did not pass the
+    /// payload through unchanged. The payload ignores fields it does not
+    /// read, so these are the only ways a payload fails.
+    Malformed(String),
+}
+
+impl std::fmt::Display for PayloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Malformed(why) => write!(f, "not a JSON hook payload: {why}"),
+        }
+    }
+}
+
 impl HookPayload {
     /// Parse the hook JSON from stdin.
     ///
     /// # Errors
     ///
-    /// Returns the serde error message when the payload is not valid JSON.
-    pub fn parse(json: &str) -> Result<Self, String> {
-        serde_json::from_str(json).map_err(|e| e.to_string())
+    /// [`PayloadError::Malformed`] when the input is not a JSON object or a
+    /// field the guard reads has the wrong type; the message names the field.
+    pub fn parse(json: &str) -> Result<Self, PayloadError> {
+        let value: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| PayloadError::Malformed(e.to_string()))?;
+        if !value.is_object() {
+            return Err(PayloadError::Malformed(format!(
+                "a JSON {} where an object belongs",
+                json_kind(&value)
+            )));
+        }
+        if let Some((field, expected, found)) = wrong_field_type(&value) {
+            return Err(PayloadError::Malformed(format!(
+                "field `{field}` is a JSON {found} where {expected} belongs"
+            )));
+        }
+        serde_json::from_value(value).map_err(|e| PayloadError::Malformed(e.to_string()))
     }
 
     /// The command to evaluate when this is a shell tool call.
@@ -81,6 +280,49 @@ impl HookPayload {
     }
 }
 
+/// The first field the guard reads whose value has the wrong type, as
+/// (field, expected, found). `null` stands for an absent optional field.
+fn wrong_field_type(
+    value: &serde_json::Value,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    use serde_json::Value;
+    let field = |names: &[&str]| names.iter().find_map(|name| value.get(*name));
+    if let Some(name) = field(&["tool_name", "toolName"]) {
+        if !name.is_string() {
+            return Some(("tool_name", "a string", json_kind(name)));
+        }
+    }
+    if let Some(input) = field(&["tool_input", "toolInput"]) {
+        match input {
+            Value::Object(_) => {
+                if let Some(command) = input.get("command") {
+                    if !(command.is_string() || command.is_null()) {
+                        return Some(("tool_input.command", "a string", json_kind(command)));
+                    }
+                }
+            }
+            other => return Some(("tool_input", "an object", json_kind(other))),
+        }
+    }
+    if let Some(cwd) = value.get("cwd") {
+        if !(cwd.is_string() || cwd.is_null()) {
+            return Some(("cwd", "a string", json_kind(cwd)));
+        }
+    }
+    None
+}
+
+fn json_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 /// Evaluation context for a guard run.
 pub struct GuardContext<'a> {
     /// The `git` policy section in force.
@@ -94,11 +336,28 @@ pub struct GuardContext<'a> {
     pub integrate_token: bool,
     /// How to resolve a `gh pr merge` target to its base branch (injected).
     pub pr_base_lookup: PrBaseLookup<'a>,
-    /// How to resolve a retargeted directory (`-C`/`--git-dir`/`GIT_DIR`/`cd`)
-    /// to the branch checked out there (injected). `None` disables cross-repo
+    /// How to resolve a retargeted repository (`-C`/`--git-dir`/`GIT_DIR`/
+    /// `cd`) to its branch and policy (injected). `None` disables cross-repo
     /// resolution and the guard evaluates against `current_branch` — the
     /// behavior in unit tests that do not exercise retargeting.
-    pub dir_branch_lookup: DirBranchLookup<'a>,
+    pub dir_target_lookup: DirTargetLookup<'a>,
+    /// How to resolve a subcommand that is not a git builtin to the alias it
+    /// names (injected). `None` leaves every such subcommand unclassifiable.
+    pub alias_lookup: AliasLookup<'a>,
+    /// The session's root checkout, when the command runs in one: a commit
+    /// there off its root branch is judged by `git.root_checkout_commits`
+    /// (TSK-165). `None` in a linked worktree.
+    pub root_checkout: Option<&'a RootCheckout>,
+}
+
+/// The outcome of one guard run.
+#[derive(Debug, Default)]
+pub struct Evaluation {
+    /// Rule violations; block-level ones deny the command.
+    pub violations: Vec<Violation>,
+    /// Disclosures that accompany the verdict, such as a git op whose target
+    /// repository could not be resolved, each with the step that clears it.
+    pub notes: Vec<crate::remedy::Finding>,
 }
 
 /// Evaluate a Bash command against the git policy.
@@ -107,19 +366,42 @@ pub struct GuardContext<'a> {
 /// exit 2 (deny) and warn-level to stderr advice.
 #[must_use]
 pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
-    let mut violations = Vec::new();
+    evaluate_report(command, ctx).violations
+}
+
+/// Evaluate a Bash command and return the violations with the notes that
+/// disclose how the verdict was reached.
+#[must_use]
+pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
+    let mut report = Evaluation::default();
+    let violations = &mut report.violations;
     // Chained checkout/switch dodges change the branch later segments run on.
     let mut branches = BranchTracker::new(ctx.current_branch);
-    // A `cd <dir>` earlier in the chain retargets subsequent git ops.
-    let mut cd_dir: Option<String> = None;
+    let segments = expand_commands(command);
+    // Where each segment sits (TSK-112): on a flat line, `Some(join)` for a
+    // top-level command and `None` for one nested in a substitution or a
+    // `bash -c` string; `None` for the whole line when it is not flat.
+    let roles = flat_top_level(command).and_then(|top| map_top_level(&segments, &top));
+    let mut shell = ShellState::new(roles.is_some());
+    let line = LineFacts::read(&segments, roles.as_deref(), command);
+    let mut notes = Vec::new();
 
     // `expand_commands` unwraps the shell constructs an agent can hide a git
     // token behind — subshells `( )`, brace groups `{ }`, `bash -c '…'`,
     // `$(…)`/backticks, newlines, and backgrounding `&` — so a git/gh
     // invocation is evaluated wherever it sits, not only as a segment's first
     // word (the review's wrapper evasions).
-    for segment in expand_commands(command) {
-        let tokens = shell_tokens(&segment);
+    for (idx, segment) in segments.iter().enumerate() {
+        let top_level = match roles.as_ref().map(|r| r[idx]) {
+            Some(Some(join)) => {
+                shell.begin(join);
+                branches.begin(join);
+                true
+            }
+            _ => false,
+        };
+        let mut tokens = shell_tokens(segment);
+        strip_reserved_words(&mut tokens);
         if tokens.is_empty() {
             continue;
         }
@@ -154,7 +436,13 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
 
         // A `cd <dir>` (as its own simple command) retargets later git ops.
         if let Some(dir) = cd_target(&tokens) {
-            cd_dir = Some(dir);
+            if top_level {
+                if tokens[0] == "cd" {
+                    shell.cd(&dir);
+                } else {
+                    shell.observe(&tokens[0], &tokens[1..]);
+                }
+            }
             continue;
         }
 
@@ -170,27 +458,84 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
 
         // Dispatch on the argument vector the program receives: unquoted
         // redirections are the shell's, not arguments.
-        let words = command_argv(&segment);
-        let Some((program, args)) = strip_launchers(&words) else {
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        let launched = strip_launchers(&words);
+        if top_level {
+            // A redirection can fail, and the assignment with it.
+            let redirected = words.len() != tokens.len();
+            shell.assign(&tokens, launched.map(|(program, _)| program), redirected);
+        }
+        let Some((program, args)) = launched else {
             continue;
         };
-        let git_dir_env = git_dir_env_prefix(&tokens);
+        if top_level {
+            shell.observe(program, args);
+        }
         match program_kind(program) {
             ProgramKind::Git => {
-                check_git(
-                    args,
-                    &mut branches,
-                    cd_dir.as_deref(),
-                    git_dir_env,
-                    ctx,
-                    &mut violations,
-                );
+                let moved = line.moves_for(&shell, top_level, &tokens);
+                check_git(args, &mut branches, &moved, ctx, violations, &mut notes, 0);
             }
-            ProgramKind::Gh => check_gh(args, ctx, &mut violations),
+            ProgramKind::Gh => check_gh(args, ctx, violations),
+            // A program named by a substitution could be git itself.
+            ProgramKind::Other if has_substitution(program) => {
+                violations.extend(unclassifiable_violation(
+                    ctx.policy,
+                    None,
+                    &substitution_reason("its program name"),
+                    &crate::remedy::GUARD_UNCLASSIFIABLE,
+                ));
+            }
             ProgramKind::Other => {}
         }
     }
-    violations
+    report.notes = notes;
+    report
+}
+
+/// The argument vector of every simple command in `command`, read the way
+/// git-guard reads them (TSK-136): subshells, groups, control-structure
+/// bodies, `$(…)`, backticks, `bash -c`/`eval` strings and script heredoc
+/// bodies unwrapped; quotes and escapes removed; redirections, leading
+/// reserved words (`!`, `time`, `do`, …), assignments and the `env`,
+/// `command`, `builtin` and `exec` launchers stripped. The first element is
+/// the program as written, which may still hold a substitution.
+pub(crate) fn simple_commands(command: &str) -> Vec<Vec<String>> {
+    expand_commands(command)
+        .iter()
+        .filter_map(|segment| {
+            let mut words = command_argv(segment);
+            strip_reserved_words(&mut words);
+            let (program, args) = strip_launchers(&words)?;
+            let mut command = Vec::with_capacity(args.len() + 1);
+            command.push(program.to_string());
+            command.extend(args.iter().cloned());
+            Some(command)
+        })
+        .collect()
+}
+
+/// Shell reserved words that can open a segment of a control structure
+/// (`do git commit`, `then git push`) or prefix a command (`! git commit`,
+/// `time git commit`). The command after them runs all the same.
+const LEADING_RESERVED_WORDS: &[&str] = &[
+    "if", "then", "else", "elif", "do", "while", "until", "!", "time",
+];
+
+/// Drop the reserved words that open a segment, and `time`'s own options, so
+/// the command they introduce is judged (TSK-112).
+pub(crate) fn strip_reserved_words(words: &mut Vec<String>) {
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let after_time = at > 0 && words[at - 1] == "time" && word.starts_with('-');
+        if LEADING_RESERVED_WORDS.contains(&word.as_str()) || after_time {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    words.drain(..at);
 }
 
 /// Which program a segment invokes, for dispatch. The basename is taken so a
@@ -302,11 +647,10 @@ fn is_assignment_of(token: &str, var: &str) -> bool {
 }
 
 fn laundering_violation(var: &str) -> Violation {
-    Violation::new(
+    Violation::always_blocking(
         "git.override_token_laundering",
-        PolicyLevel::Block,
         format!("command sets the override token `{var}` in-session"),
-        "override tokens are human-only; setting them in-session is bypass — a human runs the sanctioned path (PR merge / `codeflow integrate` / `CODEFLOW_HUMAN_OVERRIDE`) from their own terminal".to_string(),
+        "override tokens are human-only; setting them in-session is bypass — a human runs the sanctioned path (PR merge / `codeflow integrate` / `CODEFLOW_HUMAN_OVERRIDE`) from their own terminal",
     )
 }
 
@@ -315,7 +659,7 @@ fn hook_integrity_violation(level: PolicyLevel, message: String) -> Violation {
         "git.hook_integrity",
         level,
         message,
-        "the enforcement hooks and their policy are not agent-editable — fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)".to_string(),
+        crate::remedy::HOOK_INTEGRITY.remedy(),
     )
 }
 
@@ -432,20 +776,6 @@ fn cd_target(tokens: &[String]) -> Option<String> {
         .find(|t| !t.starts_with('-'))
         .map(|t| t.trim_matches(|c| c == '"' || c == '\'').to_string())
         .filter(|d| !d.is_empty())
-}
-
-/// A leading `GIT_DIR=<dir>` env-prefix assignment, when present.
-fn git_dir_env_prefix(tokens: &[String]) -> Option<String> {
-    for t in tokens {
-        let (name, val) = t.split_once('=')?;
-        if !is_identifier(name) {
-            break;
-        }
-        if name == "GIT_DIR" {
-            return Some(val.to_string());
-        }
-    }
-    None
 }
 
 /// The hook shims and the integrity files: directory prefixes and exact files
@@ -642,7 +972,7 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
 /// are both handled. A floor-raise, not a solve — arbitrary interpreters
 /// (`python3 -c`) and pipe-to-shell (`echo … | sh`) are the genuinely unbounded
 /// tail and stay a documented residual (ADR-0009), backstopped by CI + remote.
-fn expand_commands(command: &str) -> Vec<String> {
+pub(crate) fn expand_commands(command: &str) -> Vec<String> {
     let mut raw = Vec::new();
     split_into_segments(command, &mut raw, 0, false);
 
@@ -739,12 +1069,16 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         if c == '$' && chars.get(i + 1) == Some(&'(') {
             let (inner, ni) = capture_balanced(&chars, i + 2);
             line.substitution(inner, &cur, code_context, out, depth);
+            // The segment keeps a placeholder for the text the shell will
+            // substitute, so a word built from it is never read as known.
+            cur.push(substitution_placeholder(in_double));
             i = ni;
             continue;
         }
         if c == '`' {
             let (inner, ni) = capture_backtick(&chars, i + 1);
             line.substitution(inner, &cur, code_context, out, depth);
+            cur.push(substitution_placeholder(in_double));
             i = ni;
             continue;
         }
@@ -1061,7 +1395,7 @@ fn substitution_output_runs(prefix: &str) -> bool {
 /// `true` when the character at `i` begins a shell word, where an unquoted
 /// `#` opens a comment. After a closing `)` or a backtick it continues the
 /// word instead (`$(x)#y`), so neither counts.
-fn starts_word(chars: &[char], i: usize) -> bool {
+pub(super) fn starts_word(chars: &[char], i: usize) -> bool {
     i == 0 || matches!(chars[i - 1], ' ' | '\t' | '\n' | ';' | '&' | '|' | '(')
 }
 
@@ -1218,7 +1552,7 @@ fn body_substitutions(body: &str, out: &mut Vec<String>, depth: usize) {
 
 /// Capture up to the matching `)` for a `$(` opened before `start`, honoring
 /// nesting. Returns the inner text and the index just past the `)`.
-fn capture_balanced(chars: &[char], start: usize) -> (String, usize) {
+pub(super) fn capture_balanced(chars: &[char], start: usize) -> (String, usize) {
     let mut depth = 1;
     let mut s = String::new();
     let mut i = start;
@@ -1241,7 +1575,7 @@ fn capture_balanced(chars: &[char], start: usize) -> (String, usize) {
 
 /// Capture up to the closing backtick. Returns the inner text and the index
 /// just past the backtick.
-fn capture_backtick(chars: &[char], start: usize) -> (String, usize) {
+pub(super) fn capture_backtick(chars: &[char], start: usize) -> (String, usize) {
     let mut s = String::new();
     let mut i = start;
     while i < chars.len() {
@@ -1254,56 +1588,273 @@ fn capture_backtick(chars: &[char], start: usize) -> (String, usize) {
     (s, i)
 }
 
-/// The branch each git op in a chain runs on. A chained `checkout`/`switch`
-/// moves it for the ops after it: the session's own checkout, and separately
-/// each retargeted directory (`cd <dir> && git switch -c feat/x && git commit`).
+/// The branches git ops could find checked out at one point of the line.
+#[derive(Clone)]
+struct Checkouts {
+    /// The session repository's candidates.
+    session: Vec<String>,
+    /// `(normalized dir, candidates)` for retargeted repositories; `None` is
+    /// the branch the repository had when the line started.
+    dirs: Vec<(String, Vec<Option<String>>)>,
+    /// Branches a checkout the guard could not place may have left checked
+    /// out in any repository.
+    anywhere: Vec<String>,
+}
+
+fn add_unique<T: PartialEq>(into: &mut Vec<T>, items: impl IntoIterator<Item = T>) {
+    for item in items {
+        if !into.contains(&item) {
+            into.push(item);
+        }
+    }
+}
+
+impl Checkouts {
+    fn in_dir(&self, dir: &str) -> Vec<Option<String>> {
+        self.dirs
+            .iter()
+            .find(|(d, _)| d == dir)
+            .map_or_else(|| vec![None], |(_, branches)| branches.clone())
+    }
+
+    fn set_dir(&mut self, dir: &str, branches: Vec<Option<String>>) {
+        self.dirs.retain(|(d, _)| d != dir);
+        self.dirs.push((dir.to_string(), branches));
+    }
+
+    /// Every branch either state allows.
+    fn union(&self, other: &Self) -> Self {
+        let mut out = self.clone();
+        add_unique(&mut out.session, other.session.iter().cloned());
+        add_unique(&mut out.anywhere, other.anywhere.iter().cloned());
+        let mut dirs: Vec<&str> = self.dirs.iter().map(|(d, _)| d.as_str()).collect();
+        add_unique(&mut dirs, other.dirs.iter().map(|(d, _)| d.as_str()));
+        for dir in dirs {
+            let mut branches = self.in_dir(dir);
+            add_unique(&mut branches, other.in_dir(dir));
+            out.set_dir(dir, branches);
+        }
+        out
+    }
+
+    /// `target` checked out at `place`; `narrows` replaces what was there,
+    /// otherwise it joins it.
+    fn check_out(&mut self, place: Option<&str>, target: &str, narrows: bool) {
+        match place {
+            None if narrows => self.session = vec![target.to_string()],
+            None => add_unique(&mut self.session, [target.to_string()]),
+            Some(dir) => {
+                let mut branches = if narrows {
+                    Vec::new()
+                } else {
+                    self.in_dir(dir)
+                };
+                add_unique(&mut branches, [Some(target.to_string())]);
+                self.set_dir(dir, branches);
+            }
+        }
+    }
+}
+
+/// The branches each git op in a line could run on (TSK-112). A chained
+/// `checkout`, `switch` or rebase of a named branch moves them for the ops
+/// after it, in the session repository and separately in each retargeted
+/// directory. A move can fail, so it replaces the earlier branch only for the
+/// commands of its own `&&` list; after `;`, a newline, or anywhere the guard
+/// does not model the line, the earlier branch stays a candidate, as a `cd`
+/// does for the directory.
 struct BranchTracker {
-    session: String,
-    /// `(normalized dir, branch)` for checkouts made earlier in the chain.
-    retargeted: Vec<(String, String)>,
+    /// Where the current command could find things.
+    now: Checkouts,
+    /// Everywhere the current and-list could leave things, at whichever
+    /// member it stops.
+    list: Checkouts,
+    /// A command earlier in the line wrote git configuration or moved a
+    /// branch (which `includeIf "onbranch:…"` reads), so an alias read from
+    /// disk now may not be what git runs.
+    config_changed: bool,
 }
 
 impl BranchTracker {
     fn new(session: &str) -> Self {
+        let start = Checkouts {
+            session: vec![session.to_string()],
+            dirs: Vec::new(),
+            anywhere: Vec::new(),
+        };
         Self {
-            session: session.to_string(),
-            retargeted: Vec::new(),
+            now: start.clone(),
+            list: start,
+            config_changed: false,
         }
     }
 
-    fn switch_in(&mut self, dir: &str, branch: String) {
-        let dir = normalize_path(dir);
-        self.retargeted.retain(|(d, _)| *d != dir);
-        self.retargeted.push((dir, branch));
+    /// Enter a top-level command joined by `join`.
+    fn begin(&mut self, join: Join) {
+        if join == Join::Seq {
+            self.now = self.list.union(&self.now);
+            self.list = self.now.clone();
+        }
     }
 
-    fn switched_in(&self, dir: &str) -> Option<String> {
-        let dir = normalize_path(dir);
-        self.retargeted
-            .iter()
-            .find(|(d, _)| *d == dir)
-            .map(|(_, branch)| branch.clone())
+    /// Record a branch move at `places` (`None` is the session repository).
+    /// Only a move at one known place on a modeled top-level command
+    /// narrows; a move at one of several places joins each of them.
+    fn check_out(&mut self, places: &[Option<String>], target: &str, narrows: bool) {
+        let narrows = narrows && places.len() == 1;
+        for place in places {
+            let dir = place.as_deref().map(normalize_path);
+            self.now.check_out(dir.as_deref(), target, narrows);
+            self.list.check_out(dir.as_deref(), target, false);
+        }
+    }
+
+    /// A move the guard could not place: the branch may now be checked out
+    /// anywhere.
+    fn check_out_anywhere(&mut self, target: &str) {
+        add_unique(&mut self.now.anywhere, [target.to_string()]);
+        add_unique(&mut self.list.anywhere, [target.to_string()]);
+    }
+
+    fn session(&self) -> &[String] {
+        &self.now.session
+    }
+
+    fn in_dir(&self, dir: &str) -> Vec<Option<String>> {
+        self.now.in_dir(&normalize_path(dir))
+    }
+
+    fn anywhere(&self) -> &[String] {
+        &self.now.anywhere
     }
 }
 
-const SANCTIONED: &str = "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
+/// What the whole line reveals about moves the tracker cannot follow.
+struct LineFacts {
+    /// Some segment can move a shell's directory (`cd`, `pushd`, `source`, …).
+    any_mover: bool,
+    /// On a flat line: some *nested* segment can, or sets a variable.
+    nested_mover: bool,
+    /// Variables the line mentions that change what git reads.
+    mentions: Mentions,
+}
 
-#[allow(clippy::too_many_lines)]
+/// What a line may change about where git reads its repository and its
+/// configuration.
+struct Mentions {
+    /// A git location variable (`GIT_DIR`, …).
+    location_var: bool,
+    /// Where git reads its configuration from (`GIT_CONFIG_*`, `HOME`,
+    /// `XDG_CONFIG_HOME`) or a config file path, which the alias reader
+    /// cannot see.
+    config_env: bool,
+    /// A `git config` write whose order the guard does not model: anywhere
+    /// on a line that is not flat, or nested in a substitution. Top-level
+    /// writes on a flat line are followed in order.
+    config_write: bool,
+}
+
+impl LineFacts {
+    fn read(segments: &[String], roles: Option<&[Option<Join>]>, command: &str) -> Self {
+        let mut facts = Self {
+            any_mover: false,
+            nested_mover: false,
+            mentions: Mentions {
+                location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
+                config_env: mentions_config_env(command),
+                config_write: false,
+            },
+        };
+        for (idx, segment) in segments.iter().enumerate() {
+            let mut tokens = shell_tokens(segment);
+            let mut words = command_argv(segment);
+            // `! cd x`, `then cd x`: the command runs all the same.
+            strip_reserved_words(&mut tokens);
+            strip_reserved_words(&mut words);
+            let program = strip_launchers(&words).map(|(program, _)| program);
+            let mover = cd_target(&tokens).is_some()
+                || program.is_some_and(|p| git_target::moves_directory(p) || has_substitution(p));
+            let nested = roles.is_some_and(|r| r[idx].is_none());
+            let unordered = roles.is_none() || nested;
+            facts.mentions.config_write |= unordered
+                && strip_launchers(&words).is_some_and(|(program, args)| {
+                    matches!(program_kind(program), ProgramKind::Git)
+                        && git_subcommand(args)
+                            .is_some_and(|(sub, rest)| sub == "config" && !config_only_reads(rest))
+                });
+            facts.any_mover |= mover;
+            let sets_var = program.is_none_or(|p| p == "export")
+                && tokens.iter().any(|t| assignment(t).is_some());
+            facts.nested_mover |= nested && (mover || sets_var);
+        }
+        facts
+    }
+
+    /// Where a git op can run and which variables it can see.
+    fn moves_for<'r>(
+        &self,
+        shell: &'r ShellState,
+        top_level: bool,
+        tokens: &'r [String],
+    ) -> Moves<'r> {
+        let (cwd, tracked) = if !shell.flat() {
+            let cwd = if self.any_mover {
+                Cwd::Unknown("a directory change on a line the guard does not model".to_string())
+            } else {
+                Cwd::Paths(vec![String::new()])
+            };
+            (cwd, false)
+        } else if !top_level && self.nested_mover {
+            let why = "a directory or variable change inside a nested command".to_string();
+            (Cwd::Unknown(why), false)
+        } else {
+            (shell.cwd.clone(), top_level)
+        };
+        Moves {
+            cwd,
+            vars: tracked.then_some(&shell.vars),
+            // A location variable the line sets outside the op's own launcher
+            // environment is only modeled at top level of a flat line.
+            location_unknown: self.mentions.location_var && !tracked,
+            config_unknown: self.mentions.config_env || self.mentions.config_write,
+            narrows: tracked,
+            tokens,
+        }
+    }
+}
+
+/// Where the line has moved the directory a git op runs in.
+struct Moves<'r> {
+    /// The directories the op could run in.
+    cwd: Cwd,
+    /// Variables the op's words can expand from (`None`: none are known).
+    vars: Option<&'r HashMap<String, Val>>,
+    /// A git location variable may be set in a way the guard cannot scope.
+    location_unknown: bool,
+    /// The line may change where git reads its configuration from.
+    config_unknown: bool,
+    /// The op is a modeled top-level command, so a branch move it makes
+    /// holds for the rest of its `&&` list.
+    narrows: bool,
+    /// The op's full token list (its leading assignments and launchers).
+    tokens: &'r [String],
+}
+
 fn check_git(
     args: &[String],
     branches: &mut BranchTracker,
-    cd_dir: Option<&str>,
-    git_dir_env: Option<String>,
+    moved: &Moves<'_>,
     ctx: &GuardContext<'_>,
     out: &mut Vec<Violation>,
+    notes: &mut Vec<crate::remedy::Finding>,
+    depth: usize,
 ) {
     let policy = ctx.policy;
 
     // Global-flag pass, ahead of the subcommand: hook-path override (`git -c
     // core.hooksPath=…` or `git --config-env=core.hooksPath=<VAR>`) disarms
-    // the client hooks (ADR-0009); `-C`/`--git-dir` retarget the op at
-    // another repository.
-    let (hooks_path_override, retarget_flag) = scan_git_globals(args);
+    // the client hooks (ADR-0009).
+    let (hooks_path_override, _) = scan_git_globals(args);
     if hooks_path_override && policy.hook_integrity.is_active() {
         out.push(hook_integrity_violation(
             policy.hook_integrity,
@@ -1313,39 +1864,903 @@ fn check_git(
         return;
     }
 
+    // Classification uncertainty adds its own verdict; it never ends the
+    // judgment, so every other applicable rule still runs (R4-1).
+    let mut unclassified = unclassifiable_git(args);
     let Some((sub, rest)) = git_subcommand(args) else {
+        if let Some(u) = &unclassified {
+            out.extend(u.violation(ctx.policy, None));
+        }
         return;
     };
 
-    // Effective target: an explicit `--git-dir`/`-C`, else `GIT_DIR=`, else a
-    // chained `cd`. When retargeted, evaluate against that repo's branch — one
-    // an earlier checkout in this chain moved it to, else the injected
-    // resolver's reading — instead of the session branch: the review's
-    // wrong-dir evasion. No resolver / unreadable dir falls back to the session
-    // branch (documented residual; the target repo's git-hook plane backstops).
-    let retarget_dir = retarget_flag
-        .or(git_dir_env)
-        .or_else(|| cd_dir.map(str::to_string));
-    let eval_branch: String = match &retarget_dir {
-        Some(dir) => branches
-            .switched_in(dir)
-            .or_else(|| ctx.dir_branch_lookup.and_then(|resolver| resolver(dir)))
-            .unwrap_or_else(|| branches.session.clone()),
-        None => branches.session.clone(),
-    };
-    let branch = eval_branch.as_str();
-
-    match sub {
-        "checkout" | "switch" => {
-            // A checkout in a retargeted dir moves that dir's branch, not the
-            // session's.
-            if let Some(target) = checkout_target(rest) {
-                match &retarget_dir {
-                    Some(dir) => branches.switch_in(dir, target),
-                    None => branches.session = target,
+    // A subcommand that is not a builtin may be an alias: judge what it
+    // expands to, as if written literally. One the guard cannot read is
+    // unclassifiable.
+    if unclassified.is_none() && !GIT_BUILTINS.contains(&sub) {
+        match expand_alias(args, sub, moved, ctx, depth, branches.config_changed) {
+            Ok(expansions) => {
+                for expanded in expansions {
+                    check_git(&expanded, branches, moved, ctx, out, notes, depth + 1);
                 }
             }
+            Err(why) => {
+                unclassified = Some(Unclassified::Alias(format!(
+                    "`git {sub}` may be an alias the guard cannot resolve ({why})"
+                )));
+            }
         }
+    }
+
+    let judged = judge_target(args, branches, moved, ctx);
+    if let Some(u) = &unclassified {
+        let known = match u {
+            Unclassified::Subcommand(_) | Unclassified::Alias(_) => None,
+            Unclassified::Arguments(_) => Some(sub),
+        };
+        // A subcommand that acts on the branch it runs on can only reach a
+        // protected branch through its target, which is judged below; its
+        // unknown arguments matter only there. Any other unknown part can
+        // name a protected ref from anywhere.
+        let acts_on_current = known.is_some_and(|s| CURRENT_BRANCH_SUBCOMMANDS.contains(&s));
+        let exposed = !acts_on_current
+            || judged
+                .cases
+                .iter()
+                .any(|(branch, rules, _)| rules.branch_is_protected(branch));
+        if exposed {
+            let strictest = judged
+                .cases
+                .iter()
+                .filter_map(|(_, rules, _)| u.violation(rules, known))
+                .max_by_key(|v| severity(v.level));
+            out.extend(strictest);
+        }
+    }
+    track_branch_move(
+        sub,
+        rest,
+        &judged.track,
+        branches,
+        ctx.policy,
+        moved.narrows,
+    );
+    if sub == "config" && !config_only_reads(rest) {
+        branches.config_changed = true;
+    }
+    if matches!(sub, "checkout" | "switch") {
+        return;
+    }
+
+    let mut found: Vec<Violation> = Vec::new();
+    for (branch, rules, root) in &judged.cases {
+        let view = GuardContext {
+            policy: rules,
+            current_branch: ctx.current_branch,
+            integrate_token: ctx.integrate_token,
+            pr_base_lookup: ctx.pr_base_lookup,
+            dir_target_lookup: ctx.dir_target_lookup,
+            alias_lookup: ctx.alias_lookup,
+            root_checkout: ctx.root_checkout,
+        };
+        let mut case = Vec::new();
+        judge_git_sub(sub, rest, branch, &view, &mut case);
+        case.extend(root_checkout_case(sub, rest, branch, rules, root.as_ref()));
+        for v in case {
+            if !found
+                .iter()
+                .any(|f| f.rule == v.rule && f.message == v.message)
+            {
+                found.push(v);
+            }
+        }
+    }
+    if let Some(why) = judged.unresolved {
+        notes.push(disclose_unresolved(sub, &why, &mut found));
+    }
+    out.extend(found);
+}
+
+/// The root-checkout rule for one case (TSK-165): a commit-creating
+/// subcommand run in a root checkout off its root branch. A rebase given a
+/// `<branch>` checks that branch out first, so it is judged there.
+fn root_checkout_case(
+    sub: &str,
+    rest: &[String],
+    branch: &str,
+    rules: &GitPolicy,
+    root: Option<&RootCheckout>,
+) -> Option<Violation> {
+    let on = if sub == "rebase" {
+        rebase_branch(rest).unwrap_or(branch)
+    } else {
+        branch
+    };
+    crate::root_checkout::guard_violation(sub, rest, on, root?, rules.root_checkout_commits)
+}
+
+/// Name an unresolved target on each finding judged as protected, and the
+/// note that discloses it (TSK-112).
+fn disclose_unresolved(sub: &str, why: &str, found: &mut [Violation]) -> crate::remedy::Finding {
+    let note = format!(
+        "target unresolved: {why}; the guard cannot prove it is not a protected branch, so it judged it as one"
+    );
+    for v in found.iter_mut() {
+        v.message = format!("{} ({note})", v.message);
+        v.remedy = crate::remedy::GUARD_UNRESOLVED.remedy();
+    }
+    crate::remedy::Finding::new(
+        format!("`git {sub}`: {note}"),
+        crate::remedy::GUARD_UNRESOLVED.remedy(),
+    )
+}
+
+/// Follow a branch change the op makes for the rest of the line: a checkout
+/// or switch, or a rebase given a `<branch>`, which checks it out first. A
+/// move in a retargeted dir moves that dir's branch, not the session's; one
+/// the guard cannot place may have moved any repository's; a substituted
+/// checkout target is assumed to be protected.
+fn track_branch_move(
+    sub: &str,
+    rest: &[String],
+    track: &Track,
+    branches: &mut BranchTracker,
+    policy: &GitPolicy,
+    narrows: bool,
+) {
+    let target = match sub {
+        "checkout" | "switch" => checkout_target(rest).map(|target| {
+            if has_substitution(&target) {
+                assumed_protected_branch(policy).unwrap_or(target)
+            } else {
+                target
+            }
+        }),
+        "rebase" => rebase_branch(rest).map(str::to_string),
+        _ => None,
+    };
+    let Some(target) = target else {
+        return;
+    };
+    // A conditional include can depend on the branch.
+    branches.config_changed = true;
+    match track {
+        Track::Places(places) => branches.check_out(places, &target, narrows),
+        Track::Unplaced => branches.check_out_anywhere(&target),
+    }
+}
+
+/// Subcommands whose arguments the guard judges. A substitution in their
+/// arguments can change what they do to a branch.
+const JUDGED_SUBCOMMANDS: &[&str] = &[
+    "commit",
+    "merge",
+    "cherry-pick",
+    "rebase",
+    "reset",
+    "branch",
+    "config",
+    "update-ref",
+    "symbolic-ref",
+    "fast-import",
+    "push",
+    "checkout",
+    "switch",
+];
+
+/// Subcommands that act on the branch checked out where they run. Their
+/// arguments cannot move them to another branch. `rebase` is not one: its
+/// `<branch>` argument checks that branch out first.
+const CURRENT_BRANCH_SUBCOMMANDS: &[&str] = &["commit", "merge", "cherry-pick", "reset"];
+
+/// Which part of a git invocation the guard cannot classify.
+enum Unclassified {
+    /// A substitution in a global option or the subcommand itself: any git
+    /// command may run.
+    Subcommand(&'static str),
+    /// A substitution in the arguments of a subcommand the guard judges.
+    Arguments(&'static str),
+    /// An alias the guard cannot resolve; the reason. Any git command may run.
+    Alias(String),
+}
+
+impl Unclassified {
+    /// The verdict under `policy`, for the subcommand `sub` when it is known.
+    fn violation(&self, policy: &GitPolicy, sub: Option<&str>) -> Option<Violation> {
+        match self {
+            Self::Subcommand(place) | Self::Arguments(place) => unclassifiable_violation(
+                policy,
+                sub,
+                &substitution_reason(place),
+                &crate::remedy::GUARD_UNCLASSIFIABLE,
+            ),
+            Self::Alias(reason) => {
+                unclassifiable_violation(policy, sub, reason, &crate::remedy::GUARD_ALIAS)
+            }
+        }
+    }
+}
+
+/// Why a substitution in `place` makes a git command unclassifiable.
+fn substitution_reason(place: &str) -> String {
+    format!("a command substitution in {place} decides what this git command does")
+}
+
+/// Where a substitution makes a git invocation unclassifiable, if anywhere
+/// (TSK-112, R3-1): in a global option or at or before the subcommand, where
+/// it can change which command runs; or, for a subcommand the guard judges,
+/// anywhere unquoted (word splitting can add arguments) and in any argument
+/// other than a quoted message value (`-m`, `--message`). A read-only
+/// subcommand's arguments cannot turn it into a mutation.
+fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
+    let mut idx = 0;
+    let sub = loop {
+        let t = args.get(idx)?;
+        if has_substitution(t) {
+            return Some(Unclassified::Subcommand(
+                "a global option or the subcommand",
+            ));
+        }
+        if GIT_GLOBAL_VALUE_FLAGS.contains(&t.as_str()) {
+            if args.get(idx + 1).is_some_and(|v| has_substitution(v)) {
+                return Some(Unclassified::Subcommand("a global option"));
+            }
+            idx += 2;
+        } else if t.starts_with('-') {
+            idx += 1;
+        } else {
+            break t.as_str();
+        }
+    };
+    if !JUDGED_SUBCOMMANDS.contains(&sub) {
+        return None;
+    }
+    let rest = &args[idx + 1..];
+    if rest.iter().any(|a| a.contains(SUBSTITUTED_BARE)) {
+        return Some(Unclassified::Arguments(
+            "an unquoted position, where word splitting can add arguments",
+        ));
+    }
+    let mut i = 0;
+    while i < rest.len() {
+        let a = rest[i].as_str();
+        let takes_message = a == "-m"
+            || a == "--message"
+            || (a.starts_with('-') && !a.starts_with("--") && a.ends_with('m'));
+        if takes_message {
+            i += 2; // the message value may hold a quoted substitution
+            continue;
+        }
+        let message_inline = a.starts_with("--message=") || (a.starts_with("-m") && a.len() > 2);
+        if has_substitution(a) && !message_inline {
+            return Some(Unclassified::Arguments(
+                "an argument other than the message",
+            ));
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The rules an unknown part of a git invocation could break: every branch
+/// rule when the subcommand is unknown (`None`), else the rules of `sub`.
+fn exposed_rules(sub: Option<&str>, p: &GitPolicy) -> Vec<(&'static str, PolicyLevel)> {
+    let all = [
+        ("git.commit_to_protected", p.commit_to_protected),
+        ("git.merge_to_protected", p.merge_to_protected),
+        ("git.push_to_protected", p.push_to_protected),
+        ("git.force_push_protected", p.force_push_protected),
+        ("git.delete_protected", p.delete_protected),
+        ("git.hard_reset_protected", p.hard_reset_protected),
+        ("git.local_ref_protection", p.local_ref_protection),
+        ("git.hook_integrity", p.hook_integrity),
+    ];
+    let names: &[&str] = match sub {
+        None => return all.to_vec(),
+        Some("commit") => &["git.commit_to_protected"],
+        Some("merge" | "cherry-pick") => &["git.merge_to_protected"],
+        Some("rebase" | "reset") => &["git.hard_reset_protected"],
+        Some("push") => &[
+            "git.push_to_protected",
+            "git.force_push_protected",
+            "git.delete_protected",
+        ],
+        Some("branch") => &["git.delete_protected", "git.local_ref_protection"],
+        Some("config") => &["git.hook_integrity"],
+        Some("checkout" | "switch") => &["git.local_ref_protection", "git.commit_to_protected"],
+        Some(_) => &["git.local_ref_protection", "git.delete_protected"],
+    };
+    all.into_iter()
+        .filter(|(name, _)| names.contains(name))
+        .collect()
+}
+
+/// Order policy levels by strictness.
+fn severity(level: PolicyLevel) -> u8 {
+    match level {
+        PolicyLevel::Block => 2,
+        PolicyLevel::Warn => 1,
+        PolicyLevel::Allow | PolicyLevel::Off => 0,
+    }
+}
+
+/// The verdict for a git invocation the guard cannot classify: the strictest
+/// of the rules its unknown part could break, under `policy` (charter §6.1:
+/// unknown ref-writers deny). `None` when every such rule is off or allows.
+fn unclassifiable_violation(
+    policy: &GitPolicy,
+    sub: Option<&str>,
+    reason: &str,
+    remedy: &'static crate::remedy::Clearing,
+) -> Option<Violation> {
+    // The strictest level; on a tie, the first rule listed.
+    let (rule, level) = exposed_rules(sub, policy)
+        .into_iter()
+        .filter(|(_, level)| level.is_active())
+        .rev()
+        .max_by_key(|(_, level)| severity(*level))?;
+    Some(Violation::new(
+        rule,
+        level,
+        format!(
+            "command unresolved: {reason}, so the guard cannot prove it leaves protected branches alone"
+        ),
+        remedy.remedy(),
+    ))
+}
+
+/// Git's builtin commands (`git --list-cmds=builtins`, Git 2.53). Git runs a
+/// builtin even when an alias of the same name exists, so only another name
+/// is looked up as an alias.
+const GIT_BUILTINS: &[&str] = &[
+    "add",
+    "am",
+    "annotate",
+    "apply",
+    "archive",
+    "backfill",
+    "bisect",
+    "blame",
+    "branch",
+    "bugreport",
+    "bundle",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-mailmap",
+    "check-ref-format",
+    "checkout",
+    "checkout--worker",
+    "checkout-index",
+    "cherry",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "column",
+    "commit",
+    "commit-graph",
+    "commit-tree",
+    "config",
+    "count-objects",
+    "credential",
+    "credential-cache",
+    "credential-cache--daemon",
+    "credential-store",
+    "describe",
+    "diagnose",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-pairs",
+    "diff-tree",
+    "difftool",
+    "fast-export",
+    "fast-import",
+    "fetch",
+    "fetch-pack",
+    "fmt-merge-msg",
+    "for-each-ref",
+    "for-each-repo",
+    "format-patch",
+    "fsck",
+    "fsck-objects",
+    "fsmonitor--daemon",
+    "gc",
+    "get-tar-commit-id",
+    "grep",
+    "hash-object",
+    "help",
+    "hook",
+    "index-pack",
+    "init",
+    "init-db",
+    "interpret-trailers",
+    "last-modified",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "mailinfo",
+    "mailsplit",
+    "maintenance",
+    "merge",
+    "merge-base",
+    "merge-file",
+    "merge-index",
+    "merge-ours",
+    "merge-recursive",
+    "merge-recursive-ours",
+    "merge-recursive-theirs",
+    "merge-subtree",
+    "merge-tree",
+    "mktag",
+    "mktree",
+    "multi-pack-index",
+    "mv",
+    "name-rev",
+    "notes",
+    "pack-objects",
+    "pack-redundant",
+    "pack-refs",
+    "patch-id",
+    "pickaxe",
+    "prune",
+    "prune-packed",
+    "pull",
+    "push",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "receive-pack",
+    "reflog",
+    "refs",
+    "remote",
+    "remote-ext",
+    "remote-fd",
+    "repack",
+    "replace",
+    "replay",
+    "repo",
+    "rerere",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "send-pack",
+    "shortlog",
+    "show",
+    "show-branch",
+    "show-index",
+    "show-ref",
+    "sparse-checkout",
+    "stage",
+    "stash",
+    "status",
+    "stripspace",
+    "submodule--helper",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "unpack-file",
+    "unpack-objects",
+    "update-index",
+    "update-ref",
+    "update-server-info",
+    "upload-archive",
+    "upload-archive--writer",
+    "upload-pack",
+    "var",
+    "verify-commit",
+    "verify-pack",
+    "verify-tag",
+    "version",
+    "whatchanged",
+    "worktree",
+    "write-tree",
+];
+
+/// How deep an alias may expand into further aliases before the guard stops.
+const MAX_ALIAS_DEPTH: usize = 8;
+
+/// Does the line touch where git reads its configuration from, or name a git
+/// config file it could write? Any mention of a `GIT_CONFIG*` variable,
+/// `XDG_CONFIG_HOME`, a `git/config` or `gitconfig` path, or `HOME` as a word
+/// not read as `$HOME`, counts.
+fn mentions_config_env(command: &str) -> bool {
+    if ["GIT_CONFIG", "XDG_CONFIG_HOME", "git/config", "gitconfig"]
+        .iter()
+        .any(|marker| command.contains(marker))
+    {
+        return true;
+    }
+    let bytes = command.as_bytes();
+    command.match_indices("HOME").any(|(at, _)| {
+        let before = at.checked_sub(1).map(|i| bytes[i]);
+        let after = bytes.get(at + 4).copied();
+        let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        !before.is_some_and(|b| word(b) || b == b'$' || b == b'{') && !after.is_some_and(word)
+    })
+}
+
+/// Expand `sub`, a subcommand that is not a builtin, through the alias it
+/// names in every repository the op could target (TSK-112). Each result is
+/// the op's argument vector with the alias replaced by its expansion, the way
+/// git prepends it; a name that is no alias adds nothing. `Err` names why the
+/// alias cannot be read: an unresolved target, configuration the reader
+/// cannot see, a `!` shell alias, one that starts with an option, a chain
+/// deeper than [`MAX_ALIAS_DEPTH`], or a failed lookup.
+fn expand_alias(
+    args: &[String],
+    sub: &str,
+    moved: &Moves<'_>,
+    ctx: &GuardContext<'_>,
+    depth: usize,
+    config_changed: bool,
+) -> Result<Vec<Vec<String>>, String> {
+    if depth >= MAX_ALIAS_DEPTH {
+        return Err("an alias chain deeper than the guard follows".to_string());
+    }
+    let lookup = ctx
+        .alias_lookup
+        .ok_or_else(|| "no alias reader".to_string())?;
+    if moved.config_unknown {
+        return Err("the line changes where git reads its configuration".to_string());
+    }
+    if config_changed {
+        return Err(
+            "an earlier command in the line writes git configuration or moves a branch".to_string(),
+        );
+    }
+    let at = git_subcommand(args).map_or(args.len(), |(_, rest)| args.len() - rest.len() - 1);
+    let mut config = Vec::new();
+    let mut idx = 0;
+    while idx < at {
+        let t = args[idx].as_str();
+        if t == "--config-env" || t.starts_with("--config-env=") {
+            return Err("`--config-env` sets configuration from the environment".to_string());
+        }
+        if t == "-c" {
+            config.extend(args.get(idx + 1).cloned());
+            idx += 2;
+        } else if GIT_GLOBAL_VALUE_FLAGS.contains(&t) {
+            idx += 2;
+        } else {
+            idx += 1;
+        }
+    }
+    let specs = compose_targets(args, moved)?;
+    let mut expansions: Vec<Vec<String>> = Vec::new();
+    for spec in &specs {
+        let query = AliasQuery {
+            target: spec.as_ref().map(|s| Retarget {
+                path: &s.path,
+                git_dir: s.git_dir,
+            }),
+            config: &config,
+            name: sub,
+        };
+        let value = match lookup(&query) {
+            AliasAnswer::NotAlias => continue,
+            AliasAnswer::Unreadable(why) => return Err(why),
+            AliasAnswer::Expansion(value) => value,
+        };
+        if value.trim_start().starts_with('!') {
+            return Err("a `!` shell alias".to_string());
+        }
+        let words =
+            split_alias(&value).ok_or_else(|| "an alias value git cannot split".to_string())?;
+        match words.first() {
+            None => return Err("an empty alias".to_string()),
+            Some(first) if first.starts_with('-') => {
+                return Err("an alias that starts with an option".to_string())
+            }
+            Some(_) => {}
+        }
+        let mut expanded = args[..at].to_vec();
+        expanded.extend(words);
+        expanded.extend_from_slice(&args[at + 1..]);
+        if !expansions.contains(&expanded) {
+            expansions.push(expanded);
+        }
+    }
+    Ok(expansions)
+}
+
+/// Split an alias value into words as git's `split_cmdline` does: on
+/// whitespace, with single and double quotes grouping and a backslash
+/// escaping the next character outside single quotes. `None` for an
+/// unterminated quote or a trailing backslash.
+fn split_alias(value: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => word.push(c),
+            (_, '\\') => {
+                word.push(chars.next()?);
+                in_word = true;
+            }
+            (Some(_), _) => word.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                in_word = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            (None, _) => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if in_word {
+        words.push(word);
+    }
+    Some(words)
+}
+
+/// Where a branch move in the judged op happens.
+enum Track {
+    /// At each of these places (`None` is the session repository).
+    Places(Vec<Option<String>>),
+    /// Somewhere the guard could not resolve.
+    Unplaced,
+}
+
+/// A branch a git op is judged on, the policy it is judged by, and the root
+/// checkout it runs in, if it runs in one.
+type Case<'p> = (String, Cow<'p, GitPolicy>, Option<RootCheckout>);
+
+/// The cases a git op is judged against.
+struct Judged<'p> {
+    track: Track,
+    cases: Vec<Case<'p>>,
+    /// Set when the target could not be resolved; the cases then assume a
+    /// protected branch.
+    unresolved: Option<String>,
+}
+
+/// Decide which repository a git op targets (TSK-112).
+///
+/// When every directory the shell could run the op in resolves to a readable
+/// repository, the op is judged against each of them, by that repository's
+/// branch and its own policy, and blocks if any of them is protected.
+/// Otherwise the target is unresolved: the op is judged as if it ran on a
+/// protected branch under the session policy, so a mutation blocks, and the
+/// verdict says why and how to make the target resolvable.
+fn judge_target<'p>(
+    args: &[String],
+    branches: &BranchTracker,
+    moved: &Moves<'_>,
+    ctx: &GuardContext<'p>,
+) -> Judged<'p> {
+    let resolved = compose_targets(args, moved).and_then(|specs| {
+        let mut cases: Vec<Case<'p>> = Vec::new();
+        for spec in &specs {
+            match spec {
+                None => cases.extend(branches.session().iter().map(|b| {
+                    (
+                        b.clone(),
+                        Cow::Borrowed(ctx.policy),
+                        ctx.root_checkout.cloned(),
+                    )
+                })),
+                Some(spec) => cases.extend(
+                    resolve_target(spec, branches, ctx)
+                        .ok_or_else(|| format!("no readable repository at `{}`", spec.path))?,
+                ),
+            }
+        }
+        // A branch an unplaced checkout moved may be checked out here too.
+        let moved: Vec<_> = cases
+            .iter()
+            .flat_map(|(_, rules, root)| {
+                branches
+                    .anywhere()
+                    .iter()
+                    .map(move |b| (b.clone(), rules.clone(), root.clone()))
+            })
+            .collect();
+        cases.extend(moved);
+        let places = specs
+            .iter()
+            .map(|spec| spec.as_ref().map(|s| s.path.clone()))
+            .collect();
+        Ok((Track::Places(places), cases))
+    });
+    match resolved {
+        Ok((track, cases)) => Judged {
+            track,
+            cases,
+            unresolved: None,
+        },
+        Err(why) => {
+            let branch = assumed_protected_branch(ctx.policy)
+                .or_else(|| branches.session().first().cloned())
+                .unwrap_or_default();
+            Judged {
+                track: Track::Unplaced,
+                cases: vec![(branch, Cow::Borrowed(ctx.policy), None)],
+                unresolved: Some(why),
+            }
+        }
+    }
+}
+
+/// A branch name the policy protects, to judge an unresolved target by.
+fn assumed_protected_branch(policy: &GitPolicy) -> Option<String> {
+    policy
+        .protected_branches
+        .iter()
+        .map(|p| p.replace(['*', '?'], "x"))
+        .find(|b| policy.branch_is_protected(b))
+}
+
+/// An owned [`Retarget`].
+#[derive(PartialEq, Eq)]
+struct TargetSpec {
+    path: String,
+    git_dir: bool,
+}
+
+/// Compose every repository location a git op could target: each directory
+/// the shell could be in, then each `-C` in order, then the git dir
+/// (`--git-dir`, else a `GIT_DIR` in the op's launcher environment), which git
+/// reads relative to the `-C` directory. `None` in the result is the session's
+/// own working directory. `Err` names what could not be resolved.
+fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<TargetSpec>>, String> {
+    let no_vars = HashMap::new();
+    let vars = moved.vars.unwrap_or(&no_vars);
+    if moved.location_unknown {
+        return Err(
+            "a git location variable (`GIT_DIR`, `GIT_COMMON_DIR`, `GIT_WORK_TREE`) set where the guard cannot scope it".to_string(),
+        );
+    }
+    if let Some(name) = GIT_LOCATION_VARS.iter().find(|v| vars.contains_key(**v)) {
+        return Err(format!("`{name}` set earlier in the line"));
+    }
+    let mut git_dir: Option<String> = None;
+    for (name, value) in launcher_env(moved.tokens)? {
+        match name.as_str() {
+            "GIT_DIR" => git_dir = Some(expand_word(&value, vars)?),
+            "GIT_COMMON_DIR" | "GIT_WORK_TREE" => {
+                return Err(format!("`{name}` in the command's environment"))
+            }
+            _ => {}
+        }
+    }
+    let mut dash_c: Vec<String> = Vec::new();
+    let mut idx = 0;
+    while idx < args.len() {
+        let t = args[idx].as_str();
+        let value = || {
+            args.get(idx + 1)
+                .ok_or_else(|| format!("`{t}` without a value"))
+        };
+        match t {
+            "-C" => {
+                dash_c.push(expand_word(value()?, vars)?);
+                idx += 2;
+            }
+            "--git-dir" => {
+                git_dir = Some(expand_word(value()?, vars)?);
+                idx += 2;
+            }
+            "-c" | "--config-env" | "--work-tree" | "--namespace" => idx += 2,
+            _ => {
+                if let Some(v) = t.strip_prefix("--git-dir=") {
+                    git_dir = Some(expand_word(v, vars)?);
+                } else if !t.starts_with('-') {
+                    break; // the subcommand
+                }
+                idx += 1;
+            }
+        }
+    }
+    // A base the -C chain or git dir does not make irrelevant must be known.
+    let bases: Vec<Option<String>> = match &moved.cwd {
+        Cwd::Paths(paths) => paths.iter().cloned().map(Some).collect(),
+        Cwd::Unknown(_) => vec![None],
+    };
+    let mut specs: Vec<Option<TargetSpec>> = Vec::new();
+    for base in bases {
+        let mut dir = base;
+        for next in &dash_c {
+            dir = match dir {
+                Some(d) => Some(join_path(&d, next)),
+                None if next.starts_with('/') => Some(next.clone()),
+                None => None,
+            };
+        }
+        let spec = match (&git_dir, dir) {
+            (Some(g), Some(d)) => Some(TargetSpec {
+                path: join_path(&d, g),
+                git_dir: true,
+            }),
+            (Some(g), None) if g.starts_with('/') => Some(TargetSpec {
+                path: g.clone(),
+                git_dir: true,
+            }),
+            (None, Some(d)) if d.is_empty() => None,
+            (None, Some(d)) => Some(TargetSpec {
+                path: d,
+                git_dir: false,
+            }),
+            (_, None) => {
+                return Err(match &moved.cwd {
+                    Cwd::Unknown(why) => why.clone(),
+                    Cwd::Paths(_) => "the working directory".to_string(),
+                })
+            }
+        };
+        if !specs.contains(&spec) {
+            specs.push(spec);
+        }
+    }
+    Ok(specs)
+}
+
+fn lookup(spec: &Retarget<'_>, ctx: &GuardContext<'_>) -> Option<TargetRepo> {
+    ctx.dir_target_lookup.and_then(|resolver| resolver(spec))
+}
+
+/// The branch and policy pairs a resolved target is judged by: each branch
+/// an earlier move in the line may have left there, where the branch the
+/// resolver read stands for no move, under the target's own policy (the
+/// session's when it is the session repository). `None` when the resolver
+/// cannot read it.
+fn resolve_target<'p>(
+    spec: &TargetSpec,
+    branches: &BranchTracker,
+    ctx: &GuardContext<'p>,
+) -> Option<Vec<Case<'p>>> {
+    let repo = lookup(
+        &Retarget {
+            path: &spec.path,
+            git_dir: spec.git_dir,
+        },
+        ctx,
+    )?;
+    let rules = repo.policy.map_or(Cow::Borrowed(ctx.policy), Cow::Owned);
+    Some(
+        branches
+            .in_dir(&spec.path)
+            .into_iter()
+            .map(|b| {
+                (
+                    b.unwrap_or_else(|| repo.branch.clone()),
+                    rules.clone(),
+                    repo.root.clone(),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Judge one git subcommand on `branch` under `ctx.policy`.
+#[allow(clippy::too_many_lines)]
+fn judge_git_sub(
+    sub: &str,
+    rest: &[String],
+    branch: &str,
+    ctx: &GuardContext<'_>,
+    out: &mut Vec<Violation>,
+) {
+    let policy = ctx.policy;
+    match sub {
         "commit" => {
             if policy.commit_to_protected.is_active()
                 && policy.branch_is_protected(branch)
@@ -1355,7 +2770,7 @@ fn check_git(
                     "git.commit_to_protected",
                     policy.commit_to_protected,
                     format!("`git {sub}` would create commits on protected branch '{branch}'"),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             }
             maybe_no_verify(sub, rest, branch, policy, out);
@@ -1373,18 +2788,21 @@ fn check_git(
                     "git.merge_to_protected",
                     policy.merge_to_protected,
                     format!("`git {sub}` would land a commit on protected branch '{branch}'"),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             }
             maybe_no_verify(sub, rest, branch, policy, out);
         }
         "rebase" => {
+            // `git rebase <upstream> <branch>` checks `<branch>` out first and
+            // rewrites it, not the branch the command starts on.
+            let branch = rebase_branch(rest).unwrap_or(branch);
             if policy.hard_reset_protected.is_active() && policy.branch_is_protected(branch) {
                 out.push(Violation::new(
                     "git.hard_reset_protected",
                     policy.hard_reset_protected,
                     format!("`git rebase` rewrites history on protected branch '{branch}'"),
-                    "rebase feature branches in their own worktree; protected history is append-only".to_string(),
+                    crate::remedy::PROTECTED_REWRITE.remedy(),
                 ));
             }
         }
@@ -1397,7 +2815,7 @@ fn check_git(
                     "git.hard_reset_protected",
                     policy.hard_reset_protected,
                     format!("`git reset --hard` on protected branch '{branch}'"),
-                    "create a revert commit instead; protected history is append-only".to_string(),
+                    crate::remedy::PROTECTED_REWRITE.remedy(),
                 ));
             }
         }
@@ -1411,7 +2829,7 @@ fn check_git(
                         "git.delete_protected",
                         policy.delete_protected,
                         format!("`git branch` would delete protected branch '{target}'"),
-                        "protected branches are never deleted; remove the entry from git.protected_branches first if truly intended".to_string(),
+                        crate::remedy::PROTECTED_DELETE.remedy(),
                     ));
                 }
             }
@@ -1439,7 +2857,7 @@ fn check_git(
                     policy.local_ref_protection,
                     "`git fast-import` can rewrite any ref, including protected branches"
                         .to_string(),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             }
         }
@@ -1545,6 +2963,50 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     key_write && names_hooks_path
 }
 
+/// Does this `git config` invocation only read? A get, list or single-name
+/// query does; anything that sets, unsets, edits or renames, and any form
+/// the guard does not recognize, counts as a write.
+fn config_only_reads(rest: &[String]) -> bool {
+    let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+    let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
+    let subcommand = parsed.operands.first().copied().filter(|word| {
+        matches!(
+            *word,
+            "get" | "set" | "unset" | "list" | "edit" | "rename-section" | "remove-section"
+        )
+    });
+    let writes = parsed.has_short(&['e'])
+        || any_long(&[
+            "--edit",
+            "--rename-section",
+            "--remove-section",
+            "--add",
+            "--append",
+            "--replace-all",
+            "--unset",
+            "--unset-all",
+        ])
+        || matches!(
+            subcommand,
+            Some("set" | "unset" | "edit" | "rename-section" | "remove-section")
+        );
+    if writes {
+        return false;
+    }
+    let read_mode = parsed.has_short(&['l'])
+        || any_long(&[
+            "--get",
+            "--get-all",
+            "--get-regexp",
+            "--get-urlmatch",
+            "--get-color",
+            "--get-colorbool",
+            "--list",
+        ])
+        || matches!(subcommand, Some("get" | "list"));
+    read_mode || (subcommand.is_none() && parsed.operands.len() <= 1)
+}
+
 /// Guard `git update-ref` (ADR-0009). Two vectors: (1) a direct write to a
 /// protected `refs/heads/*` — a local move outside the sanctioned path; (2) a
 /// write to `refs/remotes/*/<protected>` — poisoning the remote-tracking ref
@@ -1564,7 +3026,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
                 "git.local_ref_protection",
                 policy.local_ref_protection,
                 "`git update-ref --stdin` updates refs from an opaque stream that may touch protected branches".to_string(),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
         return;
@@ -1573,13 +3035,26 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
         return;
     };
 
+    // The fetched registry is what issue and CI verify against (R-10, R-11);
+    // only a real, non-forced fetch may move it.
+    if refname
+        .strip_prefix("refs/remotes/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(_, branch)| branch == crate::ids::REGISTRY_BRANCH)
+    {
+        out.push(registry_violation(format!(
+            "`git update-ref` writes the fetched registry `{refname}`; only a non-forced fetch moves it (R-11)"
+        )));
+        return;
+    }
+
     if let Some(branch) = protected_component_of_remote_ref(refname, policy) {
         if policy.local_ref_protection.is_active() {
             out.push(Violation::new(
                 "git.local_ref_protection",
                 policy.local_ref_protection,
                 format!("`git update-ref` writes the remote-tracking ref for protected branch '{branch}' — the reference-transaction sync oracle must not be agent-set"),
-                "let a real `git fetch`/`git pull` update refs/remotes; never set it by hand".to_string(),
+                crate::remedy::REMOTE_TRACKING_REF.remedy(),
             ));
         }
         return;
@@ -1595,7 +3070,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
                     "git.delete_protected",
                     policy.delete_protected,
                     format!("`git update-ref -d` deletes protected branch '{branch}'"),
-                    "protected branches are never deleted; remove the entry from git.protected_branches first if truly intended".to_string(),
+                    crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
         } else if policy.local_ref_protection.is_active() && !ctx.integrate_token {
@@ -1603,7 +3078,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
                 "git.local_ref_protection",
                 policy.local_ref_protection,
                 format!("`git update-ref` moves protected branch '{branch}' outside the sanctioned path"),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
     }
@@ -1644,15 +3119,50 @@ fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Vio
                 "git.local_ref_protection",
                 policy.local_ref_protection,
                 "`git symbolic-ref` repoints a protected branch ref".to_string(),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
+    }
+}
+
+/// The registry rule (SPC-013 R-8): `codeflow/registry` only grows. It
+/// always blocks, whatever the policy levels say.
+fn registry_violation(message: String) -> Violation {
+    Violation::always_blocking(
+        "registry.append_only",
+        message,
+        "issue ids with `codeflow task|epic|spec new`; a maintainer repairs damage with `codeflow ids restore <id>...`",
+    )
+}
+
+/// Refuse a push that could remove or rewrite registry history: a delete, a
+/// force (including `--mirror` and a forced wildcard or `--all`), or a push
+/// that skips the pre-push range check with `--no-verify`.
+fn check_registry_push(push: &PushIntent, rest: &[String], out: &mut Vec<Violation>) {
+    let registry = crate::ids::REGISTRY_BRANCH;
+    let named = |list: &[String]| list.iter().any(|target| target == registry);
+    if named(&push.deletions) || (push.mirror && push.touches_all_branches) {
+        out.push(registry_violation(format!(
+            "`git push` could delete `{registry}`; the registry only grows (R-8)"
+        )));
+    }
+    let reaches = named(&push.updates) || push.touches_all_branches;
+    if reaches && push.force {
+        out.push(registry_violation(format!(
+            "force push reaches `{registry}`; the registry only grows (R-8)"
+        )));
+    }
+    if named(&push.updates) && has_no_verify("push", rest) {
+        out.push(registry_violation(format!(
+            "`--no-verify` skips the pre-push range check of `{registry}` (R-8)"
+        )));
     }
 }
 
 fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
     let policy = ctx.policy;
     let push = parse_push(rest, branch);
+    check_registry_push(&push, rest, out);
 
     // `--no-verify` skips the pre-push hook; on a protected target that is a
     // gate bypass (an anti-bypass structural block, ADR-0007).
@@ -1685,7 +3195,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                     "git.force_push_protected",
                     policy.force_push_protected,
                     format!("bulk force-push (--all/--mirror/wildcard) reaches protected branches: {names}"),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             } else if policy.push_to_protected.is_active() && !ctx.integrate_token {
                 out.push(Violation::new(
@@ -1694,7 +3204,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                     format!(
                         "bulk push (--all/--mirror/wildcard) reaches protected branches: {names}"
                     ),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             }
             if push.mirror && policy.delete_protected.is_active() {
@@ -1702,7 +3212,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                     "git.delete_protected",
                     policy.delete_protected,
                     format!("`git push --mirror` can delete protected branches to mirror local: {names}"),
-                    "protected branches are never deleted remotely; --mirror is unsafe here".to_string(),
+                    crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
         }
@@ -1715,7 +3225,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                 "git.delete_protected",
                 policy.delete_protected,
                 format!("`git push` would delete protected branch '{target}' on the remote"),
-                "protected branches are never deleted remotely; adjust git.protected_branches first if truly intended".to_string(),
+                crate::remedy::PROTECTED_DELETE.remedy(),
             ));
         }
     }
@@ -1729,7 +3239,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                         "git.force_push_protected",
                         policy.force_push_protected,
                         format!("force-push to protected branch '{target}'"),
-                        SANCTIONED.to_string(),
+                        crate::remedy::PROTECTED_BRANCH.remedy(),
                     ));
                 }
             } else if policy.force_push_unprotected.is_active() {
@@ -1739,8 +3249,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                     "git.force_push_unprotected",
                     policy.force_push_unprotected,
                     format!("force-push to branch '{target}'"),
-                    "policy git.force_push_unprotected restricts force-pushes in this repo"
-                        .to_string(),
+                    crate::remedy::FORCE_PUSH.remedy(),
                 ));
             }
         } else if protected && policy.push_to_protected.is_active() && !ctx.integrate_token {
@@ -1748,7 +3257,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                 "git.push_to_protected",
                 policy.push_to_protected,
                 format!("direct push to protected branch '{target}'"),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
     }
@@ -1794,7 +3303,7 @@ fn scan_pr_body(body: &str, policy: &GitPolicy, out: &mut Vec<Violation>) {
                 "git.ai_attribution",
                 policy.ai_attribution,
                 format!("PR body contains AI attribution ({which})"),
-                "remove the attribution — project policy forbids AI attribution in commits and PR bodies (charter §6.4)".to_string(),
+                crate::remedy::PR_AI_ATTRIBUTION.remedy(),
             ));
         }
     }
@@ -1804,7 +3313,7 @@ fn scan_pr_body(body: &str, policy: &GitPolicy, out: &mut Vec<Violation>) {
                 "git.commit_emoji",
                 policy.commit_emoji,
                 format!("PR body contains emoji ('{c}')"),
-                "remove emoji from the PR body (charter §6.4)".to_string(),
+                crate::remedy::PR_EMOJI.remedy(),
             ));
         }
     }
@@ -1823,11 +3332,10 @@ fn check_gh_pr_merge(rest: &[&str], ctx: &GuardContext<'_>, out: &mut Vec<Violat
     // checked out in a worktree, git has flipped the root repo to core.bare
     // (reproduced twice). Block regardless of the base branch.
     if gh_merge_deletes_branch(rest) {
-        out.push(Violation::new(
+        out.push(Violation::always_blocking(
             "git.pr_merge_delete_branch",
-            PolicyLevel::Block,
             "`gh pr merge --delete-branch` can flip the root repo to core.bare when the merged branch is checked out in a worktree".to_string(),
-            "merge plain (no --delete-branch), then delete the branch from the repo root separately (`git branch -d <branch>` / `git push origin --delete <branch>`)".to_string(),
+            "merge plain (no --delete-branch), then delete the branch from the repo root separately (`git branch -d <branch>` / `git push origin --delete <branch>`)",
         ));
         return;
     }
@@ -1848,8 +3356,9 @@ fn check_gh_pr_merge(rest: &[&str], ctx: &GuardContext<'_>, out: &mut Vec<Violat
         out.push(Violation::new(
             "git.pr_merge_to_protected",
             policy.pr_merge_to_protected,
-            "`gh pr merge` into a base that is protected or could not be confirmed unprotected".to_string(),
-            "PR merges into protected branches are performed by a human (GitHub UI / their own terminal) or explicitly sanctioned — policy git.pr_merge_to_protected".to_string(),
+            "`gh pr merge` into a base that is protected or could not be confirmed unprotected"
+                .to_string(),
+            crate::remedy::PR_MERGE_PROTECTED.remedy(),
         ));
     }
 }
@@ -2143,6 +3652,41 @@ const GIT_RESET_OPTIONS: OptionSpec = OptionSpec {
     git_style: true,
 };
 
+/// `git rebase` (git-rebase(1)). The options that take a value, so none of
+/// them is read as the `<upstream>` or `<branch>` operand.
+const GIT_REBASE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('s', Arity::Value),
+        ('X', Arity::Value),
+        ('x', Arity::Value),
+        ('C', Arity::Value),
+        ('S', Arity::AttachedValue),
+        ('r', Arity::Flag),
+    ],
+    long: &[
+        ("--onto", Arity::Value),
+        ("--strategy", Arity::Value),
+        ("--strategy-option", Arity::Value),
+        ("--exec", Arity::Value),
+        ("--whitespace", Arity::Value),
+        ("--empty", Arity::Value),
+        ("--trailer", Arity::Value),
+        ("--gpg-sign", Arity::AttachedValue),
+        ("--rebase-merges", Arity::AttachedValue),
+        ("--root", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// The `<branch>` a `git rebase` checks out and rewrites, when one is given:
+/// the second operand, or the first with `--root`.
+fn rebase_branch(rest: &[String]) -> Option<&str> {
+    let parsed = parse_options(rest, &GIT_REBASE_OPTIONS);
+    let at = usize::from(!parsed.has_long("--root"));
+    parsed.operands.get(at).copied()
+}
+
 /// `git push` (git-push(1)). The destructive options are what the guard reads,
 /// so they resolve through the same abbreviation rule as every other command.
 const GIT_PUSH_OPTIONS: OptionSpec = OptionSpec {
@@ -2401,11 +3945,10 @@ fn maybe_no_verify(
 }
 
 fn no_verify_violation(sub: &str, branch: &str) -> Violation {
-    Violation::new(
+    Violation::always_blocking(
         "git.no_verify_bypass",
-        PolicyLevel::Block,
         format!("`git {sub} --no-verify` skips the client hooks on protected branch '{branch}'"),
-        "do not bypass the hooks with --no-verify — fix the cause the gate flags, or land via the sanctioned path (PR / `codeflow integrate`)".to_string(),
+        "do not bypass the hooks with --no-verify — fix the cause the gate flags, or land via the sanctioned path (PR / `codeflow integrate`)",
     )
 }
 
@@ -2491,7 +4034,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
 /// unquoted redirections (`2>&1`, `> out`, `<<EOF`, `<<< text`), which the
 /// shell removes before the program runs. The integrity checks keep reading
 /// the full token list, where a redirect is the evidence.
-fn command_argv(segment: &str) -> Vec<String> {
+pub(crate) fn command_argv(segment: &str) -> Vec<String> {
     let words = shell_words(segment);
     let mut argv = Vec::with_capacity(words.len());
     let mut i = 0;
@@ -2533,7 +4076,7 @@ fn redirect_operator_len(word: &str) -> Option<usize> {
 /// program token and its arguments. This is a *general* normalization — the
 /// same one the launderer scan uses — so it covers `env FOO=1 bash -c …`,
 /// `command git …`, `/usr/bin/env git …`, etc., not an enumerated list.
-fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
+pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
     let mut idx = 0;
     loop {
         // Skip leading VAR=val assignments.
@@ -2756,6 +4299,69 @@ fn flag_value<'a>(args: &'a [&'a str], names: &[&str]) -> Option<&'a str> {
 }
 
 #[cfg(test)]
+mod registry_guard_tests {
+    use super::*;
+
+    fn verdict(command: &str) -> Vec<Violation> {
+        let policy = GitPolicy::default();
+        let ctx = GuardContext {
+            policy: &policy,
+            current_branch: "task/TSK-101-id-registry",
+            integrate_token: false,
+            pr_base_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            root_checkout: None,
+        };
+        evaluate(command, &ctx)
+            .into_iter()
+            .filter(|v| v.rule == "registry.append_only")
+            .collect()
+    }
+
+    #[test]
+    fn registry_deletion_force_and_no_verify_are_refused() {
+        for command in [
+            "git push origin --delete codeflow/registry",
+            "git push origin :codeflow/registry",
+            "git push origin :refs/heads/codeflow/registry",
+            "git push --force origin codeflow/registry",
+            "git push origin +codeflow/registry",
+            "git push -f origin abc123:refs/heads/codeflow/registry",
+            "git push --force-with-lease origin codeflow/registry",
+            "git push --mirror origin",
+            "git push --force --all origin",
+            "git push --no-verify origin codeflow/registry",
+            "git update-ref refs/remotes/origin/codeflow/registry abc123",
+            "git update-ref -d refs/remotes/origin/codeflow/registry",
+        ] {
+            let found = verdict(command);
+            assert!(!found.is_empty(), "{command} must be refused");
+            assert!(
+                found.iter().all(|v| v.level == PolicyLevel::Block),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_registry_pushes_and_other_branches_pass() {
+        for command in [
+            "git push origin codeflow/registry",
+            "git push origin abc123:refs/heads/codeflow/registry",
+            "git push --force-with-lease origin task/TSK-101-id-registry",
+            "git fetch origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry",
+            "git update-ref refs/heads/codeflow/registry abc123",
+        ] {
+            assert!(
+                verdict(command).is_empty(),
+                "{command} must pass the registry rule"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::super::policy::PolicyLevel;
     use super::*;
@@ -2766,7 +4372,9 @@ mod tests {
             current_branch: branch,
             integrate_token: false,
             pr_base_lookup: None,
-            dir_branch_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            root_checkout: None,
         }
     }
 
@@ -2781,7 +4389,9 @@ mod tests {
             current_branch: branch,
             integrate_token: false,
             pr_base_lookup: Some(lookup),
-            dir_branch_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            root_checkout: None,
         }
     }
 
@@ -2789,19 +4399,31 @@ mod tests {
     fn ctx_with_dir_branch<'a>(
         policy: &'a GitPolicy,
         branch: &'a str,
-        resolver: &'a dyn Fn(&str) -> Option<String>,
+        resolver: &'a dyn Fn(&Retarget<'_>) -> Option<TargetRepo>,
     ) -> GuardContext<'a> {
         GuardContext {
             policy,
             current_branch: branch,
             integrate_token: false,
             pr_base_lookup: None,
-            dir_branch_lookup: Some(resolver),
+            dir_target_lookup: Some(resolver),
+            alias_lookup: Some(&fixture_alias),
+            root_checkout: None,
         }
     }
 
     fn default_policy() -> GitPolicy {
         GitPolicy::default()
+    }
+
+    /// A resolver answer for a directory inside the session repository.
+    #[allow(clippy::unnecessary_wraps)] // the resolver's return type
+    fn same_repo(branch: &str) -> Option<TargetRepo> {
+        Some(TargetRepo {
+            branch: branch.to_string(),
+            policy: None,
+            root: None,
+        })
     }
 
     fn release_policy() -> GitPolicy {
@@ -2877,6 +4499,43 @@ mod tests {
         assert!(HookPayload::parse("{ nope").is_err());
     }
 
+    /// TSK-147 round 3 F5: input that is not a JSON object is a harness
+    /// entry that does not pass the payload through, which a local edit
+    /// clears. Round 4: so is a JSON object whose known field has the wrong
+    /// type. The payload struct ignores unknown fields, so a wrong type on a
+    /// field it reads is the only way an object fails, and nothing in it
+    /// shows a newer harness schema rather than a mangled payload.
+    #[test]
+    fn a_payload_that_is_not_a_json_object_is_malformed() {
+        for input in ["", "not json", "{ nope", "[]", "\"x\"", "42"] {
+            assert!(
+                matches!(HookPayload::parse(input), Err(PayloadError::Malformed(_))),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_known_field_with_the_wrong_type_is_malformed_and_named() {
+        for (input, field) in [
+            (r#"{"tool_name": 5}"#, "tool_name"),
+            (r#"{"toolName": 5}"#, "tool_name"),
+            (r#"{"tool_input": "git status"}"#, "tool_input"),
+            (
+                r#"{"tool_input": {"command": ["git"]}}"#,
+                "tool_input.command",
+            ),
+            (r#"{"cwd": 7}"#, "cwd"),
+        ] {
+            let Err(PayloadError::Malformed(why)) = HookPayload::parse(input) else {
+                panic!("{input:?} is not malformed");
+            };
+            assert!(why.contains(&format!("`{field}`")), "{input:?}: {why}");
+        }
+        // Fields this build does not read are ignored, not refused.
+        assert!(HookPayload::parse(r#"{"tool_name":"Bash","extra":[1]}"#).is_ok());
+    }
+
     // -- commit on protected --
 
     #[test]
@@ -2903,7 +4562,9 @@ mod tests {
             current_branch: "main",
             integrate_token: true,
             pr_base_lookup: None,
-            dir_branch_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            root_checkout: None,
         };
         assert!(evaluate("git commit -m 'feat: x'", &c).is_empty());
     }
@@ -2925,7 +4586,9 @@ mod tests {
             current_branch: "main",
             integrate_token: true,
             pr_base_lookup: None,
-            dir_branch_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            root_checkout: None,
         };
         assert!(evaluate("git merge feat/x", &c).is_empty());
     }
@@ -3255,12 +4918,14 @@ mod tests {
     }
 
     #[test]
-    fn test_pr_body_policy_character_blocked() {
+    fn test_pr_body_policy_character_reported() {
         let p = default_policy();
         let cmd = "gh pr create --title 'feat: x' --body 'Adds a hook \u{2014} and a test.'";
         let v = evaluate(cmd, &ctx(&p, "feat/x"));
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "git.policy_characters");
+        // The shipped default warns; a project that sets block is refused.
+        assert_eq!(v[0].level, PolicyLevel::Warn);
         assert!(
             v[0].message.contains("em dash (U+2014)"),
             "{}",
@@ -3268,9 +4933,28 @@ mod tests {
         );
     }
 
+    // Grok review of the warn default, D2: a project that sets block (as
+    // this repository does) still refuses a dashed PR body.
+    #[test]
+    fn test_pr_body_policy_character_blocked_when_policy_blocks() {
+        let p = GitPolicy {
+            policy_characters: PolicyLevel::Block,
+            ..default_policy()
+        };
+        for cmd in [
+            "gh pr create --title 'feat: x' --body 'Adds a hook \u{2014} and a test.'",
+            "gh pr edit 12 --body 'Pages 1\u{2013}3.'",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert_eq!(v.len(), 1, "{cmd}");
+            assert_eq!(v[0].rule, "git.policy_characters");
+            assert_eq!(v[0].level, PolicyLevel::Block, "{cmd}");
+        }
+    }
+
     // Codex EPC-017 review, finding 5: an edited body is scanned too.
     #[test]
-    fn test_pr_edit_body_policy_character_blocked() {
+    fn test_pr_edit_body_policy_character_reported() {
         let p = default_policy();
         let inline = "gh pr edit 12 --body 'Adds a hook \u{2014} and a test.'";
         let v = evaluate(inline, &ctx(&p, "feat/x"));
@@ -4073,7 +5757,7 @@ mod tests {
     fn test_retarget_dash_c_evaluated_against_target_branch() {
         // Session is feat/x; -C points at a repo the resolver says is on main.
         let p = default_policy();
-        let resolver = |_dir: &str| Some("main".to_string());
+        let resolver = |_: &Retarget<'_>| same_repo("main");
         let v = evaluate(
             "git -C /root commit -m x",
             &ctx_with_dir_branch(&p, "feat/x", &resolver),
@@ -4084,7 +5768,7 @@ mod tests {
     #[test]
     fn test_retarget_cd_then_commit() {
         let p = default_policy();
-        let resolver = |_dir: &str| Some("main".to_string());
+        let resolver = |_: &Retarget<'_>| same_repo("main");
         let v = evaluate(
             "cd /root && git commit -m x",
             &ctx_with_dir_branch(&p, "feat/x", &resolver),
@@ -4095,7 +5779,7 @@ mod tests {
     #[test]
     fn test_retarget_git_dir_env_prefix() {
         let p = default_policy();
-        let resolver = |_dir: &str| Some("main".to_string());
+        let resolver = |_: &Retarget<'_>| same_repo("main");
         let v = evaluate(
             "GIT_DIR=/root/.git git commit -m x",
             &ctx_with_dir_branch(&p, "feat/x", &resolver),
@@ -4107,7 +5791,7 @@ mod tests {
     fn test_retarget_to_feature_dir_allowed() {
         // Resolver reports the target repo is on a feature branch — allowed.
         let p = default_policy();
-        let resolver = |_dir: &str| Some("feat/y".to_string());
+        let resolver = |_: &Retarget<'_>| same_repo("feat/y");
         assert!(evaluate(
             "git -C /other commit -m x",
             &ctx_with_dir_branch(&p, "main", &resolver)
@@ -4116,23 +5800,23 @@ mod tests {
     }
 
     #[test]
-    fn test_retarget_resolver_none_falls_back_to_session_branch() {
-        // The resolver cannot read the target repo's branch (returns None); the
-        // guard falls back to the session branch (documented residual — the
-        // target repo's git-hook plane backstops). Session on a feature branch:
-        // allowed; session on a protected branch: still blocked.
+    fn test_retarget_resolver_none_blocks_as_unresolved() {
+        // The resolver cannot read the target repository (TSK-112, T112-4):
+        // the guard cannot prove the target is unprotected, so a commit
+        // blocks whatever the session branch is, and says how to resolve it.
         let p = default_policy();
-        let resolver = |_dir: &str| None;
-        assert!(evaluate(
-            "git -C /root commit -m x",
-            &ctx_with_dir_branch(&p, "feat/x", &resolver)
-        )
-        .is_empty());
-        let v = evaluate(
-            "git -C /root commit -m x",
-            &ctx_with_dir_branch(&p, "main", &resolver),
-        );
-        assert!(has_rule(&v, "git.commit_to_protected"), "{v:?}");
+        let resolver = |_: &Retarget<'_>| None;
+        for session in ["feat/x", "main"] {
+            let v = evaluate(
+                "git -C /root commit -m x",
+                &ctx_with_dir_branch(&p, session, &resolver),
+            );
+            assert!(has_rule(&v, "git.commit_to_protected"), "{session}: {v:?}");
+            assert!(v[0]
+                .message
+                .contains("target unresolved: no readable repository at `/root`"));
+            assert!(v[0].remedy.contains("literal path"));
+        }
     }
 
     // -- unknown ref-writers (4c) --
@@ -4410,7 +6094,7 @@ mod tests {
         assert!(evaluate("bash -x script.sh", &ctx(&p, "main")).is_empty());
         assert!(evaluate("env NODE_ENV=test npm test", &ctx(&p, "main")).is_empty());
         // `git -C <subdir>` resolving to a feature branch stays allowed.
-        let resolver = |_dir: &str| Some("feat/y".to_string());
+        let resolver = |_: &Retarget<'_>| same_repo("feat/y");
         assert!(evaluate(
             "git -C sub status",
             &ctx_with_dir_branch(&p, "main", &resolver)
@@ -4543,7 +6227,7 @@ mod tests {
         // The target repo is on main, but the chain first moves it to a new
         // feature branch; the commit lands there.
         let p = default_policy();
-        let resolver = |_dir: &str| Some("main".to_string());
+        let resolver = |_: &Retarget<'_>| same_repo("main");
         for cmd in [
             "cd /repo && git switch -c feat/x && git commit -m x",
             "cd /repo && git checkout -b feat/x && git commit -m x",
@@ -4560,37 +6244,1051 @@ mod tests {
         // A switch in one directory says nothing about another directory or
         // the session, and a switch back to main is tracked too.
         let p = default_policy();
-        let on_main = |_dir: &str| Some("main".to_string());
-        let on_feat = |_dir: &str| Some("feat/y".to_string());
+        let on_main = |_: &Retarget<'_>| same_repo("main");
+        let on_feat = |_: &Retarget<'_>| same_repo("feat/y");
         for (cmd, resolver, session) in [
             (
                 "git -C /a switch -c feat/x && git -C /b commit -m x",
-                &on_main as &dyn Fn(&str) -> Option<String>,
+                &on_main as &dyn Fn(&Retarget<'_>) -> Option<TargetRepo>,
                 "feat/s",
             ),
             (
                 "git -C /a switch -c feat/x && git commit -m x",
-                &on_main as &dyn Fn(&str) -> Option<String>,
+                &on_main as &dyn Fn(&Retarget<'_>) -> Option<TargetRepo>,
                 "main",
             ),
             (
                 "cd /repo && git switch main && git commit -m x",
-                &on_feat as &dyn Fn(&str) -> Option<String>,
+                &on_feat as &dyn Fn(&Retarget<'_>) -> Option<TargetRepo>,
                 "feat/s",
             ),
             (
                 "cd /repo && git checkout feat/x -- f && git commit -m x",
-                &on_main as &dyn Fn(&str) -> Option<String>,
+                &on_main as &dyn Fn(&Retarget<'_>) -> Option<TargetRepo>,
                 "feat/s",
             ),
             (
                 "git -C /repo checkout feat/x -- f && git -C /repo commit -m x",
-                &on_main as &dyn Fn(&str) -> Option<String>,
+                &on_main as &dyn Fn(&Retarget<'_>) -> Option<TargetRepo>,
                 "feat/s",
             ),
         ] {
             let v = evaluate(cmd, &ctx_with_dir_branch(&p, session, resolver));
             assert!(has_rule(&v, "git.commit_to_protected"), "{cmd}: {v:?}");
         }
+    }
+
+    // -- TSK-112: judge a git op by the repository it targets --
+
+    /// A resolver over fixed repositories. `/scratch` and `/work/scratch` are
+    /// other repositories on a feature branch with their own policy;
+    /// `/scratch-main` has no policy file, so the defaults protect its `main`;
+    /// `/release-repo` protects `release/*`; `/session/.git` is the session
+    /// repository's git dir, on `main`.
+    fn fixture_resolver(spec: &Retarget<'_>) -> Option<TargetRepo> {
+        let other = |branch: &str, policy: GitPolicy| {
+            Some(TargetRepo {
+                branch: branch.to_string(),
+                policy: Some(policy),
+                root: None,
+            })
+        };
+        match (spec.path, spec.git_dir) {
+            ("/scratch" | "/work/scratch", false) => other("feat/x", GitPolicy::default()),
+            ("/scratch-main" | "/aliased" | "/unreadable", false) => {
+                other("main", GitPolicy::default())
+            }
+            ("/release-repo", false) => other("release/1.0", release_policy()),
+            ("/session/.git", true) => same_repo("main"),
+            _ => None,
+        }
+    }
+
+    fn blocks(v: &[Violation]) -> bool {
+        v.iter().any(|x| x.level == PolicyLevel::Block)
+    }
+
+    // R3-1: a substitution at or before the git subcommand, or in a global
+    // option, decides which command runs; the command is unclassifiable and
+    // blocks, and the message says how to rewrite it.
+    #[test]
+    fn test_tsk112_substitution_before_the_subcommand_blocks() {
+        for (cmd, session) in [
+            (
+                "git $(printf '') commit --allow-empty -m \"fix: probe\"",
+                "main",
+            ),
+            (
+                "git `printf ''` commit --allow-empty -m \"fix: probe\"",
+                "main",
+            ),
+            (
+                "git $(printf -- '--no-pager') commit --allow-empty -m \"fix: probe\"",
+                "main",
+            ),
+            (
+                "git -C /scratch-main $(printf '') commit --allow-empty -m \"fix: probe\"",
+                "feat/s",
+            ),
+            ("git \"$(printf commit)\" -m x", "feat/s"),
+            ("git -c \"$(printf x=y)\" commit -m x", "feat/s"),
+            ("$(printf git) push origin main", "feat/s"),
+            ("command `printf git` push origin main", "feat/s"),
+            ("git push origin \"$(printf main)\"", "feat/s"),
+            ("git commit -m $(printf 'x --no-verify')", "main"),
+        ] {
+            let r = report(cmd, session);
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+            let v = r
+                .violations
+                .iter()
+                .find(|v| {
+                    v.message
+                        .starts_with("command unresolved: a command substitution in")
+                })
+                .unwrap_or_else(|| panic!("{cmd}: {:?}", r.violations));
+            assert_eq!(v.level, PolicyLevel::Block, "{cmd}");
+            assert!(v.remedy.contains("literally"), "{}", v.remedy);
+        }
+        // Quoted message values and read-only subcommands stay classifiable.
+        for cmd in [
+            "git commit -m \"$(printf 'fix: x')\"",
+            "git commit -am \"$(printf 'fix: x')\"",
+            "git commit --message=\"$(printf 'fix: x')\"",
+            "git merge --no-ff -m \"$(printf 'merge x')\" feat/y",
+            "git log \"$(git merge-base a b)\"..HEAD",
+            "git show $(git rev-parse HEAD)",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    // R3-1, property style: a substitution inserted at, or attached to, any
+    // argv position up to and including the subcommand never yields an allow.
+    #[test]
+    fn test_tsk112_no_placeholder_before_the_subcommand_allows() {
+        let bases: [(&str, usize); 5] = [
+            ("git commit --allow-empty -m x", 1),
+            ("git -C /scratch-main commit -m x", 3),
+            ("git --no-pager -C /scratch push origin main", 4),
+            ("git -c core.editor=true merge --no-ff feat/y", 3),
+            ("git reset --hard HEAD~1", 1),
+        ];
+        let subs = [
+            "$(printf '')",
+            "`printf ''`",
+            "\"$(printf '')\"",
+            "$(printf -- --no-pager)",
+        ];
+        let mut cases = 0;
+        for (base, sub_at) in bases {
+            let words: Vec<&str> = base.split(' ').collect();
+            for s in subs {
+                for pos in 1..=sub_at + 1 {
+                    let mut inserted = words.clone();
+                    inserted.insert(pos, s);
+                    let cmd = inserted.join(" ");
+                    // Just after the subcommand, an unknown argument of a
+                    // current-branch subcommand matters only on a protected
+                    // target (R4-1); the main session covers that position.
+                    let sessions: &[&str] = if pos > sub_at {
+                        &["main"]
+                    } else {
+                        &["main", "feat/s"]
+                    };
+                    for &session in sessions {
+                        let r = report(&cmd, session);
+                        assert!(
+                            blocks(&r.violations),
+                            "{cmd} ({session}): {:?}",
+                            r.violations
+                        );
+                        cases += 1;
+                    }
+                }
+                for pos in 1..=sub_at {
+                    for attached in [format!("{s}{}", words[pos]), format!("{}{s}", words[pos])] {
+                        let mut joined = words.clone();
+                        joined[pos] = &attached;
+                        let cmd = joined.join(" ");
+                        for session in ["main", "feat/s"] {
+                            let r = report(&cmd, session);
+                            assert!(
+                                blocks(&r.violations),
+                                "{cmd} ({session}): {:?}",
+                                r.violations
+                            );
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 200, "{cases}");
+    }
+
+    /// An alias reader over fixed configuration. The session defines `ci`
+    /// (commit) and `st` (status); `/aliased` defines `x` (commit), `sh` (a
+    /// `!` shell alias), `opt` (starts with an option), `loop` (itself) and
+    /// `quoted` (split by quotes); `/unreadable` cannot be read. The command's
+    /// own `-c alias.<name>=…` wins, and `-c include.path=/aliases.ini`
+    /// defines `x` as commit.
+    fn fixture_alias(q: &AliasQuery<'_>) -> AliasAnswer {
+        let mut found: Option<&str> = match (q.target.map(|t| t.path), q.name) {
+            (None, "ci") | (Some("/aliased"), "x") => Some("commit"),
+            (None, "st") => Some("status --short"),
+            (Some("/aliased"), "sh") => Some("!git commit"),
+            (Some("/aliased"), "opt") => Some("-C /elsewhere commit"),
+            (Some("/aliased"), "loop") => Some("loop"),
+            (Some("/aliased"), "quoted") => Some("commit -m 'a b'"),
+            (Some("/unreadable"), _) => {
+                return AliasAnswer::Unreadable("fixture".to_string());
+            }
+            _ => None,
+        };
+        let key = format!("alias.{}", q.name);
+        for setting in q.config {
+            if let Some((k, v)) = setting.split_once('=') {
+                if k == key {
+                    found = Some(v);
+                } else if k == "include.path" && v == "/aliases.ini" && q.name == "x" {
+                    found = Some("commit");
+                }
+            }
+        }
+        found.map_or(AliasAnswer::NotAlias, |v| {
+            AliasAnswer::Expansion(v.to_string())
+        })
+    }
+
+    fn report(cmd: &str, session: &str) -> Evaluation {
+        let p = default_policy();
+        evaluate_report(cmd, &ctx_with_dir_branch(&p, session, &fixture_resolver))
+    }
+
+    // Aliases (TSK-112, primary ruling after round 4): a subcommand that is
+    // not a builtin is judged by the alias it expands to; one the guard
+    // cannot read is unclassifiable.
+    #[test]
+    fn test_tsk112_aliases_are_judged_by_their_expansion() {
+        let has = |r: &Evaluation, rule: &str| r.violations.iter().any(|v| v.rule == rule);
+        // Codex round 4 reproductions and their relatives, on main.
+        for cmd in [
+            "git -c alias.x=commit x --allow-empty -m \"$(printf x)\"",
+            "git -c alias.x=commit x $(printf '') --allow-empty -m x",
+            "git -c include.path=/aliases.ini x --allow-empty -m \"$(printf x)\"",
+            "git -c include.path=/aliases.ini x $(printf '') --allow-empty -m x",
+            "git ci --allow-empty -m x",
+            "git -c alias.y=ci y -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+            assert!(
+                has(&r, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // The alias is read in the repository the op targets.
+        let r = report("git -C /aliased x -m y", "feat/s");
+        assert!(has(&r, "git.commit_to_protected"), "{:?}", r.violations);
+        // The expansion is judged like a literal command.
+        let r = report("git -c alias.x='commit --no-verify' x -m y", "main");
+        assert!(has(&r, "git.no_verify_bypass"), "{:?}", r.violations);
+        let r = report("git -c alias.p=push p origin main", "feat/s");
+        assert!(has(&r, "git.push_to_protected"), "{:?}", r.violations);
+        // Aliases the guard cannot read are unclassifiable, on any branch.
+        for cmd in [
+            "git -C /aliased sh",
+            "git -C /aliased opt",
+            "git -C /aliased loop",
+            "git -C /unreadable x -m y",
+            "git -c alias.x='!git commit' x -m y",
+            "git --config-env=alias.x=V x -m y",
+            "git --config-env alias.x=V x -m y",
+            "GIT_CONFIG_GLOBAL=/tmp/g git x -m y",
+            "export GIT_CONFIG_COUNT=1; git x -m y",
+            "HOME=/tmp git x -m y",
+            "unset HOME; git x -m y",
+            "XDG_CONFIG_HOME=/tmp git x -m y",
+            "git -C \"$UNSET\" x -m y",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.message.contains("an alias the guard cannot resolve")),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // Without an alias reader, a subcommand that is not a builtin blocks.
+        let p = default_policy();
+        assert!(blocks(&evaluate("git frobnicate", &ctx(&p, "feat/x"))));
+        // Controls: a builtin wins over an alias of its name, as in git; an
+        // alias to a read-only command, a name that is no alias, and a commit
+        // alias on a feature branch pass.
+        for (cmd, session) in [
+            ("git -c alias.log=commit log", "main"),
+            ("git st", "main"),
+            ("git frobnicate", "main"),
+            ("git ci -m x", "feat/s"),
+            ("git -c alias.x=commit x -m y", "feat/s"),
+            ("echo \"$HOME\" && git -c alias.x=status x", "main"),
+            ("CODEFLOW_HOME=/tmp git -c alias.x=status x", "main"),
+        ] {
+            let r = report(cmd, session);
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    #[test]
+    fn test_tsk112_alias_values_split_like_git() {
+        assert_eq!(
+            split_alias("commit -m 'a b'"),
+            Some(vec!["commit".into(), "-m".into(), "a b".into()])
+        );
+        assert_eq!(
+            split_alias(" a \"b c\"  d\\ e "),
+            Some(vec!["a".into(), "b c".into(), "d e".into()])
+        );
+        assert_eq!(split_alias("a 'b"), None);
+        assert_eq!(split_alias("a\\"), None);
+        assert!(mentions_config_env("HOME=/x git y"));
+        assert!(mentions_config_env("unset HOME"));
+        assert!(!mentions_config_env("git -C \"$HOME/r\" y"));
+        assert!(!mentions_config_env("git -C ${HOME}/r y"));
+        assert!(!mentions_config_env("CODEFLOW_HOME=1 git y"));
+    }
+
+    // A rebase given a `<branch>` checks it out and rewrites it: that branch
+    // is the one judged (primary ruling after round 4).
+    #[test]
+    fn test_tsk112_rebase_judges_its_branch_argument() {
+        for cmd in [
+            "git rebase feat/y main",
+            "git rebase --onto feat/z feat/y main",
+            "git rebase --onto=feat/z feat/y main",
+            "git rebase --root main",
+            "git rebase -s ours -X theirs feat/y main",
+            "git rebase -x 'make test' --exec 'true' feat/y master",
+            "git rebase -i --autosquash feat/y -- main",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.rule == "git.hard_reset_protected" && v.level == PolicyLevel::Block),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        for (cmd, session) in [
+            ("git rebase main", "feat/s"),
+            ("git rebase --onto main feat/y", "feat/s"),
+            ("git rebase main feat/s", "feat/s"),
+            ("git rebase --continue", "feat/s"),
+            ("git rebase -S feat/y", "feat/s"),
+            ("git rebase feat/y feat/x", "main"),
+        ] {
+            let r = report(cmd, session);
+            assert!(
+                r.violations.is_empty(),
+                "{cmd} ({session}): {:?}",
+                r.violations
+            );
+        }
+        assert!(blocks(&report("git rebase main", "main").violations));
+        // The rebased branch stays checked out for the rest of the line.
+        let mut p = default_policy();
+        p.hard_reset_protected = PolicyLevel::Off;
+        let c = ctx_with_dir_branch(&p, "feat/s", &fixture_resolver);
+        let r = evaluate_report("git rebase feat/y main && git commit -m x", &c);
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+        let c = ctx_with_dir_branch(&p, "main", &fixture_resolver);
+        let r = evaluate_report("git rebase main feat/x && git commit -m x", &c);
+        assert!(r.violations.is_empty(), "{:?}", r.violations);
+    }
+
+    // A git command inside a control structure is judged like any other
+    // (found while pinning round 5; it predates TSK-112).
+    #[test]
+    fn test_tsk112_control_structure_bodies_are_judged() {
+        for cmd in [
+            "for i in 1 2; do git commit -m y; done",
+            "if true; then git commit -m y; fi",
+            "if false; then :; else git commit -m y; fi",
+            "if false; then :; elif git commit -m y; then :; fi",
+            "while true; do git commit -m y; done",
+            "until false; do git commit -m y; done",
+            "select x in a; do git commit -m y; done",
+            "if git commit -m y; then :; fi",
+            "! git commit -m y",
+            "time git commit -m y",
+            "time -p git commit -m y",
+            "case x in a) git commit -m y;; esac",
+            "for i in 1; do then_x=1; git commit -m y; done",
+        ] {
+            let r = report(cmd, "main");
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.rule == "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        let r = report("while true; do git push origin main; done", "feat/s");
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+        // A directory move inside a body leaves later targets unresolved.
+        let r = report(
+            "if true; then cd /scratch-main; fi; git commit -m y",
+            "feat/s",
+        );
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+        for cmd in [
+            "for i in 1 2; do git status; done",
+            "if true; then git log; fi",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    // R5-1: a branch move can fail, so it narrows the branch only for the
+    // rest of its `&&` list; after `;` or a newline the earlier branch stays
+    // a candidate. The same holds in retargeted repositories and for a rebase
+    // that comes from an alias.
+    #[test]
+    fn test_tsk112_branch_moves_narrow_only_across_and() {
+        for cmd in [
+            "git rebase does-not-exist feat/x; git commit --allow-empty -m x",
+            "git rebase does-not-exist feat/x\ngit commit --allow-empty -m x",
+            "git checkout does-not-exist; git commit -m x",
+            "git checkout feat/y\ngit commit -m x",
+            "git switch feat/y && git commit -m x; git commit -m y",
+            "git -c alias.rb=rebase rb does-not-exist feat/x; git commit -m x",
+            "(git checkout feat/y) && git commit -m x",
+            "echo \"$(git checkout feat/y)\" && git commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.rule == "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        for cmd in [
+            "git -C /scratch-main rebase nope feat/x; git -C /scratch-main commit -m x",
+            "git -C /scratch-main checkout feat/q\ngit -C /scratch-main commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+        }
+        // Proven by `&&`: the op runs only after the move succeeded.
+        for (cmd, session) in [
+            (
+                "git rebase does-not-exist feat/x && git commit --allow-empty -m x",
+                "main",
+            ),
+            (
+                "git rebase main feat/x && git commit --allow-empty -m x",
+                "main",
+            ),
+            ("git checkout feat/y && git commit -m x", "main"),
+            (
+                "git -c alias.rb=rebase rb main feat/x && git commit -m x",
+                "main",
+            ),
+            (
+                "git -C /scratch-main checkout feat/q && git -C /scratch-main commit -m x",
+                "feat/s",
+            ),
+        ] {
+            let r = report(cmd, session);
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+        // A move at one of several places narrows none of them: here the
+        // checkout may have run in the session if the first `cd` failed.
+        let r = report(
+            "cd /scratch-main; git checkout feat/q && cd /scratch-main && git commit -m x",
+            "feat/s",
+        );
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+        // A checkout the guard cannot place may have moved any repository.
+        let r = report(
+            "git -C \"$UNSET\" checkout main && git -C /scratch commit -m x",
+            "feat/s",
+        );
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+    }
+
+    // R5-2: an alias is read from disk before the line runs, so after an
+    // earlier config write (or a branch move, which conditional includes
+    // read) a subcommand that is not a builtin is unclassifiable.
+    #[test]
+    fn test_tsk112_config_changes_earlier_in_the_line() {
+        for cmd in [
+            "git config alias.x commit; git x --allow-empty -m y",
+            "git config include.path /aliases.ini; git x -m y",
+            "git config set alias.x commit && git x -m y",
+            "git config --add alias.x commit; git x -m y",
+            "git -c alias.c=config c alias.x commit; git x -m y",
+            "echo \"$(git config alias.x commit)\"; git x -m y",
+            "(git config alias.x commit); git x -m y",
+            "printf '[alias] x = commit' >> .git/config; git x -m y",
+            "git config --unset alias.x; git x -m y",
+            "git config --edit; git x -m y",
+            "for i in 1 2; do git x -m y; git config alias.x commit; done",
+            "git checkout feat/y && git st",
+        ] {
+            let r = report(cmd, "main");
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.message.contains("an alias the guard cannot resolve")),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // Reads and queries change nothing; builtins need no alias.
+        for cmd in [
+            "git config --get alias.x; git st",
+            "git config alias.x; git st",
+            "git config --list; git st",
+            "git config get user.name && git st",
+            "git config alias.x commit; git status",
+            "git st; git config alias.x commit",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    // R4-1: classification uncertainty never ends the judgment early. With
+    // `commit_to_protected: block`, a commit on main blocks whatever level
+    // `local_ref_protection` has, on both reproduced forms.
+    #[test]
+    fn test_tsk112_uncertainty_keeps_the_protected_commit_check() {
+        let forms = [
+            "git commit --allow-empty -m x --author=\"$(printf 'X <x@example.com>')\"",
+            "git commit $(printf '') --allow-empty -m x",
+        ];
+        for local in [PolicyLevel::Off, PolicyLevel::Warn, PolicyLevel::Block] {
+            let mut p = default_policy();
+            p.commit_to_protected = PolicyLevel::Block;
+            p.local_ref_protection = local;
+            for cmd in forms
+                .iter()
+                .copied()
+                .chain(["git commit --allow-empty -m x"])
+            {
+                let r = evaluate_report(cmd, &ctx_with_dir_branch(&p, "main", &fixture_resolver));
+                assert!(
+                    blocks(&r.violations),
+                    "{cmd} ({local:?}): {:?}",
+                    r.violations
+                );
+                assert!(
+                    r.violations
+                        .iter()
+                        .any(|v| v.rule == "git.commit_to_protected"
+                            && v.level == PolicyLevel::Block),
+                    "{cmd} ({local:?}): {:?}",
+                    r.violations
+                );
+            }
+            // A warning never authorizes: with every exposed rule at warn,
+            // the verdict still carries the warning.
+            let mut w = p.clone();
+            w.commit_to_protected = PolicyLevel::Warn;
+            for cmd in forms {
+                let r = evaluate_report(cmd, &ctx_with_dir_branch(&w, "main", &fixture_resolver));
+                assert!(
+                    r.violations.iter().any(|v| v.level == PolicyLevel::Warn),
+                    "{cmd} ({local:?}): {:?}",
+                    r.violations
+                );
+            }
+            // On a feature branch the target is not protected, so unknown
+            // commit arguments cannot reach a protected branch.
+            for cmd in forms {
+                let r = evaluate_report(cmd, &ctx_with_dir_branch(&p, "feat/s", &fixture_resolver));
+                assert!(
+                    r.violations.is_empty(),
+                    "{cmd} ({local:?}): {:?}",
+                    r.violations
+                );
+            }
+        }
+        // Default policy: both forms block on main.
+        for cmd in forms {
+            assert!(blocks(&report(cmd, "main").violations), "{cmd}");
+        }
+        // A warning from the uncertainty never ends the judgment: the
+        // `--no-verify` check on a protected branch still blocks.
+        let mut w = default_policy();
+        w.commit_to_protected = PolicyLevel::Warn;
+        w.local_ref_protection = PolicyLevel::Off;
+        for cmd in [
+            "git commit --no-verify --author=\"$(printf 'X <x@example.com>')\" -m x",
+            "git commit $(printf '') --no-verify -m x",
+        ] {
+            let r = evaluate_report(cmd, &ctx_with_dir_branch(&w, "main", &fixture_resolver));
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.rule == "git.no_verify_bypass" && v.level == PolicyLevel::Block),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // The uncertainty is judged under each candidate target's policy,
+        // and the strictest of them wins.
+        let mut lax = default_policy();
+        for level in [
+            &mut lax.commit_to_protected,
+            &mut lax.merge_to_protected,
+            &mut lax.push_to_protected,
+            &mut lax.force_push_protected,
+            &mut lax.delete_protected,
+            &mut lax.hard_reset_protected,
+            &mut lax.local_ref_protection,
+            &mut lax.hook_integrity,
+        ] {
+            *level = PolicyLevel::Warn;
+        }
+        for (cmd, session) in [
+            ("git -C /scratch-main $(printf '') commit -m x", "feat/s"),
+            ("cd /scratch-main; git $(printf '') commit -m x", "main"),
+        ] {
+            let r = evaluate_report(cmd, &ctx_with_dir_branch(&lax, session, &fixture_resolver));
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+        }
+        // A rebase's `<branch>` argument checks that branch out first, so an
+        // unknown rebase argument blocks from a feature branch too.
+        for cmd in [
+            "git rebase feat/y \"$(printf main)\"",
+            "git rebase --onto x y $(printf main)",
+        ] {
+            assert!(blocks(&report(cmd, "feat/s").violations), "{cmd}");
+        }
+        // With no subcommand at all, the uncertainty still blocks.
+        let r = report("git -c \"$(printf alias.x=commit)\"", "feat/s");
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+    }
+
+    // Regression: the path held in a variable used to fall back to the
+    // session's `main` and block (3.0.0 probe: exit 2 on `R=…; git -C "$R"`).
+    #[test]
+    fn test_tsk112_variable_path_judged_by_its_target() {
+        for cmd in [
+            "R=/scratch; git -C \"$R\" commit -m x",
+            "R=/scratch && git -C \"$R\" commit -m x",
+            "export R=/scratch\ngit -C \"${R}\" commit -m x",
+            "D=/work; S=$D/scratch; git -C \"$S\" commit -m x",
+            "R=/scratch; cd \"$R\" && git commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+            assert!(r.notes.is_empty(), "{cmd}: {:?}", r.notes);
+        }
+    }
+
+    // Regression: a relative `-C` after a `cd` was read from the session cwd
+    // (3.0.0 probe: exit 2 on `cd <dir> && git -C scratchf commit`).
+    #[test]
+    fn test_tsk112_relative_dash_c_after_cd() {
+        for cmd in [
+            "cd /work && git -C scratch commit -m x",
+            "cd / && cd work && git -C scratch commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    // Regression: the target's own policy applies, so a pattern only it
+    // protects blocks (it used to be judged by the session's list only).
+    #[test]
+    fn test_tsk112_target_only_protected_pattern_blocks() {
+        for cmd in [
+            "git -C /release-repo commit -m x",
+            "cd /release-repo && git commit -m x",
+            "git -C /release-repo commit -m \"$(echo x)\"",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(has_rule(&r.violations, "git.commit_to_protected"), "{cmd}");
+            assert!(
+                r.violations[0].message.contains("'release/1.0'"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+    }
+
+    // Regression (wrong allow): `-C` plus `--git-dir`/`GIT_DIR` commits into
+    // the git dir, which here is the session repository on `main`; only the
+    // `-C` directory used to be read.
+    #[test]
+    fn test_tsk112_dash_c_with_git_dir_judges_the_git_dir() {
+        for cmd in [
+            "git -C /scratch --git-dir=/session/.git commit -m x",
+            "git -C /scratch --git-dir /session/.git commit -m x",
+            "git --git-dir=/session/.git -C /scratch commit -m x",
+            "GIT_DIR=/session/.git git -C /scratch commit -m x",
+            "git -C /scratch --git-dir=/session/.git commit -m \"$(echo x)\"",
+            "export GIT_DIR=/session/.git; git -C /scratch commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+    }
+
+    // The stricter reading: a repository with no policy file keeps the
+    // default protection of `main` and `master`.
+    #[test]
+    fn test_tsk112_repo_without_policy_keeps_default_protection() {
+        for cmd in [
+            "git -C /scratch-main commit -m x",
+            "R=/scratch-main; git -C \"$R\" commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(has_rule(&r.violations, "git.commit_to_protected"), "{cmd}");
+        }
+    }
+
+    // AC-3 (T112-4): an unresolved mutation target blocks, even from an
+    // unprotected session, and the output names what could not be resolved
+    // and how to make it resolvable. It never claims the target is safe.
+    #[test]
+    fn test_tsk112_unresolved_target_blocks_and_says_how_to_resolve() {
+        for session in ["main", "feat/s"] {
+            let r = report("git -C \"$DEST\" commit -m x", session);
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{session}"
+            );
+            let v = &r.violations[0];
+            assert!(
+                v.message.contains("target unresolved: `$DEST`"),
+                "{}",
+                v.message
+            );
+            assert!(
+                v.message
+                    .contains("the guard cannot prove it is not a protected branch"),
+                "{}",
+                v.message
+            );
+            assert!(v.remedy.contains("literal path") && v.remedy.contains("cd /path/to/repo &&"));
+            assert_eq!(r.notes.len(), 1, "{:?}", r.notes);
+            assert!(r.notes[0]
+                .text
+                .starts_with("`git commit`: target unresolved: `$DEST`"));
+            assert!(r.notes[0].remedy.contains("literal path"), "{}", r.notes[0]);
+        }
+        // A read of an unresolved target is not a mutation: allowed, noted.
+        let r = report("git -C \"$DEST\" status", "feat/s");
+        assert!(r.violations.is_empty(), "{:?}", r.violations);
+        assert_eq!(r.notes.len(), 1);
+    }
+
+    // T112-3: a `cd` can fail, so after `;` the old directory stays a
+    // candidate; `&&` proves the move.
+    #[test]
+    fn test_tsk112_failing_cd_keeps_the_old_directory() {
+        for cmd in [
+            "R=/scratch; cd \"$R\" > /absent/out; git commit -m x",
+            "cd /scratch; git commit -m x",
+            "cd /scratch && true; git commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(has_rule(&r.violations, "git.commit_to_protected"), "{cmd}");
+            assert!(
+                r.notes.is_empty(),
+                "{cmd}: both directories resolve: {:?}",
+                r.notes
+            );
+        }
+        for cmd in [
+            "R=/scratch; cd \"$R\" > /tmp/out && git commit -m x",
+            "cd /scratch && git commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+        // From an unprotected session both candidates are unprotected.
+        assert!(report("cd /scratch; git commit -m x", "feat/s")
+            .violations
+            .is_empty());
+    }
+
+    // T112-1: an escaped or quoted `$` is literal to the shell; the guard
+    // never expands it.
+    #[test]
+    fn test_tsk112_escaped_dollar_is_not_expanded() {
+        for cmd in [
+            "R=/scratch; git -C \"\\$R\" commit -m x",
+            "R=/scratch; git -C \\$R commit -m x",
+            "R=\\$X; git -C \"$R\" commit -m x",
+            "git -C $'/scratch' commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+    }
+
+    // T112-2: launcher environment (`env`, `command env`) is modeled; an
+    // unmodeled `env` option or location variable leaves the target
+    // unresolved.
+    #[test]
+    fn test_tsk112_launcher_environment_is_modeled() {
+        for cmd in [
+            "R=/scratch; env GIT_DIR=/session/.git git -C \"$R\" commit -m x",
+            "R=/scratch; command env GIT_DIR=/session/.git git -C \"$R\" commit -m x",
+            "env -u GIT_DIR git -C /scratch commit -m x",
+            "env GIT_COMMON_DIR=/session/.git git -C /scratch commit -m x",
+            "GIT_WORK_TREE=/x git -C /scratch commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        let r = report("env FOO=1 git -C /scratch commit -m x", "main");
+        assert!(r.violations.is_empty(), "{:?}", r.violations);
+    }
+
+    // A git op nested in a substitution runs in a subshell whose own `cd`
+    // the tracker does not follow: its target is unresolved.
+    #[test]
+    fn test_tsk112_nested_moves_are_unresolved() {
+        for cmd in [
+            "echo \"$(cd /scratch-main && git commit -m x)\"",
+            "echo \"$(R=/scratch-main; git -C \"$R\" commit -m x)\"",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // Nothing moves inside: a nested literal target still resolves.
+        let r = report(
+            "echo \"$(git -C /scratch log -1)\"; git -C /scratch commit -m x",
+            "main",
+        );
+        assert!(r.violations.is_empty(), "{:?}", r.violations);
+    }
+
+    // R2-1: a location word or assignment built from a substitution is
+    // unknown; the shell puts the command's output there.
+    #[test]
+    fn test_tsk112_substituted_locations_are_unresolved() {
+        for cmd in [
+            "R=/scratch$(printf /protected); git -C \"$R\" commit -m x",
+            "R=/scratch`printf /protected`; git -C \"$R\" commit -m x",
+            "git -C \"$(printf /scratch)\" commit -m x",
+            "git -C /scratch --git-dir=\"$(printf /x)\" commit -m x",
+            "cd \"$(printf /scratch)\" && git commit -m x",
+            "git -C \"$(printf /scratch)\" commit -m x | cat",
+            "$(printf cd) /scratch-main; git commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+        }
+        // A substitution in the message does not touch the location.
+        for cmd in [
+            "git -C /scratch commit -m \"$(printf 'fix: x')\"",
+            "cd /scratch && git commit -m \"`printf x`\"",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    // R2-2: `&&` stays proven across a continuation newline or comment; a
+    // newline after a complete command is still a sequence.
+    #[test]
+    fn test_tsk112_and_list_continues_across_newlines() {
+        for cmd in [
+            "cd /scratch &&\ngit commit -m x",
+            "cd /scratch && # into the scratch repo\ngit commit -m x",
+            "cd /scratch &&\n\n  git commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+        let r = report("cd /scratch\ngit commit -m x", "main");
+        assert!(has_rule(&r.violations, "git.commit_to_protected"));
+    }
+
+    // Forms the tracker cannot follow stay unknown: `pushd` (its `-n` does
+    // not move), a negated `cd`, and an assignment whose redirection can fail.
+    #[test]
+    fn test_tsk112_unmodeled_moves_stay_unknown() {
+        for (cmd, session) in [
+            ("pushd -n /scratch && git commit -m x", "main"),
+            ("pushd /scratch && git commit -m x", "main"),
+            ("! cd /scratch-main && git commit -m x", "feat/s"),
+            (
+                "R=/scratch-main; export R=/scratch > /absent/x; git -C \"$R\" commit -m x",
+                "feat/s",
+            ),
+            (
+                "R=/scratch-main; R=/scratch 2>/absent/x; git -C \"$R\" commit -m x",
+                "feat/s",
+            ),
+        ] {
+            let r = report(cmd, session);
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+    }
+
+    // A commit message built by a heredoc substitution keeps the line flat.
+    #[test]
+    fn test_tsk112_heredoc_message_keeps_the_move_resolvable() {
+        let cmd = "cd /scratch && git commit -m \"$(cat <<'EOF'\nfix: x (y)\nEOF\n)\"";
+        let r = report(cmd, "main");
+        assert!(r.violations.is_empty(), "{:?}", r.violations);
+        let r = report("cd /scratch-main && git commit -m \"$(echo x)\"", "feat/s");
+        assert!(has_rule(&r.violations, "git.commit_to_protected"));
+    }
+
+    // AC-3: moves the guard cannot be sure of never loosen the verdict: the
+    // session repository (on `main`) stays a candidate.
+    #[test]
+    fn test_tsk112_uncertain_moves_never_loosen_the_verdict() {
+        for cmd in [
+            // A subshell's assignment does not reach the parent shell.
+            "(R=/scratch); git -C \"$R\" commit -m x",
+            // An assignment that runs only when an earlier command succeeds.
+            "false && R=/scratch; git -C \"$R\" commit -m x",
+            // A prefix assignment is not visible to its own expansion.
+            "R=/scratch git -C \"$R\" commit -m x",
+            // Single quotes keep `$R` literal.
+            "R=/scratch; git -C '$R' commit -m x",
+            "R=/scratch; unset R; git -C \"$R\" commit -m x",
+            "R=/scratch; read R; git -C \"$R\" commit -m x",
+            "R=~/scratch; git -C \"$R\" commit -m x",
+            "test -d /x && cd /scratch; git commit -m x",
+            "R=/scratch; source env.sh; git -C \"$R\" commit -m x",
+            "cd /scratch && cd -; git commit -m x",
+            "GIT_COMMON_DIR=/session/.git git -C /scratch commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+    }
+
+    /// Run git in `dir` with the developer's configuration isolated.
+    fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let out = crate::git::command()
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn real_repo(dir: &std::path::Path, branch: &str) {
+        run_git(dir, &["init", "-q", "-b", branch]);
+        run_git(
+            dir,
+            &[
+                "-c",
+                "user.email=t@e",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "chore: init",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_tsk112_read_target_reads_branch_and_whose_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session = tmp.path().join("session");
+        let owned = tmp.path().join("owned");
+        let bare_policy = tmp.path().join("nopolicy");
+        for (dir, branch) in [
+            (&session, "main"),
+            (&owned, "feat/x"),
+            (&bare_policy, "main"),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+            real_repo(dir, branch);
+        }
+        std::fs::create_dir_all(session.join("sub")).unwrap();
+        std::fs::create_dir_all(owned.join(".codeflow")).unwrap();
+        std::fs::write(
+            owned.join(".codeflow/policy.json"),
+            r#"{"git":{"protected_branches":["trunk"]}}"#,
+        )
+        .unwrap();
+        let common = session.join(".git");
+        let read = |path: &str, git_dir: bool| {
+            read_target(&session, Some(&common), &Retarget { path, git_dir })
+        };
+
+        // Inside the session repository: its branch, the session's policy.
+        let inside = read("sub", false).expect("session subdir resolves");
+        assert_eq!(inside.branch, "main");
+        assert!(inside.policy.is_none());
+        let git_dir = read(common.to_str().unwrap(), true).expect("session git dir");
+        assert!(git_dir.policy.is_none());
+
+        // Another repository with a policy file: its own rules.
+        let other = read(owned.to_str().unwrap(), false).expect("other repo resolves");
+        assert_eq!(other.branch, "feat/x");
+        assert_eq!(
+            other.policy.unwrap().protected_branches,
+            vec!["trunk".to_string()]
+        );
+
+        // No policy file: the defaults, which protect main.
+        let plain = read("../nopolicy", false).expect("relative path resolves");
+        assert!(plain.policy.unwrap().branch_is_protected("main"));
+
+        // Nothing there: unresolved.
+        assert!(read("missing", false).is_none());
+        assert!(read("$R", false).is_none());
     }
 }

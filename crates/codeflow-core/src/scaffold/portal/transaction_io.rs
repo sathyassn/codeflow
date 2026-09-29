@@ -41,6 +41,14 @@ mod tests {
         io.remove("guide/nested/value").unwrap();
         io.remove("guide/nested/value").unwrap();
         io.remove_empty("guide/nested").unwrap();
+        // A one-character name is shorter than the rename header's padding, and
+        // a cross-directory rename resolves only under the held destination.
+        io.write("guide/a", b"short").unwrap();
+        io.mkdir("moved").unwrap();
+        io.rename("guide/a", "moved/b").unwrap();
+        assert_eq!(io.read("moved/b", 5).unwrap(), b"short");
+        assert!(io.read("guide/a", 5).is_err());
+        assert_eq!(io.entries("guide", 1).unwrap(), Vec::<OsString>::new());
         for bad in [
             "",
             "../outside",
@@ -652,17 +660,21 @@ mod platform {
 #[cfg(windows)]
 mod platform {
     use super::{invalid, io, ConfinedDirectory, File, Metadata, OsStr, OsString};
-    use crate::bounded_file::confined::windows::{basename, check, open_relative};
+    use crate::bounded_file::confined::windows::{basename, check, nt_result, open_relative};
     use std::os::windows::ffi::OsStringExt;
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Wdk::Storage::FileSystem::{FILE_CREATE, FILE_OPEN};
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FileRenameInformation, NtSetInformationFile, FILE_CREATE, FILE_OPEN,
+        FILE_RENAME_INFORMATION,
+    };
     use windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
     use windows_sys::Win32::Storage::FileSystem::{
         FileDispositionInfo, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
-        FileRenameInfo, GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE,
-        FILE_DISPOSITION_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO,
-        FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_TRAVERSE,
+        GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_INFO,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO, FILE_LIST_DIRECTORY,
+        FILE_READ_ATTRIBUTES, FILE_TRAVERSE,
     };
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
     fn open(
         parent: &ConfinedDirectory,
@@ -722,33 +734,39 @@ mod platform {
     ) -> io::Result<()> {
         let name = basename(to)?;
         let source = open(old, from, DELETE | FILE_READ_ATTRIBUTES, false)?;
-        let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-        let size = offset + name.len() * std::mem::size_of::<u16>();
-        let mut storage = vec![
-            0_usize;
-            size.max(std::mem::size_of::<FILE_RENAME_INFO>())
-                .div_ceil(std::mem::size_of::<usize>())
-        ];
-        let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        // Kernel FILE_RENAME_INFORMATION, not Win32 FILE_RENAME_INFO: the
+        // Win32 wrapper reads FileName as a NUL-terminated path relative to the
+        // process current directory, while the kernel resolves a simple name
+        // under RootDirectory. The kernel requires at least the header size
+        // plus the name bytes, even for a one-character name.
+        let name_bytes = name.len() * std::mem::size_of::<u16>();
+        let size = std::mem::size_of::<FILE_RENAME_INFORMATION>() + name_bytes;
+        let mut storage = vec![0_usize; size.div_ceil(std::mem::size_of::<usize>())];
+        let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
         let parent = new.ancestors.last().ok_or_else(invalid)?;
         check(parent, Some(true))?;
-        // SAFETY: storage is pointer-aligned and sized for the header and UTF-16
-        // basename. Both source and destination-parent handles remain held.
-        let success = unsafe {
+        let mut status_block = IO_STATUS_BLOCK::default();
+        // SAFETY: zeroed storage is pointer-aligned and sized for the header
+        // plus the counted UTF-16 basename, written through a pointer derived
+        // from the whole allocation. Source and destination parent stay held.
+        let status = unsafe {
             (*info).Anonymous.ReplaceIfExists = true;
             (*info).RootDirectory = parent.as_raw_handle();
-            (*info).FileNameLength = u32::try_from(name.len() * 2).map_err(|_| invalid())?;
-            std::ptr::copy_nonoverlapping(name.as_ptr(), (*info).FileName.as_mut_ptr(), name.len());
-            SetFileInformationByHandle(
+            (*info).FileNameLength = u32::try_from(name_bytes).map_err(|_| invalid())?;
+            std::ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                (&raw mut (*info).FileName).cast::<u16>(),
+                name.len(),
+            );
+            NtSetInformationFile(
                 source.as_raw_handle(),
-                FileRenameInfo,
+                &raw mut status_block,
                 info.cast(),
                 u32::try_from(size).map_err(|_| invalid())?,
+                FileRenameInformation,
             )
         };
-        if success == 0 {
-            return Err(io::Error::last_os_error());
-        }
+        nt_result(status)?;
         check(parent, Some(true))?;
         Ok(())
     }

@@ -1,5 +1,6 @@
 ---
 id: ADR-0019
+uid: 79e645f4-68f8-4c06-a84b-d677e5564feb
 title: enforcement is the floor — tiers scale project-management, not discipline
 date: 2026-07-11
 status: accepted

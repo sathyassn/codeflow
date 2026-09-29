@@ -11,20 +11,22 @@ need Node or npm.
   schema validation, state, authentication, and service policy.
 - Preact mounts only in the sibling `#cf-present-chrome`. Chrome updates must
   not replace or rerender the document root.
-- Syntax and diagram enhancement is direct, bounded DOM enhancement. It loads
-  only when a corresponding block approaches the viewport.
+- Syntax highlighting is direct, bounded DOM enhancement. It loads only when
+  a code block approaches the viewport. The app entry's dynamic imports are
+  exactly the syntax and fonts chunks; there is no diagram renderer.
 - Service requests are same-origin paths below `/app`, carry the static
   `X-CF-Present: 1` header, and rely on the HttpOnly session cookie. No bearer
   value belongs in this bundle or its configuration payload.
 
 The exact HTML attributes and configuration fields are defined in
-`src/contracts.ts`, `src/selection.ts`, `src/syntax.ts`, and `src/diagram.ts`.
+`src/contracts.ts`, `src/selection.ts`, and `src/syntax.ts`.
 Changing them requires a matching Rust change and contract test.
 
 ## Maintainer workflow
 
 Use the official Node 26.4.0 distribution and npm 11.17.0, as pinned in
-`package.json`. The build also checks the bundled zlib and Brotli versions:
+`package.json` and `.node-version`; the full gate selects that version for
+this package's target with `scripts/with-node.py`. The build also checks the bundled zlib and Brotli versions:
 system-library builds can report the same Node version but emit different
 compressed bytes. CI's `actions/setup-node` uses the official distribution.
 On a deliberate toolchain upgrade, requalify compression and regenerate all
@@ -64,8 +66,9 @@ request path and private stored path are distinct manifest fields. The export
 renderer is one deterministic gzip payload; it is not a service fallback.
 Raising a build budget requires new measured ADR evidence.
 
-The browser check covers prose-only lazy loading, code and Mermaid rendering,
-zero non-loopback requests, Rust-document node identity, UTF-16 selection,
-both themes in light and dark modes, WCAG-tagged axe checks, and 320 CSS-pixel
-reflow. The broader platform, assistive-technology, browser-launch, print, and
-render matrix remains the task-level native verification boundary.
+The browser check covers prose-only lazy loading, code highlighting, an html
+stage with no diagram hook, zero CSP violations, zero non-loopback requests,
+Rust-document node identity, UTF-16 selection, both themes in light and dark
+modes, WCAG-tagged axe checks, and 320 CSS-pixel reflow. The broader platform,
+assistive-technology, browser-launch, print, and render matrix remains the
+task-level native verification boundary.

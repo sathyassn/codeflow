@@ -147,7 +147,7 @@ fn fixture_assets(v2: bool) -> (tempfile::TempDir, DirSource) {
     "commit_to_protected": "block",
     "commit_format": "block",
     "secret_scan": "block",
-    "test_gate_on_push": "warn",
+    "test_gate_on_push": "block",
     "new_gate": "warn"
   },
   "recall": { "share": false }
@@ -1061,7 +1061,15 @@ fn update_conflict_writes_dot_new_and_never_clobbers() {
         mine,
         "file untouched"
     );
-    assert_eq!(read(&root, ".claude/workflows/develop.md.new"), DEVELOP_V2);
+    // The proposal is the merge with conflict markers: the user's line and
+    // the upstream line both survive for the user to resolve.
+    let proposal = read(&root, ".claude/workflows/develop.md.new");
+    assert!(proposal.contains("<<<<<<<"), "{proposal}");
+    assert!(proposal.contains("step one (user)"), "{proposal}");
+    assert!(
+        DEVELOP_V2.lines().all(|l| proposal.contains(l)),
+        "{proposal}"
+    );
     let notes = &report
         .files
         .iter()
@@ -1363,6 +1371,95 @@ fn update_adds_new_policy_keys_without_mutating_user_values() {
 }
 
 #[test]
+fn update_moves_test_gate_on_push_at_the_old_default_and_recommends_block() {
+    // T132-4 as amended by ADR-0075 (TSK-171 AC-7): a value still equal to
+    // the old shipped default moves to the new one, reported; a value that
+    // differs from both is kept and the new default recommended.
+    isolate_git();
+    for (value, expected, note) in [
+        (
+            "warn",
+            "block",
+            Some("moved git.test_gate_on_push from \"warn\" to \"block\""),
+        ),
+        ("off", "off", Some("kept git.test_gate_on_push = \"off\"")),
+        (
+            "allow",
+            "allow",
+            Some("kept git.test_gate_on_push = \"allow\""),
+        ),
+        ("block", "block", None),
+    ] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        let mut policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        policy["git"]["test_gate_on_push"] = value.into();
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+
+        let (_a2, assets_v2) = fixture_assets(true);
+        let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(after["git"]["test_gate_on_push"], expected, "{value}");
+        let notes = &report
+            .files
+            .iter()
+            .find(|f| f.dest == ".codeflow/policy.json")
+            .unwrap()
+            .notes;
+        let found = notes.iter().find(|n| n.contains("git.test_gate_on_push"));
+        assert_eq!(found.is_some(), note.is_some(), "{value}: {notes:?}");
+        if let (Some(found), Some(note)) = (found, note) {
+            assert!(found.starts_with(note), "{found}");
+        }
+    }
+}
+
+#[test]
+fn update_removes_the_deprecated_human_authorization_key() {
+    // TSK-137: an adopter file from before the removal carries the inert key;
+    // update deletes it and says so, and keeps every other value.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    policy["human_authorization"] = "none".into();
+    policy["git"]["commit_format"] = "warn".into();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&policy).unwrap(),
+    )
+    .unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    let after: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert!(after.get("human_authorization").is_none(), "{after}");
+    assert_eq!(after["git"]["commit_format"], "warn", "other values kept");
+    let notes = &report
+        .files
+        .iter()
+        .find(|f| f.dest == ".codeflow/policy.json")
+        .unwrap()
+        .notes;
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "removed deprecated key human_authorization"),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn update_reinstalls_missing_managed_file() {
     isolate_git();
     let (_p, root) = project_dir();
@@ -1523,4 +1620,298 @@ fn version_skew_warns_when_behind_only() {
     // Uninitialized directory: silent.
     let (_q, other) = project_dir();
     assert!(scaffold::version_skew_warning(&other, "2.1.0").is_none());
+}
+
+// --- work records (SPC-013 R-81, R-83) ---------------------------------------
+
+fn set_policy_key(root: &Path, key: &str, value: &str) {
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+    policy["git"][key] = value.into();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&policy).unwrap(),
+    )
+    .unwrap();
+}
+
+/// The v2 fixture assets with `git.work_records` in the shipped default.
+fn assets_shipping_work_records() -> (tempfile::TempDir, DirSource) {
+    let (dir, _) = fixture_assets(true);
+    let path = dir.path().join("base/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    policy["git"]["work_records"] = "block".into();
+    std::fs::write(&path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
+    let source = DirSource::new(dir.path());
+    (dir, source)
+}
+
+#[test]
+fn update_preserves_every_work_records_value_including_the_default() {
+    isolate_git();
+    for (value, expected) in [("block", "block"), ("warn", "warn"), ("off", "warn")] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        set_policy_key(&root, "work_records", value);
+        set_policy_key(&root, "commit_format", "block");
+        let (_a2, assets) = assets_shipping_work_records();
+        let report = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(after["git"]["work_records"], expected, "from {value}");
+        assert_eq!(
+            after["git"]["commit_format"], "block",
+            "a default-equal value is kept"
+        );
+        let notes = &report
+            .files
+            .iter()
+            .find(|f| f.dest == ".codeflow/policy.json")
+            .unwrap()
+            .notes;
+        assert_eq!(
+            notes.iter().any(|n| n.contains("rewritten to `warn`")),
+            value == "off",
+            "{notes:?}"
+        );
+    }
+}
+
+/// TSK-133 AC-4: `codeflow update` adds `git.work_planning` at the shipped
+/// default when the project has none, and keeps a value the project set,
+/// the default included.
+#[test]
+fn update_adds_work_planning_and_keeps_an_explicit_level() {
+    isolate_git();
+    for (value, expected) in [
+        (None, "block"),
+        (Some("warn"), "warn"),
+        (Some("block"), "block"),
+    ] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        if let Some(value) = value {
+            set_policy_key(&root, "work_planning", value);
+        }
+        let (dir, _) = fixture_assets(true);
+        let path = dir.path().join("base/policy.json");
+        let mut shipped: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        shipped["git"]["work_planning"] = "block".into();
+        std::fs::write(&path, serde_json::to_string_pretty(&shipped).unwrap()).unwrap();
+        let assets = DirSource::new(dir.path());
+        scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(after["git"]["work_planning"], expected, "from {value:?}");
+    }
+}
+
+/// TSK-170 AC-5: `codeflow update` adds `git.conflict_markers` at the
+/// shipped default, `block`, reports the added key, and keeps a level the
+/// project set.
+#[test]
+fn update_adds_conflict_markers_and_reports_it() {
+    isolate_git();
+    let real: serde_json::Value =
+        serde_json::from_str(include_str!("../../../assets/base/policy.json")).unwrap();
+    assert_eq!(real["git"]["conflict_markers"], "block");
+    for (value, expected) in [(None, "block"), (Some("warn"), "warn")] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        if let Some(value) = value {
+            set_policy_key(&root, "conflict_markers", value);
+        }
+        let (dir, _) = fixture_assets(true);
+        let path = dir.path().join("base/policy.json");
+        let mut shipped: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        shipped["git"]["conflict_markers"] = real["git"]["conflict_markers"].clone();
+        std::fs::write(&path, serde_json::to_string_pretty(&shipped).unwrap()).unwrap();
+        let assets = DirSource::new(dir.path());
+        let report = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(after["git"]["conflict_markers"], expected, "from {value:?}");
+        let notes = &report
+            .files
+            .iter()
+            .find(|f| f.dest == ".codeflow/policy.json")
+            .unwrap()
+            .notes;
+        assert_eq!(
+            notes
+                .iter()
+                .any(|n| n.contains("added key git.conflict_markers")),
+            value.is_none(),
+            "{notes:?}"
+        );
+    }
+}
+
+#[test]
+fn update_records_the_work_records_baseline_once_for_existing_records() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let (_a2, assets) = fixture_assets(true);
+    scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    assert!(
+        !read(&root, ".codeflow/project.toml").contains("work_records_baseline"),
+        "a project without records gets no baseline"
+    );
+
+    std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+    std::fs::write(
+        root.join("project-management/tasks/TSK-001.md"),
+        "---\nid: TSK-001\ntitle: t\nstatus: complete\nwork_type: feat\n---\n",
+    )
+    .unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "chore: add a record"]);
+    let head = git(&root, &["rev-parse", "HEAD"]);
+    let report = scaffold::update(&assets, &root, &update_opts("2.2.0")).unwrap();
+    let state = read(&root, ".codeflow/project.toml");
+    assert!(
+        state.contains(&format!("work_records_baseline = \"{head}\"")),
+        "{state}"
+    );
+    assert!(report
+        .notes
+        .iter()
+        .any(|n| n.contains("work_records_baseline")));
+
+    git(
+        &root,
+        &["commit", "-q", "--allow-empty", "-m", "chore: later"],
+    );
+    scaffold::update(&assets, &root, &update_opts("2.3.0")).unwrap();
+    assert!(
+        read(&root, ".codeflow/project.toml").contains(&head),
+        "a recorded baseline is never moved"
+    );
+}
+
+// --- product paths (SPC-013 R-71, R-114; TSK-104) ---------------------------
+
+fn product_paths(root: &Path) -> serde_json::Value {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+    policy["git"]["product_paths"].clone()
+}
+
+/// Remove `git.product_paths` from the policy and its shipped baseline, as a
+/// project installed before the key existed has it.
+fn drop_product_paths(root: &Path) {
+    for path in [
+        root.join(".codeflow/policy.json"),
+        root.join(".codeflow/.baseline/.codeflow/policy.json"),
+    ] {
+        let mut policy: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        policy["git"]
+            .as_object_mut()
+            .unwrap()
+            .remove("product_paths");
+        std::fs::write(&path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn init_writes_the_product_paths_of_the_detected_stack() {
+    isolate_git();
+    for (marker, stack) in [
+        (Some("Cargo.toml"), "rust"),
+        (Some("package.json"), "node"),
+        (Some("pyproject.toml"), "python"),
+        (None, "unset"),
+    ] {
+        let (_p, root) = project_dir();
+        if let Some(file) = marker {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        let (_a, assets) = fixture_assets(false);
+        scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+        let expected: Vec<&str> =
+            codeflow_core::workgraph::classify::stack_product_paths(stack).to_vec();
+        assert_eq!(product_paths(&root), serde_json::json!(expected), "{stack}");
+    }
+}
+
+#[test]
+fn update_adds_product_paths_once_and_keeps_a_project_value() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    std::fs::write(root.join("Cargo.toml"), "").unwrap();
+    let _v1 = init_v1(&root);
+    drop_product_paths(&root);
+
+    let (_a2, assets) = fixture_assets(true);
+    let report = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(
+        product_paths(&root),
+        serde_json::json!(["src/**", "crates/**", "build.rs"])
+    );
+    let notes = &report
+        .files
+        .iter()
+        .find(|f| f.dest == ".codeflow/policy.json")
+        .unwrap()
+        .notes;
+    assert!(
+        notes.iter().any(|n| n.contains("git.product_paths")),
+        "{notes:?}"
+    );
+
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    policy["git"]["product_paths"] = serde_json::json!(["engine/**"]);
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&policy).unwrap(),
+    )
+    .unwrap();
+    scaffold::update(&assets, &root, &update_opts("2.2.0")).unwrap();
+    assert_eq!(product_paths(&root), serde_json::json!(["engine/**"]));
+}
+
+// --- headless peer runs (TSK-136) --------------------------------------------
+
+fn headless_level(root: &Path) -> serde_json::Value {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+    policy["security"]["headless_peer_runs"].clone()
+}
+
+#[test]
+fn update_adds_headless_peer_runs_at_warn_and_keeps_an_explicit_level() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    // Installed before the key existed; the next release ships it at warn,
+    // as `assets/base/policy.json` does.
+    assert!(headless_level(&root).is_null());
+    let (a2, assets) = fixture_assets(true);
+    let shipped = a2.path().join("base/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&shipped).unwrap()).unwrap();
+    policy["security"] = serde_json::json!({"headless_peer_runs": "warn"});
+    std::fs::write(&shipped, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
+
+    scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(headless_level(&root), "warn");
+
+    for (version, level) in [("2.2.0", "block"), ("2.3.0", "off")] {
+        let mut policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        policy["security"]["headless_peer_runs"] = level.into();
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+        scaffold::update(&assets, &root, &update_opts(version)).unwrap();
+        assert_eq!(headless_level(&root), level, "{version}");
+    }
 }

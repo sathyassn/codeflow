@@ -4,12 +4,43 @@
 //! in the target's cwd, capturing stdout/stderr.
 
 use std::io::Read;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::testing::config::{CommandShell, Tag, TargetConfig};
 use crate::testing::error::TestingError;
+
+#[cfg(windows)]
+mod target_job;
+
+#[cfg(any(windows, test))]
+#[derive(Debug)]
+enum AdoptError {
+    Job(std::io::Error),
+    Resume(std::io::Error),
+}
+
+#[cfg(any(windows, test))]
+fn adopt_or_stop<T>(
+    result: Result<T, AdoptError>,
+    target_name: &str,
+    end_child: impl FnOnce(),
+) -> Result<T, TestingError> {
+    result.map_err(|error| {
+        end_child();
+        let (step, source) = match error {
+            AdoptError::Job(source) => ("join its kill-on-close job", source),
+            AdoptError::Resume(source) => ("resume", source),
+        };
+        TestingError::CommandSpawnError {
+            target: target_name.to_string(),
+            message: format!("could not {step} target '{target_name}': {source}"),
+        }
+    })
+}
 
 /// Default per-target wall-clock timeout, applied when a target omits
 /// `timeout_seconds`. A hanging test target must never block the gate or
@@ -233,6 +264,19 @@ fn target_matches_tag_filter(target: &TargetConfig, only_tags: &[Tag], skip_tags
     tags.iter().any(|t| only_tags.contains(t))
 }
 
+/// The stderr line written as a target starts (TSK-094), so a killed gate's
+/// log names the target it died in. One `eprintln!` holds the stderr lock for
+/// the whole line, so parallel targets never interleave inside a line; stdout
+/// and the final summary are unchanged.
+#[must_use]
+pub fn start_line(target: &str, mode: &str) -> String {
+    format!("[codeflow test] starting target '{target}' ({mode} mode)")
+}
+
+fn announce_start(target: &TargetConfig, mode: &str) {
+    eprintln!("{}", start_line(&target.name, mode));
+}
+
 fn run_sequential(
     targets: &[&TargetConfig],
     mode: &str,
@@ -241,6 +285,7 @@ fn run_sequential(
 ) -> Vec<Result<TargetRunResult, TestingError>> {
     let mut results = Vec::new();
     for target in targets {
+        announce_start(target, mode);
         let result = run_target(target, mode, project_dir);
         let should_stop = fail_fast && result.as_ref().is_ok_and(|r| r.exit_code != 0);
         results.push(result);
@@ -264,7 +309,10 @@ fn run_parallel(
             let target = (*target).clone();
             let mode = mode.to_string();
             let project_dir = project_dir.to_path_buf();
-            thread::spawn(move || run_target(&target, &mode, &project_dir))
+            thread::spawn(move || {
+                announce_start(&target, &mode);
+                run_target(&target, &mode, &project_dir)
+            })
         })
         .collect();
 
@@ -369,8 +417,27 @@ fn spawn_command(
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
+    // On Windows the target starts suspended so it joins its job object
+    // before it can start a child of its own (TSK-142 AC-3).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(target_job::CREATE_SUSPENDED);
+    }
 
     let mut child = cmd.spawn().map_err(spawn_err)?;
+    // The target's process group (its pid, set above) outlives this process
+    // if the gate is killed; the full-gate lock stays held while it runs.
+    #[cfg(unix)]
+    crate::testing::gate_guard::target_group_started(child.id());
+    // On Windows the target's tree ends with this process instead: the job
+    // is closed when the gate exits or is killed, so the lock never frees
+    // while a target of the gate runs.
+    #[cfg(windows)]
+    let target_job = adopt_or_stop(target_job::TargetJob::adopt(&child), target_name, || {
+        let _ = child.kill();
+        let _ = child.wait();
+    })?;
 
     let stdout_reader = child.stdout.take().map(spawn_reader);
     let stderr_reader = child.stderr.take().map(spawn_reader);
@@ -396,9 +463,9 @@ fn spawn_command(
             }
             #[cfg(windows)]
             {
-                // `/T` terminates descendants and `/F` avoids leaving a hung
-                // test process behind. The direct-child kill below remains a
-                // backstop if taskkill itself is unavailable.
+                // The job ends the whole tree at once. The direct-child
+                // kill below is the last backstop.
+                target_job.terminate();
                 let _ = Command::new("taskkill")
                     .args(["/PID", &child.id().to_string(), "/T", "/F"])
                     .status();
@@ -412,6 +479,8 @@ fn spawn_command(
 
     let stdout = join_reader(stdout_reader);
     let stderr = join_reader(stderr_reader);
+    #[cfg(unix)]
+    crate::testing::gate_guard::target_group_finished(child.id());
 
     Ok(CommandOutcome {
         exit_code: status.code().unwrap_or(-1),
@@ -456,6 +525,12 @@ fn build_command(
         }
         CommandShell::Cmd => {
             let mut command_process = Command::new("cmd.exe");
+            // cmd.exe parses the command line itself, so preserve the inner quotes.
+            #[cfg(windows)]
+            command_process
+                .args(["/D", "/S", "/C"])
+                .raw_arg(format!("\"{command}\""));
+            #[cfg(not(windows))]
             command_process.args(["/D", "/S", "/C", command]);
             command_process
         }
@@ -607,6 +682,24 @@ mod tests {
     use crate::testing::config::{ModeCommand, RunnerType};
     use std::collections::BTreeMap;
 
+    #[test]
+    fn adoption_decision_stops_each_failed_child_and_names_the_target() {
+        let mut stopped = 0;
+        let joined: Result<u8, AdoptError> = Ok(7);
+        assert_eq!(adopt_or_stop(joined, "sample", || stopped += 1).unwrap(), 7);
+        assert_eq!(stopped, 0);
+        for error in [
+            AdoptError::Job(std::io::Error::from_raw_os_error(5)),
+            AdoptError::Resume(std::io::Error::from_raw_os_error(6)),
+        ] {
+            let result: Result<u8, _> = Err(error);
+            let failure = adopt_or_stop(result, "sample", || stopped += 1).unwrap_err();
+            let text = failure.to_string();
+            assert!(text.contains("sample"), "{text}");
+            assert!(text.contains("os error"), "{text}");
+        }
+        assert_eq!(stopped, 2);
+    }
     fn make_target(name: &str, command: &str) -> TargetConfig {
         TargetConfig {
             name: name.to_string(),
@@ -1229,5 +1322,115 @@ mod tests {
             &[],
         );
         assert_eq!(results.len(), 2);
+    }
+
+    /// Directory handed to [`windows_gate_helper`] when it is run as a gate.
+    #[cfg(windows)]
+    const GATE_HELPER_DIR: &str = "CODEFLOW_TEST_GATE_HELPER_DIR";
+
+    /// Whether process `pid` still runs, read from `tasklist`.
+    #[cfg(windows)]
+    fn process_alive(pid: u32) -> bool {
+        let out = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+            .expect("tasklist runs");
+        String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+    }
+
+    /// Not a test on its own: run by
+    /// [`a_killed_gate_ends_its_target_tree_on_windows`] as the gate process,
+    /// it runs one long target whose grandchild records its pid. Without
+    /// the environment variable it returns at once.
+    #[cfg(windows)]
+    #[test]
+    fn windows_gate_helper() {
+        let Some(dir) = std::env::var_os(GATE_HELPER_DIR) else {
+            return;
+        };
+        let target = make_target(
+            "long",
+            "powershell -NoProfile -NonInteractive -Command \"Set-Content -Path pid.txt -Value $PID; Start-Sleep -Seconds 120\"",
+        );
+        let _ = run_target(&target, "full", Path::new(&dir));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cmd_preserves_a_quoted_argument_with_shell_operators() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = make_target(
+            "quoted",
+            "python -c \"import sys; print(len(sys.argv))\" \"a && b\"",
+        );
+        let result = run_target(&target, "full", dir.path()).unwrap();
+        assert_eq!(result.exit_code, 0, "{}", result.stderr);
+        assert_eq!(result.stdout.trim(), "2");
+    }
+
+    /// TSK-142 AC-3: when a gate is killed on Windows, its running target's
+    /// whole tree ends with it, so the OS never frees the gate lock while a
+    /// target of that gate still runs. The gate is this test binary run as
+    /// [`windows_gate_helper`]; the recorded pid is the target's grandchild
+    /// (`cmd.exe` runs `powershell`), so the check covers the tree.
+    #[cfg(windows)]
+    #[test]
+    fn a_killed_gate_ends_its_target_tree_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut gate = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "testing::runner::tests::windows_gate_helper",
+                "--test-threads",
+                "1",
+            ])
+            .env(GATE_HELPER_DIR, dir.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid_file = dir.path().join("pid.txt");
+        let pid = (0..1200)
+            .find_map(|_| {
+                let text = std::fs::read_to_string(&pid_file).unwrap_or_default();
+                let parsed = text.trim().parse::<u32>().ok();
+                if parsed.is_none() {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                parsed
+            })
+            .expect("the target recorded its pid");
+        assert!(process_alive(pid), "the target runs under its gate");
+
+        gate.kill().unwrap();
+        gate.wait().unwrap();
+        let gone = (0..200).any(|_| {
+            let alive = process_alive(pid);
+            if alive {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            !alive
+        });
+        assert!(gone, "the target tree ended with its killed gate");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_job_failure_ends_the_suspended_target_before_its_command_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid.txt");
+        target_job::fail_adoption_for_test(Some(pid_file.clone()));
+        let target = make_target("unguarded", "echo ran > marker.txt");
+        let result = run_target(&target, "full", dir.path());
+        target_job::fail_adoption_for_test(None);
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("unguarded"), "{message}");
+        assert!(message.contains("os error 5"), "{message}");
+        let pid: u32 = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
+        assert!(!process_alive(pid), "the failed target process is gone");
+        assert!(
+            !dir.path().join("marker.txt").exists(),
+            "the command never ran"
+        );
     }
 }
