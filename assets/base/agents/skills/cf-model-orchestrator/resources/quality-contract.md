@@ -2,14 +2,11 @@
 
 This resource is the portable contract shared by Claude Code, Codex, and any
 other capable host. Project rules may strengthen it but must not weaken it
-silently.
-
-It loads by section. The sections marked "every task" hold rules that do not
-change from unit to unit: read them once per session and reuse them for each
-unit, rereading only after compaction or when a section changed. Per unit,
-the plan fields and the completion record are what change. Read each other
-section when its trigger applies. Each section is the one home for its
-duties; a trigger that fires later in the run loads its section then.
+silently. It loads by section: the "every task" sections hold rules that do
+not change from unit to unit, read once per session and reread only after
+compaction or when a section changed; per unit, the plan fields and the
+completion record are what change. Each other section is the one home for
+its duties and loads when its trigger fires.
 
 | Section | Read |
 |---|---|
