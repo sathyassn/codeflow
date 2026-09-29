@@ -710,6 +710,10 @@ pub struct ChangeContext<'a> {
     /// judged per commit so a reopen and re-completion inside one range is
     /// still seen (R-83).
     pub reopened: Option<&'a BTreeSet<String>>,
+    /// Specs implemented at some earlier commit of the base's history, so
+    /// frozen though a later supersession or reopen left them open at the
+    /// base (TSK-169).
+    pub shipped: Option<&'a BTreeSet<String>>,
 }
 
 /// Paths a planning-only change may touch (R-70).
@@ -1381,12 +1385,20 @@ fn context_problems(
     problems
 }
 
-/// An implemented spec is frozen (TSK-169): until then an approved spec is
-/// amended in place, after it its text never changes. The state is read
-/// before the change (written `implemented` on a legacy record, or derived
-/// from the base tree), so reopening a consumer in the same change does not
-/// thaw it. Only the text below the frontmatter is compared: status,
-/// supersession links and a `uid` backfill are judged by their own rules.
+/// Whether `spec` is implemented in `graph`: written `implemented` by a
+/// legacy record, or derived from its consumers (R-51).
+fn implemented_in(spec: &RecordView, graph: &Graph) -> bool {
+    spec.status == "implemented" || derived_spec_state(spec, graph, None) == SpecState::Implemented
+}
+
+/// A spec that shipped is frozen (TSK-169): until it is implemented an
+/// approved spec is amended in place; after that its text never changes.
+/// It shipped when it is implemented in the tree before the change, so
+/// reopening a consumer in the same change does not thaw it, or when a
+/// judge that read its history found it implemented at an earlier commit
+/// (`context.shipped`), so a later supersession or reopen does not either.
+/// Only the text below the frontmatter is compared: status, supersession
+/// links and a `uid` backfill are judged by their own rules.
 fn frozen_spec_problems(
     before: Option<&RecordView>,
     after: &RecordView,
@@ -1398,20 +1410,148 @@ fn frozen_spec_problems(
     if before.body == after.body {
         return Vec::new();
     }
-    let derived = context
-        .base
-        .and_then(|base| {
+    let at_base = before.status == "implemented"
+        || context.base.is_some_and(|base| {
             base.get(&before.id, RecordKind::Spec)
-                .map(|spec| (spec, base))
-        })
-        .is_some_and(|(spec, base)| derived_spec_state(spec, base, None) == SpecState::Implemented);
-    if before.status != "implemented" && !derived {
+                .is_some_and(|spec| implemented_in(spec, base))
+        });
+    let in_history = context
+        .shipped
+        .is_some_and(|shipped| shipped.contains(&before.id));
+    if !at_base && !in_history {
         return Vec::new();
     }
     vec![format!(
-        "{id} is implemented, so its text is frozen: a changed contract is a new spec that lists `supersedes: [{id}]`, or an explicit superseding record",
+        "{id} was implemented, so its text is frozen: a changed contract is a new spec that lists `supersedes: [{id}]`, or an explicit superseding record",
         id = before.id
     )]
+}
+
+/// Whether `spec_id` was implemented at any commit reachable from `tip`
+/// (TSK-169). The state is derived only from the spec and the records that
+/// name it, so git's pickaxe first finds every record path whose text ever
+/// gained or lost the id, then the state is derived at each commit that
+/// changed one of those paths, from those paths alone; a commit that changed
+/// none of them keeps its parent's state. Side branches count
+/// (`--full-history`); a shallow clone reads only the history it has.
+fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Result<bool, String> {
+    let log = |args: &[&str]| -> Result<String, String> {
+        let output = crate::git::command()
+            .arg("--git-dir")
+            .arg(repo.path())
+            .args([
+                "log",
+                "--no-renames",
+                "--full-history",
+                "--format=commit %H",
+            ])
+            .args(args)
+            .output()
+            .map_err(|error| format!("git log: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    let message = |error: git2::Error| error.message().to_string();
+    let tip = tip.to_string();
+    let pickaxe = format!("-S{spec_id}");
+    let named = log(&[
+        "--diff-merges=first-parent",
+        "--name-only",
+        &pickaxe,
+        &tip,
+        "--",
+        "project-management/",
+    ])?;
+    let relevant: BTreeSet<&str> = named
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with("commit "))
+        .filter(|path| record_kind_for_tree_path(path).is_some())
+        .collect();
+    if relevant.is_empty() {
+        return Ok(false);
+    }
+    let mut args = vec![tip.as_str(), "--"];
+    args.extend(relevant.iter().copied());
+    let commits = log(&args)?;
+    let mut parsed: HashMap<git2::Oid, Option<RecordView>> = HashMap::new();
+    for hash in commits
+        .lines()
+        .filter_map(|line| line.strip_prefix("commit "))
+    {
+        let oid = git2::Oid::from_str(hash.trim()).map_err(message)?;
+        let tree = repo
+            .find_commit(oid)
+            .and_then(|commit| commit.tree())
+            .map_err(message)?;
+        let mut graph = Graph::default();
+        for path in &relevant {
+            let (Ok(entry), Some(kind)) = (
+                tree.get_path(Path::new(path)),
+                record_kind_for_tree_path(path),
+            ) else {
+                continue;
+            };
+            let view = parsed.entry(entry.id()).or_insert_with(|| {
+                repo.find_blob(entry.id()).ok().and_then(|blob| {
+                    RecordView::parse(kind, path, &String::from_utf8_lossy(blob.content())).ok()
+                })
+            });
+            if let Some(view) = view {
+                graph
+                    .records
+                    .entry(view.id.clone())
+                    .or_insert_with(|| view.clone());
+            }
+        }
+        if graph
+            .get(spec_id, RecordKind::Spec)
+            .is_some_and(|spec| implemented_in(spec, &graph))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The specs a range changes the text of that shipped at an earlier commit
+/// of `base`'s history but are not implemented at `base` itself, with a
+/// problem for each spec whose history cannot be read (TSK-169).
+fn shipped_specs(
+    repo: &Repository,
+    base: &str,
+    before: &Graph,
+    after: &Graph,
+) -> (BTreeSet<String>, Vec<(String, String)>) {
+    let mut shipped = BTreeSet::new();
+    let mut problems = Vec::new();
+    let Some(tip) = resolve_commit(repo, base) else {
+        return (shipped, problems);
+    };
+    for record in after.records.values() {
+        let Some(old) = before.get(&record.id, RecordKind::Spec) else {
+            continue;
+        };
+        if record.kind != RecordKind::Spec || old.body == record.body || implemented_in(old, before)
+        {
+            continue;
+        }
+        match shipped_in_history(repo, tip, &record.id) {
+            Ok(true) => {
+                shipped.insert(record.id.clone());
+            }
+            Ok(false) => {}
+            Err(error) => problems.push((
+                record.path.clone(),
+                format!(
+                    "cannot read the history of {} to check whether it shipped: {error}",
+                    record.id
+                ),
+            )),
+        }
+    }
+    (shipped, problems)
 }
 
 // ---------------------------------------------------------------------------
@@ -1520,15 +1660,20 @@ fn judge_range_against(
     }
     let paths = changed_paths(&repo, base, head)?;
     let reopened = reopened_in_range(&repo, base, head, &after, &base_graph);
+    let (shipped, history_problems) = shipped_specs(&repo, base, &before, &after);
     let context = ChangeContext {
         base: Some(&before),
         changed_paths: Some(&paths),
         reopened: Some(&reopened),
+        shipped: Some(&shipped),
     };
     let mut verdict = Verdict {
         notices,
         ..Verdict::default()
     };
+    for (path, problem) in history_problems {
+        verdict.apply(Mode::Strict, &path, vec![problem]);
+    }
     verdict.warnings.extend(baseline.warning());
     verdict.errors.extend(baseline.errors());
     for record in after.records.values() {

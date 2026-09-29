@@ -796,6 +796,87 @@ fn the_draft_verb_names_both_spec_routes_and_writes_nothing() {
     }
 }
 
+const SHIPPED_SPEC: &str = "project-management/specs/SPC-001.md";
+
+/// Whether a verdict refuses a text change to `id` as a frozen spec.
+fn frozen_spec(verdict: &Verdict, id: &str) -> bool {
+    verdict
+        .errors
+        .iter()
+        .any(|e| e.contains(&format!("{id} was implemented, so its text is frozen")))
+}
+
+/// A spec approved, amended while open, then shipped when its only
+/// consumer completes, each step its own commit.
+fn shipped_spec_repo() -> Repo {
+    let repo = Repo::new();
+    repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
+    repo.write(TASK_PATH, &consumer("TSK-001", "todo", "SPC-001"));
+    repo.commit("approved, consumer open");
+    let amended = repo
+        .read(SHIPPED_SPEC)
+        .replace("\nB.\n", "\nB, now with a limit of 999.\n");
+    repo.write(SHIPPED_SPEC, &amended);
+    let open = repo.commit("amended while open");
+    assert!(
+        repo.judge(&format!("{open}~1")).is_clean(),
+        "an open spec is amended"
+    );
+    repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
+    repo.commit("consumer complete");
+    repo
+}
+
+fn change_limit(repo: &Repo, path: &str) {
+    let text = repo.read(path).replace("limit of 999", "limit of 5");
+    repo.write(path, &text);
+}
+
+/// TSK-169 review round 2: a shipped spec stays frozen after a separate,
+/// metadata-only supersession, because the freeze reads the spec's history,
+/// not only the base. The successor has not shipped and stays amendable.
+#[test]
+fn a_shipped_spec_stays_frozen_after_a_separate_supersession() {
+    const NEXT: &str = "project-management/specs/SPC-002.md";
+    let repo = shipped_spec_repo();
+    repo.write(
+        NEXT,
+        &spec("SPC-002", "approved", "supersedes: [SPC-001]\n"),
+    );
+    let by = StatusChange {
+        by: Some("SPC-002".into()),
+        ..change("superseded")
+    };
+    set_status(repo.root(), RecordKind::Spec, "SPC-001", &by).unwrap();
+    let superseded = repo.commit("supersede");
+    change_limit(&repo, SHIPPED_SPEC);
+    let verdict = repo.judge(&superseded);
+    assert!(frozen_spec(&verdict, "SPC-001"), "{:?}", verdict.errors);
+    repo.git(&["checkout", "--", SHIPPED_SPEC]);
+    let text = repo
+        .read(NEXT)
+        .replace("\nB.\n", "\nB, with a limit of 7.\n");
+    repo.write(NEXT, &text);
+    let verdict = repo.judge(&superseded);
+    assert!(!frozen_spec(&verdict, "SPC-002"), "{:?}", verdict.errors);
+}
+
+/// TSK-169 review round 2: a shipped spec stays frozen after its consumer is
+/// reopened by the verb in a separate change.
+#[test]
+fn a_shipped_spec_stays_frozen_after_a_separate_consumer_reopen() {
+    let repo = shipped_spec_repo();
+    let reopen = StatusChange {
+        reason: Some("regression".into()),
+        ..change("todo")
+    };
+    set_status(repo.root(), RecordKind::Task, "TSK-001", &reopen).unwrap();
+    let reopened = repo.commit("reopen the consumer");
+    change_limit(&repo, SHIPPED_SPEC);
+    let verdict = repo.judge(&reopened);
+    assert!(frozen_spec(&verdict, "SPC-001"), "{:?}", verdict.errors);
+}
+
 /// TSK-169: an approved spec is amended in place until it is implemented;
 /// once implemented its text is frozen, whether the state is derived at the
 /// base or written by a legacy record, and reopening its consumer in the
@@ -809,7 +890,7 @@ fn an_implemented_spec_is_frozen_and_an_open_one_is_amended() {
         verdict
             .errors
             .iter()
-            .any(|e| e.contains("SPC-001 is implemented, so its text is frozen"))
+            .any(|e| e.contains("SPC-001 was implemented, so its text is frozen"))
     };
     let amend = |repo: &Repo| {
         let text = repo
