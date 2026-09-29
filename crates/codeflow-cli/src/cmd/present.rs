@@ -624,6 +624,7 @@ fn apply_minimal_service_environment(command: &mut Command) {
         "XDG_RUNTIME_DIR",
         "SYSTEMROOT",
         "WINDIR",
+        codeflow_present::service::OWNER_PID_ENV,
     ];
     command.env_clear();
     for name in ALLOWED {

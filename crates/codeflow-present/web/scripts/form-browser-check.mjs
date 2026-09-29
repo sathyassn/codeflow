@@ -53,6 +53,8 @@ const environment = {
   TMPDIR: join(root, "tmp"),
   XDG_STATE_HOME: join(root, "state"),
   LANG: "C.UTF-8",
+  // A service this check starts exits once this process is gone.
+  CF_PRESENT_OWNER_PID: String(process.pid),
 };
 const run = (args) => {
   try {

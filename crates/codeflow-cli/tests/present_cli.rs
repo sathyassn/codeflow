@@ -17,12 +17,21 @@ use std::{
 #[path = "support/json_schema.rs"]
 mod json_schema;
 
+use codeflow_present::service::OWNER_PID_ENV;
+
+/// Runs `codeflow` for a test. A service it starts exits once this test
+/// process is gone, so a stopped or killed test run leaves no server behind.
 fn codeflow(project: &Path, home: &Path, args: &[&str]) -> Output {
+    codeflow_owned_by(project, home, args, std::process::id())
+}
+
+fn codeflow_owned_by(project: &Path, home: &Path, args: &[&str], owner: u32) -> Output {
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
         .args(args)
         .current_dir(project)
         .env("HOME", home)
         .env("XDG_STATE_HOME", home.join("state"))
+        .env(OWNER_PID_ENV, owner.to_string())
         .output()
         .unwrap()
 }
@@ -130,6 +139,70 @@ fn crashed_service_close_then_selected_clear_converges() {
         &["present", "clear", &session_id, "--older-than", "0h"],
     ));
     assert!(cleared.contains(&format!("removed {session_id}")));
+}
+
+#[test]
+fn service_exits_once_its_owner_process_is_gone() {
+    let fixture = setup_project();
+    let mut owner = Command::new("sleep").arg("60").spawn().unwrap();
+    let opened = require_success(&codeflow_owned_by(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "open",
+            fixture.project.join("first.json").to_str().unwrap(),
+            "--no-launch",
+        ],
+        owner.id(),
+    ));
+    let session_id = opened.split_whitespace().nth(1).unwrap().to_string();
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    let pid = i32::try_from(listed[0]["service_pid"].as_u64().unwrap()).unwrap();
+    thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "the service stopped while its owner runs"
+    );
+
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_ne!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "the service outlived its owner"
+    );
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    assert_eq!(listed[0]["id"], session_id.as_str());
+    assert_eq!(listed[0]["status"], "closed", "{listed}");
+
+    let refused = codeflow_owned_by(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "open",
+            fixture.project.join("first.json").to_str().unwrap(),
+            "--no-launch",
+        ],
+        0,
+    );
+    assert!(!refused.status.success(), "an owner of 0 was accepted");
 }
 
 fn start_profile_writer(

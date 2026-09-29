@@ -48,6 +48,14 @@ use crate::{
 #[folder = "assets/"]
 pub(crate) struct EmbeddedAssets;
 
+/// Names a process whose exit ends the service: a test harness that starts a
+/// presentation sets it to its own process id, so the service closes the
+/// session and exits once that process is gone, even when the process was
+/// killed before it could close the session. Unset, the service keeps running
+/// until close or idle expiry. Only Unix follows the owner; elsewhere the
+/// variable is checked and then ignored.
+pub const OWNER_PID_ENV: &str = "CF_PRESENT_OWNER_PID";
+
 const BOOTSTRAP_HANDOFF: &str = "<!doctype html><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"><title>Opening presentation</title><script>location.replace('/app/')</script>";
 const BOOTSTRAP_HANDOFF_CSP: &str = "default-src 'none'; script-src 'sha256-4MyoobivIq6Xw46Dc5S5dlGeU1Me98yo/zmVu3ed3zg='; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
@@ -213,6 +221,7 @@ struct ReviewResponse {
 
 /// Run one session-scoped service until close or idle expiry.
 pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
+    let owner = owner_process()?;
     let store = SessionStore::discover(&project)?;
     let _service_lease = store.acquire_service_lease(session_id)?;
     let session = store.load(session_id)?;
@@ -283,7 +292,7 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
     };
 
     let monitor_state = state.clone();
-    let monitor = tokio::spawn(async move { monitor_session(monitor_state).await });
+    let monitor = tokio::spawn(async move { monitor_session(monitor_state, owner).await });
     let shutdown = state.shutdown.clone();
     let app = Router::new()
         .route("/bootstrap", post(bootstrap))
@@ -1232,9 +1241,42 @@ fn write_bootstrap(path: &std::path::Path, html: &str) -> Result<()> {
         .map_err(|error| PresentError::io(path, error))
 }
 
-async fn monitor_session(state: AppState) {
+/// The process named by [`OWNER_PID_ENV`], if the variable is set.
+fn owner_process() -> Result<Option<i32>> {
+    let Some(value) = std::env::var_os(OWNER_PID_ENV) else {
+        return Ok(None);
+    };
+    value
+        .to_str()
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|pid| *pid > 0)
+        .map(Some)
+        .ok_or_else(|| {
+            PresentError::ServiceUnavailable(format!("{OWNER_PID_ENV} is not a process id"))
+        })
+}
+
+#[cfg(unix)]
+fn process_is_running(pid: i32) -> bool {
+    // SAFETY: signal 0 sends nothing; it only asks whether the process exists.
+    let probed = unsafe { libc::kill(pid, 0) };
+    probed == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn process_is_running(_pid: i32) -> bool {
+    true
+}
+
+async fn monitor_session(state: AppState, owner: Option<i32>) {
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
+        if owner.is_some_and(|pid| !process_is_running(pid)) {
+            let _ = state.store.close(state.session_id);
+            cleanup_owned_browser(&state);
+            state.shutdown.notify_waiters();
+            return;
+        }
         let now = now_unix();
         let bootstrap_expired = state.bootstrap.lock().is_ok_and(|bootstrap| {
             !bootstrap.used
