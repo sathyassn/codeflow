@@ -1,6 +1,6 @@
 ---
 name: cf-evaluate-model
-description: Qualify a model, harness release, permission profile, or material CodeFlow instruction change against CodeFlow's regression and capability contracts. Use for model readiness, periodic suite maintenance, or reproducing an observed behavior regression. Runs repeated native-interactive Codex or Claude trials in disposable fixture repositories, preserves traces and environment metadata, compares a candidate with a pinned baseline, and cleans only its marked fixture roots. Never use for ordinary repository work, as a headless model runner, or as a generic cleanup tool.
+description: Qualify a model, harness release, or permission profile against CodeFlow's regression and capability contracts, and run the native diagnostic pack for a material CodeFlow instruction, rule or skill change. Use for model readiness, periodic suite maintenance, or reproducing an observed behavior regression. Runs repeated native-interactive Codex or Claude trials in disposable fixture repositories, preserves traces and environment metadata, compares a candidate with a pinned baseline, and cleans only its marked fixture roots. Never use for ordinary repository work, as a headless model runner, or as a generic cleanup tool.
 ---
 
 # cf-evaluate-model — qualify a model/harness binding
@@ -53,13 +53,22 @@ limits of catalog support in consuming scaffolds.
 
    A source checkout may use the equivalent `assets/base/...` path. Validation
    requires every hard requirement to have source markers and behavioral cases;
-   it has no line-count or token-deletion gate.
+   it has no line-count or token-deletion gate. It is a structural check, as is
+   the `model-eval-kit` gate target (the kit's own Python tests on synthetic
+   observations): they prove the markers and case coverage exist, never
+   behaviour.
 3. **Choose a suite.** Materialize one named case while reproducing a failure;
    that diagnostic is not a validated suite result. Use `canary` while editing
    the corpus or for a quick regression smoke. Use `full` for a new production
    model/harness binding, a permission change, or promotion. Canary runs each
    selected canary case once; full runs every case three times. Never present
-   canary evidence as a full qualification. For a focused diagnostic, resolve
+   canary evidence as a full qualification. A managed-instruction, rule or
+   skill change gets a native diagnostic pack instead of `full`: the
+   structural checks of step 2, plus the behavioral cases affected by the
+   changed routing, review, authority and instruction rules, run natively with
+   traces retained and graded independently, reported as diagnostic
+   assurance. A prose edit never gets full promotion, and the structural
+   checks never support a behavioral claim. For a focused diagnostic, resolve
    `list-cases --pack <pack-id>` and run those cases explicitly. Packs may
    compose other packs, but even `release-smoke` is not a promotion suite.
    Internal-route qualification pre-registers cases and fixes qualifying versus

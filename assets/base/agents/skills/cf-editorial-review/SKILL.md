@@ -1,6 +1,6 @@
 ---
 name: cf-editorial-review
-description: Review or revise substantial repository and user-facing prose without semantic drift. Use for documentation, ADRs, proposals, release notes, PR narratives, operator communications, and other consequential copy whose structure, voice, credibility, or audience fit materially affects the outcome. Do not invoke for every short conversational response, mechanical text substitution, exact quoted text, or generated machine-readable content.
+description: Review or revise substantial repository and user-facing prose without semantic drift. This description is the one trigger, by consequence. Use for substantial documentation, ADRs, proposals, release notes, operator communications, and user-facing copy whose structure, voice, credibility, or audience fit materially affects the outcome, in the same pass as the technical review where one is due. Do not invoke for every PR body, short conversational response, mechanical text substitution, exact quoted text, or generated machine-readable content.
 ---
 
 # cf-editorial-review — preserve meaning, improve delivery
@@ -36,7 +36,8 @@ Resolve conflicts in this order:
 
 Never use a lower layer to distort a higher one. Surface the conflict when a
 requested tone would overstate certainty, hide a limitation, violate policy, or
-misrepresent the author or project.
+misrepresent the author or project. Within those limits, explicit operator
+style direction outranks this skill's defaults.
 
 ## Review workflow
 
@@ -96,10 +97,9 @@ misrepresent the author or project.
 Within the CodeFlow duo, both primary seats check factual and technical
 correctness. The directly invoked `claude-judgment-primary` reviews the
 substantial artifact's design, voice, and final editorial quality, even when
-Claude drafted it; use a fresh context for an independent final pass when that
-primary authored material text. Helpers may collect evidence but do not own the
-judgment. If the selected primary is unavailable, record the fallback and
-reduced assurance.
+Claude drafted it, in the same pass as the technical review where one is
+due. Helpers may collect evidence but do not own the judgment. If the
+selected primary is unavailable, record the fallback and reduced assurance.
 
 ## Review output
 

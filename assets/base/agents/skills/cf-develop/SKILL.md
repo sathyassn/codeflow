@@ -16,8 +16,10 @@ records the required interactive seat unavailable and the reduced assurance.
    planning, never a bypass. When a work item is planned, started, blocked,
    completed or cancelled, follow
    [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle).
-2. Consult `docs/capabilities.md` and `docs/architecture.md` before touching
-   code; name the bounded impact set (quality contract). For a material
+2. Reuse the current evidence set (the plan, the task record and what the
+   session already verified); consult `docs/capabilities.md` and
+   `docs/architecture.md` only for what it does not cover, then name the
+   bounded impact set (quality contract). For a material
    product, UX, interaction, or visual-design change, require the plan's
    settled `DESIGN_INTENT`; if it is absent, apply `cf-design` before
    implementation. A valid `N/A` or `conform` record does not add ceremony.
@@ -47,10 +49,13 @@ records the required interactive seat unavailable and the reduced assurance.
       not a merge; `--force-with-lease` after a rewrite).
       At every multi-task node transition, verify predecessor/decision evidence
       against the approved graph. Stop for Plan vN+1 on a material graph
-      mutation; do not replan ordinary work inside the approved node. Persist
-      that in-node classification and its supporting evidence in the execution
-      ledger before continuing.
-   b. **Review**: get an *independent* review against the criteria — in Claude
+      mutation; do not replan ordinary work inside the approved node. Log a
+      material dependency or decision change in the task; ordinary in-node
+      work needs no entry.
+   b. **Merge the line**: before asking for review, merge the current
+      integration line into the task branch and resolve any conflicts there,
+      so they surface in the task and not in the batch gate.
+   c. **Review**: get an *independent* review against the criteria: in Claude
       Code, spawn the `cf-reviewer` subagent; in another harness, run a separate
       read-only review pass (self-review is not review). Claude Code unattended/
       batch runs use `.claude/workflows/pipeline.workflow.js` for the same
@@ -59,16 +64,23 @@ records the required interactive seat unavailable and the reduced assurance.
       (`run_in_background: false` when offered), collect its actual verdict before
       the primary turn ends, and never defer it to a later callback or bypass
       review.
-   c. On `changes_requested`, act on the round's findings as
+   d. On `changes_requested`, act on the round's findings as
       `cf-model-orchestrator/resources/quality/findings.md` sets out: one
-      batch, one apply-and-verify cycle, confirmed by each finder. Maximum 2
-      evidence-moving cycles for code; docs and records follow that section's
-      bound. At the bound, take a strategic route that keeps the approved
-      outcome or surface the external dependency or operator-owned decision.
-   d. **Verify**: `codeflow test` and `codeflow validate --docs` green. Apply
-      the orchestrator's verification-selection resource: run any property,
-      mutation, or architecture fitness check earned by the plan's trigger
-      evidence, and report `none selected` rather than inventing ceremony.
+      batch, fixed in this task's PR, each material fix confirmed by its
+      finder. No count of cycles decides anything: continue while repairs
+      produce relevant evidence; diagnose a stalled mechanism, an invalid
+      assumption or a materially changed scope (split, redesign, or surface
+      the external dependency or operator-owned decision), never a round
+      counter and never automatic acceptance.
+   e. **Verify**: run the targeted tests for the changed code (for example
+      `cargo test -p <crate>`) and `codeflow test --mode quick`, plus
+      `codeflow validate --docs` where the docs spine is installed, and cite
+      each with its revision and command. The pre-push hook's quick run is
+      that evidence when it covers the same tree. The full gate belongs to
+      the landing candidate: the primary runs it once per batch, and a
+      standalone PR runs it as its own candidate. Where the orchestrator's
+      verification-selection resource earns a property, mutation or
+      architecture fitness check, run it and name it; otherwise say nothing.
 6. Report completion: first the result for its consumer and what still
    depends on other work, then the evidence (test output, review verdict,
    file:line for each criterion). Write the report plainly: simple,
