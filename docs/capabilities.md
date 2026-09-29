@@ -161,9 +161,11 @@ contract paths from the checkout and the target, shipped templates, the
 record schema, dependency manifests, hooks, instructions and CI), needs
 Summary and Changes, under a mapped heading where the project accepted a
 mapping, and an absent Release impact there reads as no impact unless a
-commit is marked breaking. A range that cannot be listed is code.
-Summary style, missing `Not tested:`, long fences, prose width and approximate
-rendered rows warn under `pr_sections`. The independent `pr_release_impact`
+commit is marked breaking. A range that cannot be listed is code. The
+Release impact section is required only on a pull request into a protected
+branch or one that carries a breaking commit; elsewhere it is optional and
+checked when present (ADR-0076). Summary style and a missing `Not tested:`
+line warn under `pr_sections`. The independent `pr_release_impact`
 check defaults to warn: it validates generic fields, compatibility consistency,
 migration guidance and breaking commit floors against `pr_breaking_level`
 (default major). It requires no release automation or project-specific fields.
@@ -213,8 +215,8 @@ epics: [EPC-001]
 adrs: [ADR-0021, ADR-0031]
 ```
 
-`codeflow test [--mode full|quick|essential] [--strict]` runs the generic test
-engine against configured targets (`.codeflow/test-config.json`) or runtime stack
+`codeflow test [--mode full|quick|essential] [--strict] [--since <rev>] [--all]`
+runs the generic test engine against configured targets (`.codeflow/test-config.json`) or runtime stack
 detection (`quick` is the push set; a manual run aliases it to `essential`, the
 lighter mode, when no target defines it). No stack
 detected is a loud no-op (exit 0) so the bootstrap/early-setup path stays green;
@@ -225,9 +227,27 @@ targets with a `quick` mode) plus `codeflow validate --docs` and `codeflow ci` o
 the pushed range, blocking by default under `test_gate_on_push`. It blocks on
 what it can see and names what it left to CI (an unresolved range, a sibling
 ref, a dirty, sparse or submodule-incomplete checkout); the test suite belongs
-to the full gate. One full gate runs at a time on a machine (a second refuses,
+to the full gate. Targets may declare `requires`, `outputs`, `narrow` inputs
+and `exclusive`: producers and prerequisites run first, targets with no
+producer and consumer relation run in parallel up to `max_parallel`, a
+dependent of a red target reports "not run: prerequisite failed", and a
+missing or cyclic prerequisite fails the run before any target starts. The
+run names its candidate tree after the producers ran and fails when
+generation changed tracked bytes. A target is skipped only when its declared
+inputs are unchanged since a `--since` base that has a recorded green run
+for the same config; an unmatched path, a Rust, asset, build, config or
+workflow change, a rename or deletion, no base, and `--all` (the epic close)
+run every target, and the run prints what it selected and skipped and why.
+A preflight refuses before any target when the temp directory is not
+writable, a configured lock cannot be taken, or a tool a selected target
+needs is missing. One full gate runs at a time on a machine (a second refuses,
 naming the holder), a gate that runs cargo warns about a `CARGO_TARGET_DIR`
-outside the worktree, and each target prints a start line on stderr as it begins.
+outside the worktree, and each target prints a start line and a completion
+line on stderr. A full run writes a result artifact bound to its revision,
+tree hash and config digest and copies it to
+`~/.codeflow/gate-runs/<repo>/<run-id>/`, outside any worktree, for PR
+bodies to cite. CodeFlow's own gate runs the Rust suite once, instrumented,
+and its journey check reads that run's results.
 A killed gate never lets a second one run beside its target: on Unix the lock
 stays held until the target's process group exits, and on Windows the target's
 job object ends its process tree with the gate.
@@ -539,23 +559,27 @@ per-commit hook no longer does. It proves validated planning is present on the
 declared stable target. Both report at the `git.work_planning` level: `block`
 by default, or `warn`, which reports the finding and lets the work continue. A declared target whose local branch is strictly
 behind its configured upstream anchors on that upstream, with a note; a
-diverged pair is refused. With tracking on, `codeflow ci` classifies every pull
-request: tracked (`Task: TSK-NNN`, or the id the branch carries), direct change
-(`Task: none: <reason>`), planning-only (records and `docs/plan/` only), an
-epic's integration line (a task of the epic targets it, it lands on the
-default target, and it holds only merges), or an automation profile. The
-range is one diff from the merge-base, and tracking is read at the target
-as well as the head. An unclassified one, a
-mismatched `Task:` line, a pull request that adds the record it claims, and a
-spike that lands anything but `docs/research/` findings and its own record
-block. A direct change is refused on the floor of one embedded path table
-(policy, hooks, managed instructions, CI files, manifests, record schema,
-shipped templates) plus the project's own `git.product_paths` and
-`git.breaking_watch_paths`; `init` writes a stack default for
-`git.product_paths`, `update` adds it once, and `git.direct_changes: forbid`
-refuses direct changes entirely. `task new --follow-up-of`, `epic new
---integration` and `adr new` (numbered, written `proposed`) are one command
-each. One readiness core judges a task for `work next`, `work claim`,
+diverged pair is refused. For a standalone task whose record arrives in its
+own pull request, the anchor is the record at head (ADR-0076). With tracking
+on, `codeflow ci` classifies every pull request: tracked (`Task: TSK-NNN`, or
+the id the branch carries), an epic's planning-only range (`Task: EPC-NNN`,
+records and `docs/plan/` only), an epic's integration line (`Task: EPC-NNN`;
+a task of the epic targets it, it lands on the default target, and it holds
+only merges), or an automation profile. A pull request that names no task
+and no epic is refused whatever it touches; the `Task: none` route is gone,
+and `git.direct_changes` is accepted and ignored. Where tracking is
+inactive, the `Task:` line names the harness's tracked unit. The range is one
+diff from the merge-base, and tracking is read at the target as well as the
+head. An unclassified one, a mismatched `Task:` line, a pull request that
+adds an epic task's record and claims it, any record added beside a
+standalone task's own, and a spike that lands anything but
+`docs/research/` findings and its own record block. A standalone task's own
+record, added in its pull request on a branch carrying its id, is admitted
+through the structural checks of readiness and may arrive complete with a
+valid acceptance block. `task new --standalone-reason` may run on the
+task's own branch; `task new --follow-up-of` runs on a `plan/` branch;
+`epic new --integration` and `adr new` (numbered, written `proposed`) are
+one command each. One readiness core judges a task for `work next`, `work claim`,
 `work start`, `status`, `orient` and CI: status `todo`, no Blocker, no
 `awaiting_selection`, specs approved, epic open or standalone, code
 dependencies complete in the execution base, and research or decision
@@ -565,6 +589,13 @@ remedy, and a pin left out keeps the edge unmet. `work
 next` lists ready, then waiting and blocked tasks with reasons from the
 refs as last fetched; `work claim` fetches, refuses a task a visible branch
 already carries, and pushes `task/TSK-NNN-<slug>` as an advisory claim.
+`work claim` and `work start` accept a code predecessor that is reviewed but
+not complete only through `--on TSK-NNN@<sha>`, a pin a review of the
+predecessor names that still equals the predecessor branch's tip: `claim`
+checks the pins and cuts the branch from the pin that contains the others
+(incomparable pins refuse), `start` checks each pin is an ancestor of HEAD,
+and CI still requires the predecessor complete at the merge-base when the
+task lands.
 `status` shows derived active, ready, landed and conflicting branches and
 epic progress, and never calls a live integration line removable. A
 selection that removes `awaiting_selection` lands only from `plan/`, and
@@ -605,17 +636,22 @@ retired.
 A completion is bound to the reviewed commit (SPC-013 R-52 to R-54, R-60 to
 R-62): `task status complete` and `codeflow ci` check that the block's
 `reviewed` commit, named by object id, is the head or an ancestor after
-which only the record's status and Closeout changed, and that each waiver
-names a planning-only amendment on the target that changed that criterion;
-the verb also refuses uncommitted changes outside the record. Only a
-planning-only change or a checked epic line can change a task's criteria;
-the pull request's class decides it, not the branch prefix. A range touching the
+which only the record's status and Closeout changed, apart from a merge from
+the integration line whose tree equals the clean re-merge, and that each
+waiver names the commit that changed that criterion: a planning-only
+amendment on the target, or a record-only commit in the pull request's own
+range before the reviewed commit; the verb also refuses uncommitted changes
+outside the record. At a batch landing each completion binds at the commit
+that introduced its block, so reviewed heads land together on one
+candidate. A task pull request may change its own criteria, and CI prints
+the change for the reviewer; another task's criteria change only in its own
+pull request, a planning-only change or a checked epic line. A range touching the
 adopter-facing path set needs a `(journey)` criterion or one serving the
 epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a
 listed follow-up. A tag opens or closes its criterion, trailing sentence
 punctuation included; a tag inside the text does not count. `git.work_records` sets the binding and journey rules;
-frozen criteria always block. The check states that it proves structure and
+frozen criteria of other records always block. The check states that it proves structure and
 binding only, and cf-reviewer, cf-consult and cf-ship ask whether each
 criterion is supported on this source and achieves the outcome.
 Review-relevant bounded discoveries persist at task closeout; closeout cannot
@@ -634,9 +670,10 @@ evidence earn them. CodeFlow adds neither a scheduler nor mandatory
 consuming-project tools.
 
 Independent implementation tasks use bounded, host-resource-aware parallelism:
-one owner/branch/worktree per task, a single owner for shared files, serialized
-landing through `codeflow integrate` to `integration/<epic>`, affected gates
-after each landing, and aggregate gates plus review on the combined diff.
+one owner/branch/worktree per task, a single owner for shared files, and
+landing on `integration/<epic>` in small batch candidates in dependency order:
+the primary reviews the integration effects on the candidate and runs one
+full gate on it before the line moves (ADR-0076).
 Missing seats degrade legibly to solo; mid-run failure blocks and escalates.
 
 The unattended Claude workflow is explicitly single-vendor and rejects the old
