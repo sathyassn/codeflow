@@ -567,6 +567,106 @@ fn multiple_pins_require_a_single_prospective_base_before_claim_mutates() {
     }
 }
 
+/// Claim and start resolve every pin's hosted repository afresh: a
+/// remote-tracking copy of a later predecessor from another repository,
+/// arriving while an earlier pin's review is looked up, is refused.
+#[test]
+#[cfg(unix)]
+fn a_conflicting_remote_arriving_between_pin_lookups_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[TSK-001, TSK-002]"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan third"]);
+    git(
+        root,
+        &[
+            "config",
+            "remote.review.url",
+            "https://github.com/owner/project.git",
+        ],
+    );
+    git(
+        root,
+        &[
+            "config",
+            "remote.fork.url",
+            "https://github.com/other/fork.git",
+        ],
+    );
+    let mut pins = Vec::new();
+    let mut cases = Vec::new();
+    for id in ["TSK-001", "TSK-002"] {
+        let branch = format!("task/{id}-work");
+        git(root, &["switch", "-qc", &branch]);
+        git(
+            root,
+            &["config", &format!("branch.{branch}.remote"), "review"],
+        );
+        git(
+            root,
+            &["commit", "--allow-empty", "-qm", "feat: predecessor"],
+        );
+        let pin = git(root, &["rev-parse", "HEAD"]);
+        pins.push(pin.clone());
+        let body = format!("## Reviews\n| Reviewer | Scope | Verdict |\n| --- | --- | --- |\n| peer | {pin} | approved |\n");
+        let json = serde_json::json!({"headRefName":branch,"headRefOid":pin,"isCrossRepository":false,"headRepository":{"nameWithOwner":"owner/project"},"body":body}).to_string();
+        cases.push((branch, json));
+    }
+    // The first predecessor's lookup fetches a fork's copy of the second.
+    let script = format!(
+        "#!/bin/sh\ncase \"$3\" in\n{first})\ngit update-ref refs/remotes/fork/{second} {pin}\ncat <<'PAYLOAD'\n{first_json}\nPAYLOAD\n;;\n{second})\ncat <<'PAYLOAD'\n{second_json}\nPAYLOAD\n;;\nesac\n",
+        first = cases[0].0,
+        second = cases[1].0,
+        pin = pins[1],
+        first_json = cases[0].1,
+        second_json = cases[1].1,
+    );
+    write(bin.path(), "gh", &script);
+    std::fs::set_permissions(
+        bin.path().join("gh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let on = [
+        "--on".to_string(),
+        format!("TSK-001@{}", pins[0]),
+        "--on".to_string(),
+        format!("TSK-002@{}", pins[1]),
+    ];
+    for command in ["start", "claim"] {
+        git(
+            root,
+            &["update-ref", "-d", "refs/remotes/fork/task/TSK-002-work"],
+        );
+        if command == "start" {
+            git(root, &["switch", "-qc", "task/TSK-003-child"]);
+        } else {
+            git(root, &["switch", "-q", "main"]);
+        }
+        let before = git(root, &["for-each-ref", "refs/heads/"]);
+        let mut args = vec!["work", command, "TSK-003"];
+        args.extend(on.iter().map(String::as_str));
+        let out = cli(root, &args, Some(bin.path()));
+        assert!(
+            !out.status.success(),
+            "{command} admitted a conflicting pin"
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("conflicting predecessor repositories"),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(git(root, &["for-each-ref", "refs/heads/"]), before);
+    }
+}
+
 #[test]
 fn task_help_and_doctor_explain_standalone_and_retired_policy() {
     let dir = fixture();
