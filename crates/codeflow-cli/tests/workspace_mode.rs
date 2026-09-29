@@ -236,3 +236,149 @@ fn a_single_repository_gets_no_workspace_hint() {
     );
     assert_eq!(root_branch_key(&root), "");
 }
+
+/// git through the installed hooks, with the binary under test first on
+/// `PATH` and only the harness `marker` given (or none), so the hooks judge
+/// the actor the same way in an agent session and in CI.
+fn git_as(dir: &Path, marker: Option<&str>, args: &[&str]) -> Output {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("joinable PATH");
+    let mut cmd = Command::new("git");
+    cmd.args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        cmd.env_remove(name);
+    }
+    if let Some(name) = marker {
+        cmd.env(name, "1");
+    }
+    cmd.output().expect("git runs")
+}
+
+fn both(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+#[test]
+fn journey_the_root_checkout_rule_through_the_real_hooks_and_doctor() {
+    // AC-15: a fresh project, its installed hooks and the built binary.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("single");
+    std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "--quiet", "-b", "main"]);
+    let root = root.canonicalize().unwrap();
+    let init = codeflow(&root, &["init", "--yes", "--minimal"]);
+    assert!(init.status.success(), "{}", both(&init));
+    // In a repository without commits, init commits the scaffold on main.
+    git(&root, &["rev-parse", "--verify", "HEAD"]);
+
+    // A commit in a linked worktree on a feature branch passes.
+    git(
+        &root,
+        &["worktree", "add", "--quiet", ".worktrees/t", "-b", "feat/t"],
+    );
+    let wt = root.join(".worktrees/t");
+    std::fs::write(wt.join("a.txt"), "a\n").unwrap();
+    git(&wt, &["add", "a.txt"]);
+    let ok = git_as(&wt, Some("CLAUDECODE"), &["commit", "-m", "feat: add a"]);
+    assert!(ok.status.success(), "{}", both(&ok));
+    assert!(
+        !both(&ok).contains("git.root_checkout_commits"),
+        "{}",
+        both(&ok)
+    );
+
+    // At the root on a feature branch, an agent-marked commit is refused.
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    std::fs::write(root.join("b.txt"), "b\n").unwrap();
+    git(&root, &["add", "b.txt"]);
+    let refused = git_as(
+        &root,
+        Some("CODEX_THREAD_ID"),
+        &["commit", "-m", "feat: add b"],
+    );
+    let said = both(&refused);
+    assert!(!refused.status.success(), "{said}");
+    assert!(
+        said.contains("BLOCKED \u{2014} policy rule git.root_checkout_commits (block)"),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "a commit at the root checkout of {} on 'feat/x'; its root branch is 'main'",
+            root.display()
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains("CODEX_THREAD_ID is set, so this commit comes from an agent session"),
+        "{said}"
+    );
+    assert!(said.contains("`git switch main`"), "{said}");
+
+    // Unmarked, the same commit proceeds with a warning.
+    let warned = git_as(&root, None, &["commit", "-m", "feat: add b"]);
+    let said = both(&warned);
+    assert!(warned.status.success(), "{said}");
+    assert!(
+        said.contains("warning \u{2014} policy rule git.root_checkout_commits (warn)"),
+        "{said}"
+    );
+    assert!(
+        said.contains("no harness marker is set, so this commit is treated as a human's"),
+        "{said}"
+    );
+
+    // doctor reports the root checkout off its root branch.
+    let doctor = codeflow(&root, &["doctor", "--check", "repo-integrity"]);
+    let said = both(&doctor);
+    assert!(
+        said.contains(&format!(
+            "git.root_branch: the root checkout of {} is on 'feat/x'",
+            root.display()
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains("clear it: take the next step each finding above names"),
+        "{said}"
+    );
+
+    // An umbrella set up with init --workspace reports workspace mode.
+    let umbrella_root = umbrella(dir.path());
+    let setup = codeflow(
+        &umbrella_root,
+        &["init", "--yes", "--minimal", "--workspace"],
+    );
+    assert!(setup.status.success(), "{}", both(&setup));
+    let doctor = codeflow(&umbrella_root, &["doctor", "--check", "repo-integrity"]);
+    let said = both(&doctor);
+    assert!(
+        said.contains(&format!(
+            "workspace mode: the root checkout of {} stays on '{WORKSPACE_ROOT_BRANCH}' (set by \
+             git.root_branch); it holds 3 nested repositories (1 with CodeFlow)",
+            umbrella_root.display()
+        )),
+        "{said}"
+    );
+}

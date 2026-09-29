@@ -2112,7 +2112,35 @@ fn check_repo_integrity(opts: &Options) -> CheckResult {
         }
     }
 
-    pass("repo layout healthy: not bare, no protected branch in a linked worktree")
+    // The root checkout: its root branch, and in an umbrella its nested
+    // repositories and linked worktrees (TSK-165).
+    let here = if opts.project_dir.is_empty() {
+        Path::new(".")
+    } else {
+        root.as_path()
+    };
+    let (lines, warns) = crate::root_checkout::doctor_lines(here, &policy, &|name| opts.env(name));
+    let mut message = if warns {
+        "repo layout: not bare, no protected branch in a linked worktree; the root checkout \
+         needs attention"
+            .to_string()
+    } else {
+        "repo layout healthy: not bare, no protected branch in a linked worktree".to_string()
+    };
+    for line in &lines {
+        message.push_str("\n      ");
+        message.push_str(line);
+    }
+    if warns {
+        CheckResult {
+            name: "repo-integrity".into(),
+            status: Status::Warn(crate::remedy::DOCTOR_ROOT_CHECKOUT.remedy()),
+            message,
+            duration: start.elapsed(),
+        }
+    } else {
+        pass(&message)
+    }
 }
 
 /// One entry parsed from `git worktree list --porcelain`.
@@ -4777,7 +4805,9 @@ mod tests {
     #[test]
     fn test_repo_integrity_non_repo_passes_quietly() {
         // git unavailable / not a repo → no signal → pass, never guess.
-        let opts = test_opts(); // exec_command returns Err
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts(); // exec_command returns Err
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_repo_integrity(&opts);
         assert_eq!(r.status, Status::Pass);
     }

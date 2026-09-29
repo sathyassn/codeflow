@@ -104,14 +104,79 @@ fn the_convention_name_appears_in_no_other_source_file() {
     );
 }
 
+/// A shipped asset as `codeflow init` renders it.
+fn rendered_asset(file: &str) -> String {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let text = std::fs::read_to_string(repo.join(file)).unwrap();
+    crate::scaffold::init::build_context(
+        "demo",
+        "",
+        &[],
+        "rust",
+        crate::scaffold::Tier::Minimal,
+        "0",
+    )
+    .substitute(&text)
+}
+
 #[test]
 fn the_guide_and_the_contract_name_the_constant() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for file in ["docs/workspace-mode.md", "assets/base/rules/worktrees.md"] {
-        let text = std::fs::read_to_string(repo.join(file)).unwrap();
+    let guide = std::fs::read_to_string(repo.join("docs/workspace-mode.md")).unwrap();
+    assert!(
+        guide.contains(&format!("`{WORKSPACE_ROOT_BRANCH}`")),
+        "the guide must name the convention {WORKSPACE_ROOT_BRANCH}"
+    );
+    // The shipped rule renders the name from the constant instead of
+    // repeating it.
+    let raw = std::fs::read_to_string(repo.join("assets/base/rules/worktrees.md")).unwrap();
+    assert!(
+        !raw.contains(WORKSPACE_ROOT_BRANCH) && raw.contains("{{WORKSPACE_ROOT_BRANCH}}"),
+        "worktrees.md must render the convention from the constant"
+    );
+    assert!(rendered_asset("assets/base/rules/worktrees.md")
+        .contains(&format!("`{WORKSPACE_ROOT_BRANCH}`")));
+}
+
+#[test]
+fn the_guide_and_the_contract_say_how_a_change_lands() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let guide = std::fs::read_to_string(repo.join("docs/workspace-mode.md")).unwrap();
+    let worktrees = rendered_asset("assets/base/rules/worktrees.md");
+    let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    for (file, text) in [
+        ("docs/workspace-mode.md", &guide),
+        ("worktrees.md", &worktrees),
+    ] {
+        let text = flat(text);
+        for pin in [
+            "a small edit is a commit on `integration/workspace` at the root checkout.",
+            "a short-lived branch in the umbrella's own `.worktrees/<slug>`, cut from the root branch \
+             and merged back with `codeflow integrate`.",
+            "With no remote, the root branch is the landing line and `main` is a protected \
+             checkpoint: at a milestone the operator moves it forward with `codeflow integrate \
+             integration/workspace --into main`; agents never do.",
+            "With a remote the same holds, the root branch is pushed, and a change into `main` \
+             is a pull request a human merges.",
+            "every change goes through that repository's own flow, a worktree under its own \
+             `.worktrees/<slug>` and a pull request into its integration branch or its `main`.",
+            "The umbrella never commits nested files, which it ignores, and agents never merge \
+             into any repository's `main`.",
+        ] {
+            assert!(text.contains(pin), "{file} lost the landing rule: {pin}");
+        }
+    }
+    assert!(
+        guide.contains("## How a change lands\n\n```text\n"),
+        "the guide shows the landing flow as a figure"
+    );
+    for (file, text) in [
+        ("docs/workspace-mode.md", &guide),
+        ("worktrees.md", &worktrees),
+    ] {
         assert!(
-            text.contains(WORKSPACE_ROOT_BRANCH),
-            "{file} must name the convention {WORKSPACE_ROOT_BRANCH}"
+            !text.contains('\u{2014}') && !text.contains('\u{2013}'),
+            "{file} uses an em or en dash"
         );
     }
 }
@@ -160,6 +225,23 @@ fn each_harness_marker_alone_marks_an_agent() {
     for marker in AGENT_MARKERS {
         let env = env_of(&[(marker, "1")]);
         assert_eq!(actor(&env), Actor::Agent(marker), "{marker}");
+    }
+}
+
+#[test]
+fn the_test_environment_blanks_every_harness_marker() {
+    // `.cargo/config.toml` blanks each marker, so a test that commits
+    // through real hooks does not inherit the agent session running it.
+    let config = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cargo/config.toml"),
+    )
+    .unwrap();
+    for marker in AGENT_MARKERS {
+        assert!(
+            config.contains(&format!("{marker} = {{ value = \"\", force = true }}")),
+            "{marker} is not blanked in .cargo/config.toml"
+        );
+        assert_eq!(std::env::var(marker).unwrap_or_default(), "", "{marker}");
     }
 }
 
@@ -298,9 +380,11 @@ fn a_commit_at_the_root_on_a_feature_branch_is_found_with_its_message() {
         )
     );
     assert_eq!(
-        finding.next_step(),
-        "do task work in a worktree: git worktree add .worktrees/<slug> -b <branch>, then \
-         commit there; return the root to its root branch with git switch main"
+        &*finding.next_step(),
+        "task work belongs in a linked worktree: put the root checkout back on its root branch \
+         with `git switch main`, then work and commit in a worktree (`git worktree add \
+         .worktrees/<slug> -b <branch>`, or `git worktree add .worktrees/<slug> <branch>` to \
+         continue an existing branch)"
     );
 }
 
@@ -356,6 +440,367 @@ fn a_root_branch_named_main_explicitly_adds_no_finding_on_main() {
         ..GitPolicy::default()
     };
     assert_eq!(commit_finding(&root, &policy), None);
+}
+
+// ---- git-guard (AC-2) --------------------------------------------------------
+
+/// Run git-guard on `command` as a session at `cwd` would: the session's
+/// branch, policy and root checkout read from `cwd`, and retargets read
+/// from disk.
+fn guard(cwd: &Path, policy: &GitPolicy, command: &str) -> Vec<Violation> {
+    use crate::hooks::git_guard::{evaluate, read_target, GuardContext, Retarget};
+    let repo = git2::Repository::discover(cwd).unwrap();
+    let branch = crate::hooks::repo::current_branch(&repo);
+    let common = repo.commondir().to_path_buf();
+    let root = RootCheckout::at(cwd, policy);
+    let dir_target = |spec: &Retarget<'_>| read_target(cwd, Some(&common), spec);
+    let ctx = GuardContext {
+        policy,
+        current_branch: &branch,
+        integrate_token: false,
+        pr_base_lookup: None,
+        dir_target_lookup: Some(&dir_target),
+        alias_lookup: None,
+        root_checkout: root.as_ref(),
+    };
+    evaluate(command, &ctx)
+}
+
+fn rule_hits(violations: &[Violation]) -> Vec<&Violation> {
+    violations
+        .iter()
+        .filter(|v| v.rule == COMMIT_RULE)
+        .collect()
+}
+
+#[test]
+fn the_guard_refuses_each_commit_creating_command_at_a_root_off_its_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    let policy = GitPolicy::default();
+    for command in [
+        "git commit -m x",
+        "git merge feat/y",
+        "git cherry-pick abc123",
+        "git revert HEAD",
+        "git am patch.mbox",
+        "git rebase main",
+        "git pull",
+    ] {
+        let v = guard(&root, &policy, command);
+        let hits = rule_hits(&v);
+        assert_eq!(hits.len(), 1, "{command}: {v:?}");
+        assert_eq!(hits[0].level, PolicyLevel::Block, "{command}");
+    }
+    let v = guard(&root, &policy, "git commit -m x");
+    assert_eq!(
+        rule_hits(&v)[0].render("git-guard"),
+        format!(
+            "codeflow git-guard: BLOCKED \u{2014} policy rule git.root_checkout_commits (block)\n  \
+             `git commit` would commit at the root checkout of {} on 'feat/x'; its root branch \
+             is 'main' (the default branch, from git.protected_branches)\n  sanctioned: task work \
+             belongs in a linked worktree: put the root checkout back on its root branch with \
+             `git switch main`, then work and commit in a worktree (`git worktree add \
+             .worktrees/<slug> -b <branch>`, or `git worktree add .worktrees/<slug> <branch>` \
+             to continue an existing branch)\n  policy file: .codeflow/policy.json",
+            root.display()
+        )
+    );
+}
+
+#[test]
+fn the_guard_leaves_reads_aborts_and_the_root_branch_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let umbrella = GitPolicy {
+        root_branch: "trunk".into(),
+        ..GitPolicy::default()
+    };
+    git(&root, &["switch", "--quiet", "-c", "trunk"]);
+    assert!(rule_hits(&guard(&root, &umbrella, "git commit -m x")).is_empty());
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    for command in [
+        "git status",
+        "git log --oneline",
+        "git merge --abort",
+        "git rebase --abort",
+        "git cherry-pick --quit",
+        "git switch trunk",
+    ] {
+        assert!(
+            rule_hits(&guard(&root, &umbrella, command)).is_empty(),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn the_guard_follows_the_level_warn_and_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    let warn = GitPolicy {
+        root_checkout_commits: PolicyLevel::Warn,
+        ..GitPolicy::default()
+    };
+    let v = guard(&root, &warn, "git commit -m x");
+    assert_eq!(rule_hits(&v)[0].level, PolicyLevel::Warn);
+    let off = GitPolicy {
+        root_checkout_commits: PolicyLevel::Off,
+        ..GitPolicy::default()
+    };
+    assert!(rule_hits(&guard(&root, &off, "git commit -m x")).is_empty());
+}
+
+#[test]
+fn the_guard_refuses_a_detached_root_and_a_switch_then_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let policy = GitPolicy::default();
+    // On main (the root branch), a line that switches away first is judged
+    // on the branch it switched to.
+    let v = guard(&root, &policy, "git switch -c feat/x && git commit -m x");
+    let hits = rule_hits(&v);
+    assert_eq!(hits.len(), 1, "{v:?}");
+    assert!(
+        hits[0].message.contains("on 'feat/x'"),
+        "{}",
+        hits[0].message
+    );
+    git(&root, &["switch", "--quiet", "--detach"]);
+    let v = guard(&root, &policy, "git commit -m x");
+    let hits = rule_hits(&v);
+    assert_eq!(hits.len(), 1, "{v:?}");
+    assert!(
+        hits[0].message.contains("on a detached HEAD at"),
+        "{}",
+        hits[0].message
+    );
+}
+
+#[test]
+fn the_guard_judges_git_dash_c_from_a_linked_worktree_by_the_root_it_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    git(
+        &root,
+        &["worktree", "add", "--quiet", ".worktrees/t", "-b", "feat/t"],
+    );
+    let worktree = root.join(".worktrees/t");
+    let policy = GitPolicy::default();
+    // In the worktree itself a commit is fine.
+    assert!(rule_hits(&guard(&worktree, &policy, "git commit -m x")).is_empty());
+    // Aimed at the root checkout on main, it is fine too; on feat/x it is
+    // refused.
+    let at_root = format!("git -C {} commit -m x", root.display());
+    assert!(rule_hits(&guard(&worktree, &policy, &at_root)).is_empty());
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    let v = guard(&worktree, &policy, &at_root);
+    let hits = rule_hits(&v);
+    assert_eq!(hits.len(), 1, "{v:?}");
+    assert!(
+        hits[0]
+            .message
+            .contains(&format!("root checkout of {} on 'feat/x'", root.display())),
+        "{}",
+        hits[0].message
+    );
+}
+
+#[test]
+fn the_guard_on_a_protected_root_branch_adds_nothing_to_commit_to_protected() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    for policy in [
+        GitPolicy::default(),
+        GitPolicy {
+            root_branch: "main".into(),
+            ..GitPolicy::default()
+        },
+    ] {
+        let v = guard(&root, &policy, "git commit -m x");
+        assert!(rule_hits(&v).is_empty(), "{v:?}");
+        assert!(
+            v.iter().any(|v| v.rule == "git.commit_to_protected"),
+            "{v:?}"
+        );
+    }
+}
+
+// ---- the git hooks (AC-3, AC-4) --------------------------------------------
+
+#[test]
+fn the_hook_blocks_each_marker_and_warns_without_one_or_with_the_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    let policy = GitPolicy::default();
+    let head = format!(
+        "a commit at the root checkout of {} on 'feat/x'; its root branch is 'main' (the \
+         default branch, from git.protected_branches); ",
+        root.display()
+    );
+    for marker in AGENT_MARKERS {
+        let v = hook_violation(&root, &policy, &env_of(&[(marker, "1")])).expect(marker);
+        assert_eq!(v.level, PolicyLevel::Block, "{marker}");
+        assert_eq!(
+            v.message,
+            format!("{head}{marker} is set, so this commit comes from an agent session")
+        );
+    }
+    let v = hook_violation(&root, &policy, &env_of(&[])).expect("unmarked");
+    assert_eq!(v.level, PolicyLevel::Warn);
+    assert_eq!(
+        v.message,
+        format!(
+            "{head}no harness marker is set, so this commit is treated as a human's and proceeds"
+        )
+    );
+    let v = hook_violation(
+        &root,
+        &policy,
+        &env_of(&[("CLAUDECODE", "1"), (HUMAN_OVERRIDE_ENV, "1")]),
+    )
+    .expect("override");
+    assert_eq!(v.level, PolicyLevel::Warn);
+    assert!(v.message.ends_with(
+        "CODEFLOW_HUMAN_OVERRIDE is set, so this commit is treated as a human's and proceeds"
+    ));
+    assert!(
+        v.remedy.contains("`git switch main`"),
+        "{}",
+        v.remedy.to_string()
+    );
+}
+
+#[test]
+fn the_hook_is_silent_in_a_worktree_on_the_root_branch_and_when_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let agent = env_of(&[("CLAUDECODE", "1")]);
+    assert!(hook_violation(&root, &GitPolicy::default(), &agent).is_none());
+    git(
+        &root,
+        &["worktree", "add", "--quiet", ".worktrees/t", "-b", "feat/t"],
+    );
+    assert!(hook_violation(&root.join(".worktrees/t"), &GitPolicy::default(), &agent).is_none());
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    let off = GitPolicy {
+        root_checkout_commits: PolicyLevel::Off,
+        ..GitPolicy::default()
+    };
+    assert!(hook_violation(&root, &off, &agent).is_none());
+}
+
+#[test]
+fn a_pre_commit_on_a_protected_root_branch_named_explicitly_keeps_todays_protection() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let policy = GitPolicy {
+        root_branch: "main".into(),
+        ..GitPolicy::default()
+    };
+    let report = crate::hooks::git_hook::pre_commit(&root, &policy, false).unwrap();
+    let rules: Vec<&str> = report.violations.iter().map(|v| v.rule.as_str()).collect();
+    assert_eq!(rules, ["git.commit_to_protected"]);
+    let report = crate::hooks::git_hook::pre_merge_commit(&root, &policy, false, false).unwrap();
+    let rules: Vec<&str> = report.violations.iter().map(|v| v.rule.as_str()).collect();
+    assert_eq!(rules, ["git.merge_to_protected"]);
+}
+
+#[test]
+fn the_pre_commit_and_pre_merge_commit_hooks_judge_the_root_checkout() {
+    // The hooks read the process environment, which differs between an
+    // agent session and CI; either way a commit at the root on a feature
+    // branch is a finding, blocked or warned by the actor.
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    let policy = GitPolicy::default();
+    let expected = hook_level(PolicyLevel::Block, actor(&process_env));
+    for report in [
+        crate::hooks::git_hook::pre_commit(&root, &policy, false).unwrap(),
+        crate::hooks::git_hook::pre_merge_commit(&root, &policy, false, false).unwrap(),
+    ] {
+        let hits = rule_hits(&report.violations);
+        assert_eq!(hits.len(), 1, "{:?}", report.violations);
+        assert_eq!(hits[0].level, expected);
+    }
+}
+
+// ---- doctor's repo-integrity check (AC-5, AC-12) ----------------------------
+
+fn repo_integrity(dir: &Path) -> crate::doctor::CheckResult {
+    let opts = crate::doctor::Options {
+        project_dir: dir.to_string_lossy().into_owned(),
+        exec_command: Some(|program, args| {
+            let out = std::process::Command::new(program)
+                .args(args)
+                .output()
+                .map_err(|e| e.to_string())?;
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        }),
+        env_var: Some(|_| None),
+        ..crate::doctor::Options::default()
+    };
+    crate::doctor::run_check("repo-integrity", &opts).unwrap()
+}
+
+#[test]
+fn doctor_on_a_single_repository_gains_only_the_root_branch_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    git(
+        &root,
+        &["worktree", "add", "--quiet", ".worktrees/t", "-b", "feat/t"],
+    );
+    std::fs::write(root.join(".gitignore"), ".worktrees/\n").unwrap();
+    git(&root, &["add", ".gitignore"]);
+    git(&root, &["commit", "--quiet", "-m", "ignore worktrees"]);
+    let before = "repo layout healthy: not bare, no protected branch in a linked worktree";
+    let line = format!(
+        "git.root_branch: the root checkout of {} stays on 'main' (the default branch, from \
+         git.protected_branches)",
+        root.display()
+    );
+    // The same report from the root and from the linked worktree.
+    for at in [root.clone(), root.join(".worktrees/t")] {
+        let r = repo_integrity(&at);
+        assert_eq!(r.status, crate::doctor::Status::Pass, "{}", r.message);
+        assert_eq!(r.message, format!("{before}\n      {line}"));
+    }
+}
+
+#[test]
+fn doctor_warns_for_a_root_off_its_branch_with_the_clearing_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    let r = repo_integrity(&root);
+    assert_eq!(
+        r.status,
+        crate::doctor::Status::Warn(crate::remedy::DOCTOR_ROOT_CHECKOUT.remedy())
+    );
+    assert!(
+        r.message.starts_with(
+            "repo layout: not bare, no protected branch in a linked worktree; the root \
+             checkout needs attention\n      git.root_branch: the root checkout of "
+        ),
+        "{}",
+        r.message
+    );
+    assert!(
+        r.message.contains(&format!(
+            "\n      git.root_branch: the root checkout of {} is on 'feat/x'; its root branch \
+             is 'main' (the default branch, from git.protected_branches). Next: run git switch \
+             main at the root, then git worktree add .worktrees/<slug> feat/x to continue it in \
+             a worktree",
+            root.display()
+        )),
+        "{}",
+        r.message
+    );
 }
 
 // ---- nested repositories ---------------------------------------------------
@@ -1011,8 +1456,9 @@ fn the_report_lists_what_changed_and_the_next_steps() {
          CodeFlow project /proj/ in .gitignore\n  the nested git repository 'plain' is already \
          in .gitignore\nnext steps:\n  - commit .gitignore and .codeflow/policy.json on the root \
          branch\n  - bind the nested repositories with the nested-repository inventory once the \
-         harness permissions work ships it\n  - keep main as the milestone checkpoint: move it \
-         forward with codeflow integrate integration/workspace --into main\n  - do larger or \
+         harness permissions work ships it\n  - main is the milestone checkpoint: at a milestone \
+         the operator moves it forward with codeflow integrate integration/workspace --into \
+         main; agents never do\n  - do larger or \
          parallel work in a worktree: git worktree add .worktrees/<slug> -b <branch>"
     );
 }

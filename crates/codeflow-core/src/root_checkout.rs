@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::hooks::policy::{GitPolicy, PolicyLevel};
-use crate::hooks::HUMAN_OVERRIDE_ENV;
+use crate::hooks::{Violation, HUMAN_OVERRIDE_ENV};
 
 /// `CodeFlow`'s convention name for an umbrella workspace's root branch. Every
 /// surface that sets up or describes workspace mode reads this constant.
@@ -332,15 +332,132 @@ impl CommitFinding {
         )
     }
 
-    /// The exact next step.
+    /// The exact next step: the catalogued remedy.
     #[must_use]
-    pub fn next_step(&self) -> String {
-        format!(
-            "do task work in a worktree: {WORKTREE_ROUTE}, then commit there; \
-             return the root to its root branch with git switch {}",
-            self.root_branch.name
-        )
+    pub fn next_step(&self) -> crate::remedy::Remedy {
+        crate::remedy::ROOT_CHECKOUT_COMMIT.with(&[("root", &self.root_branch.name)])
     }
+}
+
+impl CommitFinding {
+    /// The policy violation at `level` for `what` (the command or event
+    /// that commits), with `note` (how a hook judged the actor) appended.
+    #[must_use]
+    pub fn violation(&self, what: &str, level: PolicyLevel, note: Option<&str>) -> Violation {
+        let mut message = format!(
+            "{what} at the root checkout of {} on {}; its root branch is '{}' ({})",
+            self.repo,
+            self.head.describe(),
+            self.root_branch.name,
+            self.root_branch.source
+        );
+        if let Some(note) = note {
+            message.push_str("; ");
+            message.push_str(note);
+        }
+        Violation::new(COMMIT_RULE, level, message, self.next_step())
+    }
+}
+
+/// Subcommands that create commits in the working tree they run in.
+pub const COMMIT_SUBCOMMANDS: [&str; 7] = [
+    "commit",
+    "merge",
+    "cherry-pick",
+    "revert",
+    "am",
+    "rebase",
+    "pull",
+];
+
+/// A repository's root checkout, as git-guard reads it before judging the
+/// commands of one line: where it is, its root branch and its HEAD.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootCheckout {
+    pub repo: String,
+    pub root_branch: RootBranch,
+    pub head: Option<Head>,
+}
+
+impl RootCheckout {
+    /// The facts for `repo` under `policy` (the root checkout's own), or
+    /// `None` when `repo` is a linked worktree, bare, or has no working
+    /// tree.
+    #[must_use]
+    pub fn read(repo: &git2::Repository, policy: &GitPolicy) -> Option<Self> {
+        if !is_root_checkout(repo) {
+            return None;
+        }
+        Some(Self {
+            repo: label(&canonical(repo.workdir()?)),
+            root_branch: root_branch(repo, policy),
+            head: head(repo),
+        })
+    }
+
+    /// The facts for the repository that holds `path`, when `path` is in
+    /// its root checkout.
+    #[must_use]
+    pub fn at(path: &Path, policy: &GitPolicy) -> Option<Self> {
+        Self::read(&git2::Repository::discover(path).ok()?, policy)
+    }
+
+    /// The finding for a commit made here on `branch`, where an empty name
+    /// is a detached HEAD. `None` on the root branch.
+    #[must_use]
+    pub fn commit_on(&self, branch: &str) -> Option<CommitFinding> {
+        if branch == self.root_branch.name {
+            return None;
+        }
+        let head = if branch.is_empty() {
+            match &self.head {
+                Some(detached @ Head::Detached(_)) => detached.clone(),
+                _ => Head::Detached("an unknown commit".to_string()),
+            }
+        } else {
+            Head::Branch(branch.to_string())
+        };
+        Some(CommitFinding {
+            repo: self.repo.clone(),
+            head,
+            root_branch: self.root_branch.clone(),
+        })
+    }
+}
+
+/// git-guard's verdict for `git <sub> <rest>` run at this root checkout on
+/// `branch` (empty: detached), at the policy's `level`. git-guard runs only
+/// in an agent session, so it applies the level without reading the
+/// environment. Ending an operation (`--abort`, `--quit`) creates no commit.
+#[must_use]
+pub fn guard_violation(
+    sub: &str,
+    rest: &[String],
+    branch: &str,
+    root: &RootCheckout,
+    level: PolicyLevel,
+) -> Option<Violation> {
+    if !level.is_active()
+        || !COMMIT_SUBCOMMANDS.contains(&sub)
+        || rest.iter().any(|a| a == "--abort" || a == "--quit")
+    {
+        return None;
+    }
+    root.commit_on(branch)
+        .map(|finding| finding.violation(&format!("`git {sub}` would commit"), level, None))
+}
+
+/// A git hook's verdict for a commit in the working tree at `path`: the
+/// policy's level for an agent, a warning for anyone else (see [`actor`]).
+#[must_use]
+pub fn hook_violation(path: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> Option<Violation> {
+    let level = policy.root_checkout_commits;
+    if !level.is_active() {
+        return None;
+    }
+    let finding = commit_finding(path, policy)?;
+    let who = actor(env);
+    Some(finding.violation("a commit", hook_level(level, who), Some(&actor_note(who))))
 }
 
 /// Judge a commit in the working tree at `path`: a finding when `path` is
@@ -349,20 +466,15 @@ impl CommitFinding {
 #[must_use]
 pub fn commit_finding(path: &Path, policy: &GitPolicy) -> Option<CommitFinding> {
     let repo = git2::Repository::discover(path).ok()?;
-    if !is_root_checkout(&repo) {
-        return None;
+    let root = RootCheckout::read(&repo, policy)?;
+    match root.head.clone()? {
+        Head::Branch(branch) => root.commit_on(&branch),
+        detached @ Head::Detached(_) => Some(CommitFinding {
+            repo: root.repo,
+            head: detached,
+            root_branch: root.root_branch,
+        }),
     }
-    let root = canonical(repo.workdir()?);
-    let root_branch = root_branch(&repo, policy);
-    let head = head(&repo)?;
-    if head == Head::Branch(root_branch.name.clone()) {
-        return None;
-    }
-    Some(CommitFinding {
-        repo: label(&root),
-        head,
-        root_branch,
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -879,17 +991,24 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     }
 }
 
-/// Everything doctor reports about the root checkout at `root` and, in an
-/// umbrella, its nested repositories and linked worktrees. The first line
-/// is always the root branch (info); the rest are findings.
+/// Doctor's `repo-integrity` lines for the root checkout: one line per
+/// finding of [`doctor_report`], and whether any of them warns.
+#[must_use]
+pub fn doctor_lines(root: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> (Vec<String>, bool) {
+    let findings = doctor_report(root, policy, env);
+    let warns = findings.iter().any(|f| f.severity == Severity::Warn);
+    (findings.iter().map(ToString::to_string).collect(), warns)
+}
+
+/// Everything doctor reports about the root checkout of the repository that
+/// holds `root` (from a linked worktree too) and, in an umbrella, its
+/// nested repositories and linked worktrees. The first line is always the
+/// root branch (info); the rest are findings.
 #[must_use]
 pub fn doctor_report(root: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> Vec<Finding> {
-    let Ok(repo) = git2::Repository::open(root) else {
+    let Some(repo) = main_checkout(root) else {
         return Vec::new();
     };
-    if !is_root_checkout(&repo) {
-        return Vec::new();
-    }
     let Some(workdir) = repo.workdir().map(canonical) else {
         return Vec::new();
     };
@@ -929,6 +1048,21 @@ pub fn doctor_report(root: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> Vec
     out.extend(nested_findings(&repo_label, &nested, &gitlinks));
     out.extend(worktree_findings(&repo, policy, env));
     out
+}
+
+/// The root checkout of the repository that holds `path`: the repository
+/// itself, or the main working tree when `path` is in a linked worktree.
+/// `None` for a bare repository or outside one.
+fn main_checkout(path: &Path) -> Option<git2::Repository> {
+    let repo = git2::Repository::discover(path).ok()?;
+    if is_root_checkout(&repo) {
+        return Some(repo);
+    }
+    if repo.is_worktree() {
+        let main = git2::Repository::open(repo.commondir()).ok()?;
+        return (is_root_checkout(&main) && main.workdir().is_some()).then_some(main);
+    }
+    None
 }
 
 /// The warning for a root branch the policy names but the repository lacks.
@@ -1405,8 +1539,8 @@ impl fmt::Display for WorkspaceReport {
         )?;
         writeln!(
             f,
-            "  - keep main as the milestone checkpoint: move it forward with codeflow \
-             integrate {} --into main",
+            "  - main is the milestone checkpoint: at a milestone the operator moves it \
+             forward with codeflow integrate {} --into main; agents never do",
             self.branch.name()
         )?;
         write!(

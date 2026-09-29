@@ -230,6 +230,8 @@ fn git_guard(stdin: &str) -> i32 {
     let branch = codeflow_core::hooks::RepoInfo::discover(&root)
         .map(|i| i.branch)
         .unwrap_or_default();
+    // The session's root checkout, when the command runs in one (TSK-165).
+    let root_checkout = codeflow_core::root_checkout::RootCheckout::at(&root, &policy.git);
 
     let lookup = gh_pr_base;
     // Resolve a retargeted repository (`-C`/`--git-dir`/`GIT_DIR`/`cd`) to its
@@ -251,6 +253,7 @@ fn git_guard(stdin: &str) -> i32 {
         pr_base_lookup: Some(&lookup),
         dir_target_lookup: Some(&dir_target),
         alias_lookup: Some(&alias),
+        root_checkout: root_checkout.as_ref(),
     };
     let report = git_guard::evaluate_report(command, &ctx);
     super::render_outcome("git-guard", &report.violations, &report.notes, 2)
