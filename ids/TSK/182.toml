@@ -1,0 +1,11 @@
+id = "TSK-182"
+uid = "8708c983-a22e-41ff-9f42-7ae66b99612a"
+kind = "TSK"
+title = "Report a CI pin only for a recognized pinned install"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T01:27:37Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
