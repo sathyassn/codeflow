@@ -69,8 +69,8 @@ doctor` reports the root branch and its source, a root checkout off it or
 holding task edits, nested repositories no tracked `.gitignore` covers, and
 linked worktrees outside `git.worktree_locations`, whose default covers
 `.worktrees/` and the folders Claude, Codex and Grok manage.
-`integration/workspace` is not an epic line; TSK-166 teaches `codeflow ci`
-so.
+`integration/workspace` is not an epic line; TSK-166 carries that into
+`codeflow ci`.
 
 ## Consequences
 

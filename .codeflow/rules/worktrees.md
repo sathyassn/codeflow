@@ -10,7 +10,7 @@ under `.worktrees/<slug>` (gitignored) or in the folder a harness manages
 for its own worktrees. Never use a sibling folder.
 
 The root checkout, the repository's main working tree, stays on its root
-branch and takes no task edits. The root branch is the repository's default
+branch and takes no task work. The root branch is the repository's default
 branch unless `git.root_branch` in `.codeflow/policy.json` names another.
 Change it only for an umbrella repository whose root is a working checkout
 (workspace mode): its convention is `integration/workspace`, and

@@ -201,7 +201,7 @@ fn the_contract_every_tier_ships_states_the_rule() {
     let worktrees = read("assets/base/rules/worktrees.md");
     for pin in [
         "The root checkout, the repository's main working tree, stays on its root\nbranch and \
-         takes no task edits.",
+         takes no task work.",
         "(`git.root_checkout_commits`)",
         "only warn a human at their own terminal",
         "`git.worktree_locations`",
@@ -1287,7 +1287,7 @@ fn a_root_on_a_feature_branch_with_work_is_reported_with_its_state() {
              to 1 tracked file; its root branch is 'main' (the default branch, from \
              git.protected_branches). Next: commit or stash that work, run git switch main at \
              the root, then git worktree add .worktrees/<slug> feat/x to continue it in a \
-             worktree",
+             worktree, and git stash pop inside it if you stashed",
             root.display()
         )]
     );
@@ -1321,7 +1321,7 @@ fn a_protected_root_holding_task_edits_is_reported() {
         warnings(&report),
         vec![format!(
             "git.root_branch: the root checkout of {} is on its protected root branch 'main' and \
-             holds uncommitted changes to 1 tracked file; the root takes no task edits. Next: \
+             holds uncommitted changes to 1 tracked file; the root takes no task work. Next: \
              move them to a worktree: git stash, then git worktree add .worktrees/<slug> -b \
              <branch>, then git stash pop inside the worktree",
             root.display()
@@ -1586,8 +1586,8 @@ fn the_report_lists_what_changed_and_the_next_steps() {
         "workspace mode:\n  created 'integration/workspace' from 'main' and switched the root \
          checkout to it\n  set git.root_branch in .codeflow/policy.json\n  ignored the nested \
          CodeFlow project /proj/ in .gitignore\n  the nested git repository 'plain' is already \
-         in .gitignore\nnext steps:\n  - commit .gitignore and .codeflow/policy.json on the root \
-         branch\n  - bind the nested repositories with the nested-repository inventory once the \
+         in .gitignore\nnext steps:\n  - commit the files init wrote, including .gitignore and \
+         .codeflow/policy.json, on the root branch\n  - bind the nested repositories with the nested-repository inventory once the \
          harness permissions work ships it\n  - main is the milestone checkpoint: at a milestone \
          the operator moves it forward with codeflow integrate integration/workspace --into \
          main; agents never do\n  - do larger or \

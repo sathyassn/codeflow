@@ -1219,7 +1219,7 @@ fn head_finding(
                 rule: ROOT_BRANCH_KEY,
                 message: format!(
                     "the root checkout of {repo_label} is on its protected root branch '{b}' \
-                         and holds uncommitted changes to {}; the root takes no task edits",
+                         and holds uncommitted changes to {}; the root takes no task work",
                     plural(changes.len(), "tracked file", "tracked files")
                 ),
                 next_step: format!(
@@ -1254,7 +1254,15 @@ fn head_finding(
             };
             let continue_step = match &found {
                 Head::Branch(b) => {
-                    format!(", then git worktree add .worktrees/<slug> {b} to continue it in a worktree")
+                    let pop = if save_step.is_empty() {
+                        ""
+                    } else {
+                        ", and git stash pop inside it if you stashed"
+                    };
+                    format!(
+                        ", then git worktree add .worktrees/<slug> {b} to continue it in a \
+                         worktree{pop}"
+                    )
                 }
                 Head::Detached(_) => String::new(),
             };
@@ -1707,7 +1715,8 @@ impl fmt::Display for WorkspaceReport {
         writeln!(f, "next steps:")?;
         writeln!(
             f,
-            "  - commit .gitignore and .codeflow/policy.json on the root branch"
+            "  - commit the files init wrote, including .gitignore and .codeflow/policy.json, on the \
+             root branch"
         )?;
         writeln!(
             f,

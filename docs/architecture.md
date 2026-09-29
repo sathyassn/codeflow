@@ -83,8 +83,8 @@ Core modules grouped by responsibility:
   the transport-neutral `delegate.rs` state machine — ADR-0036), the secret
   scanner, git conflict detection + CI wait, the flock-guarded `integrate`
   primitive with its gate-context token, the GitHub remote-protect
-  adapter, and `root_checkout.rs`: the root checkout's root branch, the actor
-  read from harness markers, and workspace mode (ADR-0074).
+  adapter, and the root checkout's root branch, the actor read from harness
+  markers, and workspace mode (ADR-0074).
 - **Records / knowledge** (`models/`, `ledger/`, `workgraph/`, `validate/`,
   `capability.rs`, `recall.rs`, `registry.rs`): frontmatter models, the JSONL
   ledger, the work graph, `validate` (+ the `--docs` referential-integrity

@@ -1,7 +1,8 @@
 # Workspace mode
 
-Workspace mode is for an umbrella repository that holds several CodeFlow
-projects, each its own git repository, in folders inside it. The umbrella's
+Workspace mode is for an umbrella repository that holds several projects,
+each its own git repository (CodeFlow projects or plain repositories), in
+folders inside it. The umbrella's
 root checkout is a working checkout: sessions start there, load their
 instructions and settings from it, and read the shared records it holds. So
 its root stays on a designated working branch, `integration/workspace` by
@@ -109,8 +110,8 @@ Do not use it for:
    `git.root_branch`, and adds every nested repository to `.gitignore`,
    saying which are CodeFlow projects and which are plain git
    repositories. It refuses over uncommitted changes and names them.
-2. Commit `.gitignore` and `.codeflow/policy.json` on
-   `integration/workspace`.
+2. Commit the files init wrote, including `.gitignore` and
+   `.codeflow/policy.json`, on `integration/workspace`.
 3. Run `codeflow doctor`. It reports workspace mode, the root branch, and
    any nested repository the tracked `.gitignore` does not cover.
 4. When the harness permissions work ships its nested-repository inventory,
