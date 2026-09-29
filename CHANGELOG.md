@@ -69,7 +69,8 @@ publication date._
     update`. Update merges the permission arrays three ways against the
     last shipped copy: a rule the preset retired is removed, the 2.x ask
     rules included; a rule you removed stays removed and is reported on
-    every run; your own rules stay. A policy value still equal to the
+    every run; your own rules stay, and none of them moves where that would
+    change what a `!` exception lifts. A policy value still equal to the
     previous shipped default moves to the new default and is reported; a
     value you set is kept. Where no shipped copy was recorded, update
     compares with the files 2.1.0 shipped, says so, and adds back every

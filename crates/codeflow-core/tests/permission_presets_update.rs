@@ -391,9 +391,15 @@ fn without_a_deny_baseline_new_exceptions_cannot_cancel_adopter_denies() {
         let later =
             merge_settings_from_baseline(&first, Some(&incoming), &incoming, &mut report).unwrap();
         assert_effective(&later, &format!("{case}: update from the new baseline"));
-        assert!(
-            !read_denied(&later, SECRET_NAMED_SOURCE),
-            "{case}: the shipped exception applies once the baseline is known"
+        assert_eq!(later, first, "{case}: the baseline update moves nothing");
+        // With the 2.1.0 rules present, the new exceptions went first and
+        // stay first, since moving them after an older rule would lift it:
+        // denying errs safe. With no older rule, the preset's order held
+        // from the start and its exceptions apply.
+        assert_eq!(
+            read_denied(&later, SECRET_NAMED_SOURCE),
+            !drop_deny,
+            "{case}"
         );
         let mut report = vec![];
         let settled =
@@ -583,7 +589,9 @@ fn update_without_a_baseline_compares_with_the_2_1_0_copy() {
         assert!(deny.contains(&rule), "missing {rule}");
     }
     assert_effective(&settings, "update without a baseline");
-    assert!(!read_denied(&settings, SECRET_NAMED_SOURCE));
+    // The 2.1.0 `Read(**/*secret*)` keeps its place after the new
+    // exceptions, since no existing entry moves: denying errs safe.
+    assert!(read_denied(&settings, SECRET_NAMED_SOURCE));
     let after = policy(&root);
     assert_eq!(after["security"]["privilege_escalation"], "block");
     assert_eq!(after["security"]["script_bypass"], "warn", "new key added");
@@ -610,6 +618,76 @@ fn update_without_a_baseline_compares_with_the_2_1_0_copy() {
     scaffold::update(&assets(), &root, &update_opts()).unwrap();
     assert_eq!(text(&root.join(".claude/settings.json")), settings_before);
     assert_eq!(text(&root.join(".codeflow/policy.json")), policy_before);
+}
+
+/// Codex round 2 of TSK-171: without a baseline, an adopter's ordered deny
+/// block keeps its meaning. Its exception `!**/*.py` sits before
+/// `Read(**/.env.*)`, an entry 2.1.0 also shipped, so env files named like
+/// source stay denied; the fallback must not move that deny ahead of the
+/// exception. Two updates, and the merge on its own, keep the adopter's
+/// entries in their order.
+#[test]
+fn without_a_baseline_an_adopters_ordered_exceptions_keep_their_meaning() {
+    const ORDERED: [&str; 5] = [
+        "Read(**/*secret*)",
+        "Read(!**/*.py)",
+        "Read(**/.env.*)",
+        "Read(**/.env.example)",
+        "Read(**/team-secret.py)",
+    ];
+    const DENIED: [&str; 4] = [
+        ".env.secret.py",
+        ".env.credentials.py",
+        ".env.example",
+        "app/team-secret.py",
+    ];
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/presets-2.1.0");
+    let prior = text(&fixtures.join("default.json"));
+    let mut adopter = json(&prior);
+    adopter["permissions"]["deny"] = Value::from(ORDERED.to_vec());
+    let adopter = serde_json::to_string_pretty(&adopter).unwrap() + "\n";
+    for path in DENIED {
+        assert!(read_denied(&adopter, path), "before update: {path}");
+    }
+    let keeps_order = |settings: &str, case: &str| {
+        let deny = strings(&json(settings)["permissions"]["deny"]);
+        let at: Vec<usize> = ORDERED
+            .iter()
+            .map(|rule| deny.iter().position(|r| r == rule).unwrap())
+            .collect();
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{case}: order {at:?}");
+        for path in DENIED {
+            assert!(
+                read_denied(settings, path),
+                "{case}: {path} became readable"
+            );
+        }
+    };
+
+    let mut report = vec![];
+    let merged = codeflow_core::scaffold::settings_merge::merge_settings_from_prior_release(
+        &adopter,
+        &prior,
+        &shipped("default.json"),
+        &mut report,
+    )
+    .unwrap();
+    keeps_order(&merged, "prior-release merge");
+
+    let (_dir, root) = init_minimal();
+    write(&root, ".claude/settings.json", &adopter);
+    std::fs::remove_file(root.join(".codeflow/.baseline/.claude/settings.json")).unwrap();
+    scaffold::update(&assets(), &root, &update_opts()).unwrap();
+    let first = text(&root.join(".claude/settings.json"));
+    keeps_order(&first, "first update");
+    assert!(
+        json(&first)["permissions"].get("ask").is_none(),
+        "asks retired"
+    );
+    scaffold::update(&assets(), &root, &update_opts()).unwrap();
+    let second = text(&root.join(".claude/settings.json"));
+    keeps_order(&second, "second update");
+    assert_eq!(second, first, "the second update changes nothing");
 }
 
 /// AC-9: an adopter's own key in `.codex/config.toml` survives the managed
