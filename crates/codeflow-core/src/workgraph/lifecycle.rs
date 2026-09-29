@@ -710,6 +710,10 @@ pub struct ChangeContext<'a> {
     /// judged per commit so a reopen and re-completion inside one range is
     /// still seen (R-83).
     pub reopened: Option<&'a BTreeSet<String>>,
+    /// Specs implemented at some earlier commit of the base's history, so
+    /// frozen though a later supersession or reopen left them open at the
+    /// base (TSK-169).
+    pub shipped: Option<&'a BTreeSet<String>>,
 }
 
 /// Paths a planning-only change may touch (R-70).
@@ -848,7 +852,7 @@ fn spec_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
         ("draft", "approved") | ("approved" | "implemented", "superseded") => Ok(()),
         (_, "implemented") => Err("implemented is derived from the consumers and never written"),
         ("approved" | "implemented", "draft") => {
-            Err("approved never returns to draft; a changed contract is a new spec")
+            Err("approved never returns to draft: amend it in place in a planning change until it is implemented; once it is implemented, a changed contract is a new spec")
         }
         ("draft", "superseded") => Err("only an approved spec is superseded"),
         ("superseded", _) => Err("a superseded spec is final"),
@@ -1381,6 +1385,225 @@ fn context_problems(
     problems
 }
 
+/// Whether `spec` is implemented in `graph`: written `implemented` by a
+/// legacy record, or derived from its consumers (R-51).
+fn implemented_in(spec: &RecordView, graph: &Graph) -> bool {
+    spec.status == "implemented" || derived_spec_state(spec, graph, None) == SpecState::Implemented
+}
+
+/// A spec that shipped is frozen (TSK-169): until it is implemented an
+/// approved spec is amended in place; after that its text never changes.
+/// It shipped when it is implemented in the tree before the change, so
+/// reopening a consumer in the same change does not thaw it, or when a
+/// judge that read its history found it implemented at an earlier commit
+/// (`context.shipped`), so a later supersession or reopen does not either.
+/// Only the text below the frontmatter is compared: status, supersession
+/// links and a `uid` backfill are judged by their own rules.
+fn frozen_spec_problems(
+    before: Option<&RecordView>,
+    after: &RecordView,
+    context: ChangeContext<'_>,
+) -> Vec<String> {
+    let Some(before) = before.filter(|record| record.kind == RecordKind::Spec) else {
+        return Vec::new();
+    };
+    if before.body == after.body {
+        return Vec::new();
+    }
+    let at_base = before.status == "implemented"
+        || context.base.is_some_and(|base| {
+            base.get(&before.id, RecordKind::Spec)
+                .is_some_and(|spec| implemented_in(spec, base))
+        });
+    let in_history = context
+        .shipped
+        .is_some_and(|shipped| shipped.contains(&before.id));
+    if !at_base && !in_history {
+        return Vec::new();
+    }
+    vec![format!(
+        "{id} was implemented, so its text is frozen: a changed contract is a new spec that lists `supersedes: [{id}]`, or an explicit superseding record",
+        id = before.id
+    )]
+}
+
+/// Whether `spec_id` was implemented at any commit reachable from `tip`
+/// (TSK-169). The state is derived only from the spec and the records that
+/// name it, and changes only at a commit that changes one of them. One
+/// `git log --raw -z` lists every record blob each commit wrote under
+/// `project-management/`; each distinct blob is parsed once, and a path is
+/// relevant when any version of it is the spec or lists it in `specs`, read
+/// as the judge reads it, never by searching the text for the id (an
+/// escaped YAML string names the spec too). The state is then derived at
+/// each commit that changed a relevant path, from those paths alone, and
+/// the walk stops at the first implemented state. Side branches count
+/// (`--full-history`); a shallow clone reads only the history it has.
+fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Result<bool, String> {
+    let message = |error: git2::Error| error.message().to_string();
+    let output = crate::git::command()
+        .arg("--git-dir")
+        .arg(repo.path())
+        .args([
+            "log",
+            "--no-renames",
+            "--full-history",
+            "--diff-merges=first-parent",
+            "--raw",
+            "-z",
+            "--no-abbrev",
+            "--format=commit %H",
+        ])
+        .arg(tip.to_string())
+        .args(["--", "project-management/"])
+        .output()
+        .map_err(|error| format!("git log: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let mut commits: Vec<(git2::Oid, Vec<String>)> = Vec::new();
+    let mut names: HashMap<git2::Oid, bool> = HashMap::new();
+    let mut relevant: BTreeSet<String> = BTreeSet::new();
+    // With `-z` every field ends in NUL and paths are never quoted:
+    // `commit <hash>`, then per change `:<old mode> <new mode> <old blob>
+    // <new blob> <status>` and its path as the next field. The first raw
+    // field of a commit starts with the newline that ends its header.
+    let mut fields = output.stdout.split(|byte| *byte == 0);
+    while let Some(field) = fields.next() {
+        let field = String::from_utf8_lossy(field);
+        let field = field.trim_start_matches('\n');
+        if let Some(hash) = field.strip_prefix("commit ") {
+            commits.push((
+                git2::Oid::from_str(hash.trim()).map_err(message)?,
+                Vec::new(),
+            ));
+            continue;
+        }
+        let Some(meta) = field.strip_prefix(':') else {
+            continue;
+        };
+        let Some(path) = fields.next() else {
+            break;
+        };
+        let path = String::from_utf8_lossy(path);
+        let path = path.as_ref();
+        let Some(kind) = record_kind_for_tree_path(path) else {
+            continue;
+        };
+        if let Some((_, paths)) = commits.last_mut() {
+            paths.push(path.to_string());
+        }
+        let Some(blob) = meta
+            .split_whitespace()
+            .nth(3)
+            .and_then(|hash| git2::Oid::from_str(hash).ok())
+            .filter(|oid| !oid.is_zero())
+        else {
+            continue;
+        };
+        let names_spec = *names.entry(blob).or_insert_with(|| {
+            repo.find_blob(blob).ok().is_some_and(|blob| {
+                RecordView::parse(kind, path, &String::from_utf8_lossy(blob.content())).is_ok_and(
+                    |record| {
+                        record.id == spec_id || record.specs.iter().any(|spec| spec == spec_id)
+                    },
+                )
+            })
+        });
+        if names_spec {
+            relevant.insert(path.to_string());
+        }
+    }
+    implemented_at_a_commit(repo, &commits, &relevant, spec_id)
+}
+
+/// Whether `spec_id` is implemented at one of `commits` that changed a
+/// `relevant` path, derived from those paths alone and stopping at the
+/// first implemented state (TSK-169, see [`shipped_in_history`]).
+fn implemented_at_a_commit(
+    repo: &Repository,
+    commits: &[(git2::Oid, Vec<String>)],
+    relevant: &BTreeSet<String>,
+    spec_id: &str,
+) -> Result<bool, String> {
+    let message = |error: git2::Error| error.message().to_string();
+    let mut parsed: HashMap<git2::Oid, Option<RecordView>> = HashMap::new();
+    for (oid, paths) in commits {
+        if !paths.iter().any(|path| relevant.contains(path)) {
+            continue;
+        }
+        let tree = repo
+            .find_commit(*oid)
+            .and_then(|commit| commit.tree())
+            .map_err(message)?;
+        let mut graph = Graph::default();
+        for path in relevant {
+            let (Ok(entry), Some(kind)) = (
+                tree.get_path(Path::new(path)),
+                record_kind_for_tree_path(path),
+            ) else {
+                continue;
+            };
+            let view = parsed.entry(entry.id()).or_insert_with(|| {
+                repo.find_blob(entry.id()).ok().and_then(|blob| {
+                    RecordView::parse(kind, path, &String::from_utf8_lossy(blob.content())).ok()
+                })
+            });
+            if let Some(view) = view {
+                graph
+                    .records
+                    .entry(view.id.clone())
+                    .or_insert_with(|| view.clone());
+            }
+        }
+        if graph
+            .get(spec_id, RecordKind::Spec)
+            .is_some_and(|spec| implemented_in(spec, &graph))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The specs a range changes the text of that shipped at an earlier commit
+/// of `base`'s history but are not implemented at `base` itself, with a
+/// problem for each spec whose history cannot be read (TSK-169).
+fn shipped_specs(
+    repo: &Repository,
+    base: &str,
+    before: &Graph,
+    after: &Graph,
+) -> (BTreeSet<String>, Vec<(String, String)>) {
+    let mut shipped = BTreeSet::new();
+    let mut problems = Vec::new();
+    let Some(tip) = resolve_commit(repo, base) else {
+        return (shipped, problems);
+    };
+    for record in after.records.values() {
+        let Some(old) = before.get(&record.id, RecordKind::Spec) else {
+            continue;
+        };
+        if record.kind != RecordKind::Spec || old.body == record.body || implemented_in(old, before)
+        {
+            continue;
+        }
+        match shipped_in_history(repo, tip, &record.id) {
+            Ok(true) => {
+                shipped.insert(record.id.clone());
+            }
+            Ok(false) => {}
+            Err(error) => problems.push((
+                record.path.clone(),
+                format!(
+                    "cannot read the history of {} to check whether it shipped: {error}",
+                    record.id
+                ),
+            )),
+        }
+    }
+    (shipped, problems)
+}
+
 // ---------------------------------------------------------------------------
 // Judgements
 // ---------------------------------------------------------------------------
@@ -1408,6 +1631,11 @@ pub fn judge_change(
         Mode::Strict,
         &after.path,
         context_problems(before, after, context),
+    );
+    verdict.apply(
+        Mode::Strict,
+        &after.path,
+        frozen_spec_problems(before, after, context),
     );
     let reopened = baseline.reopened_since(after)
         || context
@@ -1482,15 +1710,20 @@ fn judge_range_against(
     }
     let paths = changed_paths(&repo, base, head)?;
     let reopened = reopened_in_range(&repo, base, head, &after, &base_graph);
+    let (shipped, history_problems) = shipped_specs(&repo, base, &before, &after);
     let context = ChangeContext {
         base: Some(&before),
         changed_paths: Some(&paths),
         reopened: Some(&reopened),
+        shipped: Some(&shipped),
     };
     let mut verdict = Verdict {
         notices,
         ..Verdict::default()
     };
+    for (path, problem) in history_problems {
+        verdict.apply(Mode::Strict, &path, vec![problem]);
+    }
     verdict.warnings.extend(baseline.warning());
     verdict.errors.extend(baseline.errors());
     for record in after.records.values() {

@@ -94,6 +94,24 @@ publication date._
     rule cannot restore a denied action, because a deny rule wins.
 
 <!-- codeflow:release-impact minor -->
+- **Workspace mode for umbrella repositories.** An umbrella that holds
+  several projects, each its own repository, keeps its root checkout on a
+  working branch, `integration/workspace` by convention.
+  `codeflow init --workspace` creates or reuses that branch, sets
+  `git.root_branch` and adds every nested repository to `.gitignore`,
+  leaving registered submodules alone; it refuses over uncommitted changes.
+  Plain `init` and `update` in such a folder switch nothing and name the
+  flag. `codeflow doctor` reports the root branch, nested repositories no
+  tracked `.gitignore` covers, and linked worktrees outside
+  `git.worktree_locations`, whose default covers `.worktrees/` and the
+  folders Claude, Codex and Grok manage; it reads the root checkout from a
+  linked worktree too. The guide and `.codeflow/rules/worktrees.md` say how
+  a change lands in an umbrella: small edits on the root branch, larger
+  work in a short-lived worktree merged back, `main` moved forward only by
+  the operator at a milestone, and each nested repository through its own
+  pull requests. See `docs/workspace-mode.md` and ADR-0074.
+
+<!-- codeflow:release-impact minor -->
 - **Unresolved conflict markers are refused.** The pre-commit hook and
   `codeflow ci` refuse an unresolved conflict marker on a line a change adds
   to a text file, under the new `git.conflict_markers` key. It defaults to
@@ -565,6 +583,16 @@ publication date._
   tree. Subjects work in a separate subjects root, the fixture boundary covers
   both roots at every depth, a timed-out or errored session is kept and graded
   as a failure, and a pack result must keep every trial.
+
+<!-- codeflow:release-impact minor -->
+- **The root checkout keeps its root branch.** Task work happens in a
+  linked worktree. A commit at the root checkout on any branch other than
+  its root branch (`git.root_branch`, by default the default branch) is now
+  refused for agents by git-guard and by the git hooks when a harness marks
+  the session; a human at their own terminal is warned. This is a behaviour
+  change for adopters whose agents commit at the root on a feature branch:
+  move that work into a worktree, or set `git.root_checkout_commits` to
+  `warn` or `off`. See ADR-0074.
 
 <!-- codeflow:release-impact minor -->
 - **Present no longer draws Mermaid diagrams.** The `diagram` block leaves
@@ -1083,6 +1111,22 @@ publication date._
   section of `AGENTS.md` untouched.
 
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **An approved spec is amended until it ships, and frozen after.** The
+  lifecycle guidance, the spec template and the refusal of an approved spec
+  moved back to `draft` now agree with how specs change in practice. While
+  a spec is approved and not yet implemented, a change to it is amended in
+  place through a reviewed planning change, with a dated note for each
+  change of meaning and each bound consumer's disposition named; once
+  implemented it is frozen and a change is a new spec. They no longer say
+  that approval freezes the criteria. The documented freeze is now
+  checked: `validate --docs --since`, `codeflow ci` and the pre-push hook
+  refuse a change to the text of a spec that was ever implemented, also
+  after a later supersession or consumer reopen.
+  `codeflow spec status <id> draft` gives the refusal naming both routes
+  instead of an argument error. `codeflow update` brings the changed
+  guidance and template.
 
 <!-- codeflow:release-impact patch -->
 - **The secret scan reads the index a commit records (security).** `git

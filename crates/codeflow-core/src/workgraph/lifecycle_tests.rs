@@ -755,10 +755,288 @@ fn a_spec_is_superseded_only_by_a_revision_that_lists_it() {
         &spec("SPC-001", "draft", ""),
     );
     let back = repo.judge(&approved);
-    assert!(back
+    assert!(
+        back.errors.iter().any(|e| names_both_spec_routes(e)),
+        "{:?}",
+        back.errors
+    );
+}
+
+/// TSK-169 AC-3: the refusal keeps "approved never returns to draft" and
+/// names both routes: an amendment while the spec is not implemented, a new
+/// spec once it is.
+fn names_both_spec_routes(message: &str) -> bool {
+    message.contains("approved never returns to draft")
+        && message.contains("amend it in place in a planning change until it is implemented")
+        && message.contains("once it is implemented, a changed contract is a new spec")
+}
+
+/// TSK-169 AC-3: `spec status <id> draft` reaches the lifecycle judge and
+/// writes nothing, for an open approved spec and a derived implemented one.
+#[test]
+fn the_draft_verb_names_both_spec_routes_and_writes_nothing() {
+    const SPEC: &str = "project-management/specs/SPC-001.md";
+    let repo = Repo::new();
+    repo.write(SPEC, &spec("SPC-001", "approved", ""));
+    repo.write(TASK_PATH, &consumer("TSK-001", "todo", "SPC-001"));
+    repo.commit("approved, consumer open");
+    for state in ["open", "implemented"] {
+        if state == "implemented" {
+            repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
+            repo.commit("consumer complete");
+            let graph = Graph::from_worktree(repo.root());
+            assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
+        }
+        let before = repo.read(SPEC);
+        let refused = refusal(
+            set_status(repo.root(), RecordKind::Spec, "SPC-001", &change("draft")).map(drop),
+        );
+        assert!(names_both_spec_routes(&refused), "{state}: {refused}");
+        assert_eq!(repo.read(SPEC), before, "{state}: nothing written");
+    }
+}
+
+const SHIPPED_SPEC: &str = "project-management/specs/SPC-001.md";
+
+/// Whether a verdict refuses a text change to `id` as a frozen spec.
+fn frozen_spec(verdict: &Verdict, id: &str) -> bool {
+    verdict
         .errors
         .iter()
-        .any(|e| e.contains("approved never returns to draft")));
+        .any(|e| e.contains(&format!("{id} was implemented, so its text is frozen")))
+}
+
+/// A spec approved, amended while open, then shipped when its only
+/// consumer completes, each step its own commit.
+fn shipped_spec_repo() -> Repo {
+    let repo = Repo::new();
+    repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
+    repo.write(TASK_PATH, &consumer("TSK-001", "todo", "SPC-001"));
+    repo.commit("approved, consumer open");
+    let amended = repo
+        .read(SHIPPED_SPEC)
+        .replace("\nB.\n", "\nB, now with a limit of 999.\n");
+    repo.write(SHIPPED_SPEC, &amended);
+    let open = repo.commit("amended while open");
+    assert!(
+        repo.judge(&format!("{open}~1")).is_clean(),
+        "an open spec is amended"
+    );
+    repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
+    repo.commit("consumer complete");
+    repo
+}
+
+fn change_limit(repo: &Repo, path: &str) {
+    let text = repo.read(path).replace("limit of 999", "limit of 5");
+    repo.write(path, &text);
+}
+
+/// TSK-169 review round 2: a shipped spec stays frozen after a separate,
+/// metadata-only supersession, because the freeze reads the spec's history,
+/// not only the base. The successor has not shipped and stays amendable.
+#[test]
+fn a_shipped_spec_stays_frozen_after_a_separate_supersession() {
+    const NEXT: &str = "project-management/specs/SPC-002.md";
+    let repo = shipped_spec_repo();
+    repo.write(
+        NEXT,
+        &spec("SPC-002", "approved", "supersedes: [SPC-001]\n"),
+    );
+    let by = StatusChange {
+        by: Some("SPC-002".into()),
+        ..change("superseded")
+    };
+    set_status(repo.root(), RecordKind::Spec, "SPC-001", &by).unwrap();
+    let superseded = repo.commit("supersede");
+    change_limit(&repo, SHIPPED_SPEC);
+    let verdict = repo.judge(&superseded);
+    assert!(frozen_spec(&verdict, "SPC-001"), "{:?}", verdict.errors);
+    repo.git(&["checkout", "--", SHIPPED_SPEC]);
+    let text = repo
+        .read(NEXT)
+        .replace("\nB.\n", "\nB, with a limit of 7.\n");
+    repo.write(NEXT, &text);
+    let verdict = repo.judge(&superseded);
+    assert!(!frozen_spec(&verdict, "SPC-002"), "{:?}", verdict.errors);
+}
+
+/// TSK-169 review round 2: a shipped spec stays frozen after its consumer is
+/// reopened by the verb in a separate change.
+#[test]
+fn a_shipped_spec_stays_frozen_after_a_separate_consumer_reopen() {
+    let repo = shipped_spec_repo();
+    let reopen = StatusChange {
+        reason: Some("regression".into()),
+        ..change("todo")
+    };
+    set_status(repo.root(), RecordKind::Task, "TSK-001", &reopen).unwrap();
+    let reopened = repo.commit("reopen the consumer");
+    change_limit(&repo, SHIPPED_SPEC);
+    let verdict = repo.judge(&reopened);
+    assert!(frozen_spec(&verdict, "SPC-001"), "{:?}", verdict.errors);
+}
+
+/// TSK-169 review round 3: a consumer that names the spec in an escaped
+/// YAML form (`"SPC-\u0030\u0030\u0031"`) is still found in the history,
+/// so the freeze holds after a separate reopen. Discovery parses each
+/// record's `specs` list; it never searches the text for the id.
+#[test]
+fn a_consumer_naming_the_spec_in_escaped_yaml_keeps_the_freeze() {
+    let escaped = |status: &str| {
+        consumer("TSK-001", status, "SPC-001")
+            .replace("specs: [SPC-001]", "specs: [\"SPC-\\u0030\\u0030\\u0031\"]")
+    };
+    let repo = Repo::new();
+    repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
+    repo.write(TASK_PATH, &escaped("todo"));
+    repo.commit("approved, consumer open");
+    assert!(
+        !repo.read(TASK_PATH).contains("SPC-001"),
+        "the id is escaped"
+    );
+    repo.write(TASK_PATH, &escaped("complete"));
+    repo.commit("consumer complete");
+    let graph = Graph::from_worktree(repo.root());
+    assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
+    let reopen = StatusChange {
+        reason: Some("regression".into()),
+        ..change("todo")
+    };
+    set_status(repo.root(), RecordKind::Task, "TSK-001", &reopen).unwrap();
+    let reopened = repo.commit("reopen the consumer");
+    let text = repo
+        .read(SHIPPED_SPEC)
+        .replace("\nB.\n", "\nB, with a limit of 999.\n");
+    repo.write(SHIPPED_SPEC, &text);
+    let verdict = repo.judge(&reopened);
+    assert!(frozen_spec(&verdict, "SPC-001"), "{:?}", verdict.errors);
+}
+
+/// TSK-169 review round 4: a consumer under a legacy epic folder whose name
+/// Git would quote (non-ASCII, a quote, a tab, a newline) is still read
+/// from the history, so the freeze holds after a separate reopen. A
+/// backslash is not listed: the record readers treat it as a separator.
+#[test]
+fn reviewer_r4_git_quoted_record_path_keeps_the_freeze() {
+    for epic in ["EPC-001-履歴", "EPC-001 \"q\"", "EPC-001\tt", "EPC-001\nn"] {
+        let path = format!("project-management/epics/{epic}/tasks/TSK-001.md");
+        let repo = Repo::new();
+        repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
+        repo.write(&path, &consumer("TSK-001", "complete", "SPC-001"));
+        repo.commit("ship with a nested legacy record path");
+        let graph = Graph::from_worktree(repo.root());
+        assert_eq!(
+            spec_state(&graph, "SPC-001"),
+            Some(SpecState::Implemented),
+            "{epic:?}"
+        );
+        let reopen = StatusChange {
+            reason: Some("regression".into()),
+            ..change("todo")
+        };
+        set_status(repo.root(), RecordKind::Task, "TSK-001", &reopen).unwrap();
+        let reopened = repo.commit("reopen the nested consumer");
+        let text = repo
+            .read(SHIPPED_SPEC)
+            .replace("\nB.\n", "\nB, with a limit of 999.\n");
+        repo.write(SHIPPED_SPEC, &text);
+        let verdict = repo.judge(&reopened);
+        assert!(frozen_spec(&verdict, "SPC-001"), "{epic:?}: {verdict:?}");
+    }
+}
+
+/// TSK-169: an approved spec is amended in place until it is implemented;
+/// once implemented its text is frozen, whether the state is derived at the
+/// base or written by a legacy record, and reopening its consumer in the
+/// same change does not thaw it. Supersession and a frontmatter-only change
+/// such as a `uid` backfill still pass.
+#[test]
+#[allow(clippy::too_many_lines)] // One spec lived through open, shipped and legacy states.
+fn an_implemented_spec_is_frozen_and_an_open_one_is_amended() {
+    const SPEC: &str = "project-management/specs/SPC-001.md";
+    let frozen = |verdict: &Verdict| {
+        verdict
+            .errors
+            .iter()
+            .any(|e| e.contains("SPC-001 was implemented, so its text is frozen"))
+    };
+    let amend = |repo: &Repo| {
+        let text = repo
+            .read(SPEC)
+            .replace("\nB.\n", "\nB, now with a limit of 999.\n");
+        repo.write(SPEC, &text);
+    };
+
+    let repo = Repo::new();
+    repo.write(SPEC, &spec("SPC-001", "approved", ""));
+    repo.write(TASK_PATH, &consumer("TSK-001", "todo", "SPC-001"));
+    let open = repo.commit("approved, consumer open");
+    amend(&repo);
+    assert!(repo.judge(&open).is_clean(), "{:?}", repo.judge(&open));
+    repo.git(&["checkout", "--", SPEC]);
+
+    repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
+    let shipped = repo.commit("consumer complete");
+    amend(&repo);
+    let verdict = repo.judge(&shipped);
+    assert!(
+        frozen(&verdict),
+        "derived implemented: {:?}",
+        verdict.errors
+    );
+    assert!(
+        verdict
+            .errors
+            .iter()
+            .any(|e| e.contains("supersedes: [SPC-001]")),
+        "names the new-spec route: {:?}",
+        verdict.errors
+    );
+
+    // Reopening the consumer in the same change does not thaw the spec.
+    repo.write(
+        TASK_PATH,
+        &repo
+            .read(TASK_PATH)
+            .replace("status: complete ", "status: todo "),
+    );
+    assert!(frozen(&repo.judge(&shipped)), "{:?}", repo.judge(&shipped));
+    repo.git(&["checkout", "--", SPEC, TASK_PATH]);
+
+    // A frontmatter-only change leaves the text as it was.
+    repo.write(
+        SPEC,
+        &repo.read(SPEC).replace(
+            "id: SPC-001\n",
+            "id: SPC-001\nuid: 0e273f9f-5e55-4bf0-9b24-2698eeeca620\n",
+        ),
+    );
+    assert!(!frozen(&repo.judge(&shipped)), "{:?}", repo.judge(&shipped));
+    repo.git(&["checkout", "--", SPEC]);
+
+    // Supersession by a new revision passes.
+    repo.write(
+        "project-management/specs/SPC-002.md",
+        &spec("SPC-002", "draft", "supersedes: [SPC-001]\n"),
+    );
+    let by = StatusChange {
+        by: Some("SPC-002".into()),
+        ..change("superseded")
+    };
+    set_status(repo.root(), RecordKind::Spec, "SPC-001", &by).unwrap();
+    assert!(!frozen(&repo.judge(&shipped)), "{:?}", repo.judge(&shipped));
+
+    // A legacy record that wrote `implemented` is frozen too.
+    let legacy = Repo::new();
+    legacy.write(SPEC, &spec("SPC-001", "implemented", ""));
+    let written = legacy.commit("legacy implemented");
+    amend(&legacy);
+    assert!(
+        frozen(&legacy.judge(&written)),
+        "{:?}",
+        legacy.judge(&written)
+    );
 }
 
 #[test]

@@ -77,13 +77,14 @@ Core modules grouped by responsibility:
 - **Scaffold** (`scaffold/`): `init`, `update`, manifest, 3-way merge, and the
   ownership classes below; sourced from the rust-embed asset provider.
 - **Enforcement** (`hooks/`, `security/`, `git/`, `delegate.rs`,
-  `integrate.rs`, `remote.rs`): the `git-guard` and `exec-guard` PreToolUse
+  `integrate.rs`, `remote.rs`, `root_checkout.rs`): the `git-guard` and `exec-guard` PreToolUse
   handlers and git-client hook stages, the dual-mode `delegate-turn` adapter
   (legacy `--result` record-and-signal plus the schema-v2 lifecycle backed by
   the transport-neutral `delegate.rs` state machine — ADR-0036), the secret
   scanner, git conflict detection + CI wait, the flock-guarded `integrate`
-  primitive with its gate-context token, and the GitHub remote-protect
-  adapter.
+  primitive with its gate-context token, the GitHub remote-protect
+  adapter, and the root checkout's root branch, the actor read from harness
+  markers, and workspace mode (ADR-0074).
 - **Records / knowledge** (`models/`, `ledger/`, `workgraph/`, `validate/`,
   `capability.rs`, `recall.rs`, `registry.rs`): frontmatter models, the JSONL
   ledger, the work graph, `validate` (+ the `--docs` referential-integrity

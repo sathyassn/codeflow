@@ -205,6 +205,7 @@ pub const LEVEL_KEYS: &[&str] = &[
     "pr_merge_to_protected",
     "local_ref_protection",
     "hook_integrity",
+    "root_checkout_commits",
     "commit_format",
     "commit_body",
     "commit_ticket_required",

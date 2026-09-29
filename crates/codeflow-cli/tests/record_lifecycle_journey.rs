@@ -516,3 +516,301 @@ specs: []\ndepends_on: []\ncreated: 2026-09-26\n---\n\n# TSK-002: work\n\n\
         "{errors:?}"
     );
 }
+
+/// Whether a refusal names both routes of an approved spec (TSK-169 AC-3).
+fn names_both_spec_routes(text: &str) -> bool {
+    text.contains("approved never returns to draft")
+        && text.contains("amend it in place in a planning change until it is implemented")
+        && text.contains("once it is implemented, a changed contract is a new spec")
+}
+
+/// TSK-169 on a fresh `init --full` project: `spec status <id> draft` is
+/// refused with both routes and writes nothing, before and after the spec
+/// ships. An approved spec is amended while its consumer is open; once the
+/// consumer completes, the same amendment is refused by `validate --since`
+/// and by `codeflow ci`, which the installed pre-push hook runs.
+#[test]
+#[allow(clippy::too_many_lines)] // One spec lived from approval to shipped.
+fn an_approved_spec_is_amended_until_it_ships_and_frozen_after() {
+    const SPEC: &str = "project-management/specs/SPC-001.md";
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    let target = "integration/EPC-001-contract";
+    git(&root, &["switch", "-q", "-c", target]);
+    git(&root, &["switch", "-q", "-c", "plan/contract"]);
+    ok(&codeflow(&root, &["epic", "new", "outcome"]), "epic new");
+    let args = [
+        "task", "new", "--epic", "EPC-001", "--into", target, "first",
+    ];
+    ok(&codeflow(&root, &args), "task new");
+    ok(
+        &codeflow(&root, &["spec", "new", "--for", "TSK-001", "contract"]),
+        "spec new",
+    );
+    edit(
+        &root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 When used, the system shall work.\n",
+    );
+    edit(
+        &root,
+        TASK,
+        "- AC-1\n",
+        "- AC-1 When run, the system shall work (serves EPC-001 AC-1)\n",
+    );
+    edit(
+        &root,
+        SPEC,
+        "## Summary\n",
+        "## Summary\n\nThe limit is 10.\n",
+    );
+    commit(&root, "chore: plan the contract");
+    ok(
+        &codeflow(&root, &["spec", "status", "SPC-001", "approved"]),
+        "spec status approved",
+    );
+    let approved = commit(&root, "chore: approve the contract");
+
+    let draft_refused = |when: &str| {
+        let before = std::fs::read_to_string(root.join(SPEC)).unwrap();
+        let out = codeflow(&root, &["spec", "status", "SPC-001", "draft"]);
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(out.status.code(), Some(1), "{when}: {stderr}");
+        assert!(names_both_spec_routes(&stderr), "{when}: {stderr}");
+        assert_eq!(
+            std::fs::read_to_string(root.join(SPEC)).unwrap(),
+            before,
+            "{when}: nothing written"
+        );
+    };
+    draft_refused("approved, consumer open");
+
+    // Before it ships: amended in place in a planning change.
+    edit(&root, SPEC, "The limit is 10.", "The limit is 20.");
+    let (code, errors) = verdict(&root, &approved);
+    assert_eq!(code, Some(0), "an open spec is amended: {errors:?}");
+    commit(&root, "chore: amend the contract before it ships");
+
+    // Ship it: the plan lands, the only consumer completes.
+    git(&root, &["switch", "-q", target]);
+    git(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "plan/contract",
+            "-m",
+            "chore: land the plan",
+        ],
+    );
+    git(&root, &["switch", "-q", "-c", "task/TSK-001-first"]);
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start",
+    );
+    std::fs::write(root.join("first.txt"), "first\n").unwrap();
+    commit(&root, "feat: add the first slice");
+    let block = acceptance(&root, &["AC-1"], "none | no journey criterion");
+    let block = block.to_string_lossy().to_string();
+    let args = [
+        "task",
+        "status",
+        "TSK-001",
+        "complete",
+        "--acceptance",
+        &block,
+    ];
+    ok(&codeflow(&root, &args), "task complete");
+    let shipped = commit(&root, "chore: complete the first task");
+    draft_refused("implemented");
+
+    // After it ships: the same amendment is refused by both planes.
+    git(&root, &["switch", "-q", "-c", "plan/amend-shipped"]);
+    edit(&root, SPEC, "The limit is 20.", "The limit is 999.");
+    let (code, errors) = verdict(&root, &shipped);
+    assert_eq!(code, Some(1), "{errors:?}");
+    let frozen = "SPC-001 was implemented, so its text is frozen";
+    assert!(errors.iter().any(|e| e.contains(frozen)), "{errors:?}");
+    commit(&root, "chore: amend the shipped contract");
+    let ci = codeflow(
+        &root,
+        &[
+            "ci",
+            "--base",
+            &shipped,
+            "--head",
+            "HEAD",
+            "--branch",
+            "plan/amend-shipped",
+        ],
+    );
+    let ci_err = String::from_utf8_lossy(&ci.stderr);
+    assert!(!ci.status.success(), "{ci_err}");
+    assert!(ci_err.contains(frozen), "{ci_err}");
+
+    // Review round 2: a separate supersession or consumer reopen, each
+    // landed on its own, does not thaw the shipped spec for a later change.
+    let refused_after = |base: &str, branch: &str| {
+        edit(&root, SPEC, "The limit is 20.", "The limit is 999.");
+        let (code, errors) = verdict(&root, base);
+        assert_eq!(code, Some(1), "{branch}: {errors:?}");
+        assert!(errors.iter().any(|e| e.contains(frozen)), "{errors:?}");
+        commit(&root, "chore: amend the shipped contract later");
+        let ci = codeflow(
+            &root,
+            &["ci", "--base", base, "--head", "HEAD", "--branch", branch],
+        );
+        let ci_err = String::from_utf8_lossy(&ci.stderr);
+        assert!(!ci.status.success(), "{branch}: {ci_err}");
+        assert!(ci_err.contains(frozen), "{branch}: {ci_err}");
+    };
+
+    git(
+        &root,
+        &["switch", "-q", "-c", "plan/supersede-contract", &shipped],
+    );
+    let old = std::fs::read_to_string(root.join(SPEC)).unwrap();
+    let successor: String = old
+        .replace("SPC-001", "SPC-002")
+        .lines()
+        .filter(|line| !line.starts_with("uid:"))
+        .map(|line| {
+            if line.starts_with("status:") {
+                "status: draft\nsupersedes: [SPC-001]".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(root.join("project-management/specs/SPC-002.md"), successor).unwrap();
+    let args = ["spec", "status", "SPC-001", "superseded", "--by", "SPC-002"];
+    ok(&codeflow(&root, &args), "spec status superseded");
+    edit(&root, TASK, "specs: [SPC-001]", "specs: [SPC-002]");
+    let (code, errors) = verdict(&root, &shipped);
+    assert_eq!(code, Some(0), "the supersession is valid: {errors:?}");
+    let superseded = commit(&root, "chore: supersede the contract");
+    refused_after(&superseded, "plan/supersede-contract");
+
+    git(
+        &root,
+        &["switch", "-q", "-c", "plan/reopen-first", &shipped],
+    );
+    let args = [
+        "task",
+        "status",
+        "TSK-001",
+        "todo",
+        "--reason",
+        "regression",
+    ];
+    ok(&codeflow(&root, &args), "task reopen");
+    let reopened = commit(&root, "chore: reopen the first task");
+    refused_after(&reopened, "plan/reopen-first");
+}
+
+/// TSK-169 review round 3: a consumer that names its spec in an escaped YAML
+/// string (`"SPC-001"`) still ships it, so after a separate
+/// reopen `validate --since` and `codeflow ci` refuse an amendment of the
+/// spec's text. The records are historical at a migration baseline, as an
+/// adopter's would be.
+#[test]
+fn an_escaped_spec_reference_keeps_the_freeze_after_a_reopen() {
+    const SPEC: &str = "project-management/specs/SPC-001.md";
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "plan/spec-freeze"]);
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    let write = |path: &str, text: &str| {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        EPIC,
+        "---\nid: EPC-001\ntitle: Outcome\nstatus: planning\nwork_type: feat\nspecs: []\n\
+created: 2026-09-29\n---\n\n# EPC-001: Outcome\n\n## Summary\n\nAn outcome.\n\n\
+## Acceptance Criteria\n\n- AC-1 When run, the system shall deliver.\n",
+    );
+    write(
+        TASK,
+        "---\nid: TSK-001\nepic_id: EPC-001\nstandalone_reason: null\ntitle: Consumer\n\
+status: complete\nwork_type: feat\nspecs: [\"SPC-\\u0030\\u0030\\u0031\"]\ndepends_on: []\n\
+integration_target: main\ncreated: 2026-09-29\n---\n\n# TSK-001: Consumer\n\n\
+## Description\n\nA consumer.\n\n## Acceptance Criteria\n\n\
+- AC-1 When run, the system shall deliver.\n\n## Closeout\n\nHistorical delivery.\n",
+    );
+    write(
+        SPEC,
+        "---\nid: SPC-001\ntitle: Contract\nstatus: approved\nopen_questions: []\n\
+created: 2026-09-29\n---\n\n# SPC-001: Contract\n\n## Summary\n\nA contract.\n\n\
+## Behavior\n\nThe limit is 10.\n\n## Open questions\n\nNone.\n",
+    );
+    assert!(!std::fs::read_to_string(root.join(TASK))
+        .unwrap()
+        .contains("SPC-001"));
+    git(&root, &["add", "project-management"]);
+    git(
+        &root,
+        &["commit", "-q", "-m", "docs: record the historical consumer"],
+    );
+    let baseline = git(&root, &["rev-parse", "HEAD"]);
+    let config = root.join(".codeflow/project.toml");
+    let state = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        format!("work_records_baseline = \"{baseline}\"\n{state}"),
+    )
+    .unwrap();
+    let base = commit(&root, "chore: record the migration baseline");
+    let frozen = "SPC-001 was implemented, so its text is frozen";
+
+    edit(&root, SPEC, "The limit is 10.", "The limit is 999.");
+    let (code, errors) = verdict(&root, &base);
+    assert_eq!(code, Some(1), "shipped at the base: {errors:?}");
+    assert!(errors.iter().any(|e| e.contains(frozen)), "{errors:?}");
+    git(&root, &["checkout", "--", SPEC]);
+
+    let args = [
+        "task",
+        "status",
+        "TSK-001",
+        "todo",
+        "--reason",
+        "regression",
+    ];
+    ok(&codeflow(&root, &args), "task reopen");
+    let reopened = commit(&root, "docs: reopen the consumer");
+    edit(&root, SPEC, "The limit is 10.", "The limit is 999.");
+    let (code, errors) = verdict(&root, &reopened);
+    assert_eq!(code, Some(1), "after the reopen: {errors:?}");
+    assert!(errors.iter().any(|e| e.contains(frozen)), "{errors:?}");
+    commit(&root, "docs: amend the contract after the reopen");
+    let ci = codeflow(
+        &root,
+        &[
+            "ci",
+            "--base",
+            &reopened,
+            "--head",
+            "HEAD",
+            "--branch",
+            "plan/spec-freeze",
+        ],
+    );
+    let ci_err = String::from_utf8_lossy(&ci.stderr);
+    assert!(!ci.status.success(), "{ci_err}");
+    assert!(ci_err.contains(frozen), "{ci_err}");
+}
