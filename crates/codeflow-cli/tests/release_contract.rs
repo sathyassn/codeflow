@@ -323,8 +323,9 @@ fn strict_repository_gate_installs_its_declared_coverage_tool() {
         .split("\n  rust:")
         .next()
         .expect("codeflow gates job must precede the Rust job");
+    // TSK-184: one pinned install step supplies nextest and llvm-cov.
     let install = gates
-        .find("uses: taiki-e/install-action@cargo-llvm-cov")
+        .find("cargo-llvm-cov@")
         .expect("strict gate must install cargo-llvm-cov on a clean runner");
     let strict = gates
         .find("run: codeflow test --mode full --strict")

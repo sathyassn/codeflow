@@ -716,9 +716,48 @@ fn journey_ci_accepts_the_workspace_root_branch_and_no_other_line() {
     let other = ci(&root, "integration/other", Some(body));
     let said = both(&other);
     assert!(!other.status.success(), "{said}");
-    assert!(said.contains("names no epic"), "{said}");
+    assert!(said.contains("no `Task:` line"), "{said}");
     let other = ci(&root, "integration/other", None);
     let said = both(&other);
     assert!(!other.status.success(), "{said}");
     assert!(said.contains("work.criteria_frozen"), "{said}");
+}
+
+/// TSK-190 AC-3 (journey): at the minimal tier, where durable tracking is
+/// off and every other pull request names its unit, a range on the root
+/// branch passes `codeflow ci` with no `Task:` line; another `integration/`
+/// name with the same body is refused.
+#[test]
+fn journey_ci_accepts_the_root_branch_at_the_minimal_tier() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = umbrella(dir.path());
+    let init = codeflow(&root, &["init", "--yes", "--minimal", "--workspace"]);
+    assert!(init.status.success(), "{}", both(&init));
+    git(&root, &["add", "-A"]);
+    let adopted = git_as(&root, None, &["commit", "-m", "chore: adopt codeflow"]);
+    assert!(adopted.status.success(), "{}", both(&adopted));
+    let moved = codeflow(
+        &root,
+        &["integrate", WORKSPACE_ROOT_BRANCH, "--into", "main"],
+    );
+    assert!(moved.status.success(), "{}", both(&moved));
+    std::fs::write(root.join("NOTES.md"), "# Notes\n").unwrap();
+    git(&root, &["add", "-A"]);
+    let edited = git_as(&root, None, &["commit", "-m", "docs: add the notes"]);
+    assert!(edited.status.success(), "{}", both(&edited));
+
+    let body = "## Summary\nAdd the workspace notes.\n\n## Changes\n- add the notes\n\n\
+                ## Testing\n- fixture only\nNot tested: a hosted CI run.\n\n## Reviews\n\
+                None: awaiting the operator.\n\n## Release impact\n- Impact: patch\n\
+                - Breaking: no\n- Rationale: notes only.\n- Migration: none\n";
+    let on_root = ci(&root, WORKSPACE_ROOT_BRANCH, Some(body));
+    let said = both(&on_root);
+    assert!(on_root.status.success(), "{said}");
+    assert!(!said.contains("work.classification"), "{said}");
+
+    git(&root, &["branch", "integration/other", "HEAD"]);
+    let other = ci(&root, "integration/other", Some(body));
+    let said = both(&other);
+    assert!(!other.status.success(), "{said}");
+    assert!(said.contains("work.classification"), "{said}");
 }

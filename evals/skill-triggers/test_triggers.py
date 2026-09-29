@@ -1,4 +1,8 @@
-"""Description-trigger checks: the scent must contain the query's load-bearing words."""
+"""Static description lint: the scent must contain the query's load-bearing words.
+
+These checks read skill descriptions and names only. They run no model and
+prove no runtime routing; a behavioural claim needs a native evaluation run.
+"""
 
 from __future__ import annotations
 

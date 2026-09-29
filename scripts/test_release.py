@@ -145,7 +145,6 @@ class Repository:
             "required_publication_checks": [
                 "release state",
                 "codeflow gates",
-                "rust (format + test + clippy)",
                 "windows (build + test + clippy)",
                 "secret scan",
                 "security review",

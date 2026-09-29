@@ -60,7 +60,7 @@ pub type SkillFiles = BTreeMap<String, String>;
 
 /// Guideline for the per-task reading chain: what one full implementation
 /// task reads after the kernel. Reported, never a failure.
-pub const READING_CHAIN_GUIDELINE_BYTES: usize = 150 * KIB;
+pub const READING_CHAIN_GUIDELINE_BYTES: usize = 128 * KIB;
 
 /// Guideline for a skill that owns cross-lineage routing or orchestration.
 pub const ROUTING_SKILL_GUIDELINE_BYTES: usize = 29 * KIB;
@@ -87,8 +87,8 @@ pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
     ("cf-estimate", 6 * KIB),
     ("cf-evaluate-model", 9 * KIB + 512),
     ("cf-herdr", 9 * KIB),
-    ("cf-method", 19 * KIB + 512),
-    ("cf-model-orchestrator", 29 * KIB),
+    ("cf-method", 18 * KIB),
+    ("cf-model-orchestrator", 26 * KIB),
     ("cf-plan", 9 * KIB),
     ("cf-present", 8 * KIB + 256),
     ("cf-ship", 6 * KIB + 896),
@@ -243,6 +243,7 @@ const ROUTE_STATUS: &str = "cf-model-orchestrator/resources/routing/route-status
 const ROUTING_DESIGN: &str = "cf-model-orchestrator/resources/routing/design.md";
 const OVERRIDES: &str = "cf-model-orchestrator/references/model-overrides.md";
 const ORGANIZATION: &str = "cf-method/references/project-organization.md";
+const VERIFICATION_SELECTION: &str = "cf-model-orchestrator/resources/verification-selection.md";
 /// TSK-108: the moment a stage skill reads the work lifecycle section.
 const LIFECYCLE_MOMENT: &str = "work item is planned, started, blocked, completed or cancelled";
 
@@ -272,22 +273,26 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "high-blast-radius action stops the host and follows",
         "only before a catastrophic or irreversible action",
     ),
+    // TSK-184 reduction: the selection contract for property, mutation and
+    // fitness techniques is read only when a changed path carries one of the
+    // signals the verification section names.
     conditional(
         ORCH_SKILL,
-        "cf-model-orchestrator/references/other-hosts.md",
-        "| Grok Build, or another harness including Hermes |",
-        "only on a Grok Build or other host",
+        VERIFICATION_SELECTION,
+        "When a changed path carries a candidate for a property, mutation or fitness technique",
+        "only when a changed path carries a signal for an earned technique",
     ),
     conditional(
-        ORCH_SKILL,
-        "cf-model-orchestrator/references/other-hosts.md",
-        "Grok, when a Grok seat is used",
-        "only when a Grok seat is used",
+        "cf-model-orchestrator/resources/quality/verification.md",
+        VERIFICATION_SELECTION,
+        "When a changed path carries one of these signals, read",
+        "only when a changed path carries a signal for an earned technique",
     ),
     // TSK-150 (audit row H24): the Grok host detail is read before a Grok
-    // preflight or launch.
+    // preflight or launch. TSK-184: the other-hosts reference merged into the
+    // orchestrator's seat section.
     conditional(
-        "cf-model-orchestrator/references/other-hosts.md",
+        ORCH_SKILL,
         "cf-model-orchestrator/resources/grok-host.md",
         "Before a Grok preflight or launch, also read",
         "only before a Grok preflight or launch",
@@ -328,6 +333,14 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         ORGANIZATION,
         "for new-project boundary choices, brownfield adoption, monorepos",
         "only for project-organization choices; an obvious bounded task needs none",
+    ),
+    // TSK-184: the delivery process narrative is read when a body of work
+    // is shaped, a batch lands or something changes midway, never per task.
+    conditional(
+        "cf-method/references/workflow-lifecycle.md",
+        "cf-method/references/delivery-process.md",
+        "When you shape a body of work, land a batch or handle a change midway, read",
+        "only when shaping a body of work, landing a batch or handling a change midway",
     ),
     conditional(
         "cf-method/SKILL.md",
@@ -475,21 +488,18 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "| when the run is research, analysis or planning only |",
         "only for a research, analysis or planning-only run",
     ),
+    // TSK-184: the assignment record moved into the plan section.
     conditional(
-        "cf-model-orchestrator/resources/routing/assignment.md",
+        "cf-model-orchestrator/resources/quality/plan.md",
         ROUTE_STATUS,
         "Qualifying a route, or claiming scoped qualification",
         "only when a route is qualified or a qualification, promotion or savings claim is made",
     ),
+    // TSK-184: the host routes merged into the orchestrator's seat section;
+    // the worker effort preflight joined its preflight, whose adapter read is
+    // recorded above.
     conditional(
-        "cf-model-orchestrator/resources/routing/effort.md",
-        TURN_ADAPTER,
-        "On a Codex, Grok or other non-Claude host, before launching a Claude worker",
-        "the turn adapter is read on a host that launches Claude through the \
-         delegated lifecycle",
-    ),
-    conditional(
-        "cf-model-orchestrator/resources/routing/hosts.md",
+        ORCH_SKILL,
         ROUTING_DESIGN,
         "when a task has product, UX, UI, interaction, or visual design work",
         "only for product, UX, UI, interaction, or visual design work",
@@ -550,6 +560,14 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
          process, and before publication",
         "only for a minor, major or disputed impact, release preparation, a missing \
          release process, or publication; every PR's impact rules sit in PR evidence",
+    ),
+    // TSK-184 reduction: the bounded wait and the redness classes load only
+    // when a check is red or stuck or the policy requires hosted checks.
+    conditional(
+        "cf-ship/references/pr-evidence.md",
+        "cf-ship/references/pr-checks.md",
+        "When a required check is red or stuck, or the adopted policy requires hosted checks green before landing, follow",
+        "only when a check is red or stuck, or hosted checks must be green before landing",
     ),
     // TSK-131: the holistic-fix doctrine and the review rounds load when a
     // defect is fixed or review findings are briefed, written or acted on.
@@ -624,9 +642,11 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     // beside the kernel rather than in a skill tree; skills cite it for the
     // plain-writing rule (TSK-177).
     ".codeflow/rules/writing.md",
+    // The git rules file the method skill points at for the enforcement
+    // planes (TSK-184 reduction).
+    ".codeflow/rules/git-rules.md",
     ".codeflow/schemas/present/document-v1.schema.json",
     ".codeflow/schemas/present/utility-tokens-v1.schema.json",
-    "${CODEFLOW_HOME:-$HOME/.codeflow}/herdr-runs/<repo>.json",
     "DIR/settings.json",
     "result.json",
     "turns/<turn>/continuations/<task-id>/accepted.json",

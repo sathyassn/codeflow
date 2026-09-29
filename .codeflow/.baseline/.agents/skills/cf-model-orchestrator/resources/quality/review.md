@@ -1,10 +1,9 @@
 ## Independent review
 
-The approved reviewer from a lineage different from the actual author's
-reviews the actual unit, reruns relevant gates, and checks conformance with the
-chosen design, after the executor and responsible primary steps in
-[capability-routing](../capability-routing.md). Every reviewer challenges the
-evidence rather than accepting a summary.
+Author-relative review is stated in the seat section of the orchestrator's
+`SKILL.md`; the verdict rule is in the workflow discipline rules, "Review
+verdicts". The reviewer reruns relevant gates, checks conformance with the
+chosen design, and challenges the evidence rather than accepting a summary.
 For a mixed-authorship diff, retain every contributing lineage in provenance,
 review each authored unit from a different lineage, and then inspect the
 integration. Neither contributor's pass is independent review of its own

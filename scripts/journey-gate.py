@@ -1,23 +1,13 @@
 #!/usr/bin/env python3
 """Journey gate (TSK-110 AC-1, SPC-013 R-104, R-107).
 
-Runs every deterministic journey that crates/codeflow-cli/tests/journey_gate.toml
-maps from R-104: each journey's passing control and fault tests. Tests of one
-cargo target run in one `cargo test ... -- --exact <names>` call, and the gate
-fails unless exactly that many tests ran and passed, so a renamed or vanished
-journey test cannot pass silently. Python classes run verbosely: the gate
-fails on any skipped test or expected failure, and unless every listed class
-ran at least one test, so a skip never counts as a passing journey. The
-controls for this are scripts/test_journey_gate.py. The benchmark runs in release mode with
-`--include-ignored`, so its budget check runs beside it. A journey marked
-`platform = "unix"` is skipped on Windows and said so; a `pending` journey is
-reported with the task that ships it.
+Reads every mapped Rust journey from the candidate's nextest JUnit report,
+keyed by package, test target and full test name. Each must occur exactly
+once and pass. Python classes still run verbosely; a skipped or expected
+failure is not proof. The ignored read benchmark has its own gate target.
 
-The map itself is checked against R-104 and the code by
-crates/codeflow-cli/tests/journey_gate.rs.
-
-Usage: python3 scripts/journey-gate.py [--list] [--skip-benchmark]
-                                       [--test-threads N]
+Usage: python3 scripts/journey-gate.py --results <junit file or directory>
+       python3 scripts/journey-gate.py --list
 """
 
 from __future__ import annotations
@@ -28,6 +18,7 @@ import re
 import subprocess
 import sys
 import tomllib
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from pathlib import Path
 
@@ -59,8 +50,8 @@ def plan(journeys: list[dict], on_unix: bool, with_benchmark: bool):
             skipped.append(f"{journey['text']} (unix only)")
             continue
         benchmark = bool(journey.get("benchmark"))
-        if benchmark and not with_benchmark:
-            skipped.append(f"{journey['text']} (benchmark skipped)")
+        if benchmark:
+            skipped.append(f"{journey['text']} (own read-benchmark target)")
             continue
         for reference in journey["control"] + journey["fault"]:
             parts = reference.split()
@@ -82,23 +73,50 @@ def plan(journeys: list[dict], on_unix: bool, with_benchmark: bool):
 def command(key: tuple, names: list[str], test_threads: str | None) -> list[str]:
     if key[0] == "python":
         return [sys.executable, "-B", key[1], "-v", *names]
-    _, package, kind, target, benchmark = key
-    cmd = ["cargo", "test"]
-    if benchmark:
-        cmd.append("--release")
-    cmd += ["-p", package, kind]
-    if target:
-        cmd.append(target)
-    cmd += ["--", "--exact"]
-    if benchmark:
-        cmd.append("--include-ignored")
-    if test_threads:
-        cmd += ["--test-threads", test_threads]
-    return cmd + names
+    _, package, kind, target, _ = key
+    suite = package if kind == "--lib" else f"{package}::{target}"
+    return ["results", suite, *names]
 
 
-def run(key: tuple, names: list[str], test_threads: str | None) -> str | None:
+def result_failure(key: tuple, names: list[str], results: Path | None) -> str | None:
+    """Require one passing occurrence per exact nextest binary/name identity."""
+    _, package, kind, target, _ = key
+    suite = package if kind == "--lib" else f"{package}::{target}"
+    if results is None:
+        return f"{suite}: missing --results; a journey test was renamed or removed"
+    reports = sorted(results.rglob("*.xml")) if results.is_dir() else [results]
+    found = {name: [] for name in names}
+    if not reports:
+        return f"{suite}: missing results"
+    for report in reports:
+        try:
+            started = os.environ.get("CODEFLOW_GATE_STARTED_AT")
+            if started and report.stat().st_mtime < float(started):
+                return f"{suite}: stale results: {report}"
+            root = ET.parse(report).getroot()
+            if root.tag not in ("testsuites", "testsuite"):
+                return f"{suite}: malformed results: {report}"
+            suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+            for entry in suites:
+                if entry.get("name") != suite:
+                    continue
+                for case in entry.findall("testcase"):
+                    name = case.get("name")
+                    if name in found:
+                        found[name].append(not any(case.find(tag) is not None for tag in ("failure", "error", "skipped", "flakyFailure", "flakyError")))
+        except (OSError, ET.ParseError, ValueError) as error:
+            return f"{suite}: missing, malformed or truncated results: {error}"
+    bad = [name for name, states in found.items() if states != [True]]
+    if bad:
+        return f"{suite}: {len(names) - len(bad)} of {len(names)} listed tests ran and passed; a journey test was renamed or removed (missing, duplicated, skipped or failed: {', '.join(bad)})"
+    return None
+
+
+def run(key: tuple, names: list[str], test_threads: str | None, results: Path | None = None) -> str | None:
     """Run one group; return the failure, or None when every test passed."""
+    if key[0] != "python":
+        print(f"journey gate: results {key[1]} {key[3] or '--lib'} ({len(names)} exact tests)", flush=True)
+        return result_failure(key, names, results)
     cmd = command(key, names, test_threads)
     print("journey gate: " + " ".join(cmd[:8]) + (" ..." if len(cmd) > 8 else ""), flush=True)
     done = subprocess.run(
@@ -114,15 +132,6 @@ def run(key: tuple, names: list[str], test_threads: str | None) -> str | None:
             sys.stdout.write(output)
             return f"{key[1]}: {failure}"
         return None
-    results = RESULT.findall(output)
-    passed = sum(int(count) for _, count, _ in results)
-    failed = sum(int(count) for _, _, count in results)
-    if failed or passed != len(names):
-        sys.stdout.write(output)
-        return (
-            f"{' '.join(cmd[:6])}: {passed} of {len(names)} listed tests ran and passed; "
-            "a journey test was renamed or removed"
-        )
     return None
 
 
@@ -147,6 +156,7 @@ def python_failure(names: list[str], output: str) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--results", type=Path, help="JUnit file or directory from this candidate run")
     parser.add_argument("--list", action="store_true", help="print the commands only")
     parser.add_argument("--skip-benchmark", action="store_true")
     parser.add_argument("--test-threads", default=os.environ.get("JOURNEY_GATE_TEST_THREADS"))
@@ -163,7 +173,7 @@ def main() -> int:
     failures = [
         failure
         for key, names in groups.items()
-        if (failure := run(key, names, args.test_threads)) is not None
+        if (failure := run(key, names, args.test_threads, args.results)) is not None
     ]
     tests = sum(len(names) for names in groups.values())
     print(

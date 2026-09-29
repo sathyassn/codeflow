@@ -1,7 +1,7 @@
 //! Markdown-aware PR sections and advisory presentation/release checks.
 
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
 use super::SectionState;
 
@@ -355,7 +355,38 @@ pub(super) fn find_section(body: &str, name: &str) -> SectionState {
     }
 }
 
-pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) -> Vec<Violation> {
+/// A current review row names the exact revision and an approving verdict.
+/// Fences, quotes, examples and HTML comments cannot supply the evidence.
+pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> bool {
+    let outline = sections(body);
+    let matching = matching_sections(&outline, heading);
+    let [section] = matching.as_slice() else {
+        return false;
+    };
+    rendered_text(section.content(), false, false)
+        .lines()
+        .any(|line| {
+            let cells: Vec<_> = line
+                .split('|')
+                .map(str::trim)
+                .filter(|cell| !cell.is_empty())
+                .collect();
+            cells.len() >= 3
+                && cells.last().is_some_and(|verdict| {
+                    matches!(
+                        verdict.to_ascii_lowercase().as_str(),
+                        "approved" | "approve"
+                    )
+                })
+                && cells[1..cells.len() - 1].iter().any(|scope| {
+                    scope
+                        .split(|c: char| !c.is_ascii_hexdigit())
+                        .any(|token| token == sha)
+                })
+        })
+}
+
+pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec<Violation> {
     if !git.pr_sections.is_active() {
         return Vec::new();
     }
@@ -385,80 +416,7 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
             warn("PR Testing has no Not tested: line".into());
         }
     }
-    let mut fenced = false;
-    let mut code_lines = 0;
-    for event in Parser::new(body) {
-        match event {
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_))) => {
-                fenced = true;
-                code_lines = 0;
-            }
-            Event::Text(text) if fenced => code_lines += text.lines().count(),
-            Event::End(TagEnd::CodeBlock) if fenced => {
-                if code_lines > 12 {
-                    warn(format!(
-                        "PR fenced block has {code_lines} lines; aim for at most 12"
-                    ));
-                }
-                fenced = false;
-            }
-            _ => {}
-        }
-    }
-    if long_prose_line(body) {
-        warn("PR prose line exceeds about 160 characters; wrap or shorten it".into());
-    }
-    // A portable approximation to wrapped Markdown at 100 columns. Comments
-    // consume no rows; source blank lines and Markdown syntax remain conservative.
-    let visible = super::strip_html_comments(body, false);
-    let rows: usize = visible.lines().map(wrapped_rows).sum();
-    let budget = if epic_into_main { 90 } else { 65 };
-    if rows > budget {
-        warn(format!(
-            "PR body is about {rows} rendered rows at 100 columns; aim for {budget}"
-        ));
-    }
     out
-}
-
-/// Source lines of prose, list items and headings; code blocks, HTML blocks
-/// and table rows are exempt. Tight list items have no paragraph, so lines are
-/// read from the source rather than from paragraph spans.
-fn long_prose_line(body: &str) -> bool {
-    let exempt: Vec<_> = Parser::new(body)
-        .into_offset_iter()
-        .filter(|(event, _)| matches!(event, Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock)))
-        .map(|(_, span)| span)
-        .collect();
-    let mut offset = 0;
-    body.split_inclusive('\n').any(|line| {
-        let range = offset..offset + line.len();
-        offset = range.end;
-        line.trim_end().chars().count() > 160
-            && !line.trim_start().starts_with('|')
-            && !exempt
-                .iter()
-                .any(|span| span.start < range.end && range.start < span.end)
-    })
-}
-
-fn wrapped_rows(line: &str) -> usize {
-    let mut rows = 1;
-    let mut width = 0;
-    for word in line.split_whitespace() {
-        let length = word.chars().count();
-        if width > 0 && width + 1 + length > 100 {
-            rows += 1;
-            width = 0;
-        }
-        if width > 0 {
-            width += 1;
-        }
-        width += length;
-        rows += width.saturating_sub(1) / 100;
-        width = width.saturating_sub(1) % 100 + 1;
-    }
-    rows
 }
 
 /// The body's one Release impact section's own fields, each `(key,
@@ -467,8 +425,12 @@ fn wrapped_rows(line: &str) -> usize {
 /// never from a subsection; both the release check and the watched-path
 /// settlement read them here.
 fn release_fields(body: &str) -> Option<Vec<(String, String)>> {
+    release_fields_under(body, "Release impact")
+}
+
+fn release_fields_under(body: &str, heading: &str) -> Option<Vec<(String, String)>> {
     let parsed = sections(body);
-    let matched = matching_sections(&parsed, "Release impact");
+    let matched = matching_sections(&parsed, heading);
     let [section] = matched.as_slice() else {
         return None;
     };
@@ -575,6 +537,10 @@ pub(super) fn declares_no_break(body: &str) -> bool {
         && field("rationale").is_some_and(|value| !value.is_empty() && !placeholder(value))
 }
 
+pub(super) fn release_heading(git: &GitPolicy) -> String {
+    codeflow_core::hooks::adoption::mapped_sections(git, &["Release impact".into()]).remove(0)
+}
+
 pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec<Violation> {
     if !git.pr_release_impact.is_active() {
         return Vec::new();
@@ -590,7 +556,7 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
     };
     let parsed = sections(body);
     // Do not consume sibling/subsection migration fields as release fields.
-    let Some(lines) = release_fields(body) else {
+    let Some(lines) = release_fields_under(body, &release_heading(git)) else {
         issue("PR body needs exactly one Release impact section".into());
         return out;
     };
@@ -972,7 +938,8 @@ mod tests {
     fn presentation_warnings_are_advisory_and_respect_off() {
         let body = format!("## Summary\nOne. Two. Three. Four. Update `thing` in src/thing.py.\n## Testing\nPassed.\n```\n{}```\n{}", "output\n".repeat(13), "long word ".repeat(800));
         let findings = presentation(&GitPolicy::default(), &body, false);
-        for reason in ["Not tested:", "13 lines", "rendered rows", "160 characters"] {
+        {
+            let reason = "Not tested:";
             assert!(
                 findings.iter().any(|v| v.message.contains(reason)),
                 "missing {reason}: {findings:?}"
@@ -980,7 +947,14 @@ mod tests {
         }
         // ADR-0071 rule 7: a key file name or code span may anchor the
         // Summary, and its length is judgment, so none draws a warning.
-        for retired in ["code span", "contains a path", "sentences"] {
+        for retired in [
+            "code span",
+            "contains a path",
+            "sentences",
+            "13 lines",
+            "rendered rows",
+            "160 characters",
+        ] {
             assert!(
                 !findings.iter().any(|v| v.message.contains(retired)),
                 "retired Summary warning {retired}: {findings:?}"
@@ -1008,16 +982,12 @@ mod tests {
     }
 
     #[test]
-    fn presentation_accepts_short_evidence_and_uses_epic_row_budget() {
+    fn presentation_accepts_evidence_without_row_budget() {
         let body = "## Summary\nImproves the installer.\n## Testing\nNot tested: Windows.\n```\n12 passed\n```";
         assert!(presentation(&GitPolicy::default(), body, false).is_empty());
         let body = format!("{body}\n{}", "evidence\n".repeat(66));
-        assert!(presentation(&GitPolicy::default(), &body, false)
-            .iter()
-            .any(|v| v.message.contains("aim for 65")));
+        assert!(presentation(&GitPolicy::default(), &body, false).is_empty());
         assert!(presentation(&GitPolicy::default(), &body, true).is_empty());
-        assert_eq!(wrapped_rows(&"word ".repeat(40)), 2);
-        assert_eq!(wrapped_rows(&"x".repeat(201)), 3);
         let comment = format!("{body}\n<!-- {} -->", "hidden\n".repeat(100));
         assert!(presentation(&GitPolicy::default(), &comment, true).is_empty());
         assert!(presentation(
@@ -1037,28 +1007,6 @@ mod tests {
                 presentation(&GitPolicy::default(), &body, false).is_empty(),
                 "{label}"
             );
-        }
-    }
-
-    #[test]
-    fn long_line_check_reads_tight_items_but_not_code_html_or_tables() {
-        let long = "word ".repeat(40);
-        for flagged in [
-            format!("- {long}"),
-            format!("{long}\n"),
-            format!("1. {long}"),
-            format!("> {long}"),
-        ] {
-            assert!(long_prose_line(&flagged), "{flagged}");
-        }
-        for exempt in [
-            format!("```\n{long}\n```"),
-            format!("    {long}"),
-            format!("| {long} |"),
-            format!("<!-- {long} -->"),
-            format!("- item\n\n  ```\n  {long}\n  ```"),
-        ] {
-            assert!(!long_prose_line(&exempt), "{exempt}");
         }
     }
 

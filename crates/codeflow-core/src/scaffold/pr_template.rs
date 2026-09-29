@@ -722,7 +722,9 @@ mod tests {
             let template = read(dir.path(), MANAGED_TEMPLATE);
             if decision == MappingState::Refused {
                 assert!(template.contains("\n## Summary\n"), "{template}");
-                assert!(template.contains("\n## Release impact\n"), "{template}");
+                assert!(template.contains("\n## Reviews\n"), "{template}");
+                // Release impact left the shipped required list (TSK-184).
+                assert!(!template.contains("Release impact"), "{template}");
             } else {
                 assert_eq!(template, PROJECT_TEMPLATE);
             }

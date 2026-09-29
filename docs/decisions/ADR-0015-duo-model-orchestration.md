@@ -154,3 +154,11 @@ preflight now checks the orchestrating harness and the plugin surface, not
 just codex auth, and degrades to solo from either missing half. This ADR is
 not fully superseded (the flow, roles, gate, and degradation doctrine stand);
 `superseded_by` stays null.
+
+## Note, 2026-09-29: ADR-0076 removes the round bounds
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. The
+bounded fix loop of the Decision ("≤2 rounds to plan-agreement, then a
+human tiebreak; the build loop keeps `cf-develop`'s max-3-rework bound")
+is superseded: no round or rework count decides review, which ends on
+evidence. The accepted text above is unchanged.

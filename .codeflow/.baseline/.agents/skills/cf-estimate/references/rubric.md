@@ -1,5 +1,8 @@
 # Evidence-anchored delivery grades
 
+Optional. Read when anchored grades would help the estimate; scenarios from
+the operating model stand without them.
+
 Method/rubric version: `codeflow-agentic-1`. This is a provisional classification
 instrument, not a validated speed model. It adapts the supplied Agentic
 Development Model at commit `87852d69170fad6b15bf2463841c74ef80ceda58` with the

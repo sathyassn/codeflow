@@ -125,7 +125,7 @@ impl RecordView {
             .collect()
     }
 
-    fn superseded_blocks(&self) -> Vec<FencedAcceptance> {
+    pub(super) fn superseded_blocks(&self) -> Vec<FencedAcceptance> {
         self.blocks()
             .into_iter()
             .filter(FencedAcceptance::is_superseded)
@@ -482,7 +482,7 @@ impl Baseline {
 
 /// `content` without the frontmatter `uid:` line `ids backfill` writes, or
 /// `None` when its frontmatter has no such line.
-fn without_backfilled_uid(content: &str) -> Option<String> {
+pub(super) fn without_backfilled_uid(content: &str) -> Option<String> {
     let mut lines = content.split_inclusive('\n');
     let first = lines.next()?;
     if first.trim_end() != "---" {
@@ -710,14 +710,37 @@ pub struct ChangeContext<'a> {
     /// judged per commit so a reopen and re-completion inside one range is
     /// still seen (R-83).
     pub reopened: Option<&'a BTreeSet<String>>,
+    /// On a release range, the records it brings from verified lines, each
+    /// judged where it was introduced there (SPC-013 R-120).
+    pub brought: Option<&'a Brought>,
     /// Specs implemented at some earlier commit of the base's history, so
     /// frozen though a later supersession or reopen left them open at the
     /// base (TSK-169).
     pub shipped: Option<&'a BTreeSet<String>>,
 }
 
-/// Paths a planning-only change may touch (R-70).
-const PLANNING_PATHS: [&str; 2] = ["project-management/", "docs/plan/"];
+/// A release range's brought records, each judged where it was introduced
+/// on its line instead of across the whole range (SPC-013 R-120, TSK-140
+/// AC-11 to AC-13). Only a record every change of which the range brings
+/// from a verified line is listed; a record the range also changes
+/// directly is judged in full.
+#[derive(Debug, Clone, Default)]
+pub struct Brought {
+    /// Records whose only change is the `uid` line `ids backfill` writes,
+    /// landed on a line: the backfill was judged there, and the uid checks
+    /// judge the line on their own.
+    pub backfills: BTreeSet<String>,
+    /// Specs brought `approved` or `superseded`: the problem of the landing
+    /// that made the change on the line, `None` when it was planning-only.
+    pub approvals: BTreeMap<String, Option<String>>,
+    /// Complete tasks without an acceptance block whose record last changed
+    /// on their line at or before its records cutoff: the notice that lists
+    /// each as information.
+    pub legacy: BTreeMap<String, String>,
+}
+
+/// The finding a legacy record's notice replaces (TSK-140 AC-13).
+const NO_BLOCK: &str = "a complete record needs an acceptance block in its Closeout";
 
 /// A change that re-applies the rules in full (R-83): a status change, a
 /// criteria change or a changed acceptance block.
@@ -777,9 +800,26 @@ fn release_role_problem(record: &RecordView, graph: &Graph) -> Option<String> {
     })
 }
 
-/// Whether moving `before` to `after` is a legal transition (R-30, R-32 and
-/// the epic terminal acts of R-26). A record added in the change moves from
-/// the initial state: `todo`, `draft` or an open epic.
+/// A new completion of an already complete task must retain its old review.
+/// An equal active block still counts when the archived history changes.
+pub(super) fn is_recompletion(before: Option<&RecordView>, after: &RecordView) -> bool {
+    let blocks = |record: &RecordView| {
+        record
+            .superseded_blocks()
+            .into_iter()
+            .map(|block| block.inner)
+            .collect::<Vec<_>>()
+    };
+    after.kind == RecordKind::Task
+        && after.status == "complete"
+        && before.is_some_and(|old| {
+            old.status == "complete"
+                && (blocks(old) != blocks(after)
+                    || reopen_reasons(&old.body) != reopen_reasons(&after.body))
+        })
+}
+
+/// Whether moving `before` to `after` is a legal transition (R-30, R-32).
 fn transition_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<String> {
     let to = after.status.as_str();
     let from = before.map_or(
@@ -790,7 +830,11 @@ fn transition_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<S
         |record| record.status.as_str(),
     );
     if from == to {
-        return Vec::new();
+        return if is_recompletion(before, after) {
+            reopen_problems(before, after)
+        } else {
+            Vec::new()
+        };
     }
     let allowed = match after.kind {
         RecordKind::Task => task_transition_allowed(from, to),
@@ -864,11 +908,16 @@ fn spec_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
 /// reopen reason (R-30). A task completed before the migration has no block
 /// to keep; it records the reason as a Closeout line `- reopened: <reason>`
 /// and no block is invented.
-fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<String> {
+pub(super) fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<String> {
     let mut problems = Vec::new();
-    if !after.active_blocks().is_empty() {
+    if after.status != "complete" && !after.active_blocks().is_empty() {
         problems
             .push("a reopened task keeps no active acceptance block; mark it superseded".into());
+    }
+    if after.status == "complete"
+        && before.is_some_and(|old| old.criteria.signature() != after.criteria.signature())
+    {
+        problems.push(super::acceptance::REOPENED_CRITERIA.into());
     }
     if before.is_some_and(|record| record.active_blocks().is_empty()) {
         let old = before.map_or(0, |record| reopen_reasons(&record.body).len());
@@ -1285,7 +1334,7 @@ fn relationship_problems(record: &RecordView, graph: &Graph) -> Vec<String> {
     }
     if record.superseded_by.as_deref() == Some(record.id.as_str()) {
         problems
-            .push("a spec cannot be superseded by itself; a changed contract is a new spec".into());
+            .push("a spec cannot be superseded by itself; a shipped contract is not reopened; a new spec carries changes".into());
     } else if supersession_cycle(record, graph) {
         problems.push(
             "the `superseded_by` chain returns to this spec; supersession cannot cycle".into(),
@@ -1360,11 +1409,17 @@ fn context_problems(
     if after.kind != RecordKind::Spec || !moved || !matches!(to, "approved" | "superseded") {
         return problems;
     }
-    if let Some(paths) = context.changed_paths {
+    if let Some(landing) = context
+        .brought
+        .and_then(|brought| brought.approvals.get(&after.id))
+    {
+        // Brought from a line: judged where it landed there.
+        problems.extend(landing.iter().cloned());
+    } else if let Some(paths) = context.changed_paths {
         let product: Vec<&str> = paths
             .iter()
             .map(String::as_str)
-            .filter(|path| !PLANNING_PATHS.iter().any(|prefix| path.starts_with(prefix)))
+            .filter(|path| !super::classify::is_planning_path(path))
             .collect();
         if !product.is_empty() {
             problems.push(format!(
@@ -1632,6 +1687,18 @@ pub fn judge_change(
         &after.path,
         context_problems(before, after, context),
     );
+    if let Some(old) = context.base.and_then(|base| base.records.get(&after.id)) {
+        if old.status == "complete"
+            && after.kind == RecordKind::Task
+            && (after.status == "todo"
+                || (after.status == "complete"
+                    && before.is_some_and(|record| record.status == "todo"))
+                || is_recompletion(Some(old), after)
+                || context.reopened.is_some_and(|ids| ids.contains(&after.id)))
+        {
+            verdict.apply(Mode::Strict, &after.path, reopen_problems(Some(old), after));
+        }
+    }
     verdict.apply(
         Mode::Strict,
         &after.path,
@@ -1646,17 +1713,21 @@ pub fn judge_change(
     } else {
         baseline.mode(after)
     };
-    verdict.apply(
-        mode,
-        &after.path,
-        // A record the change adds is new whatever history the checkout has.
-        state_problems(
-            after,
-            graph,
-            before.is_none() || baseline.is_new(after),
-            mode != Mode::Strict && baseline.completed_before(after),
-        ),
+    // A record the change adds is new whatever history the checkout has.
+    let mut state = state_problems(
+        after,
+        graph,
+        before.is_none() || baseline.is_new(after),
+        mode != Mode::Strict && baseline.completed_before(after),
     );
+    if context
+        .brought
+        .is_some_and(|brought| brought.legacy.contains_key(&after.id))
+    {
+        // Listed as information instead (SPC-013 R-120, TSK-140 AC-13).
+        state.retain(|problem| !problem.starts_with(NO_BLOCK));
+    }
+    verdict.apply(mode, &after.path, state);
     verdict.apply(
         Mode::Strict,
         &after.path,
@@ -1677,17 +1748,21 @@ pub fn judge_change(
 ///
 /// Returns a message when the repository or a revision cannot be read.
 pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<Verdict, String> {
-    judge_range_against(repo_root, base, base, head)
+    judge_range_against(repo_root, base, base, head, false, None)
 }
 
 /// [`judge_range`] with the records diffed from `base` and the governing
 /// baseline list read from `target`, which differ for a pull request whose
-/// branch forked before the target's current tip.
+/// branch forked before the target's current tip. `on_line` says the range
+/// is a verified integration line (the caller proved it), whose landings
+/// are judged one by one; any other range is judged whole.
 fn judge_range_against(
     repo_root: &Path,
     base: &str,
     target: &str,
     head: Option<&str>,
+    on_line: bool,
+    brought: Option<&Brought>,
 ) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let target_commit = resolve_commit(&repo, target)
@@ -1709,29 +1784,60 @@ fn judge_range_against(
         }
     }
     let paths = changed_paths(&repo, base, head)?;
-    let reopened = reopened_in_range(&repo, base, head, &after, &base_graph);
+    let reopened = reopened_in_range(&repo, base, head, &after);
     let (shipped, history_problems) = shipped_specs(&repo, base, &before, &after);
     let context = ChangeContext {
         base: Some(&before),
         changed_paths: Some(&paths),
         reopened: Some(&reopened),
+        brought,
         shipped: Some(&shipped),
     };
     let mut verdict = Verdict {
         notices,
         ..Verdict::default()
     };
+    if let Some(brought) = brought {
+        verdict.notices.extend(
+            brought
+                .legacy
+                .values()
+                .map(|notice| Finding::new(notice.clone(), remedy::RELEASE_LEGACY_RECORD.remedy())),
+        );
+    }
     for (path, problem) in history_problems {
         verdict.apply(Mode::Strict, &path, vec![problem]);
     }
     verdict.warnings.extend(baseline.warning());
     verdict.errors.extend(baseline.errors());
     for record in after.records.values() {
+        if brought.is_some_and(|brought| brought.backfills.contains(&record.id)) {
+            // A `uid` backfill landed on a line was judged there.
+            continue;
+        }
         let olds: Vec<&RecordView> = match base_graph.records.get(&record.id) {
-            Some(old) if old.content == record.content => continue,
+            Some(old) if old.content == record.content && !reopened.contains(&record.id) => {
+                continue
+            }
             Some(old) => vec![old],
             None if baseline.is_legacy_blob(record) => continue,
             None => baseline.copies(&record.id),
+        };
+        // On a verified line, a spec approval landed by a merge is judged
+        // by that landing's change, never by the whole line (R-32 on a
+        // line). Any other range is judged whole, so a private merge inside
+        // a task branch cannot manufacture the exception.
+        let landing = if on_line {
+            landing_paths(&repo, base, head, record)
+        } else {
+            None
+        };
+        let context = match &landing {
+            Some(paths) => ChangeContext {
+                changed_paths: Some(paths),
+                ..context
+            },
+            None => context,
         };
         let judged: Vec<Verdict> = if olds.is_empty() {
             vec![judge_change(None, record, &after, &baseline, context)]
@@ -1749,29 +1855,65 @@ fn judge_range_against(
     Ok(verdict)
 }
 
-/// The complete tasks without an acceptance block whose status was not
-/// `complete` at some commit between `base` and `head` (or `HEAD` for the
-/// working tree): each commit is read, not only the range's endpoints, so
-/// a reopen and a re-completion inside one range cannot pass as the
-/// historical form of R-101. Only candidates for that form are walked.
-fn reopened_in_range(
+/// On a verified integration line, the paths of the landing that brought a
+/// spec's approval or supersession into the range, when that landing is a
+/// merge on the line's first-parent chain from `head` back to `base`: the
+/// landed pull request's own change, judged as the planning-only change the
+/// transition must travel in. `None` when the transition arrived by a plain
+/// commit, or on the working tree, so the whole range is judged as before.
+fn landing_paths(
+    repo: &Repository,
+    base: &str,
+    head: Option<&str>,
+    record: &RecordView,
+) -> Option<Vec<String>> {
+    let to = record.status.as_str();
+    if record.kind != RecordKind::Spec || !matches!(to, "approved" | "superseded") {
+        return None;
+    }
+    let base = resolve_commit(repo, base)?;
+    let mut commit = repo.find_commit(resolve_commit(repo, head?)?).ok()?;
+    let status_at = |commit: &git2::Commit<'_>| -> Option<String> {
+        let entry = commit.tree().ok()?.get_path(Path::new(&record.path)).ok()?;
+        let blob = entry.to_object(repo).ok()?.into_blob().ok()?;
+        let text = String::from_utf8_lossy(blob.content()).into_owned();
+        RecordView::parse(record.kind, &record.path, &text)
+            .ok()
+            .map(|view| view.status)
+    };
+    while commit.id() != base {
+        let parent = commit.parent(0).ok()?;
+        let arrived =
+            status_at(&commit).as_deref() == Some(to) && status_at(&parent).as_deref() != Some(to);
+        if arrived {
+            if commit.parent_count() < 2 {
+                return None;
+            }
+            return changed_paths(
+                repo,
+                &parent.id().to_string(),
+                Some(&commit.id().to_string()),
+            )
+            .ok();
+        }
+        commit = parent;
+    }
+    None
+}
+
+/// Complete tasks whose status left `complete` inside this range, including
+/// when its endpoint block is unchanged. Historical completions without a
+/// block are also walked so they cannot re-enter the migration exception.
+pub(super) fn reopened_in_range(
     repo: &Repository,
     base: &str,
     head: Option<&str>,
     after: &Graph,
-    base_graph: &Graph,
 ) -> BTreeSet<String> {
     let candidates: Vec<&RecordView> = after
         .records
         .values()
         .filter(|record| record.kind == RecordKind::Task && record.status == "complete")
-        .filter(|record| record.active_blocks().is_empty())
-        .filter(|record| {
-            base_graph
-                .records
-                .get(&record.id)
-                .is_none_or(|old| old.content != record.content)
-        })
         .collect();
     let mut reopened = BTreeSet::new();
     if candidates.is_empty() {
@@ -1813,7 +1955,19 @@ fn reopened_in_range(
                         .map(|view| view.status)
                 });
             if status.as_deref().is_some_and(|status| status != "complete") {
-                reopened.insert(record.id.clone());
+                // A task branch can merge a line that completed another
+                // task meanwhile. Its earlier todo snapshots are not a
+                // reopen: require the actual first-parent status edge.
+                let was_complete = repo
+                    .find_commit(oid)
+                    .ok()
+                    .and_then(|commit| commit.parent_id(0).ok())
+                    .and_then(|parent| super::acceptance::blob_at(repo, parent, &record.path))
+                    .and_then(|content| RecordView::parse(record.kind, &record.path, &content).ok())
+                    .is_some_and(|before| before.status == "complete");
+                if was_complete {
+                    reopened.insert(record.id.clone());
+                }
             }
         }
     }
@@ -1899,6 +2053,23 @@ pub fn judge_pull_request(repo_root: &Path, base: &str, head: &str) -> Result<Ve
     judge_pull_request_under(repo_root, base, head, base)
 }
 
+/// [`judge_pull_request_under`] for a verified integration line judged as
+/// one pull request (R-60): each planning landing on the line's
+/// first-parent chain is judged by its own change. The caller proves the
+/// line (`check_epic_line`); an unverified range is judged whole.
+///
+/// # Errors
+///
+/// Returns a message when a revision or the merge-base cannot be resolved.
+pub fn judge_line_under(
+    repo_root: &Path,
+    base: &str,
+    head: &str,
+    authority: &str,
+) -> Result<Verdict, String> {
+    judge_pull_request_shaped(repo_root, base, head, authority, true)
+}
+
 /// [`judge_pull_request`] with the governing baseline list read from
 /// `authority` instead of `base`. The pre-push hook passes the destination
 /// branch's current tip here, because its `base` is a boundary of every
@@ -1912,6 +2083,16 @@ pub fn judge_pull_request_under(
     base: &str,
     head: &str,
     authority: &str,
+) -> Result<Verdict, String> {
+    judge_pull_request_shaped(repo_root, base, head, authority, false)
+}
+
+fn judge_pull_request_shaped(
+    repo_root: &Path,
+    base: &str,
+    head: &str,
+    authority: &str,
+    on_line: bool,
 ) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let commit = |revision: &str| {
@@ -1929,6 +2110,42 @@ pub fn judge_pull_request_under(
         &anchor.to_string(),
         &target.to_string(),
         Some(head),
+        on_line,
+        None,
+    )
+}
+
+/// [`judge_pull_request_under`] for a release range: each record in
+/// `brought` is judged where it was introduced on its line (SPC-013 R-120).
+///
+/// # Errors
+///
+/// Returns a message when a revision or the merge-base cannot be resolved.
+pub fn judge_release_range(
+    repo_root: &Path,
+    base: &str,
+    head: &str,
+    authority: &str,
+    brought: &Brought,
+) -> Result<Verdict, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let commit = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| format!("{revision}: {}", error.message()))
+    };
+    let target = commit(authority)?;
+    let anchor = repo
+        .merge_base(commit(base)?, commit(head)?)
+        .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
+    judge_range_against(
+        repo_root,
+        &anchor.to_string(),
+        &target.to_string(),
+        Some(head),
+        false,
+        Some(brought),
     )
 }
 

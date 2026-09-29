@@ -94,7 +94,7 @@
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "208a2cec916bf027ac44fe8bc32d31b70eb67ccd800a5ebb5662a4411273dbde"
+      "pristine_sha256": "4c24c46113129de20405b3daf57d544fd4405d0e2f58a1e821ad80cf5e916493"
     },
     "src/components/PortalDisplay.astro": {
       "ownership": "managed",
