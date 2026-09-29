@@ -55,8 +55,12 @@ publication date._
   flag. `codeflow doctor` reports the root branch, nested repositories no
   tracked `.gitignore` covers, and linked worktrees outside
   `git.worktree_locations`, whose default covers `.worktrees/` and the
-  folders Claude, Codex and Grok manage. See `docs/workspace-mode.md` and
-  ADR-0074.
+  folders Claude, Codex and Grok manage; it reads the root checkout from a
+  linked worktree too. The guide and `.codeflow/rules/worktrees.md` say how
+  a change lands in an umbrella: small edits on the root branch, larger
+  work in a short-lived worktree merged back, `main` moved forward only by
+  the operator at a milestone, and each nested repository through its own
+  pull requests. See `docs/workspace-mode.md` and ADR-0074.
 
 <!-- codeflow:release-impact minor -->
 - **Guidance retention evaluations.** `cf-evaluate-model` gains a scripted

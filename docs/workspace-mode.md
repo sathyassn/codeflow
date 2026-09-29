@@ -22,18 +22,59 @@ umbrella/                        root checkout, on integration/workspace
 `-- project-b/                   a plain git repository, also ignored
 ```
 
-- The umbrella's root checkout stays on `integration/workspace`. Small
-  umbrella edits are committed there at the root.
-- Larger or parallel umbrella work uses a short-lived worktree under the
-  umbrella's own `.worktrees/`, branched from `integration/workspace` and
-  merged back.
+- The umbrella's root checkout stays on `integration/workspace`. Never
+  switch it to another branch.
 - Each nested project keeps its root checkout on its own default branch and
   does all task work in worktrees under its own `.worktrees/`.
-- `main` in the umbrella is the milestone checkpoint, moved forward with
-  `codeflow integrate integration/workspace --into main`.
 - Worktree folders that a harness manages count as valid locations too: the
   Claude desktop app's `.claude/worktrees/`, and Codex's and Grok's folders
   under their home directories (`git.worktree_locations`).
+
+## How a change lands
+
+```text
+the umbrella's own files
+
+  small edit: a commit at the root checkout ------------+
+                                                        |
+  larger or parallel work: a branch in                  |
+  umbrella/.worktrees/<slug>, cut from the root         |
+  branch, merged back with codeflow integrate ----------+
+                                                        |
+                                                        v
+                                              integration/workspace
+                                              (the landing line)
+                                                        |
+                  at a milestone, the operator runs     |
+                  codeflow integrate                    |
+                  integration/workspace --into main     |
+                                                        v
+                                                      main
+                                              (protected checkpoint;
+                                               agents never move it)
+
+a nested project's files
+
+  project-a/.worktrees/<slug> --- pull request ---> project-a's integration
+  (a task branch)                                   branch or its main
+                                                    (agents never merge
+                                                     into main)
+```
+
+- The umbrella's own files: a small edit is a commit on
+  `integration/workspace` at the root checkout. Larger or parallel work uses
+  a short-lived branch in the umbrella's own `.worktrees/<slug>`, cut from
+  the root branch and merged back with `codeflow integrate`.
+- With no remote, the root branch is the landing line and `main` is a
+  protected checkpoint: at a milestone the operator moves it forward with
+  `codeflow integrate integration/workspace --into main`; agents never do.
+  With a remote the same holds, the root branch is pushed, and a change into
+  `main` is a pull request a human merges.
+- A nested repository: every change goes through that repository's own
+  flow, a worktree under its own `.worktrees/<slug>` and a pull request into
+  its integration branch or its `main`. The umbrella never commits nested
+  files, which it ignores, and agents never merge into any repository's
+  `main`.
 
 ## Where settings come from
 

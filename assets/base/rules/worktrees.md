@@ -13,8 +13,26 @@ The root checkout, the repository's main working tree, stays on its root
 branch and takes no task edits. The root branch is the repository's default
 branch unless `git.root_branch` in `.codeflow/policy.json` names another.
 Change it only for an umbrella repository whose root is a working checkout
-(workspace mode): its convention is `integration/workspace`, and
+(workspace mode): its convention is `{{WORKSPACE_ROOT_BRANCH}}`, and
 `codeflow init --workspace` sets it up.
+
+In an umbrella, a change lands this way:
+
+- The umbrella's own files: a small edit is a commit on
+  `{{WORKSPACE_ROOT_BRANCH}}` at the root checkout. Larger or parallel
+  work uses a short-lived branch in the umbrella's own
+  `.worktrees/<slug>`, cut from the root branch and merged back with
+  `codeflow integrate`.
+- With no remote, the root branch is the landing line and `main` is a
+  protected checkpoint: at a milestone the operator moves it forward with
+  `codeflow integrate {{WORKSPACE_ROOT_BRANCH}} --into main`; agents
+  never do. With a remote the same holds, the root branch is pushed, and a
+  change into `main` is a pull request a human merges.
+- A nested repository: every change goes through that repository's own
+  flow, a worktree under its own `.worktrees/<slug>` and a pull request
+  into its integration branch or its `main`. The umbrella never commits
+  nested files, which it ignores, and agents never merge into any
+  repository's `main`.
 
 git-guard refuses an agent's commit at the root checkout on any other branch
 (`git.root_checkout_commits`). The git hooks refuse it too when a harness
