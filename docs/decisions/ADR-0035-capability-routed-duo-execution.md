@@ -121,3 +121,15 @@ seat's approval. After a recorded mid-run seat loss, every available standing
 seat approves the reassignment, the lost seat is recorded unavailable with
 reduced assurance, and any verdict it gave before the loss stays as given.
 Every other part of this decision stands.
+
+## Note, 2026-09-29: ADR-0076 supersedes one clause
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. It
+supersedes one clause of this record and no other.
+
+- "Changing the named producer or reviewer seat or lineage creates Plan
+  vN+1 and requires fresh approval from both primary seats." Superseded: a
+  reassignment is recorded where the assignment lives and, for unstarted
+  tasks of an epic, rides in the batched epic amendment with one
+  other-lineage reviewer. The named other-lineage seat still reviews the
+  actual unit, and the rest of this record stands.

@@ -37,7 +37,7 @@ fails this skill: the portal composes sources visually.
 Apply `cf-design` only when the **consuming product** needs experience
 direction, never to utility portal themes; utility tokens and Starlight
 components are never product brand authority; product DS stays out of the
-portal. Apply `cf-editorial-review` to substantive copy.
+portal. Apply `cf-editorial-review` by its trigger.
 
 ## 1. Decide whether to adopt
 
@@ -134,13 +134,13 @@ graph; do not dump one navigation folder per package or duplicate shared prose.
 
 ## 4. Preserve evidence and safety
 
-Run the locked workflow from the adopted portal root:
+Run what the change needs from the portal root: content gets the block
+below; navigation, search, theme, runtime or accessibility also section 5.
 
 ```sh
 npm run deps:install
 npm run check
 npm run build
-npm run browser:verify
 codeflow validate --portal <repository-relative-directory>
 ```
 

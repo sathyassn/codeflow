@@ -381,6 +381,14 @@ fn clears_work_start_merge_planning() {
     let hosted = Hosted::new();
     let root = &hosted.root;
     hosted.plan_task("plan/work");
+    // An epic task: its record lands by the epic's planning change, never
+    // on the task branch (TSK-184 admits only a standalone record there).
+    hosted.seed();
+    let out = codeflow(root, &["epic", "new", "an outcome"]);
+    assert!(out.contains("EPC-001"), "{out}");
+    set_field(root, TASK, "epic_id", "EPC-001");
+    set_field(root, TASK, "standalone_reason", "null");
+    commit_all(root, "docs: plan the epic");
     git(root, &["switch", "-q", "-c", "task/TSK-001-work"]);
     commit(root, "x.txt", "feat: add x");
     prove(

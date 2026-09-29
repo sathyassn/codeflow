@@ -30,7 +30,7 @@ reinterpret an earlier decision.
 | Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, the actual proposed merge tree, pending annotations, coupled stamps and the conventional-marker floor. It checks known contradictions and watched contracts; it does not infer compatibility |
 | Merge | A human | PR CI checks the actual proposed merge tree, which is more than the absence of conflicts. Main-push and integration-line CI repeat the state check without writing. These release jobs live in `codeflow-release.yml`, outside the managed `codeflow-ci.yml` that every adopter receives, and no scaffold installs them. Without strict branch protection a stale clean merge is still possible, so the human merger must require the fresh check |
 | Dispatch | A human with current write, maintain or admin permission | Dispatches with `--ref main` and the `vX.Y.Z` tag. The actor and any rerunning actor must both be GitHub Users with effective permission. `GITHUB_SHA` must still equal current main and be the result of an ordinary PR human-merged into this repository's main. Contributor forks remain valid. No static allowlist or second-human role is implied |
-| Local-artifact authority job | The generated workflow | Records `GITHUB_SHA` on main and checks the dispatch rules above, source, version and notes, the latest exact-source GitHub Actions main-push results of `codeflow-ci` and `codeflow-release` (`publication_workflows`) for `release state`, `codeflow gates`, Rust, Windows, secret scan and security review, and write-visible host collisions. Its write-scoped token can see draft releases. It fails closed on a wrong tag, source or public release, a foreign draft, or draft assets. It then creates or resumes only the exact source-bound empty draft |
+| Local-artifact authority job | The generated workflow | Records `GITHUB_SHA` on main and checks the dispatch rules above, source, version and notes, the latest exact-source GitHub Actions main-push results of `codeflow-ci` and `codeflow-release` (`publication_workflows`) for `release state`, `codeflow gates`, Windows, secret scan and security review, and write-visible host collisions. Its write-scoped token can see draft releases. It fails closed on a wrong tag, source or public release, a foreign draft, or draft assets. It then creates or resumes only the exact source-bound empty draft |
 | Global-artifact recheck | The generated workflow | Rechecks main after platform builds. Failed or cancelled guards block hosting and announcing |
 | Upload and announce | cargo-dist | Uploads without `--clobber`, so a later host conflict is never overwritten, and announces last |
 | Post-announce verification | cargo-dist's verifier | Compares tag and source, and every asset name, size and SHA-256 digest, with the same-run files |
@@ -65,12 +65,13 @@ Release impact rules for each PR:
 
 - The PR carries one `Release impact` section with `Impact`, `Breaking`,
   `Rationale`, `Migration`, `Unit` and `Evidence`.
-- `Breaking: yes` holds if and only if `Impact: major`. A break needs
-  substantive migration guidance.
+- `Breaking: yes` holds if and only if `Impact: major`, and the checkers
+  enforce both directions. A break needs substantive migration guidance.
 - An edit of a pending major entry is assessed at major, so it declares the
   break and keeps its migration guidance.
 - A field left at the template's alternatives fails.
-- The legacy `Contract` field is accepted during the transition. When it
+- `Breaking` replaces the older three-state `Contract` field. The legacy
+  `Contract` field is accepted during the transition. When it
   appears with `Breaking`, the two must agree. Alone, `not-applicable` and
   `compatible` mean `Breaking: no` and `breaking` means `Breaking: yes`, with
   `Migration` then needed only for a break. `codeflow ci` and `release.py`
@@ -423,7 +424,7 @@ ADR-0013, ADR-0014 and the parity section of
 | Duo contract and interactive lanes | The host-neutral duo contract test passes. Both native interactive lanes complete a scoped canary with the task's required Model Context Protocol (MCP) tools: Claude Code to Codex through the enabled official plugin or qualified native fallback, and Codex to Claude through task-scoped Herdr (tmux degraded) with the qualified tracked Stop/StopFailure lifecycle. Record versions, effort, exact commands, observed tool access and graceful degradation. Auth status output never replaces a working interactive session |
 | Ensemble and model bindings | The current ensemble record, selectors and effort and worker policy name only bindings qualified for this release. Every `capability-supported` harness catalog entry still proves the full capability contract, and catalog support is never taken as concrete binding qualification. Any changed concrete binding has an approved full native result, not only a diagnostic pack. `codeflow doctor --check model-bindings` passes for each retained local promotion record, or the exact non-probeable native canary needed is recorded; requested and observed identity, harness version and declared settings drift are resolved. The repository's project selection is absent or empty, or resolves atomically to exact stable-role binding IDs; a diagnostic pack or parseable harness name is not promotion evidence |
 | CodeQL | Before the repository is public, no committed CodeQL workflow has entered the portable scaffold and the CodeQL state stays pending. After it is public, enable GitHub CodeQL default setup for Rust with `security-extended`, and confirm tool status shows the intended files analyzed with zero extraction or configuration errors. Treat it as advisory until five consecutive applicable PR runs are healthy, then decide separately whether branch protection should require it. Roll back branch-protection requirements before disabling the setup |
-| Coverage | `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes locally. CI billing or availability never substitutes for this evidence |
+| Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI billing or availability never substitutes for this evidence |
 | Distribution plan and installers | `cargo dist plan --output-format=json` lists all four archives, both installers and the native runner rows. Canary the shell installer on each macOS and Linux architecture and the PowerShell installer on Windows. Confirm WSL2 selects the Linux archive and native Windows installs `codeflow.exe` |
 
 Record new verification in a current ADR or release note, and update

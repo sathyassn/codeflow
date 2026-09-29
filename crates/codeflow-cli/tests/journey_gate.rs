@@ -261,3 +261,120 @@ fn the_gate_runs_on_the_linux_gate_job_and_the_windows_job() {
         "the runner reads the map"
     );
 }
+
+#[test]
+fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
+    let workflow = read(".github/workflows/codeflow-ci.yml");
+    let trigger = workflow.split("permissions:").next().unwrap();
+    assert!(trigger.contains("  pull_request:\n  push:"));
+    assert!(trigger.contains("integration/**"));
+    let condition = "github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || github.event_name == 'push'";
+    for id in ["gates", "windows"] {
+        assert!(
+            job(&workflow, id).contains(condition),
+            "{id} must run for protected-base PRs and line pushes"
+        );
+    }
+    for id in ["secret-scan", "security-review"] {
+        assert!(
+            !job(&workflow, id)
+                .lines()
+                .any(|line| line.starts_with("    if:")),
+            "{id} runs for every PR"
+        );
+    }
+    // Task PR: security only. Main PR, integration push and main push: all.
+    for (event, base, heavy) in [
+        ("pull_request", "integration/EPC-020-delivery-system", false),
+        ("pull_request", "main", true),
+        ("push", "integration/EPC-020-delivery-system", true),
+        ("push", "main", true),
+    ] {
+        assert_eq!(event == "push" || matches!(base, "main" | "master"), heavy);
+    }
+    assert!(!workflow.contains("  rust:\n"));
+    assert!(!workflow.contains("  coverage:\n"));
+}
+
+#[test]
+fn instrumented_suite_has_serial_membership_and_a_junit_consumer() {
+    let profile = read(".config/nextest.toml");
+    let parsed: toml::Value = toml::from_str(&profile).unwrap();
+    assert_eq!(
+        parsed["test-groups"]["serial"]["max-threads"].as_integer(),
+        Some(1)
+    );
+    assert_eq!(
+        parsed["profile"]["codeflow"]["fail-fast"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        parsed["profile"]["codeflow"]["junit"]["path"].as_str(),
+        Some("junit.xml")
+    );
+    for name in [
+        "present_cli",
+        "init_e2e",
+        "process_group",
+        "package(codeflow-present)",
+    ] {
+        assert!(profile.contains(name), "missing serial member {name}");
+    }
+    let config: serde_json::Value =
+        serde_json::from_str(&read(".codeflow/test-config.json")).unwrap();
+    let targets = config["targets"].as_array().unwrap();
+    let journey = targets
+        .iter()
+        .find(|t| t["name"] == "journey-gate")
+        .unwrap();
+    assert_eq!(journey["requires"], serde_json::json!(["rust-coverage"]));
+    assert!(journey["modes"]["full"]["command"]
+        .as_str()
+        .unwrap()
+        .contains("--results"));
+    assert!(job(&read(".github/workflows/codeflow-ci.yml"), "windows").contains("--results"));
+}
+
+/// The quick gate, which the pre-push hook runs on every push, is the light
+/// set: fmt, clippy and the Python contracts. The producers (the web build,
+/// the workspace build and the binary) belong to essential and full, where
+/// the tests embed their output; a quick target requires nothing outside
+/// the quick set, or the runner would wait for a target that never runs.
+#[test]
+fn the_quick_gate_runs_only_the_light_targets() {
+    let config: serde_json::Value =
+        serde_json::from_str(&read(".codeflow/test-config.json")).expect("test config");
+    let targets = config["targets"].as_array().expect("targets");
+    let quick: std::collections::BTreeSet<&str> = targets
+        .iter()
+        .filter(|t| t["modes"].get("quick").is_some())
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        quick,
+        [
+            "gate-parity",
+            "herdr-delivery",
+            "rust-clippy",
+            "rust-format",
+            "skill-triggers",
+        ]
+        .into_iter()
+        .collect(),
+        "the quick gate runs the light targets only"
+    );
+    for target in targets
+        .iter()
+        .filter(|t| quick.contains(t["name"].as_str().unwrap()))
+    {
+        let requires: Vec<&str> = target["requires"]
+            .as_array()
+            .map(|r| r.iter().map(|v| v.as_str().unwrap()).collect())
+            .unwrap_or_default();
+        assert!(
+            requires.iter().all(|r| quick.contains(r)),
+            "{} requires {requires:?} outside the quick set",
+            target["name"]
+        );
+    }
+}

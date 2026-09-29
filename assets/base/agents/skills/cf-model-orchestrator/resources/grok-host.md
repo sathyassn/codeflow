@@ -53,10 +53,11 @@ not claim the lanes.
 
 ## Duties
 
-Host is not duty. Apply the canonical responsibility-versus-execution and route
-status rules in `capability-routing.md`; this adapter does not redefine them.
+Host is not duty. Apply the responsibility-versus-execution rules in the seat
+section of `SKILL.md` and the plan's assignment line, and the route status
+rules in `capability-routing.md`; this adapter does not redefine them.
 The Claude design owner produces direction and real design execution in its
-native session unless Plan vN records an explicit task-specific operator
+native session unless the plan records an explicit task-specific operator
 override; Claude absence alone is not one. A Grok high host stays the
 orchestrator and may use its own permitted routes. Catalog Grok may execute or
 take named extra-family review when a documented trigger fires and it is

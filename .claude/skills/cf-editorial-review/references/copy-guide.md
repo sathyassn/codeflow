@@ -70,7 +70,7 @@ a named subject, in about 25 words or fewer.
 - Use a hyphen inside a compound word and "to" for a range. Never use an em
   or en dash.
 
-Example, a colon that introduces an explanation (source: `cf-method/references/workflow-lifecycle.md`):
+Example, a colon that introduces an explanation (source: `.codeflow/rules/writing.md`):
 > A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.
 
 Example, a semicolon that joins two parallel clauses (source: `cf-docs-portal/resources/explanation-method.md`):
@@ -98,7 +98,7 @@ Example, an acronym expanded once (source: `docs/decisions/README.md`):
 > architecture decision record (ADR)
 
 Example, a command as the tool prints it (source: `cf-ship/references/pr-evidence.md`):
-> codeflow test --mode essential --strict
+> codeflow test --mode quick
 
 Example, digits with units (source: `cf-docs-portal/resources/utility-presentation-system.md`):
 > Text 12.5 px or larger; every inner mark 9 px or larger
@@ -315,7 +315,7 @@ summary, a figure or a table.
 - Use no em or en dash, and no emoji unless the project's voice documents
   one.
 
-Example, the exception itself (source: `cf-method/references/workflow-lifecycle.md`):
+Example, the exception itself (source: `.codeflow/rules/writing.md`):
 > A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.
 
 Example, a plain-text figure's legend line (source: `cf-docs-portal/resources/figure-grammar-specimens.md`):
@@ -324,7 +324,7 @@ Example, a plain-text figure's legend line (source: `cf-docs-portal/resources/fi
 Example, a plain-text figure's caption line (source: `cf-docs-portal/resources/figure-grammar-specimens.md`):
 > Caption: Both landing paths end at a human merge behind green checks.
 
-Example, the link rule (source: `cf-method/references/workflow-lifecycle.md`):
+Example, the link rule (source: `.codeflow/rules/writing.md`):
 > Never guess a URL, port, or pull request number; state an unknown link as unknown.
 
 ## Skill prose

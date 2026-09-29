@@ -122,7 +122,7 @@
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "dc0f761ae7142b42049d8042327c8993267921992e890af0aa9a870cd8f708d3"
+      "pristine_sha256": "d913b54d6285ada2aab1346fc5b7ae236beb144037553225c1d0ec5efaf44bea"
     },
     "src/components/PortalColumns.astro": {
       "ownership": "managed",

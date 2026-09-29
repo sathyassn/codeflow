@@ -88,3 +88,15 @@ record and no other; everything else here stays accepted.
 
 "New records persist one `id`, equal to their flat filename" stands: `uid`
 and `former_ids` are additions beside it.
+
+## Note, 2026-09-29: ADR-0076 narrows one clause
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. It
+changes one clause of this record and no other; everything else here stays
+accepted, the planning anchor included.
+
+- "Planning belongs on a `plan/` branch: a task branch cannot commit
+  planning records that authorize its own implementation." Narrowed to
+  epic tasks. A standalone task's own single record may be committed on
+  its task branch and lands with its code in one reviewed PR, read at head
+  (SPC-013 R-78, R-110); every other record in that PR stays refused.

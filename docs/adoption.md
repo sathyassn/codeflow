@@ -193,6 +193,7 @@ rules. Add a trusted profile per bot to `git.automation_profiles` in
     "name": "dependabot",
     "actors": ["dependabot[bot]"],
     "branch_pattern": "dependabot/**",
+    "task": "dependency update",
     "sections": {
       "Summary": "Automated dependency update opened by Dependabot.",
       "Changes": "- the dependency bump named in the title",
@@ -210,6 +211,8 @@ rules. Add a trusted profile per bot to `git.automation_profiles` in
 | What it skips | Branch naming and the commit message shape rules |
 | What still runs | Tests, the secret scan, AI attribution, emoji, the dash rule, the release declaration, and PR sections at their configured level; `sections` only supplies the headings the bot body leaves out |
 | Trusted actor | Only in a GitHub Actions pull request event from the same repository, and only as that event's own actor. In a local run, in another CI and on a fork pull request the actor is `unknown`, whatever `--actor` says, and no profile applies |
+| `task` | Names the unit the bot's pull requests are. Every pull request needs a `Task:` line and a bot names no task record, so `codeflow ci` puts the profile's unit on that line when the bot body has none; a profile without `task` leaves every bot pull request refused for the missing line. This works where durable work tracking is off (the standard and minimal tiers), where any non-empty unit name is accepted |
+| Bots at the full tier | The `Task:` line must name a `TSK-NNN` or `EPC-NNN` record, so a bot's unit name is refused there: a dependency update lands through a task of its own, opened by a person or an agent, whose pull request carries the bump; the bot's pull request is closed once that task lands |
 
 **A PR template you already have.**
 
@@ -357,8 +360,8 @@ of that commit, so the target's policy judges the change.
 The pin does not defend the CI file itself. On a GitHub `pull_request` event,
 and on every GitLab and Bitbucket pipeline, the job file runs from the pull
 request, so a pull request that edits it can change its own install step.
-Only `codeflow-policy.yml` and `codeflow-registry.yml` run from the default
-branch. Require review of your CI files (`.github/workflows/`,
+Only `codeflow-policy.yml`, which also carries the id registry check, runs
+from the default branch. Require review of your CI files (`.github/workflows/`,
 `.gitlab-ci.yml`, `bitbucket-pipelines.yml`) and `.codeflow/` in your host's
 rules, for example with a code owners file and a branch rule that requires
 code owner review; CodeFlow does not configure those settings.

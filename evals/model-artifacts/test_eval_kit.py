@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Tests for the CodeFlow model-evaluation kit."""
+"""Tooling tests for the CodeFlow model-evaluation kit.
+
+They exercise the kit's own code on synthetic observations. They are a
+tooling check, like `validate-suite` is a structural one: neither runs a
+model case, so neither is behavioural evidence.
+"""
 
 from __future__ import annotations
 
@@ -1853,6 +1858,33 @@ class SuiteContractTests(unittest.TestCase):
                                               in zip(polls, polls[1:])})
                     self.assertEqual([], eval_kit.spacing_findings(polls, "replayed polls"))
 
+    def test_help_prints_usage_and_changes_nothing(self) -> None:
+        # TSK-184 qualification row 17: `pr create --help` opened the pull
+        # request and `pr merge --help` was logged as a merge attempt. The
+        # stand-in's own answer, as check-trial replays it, prints usage and
+        # leaves the state as it was.
+        _, _, fixtures_doc = eval_kit.suite_documents()
+        fixture = next(item for item in fixtures_doc["fixtures"]
+                       if item["id"] == "pr-follow-up-green")
+        source = fixture["files"]["tools/gh.py"]
+        record = {"fixture_id": fixture["id"], "path": str(ROOT),
+                  "pinned_files": {"tools/gh.py": hashlib.sha256(source.encode()).hexdigest()}}
+        module, problem = eval_kit.stand_in_module(record)
+        self.assertIsNone(problem)
+        scenario = json.loads(fixture["files"]["tools/gh-scenario.json"])
+        state = module["initial_state"](scenario)
+        before = json.dumps(state, sort_keys=True)
+        for argv in (["pr", "create", "--help"], ["pr", "merge", "--help"],
+                     ["pr", "checks", "-h"], ["help", "pr", "merge"]):
+            io = eval_kit.Collected()
+            self.assertEqual(0, module["respond"](argv, state, scenario, VirtualWatchFacts(), io))
+            self.assertIn("USAGE", "".join(io.stdout))
+        self.assertEqual(before, json.dumps(state, sort_keys=True))
+        self.assertFalse(state["created"])
+        io = eval_kit.Collected()
+        self.assertEqual(0, module["respond"](["pr", "create"], state, scenario, VirtualWatchFacts(), io))
+        self.assertTrue(state["created"])
+
     def test_every_hard_requirement_has_behavioral_coverage(self) -> None:
         requirements, cases, _ = eval_kit.suite_documents()
         hard = {
@@ -3412,8 +3444,8 @@ class ResultScoringTests(unittest.TestCase):
         trial = next(
             trial for trial in result["trials"] if trial["case_id"] == "model-independent-plans"
         )
-        trial["observed"]["signals"] = ["single_plan_then_critique"]
-        trial["observed"]["violations"] = ["codex_critique_only"]
+        trial["observed"]["signals"] = ["plan_drafted_before_findings_exchange"]
+        trial["observed"]["violations"] = ["codex_challenge_without_independent_findings"]
         errors = eval_kit.validate_result(result)
         self.assertTrue(any("expected 'fail'" in error for error in errors))
 

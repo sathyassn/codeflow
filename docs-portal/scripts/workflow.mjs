@@ -6,7 +6,7 @@ import { assertToolOutputRoots, withWorkflowLease } from "./publication.mjs";
 import { lockDigestFailure } from "./runtime-scripts.mjs";
 
 const workflow = process.argv[2];
-if (!["build", "check", "dev", "preview"].includes(workflow)) throw new Error("workflow must be build, check, dev, or preview");
+if (!["build", "check", "dev", "preview", "verify"].includes(workflow)) throw new Error("workflow must be build, check, dev, preview, or verify");
 const root = process.cwd();
 await withSignalAwareChildLifecycle(async (lifecycle) => {
   await withWorkflowLease(root, async () => {
@@ -18,8 +18,11 @@ await withSignalAwareChildLifecycle(async (lifecycle) => {
       await run(lifecycle, process.execPath, ["--test", "tests/adapter.test.mjs", "tests/composition.test.mjs", "tests/chrome.test.mjs"]);
     }
     if (workflow !== "preview") await run(lifecycle, process.execPath, ["scripts/adapter.mjs"]);
-    await run(lifecycle, process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), workflow]);
-    if (workflow === "build") await run(lifecycle, process.execPath, ["scripts/evidence.mjs"]);
+    const astro = path.join("node_modules", "astro", "bin", "astro.mjs");
+    for (const stage of workflow === "verify" ? ["check", "build"] : [workflow]) {
+      await run(lifecycle, process.execPath, [astro, stage]);
+    }
+    if (workflow === "build" || workflow === "verify") await run(lifecycle, process.execPath, ["scripts/evidence.mjs"]);
   });
 });
 

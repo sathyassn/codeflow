@@ -105,16 +105,7 @@ not silently rewritten by a later work PR. These checks
 cover actual state, not a second release ledger or a mandatory extra approval
 role. The independent reviewer still judges the meaning of the change.
 
-## Keep pending entries checkable
-
-Give each pending entry a stable identity, such as a unique bold label, so a
-checker can tell an addition, an edit and a withdrawal apart. An edit under
-an existing label is assessed at its impact like an addition, whatever the
-PR declares: a checker cannot prove that a change keeps the meaning, so
-compare entries byte for byte, whitespace included, since in code and nested
-Markdown it is meaning. The entry is the whole
-rendered bullet, continuation lines included. Renaming a label withdraws the
-old entry and adds a new one.
+## Check release state early
 
 Check release state as early as it is cheap, and keep the pull request check
 authoritative:
@@ -135,10 +126,6 @@ A published section stays byte-identical. Correct it with a dated erratum
 that names the version, never by editing the section. Before the tag, render
 the notes from the final source and read them twice: as a new user and as a
 user upgrading from the last release, in the order they would act.
-
-Release jobs belong to the project, outside any CI file a tool manages for
-its adopters, so an update never installs or removes another project's
-release process.
 
 ## Assess each change
 
@@ -162,28 +149,10 @@ themselves prove either a release or an exemption is needed. Pre-1.0 and other
 version schemes use the adopted project's explicit rules.
 
 Use the project's required PR declaration, fragments or annotations; never
-create a competing input. The PR's Release impact block states the change in
-four fields, then the project's own fields (unit, changelog entry, evidence):
-
-- `Impact`: the change level a consumer sees.
-- `Breaking`: `yes` or `no`, the plain compatibility statement. It replaces
-  the older three-state `Contract` field. On a watched contract path,
-  `Breaking: no` is the explicit compatibility claim, so it is never
-  prefilled.
-- `Rationale`: the consumer-visible effect and the evidence for the level.
-- `Migration`: always present. It is normally `none` for nonbreaking work.
-  When Breaking is yes, give steps or a pointer to a Breaking change section.
-  A PR that refines or reconciles a pending breaking entry carries that
-  entry's migration reference; a checker that assesses edits at the entry's
-  impact also requires the break to be declared.
-- A value is chosen, never left as the template's alternatives.
-
-In stable SemVer, as CodeFlow uses it, Breaking is yes if and only if Impact
-is major, and its checker enforces both directions. Pre-1.0 and other
-schemes name the level a break takes in their adopted policy. Compare a PR's
-declaration with the entries it adds, never with the cumulative pending
-version: an additive task declares minor and Breaking no even when earlier
-work already made the pending release major.
+create a competing input. The PR's Release impact fields (`Impact`,
+`Breaking`, `Rationale`, `Migration`, then the project's own) are defined
+once in [pr-evidence.md](pr-evidence.md), "Release impact and evidence",
+with when the section is required.
 For a commit-driven calculator, the commits that will actually land must retain
 the reviewed markers: a corrected PR title alone is insufficient for merge or
 rebase workflows. For a fragment-driven tool, review its authoritative entries.

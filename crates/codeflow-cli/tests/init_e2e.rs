@@ -690,7 +690,7 @@ fn fresh_scaffolds_install_the_rule_map_at_every_tier() {
         );
         for rule in kernel.rules_for(tier) {
             assert!(
-                agents.contains(&Kernel::render_rule(rule)),
+                agents.contains(&kernel.render_rule_at(tier, rule)),
                 "{flag}: rule {} missing",
                 rule.id
             );
@@ -1038,8 +1038,10 @@ fn split_references_install_and_update_replaces_whole_files_at_standard_and_full
         let assets = repo_root().join("assets/base");
         for tree in [".claude", ".agents"] {
             let added = tsk129_added_files(&root, tree);
+            // TSK-184: five routing sections and the other-hosts reference
+            // merged into the orchestrator's seat section and plan section.
             assert!(
-                added.len() >= 3 + 16 + 8 + 6,
+                added.len() >= 3 + 16 + 3 + 5,
                 "{tier} {tree}: split files missing: {added:?}"
             );
             for rel in added.iter().cloned().chain(
@@ -1132,12 +1134,36 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
     // A docs-only pull request: Summary and Changes suffice.
     let target = git_stdout(&root, &["branch", "--show-current"]);
     let target = target.trim().to_string();
+    git_with_binary(&root, &["branch", "integration/guide", &target]);
+    let target = "integration/guide".to_string();
     git_with_binary(&root, &["switch", "-q", "-c", "docs/guide"]);
     std::fs::create_dir_all(root.join("docs")).unwrap();
     std::fs::write(root.join("docs/guide.md"), "# Guide\n\nHow to start.\n").unwrap();
     git_with_binary(&root, &["add", "docs/guide.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: add a starting guide"]);
-    let body = "Task: none: a new guide\n\n## Summary\n\nAdds a starting guide.\n\n\
+    let allocated = codeflow(
+        &root,
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "bounded guide",
+            "--into",
+            &target,
+            "guide",
+        ],
+    );
+    assert!(allocated.status.success(), "{}", output_text(&allocated));
+    let task_path = root.join("project-management/tasks/TSK-001.md");
+    let task = std::fs::read_to_string(&task_path).unwrap().replace(
+        "- AC-1\n",
+        "- AC-1 When read, the guide shall explain setup.\n",
+    );
+    std::fs::write(&task_path, task).unwrap();
+    git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
+    git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
+    let body = "Task: TSK-001\n\n## Summary\n\nAdds a starting guide.\n\n\
                 ## Changes\n\n- a guide for new readers\n";
     let ci = codeflow(
         &root,
@@ -1148,7 +1174,7 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
             "--head",
             "HEAD",
             "--branch",
-            "docs/guide",
+            "task/TSK-001-guide",
             "--pr-body",
             body,
         ],
@@ -1300,7 +1326,29 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
     std::fs::write(root.join("docs/guide.md"), "# Guide\n").unwrap();
     git_with_binary(&root, &["add", "docs/guide.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: add a guide"]);
-    let body = "Task: none: a new guide\n\n## Description\n\nAdds a guide.\n\n\
+    let allocated = codeflow(
+        &root,
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "bounded guide",
+            "--into",
+            "chore/adopt",
+            "guide",
+        ],
+    );
+    assert!(allocated.status.success(), "{}", output_text(&allocated));
+    let task_path = root.join("project-management/tasks/TSK-001.md");
+    let task = std::fs::read_to_string(&task_path).unwrap().replace(
+        "- AC-1\n",
+        "- AC-1 When read, the guide shall explain setup.\n",
+    );
+    std::fs::write(&task_path, task).unwrap();
+    git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
+    git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
+    let body = "Task: TSK-001\n\n## Description\n\nAdds a guide.\n\n\
                 ## Changes\n\n- a guide\n";
     let ci = codeflow(
         &root,
@@ -1311,7 +1359,7 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
             "--head",
             "HEAD",
             "--branch",
-            "docs/guide",
+            "task/TSK-001-guide",
             "--pr-body",
             body,
         ],
@@ -1439,7 +1487,7 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
             ),
             (
                 ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Docs and records: two review rounds per submitted version",
+                "Review is one holistic pass per revision",
             ),
             (
                 ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
@@ -1447,7 +1495,7 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
             ),
             (
                 ".claude/skills/cf-develop/SKILL.md",
-                "Maximum 2 evidence-moving cycles for code",
+                "No cycle count decides: continue while repairs produce relevant evidence",
             ),
             (
                 ".claude/agents/cf-reviewer.md",
@@ -1483,10 +1531,9 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
                 Some(&index.replace(FINDINGS_ROW, "")),
             );
             let develop = format!("{tree}/skills/cf-develop/SKILL.md");
-            let older = read(&root, &develop).replace(
-                "Maximum 2 evidence-moving cycles for code",
-                "Maximum 3 evidence-moving cycles",
-            );
+            let current = read(&root, &develop);
+            let older = current.replace("cycle count decides", "Maximum 3 evidence-moving cycles");
+            assert_ne!(older, current, "{tier}: cf-develop lost the progress rule");
             record_as_installed(&root, &develop, Some(&older));
         }
         let writing = read(&root, ".codeflow/rules/writing.md");
@@ -1819,7 +1866,7 @@ fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
             let line = String::from_utf8(reminder.stdout).unwrap();
             assert_eq!(line.lines().count(), 1, "{flag} {harness}: {line}");
             assert!(
-                line.starts_with("codeflow reminder: Durations"),
+                line.starts_with("codeflow reminder: When you give a duration"),
                 "{flag} {harness}: {line}"
             );
             for payload in [
@@ -2240,7 +2287,7 @@ fn watched_path_settles_by_release_impact(root: &Path, tmp: &Path, base: &str) {
     let body = tmp.join("body.md");
     std::fs::write(
         &body,
-        "Task: none: a new api function\n\n## Summary\n\nAdds the api.\n\n\
+        "Task: a new api function\n\n## Summary\n\nAdds the api.\n\n\
          ## Changes\n\n- the api\n\n## Testing\n\n- `codeflow ci` over the range\n\
          - Not tested: nothing else\n\n## Reviews\n\n- none yet\n\n\
          ## Release impact\n\n- Impact: minor\n- Breaking: no\n\

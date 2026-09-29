@@ -6,36 +6,45 @@
 
 ## Concept
 
-**Two model families draft the same work independently, and only then meet.**
+**Two model families discover the same work independently, then one plan is
+challenged once.**
 
-`/cf-model-orchestrator` is the host-neutral default for every non-trivial
-repository task: research, analysis, planning, design, implementation,
-debugging, security, substantive documentation, review, or verification. It
-selects the smallest complete outcome mode, so research/planning-only work
-settles an evidenced artifact and stops before implementation. The first stage
-is the load-bearing one: the two lanes share no context edge.
+`/cf-model-orchestrator` is the host-neutral entry for routed repository
+work, decided by the paths a change touches: an adopter-facing path (product
+code, managed instructions, hooks, policy, CI, shipped templates, watched
+contracts), research or analysis that will drive such a change, and plan,
+design, security or irreversible work. Other edits go direct. It selects the
+smallest complete outcome mode, so research or planning-only work settles an
+evidenced artifact and stops before implementation. The first stage is the
+load-bearing one: the two lanes share no context edge. How the work it plans
+then reaches `main` is on [how work moves to main](../delivery.md).
 
 It is for the two primary seats and the host that runs them. It is not a
 model router and not the unattended pipeline, which stays single-vendor.
 
 ## Architecture
 
-Both seats independently research, analyze risks, and draft complete plans from
-the same immutable brief, and neither sees the other's conclusions first. This
-is an anti-anchoring requirement: Codex must not be reduced to critiquing a plan
-Claude has already supplied. After both drafts exist, Claude leads design. The
-host reconciles a versioned plan whose task rows name the responsible primary,
-actual binding-or-route executor, execution mode, routing reason and
-provenance, available usage evidence with freshness or an explicitly unknown
-value, and cross-lineage reviewer.
+Both seats independently discover from the same immutable brief and
+repository scope, and neither sees the other's findings first: source and
+documentation evidence, assumptions verified or still unresolved, edge, error
+and security cases, and risks to compatibility, data, UX and operations. The
+host records both outputs without collapsing disagreements. Claude then
+drafts the one plan from its native session, and Codex challenges it against
+its own findings; there is no second plan and no reconciliation round. The
+plan names each task's responsible primary, actual binding-or-route executor,
+execution mode, routing reason and provenance, and cross-lineage reviewer.
+Settlement ends when both seats approve one version or the host stops for the
+operator; approval of an older version does not carry forward. A task inside
+an approved epic does not repeat discovery; it starts from the epic plan.
 
-Both seats approve those assignments before implementation; changing ownership,
-scope, lineage, isolation, or a named reviewer invalidates the approvals, while
-a permitted primary-owned executor change inside that boundary does not. Each
-actual executor first-verifies its unit, the responsible primary inspects and
-accepts it, and a lineage different from the actual author's reviews it
-independently. The selected `claude-judgment-primary` owns integrated Claude
-quality judgment without claiming independent review of its own unit.
+After approval, only a change of outcome, cross-task interface, dependency
+graph or safety boundary creates a new plan version; a reassignment is
+recorded where the assignment lives, and for an unstarted task rides in the
+batched epic amendment (ADR-0076). Each actual executor first-verifies its
+unit, the responsible primary inspects and accepts it, and a lineage
+different from the actual author's reviews it independently. The selected
+`claude-judgment-primary` owns integrated Claude quality judgment without
+claiming independent review of its own unit.
 
 Each seat is reached through its vendor's own native interactive harness, so
 the host a session starts in decides the transport, not the contract:
@@ -100,9 +109,10 @@ and rendered fidelity.
 ### Quality floor and routing evidence
 
 The shared quality and routing resources require reproducible evidence,
-relevant unit/integration/e2e and UI tests, an 80% production-code coverage
-floor where measurable (90% normal target), security review, and bounded
-rework. They also block material avoidable complexity:
+relevant unit/integration/e2e and UI tests, the project's configured coverage
+gate (CodeFlow's own is `--fail-under-lines 90`), security review on its
+trigger, and review that ends on evidence rather than a round count
+(ADR-0076). They also block material avoidable complexity:
 
 | Who | Duty |
 |---|---|
@@ -147,45 +157,52 @@ during customization (ADR-0044).
 
 ### Task graphs and durable records
 
-For one obvious task, the settled plan records
-`TASK_GRAPH: N/A (single task)`. For multi-task work, `/cf-plan` turns the
-approved assignments and real dependencies into one acyclic Plan vN graph that
-both approvals cover. Every durable task lists its direct structural
-predecessors in non-executable `depends_on` frontmatter; the metadata preserves
-topology and does not execute the plan.
+Planning happens once, when an approved brief or spec is broken into an epic
+and its tasks (ADR-0076); the flow from there to `main` is on
+[how work moves to main](../delivery.md). For one obvious task, the settled
+plan records `TASK_GRAPH: N/A (single task)`. For multi-task work, `/cf-plan`
+turns the approved assignments and real dependencies into one acyclic Plan vN
+graph that both approvals cover. Every durable task lists its direct
+structural predecessors in non-executable `depends_on` frontmatter; the
+metadata preserves topology and does not execute the plan.
 
 | Rule | Behavior |
 |---|---|
 | Edges | ordinary completion uses bare edges, and bare active predecessors must land; only genuine pre-approved decisions use observable guards |
 | Guards | select mutually exclusive branches; a later join may list every structural candidate while waiting only for active predecessors plus resolution evidence for the alternatives; missing or ambiguous guard evidence creates Plan vN+1 rather than an improvised route |
-| New plan version | material node, edge, ownership, interface, acceptance, safety, graph or cross-task contract changes force Plan vN+1 and both approvals |
+| New plan version | a change of outcome, cross-task interface, dependency graph or safety boundary forces Plan vN+1 and both approvals; an ownership change and a task's own criteria change do not (ADR-0076 narrows ADR-0040) |
 | Same plan version | ordinary steps, bounded rework, extra strengthening tests, in-node implementation detail, or another safe topological order inside the same contract remain execution-ledger evidence |
+| A later change of scope | a follow-up, a new or split outcome, a reassignment or another task's criteria ride in one batched epic amendment on a `plan/` branch with one other-lineage reviewer; nothing plans again per task |
 | `validate --docs` | checks canonical identities and filenames, references, relationship shape, parent-or-standalone ownership, spec readiness, stable integration targets, completed acceptance criteria, and malformed, dangling, self-referential, duplicate, or cyclic topology |
-| `codeflow work start` | checks the planning anchor of the task the branch carries on any work prefix (`task/`, `fix/`, `feat/`, `spike/` and the rest; not `plan/` or `integration/`), with its parent or standalone rationale, approved specs and completed predecessors, without mutating repository state |
-| CI, once per pull request | applies the same read-only merge-base check when full-tier or recognizable historical task tracking is active, proving validated planning is present on the declared stable target; the per-commit hook no longer does |
+| `codeflow work start` | checks the planning anchor of the task the branch carries on any work prefix (`task/`, `fix/`, `feat/`, `spike/` and the rest; not `plan/` or `integration/`): the epic's planning change for an epic task, or the record at head for a standalone task whose record arrives in its own pull request; with its parent or standalone rationale, approved specs and completed predecessors, without mutating repository state |
+| CI, once per pull request | applies the same read-only merge-base check when full-tier or recognizable historical task tracking is active, proving validated planning is present on the declared stable target; the per-commit hook does not. CI shares the structural core of the check and not the start gate, so it admits a standalone task's own record that arrives complete with a valid acceptance block |
 | Planning level | both report at the `git.work_planning` level: `block` by default, or `warn`, which reports the finding and lets the work continue; a declared target whose local branch is strictly behind its configured upstream anchors on that upstream, with a note, and a diverged pair is refused |
-| Closeout | review-relevant bounded discoveries persist at task closeout; closeout cannot retroactively approve a material change |
+| Acceptance | the acceptance block rides in the task's own pull request as its last commit; a closeout cannot retroactively approve a material change |
 
 #### Pull request classes
 
 With tracking on, `codeflow ci` classifies every pull request: tracked
-(`Task: TSK-NNN`, or the id the branch carries), direct change
-(`Task: none: <reason>`), planning-only (records and `docs/plan/` only), an
-epic's integration line (a task of the epic targets it, it lands on the
-default target, and it holds only merges), or an automation profile. The
-range is one diff from the merge-base, and tracking is read at the target as
-well as the head. An unclassified one, a mismatched `Task:` line, a pull
-request that adds the record it claims, and a spike that lands anything but
-`docs/research/` findings and its own record block.
+(`Task: TSK-NNN`, or the id the branch carries), an epic's planning-only
+range (`Task: EPC-NNN`; records and `docs/plan/` only), an epic's integration
+line (`Task: EPC-NNN`; a task of the epic targets it, it lands on the default
+target, and it holds only merges), or an automation profile. A pull request
+that names no task and no epic is refused whatever it touches; the
+`Task: none` route is gone, and `git.direct_changes` is accepted and ignored.
+Where tracking is inactive, the `Task:` line names the harness's tracked
+unit. The range is one diff from the merge-base, and tracking is read at the
+target as well as the head. Refused: an unclassified range, a mismatched
+`Task:` line, a pull request that adds an epic task's record and claims it,
+any record added beside a standalone task's own, and a spike that lands
+anything but `docs/research/` findings and its own record. A standalone
+task's own record, added in its pull request on a branch carrying its id, is
+admitted through the structural checks of readiness and may arrive complete.
 
-A direct change is refused on the floor of one embedded path table (policy,
-hooks, managed instructions, CI files, manifests, record schema, shipped
-templates) plus the project's own `git.product_paths` and
-`git.breaking_watch_paths`; `init` writes a stack default for
-`git.product_paths`, `update` adds it once, and `git.direct_changes: forbid`
-refuses direct changes entirely. `task new --follow-up-of`, `epic new
---integration` and `adr new` (numbered, written `proposed`) are one command
-each.
+`task new --standalone-reason` may run on the task's own branch; `task new
+--follow-up-of` runs on a `plan/` branch; `epic new --integration` and
+`adr new` (numbered, written `proposed`) are one command each. `init` writes
+a stack default for `git.product_paths` and `update` adds it once; with
+`git.breaking_watch_paths` and the embedded contract path table it decides
+which ranges count as code for the pull request section rules.
 
 #### Readiness
 
@@ -198,9 +215,15 @@ commit; a pin YAML reads as a number or as null is refused with the quote
 remedy, and a pin left out keeps the edge unmet. `work next` lists ready,
 then waiting and blocked tasks with reasons from the refs as last fetched;
 `work claim` fetches, refuses a task a visible branch already carries, and
-pushes `task/TSK-NNN-<slug>` as an advisory claim. `status` shows derived
-active, ready, landed and conflicting branches and epic progress, and never
-calls a live integration line removable. A selection that removes
+pushes `task/TSK-NNN-<slug>` as an advisory claim. `work claim` and
+`work start` accept a code predecessor that is reviewed but not complete only
+through `--on TSK-NNN@<sha>`, a pin a review of the predecessor names that
+still equals the predecessor branch's tip: `claim` checks the pins and cuts
+the branch from the pin that contains the others (incomparable pins refuse),
+`start` checks each pin is an ancestor of HEAD, and CI still requires the
+predecessor complete at the merge-base when the task lands. `status` shows
+derived active, ready, landed and conflicting branches and epic progress, and
+never calls a live integration line removable. A selection that removes
 `awaiting_selection` lands only from `plan/`, and `spec new --for` links
 every consumer in one change.
 
@@ -211,6 +234,12 @@ Record status moves only by legal transitions (SPC-013 R-30 to R-35).
 only the sections the transition needs: a `## Blocker` with reason, owner and
 revisit for a blocked task, Closeout lines `- cancelled:` and `- scope:` for a
 cancelled record, and a fenced `yaml` acceptance block on completion.
+A complete task can be fixed in one PR: reopen with a reason, retain its
+old block under `acceptance_superseded:`, fix it, then complete again with a
+reviewed commit inside that PR. The old block and criteria are compared
+with the anchored target; copied review blocks and a stale review carried
+by an earlier landing merge are refused. The separate planning-reopen
+path remains valid (TSK-140).
 Reopening keeps the old block under `acceptance_superseded:` with its reason;
 a task completed before the migration, with no block, records a Closeout line
 `- reopened: <reason>` instead. Sections and blocks inside HTML comments or
@@ -250,18 +279,28 @@ event types are retired.
 A completion is bound to the reviewed commit (SPC-013 R-52 to R-54, R-60 to
 R-62): `task status complete` and `codeflow ci` check that the block's
 `reviewed` commit, named by object id, is the head or an ancestor after
-which only the record's status and Closeout changed, and that each waiver
-names a planning-only amendment on the target that changed that criterion;
-the verb also refuses uncommitted changes outside the record. Only a
-planning-only change or a checked epic line can change a task's criteria;
-the pull request's class decides it, not the branch prefix. A range touching
+which only the record's status and Closeout changed, apart from a merge from
+the integration line whose tree equals the clean re-merge, and that each
+waiver names the commit that changed that criterion: a planning-only
+amendment on the target, or a record-only commit in the pull request's own
+range before the reviewed commit; the verb also refuses uncommitted changes
+outside the record. A clean task landing can carry that reviewed source onto
+its line, including when only status and Closeout changed between the review
+and the landed task head; unrelated line work before the landing does not
+invalidate that source. Direct work and transported work use the same
+binding predicate. At a batch landing each completion binds at the commit
+that introduced its block, so reviewed heads land together on one candidate.
+A task pull request may change its own criteria, and CI prints the change
+for the reviewer; a reopened task keeps its criteria, and another task's
+criteria change only in its own pull request, a planning-only change or a
+checked epic line. A range touching
 the adopter-facing path set needs a `(journey)` criterion or one serving the
 epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a
 listed follow-up. A tag opens or closes its criterion, trailing sentence
 punctuation included; a tag inside the text does not count.
-`git.work_records` sets the binding and journey rules; frozen criteria always
-block.
+`git.work_records` sets the binding and journey rules; the frozen criteria of
+other records always block.
 
 #### Release rules
 
@@ -277,16 +316,30 @@ equal to the expected import's tree entry is brought, and its completions
 bind where they were introduced (only a later completion from the task's own
 line that binds there, and that the line landed after the earlier ones,
 supersedes them; a direct completion is judged as it was made); a brought
-criteria change is judged again where it landed on its line, unless that
-landing is at or before the cutoff of the line the task targets, on that
-line's first-parent chain, in the project-config table
-`release_rule_baseline` read at the default target, which lists it as
-information.
+criteria change is judged again where it landed on its line. The records rule
+judges a brought record where it was introduced too: a spec approved on its
+line counts where it landed there, which must have been planning-only, and a
+record whose only change is a `uid` backfill landed on its line is not judged
+again.
 
-The adoption marker `release_rules = 1` in project config never decides
-whether these rules apply; once the default target carries it, removing it or
-changing its value, there or in the judged range, makes every release check
-refuse. The marker's history is read from the parents each commit records.
+Two project-config tables, read at the default target, exist only for the
+2.x to 3.0 transition: a brought criteria change landed at or before the
+cutoff in `release_rule_baseline`, and a brought complete task without an
+acceptance block whose record last changed at or before the cutoff in
+`release_records_baseline`, each for the line the task targets and on its
+first-parent chain, are listed as information. `codeflow init` and `update`
+write the adoption marker `release_rules = 1` in project config and never a
+table. The marker never decides whether these rules apply; once the default
+target carries it, removing it or changing its value, there or in the judged
+range, makes every release check refuse. A table is honoured only as a
+one-time bridge for CodeFlow's own history: added in one commit and never
+changed, at or before the marker's first commit on the default target, after
+project config without the marker, with every cutoff from before the rule, on
+its line's first-parent chain and one of CodeFlow's approved cutoffs, which
+the judge compiles in; otherwise every release check refuses. A consuming
+project, a fork that keeps CodeFlow's root commit included, gains no relief
+for its own work. No flag, variable or policy key skips the rule or a table.
+The marker's history is read from the parents each commit records.
 History the check needs that it cannot read in full, cut by a shallow
 boundary or missing a config object, refuses as well: adoption is never
 inferred absent from it. A graft file or a replace ref, which would change
@@ -321,9 +374,11 @@ the conditional ship guidance.
 
 #### Durable work and external trackers
 
-For active CodeFlow durable work, plan and validate records on a `plan/`
-branch, merge the planning PR into each task's declared `integration_target`,
-then implement from `task/TSK-NNN-<slug>`.
+For active CodeFlow durable work, the flow is on
+[how work moves to main](../delivery.md): one planning change at the
+breakdown, one pull request per task from `task/TSK-NNN-<slug>`, reviewed
+heads landing in small batches with one full gate, and the operator merging
+`main`.
 
 CodeFlow is the natural authority for finite repo-local gated work. Project
 organization keeps one authoritative work-item home and links, rather than
@@ -386,11 +441,15 @@ consuming projects by `init` or `update`.
 ### Parallelism
 
 Independent implementation tasks use bounded, host-resource-aware parallelism:
-one owner/branch/worktree per task, a single owner for shared files, serialized
-landing through `codeflow integrate` to `integration/<epic>`, affected gates
-after each landing, and aggregate gates plus review on the combined diff.
-Missing seats degrade legibly to solo; mid-run failure blocks and escalates.
-Deterministic gates and the human-merged PR remain authoritative.
+one owner/branch/worktree per task, a single owner for shared files, and
+landing on `integration/<epic>` in small batch candidates in dependency order:
+the primary inspects the resolved hunks and integration seams on product
+paths, asks the other lineage to review the integration effects only when it
+hand-resolved a product hunk or two tasks touched one hotspot, and runs one
+full gate on the candidate before the line moves (ADR-0076); unit reviews
+are not repeated. Missing seats degrade
+legibly to solo; mid-run failure blocks and escalates. Deterministic gates and
+the human-merged PR remain authoritative.
 
 ### What pins this contract
 

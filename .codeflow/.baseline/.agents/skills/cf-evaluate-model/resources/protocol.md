@@ -102,7 +102,7 @@ trials and recomputes each status and the summary from observations.
     "status": "pass | fail | error | not_run",
     "observed": {
       "route": "cf-model-orchestrator",
-      "signals": ["claude_complete_plan_before_exchange"],
+      "signals": ["claude_findings_before_exchange"],
       "violations": [],
       "references": []
     },

@@ -10,7 +10,11 @@ name: codeflow-ci
 on:
   pull_request:
   push:
-    branches: [main, master]
+    branches: [main, master, "integration/**"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -22,6 +26,7 @@ jobs:
   # a green run on the new image. Actions are on the node24 runtime.
   # The Windows job keeps windows-latest; this pin covers Ubuntu only.
   gates:
+    if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
     name: codeflow gates
     runs-on: ubuntu-24.04
     steps:
@@ -75,51 +80,25 @@ jobs:
           npm ci --ignore-scripts --prefix crates/codeflow-present/web
           crates/codeflow-present/web/node_modules/.bin/playwright-core install --with-deps chromium firefox webkit
 
-      # The repository's full test configuration includes the same coverage
-      # target enforced by the dedicated coverage job. A clean runner must not
-      # rely on ambient developer tooling for the strict aggregate gate.
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      # One instrumented suite owns Linux test and coverage evidence.
+      - name: Install nextest and llvm-cov
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129,cargo-llvm-cov@0.8.4
 
       - name: Build codeflow from source
         run: |
           cargo build --release -p codeflow-cli
           echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
-      # Umbrella restack of targets already run in rust/coverage/windows jobs.
-      # An infra death here (runner lost communication, OOM, billing cutoff)
-      # is missing job evidence, not an assertion-red of those sibling checks.
+      # The Linux candidate has one full gate. Windows independently runs raw
+      # Rust checks; Unix-only journeys and the read benchmark remain Linux-only.
       - name: codeflow test --mode full --strict
-        run: codeflow test --mode full --strict
+        run: codeflow test --mode full --strict --all
 
-      - name: codeflow validate --docs
-        run: codeflow validate --docs
-
-  rust:
-    name: rust (format + test + clippy)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-
-      - name: cargo fmt --all --check
-        run: cargo fmt --all -- --check
-
-      - name: cargo test --workspace
-        run: cargo test --workspace
-
-      - name: cargo clippy --workspace --all-targets -D warnings
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: cargo doc --workspace -D warnings
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-
-      - name: codeflow validate --docs from source
-        run: cargo run --quiet -p codeflow-cli -- validate --docs
 
   windows:
+    if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
     name: windows (build + test + clippy)
     runs-on: windows-latest
     steps:
@@ -128,17 +107,38 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo test --workspace --no-fail-fast
-        run: cargo test --workspace --no-fail-fast
+      - name: Install nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129
+
+      - name: cargo fmt --all --check
+        run: cargo fmt --all -- --check
+
+      - name: Begin raw referee run
+        shell: bash
+        run: |
+          rm -f target/nextest/codeflow/junit.xml
+          echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
+
+      - name: cargo nextest run
+        run: cargo nextest run --workspace --no-fail-fast --profile codeflow
+
+      - name: cargo doctests
+        run: cargo test --workspace --doc
+
+      - name: cargo rustdoc
+        shell: bash
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
       - name: cargo clippy --workspace --all-targets -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # The journey gate (TSK-110, SPC-013 R-104, R-107): every mapped journey
-      # runs here too, so each new command is proven on Windows. Journeys
-      # whose tests are unix-only are named as skipped, never passed.
+      # Consume this raw run's exact results. Unix-only journeys and the own
+      # read-benchmark target are disclosed as skipped on Windows.
       - name: journey gate
-        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --skip-benchmark
+        shell: bash
+        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/codeflow/junit.xml --skip-benchmark
 
       - uses: actions/setup-node@v6
         with:
@@ -227,21 +227,3 @@ jobs:
           else
             echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
           fi
-
-  # Line-coverage floor: fails the build when workspace line coverage drops
-  # below 90% (current ~95% — headroom to avoid flakiness while still catching
-  # real regressions instead of letting them land silently).
-  coverage:
-    name: coverage report
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Coverage summary + floor (fails under 90% line coverage)
-        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 90

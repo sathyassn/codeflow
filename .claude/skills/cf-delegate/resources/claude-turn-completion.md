@@ -147,29 +147,17 @@ Prompts are capped at 1 MiB.
 
 A task the turn backgrounds (a Workflow, a background Bash command) finishes
 after its `Stop`, and Claude Code then submits a task notice as a new prompt.
-The hook admits it, without an armed turn, only as a continuation of the
-current turn: the prompt must be exactly one `<task-notification>` envelope
-with nothing around it, the current turn must have stopped with no other
-continuation open, and the session transcript must show the tool call that
-returned that task id made within this turn or one of its continuations. It is
-recorded at `turns/<turn>/continuations/<task-id>/accepted.json` with
-`delivery: task_notification`, its `prompt_id` and the SHA-256 of its bytes.
-Any other notice (unknown or earlier task, extra text, a second envelope, no
-accepted turn) is blocked like an unarmed prompt, and an armed prompt waits
-until the open continuation stops.
-
-Claude Code gives the prompt hook nothing that tells a real notice from the
-same text typed into the session, so the proof comes at the `Stop` carrying
-the continuation's `prompt_id`. Before it writes `result.json` beside the
-acceptance, the session transcript must record that prompt with origin
-`task-notification`, `promptSource` `system` and `turnOrigin`
-`task_notification`, its bytes must match the recorded digest, and a queued
-enqueue of the same bytes must come before it. A typed copy, a changed body or
-a missing entry poisons the run and writes no result. The residual risk is
-plain: the model may act on a forged notice within that continuation turn;
-the check keeps it from being recorded as a clean result. `wait --until
-terminal` still reports the turn's first `Stop`; read a backgrounded result
-from the continuation record.
+The hook admits it only as a continuation of the current turn, after that
+turn stopped with no other continuation open, when the session transcript
+proves it is a real notice for a task this turn launched; an armed prompt
+waits until the open continuation stops. Its result is recorded at
+`turns/<turn>/continuations/<task-id>/accepted.json` with `delivery:
+task_notification`. Any other notice, or a typed copy of one, is blocked or
+poisons the run, and writes no `result.json`. `wait --until terminal` still
+reports the turn's first `Stop`; read a backgrounded result from the
+continuation record. The residual risk is that the model may act on a
+forged notice within that continuation turn; the check keeps it from being
+recorded as a clean result.
 
 ## Stable exit states
 
@@ -199,24 +187,20 @@ This section governs the delegated Claude lifecycle (`wait --until terminal`,
 continuation records). An in-session Agent launch follows capability-routing
 instead: its return is the task notification from the session's own launch.
 
-Collect delegated worker results before the primary returns its final answer.
-For peer-dependent turns, verify a supported public foreground native return
-within the host turn; an intended wait flag is not proof. Never call plugin-internal
-scripts or cached private paths. Keep host-side monitoring in that accepted
-foreground turn: do not use Claude Bash `run_in_background` watchers or rely on
-their task notifications to resume it. Only a notice that meets the task-notice
-rule above is admitted, and its result lives in the continuation record, not in
-`wait --until terminal`; any other notification enters as a new, unarmed
-`UserPromptSubmit` and is rejected. A persistent native peer process behind the
-dedicated pane is permitted; collect its result in-turn. A worker that resumes
-the primary after its terminal result without an admitted task notice can emit
-an unsolicited second Stop; schema-v2 cannot correlate that continuation and
-deliberately poisons the run. A terminal
-message saying work is still running is incomplete, not a successful handoff.
-Do not weaken correlation or count a later uncorrelated response as verified.
-Recover in a fresh run and recheck the evidence; no internal worker registry is
-required. If the harness cannot keep worker activity inside the accepted turn,
-record that route as unqualified and use a supported bounded native route.
+Collect delegated worker results before the primary returns its final answer,
+inside the accepted foreground turn: verify a supported public foreground
+native return (an intended wait flag is not proof), never through Claude
+Bash `run_in_background` watchers, their notifications or plugin-internal
+scripts. A persistent native peer process behind the dedicated pane is
+permitted; collect its result in-turn. Only a notice that meets the
+task-notice rule above is admitted; any other notification enters as a new,
+unarmed `UserPromptSubmit` and is rejected, and a worker that resumes the primary after its terminal result
+without an admitted notice poisons the run. A terminal message saying work
+is still running is incomplete, not a successful handoff. Do not weaken
+correlation or count a later uncorrelated response as verified; recover in
+a fresh run. If the harness cannot keep worker activity inside the accepted
+turn, record that route as unqualified and use a supported bounded native
+route.
 
 Each run permits one outstanding armed turn. After a terminal result, arm the
 next turn under a new turn id in the same session and repeat
@@ -239,11 +223,3 @@ After the terminal result is consumed, harvest what verification needs (the
 verdict, the evidence to re-derive, the worktree diff), then kill the task
 session, remove the state directory, and delete the private prompt files.
 State records carry digests and bounded payloads, never the prompt text.
-
-## Legacy compatibility only
-
-`codeflow hook delegate-turn --run-id RUN --result FILE` is the legacy
-one-shot record-and-signal mode, retained byte-compatible for existing
-callers until a later major release. The two hook modes are mutually
-exclusive and never fall back to one another. New work always uses the
-schema-v2 lifecycle above.

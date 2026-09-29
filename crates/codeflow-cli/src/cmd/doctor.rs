@@ -37,6 +37,12 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
         }
         return 0;
     }
+    for note in codeflow_core::hooks::policy_schema::deprecation_warnings(std::path::Path::new(
+        &opts.project_dir,
+    )) {
+        let _ = writeln!(out, "note  policy: {}", note.text);
+        let _ = writeln!(out, "      clear it: {}", note.remedy);
+    }
     let results = if let Some(name) = &args.check {
         match doctor::run_check(name, opts) {
             Ok(r) => vec![r],

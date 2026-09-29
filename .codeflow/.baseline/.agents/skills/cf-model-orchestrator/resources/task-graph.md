@@ -8,7 +8,8 @@ metadata.
 ## Nodes and edges
 
 Every assignment row is one outcome-bearing node and uses the canonical
-responsibility/execution fields from `capability-routing.md`:
+responsibility and execution fields of the plan's assignment line
+(`quality/plan.md`):
 
 ```text
 TASK_ID | OUTCOME | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION | AUTHORSHIP | CROSS_LINEAGE_REVIEWER seat@effort | WRITE_SCOPE | ACCEPTANCE_EVIDENCE
@@ -21,8 +22,11 @@ A -> B
 ```
 
 A bare edge is active unless its source lies on a branch resolved
-`not_selected`. Every active bare edge means B cannot start or be accepted
-until A has landed with its required task gates green. `when=complete(A)` is
+`not_selected`. Every active bare edge means B cannot be accepted or land
+until A has landed with its required gates green. B may start earlier only on
+A's exact reviewed head, named with `--on TSK-A@<sha>` to `codeflow work claim`
+and `work start`; A still lands first, and a change to A after its review
+means rebase on its new reviewed head and recheck. `when=complete(A)` is
 implicit and is never written. Ordering preference alone is not a dependency.
 
 Reserve an evidence guard for a genuine decision settled before execution, or
@@ -43,13 +47,14 @@ becomes active. Only the selected branch of a decision is written into
 `depends_on`. Until the selection is approved on the target, the join task
 carries `awaiting_selection: <plan or decision path>`, is `blocked` with the
 reason "awaiting selection", and may have an empty `depends_on`. The selection
-lands only by a planning PR that removes `awaiting_selection`, writes the
-selected dependencies and unblocks the join; it never lands on a task branch.
+lands only by the batched epic amendment that removes `awaiting_selection`,
+writes the selected dependencies and unblocks the join; it never lands on a
+task branch.
 Every unselected alternative records `not_selected` plus the guard evidence in
 the execution ledger; when a durable task already exists, it is cancelled, and
 a cancelled, unselected alternative never blocks a join. An ambiguous or
-unresolved guard blocks the join and creates Plan vN+1 rather than inviting a
-guess.
+unresolved guard blocks the join and creates a new plan version rather than
+inviting a guess.
 
 ## Well-formed graph
 
@@ -67,7 +72,7 @@ T3 -> T4
   node and may appear only as a predecessor.
 - `START` is plan-only and is never written to task metadata. A root task
   reached from `START` records `depends_on: []`.
-- The execution graph is acyclic. Bounded review or rework is a lifecycle loop
+- The execution graph is acyclic. Review and rework are a lifecycle loop
   inside a node, not a dependency cycle.
 - Tasks with no path between them are eligible for parallel work, not
   automatically parallel. The existing ownership, resource, worktree, shared
@@ -100,31 +105,34 @@ completion, or scheduling.
 
 ## Mutation and settlement
 
-Create Plan vN+1 and obtain fresh approval from both primary seats before
-dependent work continues when evidence requires any of these:
+Create a new plan version, approved by both primary seats before dependent
+work continues, only when evidence changes one of these:
 
-- add, remove, split, or merge a task node;
-- add, remove, redirect, or change a dependency edge or decision guard;
-- change a node outcome, accepted scope or non-goal, acceptance evidence,
-  cross-task interface, or security/recovery boundary;
-- change a named responsible primary, cross-lineage reviewer, task/file owner,
-  branch/worktree owner, authored lineage, scope or isolation boundary;
-- change concurrency or integration constraints in a way that alters safe
-  isolation, ownership, evidence, or the critical path.
+- a node's outcome, or the epic's accepted outcome, scope or non-goals;
+- a cross-task interface;
+- the dependency graph: a dependency edge, a decision guard, or a node whose
+  addition or removal changes what other nodes depend on;
+- a security or recovery boundary.
 
-Two recorded exceptions apply to that approval. A reversible item may carry
-`SETTLED_DISSENT` under the [quality contract](quality-contract.md) plan
-record. When a seat is lost after approval, the reassignment that
-[capability-routing.md](capability-routing.md) "Review and degradation"
-describes is Plan vN+1 approved by every available standing seat. The lost
-seat is recorded unavailable with reduced assurance. It is never waited on and
-never recorded as approving, and any verdict it gave before the loss stays as
-given.
+A reversible item in that approval may carry `SETTLED_DISSENT` under the
+[quality contract](quality-contract.md) plan record.
 
-These remain execution evidence inside the approved graph unless they cross a
-boundary above:
+These ride in one batched epic amendment on a `plan/` branch, reviewed by one
+other-lineage seat:
 
-- steps, commits, focused implementation choices, and bounded rework inside an
+- reassignment of a named responsible primary, reviewer, task or file owner,
+  or branch and worktree owner;
+- merge or split of unstarted tasks that keeps their outcomes and edges;
+- follow-ups, re-sizing, and criteria changes of other tasks;
+- a concurrency or integration constraint change that keeps isolation and
+  safety.
+
+A task's own criteria change rides in its own PR, where CI prints the change
+for the reviewer.
+
+These remain execution evidence inside the approved graph:
+
+- steps, commits, focused implementation choices, and rework inside an
   approved node;
 - expected-file drift that remains inside the same owned write boundary;
 - an extra test that strengthens already-required evidence without changing
@@ -136,21 +144,26 @@ boundary above:
 - a different valid topological order under unchanged ownership, guards, and
   safety.
 
-Classify **and persist** each such occurrence in the execution ledger with the
-supporting evidence. Merely calling it “in-node” or “ledger evidence” without
-recording it does not satisfy the trace contract.
+Log material dependency or decision changes and meaningful checkpoints in the
+execution ledger with their evidence; routine in-node steps need no entry.
 
-Node granularity prevents both evasion and ceremony. A node is a unit that
-needs its own outcome and acceptance evidence plus at least one of: a distinct
-responsible-primary/reviewer assignment, branch/worktree, decision branch, or integration
-slot. The default shape is a **narrow complete path** that is demoable or
-verifiable on its own (schema through the exercised surface plus tests), not a
-horizontal layer-slice. Wide mechanical refactors are the exception: expand
-the new form beside the old, migrate callers in blast-radius batches, then
-contract the old form; do not force them into a fake vertical slice. Work
-below that threshold is an in-node step. If a supposed step later
-needs a different owner, branch, decision branch, or landing slot, it was a new
-node: amend the plan before proceeding.
+A node is one outcome a user or operator can observe and verify, worth its own
+review and landing, delivered in one PR. Its floor is a **narrow complete
+path** that is demoable or verifiable on its own (schema through the exercised
+surface plus tests), not a horizontal layer-slice. Wide mechanical refactors
+are the exception: expand the new form beside the old, migrate callers in
+blast-radius batches, then contract the old form; do not force them into a
+fake vertical slice. Split a node only for a reason written in the task: value
+that can ship alone, a contract boundary a consumer needs pinned, an operator
+decision that gates part of it, a size too big for one thorough review, or a
+risk boundary (security, data, irreversible action). A branch, a worker, a
+file owner, a reviewer seat, a landing slot or a review finding is never a
+reason to create or split a node; work that is not its own outcome is combined
+with the outcome it serves. A node typically has 3 to 8 criteria; a broad
+safety change may need more, and past about a dozen ask whether it is two
+outcomes. These numbers are orientation, never a split rule. If a supposed
+step later turns out to be a separate outcome, it is a new node: add it in the
+batched epic amendment before proceeding.
 
 A large epic may record **Not yet specified** (in-scope fog that cannot yet be
 phrased as a node) versus **Out of scope** (ruled beyond this destination).

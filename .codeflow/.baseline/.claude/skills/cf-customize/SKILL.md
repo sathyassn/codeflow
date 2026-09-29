@@ -46,30 +46,24 @@ Then verify and **offer** remediation; never install silently.
   tmux. Retain live interactive canaries because status commands cannot prove a
   native TTY session and its tools work.
 - **Duo flow** (codex configured / `cf-model-orchestrator` in use):
-  - **Claude-host lane**: `codex login status`, `codex mcp list`, the enabled
-    `codex@openai-codex` plugin, and a scoped `/codex:setup`/tool canary. The
-    plugin/app-server is preferred. If unavailable or incompatible, qualify
-    the official native fallback in `cf-delegate`; missing plugin alone does
-    not establish a missing Codex seat. Verify task tools and safety boundaries.
-    Never use headless `codex exec`, a hand-rolled app-server driver,
-    or a third-party Grok Codex plugin.
-  - **Codex-host lane**: `claude --version` (2.1.187 or newer for sandbox
-    environment-variable denies), `herdr` when `HERDR_ENV=1` else `tmux`, and
-    `claude mcp list`, followed by authenticated interactive TTY canaries for
-    the current ensemble's Claude primary at default effort. Escalation
-    efforts are exercised by in-family workers, not canaried on the primary.
-    Production uses `bypassPermissions`; consult/no-edit review uses
-    auto with `autoMode.classifyAllShell: true` through `--settings`, plus one
-    schema-v2 round trip (`delegate init` → wait-ready → `arm` → canonical
-    UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal with
-    bounded cleanup), including the `cf-delegate` sibling Stop-hook preflight.
-    Never use `claude -p`, bare `tmux wait-for`, or pane
-    stability as the work protocol. If the preferred Claude primary is
-    unavailable, use the ensemble's recorded same-Claude primary fallback;
-    never claim the fallback was the selected primary.
+  - **Lane preflight and canary:** run those of the lane this host uses, as
+    `cf-delegate` and its lane files set out: the plugin lane on a Claude host
+    (a missing plugin alone does not establish a missing Codex seat; qualify
+    the official native fallback), the lifecycle lane on a Codex host
+    (`herdr` when `HERDR_ENV=1`, else `tmux`, and one schema-v2 round trip
+    with the sibling Stop-hook preflight). `codeflow doctor` reports the
+    inspectable part; the live canary proves the native session and its
+    tools. Canary the current ensemble's primaries at default effort;
+    escalation efforts are exercised by in-family workers. Never use
+    headless `codex exec` or `claude -p`, a hand-rolled app-server driver,
+    a third-party Grok Codex plugin, bare `tmux wait-for` or pane stability
+    as the work protocol. If the preferred Claude primary is unavailable,
+    use the ensemble's recorded same-Claude primary fallback; never claim
+    the fallback was the selected primary.
   - **Autonomy settings**: parse and inspect the effective files rather than
     trusting their comments:
-    - `.claude/settings.json`: sandbox enabled and fail-closed, sandboxed Bash
+    - `.claude/settings.json` (Claude Code 2.1.187 or newer applies the
+      sandbox environment-variable denies): sandbox enabled and fail-closed, sandboxed Bash
       auto-approved, classified unsandboxed retry enabled only for trusted
       installed tools that fail because they require host state, wildcard
       public-domain egress present for dependency/tool subprocesses, common private/link-local
@@ -237,11 +231,8 @@ confirms the final content.
   Without active tracking, claim no workgraph parity and do not silently raise
   tier. Use opaque links, never status mirroring or a host-local database as
   shared team truth. Migrate only for an evidenced failure.
-- **Agentic operating/estimation method**: when useful to this project's
-  delivery or capacity decisions, invoke `cf-estimate` for a concrete preview
-  against its existing planning authority. Confirm new adoption, reuse a
-  compatible profile or honor a recorded decline until its material re-offer
-  event. Never seed forecasts, calibration tables or `.codeflow/estimate.json`
+- **Estimation** only on an explicit request, through `cf-estimate`. Never
+  seed forecasts, calibration tables or `.codeflow/estimate.json`
   automatically; a setup walkthrough does not authorize method adoption.
 - **Releases**: follow `cf-ship/references/release-policy.md` for setup.
 - **Issue tracker**: when a work item is planned, started, blocked, completed
@@ -337,5 +328,6 @@ content. Do **not** propose auto-running the skill.
 
 Report completion with the prioritized findings, the tool fixes applied or
 declined (and what each declined fix costs), the artifacts filled, and the gate
-output. Apply `cf-editorial-review` to the substantive report and artifact
-edits, then hand off to `cf-ship`, whose step 8 says who merges the PR.
+output. `cf-editorial-review` applies to the report and artifact edits where
+its description triggers it; then hand off to `cf-ship` to land the PR,
+whose step 8 says who merges it.

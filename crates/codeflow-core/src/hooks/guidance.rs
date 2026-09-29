@@ -64,17 +64,7 @@ impl Trigger {
         match self {
             Self::Duration => "estimate",
             Self::Status => "status",
-            Self::Explanation => "explanation",
-        }
-    }
-
-    /// The kernel always rule whose title heads the reminder.
-    #[must_use]
-    pub fn rule_id(self) -> &'static str {
-        match self {
-            Self::Duration => "estimate",
-            Self::Status => "writing",
-            Self::Explanation => "present",
+            Self::Explanation => "figure",
         }
     }
 
@@ -248,16 +238,15 @@ fn moment<'k>(kernel: &'k Kernel, tier: Tier, key: &str) -> Option<&'k Moment> {
         .find(|moment| moment.key == key)
 }
 
-/// The reminder line for `trigger` at `tier`: the always rule's title, the
-/// moment's action and its pointers. `None` when the kernel lacks the rule
-/// or the moment.
+/// The moment's situation, action and pointers. No always-rule title is required.
 #[must_use]
 pub fn reminder_line(kernel: &Kernel, tier: Tier, trigger: Trigger) -> Option<String> {
-    let rule = kernel
-        .rules_for(tier)
-        .into_iter()
-        .find(|rule| rule.id == trigger.rule_id())?;
-    let moment = moment(kernel, tier, trigger.moment_key())?;
+    let moment = moment(kernel, tier, trigger.moment_key()).or_else(|| {
+        // Older installed kernels used this key before the figure moment.
+        (trigger == Trigger::Explanation)
+            .then(|| moment(kernel, tier, "explanation"))
+            .flatten()
+    })?;
     let see = moment
         .see
         .iter()
@@ -265,8 +254,8 @@ pub fn reminder_line(kernel: &Kernel, tier: Tier, trigger: Trigger) -> Option<St
         .collect::<Vec<_>>()
         .join(", ");
     Some(format!(
-        "codeflow reminder: {} {}. See {see}.",
-        rule.title,
+        "codeflow reminder: When you {}: {}. See {see}.",
+        moment.when,
         capitalized(&moment.action)
     ))
 }
@@ -506,6 +495,25 @@ mod tests {
                     "reminder {tier} {trigger:?}: {} bytes (guideline {REMINDER_LINE_GUIDELINE_BYTES})",
                     line.len()
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn reminders_use_moments_without_retired_always_rules() {
+        let mut kernel = Kernel::shipped();
+        kernel
+            .rules
+            .retain(|rule| !matches!(rule.id.as_str(), "estimate" | "present"));
+        for moment in &mut kernel.moments {
+            if moment.key == "explanation" {
+                moment.key = "figure".into();
+            }
+        }
+        for tier in Kernel::tiers() {
+            for trigger in Trigger::ALL {
+                let line = reminder_line(&kernel, tier, trigger).expect("moment supplies reminder");
+                assert!(line.starts_with("codeflow reminder: When you "), "{line}");
             }
         }
     }

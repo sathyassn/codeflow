@@ -198,12 +198,8 @@ try {
       .click();
     await page.keyboard.press("Escape");
     await page.getByTestId("settings-panel").waitFor({ state: "detached" });
-    const accessibility = await page.evaluate(async () => globalThis.axe.run(document, {
-      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
-    }));
-    if (accessibility.violations.length) {
-      throw new Error(`${mode} accessibility violations: ${accessibility.violations.map((item) => item.id).join(", ")}`);
-    }
+    // browser-check owns the shared chrome's WCAG checks across skins and
+    // appearances. This real pass records launch, persisted feedback and cleanup.
     await page.screenshot({ path: join(output, `review-${mode}.png`), fullPage: true });
   }
 

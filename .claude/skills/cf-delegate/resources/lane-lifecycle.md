@@ -52,11 +52,10 @@ armed file with `herdr pane send-text` as that skill names, never
   `autoMode.classifyAllShell` effective at user scope (Claude ignores it at
   project scope, and repeated `--settings` flags are not a supported merge
   contract; the generated task file carries only the lifecycle hooks). On the
-  degraded tmux path, use production `--permission-mode bypassPermissions` (consult: auto) and keep the OS sandbox
+  degraded tmux path, keep the OS sandbox
   enabled with `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
   and permit an auto-classified unsandboxed retry only for a trusted
-  installed tool that requires host state. When `HERDR_ENV=1`, native flags
-  come from `cf-herdr` (production bypass; consult auto). That is not a
+  installed tool that requires host state. That is not a
   write grant and not hook-trust bypass. Never
   `--dangerously-skip-permissions` unless the operator named it, and never
   `--dangerously-bypass-hook-trust`. Consults still edit nothing. See
@@ -82,10 +81,6 @@ armed file with `herdr pane send-text` as that skill names, never
 - **Cleanup:** after harvesting the bounded result and the evidence
   verification needs, kill the task session and remove the state directory
   and private prompt files.
-- **Legacy:** `codeflow hook delegate-turn --result` remains only as
-  byte-compatible compatibility for existing callers until a later major
-  release; the two hook modes are mutually exclusive and never fall back to
-  one another. New work always uses the lifecycle.
 
 ## Evidence on this lane
 

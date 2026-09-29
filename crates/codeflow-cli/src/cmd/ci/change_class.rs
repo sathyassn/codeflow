@@ -7,7 +7,7 @@
 //!
 //! - light: every path is a regular Markdown file under `docs/` or
 //!   `project-management/`, outside every adopter-facing and direct-change
-//!   floor member of the shared path sets (SPC-013 R-114, R-71), with the
+//!   floor member of the shared path sets (SPC-013 R-70, R-114), with the
 //!   target policy's product and watched contract paths; its body needs only
 //!   Summary and Changes and may omit Release impact;
 //! - docs-only: every path is a regular documentation file; its body skips
@@ -164,15 +164,14 @@ fn regular(entry: &RangeEntry) -> bool {
 /// directory, and outside every member of the shared path sets: the
 /// adopter-facing surfaces (product and watched contract paths, hook
 /// sources, shipped templates, managed instructions, CI workflows) and the
-/// rest of the direct-change floor (policy, dependency manifests, the record
-/// schema and templates).
+/// record schema and templates.
 fn is_light_path(path: &str, project: &ProjectPaths) -> bool {
     (path.starts_with("docs/") || path.starts_with("project-management/"))
         && Path::new(path)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
         && !path.split('/').any(|part| part.starts_with('.'))
-        && path_sets().direct_change_refusal(path, project).is_none()
+        && path_sets().adopter_facing_member(path, project).is_none()
 }
 
 #[cfg(test)]

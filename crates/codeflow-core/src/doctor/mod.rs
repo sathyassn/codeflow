@@ -4225,6 +4225,7 @@ mod tests {
             git_hooks: crate::scaffold::state::GIT_HOOKS_UNWIRED.into(),
             permission_preset: "acceptEdits".into(),
             product_one_liner: "x".into(),
+            release_rules: None,
         }
         .store(dir.path())
         .unwrap();

@@ -776,6 +776,25 @@ const UNSHIPPED_FILES: [&str; 6] = [
     "ci/ci-generic.sh",
 ];
 
+/// Files an earlier version shipped and this one retires (TSK-184). They
+/// are removed from the asset tree and the manifest, nothing more: on an
+/// adopter, `codeflow update` reconciles each as an orphan, removing an
+/// unmodified copy with its baseline and record, keeping a modified copy
+/// unmanaged, and never re-adding it. Each stays out of both places.
+/// The present review example stays: the visual guide line (EPC-016) made
+/// it the figure-block example that document-authoring and the present tests
+/// read, so the release line keeps it.
+const RETIRED_FILES: [&str; 7] = [
+    "agents/skills/cf-model-orchestrator/references/other-hosts.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/hosts.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/review.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/roles.md",
+    // Its registry check is a step of ci/codeflow-policy.yml now.
+    "ci/codeflow-registry.yml",
+];
+
 /// Directory prefixes under `assets/base` whose files are embedded and
 /// consumed by the binary at runtime, never scaffolded per-file:
 /// `codeflow test setup` reads the testing templates and schema directly.
@@ -827,6 +846,19 @@ fn every_authored_asset_is_in_the_manifest() {
          file here with its rationale):\n  {}",
         missing.join("\n  ")
     );
+
+    // A retired file is authored nowhere and shipped nowhere, so an update
+    // prunes an adopter's copy as an orphan and never writes it again.
+    for name in RETIRED_FILES {
+        assert!(
+            !base.join(name).exists(),
+            "retired file {name} is back under assets/base"
+        );
+        assert!(
+            !srcs.contains(name),
+            "retired file {name} is a manifest src again"
+        );
+    }
 
     // Keep the allowlist honest: an entry that no longer exists, or that got
     // wired into the manifest after all, must be removed from it.
@@ -1943,6 +1975,7 @@ fn unconditional_ascii_chat_paragraphs(text: &str) -> Vec<String> {
                     .any(|medium| lower.contains(medium))
                 && !lower.contains("plain-text")
                 && !lower.contains("workflow-lifecycle.md")
+                && !lower.contains("writing.md")
         })
         .collect()
 }
@@ -1955,20 +1988,19 @@ fn unconditional_ascii_chat_paragraphs(text: &str) -> Vec<String> {
 /// figure is ASCII without deferring to that rule.
 #[test]
 fn presentation_chat_figures_defer_to_the_lifecycle_surface_rule() {
+    // TSK-184 moved the surface rule from the lifecycle to the writing
+    // reference; the lifecycle points there.
     let lifecycle = normalized_whitespace(
-        &std::fs::read_to_string(
-            repo_root()
-                .join("assets/base/claude/skills/cf-method/references/workflow-lifecycle.md"),
-        )
-        .expect("workflow lifecycle is readable"),
+        &std::fs::read_to_string(repo_root().join("assets/base/rules/writing.md"))
+            .expect("writing reference is readable"),
     );
     for rule in [
-        "Where the harness renders one, use an inline HTML figure, or a `cf-present` page when the figure needs a full page or anchored review.",
-        "Use fenced ASCII on a terminal or other plain-text surface, in a Markdown file (a README, doc, record or PR body), or when unsure what the surface renders.",
+        "Where the current surface renders one, an inline figure is the default, such as an inline HTML figure in a desktop harness.",
+        "Use fenced ASCII in other Markdown files (READMEs, docs, records, PR bodies), in terminal output and on any other plain-text surface, or when unsure what the surface renders.",
     ] {
         assert!(
             lifecycle.contains(rule),
-            "workflow lifecycle lost the reply surface rule: {rule}"
+            "writing reference lost the reply surface rule: {rule}"
         );
     }
     assert_eq!(
@@ -2747,9 +2779,8 @@ const SHORT_ANSWER_EXCEPTION: [&str; 2] = [
 /// exception in the words of the lifecycle reply rule.
 #[test]
 fn copy_guide_keeps_the_short_answer_exception_in_summaries_and_replies() {
-    let lifecycle = normalized_whitespace(&repo_text(
-        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
-    ));
+    // TSK-184 moved the reply rule into the writing reference.
+    let lifecycle = normalized_whitespace(&repo_text("assets/base/rules/writing.md"));
     let sections: BTreeMap<String, String> = level_two_sections(&repo_text(COPY_GUIDE))
         .into_iter()
         .map(|(heading, body)| (heading, normalized_whitespace(&body)))
@@ -2757,7 +2788,7 @@ fn copy_guide_keeps_the_short_answer_exception_in_summaries_and_replies() {
     for marker in SHORT_ANSWER_EXCEPTION {
         assert!(
             lifecycle.contains(marker),
-            "the lifecycle reply rule lost: {marker}"
+            "the writing reference's reply rule lost: {marker}"
         );
         for section in ["Summaries", "Replies"] {
             let body = sections
@@ -2863,7 +2894,8 @@ const COPY_GUIDE_POINTER_FILES: [&str; 12] = [
     "agents/skills/cf-docs-portal/SKILL.md",
     "agents/skills/cf-present/references/document-authoring.md",
     "agents/skills/cf-editorial-review/SKILL.md",
-    "claude/skills/cf-method/references/workflow-lifecycle.md",
+    // TSK-184 made the writing reference the one home of the reply rule.
+    "rules/writing.md",
     "agents/skills/cf-ship/SKILL.md",
 ];
 
@@ -2912,35 +2944,26 @@ fn writing_rules_are_stated_in_full_only_in_their_three_homes() {
     );
 }
 
-/// TSK-073 AC-7. The lifecycle "Shape deliverables" text keeps the nine
-/// families, the reply rule, the link rule and the pointer to the method and
-/// the guide; the editorial skill names the guide and points its figure line
-/// at the nine families; cf-ship step 5 and the ADR and epic templates name
-/// the guide.
+/// TSK-073 AC-7. The writing reference, which TSK-184 made the one home of
+/// the reply and figure rules, keeps the nine families, the reply rule, the
+/// link rule and the pointer to the method and the guide; the editorial
+/// skill names the guide and points its figure line at the nine families;
+/// cf-ship step 5 and the ADR and epic templates name the guide.
 #[test]
 fn copy_guide_pointers_and_shape_deliverables_markers_stay_pinned() {
-    let lifecycle = normalized_whitespace(&repo_text(
-        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
-    ));
-    let start = lifecycle
-        .find("Shape deliverables for their audience and medium")
-        .expect("lifecycle keeps Shape deliverables");
-    let end = lifecycle[start..]
-        .find("state an unknown link as unknown.")
-        .map(|offset| start + offset)
-        .expect("Shape deliverables keeps the link rule");
-    let shape = &lifecycle[start..end];
+    let writing = normalized_whitespace(&repo_text("assets/base/rules/writing.md"));
     let mut missing = Vec::new();
     for marker in [
         "(flow, structure, layering, sequence, state, coverage, extent, derivation, graph)",
-        "When a relationship carries the point, the reply carries a figure. Match the form to the surface.",
-        "Never use Mermaid for a reply figure.",
+        "When a relationship carries the point, the reply or document carries a figure.",
+        "Match the form to the surface",
+        "Never use Mermaid.",
         "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.",
-        "give the exact link the tool printed or one you verified",
-        "To explain, follow the explanation method (`cf-present/resources/explanation-method.md`); to write each string, follow the copy guide (`cf-editorial-review/references/copy-guide.md`).",
+        "give the exact link a tool printed or one you verified",
+        "to explain, follow the explanation method (`.agents/skills/cf-present/resources/explanation-method.md`); to write each string, follow the copy guide (`.agents/skills/cf-editorial-review/references/copy-guide.md`).",
     ] {
-        if !shape.contains(marker) {
-            missing.push(format!("workflow-lifecycle.md: {marker}"));
+        if !writing.contains(marker) {
+            missing.push(format!("rules/writing.md: {marker}"));
         }
     }
     for (file, markers) in [
@@ -2954,7 +2977,7 @@ fn copy_guide_pointers_and_shape_deliverables_markers_stay_pinned() {
         ),
         (
             "assets/base/agents/skills/cf-ship/SKILL.md",
-            &["5. Apply `cf-editorial-review` and its copy guide to substantial changed docs"][..],
+            &["5. Apply `cf-editorial-review` and its copy guide"][..],
         ),
         (
             "assets/base/docs/decisions/template.md",

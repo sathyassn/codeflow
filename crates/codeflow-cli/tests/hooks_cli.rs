@@ -89,7 +89,7 @@ fn task_branch_ci(dir: &Path, branch: &str, valid_body: bool) -> Output {
     if valid_body {
         command.args([
             "--pr-body",
-            "## Summary\nBounded task.\n\n## Changes\n- implementation\n\n## Testing\n- focused test\nNot tested: Windows.\n\n## Reviews\nNone: pending review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve the public contract.\n- Migration: none",
+            "## Summary\nBounded task.\n\nTask: TSK-001\n\n## Changes\n- implementation\n\n## Testing\n- focused test\nNot tested: Windows.\n\n## Reviews\nNone: pending review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve the public contract.\n- Migration: none",
         ]);
     }
     command.output().unwrap()
@@ -2528,7 +2528,13 @@ fn session_orient_adds_the_guidance_block_after_compact_resume_and_fork() {
             assert_eq!(head, digest, "{tier} {source}: the digest changed");
             let block = format!("{GUIDANCE_HEADING}{block}");
             assert!(block.contains(&format!("({tier} tier)")), "{block}");
-            assert!(block.contains("Always: Work to the outcome."), "{block}");
+            // The route rule leads the map at standard and full only.
+            let always = if tier == "minimal" {
+                "Always: Work to the outcome."
+            } else {
+                "Always: Route by touched paths. Work to the outcome."
+            };
+            assert!(block.contains(always), "{block}");
             assert!(
                 block.contains("- give a duration, date or effort:"),
                 "{block}"
@@ -2669,12 +2675,17 @@ fn prompt_reminder_follows_the_fixture_corpus() {
             assert_eq!(stdout.lines().count(), 1, "{tier} {prompt:?}: {stdout}");
             assert!(stdout.starts_with("codeflow reminder: "), "{stdout}");
             longest = longest.max(stdout.trim_end().len());
-            let title = match (expect, tier) {
-                ("duration", "minimal") => "Durations are agentic.",
-                ("duration", _) => "Durations come from cf-estimate.",
-                ("status", _) => "Outcomes first, in words.",
-                ("explanation", _) => "Show complex things.",
-                (other, _) => panic!("unknown expectation {other}"),
+            let title = match expect {
+                "duration" => "When you give a duration, date or effort:",
+                "status" if stdout.contains("When you report status or hand off:") => {
+                    "When you report status or hand off:"
+                }
+                "status" => "When you report status or summarize work:",
+                "explanation" if stdout.contains("When you show something complex:") => {
+                    "When you show something complex:"
+                }
+                "explanation" => "When you explain a flow, comparison, plan or decision:",
+                other => panic!("unknown expectation {other}"),
             };
             assert!(
                 stdout.contains(title),
@@ -2872,7 +2883,7 @@ fn pre_commit_leaves_the_planning_anchor_to_work_start_and_ci() {
     std::fs::create_dir_all(&task_dir).unwrap();
     std::fs::write(
         task_dir.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nBranch-only planning must not authorize itself.\n\n## Acceptance Criteria\n- AC-1 planning is anchored\n",
+        "---\nid: TSK-001\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nBranch-only epic planning must not authorize itself.\n\n## Acceptance Criteria\n- AC-1 planning is anchored\n",
     )
     .unwrap();
     git(dir.path(), &["add", "project-management"]);

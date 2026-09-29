@@ -3,17 +3,20 @@
      (see `.codeflow/rules/writing.md`).
      The sections a PR needs follow what its range touches. A range with
      code, config, scripts, shipped templates or agent instructions needs
-     all five sections below, in this order. A range of only Markdown under
+     the sections below, in this order. A range of only documentation files
+     leaves out Testing. A range of only Markdown under
      docs/ or project-management/, outside product, watched contract and
      template paths, needs Summary and Changes; Testing and Reviews are
-     optional there, and a missing Release impact reads as no impact.
-     Conditional sections are listed at the end. Aim for about 65 rows
-     wrapped at 100 columns for a task PR, about 80 with Whole-flow
-     evidence, and about 90 for an epic; never drop evidence to fit. A
-     figure here is a fenced ASCII block, never Mermaid. -->
+     optional there. Conditional sections are listed at the end.
+     `codeflow ci` warns on unclosed HTML and on a Testing section with no
+     `Not tested:` line. Link records instead of copying them; never drop
+     evidence to shorten the body. A figure here is a fenced ASCII block,
+     never Mermaid. -->
 
-<!-- With durable work tracking: the task this delivers, or why it is a direct change. -->
-Task: `TSK-NNN | none: <reason>`
+<!-- Every PR names its work. Where durable tracking is active: TSK-NNN, or
+     EPC-NNN for the breakdown PR and the PR to main. Where it is not: the
+     name of the harness's tracked unit. A missing or empty line is refused. -->
+Task: `TSK-NNN | EPC-NNN | <unit name>`
 
 ## Summary
 
@@ -30,15 +33,17 @@ Task: `TSK-NNN | none: <reason>`
 ## Changes
 
 <!-- One bullet per logical change, most important first; number them only
-     for a sequence. About eight for a task PR; one line per task for an
-     epic. -->
+     for a sequence; one line per task for an epic. -->
 
 -
 
 ## Testing
 
-<!-- Evidence already run: the tested revision and command, then the gate's
-     summary lines in a fenced block (about twelve lines, never a full log).
+<!-- Evidence already run: the tested revision and command, then the
+     summary lines in a fenced block, never a full log. A task PR pastes its
+     targeted tests and its quick run; the full gate on the landing
+     candidate is cited by run id and revision when the batch lands, and a
+     standalone PR runs it as its own candidate.
      Coverage when the range is code: the measured TOTAL from the project's
      command; name revision, command, metric, and scope; CI PASS alone is
      insufficient; unmeasured is a stated gap. New tests: count and suites.
@@ -69,7 +74,9 @@ Task: `TSK-NNN | none: <reason>`
 
 ## Release impact
 
-<!-- Impact is the change level a consumer sees; the project's release
+<!-- Required on a PR into a protected branch or whose range carries a
+     breaking commit; elsewhere optional, and checked whenever present.
+     Impact is the change level a consumer sees; the project's release
      policy maps it to a version and names the level a break takes.
      Breaking states compatibility. Choose each value; never leave the
      alternatives. Migration is normally `none` for nonbreaking work; it

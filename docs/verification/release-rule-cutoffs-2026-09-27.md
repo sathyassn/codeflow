@@ -160,6 +160,54 @@ The verdicts are identical: the same seven notices and the same two
 findings, and the same refusal. A real `git push` of the release branch
 through the hook then took 5.9 s. No budget change is proposed.
 
+## Rerun under TSK-140, 2026-09-29
+
+TSK-140 AC-10 asks for the real 3.0.0 release tree with no blocking
+finding. That tree is TSK-010's release rebuild, which does not merge
+cleanly yet, so this rerun judges a narrower candidate on a disposable
+authority, labelled a reconstruction:
+
+- The authority's `main` is the real `main` (`2c9c77f5c`) plus one
+  commit (`540772217`) that adds `release_rules = 1` and both transition
+  tables with the cutoffs below.
+- EPC-020 is advertised at `0da32446f`, its last point without direct
+  commits on its first-parent chain, plus a planning merge that gives
+  TSK-010 `role: release-integration`. The other three lines are left
+  out.
+- `integration/release-3-0-0-r2` is cut from `2c9c77f5c`, imports
+  EPC-020, merges the authority's `main` (resolving
+  `.codeflow/project.toml`), and completes TSK-010 at the head with a
+  placeholder block.
+
+Judged by this branch's build through CI, the final pull request into
+`main` (`--into main`) and the pre-push hook, with `validate --docs`:
+
+| Candidate | Exits (CI, into main, pre-push, validate) | Notices | Blocking findings |
+|---|---|---|---|
+| As above (head `6f633bb3c`) | 1, 1, 1, 0 | TSK-098 and TSK-100 as legacy records | 1: TSK-101 |
+| EPC-020 also re-completes TSK-101 in one planning merge (head `08b7122d5`) | 0, 0, 0, 0 | the same two | none |
+
+- The records-rule findings are cleared. SPC-002's approval is judged
+  at its planning-only landing (TSK-140 AC-11), TSK-069's `uid`
+  backfill is not judged again (AC-12), and TSK-098 and TSK-100 are
+  listed as legacy records under the records cutoff (AC-13).
+- No legacy criteria change is listed. `main` has none of the seven
+  records, so the release brings each one as new and no criteria change
+  reaches the judge. The seven notices appear only on a release base
+  that already holds those records, as the rehearsal did.
+- TSK-101's second completion (`3529d1f80`) keeps the reviewed commit
+  from before its reopen (`250bd901c`). R-60 and R-119 refuse that, and
+  the cutoffs do not cover completion binding. The EPC-020 line clears
+  it by one planning pull request that reopens TSK-101 and completes it
+  again with a review inside that range; the second row shows the judge
+  then passes. That review is the line's work, not this record's.
+- The first run also refused TSK-102, whose fix landed after its
+  separate reopen pull request. That was a TSK-140 fault, fixed with
+  `a_separate_reopen_then_a_landed_fix_binds_a_late_recompletion`.
+- The reconstruction of TSK-145 AC-6 was rerun as well. Its `main`
+  carries the cutoff table without the adoption marker, so every release
+  check now refuses, naming the table, as the one-time bridge requires.
+
 ## Cutoffs to record
 
 The cutoffs are each line's tip when this record was written (advertised
@@ -181,6 +229,14 @@ on integration/EPC-020-delivery-system, landing 787e53448, cutoff
 2921df9f5, policy main at <tip>". Every other check still applies to
 them, including import qualification, full tree entries, completion
 binding and the release-integration owner.
+
+Under TSK-140 the table is honoured only as a one-time bridge (SPC-013
+R-120, planning resolution 29). It lands on `main` in one commit that
+also adds `release_rules = 1` and the records table
+`release_records_baseline`, and it is never changed after that commit.
+A cutoff's own tree must not carry the marker, so on EPC-020, where
+TSK-140 adds the marker to this repository's project config, the cutoff
+lies before that landing; `2921df9f5` does.
 
 ## Not verified
 

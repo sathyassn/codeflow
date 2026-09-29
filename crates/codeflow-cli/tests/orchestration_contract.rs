@@ -54,6 +54,9 @@ fn read_orchestrator_skill() -> String {
 }
 
 /// TSK-129: capability-routing also loads by section from an index.
+/// TSK-184: the six every-task routing files merged into the orchestrator's
+/// seat section (the session-level routing read) and the plan's assignment
+/// section, so the routing contract reads those homes too.
 fn read_routing_contract() -> String {
     let resources = "assets/base/agents/skills/cf-model-orchestrator/resources";
     let mut sections: Vec<_> = std::fs::read_dir(repo_root().join(resources).join("routing"))
@@ -65,6 +68,13 @@ fn read_routing_contract() -> String {
     for section in sections {
         contract.push('\n');
         contract.push_str(&std::fs::read_to_string(&section).expect("read section"));
+    }
+    for home in [
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md".to_string(),
+        format!("{resources}/quality/plan.md"),
+    ] {
+        contract.push('\n');
+        contract.push_str(&read(&home));
     }
     contract
 }
@@ -463,14 +473,14 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "Name extra families on trigger if available",
         "strongest capable permitted reasoning route",
         // TSK-150 (H24): the Grok host detail is a named read before launch.
-        "Before a Grok preflight or launch, also read [the Grok host detail](../resources/grok-host.md)",
+        "Before a Grok preflight or launch, also read [the Grok host detail](resources/grok-host.md)",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
         "**Review is author-relative.**",
         "**The Claude judgment primary owns integrated Claude judgment.**",
         "task fit",
-        "resources, and observed usage",
+        "verified native routing, and resources, on the plan's assignment line",
         "Codex supplies independent review",
         "owns the final quality verdict",
         "**Accountable route use.**",
@@ -482,8 +492,10 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "never starts a nested duo",
         "**Evidence outranks agreement.**",
         "**Bounded parallelism.**",
-        "Plan v1",
-        "at most two rounds",
+        // TSK-184: one plan, approved once; the round cap is gone.
+        // EPC-018 settled dissent (ADR-0070) rides inside the one approval.
+        "Plan settlement ends when both seats approve one version, with any open reversible item settled under the plan contract's `SETTLED_DISSENT` rule, or the host stops for the operator.",
+        "approval of an older version does not carry forward",
     ] {
         assert!(
             skill.contains(required),
@@ -529,8 +541,8 @@ fn cross_family_entry_preserves_receiving_primary_ownership() {
     for required in [
         "The first line of every cross-family task declares `ROLE: peer`",
         "qualified primary at its default effort",
-        "only for same-family work owned and dispatched by that family's primary",
-        "a caller never selects a foreign worker directly",
+        "is only for same-family work its primary dispatches as a native subagent of its own session",
+        "A caller never selects a foreign worker or passes worker escalation effort",
         "Later primary-approval prose cannot repair an incorrect initial dispatch",
     ] {
         assert!(
@@ -580,23 +592,24 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
 
     for required in [
         "TASK_ID | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION",
-        "requested from observed",
+        "the observed model, effort and native provenance are recorded with the return",
         "Unknown usage is advisory",
         "Never combine apparently separate limits",
-        "is reassignment: create Plan vN+1",
+        "is a reassignment: it is recorded and reviewed by one other-lineage seat",
         "permitted worker change",
         "Default effort is high for primary seats, not a ceiling",
         "strongest capable permitted same-family reasoning route",
         "An xhigh trigger requires the owning primary to obtain xhigh reasoning",
         "Delegate substantial, well-specified routine implementation",
-        "both families still plan independently and cross-lineage review remains mandatory",
+        "The primary critically integrates worker findings and retains approvals",
+        "a lineage different from the actual author's reviews it independently",
         "`candidate` and `scoped-qualified` describe evidence status",
         "three fresh accepted trials",
         "Full primary-binding promotion",
         "economical-default",
-        "A model cannot independently review its own authored unit",
+        "a model cannot independently review its own authored unit",
         "delegating back to the host lineage",
-        "generic same-lineage subagent cannot satisfy",
+        "generic same-lineage subagent never satisfies",
         "never a silent third vote",
         "available-and-named or unavailable-with-limitation",
         "A Grok Build host coordinates the standing pair through Herdr",
@@ -679,11 +692,22 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
         );
     }
 
+    // TSK-184: the design owner, fixture limit and override rule have one
+    // home, the orchestrator's "Claude leads design" invariant; cf-design
+    // points at it.
     for required in [
-        "same Claude owner authors and implements real design and retains fidelity judgment",
-        "candidates run only disposable fixtures",
-        "Turning settled product/UX/UI into components, layout, styles, or interactions is design implementation",
+        "owns real design execution and fidelity",
+        "Candidates run only disposable fixtures",
         "Claude absence is not one",
+    ] {
+        assert!(
+            routing.contains(required),
+            "design execution contract lost marker: {required}"
+        );
+    }
+    for required in [
+        "follow the orchestrator's \"Claude leads design\" invariant",
+        "Turning settled product/UX/UI into components, layout, styles, or interactions is design implementation",
     ] {
         assert!(
             design.contains(required),
@@ -711,23 +735,26 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
     }
 }
 
+/// TSK-184: independent discovery comes first; Claude then drafts the one
+/// plan and Codex challenges it against its own findings. The anti-anchoring
+/// guard is that both seats return findings before either sees the other's.
 #[test]
-fn independent_planning_cannot_degrade_to_plan_then_critique() {
+fn independent_discovery_precedes_the_one_challenged_plan() {
     let skill = read_orchestrator_skill();
     let capabilities = read("docs/capabilities.md");
     let normalized = normalize_whitespace(&skill);
 
     for required in [
-        "Both families independently research, analyze, and plan",
-        "Claude and Codex research, analyze, identify risks, and draft a plan in parallel before seeing the other's conclusions.",
+        "Claude and Codex research, analyze, and identify risks in parallel and return their findings before seeing the other's conclusions.",
         "Give both seats the same immutable brief and repository scope.",
-        "an implementation plan and test strategy;",
-        "The host reconciles the two drafts into **Plan v1**",
-        "Codex reviews the design for implementation feasibility, failure modes, security, testing, and maintainability.",
+        "each seat independently returns its findings",
+        "Claude drafts the one plan **from its native session**",
+        "Codex challenges that plan against its own findings: feasibility, failure modes, security, testing, maintainability",
+        "There is no second plan and no reconciliation round.",
     ] {
         assert!(
             normalized.contains(required),
-            "orchestrator lost the independent-plan contract: {required}"
+            "orchestrator lost the independent-discovery contract: {required}"
         );
     }
 
@@ -745,9 +772,9 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
     // TSK-127 moved the entry-point cell's doctrine into the owning skill.
     assert!(
         normalized.contains(
-            "Both families independently research, analyze, and plan; Claude owns design and integrated judgment; the host assigns"
+            "Both families independently research and analyze; Claude drafts the plan and owns design and integrated judgment, Codex challenges it; the host assigns"
         ),
-        "the orchestrator skill must expose independent planning in its description"
+        "the orchestrator skill must expose independent discovery in its description"
     );
     assert!(
         normalize_whitespace(&capabilities).contains("nineteen health checks"),
@@ -778,9 +805,9 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
     );
     assert!(
         normalize_whitespace(&capabilities).contains(
-            "Both seats independently research, analyze risks, and draft complete plans from the same immutable brief before either sees the other's conclusions"
+            "Both seats independently discover from the same immutable brief before either sees the other's findings. Claude then drafts the one plan"
         ),
-        "CAP-010 must preserve the anti-anchoring contract"
+        "CAP-010 must preserve the anti-anchoring contract (one plan, TSK-184)"
     );
 }
 
@@ -827,8 +854,8 @@ fn design_review_and_security_roles_cannot_silently_drift() {
     let normalized = normalize_whitespace(&skill);
 
     for required in [
-        "unless the brief already fixes a clear direction, compares 2–3 viable options",
-        "When the brief already dictates one clear design direction, record that constraint and why option exploration was waived.",
+        "unless the brief already fixes a clear direction, compares 2 to 3 viable options",
+        "the design options and recommendation, or the recorded constraint when the brief already dictates one clear direction",
         "a lineage different from the actual author's reviews it independently. Self-review is never independent.",
         "The Claude judgment primary owns integrated Claude judgment.",
         "they do not replace the required other-lineage review or primary judgment.",
@@ -846,7 +873,9 @@ fn design_review_and_security_roles_cannot_silently_drift() {
     );
 
     for required in [
-        "require at least 80% aggregate production-code line coverage",
+        // TSK-184: the reviewer applies the project's configured floor; the
+        // quality contract keeps the 80% floor and 90% target (below).
+        "coverage against the project's configured floor",
         "the approved design",
         "Anything less is `changes_requested`.",
         "Material avoidable complexity or brittleness is major even when tests pass",
@@ -872,7 +901,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
     }
 
     for required in [
-        "A changed plan invalidates both approvals",
+        "a later change needs fresh approval only when it changes the outcome, a cross-task interface, the dependency graph or a safety boundary",
         "hard floor of **80%**",
         "normal target is **90% or higher**",
         "failing or missing gate cannot be overridden by model consensus",
@@ -894,8 +923,9 @@ fn responsible_autonomy_has_detailed_quality_and_security_owners() {
 
     for required in [
         "Apply authority to effects, not tool verbs",
-        "the authorized instance/count of unchanged safe steps without re-asking",
-        "an identical tuple is not a standing grant",
+        // TSK-184: the authority binding is stated once in the workflow
+        // discipline rules (pinned below); the section points there.
+        "are stated once in the workflow discipline rules (acting within legitimate intent and bounded authority)",
         "Use personal or confidential data only when necessary and authorized",
         "A qualified provider or route is not blanket authority",
         "Missing a required hard control withholds that risky lane",
@@ -906,6 +936,17 @@ fn responsible_autonomy_has_detailed_quality_and_security_owners() {
         assert!(
             quality.contains(required),
             "quality contract lost responsible-autonomy duty: {required}"
+        );
+    }
+
+    let discipline = normalize_whitespace(&read("assets/base/rules/workflow-discipline.md"));
+    for required in [
+        "Continue unchanged safe steps only for their authorized instance/count, without re-asking",
+        "an identical tuple grants no standing authority",
+    ] {
+        assert!(
+            discipline.contains(required),
+            "workflow discipline lost responsible-autonomy duty: {required}"
         );
     }
 
@@ -1027,7 +1068,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
     // 2026-09-26); the map states it, CLAUDE.md carries the stage detail.
     let agents = normalize_whitespace(&agents);
     for required in [
-        "Orchestration entry is decided by touched paths",
+        "Before any research or edit, decide entry by touched paths",
         "`/cf-model-orchestrator`",
         "when unsure, route",
     ] {
@@ -1036,27 +1077,35 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
             "AGENTS map lost duo entry-point marker: {required}"
         );
     }
+    // TSK-184: research or analysis that will drive a change starts with the
+    // orchestrator (the map's routing rule); the CLAUDE notes carry the
+    // Claude mechanism for that row, and the research-only exit lives in
+    // the orchestrator's outcome modes.
+    assert!(
+        agents.contains(
+            "research or analysis that will drive one, and plan, design, security or irreversible work start with `/cf-model-orchestrator`, once per brief"
+        ),
+        "AGENTS map lost the early routing rule"
+    );
+    assert!(
+        skill.contains(
+            "independent discovery, evidence comparison, settled findings, then stop without edits"
+        ),
+        "orchestrator lost the research-only exit"
+    );
+    // The routing gate is the first section after the import: the Claude
+    // trigger (invoke before you inspect) for the map's route rule.
     let claude_normalized = normalize_whitespace(&claude);
     for required in [
-        "Research or planning-only work exits after joint settlement",
+        "@AGENTS.md ## Routing gate Invoke `/cf-model-orchestrator` (the Skill tool) before you inspect.",
+        "Do not inspect first and route later",
+        "`/cf-model-orchestrator` once per brief",
         "are supporting or solo flows, not alternate entry points",
         "when unsure, route",
     ] {
         assert!(
             claude_normalized.contains(required),
             "CLAUDE template lost duo entry-point marker: {required}"
-        );
-    }
-    for required in [
-        "## Routing gate",
-        "Before repository or external research",
-        "invoke\n`/cf-model-orchestrator`",
-        "Do not inspect first and route later",
-        "one obvious local check",
-    ] {
-        assert!(
-            claude.contains(required),
-            "CLAUDE template lost early routing marker: {required}"
         );
     }
 }
@@ -1068,7 +1117,11 @@ fn solo_fallback_requires_fresh_context_independent_review() {
 
     for (owner, contract, alternate) in [
         ("orchestrator", &skill, "else a separate read-only pass"),
-        ("AGENTS", &agents, "otherwise a separate read-only pass"),
+        (
+            "AGENTS",
+            &agents,
+            "else `cf-reviewer` with reduced assurance recorded",
+        ),
     ] {
         assert!(
             contract.contains("fresh-context independent review")
@@ -1092,12 +1145,11 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
     ));
 
     for required in [
-        "PLAN_VERSION:",
-        "TASK_ASSIGNMENTS:",
+        // TSK-184: the plan form keeps assignments and named-version approvals.
+        "ASSIGNMENTS:",
         "CROSS_LINEAGE_REVIEWER seat@effort",
-        "CLAUDE_APPROVAL:",
-        "CODEX_APPROVAL:",
-        "Model agreement is not evidence.",
+        "APPROVALS: <each seat and the plan version it approved>",
+        "A model claim, consensus, or approval never substitutes for a source",
         "hard floor of **80%**",
         "normal target is **90% or higher**",
         "Tests must be capable of failing for a material regression",
@@ -1114,21 +1166,21 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "failing or missing gate cannot be overridden by model consensus",
         "A **gate** is the verification check",
         "missing *job* evidence, not a failed check",
-        "SETTLED_TASK_GRAPH:",
-        "TASK_BRANCH_WORKTREE_OWNER:",
-        "SHARED_FILE_OWNER:",
-        "HOST_RESOURCE_BUDGET:",
-        "one writer, branch, and worktree",
-        "aggregate gates on the final",
-        "combined diff",
-        "COMPLEXITY_JUSTIFICATION:",
+        // TSK-184: one parallel field list; the batch candidate is gated once.
+        "PARALLEL_TASKS:",
+        "OWNER_BRANCH_WORKTREE:",
+        "HOTSPOT_OWNER:",
+        "CONCURRENCY_CAP:",
+        "one writer, branch and worktree per task",
+        "one full gate runs on that exact candidate before the integration line moves",
+        "Both seats grade design proportionality before approval",
         "smallest coherent solution",
         "Material avoidable complexity is `changes_requested`",
         "brittle under-design",
         "existing design system",
         "accessible primitives",
-        "not the fewest lines",
-        "A model cannot independently review its own authored unit",
+        "stated once in the workflow discipline rules, \"Write only what earns its keep\"",
+        "a model cannot independently review its own authored unit",
     ] {
         assert!(
             contract.contains(required),
@@ -1150,10 +1202,10 @@ fn task_graph_and_verification_strength_are_proportionate_contracts() {
     ));
 
     for required in [
-        "both approvals cover the same canonical task graph",
-        "material node, dependency, decision guard, ownership, acceptance, interface, or safety-boundary change creates Plan vN+1",
-        "Ordinary steps and bounded implementation choices inside an approved node remain ledger evidence",
-        "records `none selected`",
+        "the approval covers the canonical task graph",
+        "Only a change of outcome, cross-task interface, dependency graph or safety boundary creates a new plan version under the task-graph contract",
+        "Ordinary steps and bounded implementation choices inside an approved node stay in the ledger",
+        "names a technique only when one is selected",
     ] {
         assert!(
             skill.contains(required),
@@ -1163,7 +1215,7 @@ fn task_graph_and_verification_strength_are_proportionate_contracts() {
 
     for required in [
         "TASK_ID | OUTCOME | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION | AUTHORSHIP",
-        "Every active bare edge means B cannot start or be accepted until A has landed",
+        "Every active bare edge means B cannot be accepted or land until A has landed",
         "A guard that merely restates a standard quality",
         "Every unselected alternative records `not_selected`",
         "non-executable structural topology",
@@ -1175,9 +1227,10 @@ fn task_graph_and_verification_strength_are_proportionate_contracts() {
         "`START` is plan-only and is never written to task metadata",
         "A root task reached from `START` records `depends_on: []`",
         "An observed outcome that matches no approved guard is a graph mutation",
-        "Create Plan vN+1 and obtain fresh approval from both primary seats",
+        "Create a new plan version, approved by both primary seats before dependent work continues",
+        "These ride in one batched epic amendment on a `plan/` branch, reviewed by one other-lineage seat",
         "different valid topological order",
-        "Classify **and persist** each such occurrence in the execution ledger",
+        "Log material dependency or decision changes and meaningful checkpoints in the execution ledger",
         "without turning CodeFlow into a scheduler",
     ] {
         assert!(
@@ -1187,16 +1240,16 @@ fn task_graph_and_verification_strength_are_proportionate_contracts() {
     }
 
     assert!(
-        plan.contains("Run `codeflow validate --docs`"),
+        plan.contains("run `codeflow validate --docs`"),
         "planning must run the task-graph validator before approval"
     );
     assert!(
-        develop.contains("`codeflow test` and `codeflow validate --docs` green"),
+        develop.contains("`codeflow validate --docs`, each cited with revision and command"),
         "delivery must run the task-graph validator before completion"
     );
 
     for required in [
-        "`none selected` is a valid and common result",
+        "when none is selected, write nothing",
         "Select them when all of these hold",
         "Keep explicit examples for known singular boundaries",
         "Use a targeted, time-bounded mutation run",
@@ -1229,7 +1282,9 @@ fn project_organization_has_one_authority_and_honest_closeout() {
         "never mirrored status",
         "must remain rebuildable from Git Markdown",
         "Do not import or paraphrase an equivalent authoritative tree",
-        "reconcile and dual-approve Plan vN+1",
+        "stop; a new plan version or the batched epic amendment",
+        "Completion never retroactively legitimizes a material deviation",
+        "Shared engineering, security, testing, design, and review doctrine stays in `AGENTS.md`",
         "codeflow work start TSK-NNN",
         "planning PR",
     ] {
@@ -1240,10 +1295,11 @@ fn project_organization_has_one_authority_and_honest_closeout() {
     }
 
     for required in [
+        // TSK-184: the closeout narrative is gone; review-relevant scope and
+        // recovery notes live in the description, completion in the block.
         "external_refs: []",
-        "Bounded discoveries/deviations",
-        "never legalized here after implementation",
-        "Shared engineering/security/testing doctrine stays in AGENTS.md",
+        "Review-relevant scope, interfaces and recovery notes go here",
+        "for complete the fenced `yaml` acceptance block",
     ] {
         assert!(
             task.contains(required),
@@ -1275,22 +1331,25 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
         ) && full_agents.contains("`cf-editorial-review`"),
         "full entry contract lost its compact editorial route"
     );
+    // TSK-184: the reply and writing policy moved from the lifecycle to the
+    // writing reference (pinned below); the lifecycle points there.
+    assert!(
+        lifecycle
+            .contains("`.codeflow/rules/writing.md`). That file is the one home of the reply and"),
+        "workflow lifecycle lost its pointer to the writing reference"
+    );
+    // The chat rule of the figure grammar (ADR-0068), now in the writing
+    // reference: same nine families, the medium changes the marks, a figure
+    // only when a relationship carries the point, in the form its surface takes.
     for required in [
-        "verified truth and policy outrank CodeFlow philosophy",
-        "documented voice/examples",
-        "Preserve technical meaning",
-        "never fabricate personality",
-        // The chat rule of the figure grammar (ADR-0068): same nine families,
-        // the medium changes the marks, a figure only when a relationship
-        // carries the point, in the form its surface takes.
         "the same nine the presentation skills use (flow, structure, layering, sequence, state, coverage, extent, derivation, graph)",
         "the medium changes the marks, not the choice",
         "Draw a figure only when a relationship carries the point",
-        "Its form follows the surface",
+        "Match the form to the surface",
     ] {
         assert!(
-            lifecycle.contains(required),
-            "workflow lifecycle lost editorial principle: {required}"
+            full_agents.contains(required),
+            "writing reference lost the figure grammar chat rule: {required}"
         );
     }
     for required in [
@@ -1448,9 +1507,9 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     ("D20 agents pointer", "what it touches upstream and downstream", TSK131_MAP),
     ("D20 develop", "name the bounded impact set (quality contract)", TSK131_DEVELOP),
     ("D20 reviewer", "Require the named impact set", TSK131_REVIEWER),
-    ("D21 pre-apply", "Before applying a change that newly departs from the approved contract, scope, authority or risk boundary (a public contract break, a moved security boundary, scope growth, an irreversible action)", TSK131_BLOCKERS),
-    ("D21 form", "stop and surface it in the departure form: situation with evidence, the boundary crossed, options with cost and reversibility, and one recommendation", TSK131_BLOCKERS),
-    ("D21 withheld", "The dependent action waits for the answer while authorized independent work continues.", TSK131_BLOCKERS),
+    ("D21 pre-apply", "the departure form, for a change that newly departs from the approved contract, scope, authority or risk boundary (a public contract break, a moved security boundary, scope growth, an irreversible action)", TSK131_BLOCKERS),
+    ("D21 form", "situation with evidence, the boundary crossed, options with cost and reversibility, and one recommendation", TSK131_BLOCKERS),
+    ("D21 withheld", "the dependent action waits while authorized independent work continues", TSK131_DISCIPLINE),
     ("D21 reuse", "An already approved departure is reused and not asked again.", TSK131_BLOCKERS),
     ("D21 compatibility", "Compatibility is judged by the git rules' breaking-change rule and the cf-ship release-policy reference (affected consumers, migration or deprecation, mixed-version operation, recovery).", TSK131_BLOCKERS),
     ("D21 trigger", "| when a step is blocked or would depart from what was approved, or a check or CI job is red or did not finish |", TSK131_QUALITY_INDEX),
@@ -1467,22 +1526,24 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     ("D22 routing return", "returns the verdict, the findings with their remedy, what was verified and what was not verified", TSK131_FINDINGS),
     ("D22 routing scope", "Cross-lineage and Herdr briefs follow this contract.", TSK131_FINDINGS),
     ("D22 consult", "the smallest evidenced remedy and its verification criterion, or the options when the fix is an operator decision", TSK131_CONSULT),
-    ("D23 batch", "collects the round's findings into one dependency-ordered batch with provenance preserved, deduplicates them by mechanism", TSK131_FINDINGS),
+    ("D23 batch", "collects the findings into one dependency-ordered batch with provenance preserved, deduplicates them by mechanism", TSK131_FINDINGS),
     ("D23 evaluation", "evaluates each proposed remedy against the diagnosed mechanism and the impact set", TSK131_FINDINGS),
     ("D23 disposition", "records accept, modify or reject with the reason", TSK131_FINDINGS),
     ("D23 rejection", "Rejecting a remedy never closes the finding or waives a gate; a disputed finding returns with evidence to the reviewer who raised it.", TSK131_FINDINGS),
     ("D23 conflict", "Conflicting remedies are investigated against the mechanism, the impact evidence and the accepted contract.", TSK131_FINDINGS),
     ("D23 escalation", "One consolidated decision goes to the operator in the departure form under [blocker navigation](blockers-and-gates.md) only when resolution needs operator-owned intent, authority or risk acceptance.", TSK131_FINDINGS),
     ("D23 one cycle", "Apply the accepted batch as one apply-and-verify cycle (stacked dependents from Change impact stay separate) and re-verify the impact set.", TSK131_FINDINGS),
-    ("D23 re-review", "confirms that finding on the affected scope, widened when the impact or the prior evidence is uncertain", TSK131_FINDINGS),
-    ("D23 failed round", "A round that introduces an attributable regression is a failed round.", TSK131_FINDINGS),
-    ("D23 gates unchanged", "The required gates and the [completion gate](completion.md) are unchanged.", TSK131_FINDINGS),
-    ("D23 cycle definition", "One cycle is repair plus its affected verification and review.", TSK131_FINDINGS),
-    ("D23 bound", "post-review repair is bounded to two evidence-moving cycles, and the count carries across route changes.", TSK131_FINDINGS),
-    ("D23 strategic", "diagnose the persistent constraint and take an approved-outcome-preserving strategic route or surface the genuine external or owner block, never a third tactical repair.", TSK131_FINDINGS),
-    ("D23 develop", "Maximum 2 evidence-moving cycles for code", TSK131_DEVELOP),
+    ("D23 re-review", "The finder confirms each material fix on the affected scope, widened when the impact or the prior evidence is uncertain", TSK131_FINDINGS),
+    ("D23 probe rerun", "A small fix whose finding came with a failing probe is confirmed by rerunning that probe and the affected tests", TSK131_FINDINGS),
+    ("D23 failed cycle", "A cycle that introduces an attributable regression is a failed cycle.", TSK131_FINDINGS),
+    ("D23 gates unchanged", "The required gates and the [completion](completion.md) section are unchanged.", TSK131_FINDINGS),
+    // TSK-184 removed the cycle cap (change list WP3 findings row, WP4
+    // cf-develop row); the progress rule and the strategy change replace it.
+    ("D23 progress", "Continue while repairs produce relevant evidence; diagnose a stalled mechanism, an invalid assumption or a materially changed scope", TSK131_FINDINGS),
+    ("D23 strategic", "then split, redesign or take the intent question to the operator. That decision is never made by a round counter and never by automatic acceptance.", TSK131_FINDINGS),
+    ("D23 develop", "No cycle count decides: continue while repairs produce relevant evidence", TSK131_DEVELOP),
     ("D23 develop owner", "act on the round's findings as `cf-model-orchestrator/resources/quality/findings.md` sets out", TSK131_DEVELOP),
-    ("D23 eval kit", "\"Maximum 2 evidence-moving cycles for code\"", TSK131_EVAL_REQUIREMENTS),
+    ("D23 eval kit", "\"diagnose a stalled mechanism, an invalid assumption or a materially changed scope\"", TSK131_EVAL_REQUIREMENTS),
 ];
 
 /// TSK-131 AC-1: every present or carried D19 to D23 obligation keeps its
@@ -1520,13 +1581,13 @@ fn holistic_fix_pins_fail_when_a_duty_is_deleted() {
 #[test]
 fn working_method_rounds_agree_across_the_shipped_skills() {
     let findings = normalize_whitespace(&read(TSK131_FINDINGS));
+    // TSK-184: one holistic pass per revision, finder confirmation, no round
+    // or cycle cap.
     for required in [
-        "A review round runs every assigned reviewer in parallel on one revision.",
-        "Each reviewer whose blocker or major finding was fixed confirms that finding",
-        "A fix for a minor finding or a nit needs no confirmation round.",
-        "Rounds are bounded by change class.",
-        "Code, configuration and other executable changes: post-review repair is bounded to two evidence-moving cycles",
-        "Docs and records: two review rounds per submitted version; the count resets once when an edit changes the duties or claims the text states.",
+        "Review is one holistic pass per revision: every assigned reviewer reviews the whole change in parallel on that revision, with no minimum or maximum number of passes.",
+        "The finder confirms each material fix on the affected scope",
+        "Nits need no confirmation.",
+        "That decision is never made by a round counter and never by automatic acceptance.",
     ] {
         assert!(
             findings.contains(required),
@@ -1536,9 +1597,10 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
     let orchestrator = normalize_whitespace(&read(TSK131_ORCHESTRATOR));
     for required in [
         "Use the duo for routed work, decided by touched paths as AGENTS.md states; when unsure, route.",
-        "Plan reconciliation is bounded to at most two rounds.",
-        "When review findings are acted on, a round runs every reviewer in parallel and [findings](resources/quality/findings.md) bounds rounds by change class.",
-        "within the [findings](resources/quality/findings.md) round bounds.",
+        // EPC-018 settled dissent (ADR-0070) rides inside the one approval.
+        "Plan settlement ends when both seats approve one version, with any open reversible item settled under the plan contract's `SETTLED_DISSENT` rule, or the host stops for the operator.",
+        "When review findings are acted on, they are batched per [findings](resources/quality/findings.md)",
+        "as [findings](resources/quality/findings.md) sets out, fixed in the same open PR.",
     ] {
         assert!(
             orchestrator.contains(required),
@@ -1546,10 +1608,9 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
         );
     }
     assert!(
-        normalize_whitespace(&read(TSK131_DEVELOP)).contains(
-            "Maximum 2 evidence-moving cycles for code; docs and records follow that section's bound."
-        ),
-        "cf-develop lost the change-class bound"
+        normalize_whitespace(&read(TSK131_DEVELOP))
+            .contains("No cycle count decides: continue while repairs produce relevant evidence"),
+        "cf-develop lost the progress rule"
     );
     // Fable review of d60ce13f0: the defect-fix duty is stated where every
     // build happens, not only after a review bounces the change.
@@ -1570,10 +1631,12 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
         );
     }
     assert!(
-        normalize_whitespace(&read(TSK131_DISCIPLINE)).contains(
-            "Run one review round at a time with every reviewer in parallel; a reviewer whose blocker or major finding was fixed confirms it, and a fix for a minor finding needs no new round."
-        ),
-        "the discipline reference lost the review round rule"
+        normalize_whitespace(&read(TSK131_DISCIPLINE))
+            .contains("The finder confirms each material fix on the affected scope")
+            && normalize_whitespace(&read(TSK131_DISCIPLINE)).contains(
+                "There is no round cap: continue while repairs produce relevant evidence"
+            ),
+        "the discipline reference lost the review rule"
     );
     assert!(
         normalize_whitespace(&read(TSK131_QUALITY_INDEX)).contains(
@@ -1590,6 +1653,10 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
         "rework are each bounded to at most two rounds",
         "Rework is bounded to two rounds",
         "post-review repair is bounded to two evidence-moving cycles in every route",
+        // TSK-184 removed every round and cycle cap.
+        "Maximum 2 evidence-moving cycles",
+        "bounded to at most two rounds",
+        "two review rounds per submitted version",
     ] {
         let holders: Vec<String> = files
             .iter()
@@ -1893,7 +1960,7 @@ fn lifecycle_guidance_is_one_section_the_skills_follow() {
         "Only the selected branch of a decision is written into `depends_on`",
         "awaiting_selection",
         "kind: research | decision",
-        "lands only by a planning PR",
+        "lands only by the batched epic amendment",
     ] {
         assert!(graph.contains(required), "task-graph.md lost: {required}");
     }
@@ -2007,23 +2074,19 @@ fn pipeline_example_names_the_resolved_selector_not_a_model() {
     }
 }
 
-/// Every backticked `codeflow`-subcommand token in the kernel's Mechanics
-/// line, reduced to its leading subcommand word. The line names the
-/// everyday subcommands and points at `codeflow --help` for the rest.
-fn mechanics_row_subcommands(agents: &str) -> BTreeSet<String> {
-    let start = agents
-        .find("**Mechanics:**")
-        .expect("AGENTS template has a Mechanics line");
-    let rest = &agents[start..];
-    let end = rest.find("lists the rest").unwrap_or(rest.len());
+/// Every backticked `codeflow <verb>` token in a kernel, reduced to its
+/// verb. The delivery line (TSK-184) replaced the kernel's Mechanics list
+/// with verbs named in the rows where they are used, so the whole kernel is
+/// scanned.
+fn kernel_subcommands(agents: &str) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
-    let mut rest = &rest[..end];
+    let mut rest = agents;
     while let Some(open) = rest.find('`') {
         let after = &rest[open + 1..];
         let Some(close) = after.find('`') else { break };
-        let token = &after[..close];
-        if let Some(word) = token.split_whitespace().next() {
-            if word != "codeflow" {
+        let mut words = after[..close].split_whitespace();
+        if words.next() == Some("codeflow") {
+            if let Some(word) = words.next().filter(|word| !word.starts_with('-')) {
                 found.insert(word.to_string());
             }
         }
@@ -2032,10 +2095,9 @@ fn mechanics_row_subcommands(agents: &str) -> BTreeSet<String> {
     found
 }
 
-/// DEFECT 7: the mechanics line is checked against the binary's registered
-/// subcommands; `estimate`, `policy` and `ci` were missing from it. Positive:
-/// those three are named at the standard and full tiers. Negative: nothing
-/// in the line is unregistered, and the line points at `--help` for the rest.
+/// DEFECT 7: every `codeflow` verb a kernel names is checked against the
+/// binary's registered subcommands. Negative: nothing named is unregistered.
+/// Positive: each tier names verbs (the scan is not vacuous).
 #[test]
 fn mechanics_row_matches_the_registered_subcommands() {
     let help = std::process::Command::new(env!("CARGO_BIN_EXE_codeflow"))
@@ -2069,24 +2131,18 @@ fn mechanics_row_matches_the_registered_subcommands() {
     for template in [
         "assets/base/AGENTS.md.tmpl",
         "assets/base/AGENTS.full.md.tmpl",
+        "assets/base/AGENTS.minimal.md.tmpl",
         "AGENTS.md",
     ] {
-        let text = read(template);
-        let row = mechanics_row_subcommands(&text);
-        let unregistered: Vec<&String> = row.difference(&registered).collect();
+        let named = kernel_subcommands(&read(template));
+        assert!(
+            named.contains("update") && named.contains("ci"),
+            "{template}: the kernel names no codeflow verbs: {named:?}"
+        );
+        let unregistered: Vec<&String> = named.difference(&registered).collect();
         assert!(
             unregistered.is_empty(),
-            "{template}: mechanics line names unregistered subcommands {unregistered:?}"
-        );
-        for needed in ["estimate", "policy", "ci"] {
-            assert!(
-                row.contains(needed),
-                "{template}: mechanics line omits `{needed}`"
-            );
-        }
-        assert!(
-            normalize_whitespace(&text).contains("`codeflow --help` lists the rest"),
-            "{template}: mechanics line no longer points at --help"
+            "{template}: names unregistered subcommands {unregistered:?}"
         );
     }
 }
@@ -2153,7 +2209,7 @@ fn guard_plane_count_stays_four() {
         "assets/base/rules/git-rules.md",
         "assets/base/CLAUDE.minimal.md.tmpl",
     ] {
-        let text = normalize_whitespace(&read(minimal));
+        let text = normalize_whitespace(&read(minimal)).to_lowercase();
         assert!(
             text.contains("four planes"),
             "{minimal}: minimal-tier inventory no longer names four planes"

@@ -102,11 +102,11 @@ of a project's hooks, is not a folder trust prompt: it goes to the operator.
 
 ## Settled dissent
 
-Plan reconciliation and post-review rework are each bounded to two
-evidence-moving rounds. A repeated attempt without a new hypothesis or changed
-evidence is not another round. At the bound, the owner changes strategy with
-fresh evidence or surfaces a real block. The bound never closes a material
-finding: it stays open until it is fixed. After that, if two seats still
+Plan settlement and review end on evidence, with no round cap (CodeFlow
+ADR-0076). A repeated attempt without a new hypothesis or changed evidence is
+not progress; when repairs stop producing evidence, the owner changes
+strategy with fresh evidence or surfaces a real block. That never closes a
+material finding: it stays open until it is fixed. If two seats then still
 disagree on a reversible choice inside the accepted outcome, the Claude
 judgment primary settles it. The plan records `SETTLED_DISSENT`
 with the item, both verdicts, the evidence, and why the item is reversible.
@@ -131,8 +131,8 @@ to repair.
 | A sandboxed command fails for a trusted installed tool that needs host state | 1: take the one classified unsandboxed retry without asking, never for an action the presets refuse | `CLAUDE.md` project preset; CodeFlow ADR-0029 |
 | A trust prompt | 1 for the task's own project or worktree, or a sample this run's harness created: answer it; 3 for any other path: ask | Trust prompts above |
 | A credit is missing, or a seat or tool is refused or unavailable after preflight | 2: do not purchase; name the gap, record reduced assurance and continue on the recorded fallback | `AGENTS.md` Entry points; `capability-routing.md` |
-| A seat is lost mid-run after approval | 2: move the unit to the recorded fallback; the available standing seats approve the reassignment as Plan vN+1; the lost seat's actual verdict stays recorded | CodeFlow ADR-0070, amending ADR-0035 |
-| Two seats still disagree after two rounds | 2 on a reversible item: the Claude judgment primary settles it and records `SETTLED_DISSENT`, never approval; 3 on an operator-owned item: ask; not settleable on safety, security, correctness or evidence adequacy: keep the gate closed and repair | Settled dissent above; CodeFlow ADR-0070 |
+| A seat is lost mid-run after approval | 2: move the unit to the recorded fallback and record the reassignment where the assignment lives (an unstarted task's in the batched epic amendment); the lost seat's actual verdict stays recorded | CodeFlow ADR-0070; ADR-0076 for the reassignment |
+| Two seats still disagree once repairs stop producing evidence | 2 on a reversible item: the Claude judgment primary settles it and records `SETTLED_DISSENT`, never approval; 3 on an operator-owned item: ask; not settleable on safety, security, correctness or evidence adequacy: keep the gate closed and repair | Settled dissent above; CodeFlow ADR-0070 |
 | A green, reviewed pull request into an `integration/` branch that policy does not protect | 2: the primary merges it without fast forward or with `codeflow integrate`, then reruns the gate | `AGENTS.md` Git rules, Bodies of work; `codeflow integrate`; `.codeflow/policy.json` |
 | Local evidence is green and hosted jobs never ran | 2: report "ready for your merge on local evidence" only with a completed green result of every owed check, local or hosted, and name each hosted job that did not run and why | `quality-contract.md` redness classes |
 | An owed check has no completed result anywhere | a missing gate: name it as the blocker, keep the pull request draft, continue other work | `quality-contract.md` redness classes |

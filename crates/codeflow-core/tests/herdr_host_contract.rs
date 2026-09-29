@@ -45,7 +45,10 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
             "`idle` or `done` is **not**",
             "schema-v2",
             "label that path **degraded**",
-            "Herdr wins",
+            // TSK-184 removed the Herdr run cache (change list WP5, cf-herdr
+            // row), so "Herdr wins" over the cache has nothing to rule; the
+            // live cwd check on resume stays.
+            "pane `cwd` is `$PWD`",
             "intended worktree",
             "Default production launch is ADR-conformant",
             "--always-approve",
@@ -92,7 +95,9 @@ fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
             "cf-herdr",
             "HERDR_ENV=1",
             "axis: standards",
-            "herdr pane send-text",
+            // TSK-184: consult points at cf-delegate for the launch; the
+            // lifecycle lane (below) owns the Herdr delivery command.
+            "`cf-herdr` hosts the seat in a named tab and never takes over the caller pane",
         ],
     );
     // TSK-129: the Herdr host rules and delivery moved with the lifecycle into

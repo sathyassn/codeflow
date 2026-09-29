@@ -29,7 +29,7 @@ const ROOTS: [(&str, &str); 4] = [
 /// belongs here too, with the case that fails on it, and so does a grading
 /// signal or test that detects a Mermaid figure. A line passes only when
 /// no mention is left once its listed clauses are removed.
-const ALLOWED: [(&str, &str); 36] = [
+const ALLOWED: [(&str, &str); 35] = [
     (
         "cf-present/references/document-authoring.md",
         "The `diagram` block was removed with its Mermaid renderer, and Mermaid is",
@@ -78,18 +78,16 @@ const ALLOWED: [(&str, &str); 36] = [
         "cf-docs-portal/resources/explanation-method.md",
         "shows a Mermaid fence as code, and GitHub shows a `cf-stage` fence as code.",
     ),
-    (
-        "cf-method/references/workflow-lifecycle.md",
-        "- Never use Mermaid for a reply figure.",
-    ),
     ("cf-ship/references/pr-evidence.md", "Mermaid is never used."),
     (
         "cf-evaluate-model/resources/requirements.json",
         "and never a Mermaid block;",
     ),
+    // TSK-184: the figure rule moved to the writing reference; its marker
+    // quotes that rule.
     (
         "cf-evaluate-model/resources/requirements.json",
-        "Never use Mermaid for a reply figure",
+        "\"Never use Mermaid.\"",
     ),
     (
         "cf-evaluate-model/resources/fixtures.json",
