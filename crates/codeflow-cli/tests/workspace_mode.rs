@@ -526,3 +526,93 @@ fn a_case_sensitive_umbrella_gets_the_warning_and_the_literal_rule() {
         "{ignore}"
     );
 }
+
+/// The same run as [`codeflow`], with git's runtime config overrides set:
+/// every git process codeflow starts sees `key = value` on top of the files.
+fn codeflow_with_override(dir: &Path, args: &[&str], key: &str, value: &str) -> Output {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("joinable PATH");
+    Command::new(&exe)
+        .args(args)
+        .current_dir(dir)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("PATH", path)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", key)
+        .env("GIT_CONFIG_VALUE_0", value)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .output()
+        .expect("codeflow binary runs")
+}
+
+/// Whether git ignores `path` in `root` under the runtime override.
+fn git_ignores_with_override(root: &Path, path: &str, key: &str, value: &str) -> bool {
+    Command::new("git")
+        .args(["check-ignore", "-q", path])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", key)
+        .env("GIT_CONFIG_VALUE_0", value)
+        .status()
+        .expect("git runs")
+        .success()
+}
+
+#[test]
+fn a_runtime_case_override_decides_the_shared_rule_check() {
+    // Codex round 3: the stored core.ignoreCase is true, but git runs with
+    // an override to false, so `/NESTED/` does not ignore `nested`.
+    let (key, value) = ("core.ignoreCase", "false");
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("workspace"));
+    git(&root, &["config", "core.ignoreCase", "true"]);
+    std::fs::write(root.join(".gitignore"), "/NESTED/\n").unwrap();
+    git(&root, &["add", ".gitignore"]);
+    git(&root, &["commit", "--quiet", "-m", "ignore"]);
+    repo_with_commit(&root.join("nested"));
+    assert!(!git_ignores_with_override(&root, "nested", key, value));
+
+    let doctor =
+        codeflow_with_override(&root, &["doctor", "--check", "repo-integrity"], key, value);
+    let said = both(&doctor);
+    assert!(
+        said.contains("the nested git repository 'nested'"),
+        "{said}"
+    );
+
+    for run in ["first", "rerun"] {
+        let out = codeflow_with_override(
+            &root,
+            &["init", "--yes", "--minimal", "--workspace"],
+            key,
+            value,
+        );
+        let said = both(&out);
+        assert!(out.status.success(), "{run}: {said}");
+        assert!(
+            git_ignores_with_override(&root, "nested", key, value),
+            "{run}: {said}"
+        );
+    }
+    let ignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert_eq!(
+        ignore.lines().filter(|l| *l == "/nested/").count(),
+        1,
+        "{ignore}"
+    );
+}

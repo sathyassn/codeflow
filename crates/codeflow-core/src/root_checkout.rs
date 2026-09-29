@@ -641,15 +641,11 @@ impl Drop for ScratchRepo {
 /// working tree: the rules a clone shares once they are committed. git runs
 /// against a scratch repository, so this repository's `.git/info/exclude`
 /// and any global excludes file take no part. The scratch run matches case
-/// as this repository does (`core.ignoreCase`), not as a fresh repository on
-/// this file system would. Falls back to [`ignore_sources`] when no scratch
-/// repository can be made.
+/// as git does in this repository (`core.ignoreCase`, runtime overrides
+/// included), not as a fresh repository on this file system would. Falls
+/// back to [`ignore_sources`] when no scratch repository can be made.
 fn tree_ignore_sources(root: &Path, dirs: &[String]) -> Vec<Option<String>> {
-    let ignore_case = git2::Repository::open(root)
-        .and_then(|repo| repo.config())
-        .and_then(|config| config.get_bool("core.ignoreCase"))
-        .unwrap_or(false);
-    let ignore_case = format!("core.ignoreCase={ignore_case}");
+    let ignore_case = format!("core.ignoreCase={}", effective_ignore_case(root));
     let scratch = ScratchRepo::new();
     let git_dir = scratch
         .as_ref()
@@ -673,6 +669,21 @@ fn tree_ignore_sources(root: &Path, dirs: &[String]) -> Vec<Option<String>> {
         .unwrap_or_else(|| ignore_sources(root, dirs)),
         _ => ignore_sources(root, dirs),
     }
+}
+
+/// `core.ignoreCase` as git itself resolves it in `root`, runtime overrides
+/// (`git -c`, `GIT_CONFIG_COUNT`) included; git's default, false, when it
+/// is unset or unreadable.
+fn effective_ignore_case(root: &Path) -> bool {
+    crate::git::command()
+        .arg("-C")
+        .arg(root)
+        .args(["config", "--get", "--type=bool", "core.ignoreCase"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .is_some_and(|out| String::from_utf8_lossy(&out.stdout).trim() == "true")
 }
 
 /// One `git <prefix> check-ignore -v -n` call over `dirs`: for each, the
