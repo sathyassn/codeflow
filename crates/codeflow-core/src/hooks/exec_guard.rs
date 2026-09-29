@@ -21,8 +21,11 @@
 //!   paths. None of these is ever a legitimate project operation, so there is no
 //!   sanctioned path to offer — a hard block is the whole point.
 //! - **`privilege_escalation` = block** (operator decision D5, ADR-0075,
-//!   amending ADR-0008's warn). sudo/su/doas/pkexec, shell `-c` chains,
-//!   `LD_PRELOAD`/PATH injection. Agent sessions no longer prompt for these:
+//!   amending ADR-0008's warn). sudo/su/doas/pkexec/runuser and the Windows
+//!   launchers, run directly, chained, piped to, or wrapped in a shell `-c`
+//!   string or `eval`; `LD_PRELOAD` and a `PATH` through `/tmp`. A shell
+//!   `-c` string that reaches no launcher, `source` and `LD_LIBRARY_PATH`
+//!   are ordinary work and are not reported. Agent sessions no longer prompt for these:
 //!   the presets deny the plain forms and this guard refuses the rest, and
 //!   the operator runs privileged commands personally. A project may set
 //!   `warn` in `policy.json`; `codeflow update` keeps a value that differs
@@ -271,6 +274,25 @@ mod tests {
         assert!(v.iter().any(|x| {
             x.rule == "security.privilege_escalation" && x.level == PolicyLevel::Warn
         }));
+    }
+
+    /// Grok review of TSK-171: blocking escalation by default must not
+    /// refuse ordinary shell work.
+    #[test]
+    fn test_ordinary_shell_work_is_not_blocked_by_default() {
+        for cmd in [
+            "bash -c 'printf ok'",
+            "source .venv/bin/activate",
+            "LD_LIBRARY_PATH=/opt/lib cargo test",
+        ] {
+            let v = evaluate(cmd, &SecuritySection::default());
+            assert!(!any_blocking(&v), "{cmd}: {v:?}");
+        }
+        for cmd in ["sudo id", "bash -c 'sudo id'", "LD_PRELOAD=/tmp/x.so ls"] {
+            let v = evaluate(cmd, &SecuritySection::default());
+            assert!(any_blocking(&v), "{cmd}");
+            assert_eq!(v[0].rule, "security.privilege_escalation");
+        }
     }
 
     #[test]

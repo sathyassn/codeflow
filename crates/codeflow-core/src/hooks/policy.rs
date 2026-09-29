@@ -543,7 +543,8 @@ pub struct SecuritySection {
     /// project, so no sanctioned path exists — the guard is the hard line.
     pub dangerous_commands: PolicyLevel,
     /// Privilege escalation the `privilege` module catches (Unix and Windows
-    /// launchers, shell `-c` chains, `LD_PRELOAD`/PATH injection). Default
+    /// launchers, direct, chained or wrapped in a shell `-c` string or
+    /// `eval`; `LD_PRELOAD` and a `PATH` through `/tmp`). Default
     /// `block` (operator decision D5 of 2026-09-28, ADR-0075): the presets
     /// deny the plain forms without a prompt and the guard refuses the
     /// wrapped ones; the operator runs privileged commands.
