@@ -1,0 +1,11 @@
+id = "TSK-193"
+uid = "e2bb4f05-717b-4c11-9d6e-ed5a62f0864d"
+kind = "TSK"
+title = "present conversation: replies, reopen, revision diff, check"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T20:06:57Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
