@@ -878,3 +878,61 @@ fn no_skill_entry_widens_the_map_routing_rule() {
         "the orchestrator body must defer entry to the map"
     );
 }
+
+/// TSK-177 AC-1 and AC-5: every tier's map states the plain-writing rule in
+/// the operator's full form with its one pointer, and names the figure form
+/// for Markdown files; a fresh scaffold at each tier installs that map and a
+/// writing reference that leads with the same rule.
+#[test]
+fn every_tier_map_states_the_plain_writing_rule() {
+    const RULE: &str = "**Write plainly.** Everything you write, replies and status updates \
+        included, is simple, straightforward and clear, with the detail the reader needs and \
+        no more. Avoid mannered prose, writing that performs for effect: slogans, \"not X but \
+        Y\" turns, rhetorical triplets, dramatic fragments, stacked hedges, colon reveals, \
+        self-narration, ceremonial framing and walls of text. State the fact directly.";
+    let kernel = Kernel::shipped();
+    for tier in Kernel::tiers() {
+        let block = normalized(
+            managed_block(&kernel.render(agents_output(tier))).expect("managed markers"),
+        );
+        let (pointer, figures) = if tier == Tier::Minimal {
+            (
+                "See `.codeflow/rules/writing.md`.",
+                "inline HTML where rendered, fenced ASCII in Markdown files and in a terminal, \
+                 never Mermaid.",
+            )
+        } else {
+            (
+                "See `.agents/skills/cf-editorial-review/references/editorial-smells.md`.",
+                "inline HTML where rendered, the portal's figure grammar on docs-portal pages, \
+                 fenced ASCII in other Markdown files and in a terminal, never Mermaid.",
+            )
+        };
+        let rule = format!("{} {pointer}", normalized(RULE));
+        assert!(
+            block.contains(&rule),
+            "{tier} map lacks the plain-writing rule"
+        );
+        assert!(
+            block.contains(figures),
+            "{tier} map lacks the figure surfaces"
+        );
+        assert!(
+            !block.contains("ASCII in a terminal, never Mermaid)"),
+            "{tier} map keeps the retired figure wording"
+        );
+
+        let project = scaffold(&assets(), tier);
+        let installed = normalized(&read(&project.path().join("AGENTS.md")));
+        assert!(installed.contains(&rule), "{tier} scaffold lacks the rule");
+        let writing = normalized(&read(&project.path().join(".codeflow/rules/writing.md")));
+        let lead = writing
+            .find(&normalized(RULE))
+            .expect("writing reference states the rule");
+        let first_section = writing.find("## ").expect("writing reference has sections");
+        assert!(
+            lead < first_section,
+            "{tier}: the rule must lead the writing reference"
+        );
+    }
+}

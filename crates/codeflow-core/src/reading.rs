@@ -80,17 +80,17 @@ pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
     ("cf-consult", 7 * KIB),
     ("cf-customize", 22 * KIB + 512),
     ("cf-delegate", 20 * KIB + 512),
-    ("cf-design", 19 * KIB + 512),
-    ("cf-develop", 5 * KIB),
+    ("cf-design", 20 * KIB),
+    ("cf-develop", 5 * KIB + 256),
     ("cf-docs-portal", 9 * KIB),
-    ("cf-editorial-review", 6 * KIB),
+    ("cf-editorial-review", 6 * KIB + 768),
     ("cf-estimate", 6 * KIB),
     ("cf-evaluate-model", 9 * KIB + 512),
     ("cf-herdr", 9 * KIB),
     ("cf-method", 19 * KIB + 512),
     ("cf-model-orchestrator", 29 * KIB),
     ("cf-plan", 9 * KIB),
-    ("cf-present", 8 * KIB),
+    ("cf-present", 8 * KIB + 256),
     ("cf-ship", 6 * KIB + 896),
     ("cf-stack", 4 * KIB),
 ];
@@ -100,7 +100,7 @@ pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
 pub const ARTIFACT_GUIDELINES: &[(&str, usize)] = &[
     ("CLAUDE.md.tmpl", 6 * KIB),
     ("CLAUDE.minimal.md.tmpl", 3 * KIB),
-    ("claude/agents/cf-reviewer.md", 10 * KIB),
+    ("claude/agents/cf-reviewer.md", 10 * KIB + 256),
     ("claude/agents/cf-security-reviewer.md", 12 * KIB),
 ];
 
@@ -620,6 +620,10 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     ".codeflow/manifest.json",
     ".codeflow/policy.json",
     ".codeflow/test-config.json",
+    // The writing reference the rule map loads at every tier, installed
+    // beside the kernel rather than in a skill tree; skills cite it for the
+    // plain-writing rule (TSK-177).
+    ".codeflow/rules/writing.md",
     ".codeflow/schemas/present/document-v1.schema.json",
     ".codeflow/schemas/present/utility-tokens-v1.schema.json",
     "${CODEFLOW_HOME:-$HOME/.codeflow}/herdr-runs/<repo>.json",

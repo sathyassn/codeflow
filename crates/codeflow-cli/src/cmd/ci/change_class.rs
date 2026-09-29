@@ -15,7 +15,6 @@
 //! - code: anything else, and every range whose paths could not be listed.
 
 use std::path::Path;
-use std::process::Command;
 
 use codeflow_core::workgraph::classify::{path_sets, ProjectPaths};
 
@@ -54,7 +53,7 @@ impl ChangeClass {
 /// detection so a rename is its deletion and its addition. Any failure is
 /// `None`, which the caller reads as unknown, never as an empty range.
 pub(super) fn range_inventory(root: &Path, base: &str, head: &str) -> Option<Vec<RangeEntry>> {
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args([
@@ -109,7 +108,7 @@ fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
 /// side can narrow the surfaces the other names.
 pub(super) fn project_paths(root: &Path, base: &str) -> ProjectPaths {
     let mut project = ProjectPaths::load(root);
-    let target = Command::new("git")
+    let target = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["show", &format!("{base}:.codeflow/policy.json")])

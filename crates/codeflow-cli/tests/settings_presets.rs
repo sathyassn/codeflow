@@ -6,7 +6,9 @@
 //! against typos.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use codeflow_core::security::actions;
 
 /// The expected preset set, pinned so an addition or removal is a conscious
 /// choice; `preset_files_match_the_shipped_directory` keeps it honest.
@@ -54,7 +56,7 @@ const CLAUDE_SENSITIVE_READ_DENIES: [&str; 17] = [
     "Read(~/.claude/mcp-needs-auth-cache.json)",
     "Read(~/.claude/memory/**)",
     "Read(~/.claude/paste-cache/**)",
-    "Read(~/.claude/projects/**)",
+    "Read(~/.claude/projects/**/*.jsonl)",
     "Read(~/.claude/session-env/**)",
     "Read(~/.claude/sessions/**)",
     "Read(~/.claude/settings.json)",
@@ -411,109 +413,6 @@ fn allow_arrays_grant_project_autonomy() {
 }
 
 #[test]
-fn ask_arrays_gate_escalation_and_publish() {
-    // Hard protections stay: privilege escalation and irreversible publish/
-    // delete are prompted even under the most permissive preset (an `ask` rule
-    // fires in bypassPermissions mode too).
-    let expected = [
-        "Bash(sudo *)",
-        "Bash(su *)",
-        "Bash(doas *)",
-        "Bash(rm -rf /)",
-        "Bash(rm -fr /)",
-        "Bash(git reset --hard)",
-        "Bash(git reset --hard *)",
-        "Bash(git clean *)",
-        "Bash(git checkout -- .)",
-        "Bash(git checkout -- *)",
-        "Bash(git checkout .)",
-        "Bash(git checkout * -- *)",
-        "Bash(git checkout -f)",
-        "Bash(git checkout -f *)",
-        "Bash(git checkout --force)",
-        "Bash(git checkout --force *)",
-        "Bash(git checkout -B *)",
-        "Bash(git switch -C *)",
-        "Bash(git switch --force-create *)",
-        "Bash(git switch -f)",
-        "Bash(git switch -f *)",
-        "Bash(git switch --force)",
-        "Bash(git switch --force *)",
-        "Bash(git switch --discard-changes)",
-        "Bash(git switch --discard-changes *)",
-        "Bash(git restore .)",
-        "Bash(git restore *)",
-        "Bash(git stash drop)",
-        "Bash(git stash drop *)",
-        "Bash(git stash clear)",
-        "Bash(git push --force)",
-        "Bash(git push --force *)",
-        "Bash(git push -f)",
-        "Bash(git push -f *)",
-        "Bash(git push * --force)",
-        "Bash(git push * --force *)",
-        "Bash(git push * -f)",
-        "Bash(git push * -f *)",
-        "Bash(git push --delete *)",
-        "Bash(git push * --delete *)",
-        "Bash(git push -d *)",
-        "Bash(git push * -d *)",
-        "Bash(git push +*)",
-        "Bash(git push * +*)",
-        "Bash(git push --mirror *)",
-        "Bash(git push * --mirror *)",
-        "Bash(git push --prune *)",
-        "Bash(git push * --prune *)",
-        "Bash(git branch -D *)",
-        "Bash(git branch --delete --force *)",
-        "Bash(git branch --force --delete *)",
-        "Bash(git branch -d -f *)",
-        "Bash(git branch -f -d *)",
-        "Bash(git branch -f *)",
-        "Bash(git branch --force *)",
-        "Bash(git branch -M *)",
-        "Bash(git branch -m -f *)",
-        "Bash(git branch -m --force *)",
-        "Bash(git branch --move -f *)",
-        "Bash(git branch --move --force *)",
-        "Bash(cargo publish *)",
-        "Bash(npm publish *)",
-        "Bash(gh release *)",
-        "Bash(gh repo delete *)",
-    ];
-    for name in preset_files() {
-        let ask = perm_array(&load(&name), "ask");
-        for entry in expected {
-            assert!(
-                ask.iter().any(|a| a == entry),
-                "{name}: ask missing {entry:?}"
-            );
-        }
-        assert!(
-            !perm_array(&load(&name), "allow")
-                .iter()
-                .any(|entry| entry.starts_with("Bash(git restore")),
-            "{name}: git restore must not remain in allow; ask rules take precedence"
-        );
-        assert!(
-            !ask.iter().any(|entry| entry == "Bash(git push * :*)"),
-            "{name}: a rule ending in :* is parsed as a legacy literal-prefix rule"
-        );
-        // rm -rf on / and ~ is asked in some form.
-        assert!(
-            ask.iter()
-                .any(|a| a.starts_with("Bash(rm -") && a.contains('/')),
-            "{name}: ask missing an rm -rf / rule"
-        );
-        assert!(
-            ask.iter()
-                .any(|a| a.starts_with("Bash(rm -") && a.contains('~')),
-            "{name}: ask missing an rm -rf ~ rule"
-        );
-    }
-}
-
-#[test]
 fn sandbox_removes_raw_model_and_cloud_credentials_from_bash() {
     let expected = [
         "ANTHROPIC_API_KEY",
@@ -709,32 +608,9 @@ const PRIVILEGE_ESCALATION_PATTERNS: [&str; 8] = [
     "Start-Process * -Verb RunAs*",
 ];
 
-/// The shell tools Claude exposes; every escalation pattern is gated for both.
-const SHELL_TOOLS: [&str; 2] = ["Bash", "PowerShell"];
-
-/// DEFECT 2 (positive): every privilege-escalation pattern is at the ask tier
-/// for both shell tools, in every preset.
-#[test]
-fn privilege_escalation_is_asked_for_both_shell_tools() {
-    for name in preset_files() {
-        let ask = perm_array(&load(&name), "ask");
-        for tool in SHELL_TOOLS {
-            for pattern in PRIVILEGE_ESCALATION_PATTERNS {
-                let rule = format!("{tool}({pattern})");
-                assert!(
-                    ask.contains(&rule),
-                    "{name}: ask missing {rule:?} — a rule keyed to the other \
-                     shell tool does not gate this one"
-                );
-            }
-        }
-    }
-}
-
-/// DEFECT 2 (negative): ask-tier only, never allow. This is the assertion that
-/// fails if any escalation pattern is promoted into `allow`, under any tool
-/// prefix and in any preset — including `bypass-sandboxed`, where an `ask` rule
-/// is the only thing that still prompts.
+/// DEFECT 2 (negative): never allow. This is the assertion that fails if any
+/// escalation pattern is promoted into `allow`, under any tool prefix and in
+/// any preset.
 #[test]
 fn privilege_escalation_is_never_promoted_to_allow() {
     for name in preset_files() {
@@ -749,17 +625,17 @@ fn privilege_escalation_is_never_promoted_to_allow() {
                 assert_ne!(
                     inner, pattern,
                     "{name}: privilege escalation {pattern:?} was promoted to \
-                     allow — this family is ask-tier only, never allow"
+                     allow; this family is denied, never allowed"
                 );
             }
         }
     }
 }
 
-/// Whether any `tool(...)` ask rule covers `command`, using the documented
-/// matcher below; `PowerShell` rules match case-insensitively. Like
-/// `ask_covers`, this models one normalized command, not the harness.
-fn asked(ask: &[String], tool: &str, command: &str) -> bool {
+/// Whether any `tool(...)` rule covers `command`, using the documented
+/// matcher below; `PowerShell` rules match case-insensitively. It models
+/// one normalized command, not the harness.
+fn denied(rules: &[String], tool: &str, command: &str) -> bool {
     let prefix = format!("{tool}(");
     let fold = |text: &str| {
         if tool == "PowerShell" {
@@ -768,7 +644,7 @@ fn asked(ask: &[String], tool: &str, command: &str) -> bool {
             text.to_string()
         }
     };
-    ask.iter().any(|rule| {
+    rules.iter().any(|rule| {
         rule.strip_prefix(&prefix)
             .and_then(|inner| inner.strip_suffix(')'))
             .is_some_and(|inner| rule_matches(&fold(inner), &fold(command)))
@@ -776,10 +652,10 @@ fn asked(ask: &[String], tool: &str, command: &str) -> bool {
 }
 
 /// Round 1 review (F1): path-qualified launchers, Windows `.exe` spellings
-/// and `PowerShell` elevation started from the Bash tool must reach the ask
-/// tier too, while ordinary commands that only mention a launcher must not.
+/// and `PowerShell` elevation started from the Bash tool are denied too,
+/// while ordinary commands that only mention a launcher are not.
 #[test]
-fn privilege_escalation_variants_reach_the_ask_tier() {
+fn privilege_escalation_variants_are_denied() {
     let positives = [
         ("Bash", "sudo id"),
         ("Bash", "/usr/bin/sudo id"),
@@ -819,26 +695,26 @@ fn privilege_escalation_variants_reach_the_ask_tier() {
         ("PowerShell", "Write-Output runas"),
     ];
     for name in preset_files() {
-        let ask = perm_array(&load(&name), "ask");
+        let deny = perm_array(&load(&name), "deny");
         for (tool, command) in positives {
             assert!(
-                asked(&ask, tool, command),
-                "{name}: {tool} command {command:?} escalates but reaches no ask rule"
+                denied(&deny, tool, command),
+                "{name}: {tool} command {command:?} escalates but reaches no deny rule"
             );
         }
         for (tool, command) in negatives {
             assert!(
-                !asked(&ask, tool, command),
-                "{name}: {tool} command {command:?} does not escalate but is asked"
+                !denied(&deny, tool, command),
+                "{name}: {tool} command {command:?} does not escalate but is denied"
             );
         }
     }
 }
 
-/// DEFECT 2 companion: adding the ask entries must not have relaxed anything
-/// else. The non-relaxable secret-read prohibitions and the fail-closed
-/// sandbox defaults are re-asserted here, in the same run that proves the new
-/// ask entries, so a widening edit cannot land alongside them unnoticed.
+/// DEFECT 2 companion: the generated deny entries must not have relaxed
+/// anything else. The non-relaxable secret-read prohibitions and the
+/// fail-closed sandbox defaults are re-asserted here, so a widening edit
+/// cannot land alongside them unnoticed.
 #[test]
 fn escalation_additions_leave_prohibitions_and_sandbox_unchanged() {
     for name in preset_files() {
@@ -861,7 +737,7 @@ fn escalation_additions_leave_prohibitions_and_sandbox_unchanged() {
         }
 
         // The sandbox stays enabled and fail-closed, with no broad static
-        // exclusion smuggled in beside the new ask entries.
+        // exclusion smuggled in beside the generated entries.
         let sandbox = &value["sandbox"];
         assert_eq!(sandbox["enabled"], true, "{name}: sandbox disabled");
         assert_eq!(
@@ -1003,119 +879,624 @@ fn default_preset_leaves_the_permission_mode_to_the_operator() {
     );
 }
 
-/// This preset drops a confirmation layer for in-tree recursive deletes and
-/// for safe branch deletes; the sandbox limits the blast radius but does not
-/// make untracked unique data recoverable. `git branch -d` only refuses a
-/// branch unmerged into its upstream (or HEAD when it has none), so landing
-/// evidence, not this rule, is what gates a branch delete.
+// ---- Generated from the action table (ADR-0075, TSK-171) ----------------
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// A reference sample of the settled design, which the generator must
+/// reproduce.
+fn evidence(rel: &str) -> PathBuf {
+    repo_root()
+        .join("docs/verification/evidence/permission-presets")
+        .join(rel)
+}
+
+fn read_json(path: &Path) -> serde_json::Value {
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+fn bless() -> bool {
+    std::env::var_os("CODEFLOW_BLESS").is_some()
+}
+
+const REGENERATE: &str = "regenerate with CODEFLOW_BLESS=1 cargo test -p codeflow-cli --test settings_presets, then review the diff";
+
+/// Compare a generated asset with the shipped file, or rewrite it under
+/// `CODEFLOW_BLESS`.
+fn check_generated(path: &Path, generated: &str) {
+    let shipped = std::fs::read_to_string(path).unwrap_or_default();
+    if shipped == generated {
+        return;
+    }
+    if bless() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, generated).unwrap();
+        return;
+    }
+    panic!(
+        "{} is not what the action table generates; {REGENERATE}",
+        path.display()
+    );
+}
+
+/// AC-5: the Claude arrays of every shipped preset are the table's output.
 #[test]
-fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
+fn claude_presets_are_generated_from_the_action_table() {
+    let table = actions::table();
+    assert_eq!(table.parity_errors(), Vec::<String>::new());
     for name in preset_files() {
-        let ask = perm_array(&load(&name), "ask");
-        for absent in [
-            "Bash(rm -rf *)",
-            "Bash(rm -fr *)",
-            "Bash(git branch -d *)",
-            "Bash(git branch --delete *)",
-        ] {
+        let path = settings_dir().join(&name);
+        let mut value = load(&name);
+        table.apply_to_claude_preset(&mut value);
+        let mut generated = serde_json::to_string_pretty(&value).unwrap();
+        generated.push('\n');
+        check_generated(&path, &generated);
+    }
+}
+
+/// AC-5: the Codex rules file is the table's output.
+#[test]
+fn codex_rules_are_generated_from_the_action_table() {
+    check_generated(
+        &repo_root().join("assets/base/codex/rules/codeflow.rules"),
+        &actions::table().codex_rules(),
+    );
+}
+
+/// The generator reproduces the design's reference samples from the presets
+/// the design started from, with one stated departure: the read rules are
+/// ordered in groups (review of PR 749), so the deny array holds the same
+/// rules as the reference in a different order. Hook commands are excluded:
+/// their fail-closed form and `--contract` flag are TSK-173's.
+#[test]
+fn the_generator_reproduces_the_reference_samples() {
+    let table = actions::table();
+    let reference: serde_json::Value = read_json(&evidence("actions.json"));
+    let sorted = |value: &serde_json::Value| {
+        let mut items: Vec<String> = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        items.sort();
+        items
+    };
+    let mut denies = table.claude_read_denies();
+    denies.sort();
+    assert_eq!(denies, sorted(&reference["claude_read_denies"]));
+    let mut carveouts = table.claude_read_carveouts();
+    carveouts.sort();
+    assert_eq!(carveouts, sorted(&reference["claude_read_carveouts"]));
+    for key in [
+        "families",
+        "claude_edit_denies",
+        "sandbox_env_denies",
+        "sandbox_read_denies",
+        "delegate_denies",
+    ] {
+        let embedded: serde_json::Value = serde_json::from_str(include_str!(
+            "../../codeflow-core/src/security/actions.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            embedded[key], reference[key],
+            "{key} left the reference table"
+        );
+    }
+    for name in PRESET_FILES {
+        let mut generated = read_json(&evidence(&format!("current/{name}")));
+        table.apply_to_claude_preset(&mut generated);
+        let mut expected = read_json(&evidence(&format!("claude/{name}")));
+        for value in [&mut generated, &mut expected] {
+            let object = value.as_object_mut().unwrap();
+            object.remove("hooks");
+            let deny = object["permissions"]["deny"].clone();
+            object["permissions"]["deny"] = serde_json::json!(sorted(&deny));
+        }
+        assert_eq!(generated, expected, "{name}");
+    }
+    assert_eq!(
+        table.codex_rules(),
+        std::fs::read_to_string(evidence("codex/rules/codeflow.rules")).unwrap()
+    );
+    assert_eq!(
+        table.delegate_fragment(),
+        read_json(&evidence("claude/delegate-settings-fragment.json"))
+    );
+}
+
+/// AC-1: the commands ordinary work runs, which no deny rule may refuse.
+const ORDINARY_WORK: [&str; 11] = [
+    "rm -rf /tmp/x",
+    "rm -rf ~/scratch/x",
+    "gh release view v1",
+    "gh secret list",
+    "crontab -l",
+    "git branch -d topic",
+    "cargo test",
+    "npm run build",
+    "gh pr create --draft",
+    "cargo +nightly test --features publish",
+    "npm --prefix x run publish-docs",
+];
+
+/// AC-1: no preset asks, and no deny rule matches ordinary work.
+#[test]
+fn presets_carry_no_ask_rules_and_deny_no_ordinary_work() {
+    for name in preset_files() {
+        let value = load(&name);
+        assert!(
+            value["permissions"].get("ask").is_none(),
+            "{name}: an ask rule prompts in every mode (ADR-0075)"
+        );
+        let deny = perm_array(&value, "deny");
+        for command in ORDINARY_WORK {
             assert!(
-                !ask.iter().any(|a| a == absent),
-                "{name}: {absent} prompts on ordinary work"
+                !denied(&deny, "Bash", command),
+                "{name}: a deny rule refuses ordinary work {command:?}"
             );
         }
-        for present in [
-            "Bash(rm -rf /)",
-            "Bash(rm -rf /*)",
-            "Bash(rm -rf ~*)",
-            "Bash(git branch -D *)",
-            "Bash(git branch --delete --force *)",
-        ] {
+    }
+}
+
+/// AC-2: a representative command per family, each denied.
+const FAMILY_EXAMPLES: [(&str, &[&str]); 6] = [
+    (
+        "privilege",
+        &[
+            "sudo id",
+            "env sudo id",
+            "/usr/bin/sudo id",
+            "doas reboot",
+            "osascript -e 'do shell script \"id\" with administrator privileges'",
+        ],
+    ),
+    (
+        "publish",
+        &[
+            "cargo publish",
+            "npm publish --access public",
+            "yarn npm publish",
+            "python3 -m twine upload dist/x.whl",
+            "gem push x.gem",
+            "gh gist create notes.md",
+        ],
+    ),
+    (
+        "release",
+        &[
+            "gh release create v1",
+            "gh release upload v1 x.tar.gz",
+            "git push --tags",
+            "git push origin --follow-tags",
+            "git push origin refs/tags/v1",
+        ],
+    ),
+    (
+        "account",
+        &[
+            "gh auth switch",
+            "gh auth login",
+            "gh auth setup-git",
+            "gh auth token",
+            "gh secret set X",
+            "gh repo delete o/r",
+            "gh repo edit --visibility public",
+            "git push --mirror",
+            "git credential fill",
+            "gh api -X DELETE repos/o/r",
+        ],
+    ),
+    (
+        "keychain",
+        &[
+            "security find-generic-password -s x",
+            "security dump-keychain",
+        ],
+    ),
+    (
+        "persistence",
+        &[
+            "defaults write com.x key 1",
+            "launchctl load x.plist",
+            "crontab -e",
+            "crontab -r",
+            "systemctl --user enable x",
+            "systemctl enable x",
+        ],
+    ),
+];
+
+/// AC-2: every preset denies every family of the table.
+#[test]
+fn every_preset_denies_every_action_family() {
+    let table = actions::table();
+    let ids: Vec<&str> = table.families.iter().map(|f| f.id.as_str()).collect();
+    let covered: Vec<&str> = FAMILY_EXAMPLES.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, covered, "a family without examples");
+    for name in preset_files() {
+        let deny = perm_array(&load(&name), "deny");
+        for family in &table.families {
+            for rule in &family.claude {
+                assert!(deny.contains(rule), "{name}: {} lost {rule}", family.id);
+            }
+        }
+        for (id, commands) in FAMILY_EXAMPLES {
+            for command in commands {
+                assert!(
+                    denied(&deny, "Bash", command),
+                    "{name}: {id} command {command:?} is not denied"
+                );
+            }
+        }
+    }
+}
+
+/// The enforcement paths (design 2.2), each needing an `Edit(...)` deny.
+const ENFORCEMENT_PATHS: [&str; 10] = [
+    ".claude/settings.json",
+    ".codeflow/policy.json",
+    ".codeflow/project.toml",
+    ".codeflow/git-hooks/pre-commit",
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".codex/rules/codeflow.rules",
+    ".grok/hooks/codeflow.json",
+    ".grok/sandbox.toml",
+    ".github/workflows/codeflow-ci.yml",
+];
+
+/// Gitignore-style path glob: `**/` spans zero or more directories, a
+/// trailing `**` anything, and `*` any run inside one path segment.
+fn path_matches(pattern: &str, path: &str) -> bool {
+    if let Some(rest) = pattern.strip_prefix("**/") {
+        return path_matches(rest, path)
+            || path
+                .char_indices()
+                .filter(|(_, c)| *c == '/')
+                .any(|(i, _)| path_matches(rest, &path[i + 1..]));
+    }
+    if pattern == "**" {
+        return true;
+    }
+    if let Some(rest) = pattern.strip_prefix('*') {
+        let mut tail = path;
+        loop {
+            if path_matches(rest, tail) {
+                return true;
+            }
+            match tail.chars().next() {
+                Some(c) if c != '/' => tail = &tail[c.len_utf8()..],
+                _ => return false,
+            }
+        }
+    }
+    match (pattern.chars().next(), path.chars().next()) {
+        (None, None) => true,
+        (Some(p), Some(c)) if p == c => {
+            path_matches(&pattern[p.len_utf8()..], &path[c.len_utf8()..])
+        }
+        _ => false,
+    }
+}
+
+/// Whether a file-tool rule pattern covers `path`: `~/...` names the home
+/// directory, `/...` the project root, and anything else matches relative to
+/// the project at any depth only when it starts with `**/`.
+fn rule_covers_path(pattern: &str, path: &str) -> bool {
+    match pattern.strip_prefix('/') {
+        Some(anchored) => path_matches(anchored, path),
+        None => path_matches(pattern, path),
+    }
+}
+
+/// AC-2: an `Edit` deny covers each enforcement path, the `!` carve-outs sit
+/// after the read denies they narrow, and no preset carries a `Write` rule.
+#[test]
+fn edit_denies_cover_the_enforcement_paths_and_carveouts_follow_read_denies() {
+    for name in preset_files() {
+        let value = load(&name);
+        let deny = perm_array(&value, "deny");
+        let edits: Vec<&str> = deny
+            .iter()
+            .filter_map(|rule| rule.strip_prefix("Edit(")?.strip_suffix(')'))
+            .collect();
+        for path in ENFORCEMENT_PATHS {
             assert!(
-                ask.iter().any(|a| a == present),
-                "{name}: {present} must stay behind a prompt"
+                edits
+                    .iter()
+                    .any(|pattern| pattern.starts_with('/') && rule_covers_path(pattern, path)),
+                "{name}: no Edit deny covers {path}"
             );
         }
-        // The ask rules match the command text as written, so the first
-        // option after `git branch` must be `-d`, `--delete`, `-D`, or a
-        // cluster that itself begins with `-d`, `-D` or `-f`. The quiet-force
-        // clusters count only after that delete flag, never as the leading
-        // option. These are the forms that reach a prompt.
-        for forced in [
-            "git branch -D topic",
-            "git branch -d topic --force",
-            "git branch --delete topic --force",
-            "git branch -d topic -f",
-            "git branch -df topic",
-            "git branch -Df topic",
-            "git branch --delete --force topic",
-            "git branch -d --force topic",
-            "git branch --delete -f topic",
-            "git branch -d -f topic",
-            "git branch -f -d topic",
-            "git branch -d topic -qf",
-            "git branch --delete topic -qf",
-            "git branch -d -fq topic",
-        ] {
+        // Each group's carve-outs follow its own denies, and the hard denies
+        // follow every carve-out, so no exception can reopen them.
+        let at = |rule: &String| deny.iter().position(|r| r == rule).unwrap();
+        let groups = &actions::table().claude_read_groups;
+        for group in groups {
+            let last_deny = group.denies.iter().map(at).max().unwrap();
+            for carveout in &group.carveouts {
+                assert!(
+                    at(carveout) > last_deny,
+                    "{name}: {carveout} precedes its denies"
+                );
+            }
+        }
+        let last_carveout = deny.iter().rposition(|r| r.starts_with("Read(!")).unwrap();
+        for rule in &groups.last().unwrap().denies {
             assert!(
-                ask_covers(&ask, forced),
-                "{name}: no ask rule covers {forced:?}"
+                at(rule) > last_carveout,
+                "{name}: {rule} precedes an exception"
             );
         }
-        // `gh` parses with pflag, so the delete request arrives as `-d`, as
-        // a cluster of boolean shorthands carrying `d`, or as the written
-        // long name with an optional `=<bool>`. The `=` forms are covered
-        // wholesale, so an explicit `=false` prompts too: a prompt, not a
-        // block. pflag does not abbreviate, so `--del` is not the flag.
-        for merge in [
-            "gh pr merge 42 -d",
-            "gh pr merge -d 42",
-            "gh pr merge 42 --delete-branch",
-            "gh pr merge --delete-branch 42",
-            "gh pr merge 42 -ds",
-            "gh pr merge 42 -sd",
-            "gh pr merge 42 -rd",
-            "gh pr merge 42 --squash -d",
-            "gh pr merge --delete-branch=true",
-            "gh pr merge 42 --delete-branch=true",
-        ] {
+        for key in ["allow", "deny"] {
             assert!(
-                ask_covers(&ask, merge),
-                "{name}: no ask rule covers {merge:?}"
+                !perm_array(&value, key)
+                    .iter()
+                    .any(|r| r.starts_with("Write(")),
+                "{name}: permissions.{key} carries a Write rule"
             );
         }
-        for merge in [
-            "gh pr merge 42",
-            "gh pr merge 42 --squash",
-            "gh pr merge 42 --del",
-            "gh pr merge 42 -s",
+    }
+}
+
+/// Evaluate the preset's `Read` rules in order: a matching rule denies, a
+/// matching `!` carve-out lifts the rules before it.
+fn read_denied(deny: &[String], path: &str) -> bool {
+    let mut denied = false;
+    for rule in deny {
+        let Some(inner) = rule.strip_prefix("Read(").and_then(|r| r.strip_suffix(')')) else {
+            continue;
+        };
+        let (carveout, pattern) = match inner.strip_prefix('!') {
+            Some(pattern) => (true, pattern),
+            None => (false, inner),
+        };
+        if rule_covers_path(pattern, path) {
+            denied = !carveout;
+        }
+    }
+    denied
+}
+
+/// AC-3: memory, example env files and source files named after secrets stay
+/// readable; transcripts, env files and keys stay denied; the sandbox denies
+/// the table's credential variables and stores.
+#[test]
+fn read_denies_keep_memory_and_sources_readable_and_secrets_denied() {
+    let table = actions::table();
+    for name in preset_files() {
+        let value = load(&name);
+        let deny = perm_array(&value, "deny");
+        for readable in [
+            "~/.claude/projects/-work-app/memory/MEMORY.md",
+            "~/.claude/projects/-work-app/memory/notes/topic.md",
+            ".env.example",
+            "web/.env.example",
+            "crates/codeflow-core/src/hooks/secret_scan.rs",
+            "docs/credentials-guide.md",
         ] {
             assert!(
-                !ask_covers(&ask, merge),
-                "{name}: an ask rule prompts on {merge:?}"
+                !read_denied(&deny, readable),
+                "{name}: {readable} is denied"
             );
         }
-        // Ordinary work stays unprompted, and a branch name that merely
-        // looks like an option must not be read as one. The three force forms
-        // below record the boundary rather than claim it away: prefix globs
-        // cannot enumerate every aggregated cluster, and they cannot match an
-        // option placed before the delete flag. `git-guard` is what still
-        // blocks a protected branch, whether the delete flag stands alone or
-        // sits inside a cluster.
-        for ordinary in [
-            "git branch -d topic",
-            "git branch --delete topic",
-            "git branch -d topic-force",
-            "git branch -d topic -vqf",
-            "git branch -q -d topic --force",
-            "git branch -qf -d topic",
-            "rm -rf target",
-            "rm -rf ./build",
+        for secret in [
+            "~/.claude/projects/-work-app/0b1c2d.jsonl",
+            "~/.claude/projects/-work-app/sub/agent-1.jsonl",
+            ".env",
+            "config/.env",
+            ".env.local",
+            ".env.secret.py",
+            ".env.credentials.ts",
+            "config/.env.secret.md",
+            "certs/server.pem",
+            "~/.ssh/id_ed25519",
+            "~/.codex/auth.json",
+            "~/.claude/.credentials.json",
         ] {
+            assert!(read_denied(&deny, secret), "{name}: {secret} is readable");
+        }
+        let env_vars = value["sandbox"]["credentials"]["envVars"]
+            .as_array()
+            .unwrap();
+        for variable in &table.sandbox_env_denies {
             assert!(
-                !ask_covers(&ask, ordinary),
-                "{name}: an ask rule prompts on {ordinary:?}"
+                env_vars
+                    .iter()
+                    .any(|entry| entry["name"] == variable.as_str() && entry["mode"] == "deny"),
+                "{name}: sandbox does not deny {variable}"
             );
         }
+        let deny_read = value["sandbox"]["filesystem"]["denyRead"]
+            .as_array()
+            .unwrap();
+        for store in &table.sandbox_read_denies {
+            assert!(
+                deny_read.iter().any(|entry| entry == store.as_str()),
+                "{name}: sandbox denyRead misses {store}"
+            );
+        }
+    }
+}
+
+/// Review of PR 749: no `!` exception may reopen a file that a rule of
+/// another class denies. Every name here matches both a hard or env deny and
+/// a source-name or env exception.
+#[test]
+fn no_exception_reopens_a_file_another_rule_denies() {
+    let mut collisions = Vec::new();
+    for ext in [
+        "rs", "py", "ts", "tsx", "js", "mjs", "cjs", "go", "java", "kt", "rb", "swift", "md",
+    ] {
+        for word in ["secret", "credentials"] {
+            for name in [
+                format!(".env.{word}.{ext}"),
+                format!(".env.local-{word}.{ext}"),
+                format!("id_rsa_{word}.{ext}"),
+                format!("id_ed25519_{word}.{ext}"),
+                format!("~/.ssh/{word}.{ext}"),
+                format!("~/.aws/{word}.{ext}"),
+                format!("~/.gnupg/{word}.{ext}"),
+                format!("~/.kube/{word}.{ext}"),
+                format!("~/.cargo/credentials-{word}.{ext}"),
+                format!("~/.password-store/{word}.{ext}"),
+                format!("~/.claude/memory/{word}.{ext}"),
+                format!("~/.claude/tasks/{word}.{ext}"),
+            ] {
+                collisions.push(name);
+            }
+        }
+    }
+    for example in [".env.example", ".env.sample", ".env.template", ".env.dist"] {
+        collisions.push(format!("~/.ssh/{example}"));
+        collisions.push(format!("~/.aws/{example}"));
+        collisions.push(format!("~/.claude/memory/{example}"));
+    }
+    for name in preset_files() {
+        let deny = perm_array(&load(&name), "deny");
+        for path in &collisions {
+            assert!(
+                read_denied(&deny, path),
+                "{name}: an exception reopens {path}"
+            );
+        }
+    }
+}
+
+/// Grok reads the Claude command rules with its own matching (the action
+/// table's note). Modelled wider than either reading, so a pass here holds
+/// for both: a pattern whose only wildcard is trailing is also read as a
+/// literal prefix with no word boundary (`su *` covers `sudoku`), and every
+/// pattern is read as a glob that may match anywhere in the command.
+fn grok_matches(pattern: &str, command: &str) -> bool {
+    let literal = pattern.trim_end_matches('*').trim_end();
+    let by_prefix = !literal.is_empty() && !literal.contains('*') && command.starts_with(literal);
+    by_prefix || glob_matches(&format!("*{pattern}*"), command)
+}
+
+/// AC-4: read with Grok's matching, no preset rule refuses ordinary work.
+#[test]
+fn grok_matching_of_the_preset_rules_refuses_no_ordinary_work() {
+    assert!(
+        grok_matches("su *", "sudoku"),
+        "the model has no word boundary"
+    );
+    assert!(grok_matches(
+        "gh release create*",
+        "x; gh release create v1"
+    ));
+    for name in preset_files() {
+        for rule in perm_array(&load(&name), "deny") {
+            let Some(pattern) = ["Bash(", "PowerShell("]
+                .iter()
+                .find_map(|tool| rule.strip_prefix(tool)?.strip_suffix(')'))
+            else {
+                continue;
+            };
+            for command in ORDINARY_WORK {
+                assert!(
+                    !grok_matches(pattern, command),
+                    "{name}: under Grok's matching {rule} refuses {command:?}"
+                );
+            }
+        }
+    }
+}
+
+/// AC-5: every shipped JSON and TOML asset parses.
+#[test]
+fn every_shipped_json_and_toml_asset_parses() {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&repo_root().join("assets"), &mut files);
+    let mut checked = 0;
+    for path in files {
+        let text = || std::fs::read_to_string(&path).unwrap();
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("json") => {
+                serde_json::from_str::<serde_json::Value>(&text())
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            }
+            Some("toml") => {
+                toml::from_str::<toml::Value>(&text())
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            }
+            _ => continue,
+        }
+        checked += 1;
+    }
+    assert!(checked > 10, "only {checked} assets checked");
+}
+
+fn string_list(value: &toml::Value) -> Vec<String> {
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// AC-5: the Grok builder profile is `cf-guard` plus its two additions.
+#[test]
+fn grok_worktree_profile_is_cf_guard_plus_the_common_git_dir() {
+    let text = std::fs::read_to_string(repo_root().join("assets/base/grok/sandbox.toml")).unwrap();
+    let sandbox: toml::Value = toml::from_str(&text).unwrap();
+    let guard = &sandbox["profiles"]["cf-guard"];
+    let builder = &sandbox["profiles"]["cf-guard-worktree"];
+    assert_eq!(guard["extends"].as_str(), Some("workspace"));
+    assert_eq!(builder["extends"], guard["extends"]);
+    assert_eq!(builder["restrict_network"], guard["restrict_network"]);
+    assert_eq!(string_list(&builder["deny"]), string_list(&guard["deny"]));
+    let mut read_only = vec!["../../.git/hooks".to_string()];
+    read_only.extend(string_list(&guard["read_only"]));
+    assert_eq!(string_list(&builder["read_only"]), read_only);
+    assert_eq!(string_list(&builder["read_write"]), ["../../.git"]);
+    assert!(guard.get("read_write").is_none());
+    let reference: toml::Value =
+        toml::from_str(&std::fs::read_to_string(evidence("grok/sandbox.toml")).unwrap()).unwrap();
+    assert_eq!(
+        sandbox, reference,
+        "the shipped profiles left the reference"
+    );
+}
+
+/// AC-6: both new enforcement files ship from the minimal tier, and the
+/// Grok profile is written only when absent.
+#[test]
+fn the_manifest_ships_the_rules_and_the_grok_profile_at_minimal() {
+    let text =
+        std::fs::read_to_string(repo_root().join("assets/base/scaffold-manifest.toml")).unwrap();
+    let manifest: toml::Value = toml::from_str(&text).unwrap();
+    let entries = manifest["entry"].as_array().unwrap();
+    for (dest, ownership) in [
+        (".codex/rules/codeflow.rules", "managed"),
+        (".grok/sandbox.toml", "user-owned"),
+    ] {
+        let entry = entries
+            .iter()
+            .find(|e| e["dest"].as_str() == Some(dest))
+            .unwrap_or_else(|| panic!("{dest} not in the manifest"));
+        assert_eq!(entry["ownership"].as_str(), Some(ownership), "{dest}");
+        assert!(
+            string_list(&entry["tiers"]).contains(&"minimal".to_string()),
+            "{dest}: not in the minimal tier"
+        );
     }
 }
 
@@ -1127,15 +1508,7 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
 ///
 /// This models a single normalized command only. It is not the Bash
 /// permission evaluator: it does not split compound commands, and it knows
-/// nothing of deny precedence or of ask precedence over allow rules.
-fn ask_covers(ask: &[String], command: &str) -> bool {
-    ask.iter().any(|rule| {
-        rule.strip_prefix("Bash(")
-            .and_then(|rest| rest.strip_suffix(')'))
-            .is_some_and(|pattern| rule_matches(pattern, command))
-    })
-}
-
+/// nothing of deny precedence over allow rules.
 fn rule_matches(pattern: &str, command: &str) -> bool {
     if let Some(head) = pattern.strip_suffix(" *") {
         if !head.contains('*') && head == command {
@@ -1184,4 +1557,213 @@ fn rule_matcher_follows_the_documented_bash_rule_syntax() {
     ));
     assert!(rule_matches("git branch -D *", "git branch -D topic"));
     assert!(!rule_matches("rm -rf /*", "rm -rf ./build"));
+}
+
+// --- AC-7 journey: the 2.1.0 upgrade through the installed CLI -------------
+
+/// Runs the built binary as an adopter would: first on `PATH`, so the hooks
+/// the scaffold installs run it too, with an isolated home and host git
+/// configuration neutralized.
+fn run_codeflow(root: &Path, home: &Path, args: &[&str]) -> std::process::Output {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("joinable PATH");
+    std::process::Command::new(&exe)
+        .args(args)
+        .current_dir(root)
+        .env("CODEFLOW_HOME", home)
+        .env("PATH", path)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .output()
+        .expect("codeflow runs")
+}
+
+fn succeeded(out: &std::process::Output, what: &str) -> String {
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{what} failed:\n{all}");
+    all
+}
+
+/// Every file under `root` outside `.git`, with its content.
+fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = vec![];
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().is_some_and(|n| n == ".git") {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let content = std::fs::read(&path).unwrap();
+                files.push((path.strip_prefix(root).unwrap().to_path_buf(), content));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+/// The adopter's own denies: a command, and two reads that overlap the
+/// shipped exceptions.
+const ADOPTER_DENIES: [&str; 3] = [
+    "Bash(terraform apply *)",
+    "Read(**/.env.example)",
+    "Read(**/team-secret.py)",
+];
+const ADOPTER_COMMAND: &str = "terraform apply -auto-approve";
+
+/// A project made by `init --minimal`, holding the 2.1.0 Claude preset and
+/// policy as its files and their baseline copies. An adopter project adds
+/// its own denies; `settings_baseline: false` deletes the settings baseline.
+fn planted_2_1_0_project(
+    adopter: bool,
+    settings_baseline: bool,
+) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    succeeded(
+        &run_codeflow(&root, &home, &["init", "--yes", "--minimal"]),
+        "init --minimal",
+    );
+    let fixtures = repo_root().join("crates/codeflow-core/tests/fixtures/presets-2.1.0");
+    let settings = std::fs::read_to_string(fixtures.join("default.json")).unwrap();
+    let policy = std::fs::read_to_string(fixtures.join("policy.json")).unwrap();
+    let mut project: serde_json::Value = serde_json::from_str(&settings).unwrap();
+    if adopter {
+        let deny = project["permissions"]["deny"].as_array_mut().unwrap();
+        deny.extend(ADOPTER_DENIES.map(serde_json::Value::from));
+    }
+    let plant = |rel: &str, content: &str| {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    };
+    plant(
+        ".claude/settings.json",
+        &(serde_json::to_string_pretty(&project).unwrap() + "\n"),
+    );
+    plant(".codeflow/policy.json", &policy);
+    plant(".codeflow/.baseline/.codeflow/policy.json", &policy);
+    plant(".codeflow/.baseline/.claude/settings.json", &settings);
+    if !settings_baseline {
+        std::fs::remove_file(root.join(".codeflow/.baseline/.claude/settings.json")).unwrap();
+    }
+    (dir, root, home)
+}
+
+/// The effective rules of the updated settings: every deny of the new
+/// preset is present; an adopter's command and reads are refused; in the
+/// ordinary project, secret env variants are denied while a source file
+/// named after secrets and `.env.example` stay readable.
+fn assert_effective_rules(root: &Path, case: &str, adopter: bool) -> serde_json::Value {
+    let text = std::fs::read_to_string(root.join(".claude/settings.json")).unwrap();
+    let updated: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let deny = perm_array(&updated, "deny");
+    for rule in perm_array(&load("default.json"), "deny") {
+        assert!(deny.contains(&rule), "{case}: missing new deny {rule}");
+    }
+    let expected: &[(&str, bool)] = if adopter {
+        &[(".env.example", true), ("app/team-secret.py", true)]
+    } else {
+        &[
+            (".env.secret.py", true),
+            ("config/.env.credentials.ts", true),
+            ("crates/scan/src/secret_scan.rs", false),
+            (".env.example", false),
+        ]
+    };
+    for (path, denied_read) in expected {
+        assert_eq!(
+            read_denied(&deny, path),
+            *denied_read,
+            "{case}: reading {path} should be {}",
+            if *denied_read { "denied" } else { "allowed" }
+        );
+    }
+    assert_eq!(
+        denied(&deny, "Bash", ADOPTER_COMMAND),
+        adopter,
+        "{case}: {ADOPTER_COMMAND}"
+    );
+    updated
+}
+
+/// AC-7 journey: three projects on the 2.1.0 preset and policy upgrade
+/// through the installed CLI, an ordinary one and two adopters, one of
+/// which lost its settings baseline. The first update retires the asks and
+/// moves `privilege_escalation` from warn to block, reporting both, and
+/// without a baseline says it compared with the 2.1.0 copy. After each
+/// update the effective rules hold; the second changes no file and
+/// `validate` is clean.
+#[test]
+fn a_2_1_0_project_upgrades_through_the_installed_cli() {
+    for (case, adopter, settings_baseline) in [
+        ("ordinary", false, true),
+        ("adopter", true, true),
+        ("adopter without a settings baseline", true, false),
+    ] {
+        let (_dir, root, home) = planted_2_1_0_project(adopter, settings_baseline);
+        let first = succeeded(&run_codeflow(&root, &home, &["update"]), "first update");
+        let updated = assert_effective_rules(&root, case, adopter);
+        assert!(
+            updated["permissions"].get("ask").is_none(),
+            "{case}: the shipped asks are retired:\n{first}"
+        );
+        assert!(
+            first.contains("removed retired permissions.ask entry \"Bash(sudo *)\""),
+            "{case}: the retired asks are reported:\n{first}"
+        );
+        assert_eq!(
+            first.contains("compared with the copy CodeFlow 2.1.0 shipped"),
+            !settings_baseline,
+            "{case}: the copy used is reported only without a baseline:\n{first}"
+        );
+        let policy: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".codeflow/policy.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            policy["security"]["privilege_escalation"], "block",
+            "{case}"
+        );
+        assert!(
+            first.contains("moved security.privilege_escalation from \"warn\" to \"block\""),
+            "{case}: the moved default is reported:\n{first}"
+        );
+
+        let before = snapshot(&root);
+        succeeded(&run_codeflow(&root, &home, &["update"]), "second update");
+        assert!(
+            snapshot(&root) == before,
+            "{case}: the second update changed a file"
+        );
+        assert_effective_rules(&root, &format!("{case}, second update"), adopter);
+        let validate = succeeded(&run_codeflow(&root, &home, &["validate"]), "validate");
+        assert!(
+            !validate.to_lowercase().contains("warn"),
+            "{case}: validate is not clean:\n{validate}"
+        );
+    }
 }

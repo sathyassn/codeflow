@@ -21,11 +21,11 @@ pub const KERNEL: &str = include_str!("../../../../assets/base/rule-map.toml");
 /// Guideline for the number of always rules one tier's map carries. A
 /// reported measure, never a failure (TSK-150): a rule past it is a prompt
 /// to move detail behind a moment row, not a reason to cut a duty.
-pub const RULES_GUIDELINE: usize = 12;
+pub const RULES_GUIDELINE: usize = 13;
 
 /// Guideline for the bytes of one rendered always rule. Reported, never a
 /// failure; one line per rule is the structural rule.
-pub const RULE_LINE_GUIDELINE_BYTES: usize = 450;
+pub const RULE_LINE_GUIDELINE_BYTES: usize = 480;
 
 /// Guideline for the managed block of one tier's `AGENTS.md`, markers
 /// included: the always-read kernel. It leaves a realistic project section

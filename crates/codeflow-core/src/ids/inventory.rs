@@ -610,7 +610,7 @@ mod tests {
         }
 
         fn git(&self, args: &[&str]) -> String {
-            let out = std::process::Command::new("git")
+            let out = crate::git::command()
                 .args(["-c", "user.name=t", "-c", "user.email=t@example.test"])
                 .args(args)
                 .current_dir(self.dir.path())

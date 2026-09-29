@@ -1371,15 +1371,24 @@ fn update_adds_new_policy_keys_without_mutating_user_values() {
 }
 
 #[test]
-fn update_keeps_test_gate_on_push_and_recommends_block() {
-    // T132-4: a value equal to the old default may still be the adopter's
-    // choice, so update keeps it and recommends the new default.
+fn update_moves_test_gate_on_push_at_the_old_default_and_recommends_block() {
+    // T132-4 as amended by ADR-0075 (TSK-171 AC-7): a value still equal to
+    // the old shipped default moves to the new one, reported; a value that
+    // differs from both is kept and the new default recommended.
     isolate_git();
-    for (value, recommends) in [
-        ("warn", true),
-        ("off", true),
-        ("allow", true),
-        ("block", false),
+    for (value, expected, note) in [
+        (
+            "warn",
+            "block",
+            Some("moved git.test_gate_on_push from \"warn\" to \"block\""),
+        ),
+        ("off", "off", Some("kept git.test_gate_on_push = \"off\"")),
+        (
+            "allow",
+            "allow",
+            Some("kept git.test_gate_on_push = \"allow\""),
+        ),
+        ("block", "block", None),
     ] {
         let (_p, root) = project_dir();
         let _v1 = init_v1(&root);
@@ -1397,21 +1406,17 @@ fn update_keeps_test_gate_on_push_and_recommends_block() {
 
         let after: serde_json::Value =
             serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
-        assert_eq!(after["git"]["test_gate_on_push"], value, "value kept");
+        assert_eq!(after["git"]["test_gate_on_push"], expected, "{value}");
         let notes = &report
             .files
             .iter()
             .find(|f| f.dest == ".codeflow/policy.json")
             .unwrap()
             .notes;
-        let note = notes.iter().find(|n| n.contains("git.test_gate_on_push"));
-        assert_eq!(note.is_some(), recommends, "{value}: {notes:?}");
-        if let Some(note) = note {
-            assert!(
-                note.contains(&format!("kept git.test_gate_on_push = \"{value}\"")),
-                "{note}"
-            );
-            assert!(note.contains("set it to \"block\""), "{note}");
+        let found = notes.iter().find(|n| n.contains("git.test_gate_on_push"));
+        assert_eq!(found.is_some(), note.is_some(), "{value}: {notes:?}");
+        if let (Some(found), Some(note)) = (found, note) {
+            assert!(found.starts_with(note), "{found}");
         }
     }
 }

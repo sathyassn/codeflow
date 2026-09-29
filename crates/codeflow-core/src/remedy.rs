@@ -495,6 +495,18 @@ catalog! {
     /// A CI workflow whose install step is still the placeholder.
     DOCTOR_CI_PLACEHOLDER = Step::Edit("{path}"),
         "replace the PLACEHOLDER install step in {path} with the release installer, so the test and validate gates run";
+    /// A checkout that pins no codeflow version for CI to install.
+    DOCTOR_CI_PIN_MISSING = Step::Edit(".codeflow/project.toml"),
+        "set scaffold_version in .codeflow/project.toml to the codeflow version CI installs";
+    /// A target branch that pins no codeflow version.
+    DOCTOR_CI_PIN_TARGET = Step::Edit(".codeflow/project.toml"),
+        "land a scaffold_version pin in .codeflow/project.toml on {target} first, in a pull request that changes only that line";
+    /// A checkout that lowers the pin of the branch it lands on.
+    DOCTOR_CI_PIN_LOWERED = Step::Edit(".codeflow/project.toml"),
+        "set scaffold_version in .codeflow/project.toml back to {pin}, the version {target} pins";
+    /// An upgrade that carries `codeflow update` before its raised pin lands.
+    DOCTOR_CI_PIN_ORDER = Step::Edit(".codeflow/project.toml"),
+        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml and land it; then run `codeflow update` on a new branch";
     /// A tracking setting that does not read.
     DOCTOR_TRACKING_UNKNOWN = Step::Edit(".codeflow/project.toml"),
         "repair .codeflow/project.toml so durable-work tracking reads as on or off";

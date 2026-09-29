@@ -220,6 +220,7 @@ pub const LEVEL_KEYS: &[&str] = &[
     "test_gate_on_push",
     "security_review",
     "dep_audit",
+    "discard_uncommitted",
 ];
 
 /// The rules whose level is set by a key of another name.

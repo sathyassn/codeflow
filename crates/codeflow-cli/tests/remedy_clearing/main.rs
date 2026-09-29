@@ -176,6 +176,10 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_POLICY_DECISION", Runs),
     ("DOCTOR_RELEASE_BACKEND", Runs),
     ("DOCTOR_CI_PLACEHOLDER", Runs),
+    ("DOCTOR_CI_PIN_MISSING", Runs),
+    ("DOCTOR_CI_PIN_TARGET", Runs),
+    ("DOCTOR_CI_PIN_LOWERED", Runs),
+    ("DOCTOR_CI_PIN_ORDER", Runs),
     ("DOCTOR_TRACKING_UNKNOWN", Runs),
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
@@ -1857,6 +1861,189 @@ fn clears_doctor_ci_placeholder() {
             assert!(printed.contains(&format!("in {path}")), "{printed}");
             // The release installer, as `codeflow init` writes it now.
             write(&root, path, &wired);
+        },
+    );
+}
+
+const STATE: &str = ".codeflow/project.toml";
+
+/// The `scaffold_version = "..."` line of a project state.
+fn pin_line(state: &str) -> &str {
+    state
+        .lines()
+        .find(|line| line.starts_with("scaffold_version"))
+        .unwrap_or_else(|| panic!("no scaffold_version in:\n{state}"))
+}
+
+/// The state with its pin set to `version`.
+fn with_pin(state: &str, version: &str) -> String {
+    state.replace(
+        pin_line(state),
+        &format!("scaffold_version = \"{version}\""),
+    )
+}
+
+/// The branch checked out at `root`.
+fn current_branch(root: &Path) -> String {
+    String::from_utf8(run("git", root, &["branch", "--show-current"]).stdout)
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+/// Land `branch` on the destination's `target`, as the host merges a pull
+/// request, and fetch it back (no client hook runs on the destination).
+fn land(root: &Path, dest: &Path, branch: &str, target: &str) {
+    git(
+        dest,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("{branch}:{target}"),
+        ],
+    );
+    git(root, &["fetch", "-q", "origin"]);
+}
+
+fn commit_checked(root: &Path, message: &str) {
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", message]);
+}
+
+#[test]
+fn clears_doctor_ci_pin_missing() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let target = current_branch(&root);
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    let state = read(&root, STATE);
+    let pin = pin_line(&state).to_string();
+    write(&root, STATE, &state.replace(&format!("{pin}\n"), ""));
+    prove(
+        "DOCTOR_CI_PIN_MISSING",
+        "no scaffold_version is pinned",
+        || doctor(&root, "ci-perimeter"),
+        |printed| {
+            assert!(printed.contains(STATE), "{printed}");
+            // The version CI installs: the one the target pins.
+            let edited = format!("{}{pin}\n", read(&root, STATE));
+            write(&root, STATE, &edited);
+            let after = doctor(&root, "ci-perimeter");
+            assert!(
+                after.contains(&format!("the version {target} pins")),
+                "{after}"
+            );
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_ci_pin_target() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let target = current_branch(&root);
+    let dest = with_destination(&root);
+    let state = read(&root, STATE);
+    let pin = pin_line(&state).to_string();
+    // A target that pins nothing, as a project scaffolded before the pin.
+    git(&root, &["switch", "-q", "-c", "chore/unpin"]);
+    write(&root, STATE, &state.replace(&format!("{pin}\n"), ""));
+    commit_checked(&root, "chore: drop the codeflow pin");
+    land(&root, &dest, "chore/unpin", &target);
+    git(&root, &["switch", "-q", "feat/x"]);
+    assert_eq!(read(&root, STATE), state);
+    prove(
+        "DOCTOR_CI_PIN_TARGET",
+        "pins no scaffold_version",
+        || doctor(&root, "ci-perimeter"),
+        |printed| {
+            let on = format!("origin/{target}");
+            assert!(printed.contains(&format!("on {on} first")), "{printed}");
+            // A pull request into the target that changes only the pin line.
+            git(&root, &["switch", "-q", "-c", "chore/pin", &on]);
+            let unpinned = read(&root, STATE);
+            write(&root, STATE, &format!("{unpinned}{pin}\n"));
+            commit_checked(&root, "chore: pin the codeflow version");
+            let changed = text(&run("git", &root, &["diff", "--numstat", &on, "HEAD"]));
+            assert_eq!(changed.trim(), format!("1\t0\t{STATE}"));
+            land(&root, &dest, "chore/pin", &target);
+            git(&root, &["switch", "-q", "feat/x"]);
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_ci_pin_lowered() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let target = current_branch(&root);
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    let state = read(&root, STATE);
+    let pinned = pin_line(&state).split('"').nth(1).unwrap().to_string();
+    write(&root, STATE, &with_pin(&state, "0.1.0"));
+    prove(
+        "DOCTOR_CI_PIN_LOWERED",
+        "lowers scaffold_version",
+        || doctor(&root, "ci-perimeter"),
+        |printed| {
+            let named = format!("back to {pinned}, the version {target} pins");
+            assert!(
+                printed
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .contains(&named),
+                "{printed}"
+            );
+            let edited = with_pin(&read(&root, STATE), &pinned);
+            write(&root, STATE, &edited);
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_ci_pin_order() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let target = current_branch(&root);
+    let dest = with_destination(&root);
+    let state = read(&root, STATE);
+    let policy_path = ".codeflow/policy.json";
+    let policy = read(&root, policy_path);
+    // What `codeflow update` to a newer release carries: a policy key the
+    // target's policy lacks.
+    let mut updated: serde_json::Value = serde_json::from_str(&policy).unwrap();
+    updated["git"]["future_key"] = serde_json::json!("warn");
+    let updated = serde_json::to_string_pretty(&updated).unwrap();
+    let raised = with_pin(&state, "999.0.0");
+    write(&root, STATE, &raised);
+    write(&root, policy_path, &updated);
+    prove(
+        "DOCTOR_CI_PIN_ORDER",
+        "also carries",
+        || doctor(&root, "ci-perimeter"),
+        |printed| {
+            assert!(printed.contains(STATE), "{printed}");
+            // First: raise only scaffold_version, and land it.
+            write(&root, policy_path, &policy);
+            let step_one = doctor(&root, "ci-perimeter");
+            assert!(step_one.contains("upgrade step one"), "{step_one}");
+            commit_checked(&root, "chore: raise the codeflow pin");
+            land(&root, &dest, "feat/x", &target);
+            // Then the update, on a new branch from the landed raise.
+            git(
+                &root,
+                &[
+                    "switch",
+                    "-q",
+                    "-c",
+                    "chore/update",
+                    &format!("origin/{target}"),
+                ],
+            );
+            assert_eq!(read(&root, STATE), raised);
+            write(&root, policy_path, &updated);
         },
     );
 }

@@ -665,7 +665,8 @@ fn a_number_shaped_pin_is_refused_with_the_quote_remedy_on_a_fresh_project() {
     assert_ne!(out.status.code(), Some(0), "{said}");
     assert!(
         said.contains("TSK-001 pin reads as a YAML number")
-            && said.contains("quote it: pin: \"<commit sha>\""),
+            && said.contains("the pin must be quoted: pin: \"<commit sha>\"")
+            && !said.contains("not a commit id"),
         "{said}"
     );
 

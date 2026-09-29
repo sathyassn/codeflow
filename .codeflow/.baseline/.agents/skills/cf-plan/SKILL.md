@@ -55,7 +55,11 @@ You are clarifying and materializing planned work, not building it.
    `resources/task-graph.md` and put the approved topology in `depends_on` task
    frontmatter. A node, edge, decision guard, ownership, acceptance/interface,
    or safety-boundary mutation creates Plan vN+1; an in-node step does not.
-6. For CodeFlow execution, draft on a `plan/` branch. Partition a task set by
+6. For CodeFlow execution, draft on a `plan/` branch. Write each record
+   plainly: simple, straightforward and clear, no mannered prose (see
+   `.codeflow/rules/writing.md`), in short prose and bullets, with a fenced
+   ASCII figure where a flow or structure carries the point. Partition a
+   task set by
    coherent durable outcomes and direct dependencies. Related tasks may form
    epics; unrelated or standalone tasks keep separate landing routes. A batch
    is not an epic boundary. When a work item is planned, started, blocked,

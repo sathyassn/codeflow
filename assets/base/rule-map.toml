@@ -207,6 +207,20 @@ text = "Agent-delivered durations are agentic estimates with stated bases, never
 see = [".codeflow/rules/workflow-discipline.md"]
 
 [[rule]]
+id = "plain"
+tiers = ["standard", "full"]
+title = "Write plainly."
+text = "Everything you write, replies and status updates included, is simple, straightforward and clear, with the detail the reader needs and no more. Avoid mannered prose, writing that performs for effect: slogans, \"not X but Y\" turns, rhetorical triplets, dramatic fragments, stacked hedges, colon reveals, self-narration, ceremonial framing and walls of text. State the fact directly."
+see = ["cf-editorial-review/references/editorial-smells.md"]
+
+[[rule]]
+id = "plain"
+tiers = ["minimal"]
+title = "Write plainly."
+text = "Everything you write, replies and status updates included, is simple, straightforward and clear, with the detail the reader needs and no more. Avoid mannered prose, writing that performs for effect: slogans, \"not X but Y\" turns, rhetorical triplets, dramatic fragments, stacked hedges, colon reveals, self-narration, ceremonial framing and walls of text. State the fact directly."
+see = [".codeflow/rules/writing.md"]
+
+[[rule]]
 id = "writing"
 title = "Outcomes first, in words."
 text = "Replies, status and summaries lead with outcomes in plain words, with IDs and file names after: open with the result and where it stands, then what would change it and who resolves it, then what the reader must do; steps and tooling last. A summary anchors the reader in a few lines; titles name the subject in words; avoid em and en dashes in prose."
@@ -216,14 +230,14 @@ see = [".codeflow/rules/writing.md"]
 id = "present"
 tiers = ["standard", "full"]
 title = "Show complex things."
-text = "A multi-part explanation, comparison or decision goes through `/cf-present` where the harness can show it; otherwise use a figure fit to the surface (inline HTML where rendered, ASCII in a terminal, never Mermaid)."
+text = "A multi-part explanation, comparison or decision goes through `/cf-present` where the harness can show it; otherwise use a figure fit to the surface: inline HTML where rendered, the portal's figure grammar on docs-portal pages, fenced ASCII in other Markdown files and in a terminal, never Mermaid."
 see = ["cf-present", ".codeflow/rules/writing.md"]
 
 [[rule]]
 id = "present"
 tiers = ["minimal"]
 title = "Show complex things."
-text = "A multi-part explanation, comparison or decision carries a figure fit to the surface: inline HTML where rendered, ASCII in a terminal, never Mermaid."
+text = "A multi-part explanation, comparison or decision carries a figure fit to the surface: inline HTML where rendered, fenced ASCII in Markdown files and in a terminal, never Mermaid."
 see = [".codeflow/rules/writing.md"]
 
 [[rule]]

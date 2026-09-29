@@ -170,10 +170,20 @@ ADR-0026 from arbitrary Bash while leaving brokered tools and MCP processes
 available. The deterministic shell plane accepts both Bash and PowerShell
 payloads and keeps its catastrophic classifier non-relaxable across Unix/macOS
 roots and Windows drive, system, profile, disk, recovery, and permission
-operations. macOS and Linux use native harness sandboxes; WSL2 follows the
-Linux path. Native Windows Codex selects its elevated sandbox, while native
-Windows Claude has no equivalent OS sandbox and therefore moves
-high-blast-radius work to WSL2 or a container (ADR-0033). Beyond the
+operations. A composed deletion is read as scoped shell: each variable,
+positional parameter and the working directory carry every value they may
+hold through subshells, branches, loops and function calls, and the deletion
+is refused when any of them reaches a protected location. The reader is
+closed-world: its module doc lists the grammar it models, traps and zsh
+hook functions included, and anything else in command position or between
+commands (a sourced file, a name reference, an unmodelled builtin or
+option, zsh-only syntax, a command named by an unknown value) makes the
+state unknown, so a deletion that depends on it is refused as unproven
+(TSK-141).
+macOS and Linux use native harness
+sandboxes; WSL2 follows the Linux path. Native Windows Codex selects its
+elevated sandbox, while native Windows Claude has no equivalent OS sandbox
+and therefore moves high-blast-radius work to WSL2 or a container (ADR-0033). Beyond the
 guards, `session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
 interactive Codex session opens with — and re-orients after a compaction from —
 the same orientation digest Claude gets. The same command is the advisory
@@ -186,6 +196,12 @@ Build ignores these events' output, so it wires only the guards.
 PR-content checks (attribution/emoji,
 `gh pr merge` base) are git-guard/CI concerns by design — git hooks cannot see
 PR creation.
+
+A git-hook shim runs the `codeflow` binary whose command started git: that
+command names itself in `CODEFLOW_HOOK_BINARY` for its git children only, and
+the shim fails when the named binary is missing or not executable. Git run
+outside codeflow uses the `codeflow` on PATH, and the shim is a no-op when there
+is none (SPC-013 R-85).
 
 Delegation has two engine surfaces. The legacy `delegate-turn --result`
 adapter writes immutable `0600` terminal evidence and signals its scoped tmux

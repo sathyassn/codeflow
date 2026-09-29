@@ -44,6 +44,74 @@ publication date._
 
 ### Added
 
+<!-- codeflow:release-impact major -->
+- **Agent sessions refuse instead of prompting (ADR-0075).** The Claude,
+  Codex and Grok presets are generated from one action table and carry no
+  ask rules, so delegated and primary sessions no longer stop on prompts.
+  Agent sessions refuse these actions, and the operator performs them:
+  privilege escalation (`sudo`, `su`, `doas`, `pkexec`, `gsudo`, `runas`,
+  `Start-Process -Verb RunAs`, `osascript ... with administrator
+  privileges`); package and gist publishing; release changes and tag
+  pushes; repository deletion, archiving, renaming and visibility, `git
+  push --mirror`, `gh secret` set and delete, `gh auth` login, switch,
+  setup-git, token, refresh and logout, and `git credential`; keychain
+  reads; and user-level persistence (`defaults write`, `launchctl`,
+  `crontab -e` and `-r`, `systemctl enable`, registry writes). Codex gets
+  `.codex/rules/codeflow.rules` and a `cf-builder` profile beside
+  `cf-guard`, which now runs the network proxy (tested on Codex 0.157.1;
+  earlier versions are unqualified). Grok gets `.grok/sandbox.toml`,
+  written only when absent. `security.privilege_escalation` and
+  `security.headless_peer_runs` default to `block`, and new policy keys
+  ship for the guard checks. exec-guard refuses a launcher run directly,
+  chained or wrapped in a shell `-c` string or `eval`; a shell string that
+  reaches no launcher, `source` and `LD_LIBRARY_PATH` are not refused.
+  - Order: install the new `codeflow` on `PATH`, then run `codeflow
+    update`. Update merges the permission arrays three ways against the
+    last shipped copy: a rule the preset retired is removed, the 2.x ask
+    rules included; a rule you removed stays removed and is reported on
+    every run; your own rules stay, and none of them moves where that would
+    change what a `!` exception lifts. A policy value still equal to the
+    previous shipped default moves to the new default and is reported; a
+    value you set is kept. Where no shipped copy was recorded, update
+    compares with the files 2.1.0 shipped, says so, and adds back every
+    shipped deny.
+  - Relief: to let agents run one of these actions in a project, remove its
+    deny entry from `.claude/settings.json`, or set its policy level in
+    `.codeflow/policy.json`; update keeps both. A local ask rule cannot
+    restore a denied action, because a deny rule wins.
+  - Credentials (D9): agents use their own fine-grained token in
+    `GH_TOKEN`, without workflow, administration or gist permission. This
+    route narrows credential exposure only on a host that carries the
+    agent token alone. The operator's login stays on this host for setup
+    and workflow pushes, so the token narrows what agents use by default
+    and does not stop a deliberate read of a stored login outside the
+    refused forms. A push that introduces a `.github/workflows/` change is
+    refused and queued for the operator.
+  - Integration: agent sessions replace `git pull` with `git fetch`, then a
+    checked `git merge --ff-only` or `git rebase`. A human terminal is
+    unaffected.
+  - Enforcement baseline: `codeflow update`, `codeflow init` or the first
+    `codeflow baseline approve` binds the repository root, with a
+    binding-only confirmation for an identity already approved on the
+    machine. An outer workspace takes one `codeflow baseline bind
+    --inventory` for its nested repositories. A local landing that changes
+    an enforcement path waits for the operator's `codeflow baseline approve
+    --merge <source> --into <target>`, bound to the source and target
+    commits and the method. An agent's `gh pr merge` passes only in an
+    immediate mode and only when no commit on the pull request changes an
+    enforcement path; auto-merge and merge queues are the operator's.
+  - Seats (D7): seats are briefed only through `herdr agent prompt`, folder
+    trust is granted at launch, `Escape` is the only key sent to a seat,
+    and `/compact`, `/clear` and `/new` are the only slash commands.
+  - Guard hooks (D8) fail closed at every tier, with no fail-open switch.
+    A session starts with a line naming the outdated side and its exact
+    command, and the options: update, continue other work, or roll back
+    the binary.
+  - Operator actions: every step that needs the operator is recorded on
+    `.codeflow/operator-actions.jsonl` in the main checkout and shown by
+    `codeflow status`, the orient digest and the orchestrator's status
+    report.
+
 <!-- codeflow:release-impact minor -->
 - **Workspace mode for umbrella repositories.** An umbrella that holds
   several projects, each its own repository, keeps its root checkout on a
@@ -240,6 +308,24 @@ publication date._
   read names this order, including a pull request's own policy judged from
   the target branch. The `codeflow-registry` workflow installs its binary
   the same way.
+
+<!-- codeflow:release-impact minor -->
+- **The pinned CI binary on GitLab, Bitbucket and any other CI.** The
+  `.gitlab-ci.yml`, `bitbucket-pipelines.yml` and `ci-generic.sh` templates
+  no longer suggest the `releases/latest` installer. They install the
+  release the target commit pins, verified against its `sha256.sum`, run
+  `codeflow ci` from a checkout of the target, test a raised pin's release
+  separately, and fail a lowered pin. `ci-generic.sh` now takes the target
+  commit as its first argument and refuses to run without it. On GitLab the
+  target is the target branch's current commit, never the diff base, and
+  the job fails when it cannot fetch it. A branch that kept the pin it
+  started from is not a lowered pin. If you copied
+  one of these files and wired your own install, replace that install with
+  the new template's shared script, or install the version your target's
+  `scaffold_version` names and verify it the same way. `codeflow doctor`'s
+  `ci-perimeter` check now names the version CI installs, and warns on a
+  missing or lowered pin and on policy keys or schema carried before a
+  raised pin has landed, naming the two-step order.
 
 <!-- codeflow:release-impact patch -->
 - **Commit subject separator.** The commit-msg hook and `codeflow ci` now
@@ -629,19 +715,6 @@ publication date._
   or forbids direct changes, and classification is off only where durable
   work tracking is off.
 
-<!-- codeflow:release-impact patch -->
-- **Privilege escalation asks in both shells.** The scaffolded Claude
-  settings presets now ask before `pkexec`, `gsudo`, `runas` and
-  `Start-Process -Verb RunAs`, as well as `sudo`, `su` and `doas`, for both
-  the Bash and the PowerShell tool, including path-qualified launchers,
-  Windows `.exe` spellings and PowerShell elevation started from Bash. These
-  ask rules are a textual checkpoint, not a security boundary: they match
-  command text, so a command that merely contains `-Verb RunAs` also asks,
-  while other casings in Bash and renamed or indirect launchers are not
-  caught. The fail-closed sandbox remains the boundary, and exec-guard still
-  reports privilege escalation it detects. Deny rules are unchanged. `codeflow update` refreshes the managed region of
-  `.claude/settings.json` and keeps project-owned keys.
-
 <!-- codeflow:release-impact minor -->
 - **A pre-push gate under a minute that blocks.** Public behaviour change:
   the pre-push hook no longer runs the test suite. It runs the push set and
@@ -939,7 +1012,35 @@ publication date._
   self-hosted runner needs Actions runner 2.327.1 or later for Node 24
   actions.
 
+<!-- codeflow:release-impact minor -->
+- **Every writing surface states the plain-writing rule.** The managed
+  `AGENTS.md` block gains a "Write plainly." always rule at every tier:
+  everything an agent writes, replies and status updates included, is
+  simple, straightforward and clear, with no mannered prose. The writing
+  reference `.codeflow/rules/writing.md` leads with the same rule and a
+  default of short prose and bullets, and names the figure form for each
+  surface, including fenced ASCII in Markdown files. Each skill, the
+  `cf-reviewer` agent, the git rules and the PR template state the rule
+  once where they tell the agent to write, and the reply rule names
+  Markdown files for fenced ASCII figures. The size guidelines `codeflow
+  doctor` reports for five of those files rise by at most 768 bytes, and
+  the map's rule count and rule line guidelines rise to 13 and 480 bytes. `codeflow update` brings the new text and leaves a project's own
+  section of `AGENTS.md` untouched.
+
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **Herdr delivery confirms a started turn.** `cf-herdr` delivers through
+  `scripts/deliver.py`. For a Codex or Grok seat it sends one Enter and
+  confirms within 20 s that the seat started working, and otherwise reports
+  the turn not confirmed, naming the pane; it never sends a second Enter,
+  since Herdr cannot tell a prompt in the input from one already submitted.
+  It sends nothing to a seat that is working, blocked or of unknown status,
+  or whose working folder is gone, where it names the relaunch step. The
+  Claude lane adds the fold sentence only for a fold its own paste made.
+  Cleanup keeps a worktree
+  that a live seat uses. The Claude lane keeps its `accepted` wait. Run
+  `codeflow update` to install the script.
 
 <!-- codeflow:release-impact patch -->
 - **The writing reference carries every reply duty.** The rule map sends an
@@ -1038,6 +1139,80 @@ publication date._
   from disk: the command blocks. A git command inside `for`, `while`, `if`
   or `case` bodies is judged too. This also blocks a commit written inside a
   subshell such as `(cd <repo> && git commit)`.
+
+<!-- codeflow:release-impact patch -->
+- **exec-guard refuses a protected deletion however it is composed.** The
+  catastrophic floor refused `rm -rf /` and `rm -rf ~` but let the same
+  deletion through as `find / -delete`, `find / -exec rm -rf {} +`,
+  `ls / | xargs rm -rf`, `rm -rf /Users/<name>`, `cd ~ && rm -rf *` or
+  `D=/; rm -rf $D`, or inside a subshell, group, `if`, `for`, `while` or
+  `case` body. The same holds for `rsync --delete` into a protected
+  directory, `${HOME:-/}` and `~user`, a link that lands on one, and a
+  deletion behind `command`, `env`, `nice` or a here-string. A `find` rooted
+  at a protected directory with `-delete` or an `-exec` remover is refused
+  whatever its tests, so `find ~ -name .DS_Store -delete` is now refused.
+  Each is refused as its `rm -rf` equivalent is. A variable or directory
+  that may hold a protected value on any path is refused too, and the
+  message then says so. Functions, `local`, positional parameters, arrays,
+  `read`, `IFS`, aliases, `eval`, `command cd` and `builtin cd` are
+  followed as the shell runs them, and so are traps, zsh hook functions,
+  `coproc`, arithmetic and a `cd` that may fail. exec-guard allows only the
+  shell it models: after anything else, such as a sourced file,
+  `declare -n`, `enable`, `emulate`, `set -k`, a trap it cannot read, an
+  assignment to `CDPATH` or `BASH_ENV`, zsh-only syntax, or a command named
+  by a value it cannot see, a deletion whose target depends on the state
+  is refused as unproven, and the message asks for the project path written
+  literally. A deletion inside the project, such as
+  `find . -name '*.o' -delete`, still runs.
+
+<!-- codeflow:release-impact patch -->
+- **A peer CLI's help no longer counts as a headless run.** `claude --help
+  -p` and `codex exec --help` print help and exit, so exec-guard no longer
+  reports them under `security.headless_peer_runs`; at the `block` level
+  they were refused. The same word as a prompt, an option's value or after
+  `--`, as in `codex exec -- --help`, is still reported.
+
+<!-- codeflow:release-impact patch -->
+- **A peer CLI started through a package runner counts as a headless run.**
+  `npx @anthropic-ai/claude-code -p`, `bunx @openai/codex exec`, and the
+  same through `npm exec`, `npm x`, `bun x`, `pnpm dlx`, `yarn dlx`, pnpm
+  11's `pnx` and `pn dlx`, or an installed peer through `pnpm exec` or
+  `pn exec`, are now judged as the direct
+  `claude -p` or `codex exec` is, under `security.headless_peer_runs` at
+  both `warn` and `block`; before, they passed unreported. The runner's own
+  `--help` or `--version` runs nothing and passes.
+
+<!-- codeflow:release-impact patch -->
+- **A git hook runs the codeflow that started git.** When a `codeflow`
+  command ran git, such as `task new` pushing its reservation to the
+  registry, the hook git fired ran whichever `codeflow` was first on PATH;
+  an older one there refused the registry push. codeflow now names its own
+  binary in `CODEFLOW_HOOK_BINARY` for its git children only, and the hook
+  shims run that binary, failing the hook when it is missing or not
+  executable. Git run outside codeflow still uses the `codeflow` on PATH.
+  Run `codeflow update` to install the new shims.
+
+<!-- codeflow:release-impact patch -->
+- **A killed full gate on Windows ends its targets.** When a
+  `codeflow test --mode full` process was killed on Windows, its running
+  target kept going while the gate lock was freed, so a second full gate
+  could start beside it. Each target now runs in a job object that ends
+  the target's whole process tree when the gate exits, however it exits.
+  On Unix the lock still stays held until a killed gate's target exits.
+
+<!-- codeflow:release-impact patch -->
+- **Presentation cleanup on macOS no longer fails on a busy machine.**
+  Closing a presentation lists processes with `ps` to prove its browser is
+  gone. One process of any user caught mid-start could list bytes that are
+  not UTF-8, and the whole listing was refused, so cleanup failed and left
+  recovery evidence behind. Such a line is now read as it stands; it can
+  neither hide an owned browser process nor match as one.
+
+<!-- codeflow:release-impact patch -->
+- **An unquoted numeric pin is refused for its quoting.** A `depends_on`
+  pin such as `pin: 70283613`, which YAML reads as a number, was reported
+  as not a commit id. The message now says the pin must be quoted, as in
+  `pin: "70283613"`, since the text may well be a commit id.
 
 ### Changed
 
