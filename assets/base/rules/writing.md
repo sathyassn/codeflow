@@ -43,7 +43,8 @@ essay or a narrative guide.
   orient comes after it. The details follow as bullets, one point each, in a
   logical order (problem, change, effect, limits, or the order of the flow);
   a table for tabular data and a fenced block for pasted output. A summary
-  that buries the anchor in detail fails, however short it is.
+  that buries the anchor in detail fails, however short it is. A pull
+  request body opens with the same kind of summary.
 - In a reply to the operator, items the operator must act on go once under
   NEED YOUR ATTENTION, after the opening and before the detail. Each starts
   with what is needed (Decide, Do, Confirm, Clarify or Note) and stands on its
@@ -68,16 +69,18 @@ When the point is a flow, dependency, structure, state change, or
 comparison that is clearer drawn, the reply or document carries a figure.
 Match the form to the surface:
 
-- A multi-part explanation, comparison, plan or decision that benefits from
-  one coherent surface and anchored feedback goes through `cf-present` where
-  the harness can show it (standard and full tiers); say why you opened it.
-- Where the harness renders one, use an inline HTML figure.
+- Where the current surface renders one, an inline figure is the default,
+  such as an inline HTML figure in a desktop harness.
+- When people will open, comment on or share it, use a review or share
+  page: `cf-present` (standard and full tiers) when one coherent surface
+  with anchored feedback materially helps, or the harness's page publisher;
+  say why you opened it. Formatting preference alone never opens one.
 - On docs-portal pages, use the portal's figure grammar, a `cf-stage` fence
   (standard and full tiers).
-- Use fenced ASCII in other Markdown files (READMEs, docs, records, PR
-  bodies), in terminal output and on any other plain-text surface, or when
-  unsure what the surface renders.
-- Never use Mermaid.
+- Markdown files (READMEs, docs, records), PR bodies, terminal output and
+  any other plain-text surface are ASCII surfaces: use a fenced ASCII
+  figure there, and when unsure what the surface renders.
+- Never use Mermaid. A simple answer stays simple and carries no figure.
 
 ## Shape the deliverable
 
@@ -95,10 +98,17 @@ progressive? Sloppy work is a defect, not a style.
 In prose, verified truth, policy, technical meaning, project voice, and accessibility
 outrank decoration or fabricated personality: verified truth and policy outrank documented project voice,
 audience, medium, task, and requested tone; preserve technical meaning and
-never invent personality, experience, feelings, familiarity, or slang. At the
-standard and full tiers use `cf-design` for material product, UX, UI,
-interaction, or visual direction and `cf-editorial-review` for substantial
-prose.
+never invent personality, experience, feelings, familiarity, or slang. Web
+artifacts stay componentized rather than monolithic. At the standard and
+full tiers use `cf-design` for material product, UX, UI, interaction, or
+visual direction.
+
+Consequential prose gets an editorial read for meaning and evidence
+whatever its home: substantial docs, ADRs, proposals, release notes,
+operator communications and user-facing copy, combined with the technical
+review where one is due. At the standard and full tiers that read is
+`cf-editorial-review`. Ordinary PR bodies, records and short replies do not
+need it.
 
 ## Written content policy
 
@@ -109,7 +119,8 @@ writing guideline that review and evaluation judge. `git.policy_characters` chec
 commit messages, PR bodies and added lines under `docs/`,
 `project-management/` and skill trees (warn by default; a project may set
 block); old lines are exempt. No emoji or AI attribution in commits and PR
-bodies. No hook sees a chat reply, so these rules hold there by discipline.
+bodies. No hook sees a chat reply, so these rules hold there by discipline;
+mannered prose is a defect in a reply as much as in a document.
 At the standard and full tiers, `cf-editorial-review` judges substantial
 prose and the `cf-evaluate-model` evaluations check replies.
 
@@ -167,7 +178,7 @@ list. It never repeats the caption.
 
 Example, from CodeFlow's `assets/base/AGENTS.md.tmpl`:
 
-> Each always rule is one line with a pointer to its full text, and the table below names the rule and the reference for the moment you are about to act.
+> The table names what to do at the moment you are about to act; a `MUST OPEN` pointer is read before acting, and the reason is stated.
 
 ### Captions
 
