@@ -99,6 +99,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ID_REGISTRY_RETARGET", Runs),
     ("ID_REGISTRY_UID", Runs),
     ("ACCEPTANCE_BINDING", Runs),
+    ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("JOURNEY_CRITERION", Runs),
     ("RECORD_BASELINE_EXEMPT", Runs),
     ("BASELINE_REVIEW", Runs),
@@ -1735,14 +1736,30 @@ fn clears_push_range_unresolved() {
     let dest = with_destination(&root);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     commit_all(&root, "chore: add a quick target");
-    // The destination moves on in another clone, and this clone forgets
-    // its tracking refs: nothing gives the new branch a base.
+    // The push fetches the default tip (SPC-013 R-120), so only a branch
+    // sharing no history with it can lack a base: one from a line with its
+    // own history, which moves on in another clone while this clone
+    // forgets its tracking refs.
+    git(&root, &["checkout", "-q", "--orphan", "chore/archive"]);
+    git(&root, &["commit", "-q", "-m", "chore: start the archive"]);
+    let started = push(&root, &["origin", "chore/archive"]);
+    assert!(
+        text(&run(
+            "git",
+            &root,
+            &["ls-remote", "origin", "chore/archive"]
+        ))
+        .contains("chore/archive"),
+        "{started}"
+    );
     let other = root.parent().unwrap().join("other");
     git(
         root.parent().unwrap(),
         &[
             "clone",
             "-q",
+            "-b",
+            "chore/archive",
             dest.to_str().unwrap(),
             other.to_str().unwrap(),
         ],
@@ -1751,6 +1768,8 @@ fn clears_push_range_unresolved() {
     git(&other, &["add", "o.txt"]);
     git(&other, &["commit", "-q", "-m", "feat: add o"]);
     git(&other, &["push", "-q", "origin", "HEAD"]);
+    git(&root, &["switch", "-q", "-c", "feat/archived"]);
+    commit(&root, "x.txt", "feat: add x");
     let refs = String::from_utf8(
         run(
             "git",

@@ -599,6 +599,11 @@ pub fn validate_task(
     errs.extend(validate_enum(&data, "work_type", WORK_TYPE_VALUES));
     errs.extend(validate_optional_enum(&data, "priority", PRIORITY_VALUES));
     errs.extend(validate_optional_enum(&data, "estimate", ESTIMATE_VALUES));
+    errs.extend(validate_optional_enum(
+        &data,
+        "role",
+        &[crate::workgraph::release_line::RELEASE_ROLE],
+    ));
 
     // Array fields.
     errs.extend(validate_array_fields(&data, TASK_ARRAY_FIELDS));

@@ -99,6 +99,17 @@ fn project_with_remote() -> (tempfile::TempDir, PathBuf, PathBuf) {
         &codeflow(&root, &["init", "--yes", "--full"]),
         "init --full",
     );
+    // The destination's default branch holds the scaffold, as a project's
+    // remote does; the release scope reads its policy (SPC-013 R-120).
+    git(
+        &bare,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            "HEAD:refs/heads/main",
+        ],
+    );
     git(&root, &["switch", "-q", "-c", LINE]);
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["push", "-q", "origin", LINE]);
