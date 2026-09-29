@@ -226,6 +226,8 @@ outside the worktree, and each target prints a start line on stderr as it begins
 A killed gate never lets a second one run beside its target: on Unix the lock
 stays held until the target's process group exits, and on Windows the target's
 job object ends its process tree with the gate.
+If Windows cannot put a suspended target in that job, it ends the target and
+reports a failed test before the target command runs.
 File and aggregate coverage thresholds all contribute to the gate
 verdict; `changed_files` rules are rejected until an explicit comparison base is
 available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.

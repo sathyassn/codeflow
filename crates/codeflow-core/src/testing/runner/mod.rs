@@ -14,6 +14,32 @@ use crate::testing::error::TestingError;
 #[cfg(windows)]
 mod target_job;
 
+#[cfg(any(windows, test))]
+#[derive(Debug)]
+enum AdoptError {
+    Job(std::io::Error),
+    Resume(std::io::Error),
+}
+
+#[cfg(any(windows, test))]
+fn adopt_or_stop<T>(
+    result: Result<T, AdoptError>,
+    target_name: &str,
+    end_child: impl FnOnce(),
+) -> Result<T, TestingError> {
+    result.map_err(|error| {
+        end_child();
+        let (step, source) = match error {
+            AdoptError::Job(source) => ("join its kill-on-close job", source),
+            AdoptError::Resume(source) => ("resume", source),
+        };
+        TestingError::CommandSpawnError {
+            target: target_name.to_string(),
+            message: format!("could not {step} target '{target_name}': {source}"),
+        }
+    })
+}
+
 /// Default per-target wall-clock timeout, applied when a target omits
 /// `timeout_seconds`. A hanging test target must never block the gate or
 /// pre-push forever, so every target has a finite ceiling.
@@ -406,21 +432,10 @@ fn spawn_command(
     // is closed when the gate exits or is killed, so the lock never frees
     // while a target of the gate runs.
     #[cfg(windows)]
-    let target_job = match target_job::TargetJob::adopt(&child) {
-        Ok(job) => Some(job),
-        Err(target_job::AdoptError::Unguarded(error)) => {
-            eprintln!(
-                "[codeflow test] warning: target '{target_name}' runs outside a job \
-                 object ({error}); if this gate is killed, the target keeps running"
-            );
-            None
-        }
-        Err(target_job::AdoptError::Resume(error)) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(spawn_err(error));
-        }
-    };
+    let target_job = adopt_or_stop(target_job::TargetJob::adopt(&child), target_name, || {
+        let _ = child.kill();
+        let _ = child.wait();
+    })?;
 
     let stdout_reader = child.stdout.take().map(spawn_reader);
     let stderr_reader = child.stderr.take().map(spawn_reader);
@@ -446,12 +461,9 @@ fn spawn_command(
             }
             #[cfg(windows)]
             {
-                // The job ends the whole tree at once. `taskkill /T /F`
-                // remains for a target that runs outside a job, and the
-                // direct-child kill below is the last backstop.
-                if let Some(job) = &target_job {
-                    job.terminate();
-                }
+                // The job ends the whole tree at once. The direct-child
+                // kill below is the last backstop.
+                target_job.terminate();
                 let _ = Command::new("taskkill")
                     .args(["/PID", &child.id().to_string(), "/T", "/F"])
                     .status();
@@ -662,6 +674,24 @@ mod tests {
     use crate::testing::config::{ModeCommand, RunnerType};
     use std::collections::BTreeMap;
 
+    #[test]
+    fn adoption_decision_stops_each_failed_child_and_names_the_target() {
+        let mut stopped = 0;
+        let joined: Result<u8, AdoptError> = Ok(7);
+        assert_eq!(adopt_or_stop(joined, "sample", || stopped += 1).unwrap(), 7);
+        assert_eq!(stopped, 0);
+        for error in [
+            AdoptError::Job(std::io::Error::from_raw_os_error(5)),
+            AdoptError::Resume(std::io::Error::from_raw_os_error(6)),
+        ] {
+            let result: Result<u8, _> = Err(error);
+            let failure = adopt_or_stop(result, "sample", || stopped += 1).unwrap_err();
+            let text = failure.to_string();
+            assert!(text.contains("sample"), "{text}");
+            assert!(text.contains("os error"), "{text}");
+        }
+        assert_eq!(stopped, 2);
+    }
     fn make_target(name: &str, command: &str) -> TargetConfig {
         TargetConfig {
             name: name.to_string(),
@@ -1361,5 +1391,25 @@ mod tests {
             !alive
         });
         assert!(gone, "the target tree ended with its killed gate");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_job_failure_ends_the_suspended_target_before_its_command_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid.txt");
+        target_job::fail_adoption_for_test(Some(pid_file.clone()));
+        let target = make_target("unguarded", "echo ran > marker.txt");
+        let result = run_target(&target, "full", dir.path());
+        target_job::fail_adoption_for_test(None);
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("unguarded"), "{message}");
+        assert!(message.contains("os error 5"), "{message}");
+        let pid: u32 = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
+        assert!(!process_alive(pid), "the failed target process is gone");
+        assert!(
+            !dir.path().join("marker.txt").exists(),
+            "the command never ran"
+        );
     }
 }
