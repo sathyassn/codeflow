@@ -30,7 +30,7 @@ pub struct SessionRecord {
     pub timestamp: String,
 }
 
-/// The session ledger could not be written.
+/// A ledger (the session or the refusals ledger) could not be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LedgerUnwritten {
     /// What keeps the ledger from being written, from the path the write
@@ -53,6 +53,9 @@ pub enum Repair {
     RemoveDirectory,
     /// The path exists but this user cannot write it.
     MakeWritable,
+    /// Another process holds the ledger file's lock (the refusal record,
+    /// which waits a bounded time).
+    EndLockHolder,
 }
 
 impl Repair {
@@ -67,6 +70,9 @@ impl Repair {
                 "remove the directory that stands where the ledger writes a file"
             }
             Self::MakeWritable => "give this user write access",
+            Self::EndLockHolder => {
+                "end the process that holds the lock on the ledger file, or wait for it"
+            }
         }
     }
 }
@@ -209,9 +215,17 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
 /// What keeps the ledger from being written, from the path the writer
 /// failed on: a file in the way of a directory it creates, a directory in
 /// the way of a file it opens, or else the nearest existing part of that
-/// path, which this user cannot write.
-fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
+/// path, which this user cannot write. The refusal record reads it too.
+#[must_use]
+pub fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
     let cause = error.to_string();
+    if let LedgerError::LockTimeout { path, .. } = error {
+        return LedgerUnwritten {
+            path,
+            cause,
+            repair: Repair::EndLockHolder,
+        };
+    }
     let LedgerError::IoAt { path, source } = error else {
         return LedgerUnwritten {
             path: ledger_dir.to_path_buf(),
@@ -254,12 +268,11 @@ fn normalize_session_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::process::Command;
 
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

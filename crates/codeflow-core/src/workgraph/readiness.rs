@@ -10,7 +10,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::process::Command;
 use std::rc::Rc;
 
 use git2::{BranchType, Repository};
@@ -716,7 +715,7 @@ pub struct Claim {
 }
 
 fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::git::command()
         .arg("-C")
         .arg(repo_root)
         .args(args)
@@ -986,7 +985,7 @@ mod tests {
     use std::fs;
 
     fn run(root: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = crate::git::command()
             .arg("-C")
             .arg(root)
             .args(args)
@@ -1407,7 +1406,7 @@ mod tests {
 
     fn commit_dated(root: &Path, message: &str, date: &str) -> String {
         run(root, &["add", "-A"]);
-        let out = Command::new("git")
+        let out = crate::git::command()
             .arg("-C")
             .arg(root)
             .args(["commit", "-q", "-m", message])

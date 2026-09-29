@@ -645,6 +645,45 @@ pub fn declared_work_target(repo_root: &Path, task_id: &str) -> Option<String> {
         .and_then(|path| declared_work_target_at(&path))
 }
 
+/// Read a work branch's target from the pushed revision, not the checkout.
+/// Uses readiness's bounded reader and supported layouts for the matching
+/// task only. Returns a logical branch name for destination resolution.
+///
+/// # Errors
+///
+/// Returns an error if the revision or matching task cannot be read, so a
+/// caller can distinguish an unavailable target from an absent declaration.
+pub fn declared_work_target_at_revision(
+    repo_root: &Path,
+    branch: &str,
+    revision: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let Some(suffix) = work_branch_suffix(repo_root, branch) else {
+        return Ok(None);
+    };
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let tree = repo
+        .revparse_single(revision)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let records = records_from_tree_matching(&repo, &tree, |path, kind| {
+        kind == RecordKind::Task
+            && path
+                .rsplit('/')
+                .next()
+                .and_then(markdown_stem)
+                .is_some_and(|id| suffix.starts_with(&format!("{id}-")))
+    })?;
+    Ok(records
+        .values()
+        .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
+        .max_by_key(|record| record.id.len())
+        .and_then(|record| record.integration_target.as_deref())
+        .filter(|target| !target.trim().is_empty())
+        .map(|target| logical_target(target.trim()).to_owned()))
+}
+
 /// The `integration_target` the task record at `path` declares.
 pub(crate) fn declared_work_target_at(path: &Path) -> Option<String> {
     std::fs::read_to_string(path)
@@ -1171,6 +1210,14 @@ pub(crate) fn records_from_tree(
     repo: &Repository,
     tree: &git2::Tree<'_>,
 ) -> Result<BTreeMap<String, Record>, WorkStartError> {
+    records_from_tree_matching(repo, tree, |_, _| true)
+}
+
+fn records_from_tree_matching(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    include: impl Fn(&str, RecordKind) -> bool,
+) -> Result<BTreeMap<String, Record>, WorkStartError> {
     #[cfg(test)]
     TREE_PARSES.with(|parses| parses.set(parses.get() + 1));
     let mut records = BTreeMap::new();
@@ -1198,6 +1245,9 @@ pub(crate) fn records_from_tree(
         let Some(kind) = record_kind_for_tree_path(&path) else {
             return TreeWalkResult::Ok;
         };
+        if !include(&path, kind) {
+            return TreeWalkResult::Ok;
+        }
         // A record's size is read from its object header before its bytes,
         // so a hostile tip cannot make every reader load it.
         if odb
@@ -1467,7 +1517,7 @@ mod tests {
     }
 
     fn git(root: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = crate::git::command()
             .arg("-C")
             .arg(root)
             .args(args)
@@ -1531,7 +1581,7 @@ mod tests {
     fn anchored_graph_passes_without_mutating_repo() {
         let dir = fixture();
         let before_head = fs::read_to_string(dir.path().join(".git/HEAD")).expect("HEAD readable");
-        let before_status = Command::new("git")
+        let before_status = crate::git::command()
             .arg("-C")
             .arg(dir.path())
             .args(["status", "--porcelain"])
@@ -1546,7 +1596,7 @@ mod tests {
             fs::read_to_string(dir.path().join(".git/HEAD")).unwrap(),
             before_head
         );
-        let after_status = Command::new("git")
+        let after_status = crate::git::command()
             .arg("-C")
             .arg(dir.path())
             .args(["status", "--porcelain"])

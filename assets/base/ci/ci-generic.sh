@@ -1,49 +1,138 @@
 #!/usr/bin/env sh
-# codeflow CI — a PORTABLE snippet (CodeFlow ADR-0017). The checks live in the `codeflow`
-# binary (single source of truth, no drift from the git hooks or the Claude
-# git-guard). Run or source this from any CI, a git pre-receive hook, or a
-# Makefile target — anywhere without a first-class codeflow template.
+# codeflow CI: a PORTABLE snippet (CodeFlow ADR-0017). The checks live in the
+# `codeflow` binary (single source of truth, no drift from the git hooks or the
+# Claude git-guard). Run it from any CI, a Makefile target or a script that
+# has a working tree of the change and its full history.
 #
 # It runs the same three gates the platform templates do:
-#   codeflow ci             — verify the commit range + branch name against policy
-#   codeflow test           — the test gate
-#   codeflow validate --docs — the doc-graph integrity lint
+#   codeflow ci              verify the commit range and branch name against policy
+#   codeflow test            the test gate
+#   codeflow validate --docs the doc-graph integrity lint
 #
-# Range: pass base + head as $1 $2, or set BASE/HEAD in the env. When both are
-# empty, `codeflow ci` auto-detects from the CI platform's variables
-# (GitHub/GitLab/Bitbucket). On hosts with none of those, export
-# CODEFLOW_DEFAULT_BRANCH=<branch> to name the base branch explicitly;
-# otherwise the fallback tries the policy's protected branches
-# (origin/main, main, origin/master, master by default) ..HEAD.
+# The binary is the version the TARGET pins in .codeflow/project.toml
+# (`scaffold_version`), downloaded from its release and verified against the
+# release's published sha256.sum; a missing or wrong checksum fails the run and
+# nothing unverified is installed (SPC-013 R-113). The target is the current
+# commit of the branch the change lands on, not the merge base; this script
+# refuses to run without it and never guesses it, since a pin read from the
+# change itself would let the change choose the binary that judges it. An upgrade takes two
+# changes, in order: first raise only `scaffold_version` (the target's binary
+# judges it and the candidate is tested alongside), then run `codeflow update`.
 #
-# PR/MR body: export CODEFLOW_PR_BODY to also scan it — AI attribution, emoji,
-# and the required-section structure (git.pr_sections).
+# PR/MR body: export CODEFLOW_PR_BODY to also scan it (AI attribution, emoji,
+# and the required-section structure, git.pr_sections).
 #
 # Usage:
-#   ci-generic.sh <base> <head>        # explicit range
-#   BASE=main HEAD=HEAD ci-generic.sh  # via env
-#   ci-generic.sh                      # auto-detect from CI env
-set -eu
+#   ci-generic.sh <target> [<head>]        # target commit, head (default HEAD)
+#   BASE=<target> HEAD=<head> ci-generic.sh
+#
+# Needs git, curl, tar with xz, awk and sha256sum or shasum. Releases carry
+# Linux x86_64 and macOS binaries.
 
 BASE="${1:-${BASE:-}}"
-HEAD="${2:-${HEAD:-}}"
+HEAD="${2:-${HEAD:-HEAD}}"
 
-if ! command -v codeflow >/dev/null 2>&1; then
-  # A missing binary is an unarmed perimeter, not a pass — fail RED. Install the
-  # codeflow binary onto PATH before this runs, e.g.:
-  #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
-  #   export PATH="$HOME/.codeflow/bin:$PATH"
-  echo "codeflow not installed — install the binary onto PATH first (failing red)." >&2
-  exit 1
+# >>> codeflow pinned run (SPC-013 R-113). The same text runs in ci-generic.sh,
+# .gitlab-ci.yml and bitbucket-pipelines.yml: BASE names the target commit and
+# HEAD the change, and the target's pin chooses the binary that judges it.
+set -eu
+codeflow_fail() { echo "codeflow: error: $*" >&2; exit 1; }
+[ -n "${BASE:-}" ] || codeflow_fail "no target commit: pass the commit this change lands on (the pull request's base); the pinned install never guesses it"
+target=$(git rev-parse --verify -q "${BASE}^{commit}") || codeflow_fail "target commit ${BASE} is not in this clone's history"
+head=$(git rev-parse --verify -q "${HEAD:-HEAD}^{commit}") || codeflow_fail "head commit ${HEAD:-HEAD} is not in this clone's history"
+case "$(uname -s) $(uname -m)" in
+  "Linux x86_64") triple=x86_64-unknown-linux-gnu ;;
+  "Darwin arm64") triple=aarch64-apple-darwin ;;
+  "Darwin x86_64") triple=x86_64-apple-darwin ;;
+  *) codeflow_fail "codeflow publishes no release binary for $(uname -s) $(uname -m)" ;;
+esac
+# The scaffold_version a commit pins, or nothing.
+codeflow_pin() {
+  git show "$1:.codeflow/project.toml" 2>/dev/null |
+    sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1
+}
+# Succeeds when version $1 is older than $2: numeric core first, and a
+# pre-release before its release, as codeflow orders versions.
+codeflow_older() {
+  awk -v a="$1" -v b="$2" 'BEGIN {
+    i = index(a, "-"); ca = i ? substr(a, 1, i - 1) : a; pa = i ? substr(a, i + 1) : ""
+    j = index(b, "-"); cb = j ? substr(b, 1, j - 1) : b; pb = j ? substr(b, j + 1) : ""
+    n = split(ca, x, "."); m = split(cb, y, ".")
+    for (k = 1; k <= (n > m ? n : m); k++) {
+      if (x[k] + 0 < y[k] + 0) exit 0
+      if (x[k] + 0 > y[k] + 0) exit 1
+    }
+    if (pa != "" && pb == "") exit 0
+    if (pa == "" || pb == "") exit 1
+    exit (pa < pb) ? 0 : 1
+  }'
+}
+# Install release $1 into directory $2, verified against its sha256.sum. A
+# missing checksum file, a missing entry or a mismatch fails closed.
+codeflow_install() {
+  url="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v$1"
+  asset="codeflow-cli-${triple}.tar.xz"
+  work=$(mktemp -d)
+  curl -fsSL "${url}/sha256.sum" -o "${work}/sha256.sum" ||
+    codeflow_fail "codeflow $1 has no published checksum file (sha256.sum); refusing an unverified binary"
+  expected=$(awk -v a="$asset" '{n=$2; sub(/^\*/, "", n)} n == a {print $1; exit}' "${work}/sha256.sum")
+  [ -n "$expected" ] ||
+    codeflow_fail "sha256.sum for codeflow $1 lists no checksum for ${asset}; refusing an unverified binary"
+  curl -fsSL "${url}/${asset}" -o "${work}/${asset}" ||
+    codeflow_fail "cannot download ${asset} for codeflow $1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "${work}/${asset}" | cut -d ' ' -f 1)
+  else
+    actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
+  fi
+  [ "$actual" = "$expected" ] ||
+    codeflow_fail "checksum mismatch for ${asset} (codeflow $1): expected ${expected}, got ${actual}; refusing it"
+  tar -xJf "${work}/${asset}" -C "$work"
+  mkdir -p "$2"
+  cp "${work}/codeflow-cli-${triple}/codeflow" "$2/codeflow"
+  chmod +x "$2/codeflow"
+  echo "codeflow $1 installed and verified against sha256.sum"
+}
+pin=$(codeflow_pin "$target")
+[ -n "$pin" ] || codeflow_fail "no scaffold_version pinned in .codeflow/project.toml at ${target}"
+head_pin=$(codeflow_pin "$head")
+# A head that kept the pin it branched from lowers nothing: merging it
+# keeps the target's pin, and the target's binary judges it. Every merge
+# base must carry the head's pin, since a criss-cross head chooses which
+# single base `git merge-base` prints; no base at all fails closed.
+kept=
+for base in $(git merge-base --all "$target" "$head" || true); do
+  if [ "$head_pin" = "$(codeflow_pin "$base")" ]; then kept=yes; else kept=no; break; fi
+done
+[ "$kept" != yes ] || head_pin="$pin"
+bin=$(mktemp -d)
+codeflow_install "$pin" "$bin"
+PATH="${bin}:${PATH}"
+export PATH
+lowered=
+if [ "$head_pin" != "$pin" ]; then
+  if [ -n "$head_pin" ] && codeflow_older "$pin" "$head_pin"; then
+    # Upgrade step one: test the candidate the head pins, never enforce with it.
+    candidate=$(mktemp -d)
+    codeflow_install "$head_pin" "$candidate"
+    "${candidate}/codeflow" --version
+    "${candidate}/codeflow" validate --docs
+  else
+    lowered="${head_pin:-no pin}"
+  fi
 fi
-
-if [ -n "$BASE" ] && [ -n "$HEAD" ]; then
-  codeflow ci --base "$BASE" --head "$HEAD"
-else
-  codeflow ci
-fi
+# The target's binary judges the range from a checkout of the target, so the
+# target's policy applies and the head is read only as git data.
+judge=$(mktemp -d)
+git worktree add -q --detach "${judge}/target" "$target"
+trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true' EXIT
+branch=$(git symbolic-ref --short -q HEAD || true)
+(cd "${judge}/target" && codeflow ci --base "$target" --head "$head" ${branch:+--branch "$branch"})
 codeflow test --strict
 codeflow validate --docs
+[ -z "$lowered" ] ||
+  codeflow_fail "the head lowers scaffold_version from ${pin} to ${lowered}; the pin only rises, one pull request at a time, then \`codeflow update\` in the next"
+# <<< codeflow pinned run
 
 # Optional external add-ons (uncomment once the tools are on PATH):
 #   gitleaks detect --source . --redact --no-banner --exit-code 1   # secret scan

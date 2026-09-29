@@ -6,7 +6,6 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use clap::Args;
 use codeflow_core::hooks::{git_hook, policy::Policy, policy_schema};
@@ -113,7 +112,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
     };
 
     match result {
-        Ok(report) => super::render_stage(plane, &report, 1),
+        Ok(report) => super::render_stage(plane, &root, &report, 1),
         Err(e) => {
             // A hook that cannot evaluate must not block work invisibly:
             // report and pass (CI remains the hard line, charter D19).
@@ -228,7 +227,7 @@ fn run_reference_transaction_with_reader(
     let token = super::integrate_token_present();
     let human = super::human_override_present();
     match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
-        Ok(report) => super::render_stage("reference-transaction", &report, 1),
+        Ok(report) => super::render_stage("reference-transaction", root, &report, 1),
         Err(e) => {
             eprintln!(
                 "codeflow reference-transaction: could not evaluate protected-ref transaction ({e}) — operation blocked"
@@ -310,7 +309,7 @@ fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
 /// The NUL-separated entries of one `git config -z` read in `root`, exact
 /// bytes, value text unchanged; empty when unset or unreadable.
 fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["config", "-z"])
@@ -332,7 +331,7 @@ fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
 /// the subject text, so a normal one-parent commit named `Merge ...` is still
 /// format- and body-checked.
 fn merge_in_progress(root: &Path) -> bool {
-    let git_dir = Command::new("git")
+    let git_dir = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -350,7 +349,7 @@ fn merge_in_progress(root: &Path) -> bool {
 /// the contract-surface tripwire. Empty on any error — the tripwire is advisory,
 /// so an unavailable file list simply means no nudge.
 fn staged_files(root: &Path) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["diff", "--cached", "--name-only"])

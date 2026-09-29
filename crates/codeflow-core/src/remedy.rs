@@ -319,6 +319,15 @@ catalog! {
     FILE_POLICY_CHARACTER = Step::Edit("{path}"),
         "edit {path}: use a comma, colon, semicolon, parentheses, or a full stop and a new sentence; a hyphen (-) inside a compound word; \"to\" in a range (ADR-0067); existing lines are grandfathered, only this added line changes";
 
+    /// An unresolved conflict marker on an added line of a file.
+    CONFLICT_MARKER = Step::Edit("{path}"),
+        "edit {path}: resolve the conflict and restage, or set conflict-marker-size for the path in .gitattributes to a length its markers do not have";
+
+    /// A git without `check-attr --source`, which the conflict-marker row
+    /// of `codeflow ci` needs.
+    GIT_ATTR_SOURCE_UNSUPPORTED = Step::Codeflow("codeflow ci"),
+        "install a Git release build of 2.40 or later, whose `git check-attr --source` the conflict-marker check needs, then rerun `codeflow ci`; fetching more history does not help";
+
     /// A commit on a declared contract surface.
     BREAKING_WATCH_PATH = Step::Codeflow("codeflow ci"),
         "if it is not breaking, state `Breaking: no` with a `Rationale` under Release impact in the pull request body, and `codeflow ci --pr-body-file <body.md>` reports nothing; if it is, mark the commit `type!:` with a `BREAKING CHANGE:` footer and the migration path";
@@ -492,6 +501,18 @@ catalog! {
     /// A CI workflow whose install step is still the placeholder.
     DOCTOR_CI_PLACEHOLDER = Step::Edit("{path}"),
         "replace the PLACEHOLDER install step in {path} with the release installer, so the test and validate gates run";
+    /// A checkout that pins no codeflow version for CI to install.
+    DOCTOR_CI_PIN_MISSING = Step::Edit(".codeflow/project.toml"),
+        "set scaffold_version in .codeflow/project.toml to the codeflow version CI installs";
+    /// A target branch that pins no codeflow version.
+    DOCTOR_CI_PIN_TARGET = Step::Edit(".codeflow/project.toml"),
+        "land a scaffold_version pin in .codeflow/project.toml on {target} first, in a pull request that changes only that line";
+    /// A checkout that lowers the pin of the branch it lands on.
+    DOCTOR_CI_PIN_LOWERED = Step::Edit(".codeflow/project.toml"),
+        "set scaffold_version in .codeflow/project.toml back to {pin}, the version {target} pins";
+    /// An upgrade that carries `codeflow update` before its raised pin lands.
+    DOCTOR_CI_PIN_ORDER = Step::Edit(".codeflow/project.toml"),
+        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml and land it; then run `codeflow update` on a new branch";
     /// A tracking setting that does not read.
     DOCTOR_TRACKING_UNKNOWN = Step::Edit(".codeflow/project.toml"),
         "repair .codeflow/project.toml so durable-work tracking reads as on or off";
@@ -545,6 +566,9 @@ catalog! {
     /// A session summary that could not be written.
     SESSION_SUMMARY_UNWRITTEN = Step::Edit("{path}"),
         "{repair}: {path}; the session ledger lives under git's common directory, and the next session end writes it";
+    /// A refusal the hook or guard could not write to the refusals ledger.
+    REFUSAL_UNRECORDED = Step::Edit("{path}"),
+        "{repair}: {path}; the refusals ledger lives under git's common directory, and the next refusal writes it";
     /// The per-user project registry that could not be written.
     REGISTRY_UNWRITTEN = Step::Edit("{path}"),
         "repair or delete {path}, the per-user project registry; the next codeflow command writes it again";

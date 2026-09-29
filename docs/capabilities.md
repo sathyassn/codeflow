@@ -78,8 +78,10 @@ secret-bearing environment filter pinned on. Claude-hosted plugin turns pass
 the current ensemble's model and effort explicitly so they cannot inherit a
 different user default. Claude
 ships a fail-closed sandbox on macOS, Linux, and WSL2, public web/tool access,
-raw model/cloud credential removal for sandboxed Bash, and ask rules for
-destructive source-control operations. A sandbox failure may request an
+raw model/cloud credential removal for sandboxed Bash, and no ask rules:
+the actions the operator performs are denied by rules generated from one
+action table, which also generates the Codex command rules; Grok gets a
+sandbox profile (ADR-0075). A sandbox failure may request an
 auto-classified unsandboxed retry
 only for a trusted installed tool that needs host state; this enables the
 official Codex plugin without granting a general bypass. Project `acceptEdits`
@@ -103,7 +105,10 @@ adrs: [ADR-0011, ADR-0019]
 unmodified files are replaced, user-modified files get a 3-way merge from
 `.codeflow/.baseline/` (conflicts produce `.new` + report), managed regions
 (AGENTS.md markers, settings.json codeflow keys) are surgically updated, and
-user-owned schema-versioned files only gain new keys with defaults. It also
+user-owned schema-versioned files gain new keys with defaults; a policy scalar
+still equal to the prior shipped default moves to the new default and is
+reported, and a value that differs is kept. Where no baseline was recorded,
+the settings and policy are compared with the copies 2.1.0 shipped. It also
 installs any manifest entry that is in-tier but missing on disk — so a file that
 became in-tier since the last install (e.g. an old `--minimal` repo gaining the
 enforcement floor under ADR-0019) is reconciled into place and recorded, not just
@@ -119,14 +124,15 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
 
 Git discipline enforced across four planes reading one config (the `git`
 section of `.codeflow/policy.json`). Two give fast local feedback — the git
-client hooks (pre-commit secret scan + staged-.env, commit-msg
+client hooks (pre-commit secret scan + staged-.env and unresolved conflict
+markers, commit-msg
 format/attribution/emoji and the ADR-0067 em and en dash check,
 pre-merge-commit and reference-transaction protected-branch merge/ref rules,
 pre-push branch naming and protected-branch rules) and the Claude
@@ -166,6 +172,14 @@ The ADR-0067 dash check (`policy_characters`) also defaults to warn; CodeFlow's
 own policy sets block. Its added-lines scan skips a file only when its bytes
 equal the whole-file managed asset the running binary ships for that path, so
 unmodified scaffold content never trips it and a project record proves nothing.
+The conflict-marker check (`git.conflict_markers`, default block, TSK-170)
+judges the lines a change adds to a text file, in pre-commit over the staged
+diff and in `codeflow ci` over the range, which also catches a marker left
+while resolving `git rebase --continue`. A separator line counts only
+between an opening and a closing marker, so a Markdown heading underline
+passes, and a file that must hold markers sets `conflict-marker-size` for
+its path in `.gitattributes` (tests: `hooks::conflict_markers`,
+`git_hook` pre-commit tests, `ci_cli.rs`, `hooks_cli.rs`).
 The generic PR template ships at every tier. The structural
 anti-bypass layer is not flippable, by design: the strict policy validator (an
 invalid file fails loud rather than silently reverting to defaults), the schema
@@ -195,6 +209,16 @@ the managed CI file.
 Secret scanning fails closed if libgit2 cannot traverse the complete staged
 diff. Hook stdin read failures remain advisory but print an explicit degraded
 ref-check warning instead of passing silently.
+Each operation a git hook or session guard stops appends one `refusal` event
+to the clone's ledger, naming the plane, the effective level and the rules,
+never the command; a finding at warn stops nothing and is not written.
+`codeflow report ceremony` reads it with the merge history over a window of
+pull requests or dates: pull requests per logical change, record status pull
+requests on their own row, review rounds asked of the host (`unknown` when the
+host cannot answer, the one host-backed read of SPC-013 R-103) and refusals
+(`unknown` before the clone began recording). The baseline over pull requests
+568 to 644 is `docs/verification/ceremony-baseline-2026-09-28.md`, and the
+release checklist compares each release's window with it.
 
 ## CAP-004 — test-gate
 
@@ -217,7 +241,12 @@ detected is a loud no-op (exit 0) so the bootstrap/early-setup path stays green;
 (CI, the pipeline verify gate) where "ran nothing" must not read as a pass. With a
 stack it is a real gate, re-run in CI. The pre-push hook runs the push set (the
 targets with a `quick` mode) plus `codeflow validate --docs` and `codeflow ci` on
-the pushed range, blocking by default under `test_gate_on_push`. It blocks on
+the pushed range, blocking by default under `test_gate_on_push`. An existing
+protected or `integration/` branch fast-forward starts at its advertised tip.
+Branches with a declared target use the merge base with its advertised tip,
+reading the target from the task record at the pushed commit; the hook names
+that target. Line rewrites, undeclared branches and unavailable targets retain
+the advertised-history fallback. An advertised target missing locally is noted. It blocks on
 what it can see and names what it left to CI (an unresolved range, a sibling
 ref, a dirty, sparse or submodule-incomplete checkout); the test suite belongs
 to the full gate. One full gate runs at a time on a machine (a second refuses,
