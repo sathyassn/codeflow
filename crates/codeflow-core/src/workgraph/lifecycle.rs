@@ -818,7 +818,7 @@ fn spec_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
         ("draft", "approved") | ("approved" | "implemented", "superseded") => Ok(()),
         (_, "implemented") => Err("implemented is derived from the consumers and never written"),
         ("approved" | "implemented", "draft") => {
-            Err("approved never returns to draft; a changed contract is a new spec")
+            Err("approved never returns to draft: amend it in place in a planning change until it is implemented; once it is implemented, a changed contract is a new spec")
         }
         ("draft", "superseded") => Err("only an approved spec is superseded"),
         ("superseded", _) => Err("a superseded spec is final"),

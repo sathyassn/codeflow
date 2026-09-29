@@ -756,10 +756,20 @@ fn a_spec_is_superseded_only_by_a_revision_that_lists_it() {
         &spec("SPC-001", "draft", ""),
     );
     let back = repo.judge(&approved);
-    assert!(back
-        .errors
-        .iter()
-        .any(|e| e.contains("approved never returns to draft")));
+    assert!(
+        back.errors.iter().any(|e| names_both_spec_routes(e)),
+        "{:?}",
+        back.errors
+    );
+}
+
+/// TSK-169 AC-3: the refusal keeps "approved never returns to draft" and
+/// names both routes: an amendment while the spec is not implemented, a new
+/// spec once it is.
+fn names_both_spec_routes(message: &str) -> bool {
+    message.contains("approved never returns to draft")
+        && message.contains("amend it in place in a planning change until it is implemented")
+        && message.contains("once it is implemented, a changed contract is a new spec")
 }
 
 #[test]
