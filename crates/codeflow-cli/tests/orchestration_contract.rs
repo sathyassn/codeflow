@@ -1661,22 +1661,33 @@ fn lifecycle_guidance_is_one_section_the_skills_follow() {
     }
 }
 
-/// TSK-169: the two texts that state how an approved spec changes.
+/// TSK-169: the two texts that state how an approved spec changes, each
+/// with every duty of the rule: Plan vN+1 amended in place, a dated note
+/// naming its resolution with the editorial exception, the superseded
+/// decision kept, each bound consumer's disposition, and the `implemented`
+/// boundary with both later routes.
 const SPEC_RULE_OWNERS: &[(&str, &[&str])] = &[
     (
         "assets/base/claude/skills/cf-method/references/project-organization.md",
         &[
             "a change to it is Plan vN+1, amended in place through a reviewed planning change",
-            "names each consumer bound to a changed requirement and its disposition",
+            "each change of meaning gets a dated note naming its resolution",
+            "(an editorial change needs none)",
+            "the superseded decision stays visible as history",
+            "names each consumer bound to a changed requirement and its disposition: unaffected, criteria amended in the same change, or reopened",
             "An `implemented` spec is frozen, so a later change gets a new spec or an explicit superseding record",
         ],
     ),
     (
         "assets/base/pm/spec.md.tmpl",
         &[
-            "a change to an approved spec is amended in place through a reviewed planning change",
-            "names each consumer bound to a changed requirement and its disposition",
-            "Once implemented the spec is frozen",
+            "a change to an approved spec is Plan vN+1, amended in place through a reviewed planning change",
+            "each change of meaning gets a dated note naming its resolution",
+            "(an editorial change needs none)",
+            "the superseded decision stays visible as history",
+            "names each consumer bound to a changed requirement and its disposition: unaffected, criteria amended in the same change, or reopened",
+            "Once implemented the spec is frozen, so a later change gets a new spec that lists `supersedes: [SPC-old]`",
+            "`codeflow spec status SPC-old superseded --by SPC-new`, or an explicit superseding record",
         ],
     ),
 ];

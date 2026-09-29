@@ -16,14 +16,16 @@ created: {{DATE}}
      work items need no spec. `approved` requires an empty `open_questions`
      list. `implemented` is derived, never written: every consumer is terminal
      and at least one is complete. Until then, a change to an approved spec is
-     amended in place through a reviewed planning change, with a dated note
-     for each change of meaning and the superseded decision kept as history.
-     That change names each consumer bound to a changed requirement and its
-     disposition: unaffected, criteria amended, or reopened. Once implemented
-     the spec is frozen: a changed contract is a new spec that lists
-     `supersedes: [SPC-old]`; `codeflow spec status SPC-old superseded --by
-     SPC-new` records the link. Keep maintained requirements and executable
-     schemas current at their declared authority. -->
+     Plan vN+1, amended in place through a reviewed planning change: each
+     change of meaning gets a dated note naming its resolution (an editorial
+     change needs none), and the superseded decision stays visible as
+     history. That change names each consumer bound to a changed requirement
+     and its disposition: unaffected, criteria amended in the same change, or
+     reopened. Once implemented the spec is frozen, so a later change gets a
+     new spec that lists `supersedes: [SPC-old]`, linked by `codeflow spec
+     status SPC-old superseded --by SPC-new`, or an explicit superseding
+     record. Keep maintained requirements and executable schemas current at
+     their declared authority. -->
 
 ## Summary
 
