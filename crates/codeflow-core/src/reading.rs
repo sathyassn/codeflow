@@ -60,7 +60,7 @@ pub type SkillFiles = BTreeMap<String, String>;
 
 /// Guideline for the per-task reading chain: what one full implementation
 /// task reads after the kernel. Reported, never a failure.
-pub const READING_CHAIN_GUIDELINE_BYTES: usize = 150 * KIB;
+pub const READING_CHAIN_GUIDELINE_BYTES: usize = 128 * KIB;
 
 /// Guideline for a skill that owns cross-lineage routing or orchestration.
 pub const ROUTING_SKILL_GUIDELINE_BYTES: usize = 29 * KIB;
@@ -87,8 +87,8 @@ pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
     ("cf-estimate", 6 * KIB),
     ("cf-evaluate-model", 9 * KIB + 512),
     ("cf-herdr", 9 * KIB),
-    ("cf-method", 19 * KIB + 512),
-    ("cf-model-orchestrator", 29 * KIB),
+    ("cf-method", 18 * KIB),
+    ("cf-model-orchestrator", 26 * KIB),
     ("cf-plan", 9 * KIB),
     ("cf-present", 8 * KIB + 256),
     ("cf-ship", 6 * KIB + 896),
@@ -243,6 +243,7 @@ const ROUTE_STATUS: &str = "cf-model-orchestrator/resources/routing/route-status
 const ROUTING_DESIGN: &str = "cf-model-orchestrator/resources/routing/design.md";
 const OVERRIDES: &str = "cf-model-orchestrator/references/model-overrides.md";
 const ORGANIZATION: &str = "cf-method/references/project-organization.md";
+const VERIFICATION_SELECTION: &str = "cf-model-orchestrator/resources/verification-selection.md";
 /// TSK-108: the moment a stage skill reads the work lifecycle section.
 const LIFECYCLE_MOMENT: &str = "work item is planned, started, blocked, completed or cancelled";
 
@@ -271,6 +272,21 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         IRREVERSIBLE,
         "high-blast-radius action stops the host and follows",
         "only before a catastrophic or irreversible action",
+    ),
+    // TSK-184 reduction: the selection contract for property, mutation and
+    // fitness techniques is read only when a changed path carries one of the
+    // signals the verification section names.
+    conditional(
+        ORCH_SKILL,
+        VERIFICATION_SELECTION,
+        "When a changed path carries a candidate for a property, mutation or fitness technique",
+        "only when a changed path carries a signal for an earned technique",
+    ),
+    conditional(
+        "cf-model-orchestrator/resources/quality/verification.md",
+        VERIFICATION_SELECTION,
+        "When a changed path carries one of these signals, read",
+        "only when a changed path carries a signal for an earned technique",
     ),
     // TSK-150 (audit row H24): the Grok host detail is read before a Grok
     // preflight or launch. TSK-184: the other-hosts reference merged into the
@@ -545,6 +561,14 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "only for a minor, major or disputed impact, release preparation, a missing \
          release process, or publication; every PR's impact rules sit in PR evidence",
     ),
+    // TSK-184 reduction: the bounded wait and the redness classes load only
+    // when a check is red or stuck or the policy requires hosted checks.
+    conditional(
+        "cf-ship/references/pr-evidence.md",
+        "cf-ship/references/pr-checks.md",
+        "When a required check is red or stuck, or the adopted policy requires hosted checks green before landing, follow",
+        "only when a check is red or stuck, or hosted checks must be green before landing",
+    ),
     // TSK-131: the holistic-fix doctrine and the review rounds load when a
     // defect is fixed or review findings are briefed, written or acted on.
     conditional(
@@ -618,6 +642,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     // beside the kernel rather than in a skill tree; skills cite it for the
     // plain-writing rule (TSK-177).
     ".codeflow/rules/writing.md",
+    // The git rules file the method skill points at for the enforcement
+    // planes (TSK-184 reduction).
+    ".codeflow/rules/git-rules.md",
     ".codeflow/schemas/present/document-v1.schema.json",
     ".codeflow/schemas/present/utility-tokens-v1.schema.json",
     "DIR/settings.json",
