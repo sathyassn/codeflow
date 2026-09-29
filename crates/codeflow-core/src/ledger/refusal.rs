@@ -24,6 +24,9 @@ pub const REFUSAL: &str = "refusal";
 pub const RECORDING_STARTED: &str = "refusal_recording_started";
 /// The level a refused operation is written at.
 pub const BLOCK: &str = "block";
+/// How long a hook or guard waits for another writer's lock on this
+/// ledger before it gives up on the record and keeps its verdict.
+pub const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Write the recording marker unless the refusals ledger already exists.
 /// A second marker from a racing plane is harmless: readers take the
@@ -65,13 +68,15 @@ fn append(
     timestamp: &str,
     data: HashMap<String, serde_json::Value>,
 ) -> Result<(), LedgerError> {
-    JsonlWriter::new(ledger_dir)?.append_event(Event {
-        event_type: event_type.to_string(),
-        timestamp: timestamp.to_string(),
-        session_id: None,
-        worktree: None,
-        data,
-    })
+    JsonlWriter::new(ledger_dir)?
+        .with_lock_wait(LOCK_WAIT)
+        .append_event(Event {
+            event_type: event_type.to_string(),
+            timestamp: timestamp.to_string(),
+            session_id: None,
+            worktree: None,
+            data,
+        })
 }
 
 /// `resolve_path_in` takes the state dir, the parent of `ledger/`.
@@ -182,6 +187,42 @@ mod tests {
         );
         let text = std::fs::read_to_string(ledger.join("refusals").join("refusals.jsonl")).unwrap();
         assert_eq!(text.matches(RECORDING_STARTED).count(), 1, "{text}");
+    }
+
+    #[test]
+    fn a_held_lock_bounds_the_marker_and_the_refusal() {
+        use fs2::FileExt;
+        let (_dir, ledger) = ledger();
+        let lock_path = ledger.join("refusals").join("refusals.jsonl.lock");
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        let holder = std::fs::File::create(&lock_path).unwrap();
+        holder.lock_exclusive().unwrap();
+        for attempt in [
+            mark_recording(&ledger, "2026-09-28T09:00:00Z"),
+            record(
+                &ledger,
+                "pre-push",
+                &["git.push_to_protected"],
+                "2026-09-28T10:00:00Z",
+            ),
+        ] {
+            match attempt {
+                Err(LedgerError::LockTimeout { path, waited }) => {
+                    assert_eq!(path, lock_path);
+                    assert_eq!(waited, LOCK_WAIT);
+                }
+                other => panic!("expected a lock timeout, got {other:?}"),
+            }
+        }
+        holder.unlock().unwrap();
+        record(
+            &ledger,
+            "pre-push",
+            &["git.push_to_protected"],
+            "2026-09-28T10:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(read(&ledger).unwrap().refusals.len(), 1);
     }
 
     #[test]

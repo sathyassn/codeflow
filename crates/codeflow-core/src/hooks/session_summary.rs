@@ -53,6 +53,9 @@ pub enum Repair {
     RemoveDirectory,
     /// The path exists but this user cannot write it.
     MakeWritable,
+    /// Another process holds the ledger file's lock (the refusal record,
+    /// which waits a bounded time).
+    EndLockHolder,
 }
 
 impl Repair {
@@ -67,6 +70,9 @@ impl Repair {
                 "remove the directory that stands where the ledger writes a file"
             }
             Self::MakeWritable => "give this user write access",
+            Self::EndLockHolder => {
+                "end the process that holds the lock on the ledger file, or wait for it"
+            }
         }
     }
 }
@@ -213,6 +219,13 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
 #[must_use]
 pub fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
     let cause = error.to_string();
+    if let LedgerError::LockTimeout { path, .. } = error {
+        return LedgerUnwritten {
+            path,
+            cause,
+            repair: Repair::EndLockHolder,
+        };
+    }
     let LedgerError::IoAt { path, source } = error else {
         return LedgerUnwritten {
             path: ledger_dir.to_path_buf(),

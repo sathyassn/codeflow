@@ -4595,3 +4595,64 @@ fn quoted_commit_text_never_becomes_a_refusal_rule() {
         assert!(!text.contains(content), "{content:?} in {text}");
     }
 }
+
+/// Hold an exclusive `flock` on `path` until the returned file is dropped,
+/// as another writer of the ledger would.
+#[cfg(unix)]
+fn hold_lock(path: &Path) -> std::fs::File {
+    use std::os::unix::io::AsRawFd;
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .unwrap();
+    // SAFETY: flock on a descriptor this function owns.
+    assert_eq!(unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) }, 0);
+    file
+}
+
+// TSK-149 review round 1, P2: a lock another process holds on the refusals
+// ledger delays a hook or guard by at most the bounded wait, and never
+// changes its verdict: first for the recording marker of an allowed call,
+// then for the record of a refused one.
+#[cfg(unix)]
+#[test]
+fn a_held_ledger_lock_neither_stalls_nor_changes_a_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let ledger = dir.path().join(".git/codeflow/ledger/refusals");
+    let held = hold_lock(&ledger.join("refusals.jsonl.lock"));
+
+    let started = std::time::Instant::now();
+    let allowed = guard_run("git status", dir.path());
+    assert_eq!(allowed.status.code(), Some(0));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(
+        !ledger.join("refusals.jsonl").exists(),
+        "the marker waits for no lock"
+    );
+
+    std::fs::write(
+        ledger.join("refusals.jsonl"),
+        "{\"event\":\"refusal_recording_started\",\"timestamp\":\"2026-09-28T00:00:00Z\"}\n",
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let refused = guard_run("git push origin main", dir.path());
+    let err = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert_eq!(refused.status.code(), Some(2), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(
+        err.contains("refusal not recorded")
+            && err.contains("end the process that holds the lock on the ledger file"),
+        "{err}"
+    );
+    assert!(refusal_events(dir.path()).is_empty());
+
+    drop(held);
+    let refused = guard_run("git push origin main", dir.path());
+    assert_eq!(refused.status.code(), Some(2));
+    assert_eq!(refusal_events(dir.path()).len(), 1);
+}

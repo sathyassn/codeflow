@@ -51,6 +51,14 @@ pub enum LedgerError {
     #[error("lock acquisition failed: {0}")]
     Lock(String),
 
+    /// Another process held the file lock for longer than a bounded writer
+    /// waits (`JsonlWriter::with_lock_wait`).
+    #[error("{}: held by another process for over {}ms", .path.display(), .waited.as_millis())]
+    LockTimeout {
+        path: std::path::PathBuf,
+        waited: std::time::Duration,
+    },
+
     #[error("corrupt ledger data: {0}")]
     Corrupt(String),
 
