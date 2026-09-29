@@ -179,7 +179,7 @@ list. It never repeats the caption.
 
 Example, from CodeFlow's `assets/base/AGENTS.md.tmpl`:
 
-> The table names what to do at the moment you are about to act; a `MUST OPEN` pointer is read before acting, and the reason is stated.
+> Delivery, in the order work moves:
 
 ### Captions
 

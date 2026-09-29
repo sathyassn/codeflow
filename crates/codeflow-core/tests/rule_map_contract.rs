@@ -235,7 +235,7 @@ fn each_tier_map_has_one_line_rules_and_every_moment() {
                 "{tier}: rule {} has no pointer",
                 rule.id
             );
-            let line = Kernel::render_rule(rule);
+            let line = kernel.render_rule_at(tier, rule);
             assert!(!line.contains('\n'), "{tier}: rule {} spans lines", rule.id);
             if line.len() > RULE_LINE_GUIDELINE_BYTES {
                 println!(

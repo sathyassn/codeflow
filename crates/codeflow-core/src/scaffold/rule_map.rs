@@ -12,6 +12,7 @@
 //! Keeping the rules as data also lets a later reader (the compaction
 //! re-injection of TSK-128) take the same rules without parsing Markdown.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use serde::Deserialize;
@@ -27,6 +28,10 @@ pub const KERNEL: &str = include_str!("../../../../assets/base/rule-map.toml");
 /// to move detail behind a moment row, not a reason to cut a duty.
 pub const RULES_GUIDELINE: usize = 13;
 
+/// How many always rules must share one sole pointer before the map states
+/// that home once under the list instead of on each line.
+pub const SHARED_HOME_RULES: usize = 3;
+
 /// Guideline for the bytes of one rendered always rule. Reported, never a
 /// failure; one line per rule is the structural rule.
 pub const RULE_LINE_GUIDELINE_BYTES: usize = 480;
@@ -37,14 +42,14 @@ pub const RULE_LINE_GUIDELINE_BYTES: usize = 480;
 pub const PROJECT_SECTION_ROOM_BYTES: usize = 16 * 1024;
 
 /// Guideline for the managed block of one tier's `AGENTS.md`, markers
-/// included: the always-read kernel. It is what Codex's instruction limit
-/// leaves after [`PROJECT_SECTION_ROOM_BYTES`] and 1 KiB for the header, so
-/// a block within it keeps the adopter's section whole. `codeflow doctor`
-/// reports the kernel against it, apart from the size of the complete
-/// installed `AGENTS.md` (its `instructions` check); a fresh scaffold is
-/// within it, and it is never a failure (TSK-150, TSK-184).
-pub const MANAGED_BLOCK_GUIDELINE_BYTES: usize =
-    CODEX_INSTRUCTION_LIMIT_BYTES - PROJECT_SECTION_ROOM_BYTES - 1024;
+/// included: the always-read kernel. 12 KiB is 3 KiB under what Codex's
+/// instruction limit leaves after [`PROJECT_SECTION_ROOM_BYTES`] and 1 KiB
+/// for the header, so a block within it keeps the adopter's section whole
+/// with room to grow. `codeflow doctor` reports the kernel against it, apart
+/// from the size of the complete installed `AGENTS.md` (its `instructions`
+/// check); a fresh scaffold is within it, and it is never a failure
+/// (TSK-150, TSK-184).
+pub const MANAGED_BLOCK_GUIDELINE_BYTES: usize = 12 * 1024;
 
 /// Codex reads at most this many bytes of project instructions
 /// (`project_doc_max_bytes`) and silently cuts the rest of an `AGENTS.md`.
@@ -416,10 +421,47 @@ impl Kernel {
         )
     }
 
+    /// The home most always rules of `tier` share as their only pointer,
+    /// when at least [`SHARED_HOME_RULES`] do: stated once under the list
+    /// instead of on each of those lines, so the kernel repeats no path.
+    #[must_use]
+    pub fn rule_home(&self, tier: Tier) -> Option<&str> {
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for rule in self.rules_for(tier) {
+            if let [only] = rule.see.as_slice() {
+                *counts.entry(only.as_str()).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .filter(|(_, count)| *count >= SHARED_HOME_RULES)
+            .map(|(home, _)| home)
+    }
+
+    /// One always rule as the line the map of `tier` carries: without its
+    /// pointer when that is the tier's shared home ([`Self::rule_home`]).
+    #[must_use]
+    pub fn render_rule_at(&self, tier: Tier, rule: &Rule) -> String {
+        let shared = matches!((self.rule_home(tier), rule.see.as_slice()), (Some(home), [only]) if only == home);
+        if shared {
+            format!("- **{}** {}", rule.title, rule.text)
+        } else {
+            Self::render_rule(rule)
+        }
+    }
+
     fn render_rules(&self, tier: Tier, out: &mut String) {
         for rule in self.rules_for(tier) {
-            out.push_str(&Self::render_rule(rule));
+            out.push_str(&self.render_rule_at(tier, rule));
             out.push('\n');
+        }
+        if let Some(home) = self.rule_home(tier) {
+            let _ = write!(
+                out,
+                "\nRules without a pointer: {}.\n",
+                render_pointer(home)
+            );
         }
     }
 
@@ -441,7 +483,7 @@ impl Kernel {
             first = false;
             let _ = write!(
                 out,
-                "{lead}\n\n| When you are about to | Do this | Read |\n|---|---|---|\n"
+                "{lead}\n\n| About to | Do this | Read |\n|---|---|---|\n"
             );
             for moment in group_rows {
                 let _ = writeln!(
@@ -592,7 +634,7 @@ see = [{ target = "cf-plan", must_open = true, reason = "the verbs" }, ".codeflo
     #[test]
     fn moments_render_as_two_tables_with_their_leads() {
         let kernel = Kernel::parse(TWO_GROUPS).unwrap();
-        let header = "| When you are about to | Do this | Read |\n|---|---|---|\n";
+        let header = "| About to | Do this | Read |\n|---|---|---|\n";
         assert_eq!(
             kernel.render(&OUTPUTS[1]),
             format!(
@@ -689,11 +731,13 @@ see = [{ target = "cf-plan", must_open = true }, { target = "cf-ship", reason = 
         assert!(!is_agent_pointer("cf-plan"));
     }
 
-    /// The managed-block guideline is what Codex's limit leaves after a
-    /// 16 KiB project section and the header: 15 KiB.
+    /// The managed-block guideline, 12 KiB, sits under what Codex's limit
+    /// leaves after a 16 KiB project section and the header (15 KiB).
     #[test]
     fn the_block_guideline_leaves_room_for_the_project_section() {
-        assert_eq!(MANAGED_BLOCK_GUIDELINE_BYTES, 15 * 1024);
+        assert_eq!(MANAGED_BLOCK_GUIDELINE_BYTES, 12 * 1024);
+        let room = CODEX_INSTRUCTION_LIMIT_BYTES - PROJECT_SECTION_ROOM_BYTES - 1024;
+        assert!(MANAGED_BLOCK_GUIDELINE_BYTES <= room, "{room}");
     }
 
     #[test]

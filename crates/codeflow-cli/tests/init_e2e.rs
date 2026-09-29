@@ -601,7 +601,7 @@ fn fresh_scaffolds_install_the_rule_map_at_every_tier() {
         );
         for rule in kernel.rules_for(tier) {
             assert!(
-                agents.contains(&Kernel::render_rule(rule)),
+                agents.contains(&kernel.render_rule_at(tier, rule)),
                 "{flag}: rule {} missing",
                 rule.id
             );
