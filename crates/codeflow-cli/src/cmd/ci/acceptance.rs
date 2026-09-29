@@ -49,7 +49,11 @@ pub(super) fn dispatch(
         Ok(found) => {
             for found in found {
                 if found.note {
-                    println!("codeflow ci: note: {}: {}", found.rule, found.message);
+                    let note = codeflow_core::remedy::Finding::new(
+                        format!("{}: {}", found.rule, found.message),
+                        codeflow_core::remedy::ACCEPTANCE_BOUND.remedy(),
+                    );
+                    println!("{}", note.line("codeflow ci", "note"));
                 } else {
                     tagged.push(violation(git, found));
                 }

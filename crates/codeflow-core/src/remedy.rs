@@ -239,6 +239,9 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
+    /// A completion bound to its reviewed commit: evidence, not a refusal.
+    ACCEPTANCE_BOUND = Step::Codeflow("codeflow ci"),
+        "nothing to change: the completion is bound to its reviewed commit, which `codeflow ci` proves for binding only; a human reviewer confirms that the review the block names covers that commit";
     /// A release-line legacy criteria change, landed before the release
     /// rule and covered by its line's cutoff (SPC-013 R-120).
     RELEASE_LEGACY_CHANGE = Step::Edit(".codeflow/project.toml"),
@@ -289,6 +292,9 @@ catalog! {
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
         "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+    /// A hook binary built from other hook or policy sources than the tree's.
+    JUDGE_SOURCE_DRIFT = Step::Codeflow("codeflow doctor"),
+        "rebuild the hook binary from the current hook and policy sources (`cargo build -p codeflow-cli`) and rerun; `codeflow doctor` reports the binary the hooks run; until then a human decides whether this judgment stands";
 
     // Commit messages, reworded with `git commit --amend`.
 

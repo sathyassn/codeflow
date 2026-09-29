@@ -10,6 +10,7 @@ use std::path::Path;
 use git2::Repository;
 
 use crate::error::HookError;
+use crate::remedy::{Finding, JUDGE_SOURCE_DRIFT};
 use crate::testing::gate::{run_gate_exact, GateOutcome, GateTargetResult};
 
 use super::policy::{GitPolicy, PolicyLevel};
@@ -40,8 +41,20 @@ pub fn judging_identity(
     let mut lines = vec![format!("codeflow judge: binary={path} version={version} source={revision} dirty={dirty} inputs={inputs} sha256={digest}")];
     if root.join("crates/codeflow-core/src/hooks").is_dir() {
         match super::source_identity::input_digest(root) {
-            Ok(current) if current != inputs => lines.push("codeflow judge: warning: built from different hook or policy sources; rebuild before trusting this judgment".into()),
-            Err(error) => lines.push(format!("codeflow judge: warning: cannot verify hook or policy source inputs: {error}")),
+            Ok(current) if current != inputs => lines.push(
+                Finding::new(
+                    "built from different hook or policy sources; rebuild before trusting this judgment",
+                    JUDGE_SOURCE_DRIFT.remedy(),
+                )
+                .line("codeflow judge", "warning"),
+            ),
+            Err(error) => lines.push(
+                Finding::new(
+                    format!("cannot verify hook or policy source inputs: {error}"),
+                    JUDGE_SOURCE_DRIFT.remedy(),
+                )
+                .line("codeflow judge", "warning"),
+            ),
             Ok(_) => {}
         }
     }
