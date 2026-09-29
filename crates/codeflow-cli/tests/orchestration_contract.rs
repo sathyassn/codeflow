@@ -1716,3 +1716,89 @@ fn lifecycle_guidance_is_one_section_the_skills_follow() {
         assert!(graph.contains(required), "task-graph.md lost: {required}");
     }
 }
+
+/// TSK-169: the two texts that state how an approved spec changes, each
+/// with every duty of the rule: Plan vN+1 amended in place, a dated note
+/// naming its resolution with the editorial exception, the superseded
+/// decision kept, each bound consumer's disposition, and the `implemented`
+/// boundary with both later routes.
+const SPEC_RULE_OWNERS: &[(&str, &[&str])] = &[
+    (
+        "assets/base/claude/skills/cf-method/references/project-organization.md",
+        &[
+            "a change to it is Plan vN+1, amended in place through a reviewed planning change",
+            "each change of meaning gets a dated note naming its resolution",
+            "(an editorial change needs none)",
+            "the superseded decision stays visible as history",
+            "names each consumer bound to a changed requirement and its disposition: unaffected, criteria amended in the same change, or reopened",
+            "An `implemented` spec is frozen, so a later change gets a new spec or an explicit superseding record",
+        ],
+    ),
+    (
+        "assets/base/pm/spec.md.tmpl",
+        &[
+            "a change to an approved spec is Plan vN+1, amended in place through a reviewed planning change",
+            "each change of meaning gets a dated note naming its resolution",
+            "(an editorial change needs none)",
+            "the superseded decision stays visible as history",
+            "names each consumer bound to a changed requirement and its disposition: unaffected, criteria amended in the same change, or reopened",
+            "Once implemented the spec is frozen, so a later change gets a new spec that lists `supersedes: [SPC-old]`",
+            "`codeflow spec status SPC-old superseded --by SPC-new`, or an explicit superseding record",
+        ],
+    ),
+];
+
+/// Text an owner must not carry: approval freezing the criteria, or a new
+/// spec for any later change without the `implemented` boundary.
+const SPEC_RULE_FORBIDDEN: &[&str] = &[
+    "freezes the criteria",
+    "Later semantic change gets a new spec",
+];
+
+fn spec_rule_gaps(text: &str, needles: &[&str]) -> Vec<String> {
+    let text = normalize_whitespace(text);
+    let mut gaps: Vec<String> = needles
+        .iter()
+        .filter(|needle| !text.contains(&normalize_whitespace(needle)))
+        .map(|needle| format!("missing: {needle}"))
+        .collect();
+    gaps.extend(
+        SPEC_RULE_FORBIDDEN
+            .iter()
+            .filter(|phrase| text.contains(*phrase))
+            .map(|phrase| format!("forbidden: {phrase}")),
+    );
+    gaps
+}
+
+/// TSK-169 AC-4: an approved spec is amended in place until it is
+/// `implemented` and frozen after, in the lifecycle guidance and the spec
+/// template, and neither says approval freezes the criteria.
+#[test]
+fn an_approved_spec_is_amended_until_implemented_and_frozen_after() {
+    for (file, needles) in SPEC_RULE_OWNERS {
+        let gaps = spec_rule_gaps(&read(file), needles);
+        assert!(gaps.is_empty(), "{file}: {gaps:?}");
+    }
+}
+
+/// The negative control: removing the rule or its boundary from each file,
+/// or restoring the approval freeze, fails the pin.
+#[test]
+fn the_spec_amendment_pin_fails_when_the_rule_is_lost() {
+    for (file, needles) in SPEC_RULE_OWNERS {
+        let text = normalize_whitespace(&read(file));
+        for needle in *needles {
+            let removed = text.replacen(&normalize_whitespace(needle), "", 1);
+            assert!(
+                !spec_rule_gaps(&removed, needles).is_empty(),
+                "{file}: removing {needle:?} left the pin satisfied"
+            );
+        }
+        let frozen = format!("{text} Approval freezes the criteria.");
+        assert!(
+            !spec_rule_gaps(&frozen, needles).is_empty(),
+            "{file}: an approval freeze left the pin satisfied"
+        );
+    }
+}

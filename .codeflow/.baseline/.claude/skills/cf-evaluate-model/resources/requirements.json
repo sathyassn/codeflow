@@ -1752,7 +1752,7 @@
         {
           "path": "project-management/templates/spec.md",
           "markers": [
-            "optional frozen work inputs, not living requirements",
+            "optional settled work inputs, frozen once implemented",
             "Link the authoritative living source"
           ]
         }

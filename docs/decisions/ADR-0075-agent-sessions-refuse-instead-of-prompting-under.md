@@ -11,6 +11,49 @@ architecture_impact: "the permission presets for Claude, Codex and Grok become d
 
 # ADR-0075: Agent sessions refuse instead of prompting, under a guarded floor
 
+## Delivery note (2026-09-29)
+
+This record is still proposed; TSK-175 accepts it. Release 3.0.0 carries
+only TSK-171, the first of the five implementing tasks. The rest follows in
+3.1. Until then, the decisions below describe intended behavior, and the
+3.0.0 CHANGELOG entry is the account of what shipped.
+
+Shipped in 3.0.0 (TSK-171):
+
+- Decision 1: the Claude, Codex and Grok presets carry no ask rules; deny
+  rules for the listed action families are generated from one action table
+  (`crates/codeflow-core/src/security/actions.json`), with
+  `.codex/rules/codeflow.rules` for Codex and `.grok/sandbox.toml` for Grok.
+  `codeflow update` merges the permission arrays three ways against the
+  last shipped copy. The deny rules match the listed spellings only.
+- D5 in part: `security.privilege_escalation` defaults to `block`, and
+  exec-guard refuses a privilege launcher run directly, chained, or wrapped
+  in a shell `-c` string or `eval`.
+- D4 in part: `security.headless_peer_runs` defaults to `block`;
+  `security.headless_opt_in` is accepted but not yet read.
+- The profile assets for D1 to D3: the Codex `cf-guard` profile with the
+  network proxy and a `cf-builder` profile that is defined but not selected,
+  and the Grok `cf-guard` and `cf-guard-worktree` profiles. The launch
+  postures themselves are unchanged.
+- The Claude presets' sandbox credential variable and store denies.
+- The policy keys the later tasks read, at their shipped defaults, with no
+  check reading them.
+
+Follows in 3.1:
+
+- TSK-172: decision 2 (guards for wrapped, flag-led and interpreter forms,
+  and edit-guard), decision 5 (the enforcement baseline, the repository
+  binding, the `codeflow baseline` verbs, merge approval and the `gh pr
+  merge` rule), the `git pull` refusal, D4's opt-in, D9's workflow-push
+  refusal and D10's fixture root.
+- TSK-173: decision 3 and D8 (fail-closed guards, `--contract` and the
+  session-start check) and decision 4 (seat readiness).
+- TSK-174: decision 6 (the one sandbox exit) and D7's Herdr grammar;
+  ADR-0029's classified retry stands until then.
+- TSK-175: the D1 to D3 launch postures, D7's briefing rules, D9's token
+  route, decision 8 (the operator-actions list), the live journey and the
+  acceptance of this record.
+
 ## Context
 
 The shipped Claude preset carried 161 ask rules. Ask rules prompt in every

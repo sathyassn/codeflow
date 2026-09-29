@@ -2500,3 +2500,93 @@ fn init_and_update_bring_the_plain_writing_rule_at_every_tier() {
         }
     }
 }
+
+/// The spec paragraph of `project-organization.md` before TSK-169.
+const TSK169_OLD_RULE: &str = "is complete. Later semantic change gets a new spec or an explicit superseding record;\ndo not rewrite history.";
+
+/// The spec template's lifecycle comment before TSK-169.
+const TSK169_OLD_TEMPLATE_COMMENT: &str =
+    "<!-- Specs are optional frozen work inputs, not living requirements. `codeflow spec new --for
+     EPC-NNN|TSK-NNN` allocates this file and links it from the consuming work
+     item. Write one only when interfaces, formats, or behavior need pinning
+     down before building; many work items need no spec. `approved` requires
+     an empty `open_questions` list and freezes the criteria. `implemented` is
+     derived, never written: every consumer is terminal and at least one is
+     complete. A changed contract is a new spec that lists
+     `supersedes: [SPC-old]`; `codeflow spec status SPC-old superseded --by
+     SPC-new` records the link. Keep maintained requirements and executable
+     schemas current at their declared authority. -->";
+
+/// TSK-169 AC-6: a fresh scaffold installs the amendment rule in
+/// `project-organization.md` at the standard and full tiers and in the spec
+/// template at the full tier, and `codeflow update` brings both to a project
+/// that has the older text, leaving none of it.
+#[test]
+fn fresh_scaffolds_install_the_spec_amendment_rule_and_update_brings_it() {
+    let assets = repo_root().join("assets/base");
+    let asset = |src: &str| normalize_crlf(&std::fs::read_to_string(assets.join(src)).unwrap());
+    let organization = asset("claude/skills/cf-method/references/project-organization.md");
+    let template = asset("pm/spec.md.tmpl");
+    let (rule_start, _) = organization
+        .split_once("While it is approved and not yet `implemented`")
+        .expect("the amendment rule in the asset");
+    let rule_end = organization
+        .find("not rewrite history.")
+        .expect("the frozen boundary in the asset")
+        + "not rewrite history.".len();
+    let older_organization = format!(
+        "{}{}{}",
+        rule_start
+            .strip_suffix("is complete. ")
+            .expect("rule follows its lead"),
+        TSK169_OLD_RULE,
+        &organization[rule_end..]
+    );
+    let start = template
+        .find("<!-- Specs are optional")
+        .expect("lifecycle comment");
+    let end = template[start..].find("-->").expect("comment end") + start + "-->".len();
+    let older_template = format!(
+        "{}{}{}",
+        &template[..start],
+        TSK169_OLD_TEMPLATE_COMMENT,
+        &template[end..]
+    );
+
+    for tier in ["--standard", "--full"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir(&root).unwrap();
+        let init = codeflow(&root, &["init", "--yes", tier]);
+        assert!(init.status.success(), "{tier}: {}", output_text(&init));
+        let mut installed: Vec<(String, &str, &str)> = [".claude", ".agents"]
+            .iter()
+            .map(|tree| {
+                (
+                    format!("{tree}/skills/cf-method/references/project-organization.md"),
+                    organization.as_str(),
+                    older_organization.as_str(),
+                )
+            })
+            .collect();
+        let has_template = root.join(SPEC_TEMPLATE).exists();
+        assert_eq!(has_template, tier == "--full", "{tier}: spec template tier");
+        if has_template {
+            installed.push((SPEC_TEMPLATE.to_string(), &template, &older_template));
+        }
+        for (rel, fresh, older) in &installed {
+            assert_eq!(normalize_crlf(&read(&root, rel)), *fresh, "{tier}: {rel}");
+            record_as_installed(&root, rel, Some(older));
+        }
+        let update = codeflow(&root, &["update"]);
+        let report = output_text(&update);
+        assert!(update.status.success(), "{tier}: update failed: {report}");
+        assert!(!report.contains("CONFLICT"), "{tier}: {report}");
+        for (rel, fresh, _) in &installed {
+            let text = normalize_crlf(&read(&root, rel));
+            assert_eq!(text, *fresh, "{tier}: update did not bring {rel}");
+            assert!(!text.contains("freezes the criteria"), "{tier}: {rel}");
+            assert!(!text.contains("Later semantic change"), "{tier}: {rel}");
+        }
+    }
+}
