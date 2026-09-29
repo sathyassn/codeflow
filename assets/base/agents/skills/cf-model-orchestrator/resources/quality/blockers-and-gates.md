@@ -1,40 +1,26 @@
 ## Blocker navigation and gate redness
 
-Do not confuse missing evidence with missing operator intent. Classify an
-impediment before escalating it:
+Do not confuse missing evidence with missing operator intent. The
+classification of an impediment, the bounded probe, the one confirmation of a
+prior failure and the escalation form are stated once in the workflow
+discipline rules, "Navigate blockers". What this section adds:
 
-- a discoverable fact or technical failure is reproduced, isolated, and tested
-  with a bounded probe tied to a new hypothesis. For a defect that resists a
-  first glance, that probe is one command already run that fails on the
-  **exact reported symptom** before hypothesising;
-- a local reversible implementation choice inside the accepted outcome uses
-  repository evidence and the safest durable route, with the choice disclosed;
+- for a defect that resists a first glance, that probe is one command
+  already run that fails on the **exact reported symptom** before
+  hypothesising;
 - an external dependency or enforced gate is recorded with the exact evidence
-  or input that clears it; and
-- a choice that changes desired outcome, public contract, scope or authority,
-  risk tolerance, or an irreversible tradeoff belongs to the operator.
+  or input that clears it;
+- the departure form, for a change that newly departs from the approved
+  contract, scope, authority or risk boundary (a public contract break, a
+  moved security boundary, scope growth, an irreversible action): situation
+  with evidence, the boundary crossed, options with cost and reversibility,
+  and one recommendation. An already approved departure is reused and not
+  asked again. Compatibility is judged by the git rules' breaking-change rule
+  and the cf-ship release-policy reference (affected consumers, migration or
+  deprecation, mixed-version operation, recovery).
 
-Before applying a change that newly departs from the approved contract, scope,
-authority or risk boundary (a public contract break, a moved security
-boundary, scope growth, an irreversible action), stop and surface it in the
-departure form: situation with evidence, the boundary crossed, options with
-cost and reversibility, and one recommendation. The dependent action waits for
-the answer while authorized independent work continues. An already approved
-departure is reused and not asked again. Compatibility is judged by the git
-rules' breaking-change rule and the cf-ship release-policy reference (affected
-consumers, migration or deprecation, mixed-version operation, recovery).
-
-Record the last failed attempt and what evidence changed. One bounded
-confirmation of a prior failure is allowed when current provenance or freshness
-materially matters; state that evidence question. If it reproduces the same
-failure, change hypothesis or strategy and never retry it again unchanged. When
-a bounded tactical cycle fails, move up a level: restate the actual constraint
-and current critical path, compare viable strategies, and reroute only if
-accepted outcome, scope, authority, and every quality/safety gate remain intact.
-Ask the operator only for a real external dependency or owner decision, and
-present verified state, attempts, options with consequences, and a
-recommendation. Gate failure is information to fix or honor, not automatic
-evidence that the operator must decide.
+Gate failure is information to fix or honor, not automatic evidence that the
+operator must decide.
 
 A **gate** is the verification check (`codeflow test` target, coverage floor,
 OSV/security scan, `validate --docs`, …), not the CI job that happens to run

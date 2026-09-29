@@ -9,6 +9,8 @@
 //! repo (the `policy_cli.rs` pattern), pinning the exit-code and message
 //! contracts a consumer of the binary (no source) relies on.
 
+#[path = "ci_cli/acceptance_fix.rs"]
+mod acceptance_fix;
 #[path = "ci_cli/change_class_probes.rs"]
 mod change_class_probes;
 #[path = "ci_cli/pr_body_fixtures.rs"]
@@ -45,8 +47,28 @@ fn codeflow() -> Command {
 }
 
 fn run_in(dir: &Path, args: &[&str]) -> Output {
+    // These fixtures isolate section checks; grammar negatives live in classification_cli.
+    let mut named: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+    if let Some(at) = named
+        .iter()
+        .position(|arg| arg == "--pr-body")
+        .map(|at| at + 1)
+    {
+        if let Some(body) = named
+            .get(at)
+            .filter(|body| !body.trim().is_empty() && !body.contains("Task:"))
+        {
+            let branch = args
+                .windows(2)
+                .find(|pair| pair[0] == "--branch")
+                .map_or("", |pair| pair[1]);
+            let id = codeflow_core::workgraph::task_id_from_branch(dir, branch)
+                .unwrap_or_else(|| "TSK-001".into());
+            named[at] = format!("Task: {id}\n{body}");
+        }
+    }
     codeflow()
-        .args(args)
+        .args(&named)
         .current_dir(dir)
         .output()
         .expect("binary runs")
@@ -115,7 +137,7 @@ fn ci_blocks_task_whose_planning_record_is_not_on_target() {
     std::fs::create_dir_all(&tasks).unwrap();
     std::fs::write(
         tasks.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n",
+        "---\nid: TSK-001\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n",
     )
     .unwrap();
     std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
@@ -384,7 +406,19 @@ fn ci_scales_the_pr_body_sections_to_the_change_class() {
         let dir = tempfile::tempdir().unwrap();
         light_range(dir.path(), path);
         blocking(dir.path());
-        let out = ci_with_body(dir.path(), LIGHT);
+        git(dir.path(), &["branch", "integration/line", "main"]);
+        let out = run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                "integration/line",
+                "--branch",
+                "feat/x",
+                "--pr-body",
+                LIGHT,
+            ],
+        );
         let all = combined(&out);
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(0), "{class}: {all}");
@@ -621,7 +655,7 @@ fn ci_pr_body_policy_character_blocks() {
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("git.policy_characters"), "{stderr}");
-    assert!(stderr.contains("PR body line 3"), "{stderr}");
+    assert!(stderr.contains("PR body line 4"), "{stderr}");
 }
 
 #[test]

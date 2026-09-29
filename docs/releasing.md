@@ -23,11 +23,13 @@ One publisher remains:
 
 PRs carry one `Release impact` section with `Impact`, `Breaking`,
 `Rationale`, `Migration`, `Unit` and `Evidence`. `Breaking: yes` holds if and
-only if `Impact: major`, and a break needs substantive migration guidance.
+only if `Impact: major`, and the checkers enforce both directions; a break
+needs substantive migration guidance.
 An edit of a pending major entry is assessed at major, so it declares the
 break and keeps its migration guidance, and a field left at the template's
 alternatives fails.
-The legacy `Contract` field is accepted during the transition and must agree
+`Breaking` replaces the older three-state `Contract` field. The legacy
+`Contract` field is accepted during the transition and must agree
 with `Breaking` when both appear. Alone, `not-applicable` and `compatible`
 mean `Breaking: no` and `breaking` means `Breaking: yes`, with `Migration`
 then needed only for a break; `codeflow ci` and `release.py` read it alike.
@@ -360,7 +362,7 @@ the key to make the hook pass.
 5. The supported local-artifact job checks source/version/notes, the latest
    exact-source GitHub Actions main-push results of `codeflow-ci` and
    `codeflow-release` (`publication_workflows`) for `release state`, `codeflow gates`,
-   Rust, Windows, secret scan, and security review, plus write-visible host collisions,
+   Windows, secret scan, and security review, plus write-visible host collisions,
    then creates or resumes only an exact empty draft.
    The supported global-artifact job rechecks main after platform builds.
    Failed or cancelled guards block host and announce. This narrows but cannot
@@ -419,8 +421,10 @@ Material work and withdrawals remain blocked while an attempt is unresolved.
     tool-status errors, and collect five healthy applicable PR runs before
     considering the check required. Roll back branch-protection requirements
     before disabling the setup.
-  - `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes
-    locally; CI billing/availability never substitutes for this evidence.
+  - The one instrumented run, `cargo llvm-cov nextest --workspace
+    --no-fail-fast --fail-under-lines 90 --profile codeflow` (the
+    `rust-coverage` target of the full gate), passes locally; CI
+    billing/availability never substitutes for this evidence.
   - `cargo dist plan --output-format=json` lists all four archives, both
     installers, and native runner rows. Canary the shell installer on each
     macOS/Linux architecture and the PowerShell installer on Windows; confirm

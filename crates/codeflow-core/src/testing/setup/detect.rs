@@ -123,6 +123,10 @@ fn build_rust_target() -> TargetConfig {
         cwd: Some(".".to_string()),
         env: BTreeMap::new(),
         shell: crate::testing::config::CommandShell::Auto,
+        requires: Vec::new(),
+        outputs: Vec::new(),
+        narrow: Vec::new(),
+        exclusive: false,
         runner: RunnerType::Cargo,
         modes: BTreeMap::from([
             (
@@ -156,6 +160,10 @@ fn build_vitest_target() -> TargetConfig {
         cwd: Some(".".to_string()),
         env: BTreeMap::new(),
         shell: crate::testing::config::CommandShell::Auto,
+        requires: Vec::new(),
+        outputs: Vec::new(),
+        narrow: Vec::new(),
+        exclusive: false,
         runner: RunnerType::Vitest,
         modes: BTreeMap::from([
             (
@@ -189,6 +197,10 @@ fn build_jest_target() -> TargetConfig {
         cwd: Some(".".to_string()),
         env: BTreeMap::new(),
         shell: crate::testing::config::CommandShell::Auto,
+        requires: Vec::new(),
+        outputs: Vec::new(),
+        narrow: Vec::new(),
+        exclusive: false,
         runner: RunnerType::Jest,
         modes: BTreeMap::from([
             (
@@ -222,6 +234,10 @@ fn build_go_target() -> TargetConfig {
         cwd: Some(".".to_string()),
         env: BTreeMap::new(),
         shell: crate::testing::config::CommandShell::Auto,
+        requires: Vec::new(),
+        outputs: Vec::new(),
+        narrow: Vec::new(),
+        exclusive: false,
         runner: RunnerType::Go,
         modes: BTreeMap::from([
             (
@@ -255,6 +271,10 @@ fn build_python_target() -> TargetConfig {
         cwd: Some(".".to_string()),
         env: BTreeMap::new(),
         shell: crate::testing::config::CommandShell::Auto,
+        requires: Vec::new(),
+        outputs: Vec::new(),
+        narrow: Vec::new(),
+        exclusive: false,
         runner: RunnerType::Pytest,
         modes: BTreeMap::from([
             (

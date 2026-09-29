@@ -33,10 +33,11 @@ pub use format_id::{
 pub use store::{MarkdownStore, RecordStore, StoreError};
 pub use work_start::{
     branch_claims_task_id, check_epic_line, check_work_start, check_work_start_anchored,
-    check_work_start_for_branch, declared_work_target, default_work_target,
-    durable_work_tracking_enabled, durable_work_tracking_enabled_at, is_stable_work_target,
-    resolve_work_target, resolve_work_target_checked, task_id_from_branch, work_target_resolves,
-    DurableTrackingError, RecordKind, ResolvedWorkTarget, WorkStartError, WorkStartReport,
+    check_work_start_for_branch, declared_work_target, declared_work_target_at_revision,
+    default_work_target, durable_work_tracking_enabled, durable_work_tracking_enabled_at,
+    is_stable_work_target, resolve_work_target, resolve_work_target_checked, task_id_from_branch,
+    task_id_from_branch_at, work_target_resolves, DurableTrackingError, RecordKind,
+    ResolvedWorkTarget, WorkStartError, WorkStartReport,
 };
 
 /// Generate an RFC 3339 UTC timestamp string.

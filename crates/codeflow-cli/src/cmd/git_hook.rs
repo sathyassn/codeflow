@@ -46,13 +46,24 @@ pub fn run(args: &GitHookArgs) -> i32 {
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let root = super::project_root(&cwd);
-
     // reference-transaction fires on every ref update, including the hundreds
     // of remote-tracking refs a `git fetch` touches. Short-circuit before any
     // policy load or full stdin parse when it cannot apply (charter §6.1
     // performance note; ADR-0007).
     if let StageName::ReferenceTransaction = args.stage {
         return run_reference_transaction(&root, &args.args);
+    }
+
+    // The judging binary's identity, for every stage a person reads: the
+    // reference-transaction stage above stays silent and cheap.
+    for line in git_hook::judging_identity(
+        &root,
+        env!("CARGO_PKG_VERSION"),
+        env!("CODEFLOW_SOURCE_REVISION"),
+        env!("CODEFLOW_SOURCE_DIRTY"),
+        env!("CODEFLOW_HOOK_INPUT_DIGEST"),
+    ) {
+        eprintln!("{line}");
     }
 
     // A policy file that does not validate cannot express the project's intent

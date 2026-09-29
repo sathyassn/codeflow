@@ -115,8 +115,27 @@ writer and colocated schema. Automatic setup may fill an absent/empty config but
 never replaces populated or malformed project intent. The schema retains legacy
 `structural` blocks for compatibility while doctor labels them unenforced; the
 prescriptive structural validator remains outside the gate (ADR-0031).
-Codeflow's own full local gate additionally runs `cargo llvm-cov` with a 90%
-aggregate line floor, matching the independent CI coverage job.
+A target may declare the targets it `requires`, the `outputs` it produces,
+the `narrow` inputs that alone select it, and `exclusive` when it needs the
+machine to itself. The runner schedules producers and prerequisites first
+and runs targets with no producer and consumer relation in parallel up to
+`max_parallel`; a dependent of a red target reports "not run: prerequisite
+failed", and a missing or cyclic `requires` fails the run before any target
+starts. The run names the candidate tree only after its producers ran, and
+fails when generation changed tracked bytes. Change-aware selection skips a
+target only when its declared inputs are unchanged against a base that has
+a recorded green run for the same config digest; a path no set matches, a
+change to the run-everything set (Rust, assets, build, config, workflows,
+gate scripts), a rename or deletion, an unknown base, and an epic close
+(`--all`) run every target. The run prints what it selected and skipped and
+why, and writes a result artifact bound to its revision, tree hash and
+config digest; a full run copies it to `~/.codeflow/gate-runs/<repo>/<run-id>/`,
+outside any worktree, where PR bodies cite it.
+CodeFlow's own full gate runs the Rust suite once, instrumented
+(`cargo llvm-cov nextest` with a 90% aggregate line floor), and its journey
+check reads that run's results by exact test name; the doctest target still
+runs. On GitHub the Windows job's raw steps are the independent referee
+for the runner.
 
 Enforcement is spread across four planes: git client hooks, the in-session
 PreToolUse (Bash) guards, and remote branch protection read one config
@@ -272,17 +291,23 @@ read-only judgements: `ids check`, the merge rule that binds every added
 record to its `uid`, and a uniqueness scan over all refs that holds even
 without a registry. Pre-push and git-guard refuse deletion, force and
 non-additive ranges on the registry; the enforcing CI job runs on
-`pull_request_target` (the `codeflow-registry` workflow from the default
-branch) and checks out the pull request's base commit;
+`pull_request_target` (the registry step of the `codeflow-policy` workflow,
+from the default branch) and checks out the pull request's base commit;
 `remote protect` applies the branch's data profile; `doctor` reports damage,
 unplaced ids and host assurance. Claims stay advisory (ADR-0072).
 Documentation validation checks the
 non-executable structural graph for well-formed IDs, filenames, references,
 duplicates, parent/standalone exclusivity, spec readiness, self-edges, and
 cycles. The read-only `work start` preflight proves the task and its applicable
-graph at the merge-base with the declared target; the CLI, pre-commit hook, and
-detached CI share that core check. Scheduling and status mutation remain
-Plan/native-harness concerns (ADR-0040, ADR-0046).
+graph at the merge-base with the declared target, or at HEAD for a
+standalone task whose record arrives in its own PR (ADR-0076); a code
+predecessor that is reviewed but not complete is accepted only through a
+reviewed pin (`--on TSK-NNN@<sha>`), and CI still requires it complete at
+the merge-base when the task lands. The CLI and detached CI share the
+structural core of that check; only `work start` applies the start gate
+(status, Blocker, awaiting selection), so CI admits a standalone record
+that arrives complete with a valid acceptance block. Scheduling and status
+mutation remain Plan/native-harness concerns (ADR-0040, ADR-0046).
 
 ### scaffold — `assets/`
 

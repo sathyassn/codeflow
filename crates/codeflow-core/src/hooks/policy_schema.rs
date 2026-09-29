@@ -443,21 +443,18 @@ pub const SCHEMA: [KeySpec; 64] = [
         path: "git.product_paths",
         kind: KeyKind::StringList,
         valid: "an array of path globs (e.g. src/**)",
-        purpose: "The project's product code: a pull request touching it is tracked work, never a direct change (SPC-013 R-71, R-114).",
+        purpose: "The project's product code extends the adopter-facing paths requiring a journey criterion (SPC-013 R-114); every PR names its task or epic (R-70).",
         notes: "`codeflow init` writes the default for the detected stack and \
                 `codeflow update` adds it once; a value the project sets is \
-                kept. Absent, the binary assumes the stack default. It extends \
-                the fixed floor (policy, hooks, managed instructions, CI files, \
-                manifests, record schema); it cannot narrow it.",
+                kept. Absent, the binary assumes the stack default. The shared \
+                adopter-facing paths continue to require journey coverage.",
     },
     KeySpec {
         path: "git.direct_changes",
         kind: KeyKind::Enum(&["allow", "forbid"]),
         valid: "allow | forbid",
-        purpose: "Whether a pull request may be a direct change (`Task: none: <reason>`) at all.",
-        notes: "Default allow. `forbid` makes every product pull request tracked \
-                or planning-only; no value narrows the surfaces a direct change \
-                is refused on.",
+        purpose: "Retired compatibility key; accepted and ignored.",
+        notes: "Every pull request names its task or epic (R-70), regardless of this retained key.",
     },
     KeySpec {
         path: "git.release_branch_pattern",
@@ -767,7 +764,7 @@ pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
     let Ok(value) = serde_json::from_str::<Value>(&data) else {
         return Vec::new();
     };
-    DEPRECATED_KEYS
+    let mut warnings: Vec<_> = DEPRECATED_KEYS
         .iter()
         .filter(|(key, _)| {
             value
@@ -780,7 +777,14 @@ pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
                 crate::remedy::POLICY_DEPRECATED.with(&[("key", key)]),
             )
         })
-        .collect()
+        .collect();
+    if value.pointer("/git/direct_changes").is_some() {
+        warnings.push(crate::remedy::Finding::new(
+            "policy key git.direct_changes is retired and ignored; every PR names its task or epic",
+            crate::remedy::POLICY_DEPRECATED.with(&[("key", "git.direct_changes")]),
+        ));
+    }
+    warnings
 }
 
 /// Strictly validate `<root>/.codeflow/policy.json`. See [`validate_policy_file`].
@@ -1064,7 +1068,8 @@ fn string_map(value: &Value) -> bool {
 /// Validate `git.automation_profiles`: every entry an object with a
 /// non-empty `name`, a non-empty `actors` list of non-empty strings, a valid
 /// non-empty `branch_pattern` glob, an optional `sections` map of heading to
-/// content, and no other field. A malformed profile would otherwise be
+/// content, an optional non-empty `task` unit name, and no other field. A
+/// malformed profile would otherwise be
 /// dropped by the loader and its bot would fail, or worse, a typo would read
 /// as a wider pattern.
 fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
@@ -1085,16 +1090,26 @@ fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
         for key in obj.keys() {
             if !matches!(
                 key.as_str(),
-                "name" | "actors" | "branch_pattern" | "sections"
+                "name" | "actors" | "branch_pattern" | "sections" | "task"
             ) {
                 nested_error(
                     errors,
                     &at,
                     &format!(
-                        "unknown field `{key}`; expected name, actors, branch_pattern, sections"
+                        "unknown field `{key}`; expected name, actors, branch_pattern, sections, task"
                     ),
                 );
             }
+        }
+        if obj
+            .get("task")
+            .is_some_and(|task| task.as_str().is_none_or(|t| t.trim().is_empty()))
+        {
+            nested_error(
+                errors,
+                &at,
+                "`task` must be a non-empty string when present",
+            );
         }
         if obj
             .get("name")

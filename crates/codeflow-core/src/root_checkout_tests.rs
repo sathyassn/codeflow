@@ -185,8 +185,7 @@ fn the_guide_and_the_contract_say_how_a_change_lands() {
 fn the_contract_every_tier_ships_states_the_rule() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read = |file: &str| std::fs::read_to_string(repo.join(file)).unwrap();
-    let branch_row = "one worktree per session; the root checkout stays on its root branch \
-                      and takes no task work";
+    let branch_row = "one worktree per session; no task work at the root checkout";
     for file in [
         "assets/base/AGENTS.md.tmpl",
         "assets/base/AGENTS.minimal.md.tmpl",
@@ -210,8 +209,8 @@ fn the_contract_every_tier_ships_states_the_rule() {
     }
     let git_rules = read("assets/base/rules/git-rules.md");
     for pin in [
-        "commits at the root\ncheckout off its root branch",
-        "- **Root checkout:** task work happens in a linked worktree;",
+        "commits at\nthe root checkout off its root branch",
+        "**Root checkout:** task work happens in a linked worktree;",
         "is refused; a human at their own terminal is warned.",
     ] {
         assert!(git_rules.contains(pin), "git-rules.md lost: {pin}");

@@ -12,8 +12,8 @@
 //!   worktree of the repository and stays writable in a sandbox that can
 //!   commit but cannot write the home directory.
 //!
-//! A lock that cannot be opened is a note, not a refusal: the lock prevents
-//! contention, it is not a security boundary. A lock that is held refuses and
+//! Every configured lock must be opened and acquired before targets start.
+//! An unavailable lock refuses, naming the path and sandbox error. A held lock refuses and
 //! names the holder recorded in the file. A file that still names a holder
 //! while its lock is free was left by a process that died, and is reclaimed.
 //!
@@ -87,6 +87,7 @@ impl Drop for GateLock {
             // Best effort: an uncleared record only reads as a stale lock,
             // which the next gate reclaims.
             let _ = file.set_len(0);
+            let _ = FileExt::unlock(file);
         }
     }
 }
@@ -106,6 +107,9 @@ pub struct LockHeld {
 
 impl std::fmt::Display for LockHeld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.holder.starts_with("gate lock unavailable:") {
+            return write!(f, "{} (lock: {})", self.holder, self.path.display());
+        }
         let holder = if self.holder.trim().is_empty() {
             "a process that has not recorded itself yet".to_string()
         } else {
@@ -172,11 +176,11 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
         let mut file = match open_lock_file(&path) {
             Ok(file) => file,
             Err(error) => {
-                lock.notes.push(format!(
-                    "gate lock unavailable at {}: {error}; continuing with the other lock",
-                    path.display()
-                ));
-                continue;
+                return Err(LockHeld {
+                    holder: format!("gate lock unavailable: {error}"),
+                    path,
+                    running_groups: Vec::new(),
+                });
             }
         };
         match file.try_lock_exclusive() {
@@ -189,11 +193,11 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
                 });
             }
             Err(error) => {
-                lock.notes.push(format!(
-                    "gate lock unavailable at {}: {error}; continuing with the other lock",
-                    path.display()
-                ));
-                continue;
+                return Err(LockHeld {
+                    holder: format!("gate lock unavailable: {error}"),
+                    path,
+                    running_groups: Vec::new(),
+                });
             }
         }
         let previous = read_record(&mut file);
@@ -578,20 +582,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unopenable_lock_is_a_note_not_a_refusal() {
+    fn an_unopenable_lock_refuses_and_releases_other_locks() {
         let tmp = tempfile::tempdir().unwrap();
         let blocker = tmp.path().join("not-a-dir");
         std::fs::write(&blocker, "file").unwrap();
-        let unusable = vec![blocker.join("locks"), tmp.path().join("repo-locks")];
-        let lock = acquire_full_gate_lock(&unusable, Path::new("/w")).unwrap();
-        assert!(
-            lock.notes
-                .iter()
-                .any(|n| n.contains("gate lock unavailable")),
-            "{:?}",
-            lock.notes
-        );
-        assert_eq!(lock.files.len(), 1);
+        let usable = tmp.path().join("repo-locks");
+        let unusable = vec![usable.clone(), blocker.join("locks")];
+        let error = acquire_full_gate_lock(&unusable, Path::new("/w")).unwrap_err();
+        assert!(error.to_string().contains("gate lock unavailable"));
+        let file = open_lock_file(&usable.join(LOCK_FILE)).unwrap();
+        file.try_lock_exclusive()
+            .expect("partial acquisition released its OS lock");
     }
 
     #[test]

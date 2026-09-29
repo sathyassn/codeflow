@@ -7,11 +7,9 @@ description: Delegate to the other vendor's native coding harness under its own 
 
 Compose native harnesses at the process boundary, each under its own subscription
 auth. CodeFlow's gates judge the output, not the author. You own and verify
-every returned result.
-
-The delegate is a vendor you are **not**: from Claude Code that is codex; from
-codex that is claude. Consulting or delegating to your own vendor is
-self-review with extra steps — never label it independent.
+every returned result. The delegate is a vendor you are **not**: from Claude
+Code that is codex; from codex that is claude. Consulting or delegating to
+your own vendor is self-review with extra steps; never label it independent.
 
 ## Consult, delegate, or neither
 
@@ -37,12 +35,11 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
 ```
 
 - **Claude Code → codex: prefer the official `codex-plugin-cc` plugin.** It
-  wraps the codex app-server — the same interactive engine as the TUI — so a
-  delegated task gets codex's full MCP toolset (Playwright verified with 24
-  browser tools on codex-cli 0.144.1, 2026-07-11), a resumable thread, and
-  in-band approvals. When unavailable or incompatible, use a qualified official
-  Codex App/interactive CLI route under the fallback contract below. A missing
-  plugin is not proof that Codex itself is unavailable.
+  wraps the codex app-server, so a delegated task gets codex's full MCP
+  toolset, a resumable thread, and in-band approvals. When unavailable or
+  incompatible, use a qualified official Codex App/interactive CLI route under
+  the fallback contract below; a missing plugin is not proof that Codex itself
+  is unavailable.
 - **codex → claude: the interactive `claude` CLI driven through CodeFlow's
   schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036). A Codex host
   follows its host and canary rules in
@@ -51,12 +48,10 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
 **Prohibited at all times** — no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /
 `--print`), and driving the codex app-server through hand-rolled JSON-RPC.
-CodeFlow requires verified native sessions with the task's tools and guards;
-it does not infer those capabilities from a process label or terminal host.
-Use vendor-supported clients instead of maintaining a competing broker.
-Status commands are not work sessions
-— `codex login status`, `codex --version`, `codex mcp list`, and the plugin
-install/setup steps stay fine.
+CodeFlow requires verified native sessions with the task's tools and guards.
+Status commands are not work sessions: `codex login status`,
+`codex --version`, `codex mcp list`, and the plugin install/setup steps stay
+fine.
 
 For an incompatible or unavailable preferred lane, read
 [qualified native fallback](resources/native-fallback.md) before choosing
@@ -94,12 +89,42 @@ Read this core, then only the lane for the host you are on:
   Stop-hook preflight, exact-byte delivery and turn detection. A Claude
   host does not load it.
 
+## Dispatch and return
+
+A dispatch names the task id, branch, exact revision, worktree, role and
+where to return, and nothing the task record already says. Check the model
+line (selector and effort) before every send. Where the Codex seat exposes
+a setting that turns off its rate-limit prompt to switch models, keep it
+off, so a switch never happens silently mid-task. A return names the model
+that produced it.
+
 ## Evidence contract, both lanes
 
-Every delegated exchange meets the one five-obligation evidence contract in
-[capability-routing's admissible evidence](../cf-model-orchestrator/resources/routing/evidence.md):
-launch, provenance, return, failure and recheck. Each lane file states what
-satisfies them on that lane; re-derive the returned work yourself.
+Output counts as the other lineage only under
+[admissible cross-lineage evidence](../cf-model-orchestrator/resources/routing/evidence.md):
+native runtime provenance, a relay is transport and never author. Every
+qualified native route (preferred plugin, official client fallback, or
+schema-v2 delegate lifecycle) meets one five-obligation evidence contract:
+
+1. **Launch**: verify the delegated task started through a native session
+   artifact: a Codex thread forward or a lifecycle ready record reverse;
+2. **Provenance**: native runtime provenance only: a native Codex thread ID
+   with source-labeled model/effort forward; the lifecycle's
+   session/digest/prompt binding reverse;
+3. **Return**: verify the returned unit, scoped worktree diff, and cited
+   evidence; a relay's idle or completion signal is evidence of neither;
+4. **Failure**: a legible bounded failure (stable exit state, durable
+   poison, or explicit harness error), never silent substitution or
+   completion inferred from silence;
+5. **Recheck**: evidence recheckable through the native surface after the
+   fact: the resumable Codex thread forward, the durable state records until
+   cleanup reverse.
+
+Record model/effort as observed only when the transport exposes actual
+values; otherwise label them requested, and never silently upgrade
+requested to observed. Grade inferred completion explicitly as inferred.
+Each lane file states what satisfies the obligations on that lane;
+re-derive the returned work yourself.
 
 ## Edit access
 
@@ -108,14 +133,9 @@ a delegate edits only inside a worktree on a feature branch, never on the root
 checkout or a protected branch, and its commits pass CodeFlow's gates
 unchanged.
 
-## agy — retired as a delegate tier (no interactive lane)
-
-`agy` has no verified interactive lane, only headless one-shot CLI use, which
-CodeFlow ADR-0023 prohibits, so it is **not** a delegate tier; if the user
-names it, say the transport rule rules it out. It stays bound by the
-harness-agnostic git-hook plane and CI. For its history and the experimental
-guard binding when `agy` is someone's harness, read
-[agy notes](resources/agy.md).
+`agy` is not a delegate tier (headless only, so the transport rule rules it
+out); when `agy` is someone's harness, read [agy notes](resources/agy.md) for
+the experimental guard binding.
 
 ## Guardrails
 

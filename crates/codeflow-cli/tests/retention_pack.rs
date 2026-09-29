@@ -148,9 +148,17 @@ fn assert_scaffold_carries_map_and_hooks(case: &str, record: &Value, fixture: &P
         std::fs::read_to_string(fixture.join(".codeflow/project.toml")).expect("project.toml");
     assert!(project.contains("standard"), "{case}: {project}");
     let agents = std::fs::read_to_string(fixture.join("AGENTS.md")).expect("AGENTS.md");
-    assert!(agents.contains("**Durations come from cf-estimate.**"));
-    assert!(agents.contains("**Outcomes first, in words.**"));
-    assert!(agents.contains("**Show complex things.**"));
+    // TSK-184: the map carries these duties as moment rows.
+    assert!(
+        agents.contains("| give a duration, date or effort |"),
+        "{case}"
+    );
+    assert!(
+        agents
+            .contains("| report status or hand off | each item by its outcome in words, IDs after"),
+        "{case}"
+    );
+    assert!(agents.contains("| show something complex |"), "{case}");
     assert!(!fixture.join("TASK.md").exists(), "{case}: no TASK.md");
 }
 
@@ -186,8 +194,9 @@ fn assert_local_window_and_reinjection(case: &str, plan: &Value, fixture: &Path,
         }),
     );
     assert!(block.contains(GUIDANCE_HEADING), "{case}: {block}");
+    // TSK-184: the duty is a moment row of the map, re-injected as such.
     assert!(
-        block.contains("Durations come from cf-estimate."),
+        block.contains("give a duration, date or effort: /cf-estimate"),
         "{block}"
     );
     assert!(block.contains("cf-present"), "{block}");

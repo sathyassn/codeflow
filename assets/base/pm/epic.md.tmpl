@@ -27,7 +27,8 @@ created: {{DATE}}
      claim-matched evidence: automate where meaningful, otherwise name a
      bounded observable or review. Do not invent a hard-coded or meaningless
      test merely to make the record look verifiable. "Works correctly" is not
-     a criterion. If the list will not fit on one screen, split the epic.
+     a criterion. An epic is one outcome: when its criteria describe two
+     outcomes, make it two epics on one integration line.
      List each as `- AC-n <criterion>` with no checkbox; a task criterion
      serves one with `(serves EPC-NNN AC-m)`. `codeflow epic status` closes
      the epic only when every task is terminal and every criterion is
@@ -48,6 +49,13 @@ created: {{DATE}}
 
 ## Plan graph (when needed)
 
-<!-- Link the exact dual-approved TASK_GRAPH vN for a multi-task body; omit
-     when unnecessary. Task frontmatter owns membership (`epic_id`) and direct
+<!-- Optional: link the TASK_GRAPH for a multi-task body when one exists; omit
+     it otherwise. Task frontmatter owns membership (`epic_id`) and direct
      predecessors (`depends_on`); this is not a second task roster. -->
+
+## Planning notes
+
+<!-- Tracked nits, one line each with the event that revisits it, and hotspot
+     notes: files that two tasks restructure, one writer at a time. Recorded
+     nits are folded into the next breakdown or dropped with a reason at epic
+     close. -->

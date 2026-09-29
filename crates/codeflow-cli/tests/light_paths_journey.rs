@@ -1,5 +1,5 @@
 //! Journey (TSK-104 AC-6): on a fresh `codeflow init --full` project, a new
-//! epic line, a leaf task, a follow-up, a small fix with `Task: none` and a
+//! epic line, a leaf task, a follow-up, an unnamed fix refusal and a
 //! new ADR each take one command and at most one ordinary pull request, and
 //! `codeflow ci` classifies each pull request from the project's own paths.
 //! The binary under test is the one Cargo built; hooks installed by `init`
@@ -182,13 +182,12 @@ fn each_light_path_takes_one_command_and_one_pull_request() {
         "- AC-1 (journey) When run, the system shall work.\n",
     );
     commit(&root, "chore: plan the outcome");
-    let (code, out) = pull_request(&root, "plan/outcome", line, "");
+    let (code, out) = pull_request(&root, "plan/outcome", line, "Task: EPC-001");
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("class: planning-only"), "{out}");
     land(&root, line, "plan/outcome");
 
-    // Build the leaf: the branch carries the task, so the pull request needs
-    // no Task line.
+    // Build the leaf: the pull request names the task carried by its branch.
     git(&root, &["switch", "-q", "-c", "task/TSK-001-leaf"]);
     ok(
         &codeflow(&root, &["work", "start", "TSK-001"]),
@@ -197,10 +196,10 @@ fn each_light_path_takes_one_command_and_one_pull_request() {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/leaf.rs"), "pub fn leaf() {}\n").unwrap();
     commit(&root, "feat: add the leaf");
-    let (code, out) = pull_request(&root, "task/TSK-001-leaf", line, "");
+    let (code, out) = pull_request(&root, "task/TSK-001-leaf", line, "Task: TSK-001");
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("class: tracked TSK-001 (from the branch)"),
+        out.contains("class: tracked TSK-001 (from the Task: line)"),
         "{out}"
     );
     land(&root, line, "task/TSK-001-leaf");
@@ -229,24 +228,24 @@ fn each_light_path_takes_one_command_and_one_pull_request() {
         "- AC-1 When run, the system shall be tidy.\n",
     );
     commit(&root, "chore: file the follow-up");
-    let (code, out) = pull_request(&root, "plan/tidy", line, "");
+    let (code, out) = pull_request(&root, "plan/tidy", line, "Task: EPC-001");
     assert_eq!(code, 0, "{out}");
     land(&root, line, "plan/tidy");
 
-    // A small fix: `Task: none` passes on docs, and blocks on product code.
+    // An unnamed fix is refused on docs and product code alike.
     git(&root, &["switch", "-q", "-c", "docs/typo"]);
     std::fs::write(root.join("README.md"), "# Project\n\nFixed a typo.\n").unwrap();
     commit(&root, "docs: fix a typo");
     let (code, out) = pull_request(&root, "docs/typo", line, "Task: none: fix a typo");
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("class: direct change"), "{out}");
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("is neither"), "{out}");
     std::fs::write(root.join("src/leaf.rs"), "pub fn leaf() { }\n").unwrap();
     commit(&root, "fix: tweak the leaf");
     let (code, out) = pull_request(&root, "docs/typo", line, "Task: none: fix a typo");
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("src/leaf.rs (product_paths)"), "{out}");
+    assert!(out.contains("is neither"), "{out}");
 
-    // A new ADR: one command, proposed, one direct pull request.
+    // A new ADR supports the named follow-up task in one pull request.
     git(&root, &["switch", "-q", "-c", "docs/adr", line]);
     let adr = ok(
         &codeflow(&root, &["adr", "new", "Adopt a cache: keep it small"]),
@@ -272,6 +271,6 @@ fn each_light_path_takes_one_command_and_one_pull_request() {
         "validate --docs after adr new",
     );
     commit(&root, "docs: propose the cache decision");
-    let (code, out) = pull_request(&root, "docs/adr", line, "Task: none: propose a decision");
+    let (code, out) = pull_request(&root, "docs/adr", line, "Task: TSK-002");
     assert_eq!(code, 0, "{out}");
 }

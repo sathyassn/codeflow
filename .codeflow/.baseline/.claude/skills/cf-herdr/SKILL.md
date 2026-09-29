@@ -31,7 +31,8 @@ tab** (or resume one this work already owns).
 
 ## Discover before touching anything
 
-Parse JSON; never invent IDs from sidebar order.
+Parse JSON; never invent IDs from sidebar order. Live Herdr state is the
+only index of seats; keep no cache of it.
 
 ```bash
 herdr workspace list
@@ -49,35 +50,15 @@ Never send keys to an agent whose pane `cwd` is not the intended worktree.
 
 ## Naming
 
-Tab label (human, unique):
-
-```text
-cf/<repo>/<work>/<kind>/<nn>
-```
-
-Agent name (live unique, `[a-z][a-z0-9_-]{0,31}`):
-
-```text
-cf-<repo>-<work>-<k><nn>
-```
-
-| Part | Rule |
-|---|---|
-| repo | cwd basename, kebab, max 8 |
-| work | `tsk014` if a task id is in play, else kebab of the work, max 12 |
-| kind / k | `claude`/`cl`, `codex`/`cx`, `grok`/`gk` |
-| nn | next free `01`–`99` among **live** agents with the same `cf-<repo>-<work>-<k>` prefix |
-
-Examples: `cf-codeflow-skills-rev-cl01`, a parallel Claude on the same work
-`cf-codeflow-skills-rev-cl02`, and Codex on the same work
-`cf-codeflow-skills-rev-cx01`.
-
-Repo slug truncation collides across worktrees of the same project. The
-**intended worktree `cwd`** is the disambiguator, not the label. Put full cwd,
-repo basename, and work identity in the optional cache.
-
-List live agents first; increment `nn` until free. Never reuse a live name.
-Never steal a name that does not start with `cf-`.
+Tab label `cf/<repo>/<work>/<kind>/<nn>`; agent name
+`cf-<repo>-<work>-<k><nn>` (`[a-z][a-z0-9_-]{0,31}`; `repo` the cwd
+basename, at most 8 characters; `work` the task id such as `tsk014`, else a
+kebab slug, at most 12; `k` is `cl`, `cx` or `gk`; `nn` the next free number
+among live agents with that prefix), for
+example `cf-codeflow-skills-rev-cx01`. List live agents first and never reuse
+a live name; never take a name that does not start with `cf-`. Worktrees of
+one project can share a name prefix, so the intended worktree `cwd`, not the
+label, identifies the seat.
 
 ## Create or resume
 
@@ -162,20 +143,6 @@ Do not `tmux load-buffer` / `paste-buffer` into a Herdr pane, and do not use
 `herdr agent prompt`: submission alone does not prove a started turn. Prove
 the Herdr path with the same lifecycle canary as tmux.
 
-## Cache (optional, not a record to maintain)
-
-Live Herdr names are the index. Optional cache:
-
-`${CODEFLOW_HOME:-$HOME/.codeflow}/herdr-runs/<repo>.json`
-
-Owner-only. Never commit. Never put it in `docs/` or `project-management/`.
-Write a row on create (tab id, pane id, agent name, **cwd**, full repo
-basename, work identity, native session/thread if observed). Delete the row
-when the tab closes. On every use, drop rows whose tab or pane is gone from
-`herdr pane list` / `tab list`. Missing file: list Herdr. If cache and Herdr
-disagree, **Herdr wins**. Resume still requires live cwd match even when the
-cache looks right.
-
 ## Cleanup
 
 same topic / same review / follow-up: **resume this tab**. Do not mint a new
@@ -188,9 +155,3 @@ blocked or working agents. Never close the caller tab.
 Before removing a worktree, check `herdr agent list`: keep a worktree that a
 live seat uses as its folder until that seat's tab is closed. A seat whose
 folder is gone cannot start turns.
-
-## Completion
-
-Report tab label, agent name, pane id, requested vs observed model/effort,
-native thread/session id when exposed, and whether the tab was kept or closed.
-A consult still needs `cf-consult` synthesis and a `VERDICT` line.

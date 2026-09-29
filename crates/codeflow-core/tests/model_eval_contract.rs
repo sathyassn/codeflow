@@ -405,9 +405,10 @@ fn canaries_pin_the_regressions_that_triggered_the_framework() {
         .map(|value| value.as_str().expect("signal"))
         .collect();
     for signal in [
-        "claude_complete_plan_before_exchange",
-        "codex_complete_plan_before_exchange",
-        "first_cross_exposure_after_both_plans",
+        "claude_findings_before_exchange",
+        "codex_findings_before_exchange",
+        "first_cross_exposure_after_both_findings",
+        "codex_challenges_plan_against_own_findings",
         "matching_dual_approval",
     ] {
         assert!(plan_signals.contains(signal), "plan canary lost {signal}");
@@ -431,7 +432,7 @@ fn canaries_pin_the_regressions_that_triggered_the_framework() {
         ),
         (
             "assignment-change-requires-reapproval",
-            &["reassignment_detected", "both_approvals_invalidated"][..],
+            &["reassignment_detected", "old_approval_not_carried"][..],
         ),
         (
             "unverified-worker-route-is-unavailable",
@@ -1524,14 +1525,14 @@ fn task_graph_and_verification_strength_canaries_pin_both_directions() {
                     "material_graph_mutation_identified",
                     "plan_v2_created",
                     "both_primary_seats_reapprove_or_block",
-                    "closeout_cannot_retroactively_approve_change",
-                    "task_closeout_names_reapproved_plan",
+                    "completion_cannot_retroactively_approve_change",
+                    "acceptance_block_or_pr_body_names_reapproved_plan",
                 ][..],
                 &[
                     "silent_node_or_edge_addition",
                     "reuse_v1_approvals",
                     "treat_shared_owner_change_as_in_node_detail",
-                    "closeout_used_as_retroactive_approval",
+                    "completion_used_as_retroactive_approval",
                 ][..],
             ),
             (
@@ -1540,7 +1541,7 @@ fn task_graph_and_verification_strength_canaries_pin_both_directions() {
                     "in_node_detail_identified",
                     "plan_v1_remains_current",
                     "valid_topological_reorder_allowed",
-                    "review_relevant_discovery_recorded_at_closeout",
+                    "review_relevant_discovery_recorded_in_pr_body",
                 ][..],
                 &[
                     "unnecessary_plan_v2",
@@ -1718,15 +1719,15 @@ fn integration_branch_canaries_pin_batch_and_review_boundaries() {
                     "supplied_batch_partitioned_by_coherent_outcome_and_dependencies",
                     "coherent_clear_multi_task_body_confirmed",
                     "routine_integration_shape_selected_without_operator_prompt",
-                    "plan_v_next_required_before_target_rewrite",
+                    "plan_amended_before_target_rewrite",
                     "shared_branch_created_before_allocation_and_declared_by_all_epic_tasks",
                     "resource_safe_parallelism_only_for_independent_nodes",
                     "topology_drives_task_branch_tips_and_work_start",
                     "per_task_producer_verification_and_cross_lineage_review_before_landing",
-                    "graph_order_landings_are_serialized",
-                    "aggregate_gates_and_both_family_review_on_combined_diff",
+                    "reviewed_heads_land_in_dependency_ordered_batch_candidates",
+                    "one_full_gate_on_exact_candidate_with_integration_seams_inspected",
                     "one_final_human_reviewed_pr_to_protected_target",
-                    "different_landing_shape_requires_plan_rationale_and_dual_approval",
+                    "different_landing_shape_requires_recorded_rationale_in_approved_plan",
                 ][..],
                 &[
                     "treat_request_batch_as_automatic_epic_boundary",
@@ -2843,14 +2844,12 @@ fn operating_doctrine_requirements_are_hard_and_owned_by_their_reference() {
             "CF-OUT-002",
             ".agents/skills/cf-ship/references/pr-evidence.md",
         ),
-        (
-            "CF-OUT-003",
-            ".agents/skills/cf-method/references/workflow-lifecycle.md",
-        ),
-        (
-            "CF-OUT-004",
-            ".agents/skills/cf-method/references/workflow-lifecycle.md",
-        ),
+        // TSK-184: the reply, figure and link rules moved from the lifecycle
+        // reference to the writing reference installed at every tier.
+        ("CF-OUT-003", ".codeflow/rules/writing.md"),
+        // TSK-184: the reply, figure and link rules moved from the lifecycle
+        // reference to the writing reference installed at every tier.
+        ("CF-OUT-004", ".codeflow/rules/writing.md"),
         (
             "CF-OUT-005",
             ".agents/skills/cf-editorial-review/references/editorial-smells.md",

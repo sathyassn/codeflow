@@ -274,3 +274,13 @@ is read only as git data. The accepted text above is unchanged. The same
 correction applies to Finding 1 of the TSK-100 host proof
 (`docs/verification/tsk-100-registry-proof.md`), which says
 `pull_request_target` uses the base branch's workflow.
+
+## Note, 2026-09-29: ADR-0076 narrows one clause
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. In
+"What this supersedes", ADR-0046 stays accepted here for "the rule that a
+task branch cannot authorise its own planning record". That rule is now
+narrowed to epic tasks: a standalone task's own single record lands with
+its code in one reviewed PR, and its planning anchor is the record at head
+(SPC-013 R-78, R-110). The registry, the `uid` binding and every other
+clause of this record are unchanged. The accepted text above is unchanged.

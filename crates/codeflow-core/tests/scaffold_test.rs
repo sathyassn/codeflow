@@ -1809,7 +1809,7 @@ fn update_records_the_work_records_baseline_once_for_existing_records() {
     );
 }
 
-// --- product paths (SPC-013 R-71, R-114; TSK-104) ---------------------------
+// --- product paths (SPC-013 R-70, R-114; TSK-104) ---------------------------
 
 fn product_paths(root: &Path) -> serde_json::Value {
     let policy: serde_json::Value =
@@ -1930,4 +1930,41 @@ fn update_adds_headless_peer_runs_at_warn_and_keeps_an_explicit_level() {
         scaffold::update(&assets, &root, &update_opts(version)).unwrap();
         assert_eq!(headless_level(&root), level, "{version}");
     }
+}
+
+/// TSK-140 AC-14: `init` writes the release rule's adoption marker and no
+/// transition table; `update` adds the marker to a project that lacks it,
+/// keeps a value already written, and never writes a table.
+#[test]
+fn init_and_update_write_the_adoption_marker_and_never_a_table() {
+    isolate_git();
+    let tables = ["release_rule_baseline", "release_records_baseline"];
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let state = read(&root, ".codeflow/project.toml");
+    assert!(state.contains("release_rules = 1"), "init: {state}");
+    for table in tables {
+        assert!(!state.contains(table), "init wrote {table}: {state}");
+    }
+
+    // A project from before the rule: no marker until update brings it.
+    let without = state.replace("release_rules = 1\n", "");
+    std::fs::write(root.join(".codeflow/project.toml"), &without).unwrap();
+    let (_a2, assets) = fixture_assets(true);
+    scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    let state = read(&root, ".codeflow/project.toml");
+    assert!(state.contains("release_rules = 1"), "update: {state}");
+    for table in tables {
+        assert!(!state.contains(table), "update wrote {table}: {state}");
+    }
+
+    // Written once: update never rewrites a value it finds.
+    std::fs::write(
+        root.join(".codeflow/project.toml"),
+        state.replace("release_rules = 1", "release_rules = 2"),
+    )
+    .unwrap();
+    scaffold::update(&assets, &root, &update_opts("2.2.0")).unwrap();
+    let state = read(&root, ".codeflow/project.toml");
+    assert!(state.contains("release_rules = 2"), "kept: {state}");
 }

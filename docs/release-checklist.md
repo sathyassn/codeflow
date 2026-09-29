@@ -88,7 +88,7 @@ named human release decision.
 - [ ] The deliberately dispatched plan authority records `GITHUB_SHA` on
       `main`, checks current actor/rerunner permission, ordinary merged-PR
       provenance, source/version/notes and the configured latest exact-source
-      GitHub Actions main-push release-state (`codeflow-release`), aggregate, Rust, Windows, secret-scan, and
+      GitHub Actions main-push release-state (`codeflow-release`), aggregate, Windows, secret-scan, and
       security-review checks. Its write-scoped token can see draft releases;
       read-scoped PR checks make no draft-absence claim. It fails closed on
       wrong tag, source, public release, foreign draft, or draft assets. It may
@@ -160,8 +160,9 @@ named human release decision.
       locked install/build/audit/upgrade, `validate --portal`, source/manifest
       negative fixtures, and Chromium/Firefox/WebKit accessibility journeys.
       CodeFlow itself runs the `docs-portal` target through
-      `codeflow test --mode full --strict` locally and on Ubuntu, plus the
-      authority/path suite on Windows. Generic consumer CI remains portal-free
+      `codeflow test --mode full --strict` locally and on Ubuntu, selected
+      when its inputs change and always under `--all` at epic close, plus
+      the authority/path suite on Windows. Generic consumer CI remains portal-free
       until adoption. Generated output is not published by these checks.
 
 ## 4. Harness and model qualification

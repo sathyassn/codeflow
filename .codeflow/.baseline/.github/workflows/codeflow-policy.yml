@@ -19,11 +19,23 @@
 # ADR-0017). `edited` reruns it when the PR body changes. Trusted automation
 # profiles (git.automation_profiles) apply only for the actor passed here, and
 # never on a fork pull request.
+#
+# The same job is the enforcing check of the shared id registry (SPC-013
+# R-14, R-20, R-109; ADR-0072), so one target build serves both. Push,
+# schedule and dispatch runs keep their own event's commit and run only the
+# registry check; with durable work tracking off, `codeflow ids check` passes
+# with a note. No concurrency group: a registry run is never replaced by a
+# newer queued event.
 name: codeflow-policy
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main, master, "integration/**"]
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,11 +45,12 @@ jobs:
     name: commit standards
     runs-on: ubuntu-24.04
     steps:
-      # The pull request's target, by the base commit the event names: the
-      # binary, the pin and the policy all come from this checkout.
+      # The target, never the pull request head: for a pull request its base
+      # commit, otherwise the event's own commit. The binary, the pin and the
+      # policy all come from this checkout.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
           fetch-depth: 0
 
       - name: Install codeflow (target-pinned, checksum-verified)
@@ -84,6 +97,7 @@ jobs:
           echo "codeflow ${version} installed and verified against sha256.sum"
 
       - name: Fetch the pull request head as data
+        if: github.event_name == 'pull_request_target'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -97,6 +111,7 @@ jobs:
       # The PR body reaches `codeflow ci` through `env:`, never interpolated
       # into the script, so an untrusted body cannot inject shell.
       - name: codeflow ci (commit + branch + PR-body standards)
+        if: github.event_name == 'pull_request_target'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -104,3 +119,24 @@ jobs:
           CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
         run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
+
+      # The registry is fetched explicitly with full history, never forced
+      # (R-20); the pull request head above was fetched as data only.
+      - name: Fetch the shared registry
+        run: |
+          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
+            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+          else
+            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
+          fi
+
+      - name: codeflow ids check
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request_target ]; then
+            codeflow ids check --base "$BASE_SHA" --head refs/codeflow/pr-head
+          else
+            codeflow ids check
+          fi

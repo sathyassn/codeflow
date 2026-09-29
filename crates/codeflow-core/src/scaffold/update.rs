@@ -212,6 +212,9 @@ fn update_writes(
     installed.scaffold_version.clone_from(&opts.binary_version);
     installed.store(root)?;
     state.scaffold_version.clone_from(&opts.binary_version);
+    // The release rule's adoption marker (SPC-013 R-120): written once by
+    // the release that brings the rule, never rewritten; never a table.
+    state.release_rules.get_or_insert(1);
     state.store(root)?;
     if let Some(note) = record_work_records_baseline(root)? {
         report.notes.push(note);

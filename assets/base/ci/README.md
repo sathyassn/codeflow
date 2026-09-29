@@ -81,7 +81,7 @@ runner — copy the one you need to your repo root (`.gitlab-ci.yml`,
 
 ## The pinned install
 
-`codeflow-ci.yml`, `codeflow-policy.yml` and `codeflow-registry.yml` install
+`codeflow-ci.yml` and `codeflow-policy.yml` install
 the `codeflow` release named by `scaffold_version` in the target branch's
 `.codeflow/project.toml`, verified against the release's published
 `sha256.sum`. A missing checksum file, a missing entry or a mismatch fails the

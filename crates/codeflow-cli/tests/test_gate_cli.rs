@@ -38,7 +38,10 @@ fn repo(config: &str) -> tempfile::TempDir {
 }
 
 fn command(dir: &Path, home: &Path, args: &[&str]) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    let mut cmd = Command::new(
+        std::env::var_os("CODEFLOW_TEST_GATE_BIN")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_codeflow").into()),
+    );
     cmd.args(args)
         .current_dir(dir)
         .env("CODEFLOW_HOME", home)
@@ -480,4 +483,352 @@ fn a_cargo_target_dir_outside_the_worktree_warns_and_runs() {
         .unwrap();
     assert_eq!(other.status.code(), Some(0), "{}", stderr(&other));
     assert!(!stderr(&other).contains("warning: CARGO_TARGET_DIR"));
+}
+
+#[cfg(unix)]
+#[test]
+fn prerequisite_failure_never_starts_its_consumer() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2},"targets":[
+      {"name":"producer","runner":"custom","modes":{"full":{"command":"exit 1"}}},
+      {"name":"consumer","runner":"custom","requires":["producer"],"modes":{"full":{"command":"touch consumed"}}}] }"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--all"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("not run: prerequisite failed"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!dir.path().join("consumed").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn delayed_producer_precedes_consumer_and_evidence_survives_cleanup() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2},"targets":[
+      {"name":"consumer","runner":"custom","requires":["producer"],"modes":{"full":{"command":"test -f generated"}}},
+      {"name":"producer","runner":"custom","outputs":["generated"],"exclusive":true,"modes":{"full":{"command":"sleep 0.1; touch generated"}}}] }"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--all"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let artifact = stderr(&output)
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] durable artifact: "))
+        .unwrap()
+        .to_owned();
+    let raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&artifact).unwrap()).unwrap();
+    assert_eq!(raw["passed"], true);
+    assert!(!raw["revision"].as_str().unwrap().is_empty());
+    assert!(!raw["tree"].as_str().unwrap().is_empty());
+    drop(dir);
+    assert!(Path::new(&artifact).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn producer_changing_tracked_bytes_refuses_candidate() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[
+      {"name":"producer","runner":"custom","outputs":["README.md"],"modes":{"full":{"command":"echo changed > README.md"}}},
+      {"name":"consumer","runner":"custom","requires":["producer"],"modes":{"full":{"command":"touch consumed"}}}] }"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("generation changed the candidate"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!dir.path().join("consumed").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn unavailable_gate_lock_refuses_before_start() {
+    let dir = repo(TWO_SLEEPERS);
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("locks"), "blocked").unwrap();
+    let output = run(dir.path(), home.path(), &["test"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("gate lock unavailable"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stderr(&output).contains("starting target"));
+}
+
+#[cfg(unix)]
+fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
+    let dir = repo(
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2,"run_everything":["crates/**","assets/**","Cargo.*",".codeflow/**"]},"targets":[
+      {"name":"producer","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo producer >> runs"}}},
+      {"name":"docs","runner":"custom","requires":["producer"],"narrow":["docs/**"],"modes":{"full":{"command":"echo docs >> runs"}}},
+      {"name":"present","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo present >> runs"}}},
+      {"name":"release","runner":"custom","narrow":["scripts/**"],"modes":{"full":{"command":"echo release >> runs"}}}] }"#,
+    );
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/guide.md"), "base\n").unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "target/\nruns\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: selection base"]);
+    let base = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let base = String::from_utf8(base.stdout).unwrap().trim().to_owned();
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--all"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let artifact = err
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] durable artifact: "))
+        .unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    assert_eq!(raw["clean"], true, "{raw}");
+    assert_eq!(raw["complete"], true, "{raw}");
+    std::fs::remove_file(dir.path().join("runs")).unwrap();
+    (dir, home, base)
+}
+
+#[cfg(unix)]
+#[test]
+fn selection_narrows_only_with_green_base_and_keeps_prerequisite_closure() {
+    let (dir, home, base) = selection_repo();
+    std::fs::write(dir.path().join("docs/guide.md"), "changed\n").unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--since", &base]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
+    assert_eq!(runs, "producer\ndocs\n", "{}", stderr(&output));
+    assert!(stderr(&output).contains("skipped present"));
+    let output = run(dir.path(), home.path(), &["test", "--all"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("selected present"));
+}
+
+#[cfg(unix)]
+#[test]
+fn selection_runs_everything_for_shared_unmatched_rename_deletion_and_unproven_base() {
+    for case in [
+        "core",
+        "asset",
+        "new",
+        "rename",
+        "delete",
+        "unknown-base",
+        "config",
+    ] {
+        let (dir, home, base) = selection_repo();
+        let mut comparison = base.clone();
+        match case {
+            "core" | "asset" => {
+                let folder = if case == "core" { "crates" } else { "assets" };
+                std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+                std::fs::write(dir.path().join(folder).join("new.rs"), "input").unwrap();
+            }
+            "new" => {
+                std::fs::write(dir.path().join("unmatched-new-file"), "input").unwrap();
+            }
+            "rename" => {
+                git(dir.path(), &["mv", "docs/guide.md", "docs/renamed.md"]);
+            }
+            "delete" => {
+                std::fs::remove_file(dir.path().join("docs/guide.md")).unwrap();
+            }
+            "unknown-base" => {
+                comparison = "unknown".into();
+            }
+            "config" => {
+                let path = dir.path().join(".codeflow/test-config.json");
+                let mut config: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                config["execution"]["max_parallel"] = 1.into();
+                std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let output = run(dir.path(), home.path(), &["test", "--since", &comparison]);
+        assert!(output.status.success(), "{case}: {}", stderr(&output));
+        let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
+        for target in ["producer", "docs", "present", "release"] {
+            assert!(runs.lines().any(|line| line == target), "{case}: {runs}");
+        }
+    }
+}
+
+#[test]
+fn every_tracked_path_is_classified_by_the_conservative_partition() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join(".codeflow/test-config.json")).unwrap())
+            .unwrap();
+    let mut patterns: Vec<String> = config["execution"]["run_everything"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_owned())
+        .collect();
+    for target in config["targets"].as_array().unwrap() {
+        if let Some(narrow) = target["narrow"].as_array() {
+            patterns.extend(narrow.iter().map(|p| p.as_str().unwrap().to_owned()));
+        }
+    }
+    let output = Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let paths = String::from_utf8(output.stdout).unwrap();
+    let unclassified: Vec<_> = paths
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .filter(|p| !codeflow_core::testing::gate::inputs_match(&patterns, p))
+        .collect();
+    assert!(unclassified.is_empty(), "unclassified: {unclassified:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn parallel_execution_honors_its_bound_and_exclusive_targets_run_alone() {
+    let bounded = r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2},"targets":[
+      {"name":"a","runner":"custom","modes":{"full":{"command":"if mkdir slot1 2>/dev/null; then sleep 0.3; rmdir slot1; else mkdir slot2 && sleep 0.3 && rmdir slot2; fi"}}},
+      {"name":"b","runner":"custom","modes":{"full":{"command":"if mkdir slot1 2>/dev/null; then sleep 0.3; rmdir slot1; else mkdir slot2 && sleep 0.3 && rmdir slot2; fi"}}},
+      {"name":"c","runner":"custom","modes":{"full":{"command":"if mkdir slot1 2>/dev/null; then sleep 0.3; rmdir slot1; else mkdir slot2 && sleep 0.3 && rmdir slot2; fi"}}}] }"#;
+    let dir = repo(bounded);
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let exclusive = bounded.replace("\"name\":\"b\",", "\"name\":\"b\",\"exclusive\":true,")
+        .replace("if mkdir slot1 2>/dev/null; then sleep 0.3; rmdir slot1; else mkdir slot2 && sleep 0.3 && rmdir slot2; fi", "mkdir active && sleep 0.1 && rmdir active");
+    let dir = repo(&exclusive);
+    let output = run(dir.path(), home.path(), &["test"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn unwritable_temporary_storage_refuses_before_targets_start() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[{"name":"unit","runner":"custom","modes":{"full":{"command":"touch started"}}}]}"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    let blocked = dir.path().join("not-a-directory");
+    std::fs::write(&blocked, "blocked").unwrap();
+    let output = command(dir.path(), home.path(), &["test"])
+        .env("TMPDIR", &blocked)
+        .env("TMP", &blocked)
+        .env("TEMP", &blocked)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("temporary directory is not writable in this sandbox"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!dir.path().join("started").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn coordinator_sets_absolute_binary_paths_from_the_declared_output() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[
+      {"name":"codeflow-bin","runner":"custom","outputs":["target/debug/codeflow"],"modes":{"full":{"command":"mkdir -p target/debug; touch target/debug/codeflow"}}},
+      {"name":"consumer","runner":"custom","requires":["codeflow-bin"],"env":{"CODEFLOW_BIN":"wrong","CF_PRESENT_CODEFLOW":"wrong"},"modes":{"full":{"command":"test \"$CODEFLOW_BIN\" = \"$PWD/target/debug/codeflow\" && test \"$CF_PRESENT_CODEFLOW\" = \"$CODEFLOW_BIN\""}}}] }"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn evidence_records_the_resolved_tool_path_and_version() {
+    let dir = repo(CARGO_TARGET);
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let artifact = err
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] artifact: "))
+        .unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    let cargo = raw["tools"]["cargo"].as_str().unwrap();
+    assert!(
+        cargo.starts_with('/'),
+        "resolved absolute tool path: {cargo}"
+    );
+    assert!(cargo.contains("cargo "), "tool version: {cargo}");
+}
+
+/// TSK-184 AC-5 (Astra's A184-2): a target CI skips is still owed locally.
+/// The CI run's artifact is not complete, so a local `--since` run does not
+/// take it as a green base for that target and runs it.
+#[cfg(unix)]
+#[test]
+fn a_ci_skipped_target_is_never_proved_by_the_ci_run() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2},"targets":[
+      {"name":"always","runner":"custom","modes":{"full":{"command":"echo control"}}},
+      {"name":"local-required","runner":"custom","ci_skip":true,"ci_skip_reason":"local hardware check","narrow":["src/**"],"modes":{"full":{"command":"exit 19"}}}] }"#,
+    );
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/input.txt"), "unchanged\n").unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: fixture"]);
+    let base = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let base = String::from_utf8(base.stdout).unwrap().trim().to_owned();
+    let home = tempfile::tempdir().unwrap();
+
+    // CI: the skipped target is omitted, and the artifact says so.
+    let output = command(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "full", "--all"],
+    )
+    .env("CI", "true")
+    .output()
+    .unwrap();
+    let err = stderr(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(err.contains("still owed locally: local-required"), "{err}");
+    let artifact = err
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] durable artifact: "))
+        .unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    assert_eq!(raw["complete"], false, "{raw}");
+    assert_eq!(
+        raw["ci_skipped"],
+        serde_json::json!(["local-required"]),
+        "{raw}"
+    );
+
+    // Local: the CI run is no green base, so the owed target runs and fails.
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "full", "--since", &base],
+    );
+    let err = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{err}");
+    assert!(!err.contains("skipped local-required"), "{err}");
 }
