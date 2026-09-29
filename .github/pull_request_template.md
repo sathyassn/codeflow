@@ -123,5 +123,5 @@ Task: `TSK-NNN | EPC-NNN | <unit name>`
                           or landing needs a human step. Bullets: what can go
                           wrong, how to back out, steps after merge.
      Links                last: the task, epic, ADR and capability IDs this
-                          serves, and the task closeout or verification
-                          record. Omit it when there is nothing to link. -->
+                          serves, and the gate run the Testing section
+                          cites. Omit it when there is nothing to link. -->

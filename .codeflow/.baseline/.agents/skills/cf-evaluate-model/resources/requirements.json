@@ -1680,7 +1680,8 @@
             "assembles reviewed heads into a small batch candidate in dependency order",
             "one full gate on that exact candidate",
             "Unit reviews are not repeated",
-            "Boundaries are unchanged"
+            "Boundaries are unchanged",
+            "An explicit operator request about the landing shape is valid input and is honoured, but it cannot waive the clarity, safety, review or protected-branch conditions."
           ]
         },
         {
@@ -2432,7 +2433,8 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/completion.md",
           "markers": [
-            "the PR's required evidence exists and is cited"
+            "the PR's required evidence exists and is cited",
+            "never an open-ended poll"
           ]
         }
       ]

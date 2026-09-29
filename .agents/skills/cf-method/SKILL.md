@@ -147,7 +147,9 @@ landing shape for a multi-task epic; an exception needs a recorded rationale
 in the approved plan before tasks are allocated. The branch holds one coherent
 epic outcome, never unrelated standalone tasks. The orchestrating agent
 chooses this routine mechanism without an operator question once the outcome,
-acceptance boundaries, and dependency graph are clear.
+acceptance boundaries, and dependency graph are clear. An explicit operator
+request about the landing shape is valid input and is honoured, but it cannot
+waive the clarity, safety, review or protected-branch conditions.
 
 1. **Break down once.** Before task allocation, cut and push
    `integration/<epic-id>-<slug>` off the current protected target

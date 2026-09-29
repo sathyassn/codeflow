@@ -10,9 +10,10 @@ its PR body show:
   is missed are a finding that returns to `cf-plan`, not a pass;
 - required deterministic gates are green, with redness classified as in
   [blocker navigation and gate redness](blockers-and-gates.md);
-- the PR's required evidence exists and is cited; where an adopted policy
-  requires hosted checks before landing, their result is read once, not
-  polled. The operator received the readiness report with the PR URL the tool
+- the PR's required evidence exists and is cited; nothing polls by default,
+  and only where the adopted policy requires hosted checks green before
+  landing are they awaited with the bounded wait `cf-ship` step 7 names, never
+  an open-ended poll. The operator received the readiness report with the PR URL the tool
   printed; no agent merged a protected branch;
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;

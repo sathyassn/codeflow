@@ -263,7 +263,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "6f59d0bbf2bb6c1e5a9e13ed8e2edd2c1d6e580d3b52c454ffb6c14acef8d7c0",
+      "sha256": "8493bf8a4c637d7c29c6d3146986f3ddee2a4c51b4185dff252e7fa890e2e16d",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -329,7 +329,7 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "c6380820cd55d4d177f1dd04863ad9b6ddb181cec3865c33d9101204227b7256",
+      "sha256": "dcbbe57ae4d846cac534ed10d4b1eab95263ecb773f7ef05f5bf332d20b58e8d",
       "exec": false
     },
     ".agents/skills/cf-method/references/delivery-process.md": {
@@ -431,7 +431,7 @@
     ".agents/skills/cf-model-orchestrator/resources/quality/completion.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/completion.md",
       "ownership": "managed",
-      "sha256": "5b85e80d54af352901bed0ee6fd3963c6504e9a2e16e45158688af3778ee1f1a",
+      "sha256": "5cdfdd6f072adbb77c73a36e41ea5135c2a30cd0caac1cfb5e204e36a9a55ba1",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality/coverage.md": {
@@ -917,7 +917,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "6f59d0bbf2bb6c1e5a9e13ed8e2edd2c1d6e580d3b52c454ffb6c14acef8d7c0",
+      "sha256": "8493bf8a4c637d7c29c6d3146986f3ddee2a4c51b4185dff252e7fa890e2e16d",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -983,7 +983,7 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "c6380820cd55d4d177f1dd04863ad9b6ddb181cec3865c33d9101204227b7256",
+      "sha256": "dcbbe57ae4d846cac534ed10d4b1eab95263ecb773f7ef05f5bf332d20b58e8d",
       "exec": false
     },
     ".claude/skills/cf-method/references/delivery-process.md": {
@@ -1085,7 +1085,7 @@
     ".claude/skills/cf-model-orchestrator/resources/quality/completion.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality/completion.md",
       "ownership": "managed",
-      "sha256": "5b85e80d54af352901bed0ee6fd3963c6504e9a2e16e45158688af3778ee1f1a",
+      "sha256": "5cdfdd6f072adbb77c73a36e41ea5135c2a30cd0caac1cfb5e204e36a9a55ba1",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality/coverage.md": {
