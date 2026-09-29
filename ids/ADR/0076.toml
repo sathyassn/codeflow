@@ -1,0 +1,11 @@
+id = "ADR-0076"
+uid = "2b3eb168-2661-4484-beab-62113437b153"
+kind = "ADR"
+title = "One PR per task and planning once per epic"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T06:06:48Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
