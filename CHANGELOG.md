@@ -64,7 +64,7 @@ publication date._
   +stable publish` or `git push origin v1.2.3`, is not refused in this
   release. Codex gets `.codex/rules/codeflow.rules`, and its `cf-guard`
   profile now runs the network proxy, with a `cf-builder` profile defined
-  beside it but not selected (tested on Codex 0.157.1; earlier versions
+  beside it but not selected (tested on Codex 0.159.1; earlier versions
   are unqualified). Grok gets `.grok/sandbox.toml`, written only when
   absent. The Claude presets' sandbox now withholds model, cloud and
   publishing credential variables and the common credential stores
@@ -1221,8 +1221,25 @@ publication date._
   planning-reopen path remains valid.
 
 <!-- codeflow:release-impact patch -->
+- **A Codex seat under `cf-guard` can delete files and build.** The
+  profile's secret-file denies (`.env`, `.env.*`, `*.pem`, `*.key`,
+  `*.p12`, `*.pfx`, `.netrc`, `id_rsa*`, `id_ed25519*`) now apply at the
+  workspace root only. The `**/` forms made Codex deny deleting and
+  renaming every directory, so `rmdir`, `cargo build` and `npm` builds
+  failed. Nested secret files, such as `sub/.env` or a linked worktree's
+  `.env` under `.worktrees/`, are no longer denied; the config comment
+  records that gap. The network is unchanged: no unix sockets and no local
+  binding. Reviewer seats launch with `--ask-for-approval never` and no
+  `--sandbox` flag, which selects `cf-guard`; builder seats keep full
+  access, because the `cf-builder` spike did not pass (a push to a remote
+  outside the workspace root is denied). Tested on Codex 0.159.1. Chromium,
+  and so Playwright, cannot start under any Codex sandbox profile on macOS,
+  since the sandbox denies its Mach port rendezvous; run browser tests
+  outside Codex (TSK-190).
+
+<!-- codeflow:release-impact patch -->
 - **`codeflow ci` accepts a workspace's root branch.** In workspace mode,
-  a range on the branch `git.root_branch` names, such as
+  at every tier, a range on the branch `git.root_branch` names, such as
   `integration/workspace`, is classified as the workspace root branch, the
   way a verified epic line is: it needs no `Task:` line and may change task
   criteria. Before, `ci` refused it as an unverified epic line and blocked

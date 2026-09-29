@@ -34,10 +34,25 @@ Shipped in 3.0.0 (TSK-171):
 - The profile assets for D1 to D3: the Codex `cf-guard` profile with the
   network proxy and a `cf-builder` profile that is defined but not selected,
   and the Grok `cf-guard` and `cf-guard-worktree` profiles. The launch
-  postures themselves are unchanged.
+  postures themselves are unchanged, except D2's below.
 - The Claude presets' sandbox credential variable and store denies.
 - The policy keys the later tasks read, at their shipped defaults, with no
   check reading them.
+
+Also in 3.0.0 (TSK-190):
+
+- D2: Codex reviewer seats launch with `--ask-for-approval never` and no
+  `--sandbox` flag, so `cf-guard` applies; the cf-model-orchestrator and
+  cf-herdr launch text says so. `cf-guard` denies secret files at the
+  workspace root only, since the `**/` forms blocked every directory
+  delete; nested secret files are a recorded gap.
+- D1: the spike ran on 2026-09-29 on Codex 0.159.1 and did not pass.
+  Fetch with an absolute remote URL, worktree add, stage, commit, cargo and
+  npm builds ran unattended from the main checkout root, with `.git/hooks`
+  and `.git/config` unwritable; a push to a bare remote outside the
+  workspace root was denied, and a push to a hosted remote was not tried.
+  Builder seats keep full access with that gap recorded, and `cf-builder`
+  stays defined and unselected.
 
 Follows in 3.1:
 
