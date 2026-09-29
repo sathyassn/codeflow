@@ -652,15 +652,20 @@ pub fn check_epic_line(
         .and_then(|()| walk.hide(merge_base))
         .and_then(|()| walk.simplify_first_parent())
         .map_err(|error| error.to_string())?;
+    // Work lands on the line by classified pull requests; the only direct
+    // commits are planning records, such as the completions a batch
+    // landing records on the candidate (SPC-013 R-60, TSK-184 AC-4).
     for oid in walk {
         let oid = oid.map_err(|error| error.to_string())?;
-        let parents = repo
-            .find_commit(oid)
-            .map_err(|error| error.to_string())?
-            .parent_count();
-        if parents < 2 {
+        let commit = repo.find_commit(oid).map_err(|error| error.to_string())?;
+        if commit.parent_count() >= 2 {
+            continue;
+        }
+        let outside = super::acceptance::non_planning_change(&repo, commit.parent_id(0).ok(), oid)
+            .map_err(|error| error.to_string())?;
+        if let Some(path) = outside {
             return Err(format!(
-                "'{branch}' has a commit made directly on the line ({}); land work on the line by classified pull requests",
+                "'{branch}' has a product change made directly on the line ({} changes {path}); land work on the line by classified pull requests",
                 &oid.to_string()[..9]
             ));
         }

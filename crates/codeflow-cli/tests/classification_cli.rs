@@ -540,7 +540,7 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     assert_blocks(
         &ci(root, line, &body("Task: EPC-001")),
         "untracked addition",
-        "a commit made directly on the line",
+        "a product change made directly on the line",
     );
 }
 
