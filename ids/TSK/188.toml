@@ -1,0 +1,11 @@
+id = "TSK-188"
+uid = "9c7a5c97-a07a-4a88-965b-35c3d1876323"
+kind = "TSK"
+title = "agent sessions refuse the dangerous actions in every spelling"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T20:06:13Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
