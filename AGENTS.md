@@ -126,8 +126,11 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   revision, a dirty flag and a digest of its hook, guard and policy source
   inputs, and the hook report prints path, version, source revision, input
   digest and binary digest and warns whenever the current sources' digest
-  differs from the embedded one, a same-HEAD edit included. Path and
-  version alone identify the binary; they do not prove its source.
+  differs from the embedded one, a same-HEAD edit included. The build
+  script reruns on any edit under the crates, assets, docs, records or
+  harness directories, so the next build re-embeds revision and dirty
+  state after a docs-only edit too. Path and version alone identify the
+  binary; they do not prove its source.
 - **This repo lands only through PRs (ADR-0006):** use a feature branch, the PR
   template, green CI and a human merge; agents never merge protected branches.
   `codeflow integrate` remains shipped for offline use, not this
