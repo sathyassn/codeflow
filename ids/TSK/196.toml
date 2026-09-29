@@ -1,0 +1,11 @@
+id = "TSK-196"
+uid = "96eecdfb-d2b2-4f0e-bc0a-6e5d1b18798e"
+kind = "TSK"
+title = "task branches push their own criteria changes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T23:38:20Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
