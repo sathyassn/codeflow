@@ -1,6 +1,16 @@
 <!-- codeflow:managed:begin scaffold=3.0.0 -->
 @AGENTS.md
 
+## Routing gate
+
+Invoke `/cf-model-orchestrator` (the Skill tool) before you inspect. For
+routed work, which the map's "Route by touched paths" rule decides, it comes
+before repository or external research, analysis, planning, design,
+substantive review or docs, implementation, or multi-step verification. Do
+not inspect first and route later: its preflight and independent discovery
+are part of the work. Skip it only for conversation or one obvious local
+check; when unsure, route.
+
 ## Claude-specific notes
 
 - Session hooks are wired in `.claude/settings.json`: the orient digest at
