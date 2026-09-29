@@ -136,3 +136,18 @@ and deterministic Codeflow gates remain author-agnostic.
 - Official Codex plugin for Claude Code:
   <https://github.com/openai/codex-plugin-cc/blob/main/README.md>
 - Codex app-server: <https://developers.openai.com/codex/app-server>
+
+## Note, 2026-09-29: ADR-0076 supersedes two clauses
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. It
+supersedes two clauses of this record and no other; the roles, the evidence
+gates and the rest stay accepted.
+
+- "Plan and rework loops are each bounded to two rounds before human
+  escalation." Superseded: there is no round cap. Review ends on evidence:
+  continue while repairs produce relevant evidence, and diagnose a stalled
+  mechanism, an invalid assumption or a materially changed scope.
+- "Where line coverage is supported, production code has an 80% hard floor
+  and a normal 90% target." Superseded: the coverage floor is the
+  project's configured gate (CodeFlow's is `--fail-under-lines 90`), not
+  prose.

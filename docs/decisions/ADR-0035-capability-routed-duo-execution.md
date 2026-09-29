@@ -106,3 +106,15 @@ new engine policy or general runtime plugin system.
 The scaffold gains a managed capability-routing resource, updated skill/docs,
 and deterministic/model-eval pins. No Rust runtime routing or pipeline schema is
 added. CAP-010 remains the capability record for the duo.
+
+## Note, 2026-09-29: ADR-0076 supersedes one clause
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. It
+supersedes one clause of this record and no other.
+
+- "Changing the named producer or reviewer seat or lineage creates Plan
+  vN+1 and requires fresh approval from both primary seats." Superseded: a
+  reassignment is recorded where the assignment lives and, for unstarted
+  tasks of an epic, rides in the batched epic amendment with one
+  other-lineage reviewer. The named other-lineage seat still reviews the
+  actual unit, and the rest of this record stands.
