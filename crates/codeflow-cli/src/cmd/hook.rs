@@ -256,7 +256,7 @@ fn git_guard(stdin: &str) -> i32 {
         root_checkout: root_checkout.as_ref(),
     };
     let report = git_guard::evaluate_report(command, &ctx);
-    super::render_outcome("git-guard", &report.violations, &report.notes, 2)
+    super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
 }
 
 /// The finding for a guard input it could not read. Fail open with a
@@ -304,7 +304,7 @@ fn exec_guard(stdin: &str) -> i32 {
     // enough — no need for `load_effective`.
     let policy = Policy::load(&root);
     let violations = exec_guard::evaluate(command, &policy.security);
-    super::render_outcome("exec-guard", &violations, &[], 2)
+    super::render_outcome("exec-guard", &root, &violations, &[], 2)
 }
 
 /// Resolve a `gh pr merge <arg>` target to its base branch via `gh pr view`

@@ -202,9 +202,24 @@ struct Added {
     uid: Option<String>,
 }
 
-fn uid_at(git: &Git, rev: &str, path: &str) -> Option<String> {
-    let text = git.run(&["show", &format!("{rev}:{path}")]).ok()?;
-    frontmatter_value(&text, "uid")
+/// The record texts a range's merge rule reads, fetched in one
+/// `git cat-file --batch` rather than a process per record.
+struct Texts(HashMap<String, Vec<u8>>);
+
+impl Texts {
+    fn read(git: &Git, wanted: &[(&str, &str)]) -> Result<Texts, IdsError> {
+        let specs: Vec<String> = wanted
+            .iter()
+            .map(|(rev, path)| format!("{rev}:{path}"))
+            .collect();
+        git.blobs(&specs).map(Texts)
+    }
+
+    /// The `uid` of the record at `path` in `rev`, if it has one.
+    fn uid_at(&self, rev: &str, path: &str) -> Option<String> {
+        let text = self.0.get(&format!("{rev}:{path}"))?;
+        frontmatter_value(&String::from_utf8_lossy(text), "uid")
+    }
 }
 
 /// The merge rule (R-2, R-14) and the uniqueness scan for the range
@@ -246,13 +261,24 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
             _ => modified.push((id, path.to_string())),
         }
     }
+    let mut wanted: Vec<(&str, &str)> = Vec::new();
+    for (id, path) in &added_paths {
+        wanted.push((head, path));
+        if let Some(old) = removed.get(id) {
+            wanted.push((&merge_base, old));
+        }
+    }
+    for (_, path) in &modified {
+        wanted.extend([(merge_base.as_str(), path.as_str()), (head, path.as_str())]);
+    }
+    let texts = Texts::read(git, &wanted)?;
     let mut added = Vec::new();
     let mut backfilled = Vec::new();
     for (id, path) in added_paths {
         if let Some(old) = removed.get(&id) {
             // A moved record keeps its identity: judge it as an edit.
             backfilled.extend(check_uid_edit(
-                git,
+                &texts,
                 &merge_base,
                 old,
                 head,
@@ -262,12 +288,12 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
             ));
             continue;
         }
-        let uid = uid_at(git, head, &path);
+        let uid = texts.uid_at(head, &path);
         added.push(Added { id, path, uid });
     }
     for (id, path) in &modified {
         backfilled.extend(check_uid_edit(
-            git,
+            &texts,
             &merge_base,
             path,
             head,
@@ -283,18 +309,19 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
         short(&merge_base),
         short(head)
     ));
+    let mut intros = inventory::Introductions::default();
     if !added.is_empty() || !backfilled.is_empty() {
         let judged: Vec<Added> = added.iter().chain(&backfilled).cloned().collect();
-        bind(git, head, &judged, &mut report)?;
+        bind(git, &mut intros, head, &judged, &mut report)?;
     }
     if !added.is_empty() {
-        scan(git, head, &added, &mut report)?;
+        scan(git, &mut intros, head, &added, &mut report)?;
     }
     Ok(report)
 }
 
 fn check_uid_edit(
-    git: &Git,
+    texts: &Texts,
     base: &str,
     old_path: &str,
     head: &str,
@@ -302,16 +329,16 @@ fn check_uid_edit(
     id: &RegId,
     report: &mut Report,
 ) -> Option<Added> {
-    let Some(old) = uid_at(git, base, old_path) else {
+    let Some(old) = texts.uid_at(base, old_path) else {
         // A record without a uid keeps its legacy allowance, but its first
         // uid (the backfill) must be the one the registry binds (R-2).
-        return uid_at(git, head, new_path).map(|uid| Added {
+        return texts.uid_at(head, new_path).map(|uid| Added {
             id: id.clone(),
             path: new_path.to_string(),
             uid: Some(uid),
         });
     };
-    match uid_at(git, head, new_path) {
+    match texts.uid_at(head, new_path) {
         Some(new) if new == old => {}
         Some(new) => report.blocks.push(format!(
             "{id}: the range edits the uid of an existing record ({old} -> {new}); a uid is written once (R-2)"
@@ -323,7 +350,13 @@ fn check_uid_edit(
     None
 }
 
-fn bind(git: &Git, head: &str, added: &[Added], report: &mut Report) -> Result<(), IdsError> {
+fn bind(
+    git: &Git,
+    intros: &mut inventory::Introductions,
+    head: &str,
+    added: &[Added],
+    report: &mut Report,
+) -> Result<(), IdsError> {
     let Some(registry) = registry_ref(git) else {
         report.blocks.push(format!(
             "{} record(s) added but no `codeflow/registry` was fetched: CI must fetch it explicitly with full history (R-20)",
@@ -352,7 +385,7 @@ fn bind(git: &Git, head: &str, added: &[Added], report: &mut Report) -> Result<(
                 record.path
             )),
             (None, Some(entry)) => {
-                if inventory::is_replica(git, entry, head, id)? {
+                if inventory::is_replica(git, intros, entry, head, id)? {
                     report
                         .info
                         .push(format!("bound by provenance: {id} (no uid before backfill)"));
@@ -376,28 +409,30 @@ fn bind(git: &Git, head: &str, added: &[Added], report: &mut Report) -> Result<(
 /// record blocks the range. A copy's identity is its `uid`; a copy without
 /// one takes the `uid` of the registry entry it is a replica of, else its
 /// introducing commit.
-fn scan(git: &Git, head: &str, added: &[Added], report: &mut Report) -> Result<(), IdsError> {
+fn scan(
+    git: &Git,
+    intros: &mut inventory::Introductions,
+    head: &str,
+    added: &[Added],
+    report: &mut Report,
+) -> Result<(), IdsError> {
     let head_sha = git.rev(head).unwrap_or_default();
     let ledger = match registry_ref(git) {
         Some(registry) => Ledger::read(git, &registry)?,
         None => Ledger::default(),
     };
-    let mut intro_cache: HashMap<String, BTreeMap<RegId, String>> = HashMap::new();
     let mut identity =
         |rev: &str, id: &RegId, uid: Option<&String>| -> Result<Option<String>, IdsError> {
             if let Some(uid) = uid {
                 return Ok(Some(uid.clone()));
             }
             if let Some(entry) = ledger.entry(id) {
-                if inventory::is_replica(git, entry, rev, id)? {
+                if inventory::is_replica(git, intros, entry, rev, id)? {
                     return Ok(Some(entry.uid.clone()));
                 }
             }
-            if !intro_cache.contains_key(rev) {
-                intro_cache.insert(rev.to_string(), inventory::introductions(git, rev)?);
-            }
-            Ok(intro_cache[rev]
-                .get(id)
+            Ok(intros
+                .of(git, rev, id)?
                 .map(|sha| format!("introduced by {sha}")))
         };
     let mut ours = Vec::new();

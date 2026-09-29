@@ -423,6 +423,14 @@ planning checks: a valid workgraph, a record for the task the branch
 carries, and that record anchored on its target. Pre-commit does not run
 them. A value the project set is kept.
 
+`codeflow update` also adds `git.conflict_markers` (default `block`) and
+reports the added key. The pre-commit hook and `codeflow ci` then refuse an
+unresolved conflict marker on a line a change adds to a text file; existing
+lines are not judged. A file that must hold markers, such as a test fixture
+or a page about git, sets `conflict-marker-size` for its path in
+`.gitattributes` to a length its markers do not have. A team that wants a
+softer start sets the key to `warn` or `off` in a reviewed policy change.
+
 ## Optional repository guide portal
 
 Standard and full tiers include the concise `cf-docs-portal` workflow, but no

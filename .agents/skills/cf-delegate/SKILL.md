@@ -88,9 +88,11 @@ Read this core, then only the lane for the host you are on:
   holds the `/codex:*` commands, the bounded role prompt, selector and effort,
   native thread provenance, and the consult verdict line.
 - **From codex (Codex host):** [the lifecycle lane](resources/lane-lifecycle.md)
-  holds `codeflow delegate init`, exact-byte delivery, turn detection, the
-  sibling Stop-hook preflight, pane access, effective autonomy, consult and
-  edit sessions, and cleanup. A Claude host does not load it.
+  holds the host preflight, the Herdr variant, pane access, effective
+  autonomy, consult and edit sessions, and cleanup; before launch it sends
+  you to the turn adapter for `codeflow delegate init`, the sibling
+  Stop-hook preflight, exact-byte delivery and turn detection. A Claude
+  host does not load it.
 
 ## Evidence contract, both lanes
 

@@ -99,6 +99,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ID_REGISTRY_RETARGET", Runs),
     ("ID_REGISTRY_UID", Runs),
     ("ACCEPTANCE_BINDING", Runs),
+    ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("JOURNEY_CRITERION", Runs),
     ("RECORD_BASELINE_EXEMPT", Runs),
     ("BASELINE_REVIEW", Runs),
@@ -124,6 +125,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("COMMIT_EMOJI", Runs),
     ("COMMIT_POLICY_CHARACTER", Runs),
     ("FILE_POLICY_CHARACTER", Runs),
+    ("CONFLICT_MARKER", Runs),
+    ("GIT_ATTR_SOURCE_UNSUPPORTED", Excluded(Network)),
     ("BREAKING_WATCH_PATH", Runs),
     ("PR_POLICY_CHARACTER", Runs),
     ("PR_AI_ATTRIBUTION", Runs),
@@ -197,6 +200,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("HOOK_STDIN_UNREAD", Runs),
     ("GUARD_PAYLOAD_MALFORMED", Runs),
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
+    ("REFUSAL_UNRECORDED", Runs),
     ("REGISTRY_UNWRITTEN", Runs),
     ("PRIVILEGE_ESCALATION", Excluded(HumanAuthority)),
 ];
@@ -735,6 +739,30 @@ fn clears_file_policy_character() {
             assert!(printed.contains("edit docs/notes.md"), "{printed}");
             write(root, "docs/notes.md", "one, two\n");
             git(root, &["commit", "-q", "-am", "docs: reword the notes"]);
+        },
+    );
+}
+
+#[test]
+fn clears_conflict_marker() {
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    // Built at run time, so this file holds no marker line itself.
+    let open = "<".repeat(7);
+    let close = ">".repeat(7);
+    write(
+        &root,
+        "notes.md",
+        &format!("{open} HEAD\nours\n{close} feat/y\n"),
+    );
+    prove(
+        "CONFLICT_MARKER",
+        "notes.md:1 adds an unresolved opening conflict marker",
+        || commit_all(&root, "docs: add the notes"),
+        |printed| {
+            assert!(printed.contains("edit notes.md"), "{printed}");
+            write(&root, "notes.md", "ours\n");
         },
     );
 }
@@ -1710,14 +1738,30 @@ fn clears_push_range_unresolved() {
     let dest = with_destination(&root);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     commit_all(&root, "chore: add a quick target");
-    // The destination moves on in another clone, and this clone forgets
-    // its tracking refs: nothing gives the new branch a base.
+    // The push fetches the default tip (SPC-013 R-120), so only a branch
+    // sharing no history with it can lack a base: one from a line with its
+    // own history, which moves on in another clone while this clone
+    // forgets its tracking refs.
+    git(&root, &["checkout", "-q", "--orphan", "chore/archive"]);
+    git(&root, &["commit", "-q", "-m", "chore: start the archive"]);
+    let started = push(&root, &["origin", "chore/archive"]);
+    assert!(
+        text(&run(
+            "git",
+            &root,
+            &["ls-remote", "origin", "chore/archive"]
+        ))
+        .contains("chore/archive"),
+        "{started}"
+    );
     let other = root.parent().unwrap().join("other");
     git(
         root.parent().unwrap(),
         &[
             "clone",
             "-q",
+            "-b",
+            "chore/archive",
             dest.to_str().unwrap(),
             other.to_str().unwrap(),
         ],
@@ -1726,6 +1770,8 @@ fn clears_push_range_unresolved() {
     git(&other, &["add", "o.txt"]);
     git(&other, &["commit", "-q", "-m", "feat: add o"]);
     git(&other, &["push", "-q", "origin", "HEAD"]);
+    git(&root, &["switch", "-q", "-c", "feat/archived"]);
+    commit(&root, "x.txt", "feat: add x");
     let refs = String::from_utf8(
         run(
             "git",
