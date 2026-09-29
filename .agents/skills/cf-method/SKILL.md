@@ -26,10 +26,10 @@ orchestrator selects stages and weight separately. The host-neutral duo remains
 the default for routed work: independent Claude and Codex discovery, one
 Claude-drafted plan challenged by Codex, Claude design and integrated
 judgment, capability-based production, and author-relative cross-lineage
-review. Solo is only a recorded degradation after
-an interactive seat is unavailable. Research- or planning-only work stops after
-its settled artifact. Make the weight call inside the orchestrator and
-materialize durable planning with `cf-plan`, not mid-build.
+review. Solo is only a recorded degradation after an interactive seat is
+unavailable. Research- or planning-only work stops after its settled
+artifact. Make the weight call inside the orchestrator and materialize
+durable planning with `cf-plan`, not mid-build.
 
 Mature accepted work does not restart open-ended discovery or re-interview
 settled intent. Perform a compact currency, acceptance, dependency, and anchor
@@ -42,35 +42,27 @@ approved node remains execution evidence.
 - **No workflow** for conversational or trivial changes — answer, edit, done.
 - **Interactive `/cf-model-orchestrator` loop** for routed work: parallel
   discovery, one plan approval, then only the stages the outcome needs.
-- **Inline `/cf-develop` loop** supports an orchestrated implementation; used
-  alone, it is the recorded solo fallback: build → independent review → verify.
+  `/cf-develop` supports it; used alone, it is the recorded solo fallback.
 - **Pipeline preset** (`.claude/workflows/pipeline.workflow.js`, Claude Code) for
-  unattended, batch, or parallel fan-out runs. Its assurance preset is
-  explicitly single-vendor; it never claims the interactive duo's dual approval.
-  (Workflows are a Claude-Code runtime; on another harness this rung is
-  unavailable—use that harness's native task composition.)
-- **Custom ad-hoc workflow** (Claude Code) for genuinely novel orchestration,
-  not a shortcut around review.
+  unattended, batch, or parallel fan-out runs; its assurance is explicitly
+  single-vendor and never claims the interactive duo's dual approval. Stage
+  and model composition lives in invocation args (`args.stages`,
+  `args.models`), never hardcoded. On another harness this rung is
+  unavailable; use that harness's native task composition.
 - **Standalone task** for one outcome: its record and code land together in
   one reviewed PR, which is its own candidate.
 - **Integration-branch flow** for a multi-task body of work: an epic of serial
   and/or parallel tasks lands in gated batch candidates on a shared
   `integration/<epic>` branch, not on `main`, and the human reviews one final
   PR. See "Managing a body of work" below.
-- **Stage/model composition** lives in invocation args (`args.stages`,
-  `args.models`), never hardcoded into a workflow.
 
 ## Planning an epic
 
 An epic exists to make one question answerable before any code is written:
-*what does done look like, verifiably?*
-
-**An epic is optional — reach for one only when the work needs it.** Warrant an
-epic only when the work fails the standalone test in the work lifecycle
-reference; otherwise it is a single task with acceptance criteria and no
-epic, and an epic never gates a single task. The clarity
-checklist below applies either way — to the epic when there is one, otherwise to
-the task.
+*what does done look like, verifiably?* Warrant an epic only when the work
+fails the standalone test in the work lifecycle reference; otherwise it is a
+single task with acceptance criteria and no epic, and an epic never gates a
+single task. The clarity checklist below applies either way.
 
 Input clarity checklist, the one statement of it (`cf-plan` and the
 orchestrator point here). Do not draft until you can state all five:
@@ -85,7 +77,10 @@ orchestrator point here). Do not draft until you can state all five:
 4. **Acceptance criteria.** Testable statements, preferably in **EARS** ("When
    <trigger>, the system shall <response>") or **Given/When/Then** form. Each
    names the evidence that proves it: a test, a bounded observation, or an
-   independent review.
+   independent review. Good: "When a capability entry references a
+   nonexistent epic ID, `codeflow validate --docs` shall exit non-zero in
+   CI." Bad: "validation works correctly", or a 14-item list restating the
+   implementation plan (that is design, not acceptance).
 5. **Touched surface.** Which areas and which existing capabilities
    (`docs/capabilities.md`) this creates or changes.
 
@@ -96,21 +91,12 @@ evidence, options, consequences, and a recommendation. Discover repository
 facts yourself and make reversible, outcome-preserving implementation choices
 from evidence; do not offload research to the operator.
 
-Good criterion (EARS): "When a capability entry references a nonexistent epic
-ID, `codeflow validate --docs` shall exit non-zero in CI."
-Bad criterion: "validation works correctly" (not testable, no check named), or a
-14-item list restating the implementation plan (that is design, not acceptance).
-
 An epic is one outcome. When its criteria describe two outcomes, it is two
 epics on one integration line. Size tasks by the rule in the orchestrator's
 task-graph contract: one observable outcome per task, split only for a
 written reason. For an explicit estimate, capacity or deadline request, use
-`cf-estimate`.
-
-For a durable repository guide, `cf-docs-portal` owns the opt-in lifecycle.
-Markdown stays authoritative. Configure supported seams while CodeFlow owns
-the runtime, or explicitly transfer the whole runtime for project maintenance;
-never turn local drift into an automatic merge, transfer or validation waiver.
+`cf-estimate`. For a durable repository guide, `cf-docs-portal` owns the
+opt-in lifecycle; Markdown stays authoritative.
 
 ## Project organization and work authority
 
@@ -120,8 +106,7 @@ An epic or justified standalone task owns a coherent repository outcome, not
 a team or folder. External portfolio/product work may have its own authority,
 but active CodeFlow tracking still requires distinct Git execution anchors;
 links never waive `work start`, pre-commit, or CI. Local databases are caches,
-not team truth. Maintained requirements remain current; optional SPC inputs
-freeze a particular work agreement.
+not team truth.
 
 Load `references/project-organization.md` for new-project boundary choices,
 brownfield adoption, monorepos, artifact/authority selection, or implementation
@@ -195,29 +180,25 @@ reaches `main` only through that final reviewed PR.
 
 ## Why the git boundary is remote
 
-The git standards are enforced in layers, and the layers are not equal. Local git
-hooks and the `git-guard` PreToolUse hook are **fast feedback** — they catch the
-normal ways work goes wrong in-session, before a push, but an agent on the local host
-can edit or skip them. Required CI and remote rules form a server-side boundary
-only when configured and enforced for the actor's permissions.
-`codeflow remote protect` configures supported rules; verify availability and
-success, not just scaffold files.
-Inspect required checks, bypass rights and actual results before claiming an
-**authoritative perimeter**. Local checks remain required defense in depth.
-
-Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are not authentication or
-proof of safety. They establish no remote boundary; agents must never set them
-to slip past a local gate. That is laundering even
-when remote protection is unavailable. Report the missing boundary, retain the
-project's safety and review duties, and do not imply local checks replace
-server-side enforcement.
+The git standards are enforced in layers, and the layers are not equal. Local
+git hooks and the `git-guard` PreToolUse hook are **fast feedback**; an agent
+on the local host can edit or skip them. Required CI and remote rules form a
+server-side boundary only when configured and enforced for the actor's
+permissions: `codeflow remote protect` configures supported rules, and you
+inspect required checks, bypass rights and actual results before claiming an
+**authoritative perimeter**. Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
+tokens) are not authentication or proof of safety; agents never set them to
+slip past a local gate, which is laundering even when remote protection is
+unavailable. Report a missing boundary and keep the project's safety and
+review duties. The rule file `.codeflow/rules/git-rules.md`, "Enforcement",
+is the home of what each plane checks.
 
 ## When an ADR is warranted — Tier-3 triggers
 
-Accepted ADRs are append-only and finalized at the moment of decision, when context is
-loaded — the cheapest possible "why" capture, and the best-value reading for a
-fresh session. But ADR over-production is its own swamp. Write one only at a
-**Tier-3 decision point**:
+Accepted ADRs are append-only and finalized at the moment of decision, when
+context is loaded: the cheapest "why" capture, and the best-value reading for
+a fresh session. But ADR over-production is its own swamp. Write one only at
+a **Tier-3 decision point**:
 
 - **New dependency** — a crate, package, service, or external tool joins the
   project.
@@ -241,16 +222,11 @@ an accepted decision.
 
 ## Capability registry discipline
 
-`docs/capabilities.md` is the agent's index of what the system actually does —
+`docs/capabilities.md` is the agent's index of what the system actually does:
 the first thing to consult before building ("does this exist? what does it
-touch?") and the artifact that makes the system legible without reading all
-the code.
-
-Entry fields: `id` (CAP-###), `name`, `area`, `status`
+touch?"). Entry fields: `id` (CAP-###), `name`, `area`, `status`
 (planned → building → shipped → deprecated), `verified_by` (test tags),
-`epics[]`, `adrs[]` — plus exactly one paragraph of prose.
-
-Rules:
+`epics[]`, `adrs[]`, plus exactly one paragraph of prose.
 
 - One entry per user-meaningful capability — what the system *does*, not how.
   "Secret scanning at commit time" is a capability; "the regex module" is not.
@@ -266,20 +242,14 @@ Rules:
 
 ## Spec lifecycle
 
-Specs are **inputs to work, not living documents.**
-
-- Drafted during `/cf-plan`, only when interfaces, formats, or behavior need
-  pinning down before building. Allocate and link with `codeflow spec new --for
-  EPC-NNN|TSK-NNN`. Many work items need no spec at all.
-- `status: approved` only after open questions are empty; draft specs block
-  `codeflow work start`.
-- Consumed during `/cf-develop`.
-- **Frozen at ship:** `implemented` is derived once every consumer is
-  complete, never written. After
-  that, truth lives in architecture, capabilities, and tests — the spec is
-  allowed to be historical. Never "update" a frozen spec to match later
-  reality; that is what architecture.md is for.
-- A spec's open-questions section must be empty before building starts.
+Specs are **inputs to work, not living documents.** Drafted during `/cf-plan`
+only when interfaces, formats, or behavior need pinning down before building
+(allocate and link with `codeflow spec new --for EPC-NNN|TSK-NNN`; many work
+items need no spec). `status: approved` only after open questions are empty;
+draft specs block `codeflow work start`. Consumed during `/cf-develop`.
+**Frozen at ship:** `implemented` is derived once every consumer is complete,
+never written; after that, truth lives in architecture, capabilities, and
+tests, and a frozen spec is never "updated" to match later reality.
 
 ## Graduation rules
 

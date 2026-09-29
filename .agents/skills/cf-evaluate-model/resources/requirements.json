@@ -2417,8 +2417,14 @@
           "markers": [
             "## After opening",
             "No polling by default",
-            "at most once a minute, for at most thirty minutes",
             "whether or not the host marks them required",
+            "Never merge. When the evidence is complete, send one readiness report without being asked"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-checks.md",
+          "markers": [
+            "at most once a minute, for at most thirty minutes",
             "an empty list is not readiness",
             "Read all check runs with `gh pr checks <url>` on the same cadence",
             "A gate with no matching run,",
@@ -2426,8 +2432,7 @@
             "Do not use `--watch` without a ceiling, and do not poll without an end",
             "`timeout 30m gh pr checks <url> --watch --interval 60`",
             "Do not wait for the operator to name the job",
-            "Report it as missing evidence with the reason the tool gave, not as a product defect",
-            "Never merge. When the evidence is complete, send one readiness report without being asked"
+            "Report it as missing evidence with the reason the tool gave, not as a product defect"
           ]
         },
         {

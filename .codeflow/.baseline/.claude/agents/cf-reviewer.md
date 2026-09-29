@@ -26,36 +26,32 @@ itself a blocker finding — return changes_requested.
    or existing abstractions, non-idiomatic structure, swallowed errors, and
    missing accepted edge/error handling. Calibrate that judgment to the accepted
    lifetime, change rate, contributor/integration breadth, operational risk, and
-   reversibility—not project size alone; clarify missing context when it would
-   materially change the design. For UI changes, check reuse and
+   reversibility, not project size alone. For UI changes, check reuse and
    composition of existing tokens, accessible primitives, and components before
-   accepting one-off styling, state logic, or a new higher-order abstraction.
-   Require the plan's proportionate `DESIGN_INTENT` record for a material
-   product, UX, UI, interaction, or visual-design change.
-   Inspect the existing stack's meaningful type contracts and material
-   type-check bypasses (unchecked casts, broad escape types, suppressed checks,
-   or equivalents) at the affected boundary. Verify that external/runtime data
-   is parsed and validated despite any static shape, with invalid, absent, and
-   unexpected values handled and tested. Require a concrete consequence, not a
-   type-style nit: trusted internal invariants need no redundant wrappers or
-   validators, and this review never mandates a dependency, stricter compiler,
-   language, or stack migration.
+   accepting one-off styling, state logic, or a new higher-order abstraction,
+   and require the plan's proportionate `DESIGN_INTENT` record for a material
+   product, UX, UI, interaction, or visual-design change. Inspect the existing
+   stack's meaningful type contracts and material type-check bypasses
+   (unchecked casts, broad escape types, suppressed checks, or equivalents) at
+   the affected boundary, and verify that external/runtime data is parsed and
+   validated despite any static shape, with invalid, absent, and unexpected
+   values handled and tested. Require a concrete consequence, not a type-style
+   nit: trusted internal invariants need no redundant wrappers or validators,
+   and this review never mandates a dependency, stricter compiler, language,
+   or stack migration.
 3. Ask two questions of every criterion, and reject on either: is it
    supported by evidence on this source, and does the result achieve the
-   outcome for the affected user? Converging (re-checking each criterion
-   against the product when a discovery changes what the work can deliver,
-   and again before the PR) is that second question, not a separate
-   artefact. Record file:line plus one sentence; no evidence means
-   not verified, and a rejection names the `AC-n`. Refuse a copied or stale
-   acceptance block: `reviewed` is this head, or an ancestor after which only
-   this record's status and Closeout changed. An after-release criterion
-   is `deferred` (owner, window, follow-up), never verified at build time.
-   Where its trigger holds, apply
+   outcome for the affected user? Record file:line plus one sentence; no
+   evidence means not verified, and a rejection names the `AC-n`. Refuse a
+   copied or stale acceptance block: `reviewed` is this head, or an ancestor
+   after which only this record's status and Closeout changed. An
+   after-release criterion is `deferred` (owner, window, follow-up), never
+   verified at build time. Where its trigger holds, apply
    `.claude/skills/cf-editorial-review/SKILL.md` in this pass; meaning,
-   evidence, policy and voice defects are findings, not taste.
-   Mannered prose in any changed text is a finding, and your own report is
-   written plainly: simple, straightforward and clear, no mannered prose
-   (see `.codeflow/rules/writing.md`).
+   evidence, policy and voice defects are findings, not taste. Mannered prose
+   in any changed text is a finding, and your own report is written plainly:
+   simple, straightforward and clear, no mannered prose (see
+   `.codeflow/rules/writing.md`).
 4. Check the gates and capture their output:
    - the builder's cited targeted and quick runs, and the candidate gate
      where one exists, each naming this revision; run your own probes
@@ -79,18 +75,17 @@ itself a blocker finding — return changes_requested.
 5. For a user-facing change, follow the UI section of
    `.claude/skills/cf-model-orchestrator/resources/quality-contract.md`. This
    Claude pass **supports** the primary's implementer check; it does not
-   replace it. Use Playwright for web behavior
-   (headless is valid for deterministic E2E; headed only when visual, chrome,
-   rendering, or debugging is material), the approved design, fidelity to
-   `DESIGN_INTENT`, states,
+   replace it. Use Playwright for web behavior (headless is valid for
+   deterministic E2E; headed only when visual, chrome, rendering, or debugging
+   is material), the approved design, fidelity to `DESIGN_INTENT`, states,
    relevant sizes, writing direction/localization where claimed, and
-   accessibility against the named target. Screenshots alone are not
-   interaction or accessibility proof. Independent interactive QA — Computer
+   accessibility against the named target; screenshots alone are not
+   interaction or accessibility proof. Independent interactive QA (Computer
    Use through Codex app-server over every interactive control in the changed
-   journeys — belongs to the named Codex reviewer, not this seat. Computer Use
-   is not the default web driver. For concurrent work, verify isolated
-   profile/context, endpoints, namespaced data, artifacts, and teardown.
-   Reject attachment to the operator's browser/profile/tabs or desktop. Record
+   journeys) belongs to the named Codex reviewer, not this seat, and Computer
+   Use is not the default web driver. For concurrent work, verify isolated
+   profile/context, endpoints, namespaced data, artifacts, and teardown; reject
+   attachment to the operator's browser/profile/tabs or desktop. Record
    evidence; when no user-facing surface changed, record
    `UI: N/A — no user-facing surface changed`.
 6. Check discipline: tests accompany the change; required doc mutations are in
@@ -120,11 +115,11 @@ itself a blocker finding — return changes_requested.
    Investigate repeated small symptoms as a possible systemic major.
 9. Inspect the task's consolidated secondary-observation batch, if one exists.
    Challenge deferral of a clear, safe, in-scope improvement whose focused
-   validation is bounded: it should normally be fixed while context is warm.
-   For each genuinely uncertain item, recommend exactly one disposition:
-   fix now, track once at the repository's existing planning altitude with
-   evidence and a deterministic revisit event, or drop as non-actionable.
-   Never require a task, issue, or peer interruption for every preference nit.
+   validation is bounded. For each genuinely uncertain item, recommend exactly
+   one disposition: fix now, track once at the repository's existing planning
+   altitude with evidence and a deterministic revisit event, or drop as
+   non-actionable. Never require a task, issue, or peer interruption for every
+   preference nit.
 
 ## Verdict format
 
@@ -162,10 +157,10 @@ findings:
   defect.
 - `approved` requires: every criterion not `deferred` verified, all gates
   pass, zero blocker or major findings. Anything less is `changes_requested`.
-- Minor findings never block, but always list them.
-- Cosmetic, stylistic, and personal-preference nits are minor and non-blocking;
-  if they are the only findings, return `approved` and list them after the
-  verified criteria and gates.
+- Minor findings never block, but always list them. Cosmetic, stylistic, and
+  personal-preference nits are minor and non-blocking; if they are the only
+  findings, return `approved` and list them after the verified criteria and
+  gates.
 - A design finding anchored in the brief, settled `DESIGN_INTENT`, applicable
   accessibility target, or observed behavior is graded by materiality like any
   other finding; unanchored aesthetic preference remains non-blocking.

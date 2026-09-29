@@ -7,11 +7,9 @@ description: Delegate to the other vendor's native coding harness under its own 
 
 Compose native harnesses at the process boundary, each under its own subscription
 auth. CodeFlow's gates judge the output, not the author. You own and verify
-every returned result.
-
-The delegate is a vendor you are **not**: from Claude Code that is codex; from
-codex that is claude. Consulting or delegating to your own vendor is
-self-review with extra steps — never label it independent.
+every returned result. The delegate is a vendor you are **not**: from Claude
+Code that is codex; from codex that is claude. Consulting or delegating to
+your own vendor is self-review with extra steps; never label it independent.
 
 ## Consult, delegate, or neither
 
@@ -37,11 +35,11 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
 ```
 
 - **Claude Code → codex: prefer the official `codex-plugin-cc` plugin.** It
-  wraps the codex app-server — the same interactive engine as the TUI — so a
-  delegated task gets codex's full MCP toolset, a resumable thread, and
-  in-band approvals. When unavailable or incompatible, use a qualified official
-  Codex App/interactive CLI route under the fallback contract below. A missing
-  plugin is not proof that Codex itself is unavailable.
+  wraps the codex app-server, so a delegated task gets codex's full MCP
+  toolset, a resumable thread, and in-band approvals. When unavailable or
+  incompatible, use a qualified official Codex App/interactive CLI route under
+  the fallback contract below; a missing plugin is not proof that Codex itself
+  is unavailable.
 - **codex → claude: the interactive `claude` CLI driven through CodeFlow's
   schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036). A Codex host
   follows its host and canary rules in
@@ -50,12 +48,10 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
 **Prohibited at all times** — no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /
 `--print`), and driving the codex app-server through hand-rolled JSON-RPC.
-CodeFlow requires verified native sessions with the task's tools and guards;
-it does not infer those capabilities from a process label or terminal host.
-Use vendor-supported clients instead of maintaining a competing broker.
-Status commands are not work sessions
-— `codex login status`, `codex --version`, `codex mcp list`, and the plugin
-install/setup steps stay fine.
+CodeFlow requires verified native sessions with the task's tools and guards.
+Status commands are not work sessions: `codex login status`,
+`codex --version`, `codex mcp list`, and the plugin install/setup steps stay
+fine.
 
 For an incompatible or unavailable preferred lane, read
 [qualified native fallback](resources/native-fallback.md) before choosing

@@ -11,9 +11,8 @@ when a single outcome becomes one standalone task.
 
 1. Confirm routing. If this routed task did not arrive from an active
    `cf-model-orchestrator` run and has no recorded solo degradation, invoke the
-   orchestrator first. Do not recurse when the orchestrator already supplied
-   the immutable brief and plan. Then load `cf-method` for artifact
-   discipline.
+   orchestrator first; do not recurse when it already supplied the immutable
+   brief and plan. Then load `cf-method` for artifact discipline.
 2. Reuse the current evidence set: what discovery or the epic plan already
    read. Read `docs/product.md` (scope and non-goals), `docs/capabilities.md`
    and the recent `docs/decisions/` ADRs, or run `codeflow recall`, only where
@@ -28,10 +27,10 @@ when a single outcome becomes one standalone task.
    **synthesize that settled ground**: do not open a second interview on
    boundaries, landing shape, or reversible implementation choices already
    approved. Still ask every *live* operator-owned question the brief and the
-   plan do not answer, all unblocked ones in one round.
-4. Check the request against `product.md` non-goals; surface conflicts instead
-   of planning around them.
-5. Use the exact approved plan; never add scope or design silently. In a
+   plan do not answer, all unblocked ones in one round. Check the request
+   against `product.md` non-goals; surface conflicts instead of planning
+   around them.
+4. Use the exact approved plan; never add scope or design silently. In a
    recorded solo degradation, perform the same clarity and evidence work and
    name the missing cross-vendor assurance.
    Before allocating, check whether active tracking or approved adoption assigns
@@ -41,7 +40,7 @@ when a single outcome becomes one standalone task.
    `resources/task-graph.md` and put the approved topology in `depends_on` task
    frontmatter; its mutation rules say which later change needs a new plan
    version and which rides in the batched epic amendment.
-6. Materialize by route. Write each record plainly: simple, straightforward
+5. Materialize by route. Write each record plainly: simple, straightforward
    and clear, no mannered prose (see `.codeflow/rules/writing.md`), in short
    prose and bullets, with a fenced ASCII figure where a flow or structure
    carries the point. Partition a task set by coherent durable outcomes and
@@ -66,15 +65,14 @@ when a single outcome becomes one standalone task.
      `plan/` branch, reviewed by one other-lineage seat. A task's own criteria
      change rides in its own PR.
    Add a spec only where interfaces, formats, or behavior need pinning down,
-   and an ADR draft if a Tier-3 decision is involved (new dependency, schema
-   change, boundary change). Do not hand-invent IDs. If another method owns
-   product specs or task decomposition, link the settled source with its
-   revision (an opaque link in the record, or an SPC body); `specs` arrays
-   contain only SPC IDs. Do not mirror status or copy its tree. Active
-   full/historical tracking nevertheless requires distinct anchored
-   repository-execution tasks; an external artifact cannot satisfy or waive
-   those gates.
-7. For CodeFlow records, run `codeflow validate --docs`; the planning PR is
+   and an ADR draft if a Tier-3 decision is involved. Do not hand-invent IDs.
+   If another method owns product specs or task decomposition, link the
+   settled source with its revision (an opaque link in the record, or an SPC
+   body); `specs` arrays contain only SPC IDs. Do not mirror status or copy
+   its tree. Active full/historical tracking nevertheless requires distinct
+   anchored repository-execution tasks; an external artifact cannot satisfy
+   or waive those gates.
+6. For CodeFlow records, run `codeflow validate --docs`; the planning PR is
    reviewed once by the other lineage, and presented for approval only where
    the operator owns the decision. Implementation begins from
    `task/TSK-NNN-<slug>` only after `codeflow work start TSK-NNN` passes. That

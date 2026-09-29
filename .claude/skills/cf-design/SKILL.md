@@ -10,12 +10,10 @@ the creator, audience, context, subject, and systems in force. Design is a
 reasoned product decision, not decoration or a catalog of fashionable patterns.
 
 This supports `cf-model-orchestrator`, which owns Plan vN and settlement. The
-role qualified as `claude-judgment-primary` **produces** design
-in its own native interactive session; the Codex primary challenges
-feasibility, proportionality, failure modes, fidelity, and testability. A Grok
-or Codex host may pass options and review; it never drafts the direction for
-Claude to rubber-stamp. Model names and effort live in the ensemble binding,
-not here.
+role qualified as `claude-judgment-primary` **produces** design in its own
+native interactive session; the Codex primary challenges feasibility,
+proportionality, failure modes, fidelity, and testability. A Grok or Codex
+host may pass options and review; it never drafts the direction.
 
 ## 1. Select the process weight
 
@@ -36,12 +34,12 @@ materially open direction, primary composition, or experience
   -> render and compare materially different candidates, then settle
 ```
 
-Direction and composition are separate uncertainties. An accepted direction
+Direction and composition are separate uncertainties: an accepted direction
 does not settle how a surface must be composed, and an established system does
 not settle a genuinely new explanation, collection, comparison, journey, or
-interaction. Resolve each at the rung its own evidence requires. Do not promote
-a tweak into a redesign, and do not use an existing system as an excuse to
-avoid resolving something genuinely new.
+interaction. Resolve each at the rung its own evidence requires; neither
+promote a tweak into a redesign nor use an existing system to avoid resolving
+something new.
 
 ## 2. Inspect before inventing
 
@@ -92,12 +90,11 @@ Resolve only the dimensions that materially steer the surface:
    feasibility concerns; never silently override it and never amplify it
    without examination.
 
-Label the provenance of material claims. Audience facts come from the operator,
-repository, or real research. If a reversible inference is necessary, label it
-`inferred` and expose it for settlement. Never fabricate research, users,
-personas, preferences, quotes, metrics, testimonials, or brand history.
-
-Clarify when missing intent would materially change the outcome. Otherwise use
+Label the provenance of material claims: audience facts come from the
+operator, repository, or real research, and a necessary reversible inference
+is labeled `inferred` and exposed for settlement. Never fabricate research,
+users, personas, preferences, quotes, metrics, testimonials, or brand history.
+Clarify when missing intent would materially change the outcome; otherwise use
 the safest established convention and disclose the assumption.
 
 The consuming product owns its themes, palettes, and tokens; CodeFlow supplies
@@ -325,12 +322,11 @@ comparisons, console/network evidence, and failure traces where material. Where
 responsive or cross-platform composition is material, the evidence covers the
 intermediate contexts where composition changes and shows the idea intact.
 Fidelity review inspects the surface as it actually renders and behaves; an
-approval statement, a green build, a passing schema check, or a description of
-the intended result is not fidelity evidence. Review only the dimensions the
-intent makes applicable, to the depth the quality contract requires, and record
-an evidenced `N/A` instead of simulating irrelevant coverage. Where language or
-appearance modes apply, verify real localized variants rather than English-only
-inference, mode preference and persistence, and no incorrect-mode flash.
+approval statement, a green build or a description of the intended result is
+not fidelity evidence. Review only the dimensions the intent makes applicable
+and record an evidenced `N/A` for the rest; where language or appearance modes
+apply, verify real localized variants, mode preference and persistence, and no
+incorrect-mode flash.
 
 A difference from the settled intent is not automatically a defect: determine
 whether it is an approved improvement, an evidence-backed implementation
@@ -342,10 +338,7 @@ graded by materiality. An unanchored taste preference remains non-blocking.
 
 Return the process weight and evidence; settled `DESIGN_INTENT` or collapse;
 governing idea and composition; rendered candidates and operator decision where
-owned; warranted alternatives, references, and system scope; unresolved
-decisions; review and fidelity evidence; and the plan approval the orchestrator
-records.
-
-Do not claim a user was researched, a direction was approved, a composition was
-reviewed, a standard was met, or a rendered surface was verified without
-recheckable evidence.
+owned; system scope; unresolved decisions; review and fidelity evidence; and
+the plan approval the orchestrator records. Never claim a user was researched,
+a direction approved, a composition reviewed, a standard met or a surface
+verified without recheckable evidence.
