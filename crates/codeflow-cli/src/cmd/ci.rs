@@ -23,6 +23,7 @@ mod acceptance;
 mod adopter;
 mod change_class;
 mod classification;
+mod conflict_markers;
 mod id_registry;
 mod pr_body;
 mod work_records;
@@ -272,6 +273,14 @@ pub fn run(args: &CiArgs) -> i32 {
         Some(false) => skipped.push("added-lines"),
         None => {}
     }
+    conflict_markers::dispatch(
+        &root,
+        git,
+        range.base_sha.as_deref(),
+        &head,
+        &mut tagged,
+        &mut ran,
+    );
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     record_checks(

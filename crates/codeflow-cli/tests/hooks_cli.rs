@@ -5129,3 +5129,354 @@ fn a_child_that_is_not_git_never_inherits_the_designated_binary() {
     assert!(out.status.success(), "{}", both(&out));
     assert_eq!(std::fs::read_to_string(&seen).unwrap().trim(), "unset");
 }
+
+// -- conflict markers through the installed hooks (TSK-170 AC-6) -------------
+
+/// Run `program` in `dir` with the binary under test first on `PATH`, so
+/// the installed hook shims run it, and no user git configuration.
+#[cfg(unix)]
+fn with_installed_hooks(program: &str, dir: &Path, args: &[&str]) -> Output {
+    let bin = Path::new(env!("CARGO_BIN_EXE_codeflow")).parent().unwrap();
+    let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .env("GIT_EDITOR", "true")
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_NAME")
+        .env_remove("GITHUB_HEAD_REF")
+        .env_remove("BITBUCKET_PR_ID")
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn both_streams(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+#[cfg(unix)]
+fn ok(program: &str, dir: &Path, args: &[&str]) -> String {
+    let out = with_installed_hooks(program, dir, args);
+    let text = both_streams(&out);
+    assert!(out.status.success(), "{program} {args:?}: {text}");
+    text
+}
+
+/// A marker line built at run time, so this file holds none itself.
+#[cfg(unix)]
+fn marker_line(fill: char, size: usize, label: &str) -> String {
+    format!("{}{label}", fill.to_string().repeat(size))
+}
+
+#[cfg(unix)]
+fn ci_over(dir: &Path, branch: &str, base: &str) -> Output {
+    with_installed_hooks(
+        env!("CARGO_BIN_EXE_codeflow"),
+        dir,
+        &["ci", "--base", base, "--head", "HEAD", "--branch", branch],
+    )
+}
+
+/// Two branches that change the same line of `shared.txt` differently.
+#[cfg(unix)]
+fn diverged(root: &Path, base: &str, ours: &str, theirs: &str) {
+    ok("git", root, &["switch", "-q", "-c", theirs, base]);
+    std::fs::write(root.join("shared.txt"), "theirs\n").unwrap();
+    ok(
+        "git",
+        root,
+        &["commit", "-q", "-am", "feat: change the line there"],
+    );
+    ok("git", root, &["switch", "-q", "-c", ours, base]);
+    std::fs::write(root.join("shared.txt"), "ours\n").unwrap();
+    ok(
+        "git",
+        root,
+        &["commit", "-q", "-am", "feat: change the line here"],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_hooks_refuse_conflict_markers_and_ci_catches_what_they_cannot() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        &root,
+        &["init", "--yes", "--minimal"],
+    );
+    ok("git", &root, &["switch", "-q", "-c", "feat/seed"]);
+    std::fs::write(root.join("shared.txt"), "line\n").unwrap();
+    ok("git", &root, &["add", "shared.txt"]);
+    ok(
+        "git",
+        &root,
+        &["commit", "-q", "-m", "feat: add the shared line"],
+    );
+
+    // A conflicted merge concluded with `git commit` while markers remain is
+    // refused by the pre-commit hook.
+    diverged(&root, "feat/seed", "feat/merge", "feat/other");
+    let merged = with_installed_hooks("git", &root, &["merge", "-q", "feat/other"]);
+    assert!(!merged.status.success(), "the merge conflicts");
+    ok("git", &root, &["add", "shared.txt"]);
+    let refused = with_installed_hooks("git", &root, &["commit", "--no-edit"]);
+    let text = both_streams(&refused);
+    assert!(!refused.status.success(), "{text}");
+    assert!(
+        text.contains("BLOCKED — policy rule git.conflict_markers (block)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("shared.txt:1 adds an unresolved opening"),
+        "{text}"
+    );
+
+    // The same content committed past the hook, kept on its own branch:
+    // `codeflow ci` over that range refuses it.
+    ok("git", &root, &["commit", "-q", "--no-verify", "--no-edit"]);
+    ok("git", &root, &["branch", "feat/bypassed"]);
+    ok("git", &root, &["reset", "-q", "--hard", "HEAD^"]);
+    ok("git", &root, &["switch", "-q", "feat/bypassed"]);
+    let out = ci_over(&root, "feat/bypassed", "feat/seed");
+    let text = both_streams(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("shared.txt:1 adds an unresolved opening"),
+        "{text}"
+    );
+
+    // With the markers resolved, the merge commits and the range passes.
+    ok("git", &root, &["switch", "-q", "feat/merge"]);
+    let merged = with_installed_hooks("git", &root, &["merge", "-q", "feat/other"]);
+    assert!(!merged.status.success(), "the merge conflicts again");
+    std::fs::write(root.join("shared.txt"), "ours and theirs\n").unwrap();
+    ok("git", &root, &["add", "shared.txt"]);
+    ok("git", &root, &["commit", "--no-edit"]);
+    let out = ci_over(&root, "feat/merge", "feat/seed");
+    assert_eq!(out.status.code(), Some(0), "{}", both_streams(&out));
+
+    // A Markdown underline and a fixture under conflict-marker-size=32
+    // both commit through the hooks, and the range passes.
+    ok(
+        "git",
+        &root,
+        &["switch", "-q", "-c", "feat/fixtures", "feat/seed"],
+    );
+    std::fs::write(
+        root.join("README.md"),
+        format!("Title\n{}\n\nText.\n", marker_line('=', 7, "")),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("fixtures")).unwrap();
+    std::fs::write(
+        root.join("fixtures/conflict.txt"),
+        format!(
+            "{}\nours\n{}\ntheirs\n{}\n",
+            marker_line('<', 7, " HEAD"),
+            marker_line('=', 7, ""),
+            marker_line('>', 7, " feat/y")
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".gitattributes"),
+        "fixtures/** conflict-marker-size=32\n",
+    )
+    .unwrap();
+    ok("git", &root, &["add", "-A"]);
+    ok(
+        "git",
+        &root,
+        &["commit", "-q", "-m", "test: add the conflict fixture"],
+    );
+    let out = ci_over(&root, "feat/fixtures", "feat/seed");
+    assert_eq!(out.status.code(), Some(0), "{}", both_streams(&out));
+
+    // A marker left while resolving `git rebase --continue` is committed
+    // locally, since no pre-commit hook runs; `codeflow ci` refuses it.
+    diverged(&root, "feat/seed", "feat/rebase", "feat/upstream");
+    let rebased = with_installed_hooks("git", &root, &["rebase", "-q", "feat/upstream"]);
+    assert!(!rebased.status.success(), "the rebase conflicts");
+    ok("git", &root, &["add", "shared.txt"]);
+    ok("git", &root, &["rebase", "--continue"]);
+    let committed = std::fs::read_to_string(root.join("shared.txt")).unwrap();
+    assert!(
+        committed.starts_with(&marker_line('<', 7, " ")),
+        "{committed}"
+    );
+    let out = ci_over(&root, "feat/rebase", "feat/seed");
+    let text = both_streams(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("shared.txt:1 adds an unresolved opening"),
+        "{text}"
+    );
+}
+
+/// A fresh `--minimal` project on `feat/x` with a clean tracked `work.txt`
+/// and `clean.txt`, its installed hooks running the binary under test.
+#[cfg(unix)]
+fn minimal_project(dir: &Path) -> std::path::PathBuf {
+    let root = dir.join("p");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        &root,
+        &["init", "--yes", "--minimal"],
+    );
+    ok("git", &root, &["switch", "-q", "-c", "feat/x"]);
+    std::fs::write(root.join("work.txt"), "plain\n").unwrap();
+    std::fs::write(root.join("clean.txt"), "one\n").unwrap();
+    ok("git", &root, &["add", "work.txt", "clean.txt"]);
+    ok("git", &root, &["commit", "-q", "-m", "feat: add the files"]);
+    root
+}
+
+#[cfg(unix)]
+fn leftover_markers() -> String {
+    format!(
+        "{}\nours\n{}\ntheirs\n{}\n",
+        marker_line('<', 7, " HEAD"),
+        marker_line('=', 7, ""),
+        marker_line('>', 7, " other")
+    )
+}
+
+/// TSK-170 review P1: `git commit -a` and `git commit <path>` commit a
+/// temporary index named by `GIT_INDEX_FILE`; the hook judges that index,
+/// not the ordinary one.
+#[cfg(unix)]
+#[test]
+fn installed_hook_judges_the_index_git_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = minimal_project(dir.path());
+    let head = ok("git", &root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("work.txt"), leftover_markers()).unwrap();
+
+    // Unstaged markers committed with `-a` are refused.
+    let all = with_installed_hooks("git", &root, &["commit", "-am", "fix: work"]);
+    let text = both_streams(&all);
+    assert!(!all.status.success(), "commit -a: {text}");
+    assert!(
+        text.contains("work.txt:1 adds an unresolved opening"),
+        "{text}"
+    );
+
+    // The same file named on the command line is refused too.
+    let path = with_installed_hooks("git", &root, &["commit", "work.txt", "-m", "fix: work"]);
+    let text = both_streams(&path);
+    assert!(!path.status.success(), "commit <path>: {text}");
+    assert!(
+        text.contains("work.txt:1 adds an unresolved opening"),
+        "{text}"
+    );
+    assert_eq!(ok("git", &root, &["rev-parse", "HEAD"]), head);
+
+    // A clean selected path commits while unrelated staged markers, which
+    // that commit leaves out, stay staged and are not judged.
+    ok("git", &root, &["checkout", "--", "work.txt"]);
+    std::fs::write(root.join("staged.txt"), leftover_markers()).unwrap();
+    ok("git", &root, &["add", "staged.txt"]);
+    std::fs::write(root.join("clean.txt"), "one\ntwo\n").unwrap();
+    let clean = with_installed_hooks("git", &root, &["commit", "clean.txt", "-m", "fix: clean"]);
+    assert!(clean.status.success(), "{}", both_streams(&clean));
+    let committed = ok("git", &root, &["show", "--name-only", "--format=", "HEAD"]);
+    assert_eq!(committed.trim(), "clean.txt");
+    let staged = ok("git", &root, &["diff", "--cached", "--name-only"]);
+    assert_eq!(staged.trim(), "staged.txt");
+}
+
+/// TSK-170 review P1: an index the hook cannot read is reported at the
+/// configured level, never passed. The secret scan, which has no lower
+/// level, refuses it too, so the commit stops either way.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_commit_index_is_reported_at_the_configured_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = minimal_project(dir.path());
+    let bad = dir.path().join("broken-index");
+    std::fs::write(&bad, "not an index").unwrap();
+    for (level, code, verdict) in [("block", 1, "BLOCKED"), ("warn", 1, "warning")] {
+        let mut policy: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".codeflow/policy.json")).unwrap(),
+        )
+        .unwrap();
+        policy["git"]["conflict_markers"] = level.into();
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+        let out = codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(&root)
+            .env("GIT_INDEX_FILE", &bad)
+            .output()
+            .unwrap();
+        let text = both_streams(&out);
+        assert_eq!(out.status.code(), Some(code), "{level}: {text}");
+        assert!(
+            text.contains(&format!(
+                "{verdict} — policy rule git.conflict_markers ({level})"
+            )),
+            "{level}: {text}"
+        );
+        assert!(text.contains("cannot read the index"), "{level}: {text}");
+        assert!(
+            text.contains("BLOCKED — policy rule git.secret_scan (block)")
+                && text.contains("staged secret scan incomplete"),
+            "{level}: {text}"
+        );
+    }
+}
+
+/// TSK-170 review follow-up (security): the secret scan judges the index git
+/// commits too, so a key committed with `git commit -a` or `git commit
+/// <path>` without staging it first is refused and never reaches HEAD.
+#[cfg(unix)]
+#[test]
+fn installed_hook_refuses_a_secret_in_the_index_git_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = minimal_project(dir.path());
+    let head = ok("git", &root, &["rev-parse", "HEAD"]);
+    // Built at run time, so this file carries no key shape itself.
+    let key = format!("AKIA{}", "IOSFODNN7EXAMPLF");
+    std::fs::write(root.join("work.txt"), format!("key = {key}\n")).unwrap();
+    for args in [
+        &["commit", "-am", "feat: add the key"][..],
+        &["commit", "work.txt", "-m", "feat: add the key"][..],
+    ] {
+        let out = with_installed_hooks("git", &root, args);
+        let text = both_streams(&out);
+        assert!(!out.status.success(), "{args:?}: {text}");
+        assert!(text.contains("possible secret"), "{args:?}: {text}");
+        assert_eq!(ok("git", &root, &["rev-parse", "HEAD"]), head, "{args:?}");
+        let committed = ok("git", &root, &["show", "HEAD:work.txt"]);
+        assert!(!committed.contains(&key), "{args:?}: the key reached HEAD");
+    }
+}

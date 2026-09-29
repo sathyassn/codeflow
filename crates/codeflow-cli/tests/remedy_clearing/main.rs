@@ -123,6 +123,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("COMMIT_EMOJI", Runs),
     ("COMMIT_POLICY_CHARACTER", Runs),
     ("FILE_POLICY_CHARACTER", Runs),
+    ("CONFLICT_MARKER", Runs),
+    ("GIT_ATTR_SOURCE_UNSUPPORTED", Excluded(Network)),
     ("BREAKING_WATCH_PATH", Runs),
     ("PR_POLICY_CHARACTER", Runs),
     ("PR_AI_ATTRIBUTION", Runs),
@@ -734,6 +736,30 @@ fn clears_file_policy_character() {
             assert!(printed.contains("edit docs/notes.md"), "{printed}");
             write(root, "docs/notes.md", "one, two\n");
             git(root, &["commit", "-q", "-am", "docs: reword the notes"]);
+        },
+    );
+}
+
+#[test]
+fn clears_conflict_marker() {
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    // Built at run time, so this file holds no marker line itself.
+    let open = "<".repeat(7);
+    let close = ">".repeat(7);
+    write(
+        &root,
+        "notes.md",
+        &format!("{open} HEAD\nours\n{close} feat/y\n"),
+    );
+    prove(
+        "CONFLICT_MARKER",
+        "notes.md:1 adds an unresolved opening conflict marker",
+        || commit_all(&root, "docs: add the notes"),
+        |printed| {
+            assert!(printed.contains("edit notes.md"), "{printed}");
+            write(&root, "notes.md", "ours\n");
         },
     );
 }

@@ -28,6 +28,7 @@
 //! path (charter §6.2).
 
 pub mod adoption;
+pub mod conflict_markers;
 pub mod delegate_turn;
 pub mod exec_guard;
 pub mod git_guard;
@@ -216,6 +217,7 @@ pub const LEVEL_KEYS: &[&str] = &[
     "work_planning",
     "branch_naming",
     "secret_scan",
+    "conflict_markers",
     "test_gate_on_push",
     "security_review",
     "dep_audit",

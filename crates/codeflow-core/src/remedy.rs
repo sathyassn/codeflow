@@ -319,6 +319,15 @@ catalog! {
     FILE_POLICY_CHARACTER = Step::Edit("{path}"),
         "edit {path}: use a comma, colon, semicolon, parentheses, or a full stop and a new sentence; a hyphen (-) inside a compound word; \"to\" in a range (ADR-0067); existing lines are grandfathered, only this added line changes";
 
+    /// An unresolved conflict marker on an added line of a file.
+    CONFLICT_MARKER = Step::Edit("{path}"),
+        "edit {path}: resolve the conflict and restage, or set conflict-marker-size for the path in .gitattributes to a length its markers do not have";
+
+    /// A git without `check-attr --source`, which the conflict-marker row
+    /// of `codeflow ci` needs.
+    GIT_ATTR_SOURCE_UNSUPPORTED = Step::Codeflow("codeflow ci"),
+        "install a Git release build of 2.40 or later, whose `git check-attr --source` the conflict-marker check needs, then rerun `codeflow ci`; fetching more history does not help";
+
     /// A commit on a declared contract surface.
     BREAKING_WATCH_PATH = Step::Codeflow("codeflow ci"),
         "if it is not breaking, state `Breaking: no` with a `Rationale` under Release impact in the pull request body, and `codeflow ci --pr-body-file <body.md>` reports nothing; if it is, mark the commit `type!:` with a `BREAKING CHANGE:` footer and the migration path";
