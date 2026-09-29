@@ -778,6 +778,7 @@ fn fresh_policy_has_no_human_authorization_at_every_tier() {
 }
 
 /// Every `PreToolUse` hook command in a harness wiring file.
+#[cfg(unix)]
 fn pretooluse_commands(root: &Path, rel: &str) -> Vec<String> {
     let wiring: serde_json::Value = serde_json::from_str(&read(root, rel)).unwrap();
     wiring["hooks"]["PreToolUse"]
@@ -791,6 +792,7 @@ fn pretooluse_commands(root: &Path, rel: &str) -> Vec<String> {
 
 /// Run a wired hook command through the shell, as the harness does, with a
 /// Bash tool call for `command` on stdin.
+#[cfg(unix)]
 fn run_wired(root: &Path, hook: &str, command: &str) -> Output {
     use std::io::Write as _;
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
