@@ -347,7 +347,7 @@ const HINT: &str = "add one line `Task: TSK-NNN` for tracked work or `Task: none
 fn push(tagged: &mut Vec<super::TaggedViolation>, rule: &str, message: String, hint: &str) {
     tagged.push(super::TaggedViolation {
         sha: None,
-        violation: Violation::new(rule, PolicyLevel::Block, message, hint.to_string()),
+        violation: Violation::always_blocking(rule, message, hint),
     });
 }
 
@@ -369,16 +369,11 @@ fn anchor_failure(
     tagged: &mut Vec<super::TaggedViolation>,
     level: PolicyLevel,
     message: String,
-    hint: &str,
+    hint: codeflow_core::remedy::Remedy,
 ) {
     tagged.push(super::TaggedViolation {
         sha: None,
-        violation: Violation::new(
-            "work.stable_planning_anchor",
-            level,
-            message,
-            hint.to_string(),
-        ),
+        violation: Violation::new("work.stable_planning_anchor", level, message, hint),
     });
 }
 
@@ -411,14 +406,15 @@ fn tracked(
                 tagged,
                 anchor.level,
                 error.to_string(),
-                &format!("reconcile the target branch, then run `codeflow work start {task_id}`"),
+                codeflow_core::remedy::WORK_START_RECONCILE.with(&[("id", task_id)]),
             );
             return;
         }
     };
     match check_work_start_anchored(root, task_id, &target) {
         Ok(report) => {
-            let spike = report.work_type.as_deref() == Some("spike") || branch.starts_with("spike/");
+            let spike =
+                report.work_type.as_deref() == Some("spike") || branch.starts_with("spike/");
             if spike {
                 if let Some(path) = files.iter().find(|path| !is_spike_path(path, task_id)) {
                     push(
@@ -435,9 +431,8 @@ fn tracked(
             tagged,
             anchor.level,
             error.to_string(),
-            &format!(
-                "merge the validated planning record into '{target}', then run `codeflow work start {task_id}`"
-            ),
+            codeflow_core::remedy::WORK_START_MERGE_PLANNING
+                .with(&[("target", &target), ("id", task_id)]),
         ),
     }
 }
@@ -522,7 +517,8 @@ fn journey(
                 JOURNEY_RULE,
                 git.work_records_level(),
                 message,
-                "add a `(journey)` criterion by a planning pull request, or serve the epic's journey criterion with `(serves EPC-NNN AC-n)`".to_string(),
+                codeflow_core::remedy::JOURNEY_CRITERION
+                    .with(&[("path", &format!("project-management/tasks/{task_id}.md"))]),
             ),
         });
     }

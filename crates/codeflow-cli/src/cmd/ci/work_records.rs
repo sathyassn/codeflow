@@ -30,7 +30,13 @@ pub(super) fn dispatch(
         ran.push("work-records");
     }
     for notice in &outcome.notices {
-        eprintln!("codeflow ci: notice: work.records: {notice}");
+        eprintln!(
+            "{}",
+            notice
+                .clone()
+                .prefixed("work.records")
+                .line("codeflow ci", "notice")
+        );
     }
     tagged.extend(
         outcome
@@ -47,7 +53,7 @@ pub(super) fn dispatch(
 pub(super) struct Outcome {
     pub violations: Vec<Violation>,
     /// Facts to show without blocking, such as an edited baseline list.
-    pub notices: Vec<String>,
+    pub notices: Vec<codeflow_core::remedy::Finding>,
     pub ran: bool,
 }
 
@@ -92,8 +98,8 @@ pub(super) fn check(
                 Violation::new(
                     "work.records",
                     PolicyLevel::Warn,
-                    warning,
-                    "an older record keeps its baseline exemption; a transition applies the rules in full".to_string(),
+                    warning.text,
+                    warning.remedy,
                 )
             }));
             Outcome {
@@ -111,10 +117,9 @@ pub(super) fn check(
 }
 
 fn block(message: String) -> Violation {
-    Violation::new(
+    Violation::always_blocking(
         "work.records",
-        PolicyLevel::Block,
         message,
-        "change status with `codeflow task|epic|spec status`, which writes what the transition needs".to_string(),
+        "change status with `codeflow task|epic|spec status`, which writes what the transition needs",
     )
 }

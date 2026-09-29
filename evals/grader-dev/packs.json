@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "packs": [
+    {
+      "id": "grader-dev",
+      "description": "A public development pack for the file-state and tool-effect grader: one small graded case, safe to publish, used by the kit's own tests. Qualification uses a holdout kept outside the published repository.",
+      "includes": [],
+      "cases": [
+        "grader-dev-fix-greeting"
+      ]
+    }
+  ]
+}

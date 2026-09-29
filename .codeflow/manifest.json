@@ -257,7 +257,7 @@
     ".agents/skills/cf-evaluate-model/resources/protocol.md": {
       "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
       "ownership": "managed",
-      "sha256": "9e6f97d345aef79099055da0ca4e3086ae797107e7817c2a3eae454332797102",
+      "sha256": "513cb0390677282d487e899833b33d5d4870f7940fbe02ff9366a3de28b2fc04",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
@@ -275,7 +275,7 @@
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "30731a036a4d0deb1b65eb32537d32b2a77dd5366d1128fb257fe1163a402846",
+      "sha256": "d598a981831cb3d044eea73d3c1a6037e8aabe44bc9b774ca6062b577148c8f1",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/fake_client.py": {
@@ -935,7 +935,7 @@
     ".claude/skills/cf-evaluate-model/resources/protocol.md": {
       "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
       "ownership": "managed",
-      "sha256": "9e6f97d345aef79099055da0ca4e3086ae797107e7817c2a3eae454332797102",
+      "sha256": "513cb0390677282d487e899833b33d5d4870f7940fbe02ff9366a3de28b2fc04",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
@@ -953,7 +953,7 @@
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "30731a036a4d0deb1b65eb32537d32b2a77dd5366d1128fb257fe1163a402846",
+      "sha256": "d598a981831cb3d044eea73d3c1a6037e8aabe44bc9b774ca6062b577148c8f1",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/fake_client.py": {
@@ -1409,7 +1409,7 @@
     ".codeflow/rules/writing.md": {
       "src": "rules/writing.md",
       "ownership": "managed",
-      "sha256": "b18fe2caa256df90c79d3c81ce3916b13bfd09bdcdb2cfa3bbe1f95d0730e69f",
+      "sha256": "713bd019a17c32a44e7d2f2e3c6530a421fd79a0bc275cac9f528cd4bbdb83f3",
       "exec": false
     },
     ".codeflow/schemas/present/document-v1.schema.json": {

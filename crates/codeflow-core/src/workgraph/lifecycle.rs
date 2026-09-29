@@ -23,6 +23,8 @@ use std::path::Path;
 
 use git2::{Repository, TreeWalkMode, TreeWalkResult};
 
+use crate::remedy::{self, Finding};
+
 use super::record_text::{
     acceptance_blocks, check_acceptance, check_block, historical_acceptance, outcome_word,
     parse_blocker, parse_cancellation, parse_criteria, reopen_reasons, AcceptanceBlock,
@@ -443,11 +445,14 @@ impl Baseline {
     }
 
     /// The visible warning of a checkout that cannot see the baseline.
-    fn warning(&self) -> Option<String> {
+    fn warning(&self) -> Option<Finding> {
         match self {
-            Self::Unavailable(commits) => Some(format!(
-                "work-records migration baseline {} is not in this clone's history; records the range did not add are judged leniently (fetch full history to enforce the rules in full)",
-                commits.join(", ")
+            Self::Unavailable(commits) => Some(Finding::new(
+                format!(
+                    "work-records migration baseline {} is not in this clone's history; records the range did not add are judged leniently",
+                    commits.join(", ")
+                ),
+                remedy::BASELINE_HISTORY.remedy(),
             )),
             _ => None,
         }
@@ -564,7 +569,7 @@ fn range_baseline(
     repo: &Repository,
     target: git2::Oid,
     head: Option<&str>,
-) -> (Baseline, Vec<String>) {
+) -> (Baseline, Vec<Finding>) {
     let head_commit = resolve_commit(repo, head.unwrap_or("HEAD"));
     let base_list = baseline_at(repo, target);
     let head_list = match head {
@@ -576,9 +581,12 @@ fn range_baseline(
     let mut notices = Vec::new();
     if base_list.is_empty() {
         if !head_list.is_empty() {
-            notices.push(format!(
-                "this change introduces {BASELINE_KEY}; every record unchanged from these snapshots is legacy, so the human reviewer approves each: {}",
-                head_list.join(", ")
+            notices.push(Finding::new(
+                format!(
+                    "this change introduces {BASELINE_KEY}; every record unchanged from these snapshots is legacy, so the human reviewer approves each: {}",
+                    head_list.join(", ")
+                ),
+                remedy::BASELINE_REVIEW.remedy(),
             ));
         }
         return (
@@ -604,11 +612,14 @@ fn range_baseline(
                 entries.join(", ")
             }
         };
-        notices.push(format!(
-            "this change edits {BASELINE_KEY} (added {}; removed {}{}); the target's list judges this change, and the edit takes effect after it lands",
-            describe(&added),
-            describe(&removed),
-            if added.is_empty() && removed.is_empty() { "; reordered" } else { "" }
+        notices.push(Finding::new(
+            format!(
+                "this change edits {BASELINE_KEY} (added {}; removed {}{}); the target's list judges this change, and the edit takes effect after it lands",
+                describe(&added),
+                describe(&removed),
+                if added.is_empty() && removed.is_empty() { "; reordered" } else { "" }
+            ),
+            remedy::BASELINE_REVIEW.remedy(),
         ));
     }
     let baseline = match Baseline::from_entries(repo, &base_list, head_commit) {
@@ -644,10 +655,11 @@ enum Mode {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Verdict {
     pub errors: Vec<String>,
-    pub warnings: Vec<String>,
+    /// Warnings, each with the step that clears it (R-80).
+    pub warnings: Vec<Finding>,
     /// Facts a reviewer should see that are neither errors nor warnings,
     /// such as a change to the baseline list.
-    pub notices: Vec<String>,
+    pub notices: Vec<Finding>,
 }
 
 impl Verdict {
@@ -657,16 +669,19 @@ impl Verdict {
     }
 
     fn apply(&mut self, mode: Mode, path: &str, problems: Vec<String>) {
-        let target = match mode {
-            Mode::Exempt => return,
-            Mode::Lenient => &mut self.warnings,
-            Mode::Strict => &mut self.errors,
-        };
-        target.extend(
-            problems
-                .into_iter()
-                .map(|problem| format!("{path}: {problem}")),
-        );
+        let problems = problems
+            .into_iter()
+            .map(|problem| format!("{path}: {problem}"));
+        match mode {
+            Mode::Exempt => {}
+            Mode::Lenient => self.warnings.extend(problems.map(|problem| {
+                Finding::new(
+                    problem,
+                    remedy::RECORD_BASELINE_EXEMPT.with(&[("path", path)]),
+                )
+            })),
+            Mode::Strict => self.errors.extend(problems),
+        }
     }
 
     fn sort(&mut self) {
@@ -1681,7 +1696,7 @@ pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
     verdict
 }
 
-fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<String> {
+fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<Finding> {
     let mut warnings = Vec::new();
     let repo = Repository::discover(repo_root).ok();
     let prefixes = crate::hooks::policy::Policy::load_effective(repo_root)
@@ -1698,11 +1713,14 @@ fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<String> {
                     .map(|task| task.id.as_str())
                     .collect();
                 if !done.is_empty() {
-                    warnings.push(format!(
-                        "{}: stale status: {} epic has complete tasks ({})",
-                        record.path,
-                        record.status,
-                        done.join(", ")
+                    warnings.push(Finding::new(
+                        format!(
+                            "{}: stale status: {} epic has complete tasks ({})",
+                            record.path,
+                            record.status,
+                            done.join(", ")
+                        ),
+                        remedy::EPIC_STATUS.with(&[("path", &record.path), ("id", &record.id)]),
                     ));
                 }
             }
@@ -1711,9 +1729,12 @@ fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<String> {
                     .as_ref()
                     .is_some_and(|repo| has_active_branch(repo, record, &prefixes));
                 if !active {
-                    warnings.push(format!(
-                        "{}: stale status: in_progress with no active branch carrying {}",
-                        record.path, record.id
+                    warnings.push(Finding::new(
+                        format!(
+                            "{}: stale status: in_progress with no active branch carrying {}",
+                            record.path, record.id
+                        ),
+                        remedy::TASK_STATUS.with(&[("id", &record.id)]),
                     ));
                 }
             }
@@ -1723,9 +1744,13 @@ fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<String> {
                         .get(&spec, RecordKind::Spec)
                         .is_some_and(|spec| spec.status == "superseded")
                     {
-                        warnings.push(format!(
-                            "{}: acceptance cited superseded spec {spec}; recheck it against the successor",
-                            record.path
+                        warnings.push(Finding::new(
+                            format!(
+                                "{}: acceptance cited superseded spec {spec}; recheck it against the successor",
+                                record.path
+                            ),
+                            remedy::SUPERSEDED_CITATION
+                                .with(&[("id", &record.id), ("spec", &spec)]),
                         ));
                     }
                 }
@@ -1737,12 +1762,18 @@ fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<String> {
                 // R-51). Only states that disagree with the consumers warn.
                 match (record.status.as_str(), state) {
                     ("approved", SpecState::NoDeliveringConsumer) => {
-                        warnings.push(format!("{}: no delivering consumer", record.path));
+                        warnings.push(Finding::new(
+                            format!("{}: no delivering consumer", record.path),
+                            remedy::SPEC_NO_CONSUMER.with(&[("id", &record.id)]),
+                        ));
                     }
                     ("implemented", SpecState::Implemented) => {}
-                    ("implemented", _) => warnings.push(format!(
-                        "{}: written `implemented` disagrees with the derived state",
-                        record.path
+                    ("implemented", _) => warnings.push(Finding::new(
+                        format!(
+                            "{}: written `implemented` disagrees with the derived state",
+                            record.path
+                        ),
+                        remedy::SPEC_WRITTEN_IMPLEMENTED.with(&[("path", &record.path)]),
                     )),
                     _ => {}
                 }

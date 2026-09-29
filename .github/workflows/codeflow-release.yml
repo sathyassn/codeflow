@@ -27,6 +27,14 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+      # release.py reads the body with the codeflow built from this same
+      # checkout, the reader `codeflow ci` uses, so the two cannot read a
+      # body differently (TSK-147 F4). It never takes a codeflow from PATH.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the codeflow that reads the body
+        run: cargo build --release --locked -p codeflow-cli
       - name: Validate reviewed release intent
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -38,7 +46,8 @@ jobs:
           git fetch origin "$BASE_REF"
           python3 scripts/release.py check-pr \
             --base "$BASE_SHA" --head "$HEAD_SHA" \
-            --target-ref "origin/$BASE_REF" --body-env CODEFLOW_PR_BODY
+            --target-ref "origin/$BASE_REF" --body-env CODEFLOW_PR_BODY \
+            --codeflow-bin target/release/codeflow
 
   release-state:
     name: release state
