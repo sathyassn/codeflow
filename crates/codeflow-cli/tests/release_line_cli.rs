@@ -3568,6 +3568,55 @@ fn the_records_table_is_a_one_time_bridge() {
     the_table_is_a_one_time_bridge("release_records_baseline");
 }
 
+/// AC-14: a cutoff on a line this clone has never fetched is read after
+/// the judge fetches the advertised lines, so the bridge is honoured
+/// rather than refused as unreadable.
+#[test]
+fn a_cutoff_the_clone_lacks_is_fetched_before_it_is_read() {
+    for key in ["release_rule_baseline", "release_records_baseline"] {
+        let fx = Fx::new(false);
+        let parent = fx.root.parent().unwrap().to_path_buf();
+        run_git(
+            &parent,
+            &["clone", "-q", fx.origin.to_str().unwrap(), "other"],
+        );
+        let other = parent.join("other");
+        run_git(&other, &["switch", "-q", LINE_B]);
+        std::fs::write(other.join("src/two.rs"), "// line B\n").unwrap();
+        run_git(&other, &["add", "-A"]);
+        run_git(&other, &["commit", "-q", "-m", "feat: line B work"]);
+        run_git(&other, &["push", "-q", "origin", LINE_B]);
+        let unseen = run_git(&other, &["rev-parse", "HEAD"]);
+
+        fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+        let line_tip = fx.land(LINE_A, "task/TSK-001-work");
+        fx.git(&["switch", "-q", "main"]);
+        fx.write(
+            ".codeflow/project.toml",
+            &format!(
+                "{PROJECT}{MARKER}\n[{key}]\n\"{LINE_A}\" = \"{line_tip}\"\n\"{LINE_B}\" = \"{unseen}\"\n"
+            ),
+        );
+        fx.commit("chore: record the transition table");
+        fx.git(&["push", "-q", "origin", "main"]);
+        // The release imports line A from this clone: a fetch here would
+        // bring line B's cutoff before the judge does.
+        fx.cut_release();
+        fx.merge(LINE_A);
+        assert!(
+            !run_git_status(
+                &fx.root,
+                &["cat-file", "-e", &format!("{unseen}^{{commit}}")]
+            ),
+            "{key}: the clone must lack line B's cutoff"
+        );
+        passes(
+            &fx.ci_release(),
+            &format!("{key}: a cutoff on a line the clone never fetched"),
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TSK-140 AC-11 to AC-13: brought records judged where they were introduced
 // ---------------------------------------------------------------------------
