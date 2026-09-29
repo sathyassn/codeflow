@@ -76,7 +76,10 @@ description: Land finished work — docs and capability updates, then a PR throu
    into a protected base, no by-hand merge, never `gh pr merge --delete-branch`.
    Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 9. Confirm the landed state with `codeflow status`; report the final epic and
-   capability state.
+   capability state. After an epic-line landing, only when the project
+   configures a release branch matching its release pattern, R-120, and a workflow
+   integrating into it, follow [release integration](references/pr-evidence.md#release-integration-after-landing).
+   Otherwise skip that step.
 10. Clean up after the human merge, with proof. From outside the task worktree:
     - fetch, then use `codeflow status` as the local worktree/branch inventory;
       its removable/dirty/unproven classification is evidence, not deletion or
