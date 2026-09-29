@@ -1703,6 +1703,48 @@ fn update_adds_work_planning_and_keeps_an_explicit_level() {
     }
 }
 
+/// TSK-170 AC-5: `codeflow update` adds `git.conflict_markers` at the
+/// shipped default, `block`, reports the added key, and keeps a level the
+/// project set.
+#[test]
+fn update_adds_conflict_markers_and_reports_it() {
+    isolate_git();
+    let real: serde_json::Value =
+        serde_json::from_str(include_str!("../../../assets/base/policy.json")).unwrap();
+    assert_eq!(real["git"]["conflict_markers"], "block");
+    for (value, expected) in [(None, "block"), (Some("warn"), "warn")] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        if let Some(value) = value {
+            set_policy_key(&root, "conflict_markers", value);
+        }
+        let (dir, _) = fixture_assets(true);
+        let path = dir.path().join("base/policy.json");
+        let mut shipped: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        shipped["git"]["conflict_markers"] = real["git"]["conflict_markers"].clone();
+        std::fs::write(&path, serde_json::to_string_pretty(&shipped).unwrap()).unwrap();
+        let assets = DirSource::new(dir.path());
+        let report = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(after["git"]["conflict_markers"], expected, "from {value:?}");
+        let notes = &report
+            .files
+            .iter()
+            .find(|f| f.dest == ".codeflow/policy.json")
+            .unwrap()
+            .notes;
+        assert_eq!(
+            notes
+                .iter()
+                .any(|n| n.contains("added key git.conflict_markers")),
+            value.is_none(),
+            "{notes:?}"
+        );
+    }
+}
+
 #[test]
 fn update_records_the_work_records_baseline_once_for_existing_records() {
     isolate_git();

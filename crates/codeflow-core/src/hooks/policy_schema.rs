@@ -89,7 +89,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 49] = [
+pub const SCHEMA: [KeySpec; 50] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -453,6 +453,18 @@ pub const SCHEMA: [KeySpec; 49] = [
         purpose: "Pre-commit scan for staged secrets and .env files.",
         notes: "Never suspended by bootstrap grace — but off/allow HERE does \
                 disable the scan (it is policy, not hardcoded); leave at block.",
+    },
+    KeySpec {
+        path: "git.conflict_markers",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170).",
+        notes: "Defaults to block. Only added lines are judged. A separator \
+                line counts only between an opening and a closing marker, so \
+                a Markdown heading underline passes. A file that must hold \
+                markers sets `conflict-marker-size` for its path in \
+                .gitattributes to a length its markers do not have. \
+                Suspended by bootstrap grace.",
     },
     KeySpec {
         path: "git.test_gate_on_push",
@@ -1110,6 +1122,17 @@ mod tests {
         let errs =
             validate_policy_str(r#"{"security":{"dangerous_commands":"nope"}}"#).unwrap_err();
         assert_eq!(errs[0].key, "security.dangerous_commands");
+    }
+
+    #[test]
+    fn test_conflict_markers_takes_every_level_and_refuses_others() {
+        // TSK-170 AC-5.
+        for level in ["block", "warn", "allow", "off"] {
+            let json = format!(r#"{{"git":{{"conflict_markers":"{level}"}}}}"#);
+            assert!(validate_policy_str(&json).is_ok(), "{level}");
+        }
+        let errs = validate_policy_str(r#"{"git":{"conflict_markers":"strict"}}"#).unwrap_err();
+        assert_eq!(errs[0].key, "git.conflict_markers");
     }
 
     #[test]

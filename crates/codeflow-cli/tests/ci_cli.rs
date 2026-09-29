@@ -1371,3 +1371,134 @@ fn a_body_without_the_declaration_keeps_the_watched_path_warning() {
         "{text}"
     );
 }
+
+// -- conflict markers (TSK-170) ------------------------------------------------
+
+/// A marker line built at run time, so this file holds none itself.
+fn marker(fill: char, size: usize, label: &str) -> String {
+    format!("{}{label}", fill.to_string().repeat(size))
+}
+
+fn output_text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// TSK-170 AC-4: `codeflow ci` judges the lines a range adds to every text
+/// path with the hook's matcher, level, messages and attribute rule, and
+/// names the check it ran. One finding per case of AC-1 and AC-3.
+#[test]
+fn ci_refuses_conflict_markers_one_finding_per_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    repo_with_range(root, "code");
+    // A clean range names the check among those that passed.
+    let clean = ci_range(root);
+    let text = output_text(&clean);
+    assert_eq!(clean.status.code(), Some(0), "{text}");
+    assert!(text.contains("conflict-markers"), "{text}");
+    let cases = [
+        ("opening.txt", marker('<', 7, " HEAD")),
+        ("opening-bare.txt", marker('<', 7, "")),
+        ("closing.txt", marker('>', 7, " feat/y")),
+        ("closing-bare.txt", marker('>', 7, "")),
+        ("base.txt.d", marker('|', 7, " merged common ancestors")),
+        ("base-bare.txt.d", marker('|', 7, "")),
+        ("fixtures/sized.txt", marker('<', 32, " HEAD")),
+    ];
+    for (path, line) in &cases {
+        let full = root.join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, format!("before\n{line}\nafter\n")).unwrap();
+    }
+    // A separator between an opening and a closing marker.
+    std::fs::write(
+        root.join("separator.md"),
+        format!("text\n{}\n", marker('=', 7, "")),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pair.md"),
+        format!(
+            "{}\nours\n{}\ntheirs\n{}\n",
+            marker('<', 7, " a"),
+            marker('=', 7, ""),
+            marker('>', 7, " b")
+        ),
+    )
+    .unwrap();
+    // Seven-character markers under a path whose attribute sets 32.
+    std::fs::write(
+        root.join("fixtures/seven.txt"),
+        format!("{}\nx\n{}\n", marker('<', 7, " a"), marker('>', 7, " b")),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".gitattributes"),
+        "fixtures/** conflict-marker-size=32\n",
+    )
+    .unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "feat: add the fixtures"]);
+
+    let out = ci_range(root);
+    let all = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "{all}");
+    for (path, _) in &cases {
+        assert_eq!(
+            all.matches(&format!("{path}:2 adds an unresolved")).count(),
+            1,
+            "{path}: {all}"
+        );
+    }
+    // The setext underline alone is text; the pair's three lines are found.
+    assert!(!all.contains("separator.md"), "{all}");
+    assert!(
+        all.contains("pair.md:1 adds an unresolved opening"),
+        "{all}"
+    );
+    assert!(
+        all.contains("pair.md:3 adds an unresolved separator"),
+        "{all}"
+    );
+    assert!(
+        all.contains("pair.md:5 adds an unresolved closing"),
+        "{all}"
+    );
+    assert!(!all.contains("fixtures/seven.txt"), "{all}");
+    assert_eq!(
+        all.matches("policy rule git.conflict_markers (block)")
+            .count(),
+        cases.len() + 3,
+        "{all}"
+    );
+    assert!(
+        all.contains(
+            "resolve the conflict and restage, or set conflict-marker-size for the path in .gitattributes"
+        ),
+        "{all}"
+    );
+
+    // At warn the same findings warn and the run passes; at off it is silent.
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    for (level, code) in [("warn", 0), ("off", 0)] {
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            format!(r#"{{"schema_version":1,"git":{{"conflict_markers":"{level}"}}}}"#),
+        )
+        .unwrap();
+        let out = ci_range(root);
+        let all = output_text(&out);
+        assert_eq!(out.status.code(), Some(code), "{level}: {all}");
+        let expected = if level == "warn" { cases.len() + 3 } else { 0 };
+        assert_eq!(
+            all.matches("policy rule git.conflict_markers (warn)")
+                .count(),
+            expected,
+            "{level}: {all}"
+        );
+    }
+}
