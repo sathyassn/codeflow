@@ -1637,6 +1637,119 @@ fn a_fully_merged_recompletion_cannot_reuse_review_across_a_reopen() {
     }
 }
 
+/// A separate reopen pull request, then a fix branched after it that lands
+/// by a clean task landing while other work lands on the line, then a late
+/// completion reviewed at the fix: the landing carries that review, as for
+/// any late completion (R-119 keeps a separate reopen pull request valid).
+/// A direct code commit after the landing is still refused. This is
+/// TSK-102's history on EPC-020 (reopen #612, fix #615, completion
+/// `66c995192`).
+#[test]
+fn a_separate_reopen_then_a_landed_fix_binds_a_late_recompletion() {
+    for direct in [false, true] {
+        let (dir, _, archived) = late_completed_line();
+        let root = dir.path();
+        git(root, &["switch", "-c", "plan/reopen", LINE]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task("TSK-001", "todo", &archived),
+        );
+        commit(root, "docs: reopen task");
+        land(root, "plan/reopen");
+
+        git(root, &["switch", "-c", "task/TSK-001-fix", LINE]);
+        write(root, "src/work.rs", "// fixed after the reopen\n");
+        let fixed = commit(root, "fix: repair the reopened work");
+        git(root, &["switch", "-c", "other/change", LINE]);
+        write(root, "src/other.rs", "pub fn other() {}\n");
+        commit(root, "feat: other line work");
+        land(root, "other/change");
+        land(root, "task/TSK-001-fix");
+        if direct {
+            write(root, "src/direct.rs", "pub fn direct() {}\n");
+            commit(root, "feat: straight onto the line");
+        }
+
+        git(root, &["switch", "-c", "plan/recomplete", LINE]);
+        let closeout = format!("{archived}{}", valid_block(&fixed));
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task("TSK-001", "todo", &closeout),
+        );
+        let verb = status_complete(root, "TSK-001");
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task("TSK-001", "complete", &closeout),
+        );
+        commit(root, "docs: complete the fixed task late");
+        let result = ci_on(root, LINE, "plan/recomplete", "");
+        if direct {
+            let needle = "changes src/direct.rs after the landing merge";
+            assert_ne!(verb.0, 0, "the verb after a direct commit: {}", verb.1);
+            assert!(verb.1.contains(needle), "{}", verb.1);
+            assert_blocks(&result, "a direct commit after the fix", &[needle]);
+        } else {
+            assert_passes(&verb, "the verb after a separate reopen");
+            assert_passes(&result, "a late completion after a separate reopen");
+            land(root, "plan/recomplete");
+            assert_passes(
+                &ci_on(root, "main", LINE, ""),
+                "the line carrying the reopen, fix and completion",
+            );
+        }
+    }
+}
+
+/// The twin of the separate reopen: a pull request that reopens the task
+/// itself owns its range (R-119), so a fix merged into it does not carry
+/// its review past other code merged after it.
+#[test]
+fn a_one_pr_reopen_does_not_carry_a_merged_review_past_later_code() {
+    let (dir, _, archived) = late_completed_line();
+    let root = dir.path();
+    git(root, &["switch", "-c", "feat/side", LINE]);
+    write(root, "src/side.rs", "pub fn side() {}\n");
+    commit(root, "feat: side work");
+    git(root, &["switch", "-c", "task/TSK-001-fix", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", &archived),
+    );
+    commit(root, "docs: reopen the task");
+    git(root, &["switch", "-c", "fix/implementation"]);
+    write(root, "src/work.rs", "// fixed in the reopening range\n");
+    let fixed = commit(root, "fix: repair the regression");
+    git(root, &["switch", "task/TSK-001-fix"]);
+    for branch in ["fix/implementation", "feat/side"] {
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                &format!("chore: merge {branch}"),
+                branch,
+            ],
+        );
+    }
+    let closeout = format!("{archived}{}", valid_block(&fixed));
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "complete", &closeout),
+    );
+    commit(root, "docs: re-complete the task");
+    assert_blocks(
+        &ci_on(root, LINE, "task/TSK-001-fix", "Task: TSK-001"),
+        "a merged review carried past later code in a reopening range",
+        &["src/side.rs changed after the reviewed commit"],
+    );
+}
+
 /// The target checkout has no range base to reveal the completion that the
 /// task record reopened before accepting a fresh status transition.
 #[test]

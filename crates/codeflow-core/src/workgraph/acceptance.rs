@@ -166,6 +166,10 @@ pub fn bind_completion(
             .head()
             .ok()
             .is_some_and(|head| head.shorthand().ok() == task.integration_target.as_deref());
+    // A reopen landed before this range, by its own pull request (R-119
+    // keeps that valid), is recovered from the history below. The fix then
+    // lands as any task does, so a task landing may carry its review.
+    let mut reopened_earlier = false;
     let reopen = (!on_target)
         .then_some(anchor)
         .flatten()
@@ -196,6 +200,7 @@ pub fn bind_completion(
             }) {
                 old.criteria = anchored.criteria;
             }
+            reopened_earlier = true;
             Some((at, old))
         });
     let mut findings = Vec::new();
@@ -217,7 +222,8 @@ pub fn bind_completion(
                 reviewed == *anchor || !is_ancestor_or_same(repo, *anchor, reviewed)
             }) {
                 Some(format!("a reopened task's reviewed commit {reviewed} must lie inside the fix range, after its anchored base"))
-            } else if transport == Transport::TaskLanding && reopen.is_none() {
+            } else if transport == Transport::TaskLanding && (reopen.is_none() || reopened_earlier)
+            {
                 binding_problem(repo, task, landing, reviewed, transport)
             } else {
                 binding_problem(repo, task, landing, reviewed, Transport::Direct)
