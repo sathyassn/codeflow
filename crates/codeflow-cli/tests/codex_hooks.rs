@@ -296,3 +296,30 @@ fn the_codex_exec_guard_wiring_judges_composed_deletions_and_help() {
         );
     }
 }
+
+/// TSK-180: the built hook runs a cleanup after a trap reset or a removed
+/// hook, and refuses one whose reset or removal may not take effect.
+#[cfg(unix)]
+#[test]
+fn the_codex_exec_guard_wiring_holds_the_round_four_probes() {
+    use guard_forms::Expect;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::os::unix::fs::symlink("/", root.join("root-link")).unwrap();
+    for sub in ["build", "empty"] {
+        std::fs::create_dir(root.join(sub)).unwrap();
+    }
+    let mut wrong = Vec::new();
+    for (case, command, expect) in guard_forms::REVIEW_ROUND_FOUR_PROBES {
+        let out = run_codex_exec_guard(root, command);
+        let want = if *expect == Expect::Allowed { 0 } else { 2 };
+        if out.status.code() != Some(want) {
+            wrong.push(format!(
+                "{case} ({expect:?}): {command} -> {:?} {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
