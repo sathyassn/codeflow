@@ -36,6 +36,9 @@ pub fn route_event_type(event_type: &str) -> Result<&'static str, LedgerError> {
         // config.jsonl
         "config_set" | "config_updated" => Ok(files::CONFIG),
 
+        // refusals.jsonl — the ceremony report's refusal count (TSK-149)
+        super::refusal::REFUSAL | super::refusal::RECORDING_STARTED => Ok(files::REFUSALS),
+
         _ => Err(LedgerError::UnknownEventType(event_type.to_string())),
     }
 }
@@ -102,6 +105,17 @@ mod tests {
                 route_event_type(event_type).unwrap(),
                 files::CONFIG,
                 "{event_type} should route to config.jsonl"
+            );
+        }
+    }
+
+    #[test]
+    fn test_refusal_events_route_to_refusals() {
+        for event_type in &["refusal", "refusal_recording_started"] {
+            assert_eq!(
+                route_event_type(event_type).unwrap(),
+                files::REFUSALS,
+                "{event_type} should route to refusals.jsonl"
             );
         }
     }

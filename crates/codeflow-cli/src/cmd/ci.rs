@@ -90,6 +90,12 @@ pub struct CiArgs {
     #[arg(long, value_name = "LEVEL", hide = true, value_parser = parse_level)]
     pub run_level: Option<PolicyLevel>,
 
+    /// Write the rule id of each blocking finding, one per line, to this
+    /// existing file: the pre-push hook names them in its refusal record
+    /// (TSK-149) without reading them back from the printed findings.
+    #[arg(long, value_name = "FILE", hide = true)]
+    pub blocking_rules_out: Option<PathBuf>,
+
     /// Read PR bodies for `scripts/release.py`, the one reader both use:
     /// a JSON array of body strings on stdin, and on stdout
     /// `{"protocol": READ_PROTOCOL, "readings": [...]}`, each reading the
@@ -355,7 +361,33 @@ pub fn run(args: &CiArgs) -> i32 {
     if let Some(running) = args.run_level {
         run_under(&root, running, &mut tagged);
     }
+    if let Some(out) = &args.blocking_rules_out {
+        write_blocking_rules(out, &tagged);
+    }
     report(&tagged, &ran, &skipped)
+}
+
+/// The blocking findings' rule ids, one per line, for the pre-push hook's
+/// refusal record. Best effort: the hook then names only its own rule.
+fn write_blocking_rules(out: &Path, tagged: &[TaggedViolation]) {
+    let mut rules: Vec<&str> = Vec::new();
+    for t in tagged
+        .iter()
+        .filter(|t| t.violation.level == PolicyLevel::Block)
+    {
+        if !rules.contains(&t.violation.rule.as_str()) {
+            rules.push(&t.violation.rule);
+        }
+    }
+    let mut text = rules.join("\n");
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(out)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes()));
 }
 
 /// The contract-surface findings under the pull request's Release impact

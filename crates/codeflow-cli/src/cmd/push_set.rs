@@ -317,9 +317,18 @@ fn run_check(
         None => args.to_vec(),
     };
     let shown = format!("codeflow {}", rerun.join(" "));
+    // `codeflow ci` names its blocking rules in a file of its own, for the
+    // refusal record; its printed findings can quote operation content.
+    let rules_out = (args.first() == Some(&"ci"))
+        .then(RulesOut::create)
+        .flatten();
+    let mut command = Command::new(exe);
+    command.args(args);
+    if let Some(out) = &rules_out {
+        command.arg("--blocking-rules-out").arg(&out.0);
+    }
     let started = Instant::now();
-    let output = Command::new(exe)
-        .args(args)
+    let output = command
         .current_dir(root)
         .env_remove("CODEFLOW_PR_BODY")
         .output();
@@ -347,6 +356,9 @@ fn run_check(
         Ok(out) => {
             eprint!("{}", String::from_utf8_lossy(&out.stdout));
             eprint!("{}", String::from_utf8_lossy(&out.stderr));
+            if let Some(rules) = &rules_out {
+                report.refused_by.extend(rules.read());
+            }
             // A check run at the push gate's level (R-80) that still fails
             // holds a finding that keeps its block: it stops the push.
             let kept_block = rerun.len() < args.len() && out.status.code() == Some(1);
@@ -396,6 +408,44 @@ fn relayed_findings(stderr: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// A private file `codeflow ci` writes its blocking rule ids to
+/// (`--blocking-rules-out`), removed when dropped.
+struct RulesOut(std::path::PathBuf);
+
+impl RulesOut {
+    /// A new empty file in the temporary directory, created exclusively so
+    /// no other file is written through it; `None` when it cannot be made.
+    fn create() -> Option<Self> {
+        let path = std::env::temp_dir().join(format!(
+            "codeflow-blocking-rules-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .ok()?;
+        Some(Self(path))
+    }
+
+    /// The rule ids the check wrote. Only text with a rule id's form is
+    /// kept, so nothing else can reach the refusal record.
+    fn read(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.0)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| codeflow_core::hooks::is_rule_id(line))
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+impl Drop for RulesOut {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Whether `line` opens a finding: `<plane>: warning`, `note` or `notice`,

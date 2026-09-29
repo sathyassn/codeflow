@@ -197,6 +197,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("HOOK_STDIN_UNREAD", Runs),
     ("GUARD_PAYLOAD_MALFORMED", Runs),
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
+    ("REFUSAL_UNRECORDED", Runs),
     ("REGISTRY_UNWRITTEN", Runs),
     ("PRIVILEGE_ESCALATION", Excluded(HumanAuthority)),
 ];

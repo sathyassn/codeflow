@@ -124,7 +124,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
@@ -209,6 +209,16 @@ the managed CI file.
 Secret scanning fails closed if libgit2 cannot traverse the complete staged
 diff. Hook stdin read failures remain advisory but print an explicit degraded
 ref-check warning instead of passing silently.
+Each operation a git hook or session guard stops appends one `refusal` event
+to the clone's ledger, naming the plane, the effective level and the rules,
+never the command; a finding at warn stops nothing and is not written.
+`codeflow report ceremony` reads it with the merge history over a window of
+pull requests or dates: pull requests per logical change, record status pull
+requests on their own row, review rounds asked of the host (`unknown` when the
+host cannot answer, the one host-backed read of SPC-013 R-103) and refusals
+(`unknown` before the clone began recording). The baseline over pull requests
+568 to 644 is `docs/verification/ceremony-baseline-2026-09-28.md`, and the
+release checklist compares each release's window with it.
 
 ## CAP-004 — test-gate
 

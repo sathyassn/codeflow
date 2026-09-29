@@ -32,6 +32,9 @@ pub struct StageReport {
     /// Findings another plane printed when this one ran its check, as it
     /// printed them, each with the remedy lines under it.
     pub relayed: Vec<String>,
+    /// The rules another plane's check blocked on when this one ran it
+    /// (pre-push's `codeflow ci`), named in the refusal record (TSK-149).
+    pub refused_by: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
