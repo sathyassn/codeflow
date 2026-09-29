@@ -439,6 +439,19 @@
       }
     },
     {
+      "id": "approved-plan-reassignment",
+      "tier": "full",
+      "state": {
+        "branch": "fixture/plan-reassignment",
+        "peer": "available",
+        "approved_plan": "v2",
+        "requested_change": "move T2 from the Claude primary to Codex"
+      },
+      "files": {
+        "PLAN.md": "# Plan v2\n\nSCOPE_AND_NON_GOALS: Cache parsed configuration inside the internal parser. No public API change.\n\nASSIGNMENTS:\n  TASK_ID | RESPONSIBLE_PRIMARY seat@effort | EXEC_MODE | EXECUTION | CROSS_LINEAGE_REVIEWER seat@effort | DEPENDENCIES\n  T1 | codex-primary@high | primary-retained | codex-primary@high | claude-primary@high | none\n  T2 | claude-primary@high | primary-retained | claude-primary@high | codex-primary@high | T1\n\nTASK_GRAPH v2\nSTART -> T1\nT1 -> T2\n\nT1 has landed. T2 has not started.\n\nAPPROVALS:\n  claude-primary: v2\n  codex-primary: v2\n"
+      }
+    },
+    {
       "id": "bounded-improvement-after-evidenced-path",
       "tier": "standard",
       "state": {

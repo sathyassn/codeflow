@@ -1145,7 +1145,7 @@
       "kind": "regression",
       "category": "governance",
       "canary": true,
-      "fixture": "approved-plan-change",
+      "fixture": "approved-plan-reassignment",
       "requirements": [
         "CF-MM-004",
         "CF-MM-005"
