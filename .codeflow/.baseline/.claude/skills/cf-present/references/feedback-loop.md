@@ -40,11 +40,11 @@ After each turn that handled events, start the loop again. In a harness
 without background tasks, run one bounded wait at a natural pause instead.
 Never start another model or agent to listen for you.
 
-Codex CLI has no background task that wakes the model on an event. With
-Codex, an answer is stored at once and delivered on the agent's next turn,
-when it runs a bounded wait, and until then the page shows "Stored, waiting
-for agent". Tell the reviewer that answers are read at the next turn, not
-the moment they are sent.
+Codex CLI is a harness without background tasks: nothing wakes the model
+on an event. With Codex, an answer, a correction or a review is stored at
+once and delivered on the agent's next turn, when it runs a bounded wait,
+and until then an answer's page state stays "Stored, waiting for agent".
+Tell the reviewer when answers are read: at the agent's next turn.
 
 `--wait` and `--follow` together are a usage error. `--follow` still
 streams v1 review envelopes until the session closes, for a consumer that
