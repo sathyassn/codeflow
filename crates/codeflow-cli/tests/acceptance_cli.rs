@@ -169,6 +169,11 @@ fn ci_with(root: &Path, branch: &str, task_line: &str) -> (i32, String) {
 /// `codeflow ci` from `base` to `HEAD` as `branch`, with `task_line` in the
 /// pull request body.
 fn ci_on(root: &Path, base: &str, branch: &str, task_line: &str) -> (i32, String) {
+    let task_line = if task_line.is_empty() {
+        "Task: EPC-001"
+    } else {
+        task_line
+    };
     let out = codeflow()
         .args([
             "ci",
@@ -339,7 +344,7 @@ fn a_waiver_names_its_amendment_on_the_target() {
     assert_blocks(
         &ci(root, BRANCH, "TSK-001"),
         "a waiver naming a branch commit",
-        &["AC-1 waiver", "which is not on the target"],
+        &["AC-1 waiver", "strictly before the reviewed revision"],
     );
 
     // A ref named like an abbreviated id never stands in for the amendment.
@@ -353,11 +358,13 @@ fn a_waiver_names_its_amendment_on_the_target() {
     );
 }
 
-/// AC-2, AC-6: a task branch that changes its record's criteria blocks, and
-/// `git.work_records: warn` does not relax it.
+/// Own-task criteria may change; other records remain frozen even at warn.
 #[test]
-fn criteria_are_frozen_on_a_task_branch() {
-    let dir = repo(&[("TSK-001", OWN_JOURNEY)], ", \"work_records\": \"warn\"");
+fn own_task_criteria_delta_is_printed_and_other_records_stay_frozen() {
+    let dir = repo(
+        &[("TSK-001", OWN_JOURNEY), ("TSK-002", OWN_JOURNEY)],
+        ", \"work_records\": \"warn\"",
+    );
     let root = dir.path();
     code_change(root, BRANCH, "pub fn work() {}\n");
     let loosened = OWN_JOURNEY.replace("shall work.", "shall mostly work.");
@@ -367,13 +374,27 @@ fn criteria_are_frozen_on_a_task_branch() {
         &task("TSK-001", "todo", &loosened, "Pending.\n"),
     );
     commit(root, "docs(records): loosen AC-1");
+    let result = ci(root, BRANCH, "TSK-001");
+    assert_passes(&result, "own criteria amendment");
+    assert!(result.1.contains("AC-1 changed"), "{}", result.1);
+    assert!(result.1.contains("shall mostly work"), "{}", result.1);
+    assert!(
+        result.1.contains("changes its own criteria"),
+        "{}",
+        result.1
+    );
+    assert!(!result.1.contains("completion is bound"), "{}", result.1);
+
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", "todo", &loosened, "Pending.\n"),
+    );
+    commit(root, "docs: change another task criterion");
     assert_blocks(
         &ci(root, BRANCH, "TSK-001"),
-        "criteria changed on the task branch",
-        &[
-            "work.criteria_frozen",
-            "TSK-001 changes its criteria on this branch",
-        ],
+        "other criteria remain frozen",
+        &["work.criteria_frozen", "TSK-002 changes its criteria"],
     );
 
     // A planning branch is where criteria change.
@@ -593,10 +614,9 @@ fn the_freeze_follows_the_class_not_the_prefix() {
         &task("TSK-001", "todo", &loosened, "Pending.\n"),
     );
     commit(root, "docs(records): loosen AC-1");
-    assert_blocks(
+    assert_passes(
         &ci(root, "plan/code-with-criteria", "TSK-001"),
-        "tracked code on a plan/ prefix",
-        &["work.criteria_frozen"],
+        "own task amendment regardless of prefix",
     );
 
     git(root, &["switch", "-C", "fix/criteria", "main"]);
@@ -1179,7 +1199,10 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
             "landed after the task branched",
             "which the completion does not contain",
         ),
-        ("the task branch's head", "which is not on the target"),
+        (
+            "the task branch's head",
+            "strictly before the reviewed revision",
+        ),
     ] {
         let dir = line_repo(&["TSK-001"]);
         let root = dir.path();
@@ -1218,6 +1241,10 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
             ),
         );
         let verb = status_complete(root, "TSK-001");
+        if what == "only on a side branch" {
+            assert_eq!(verb.0, 0, "record-only amendment in own range: {}", verb.1);
+            continue;
+        }
         assert_ne!(verb.0, 0, "{what}: the verb: {}", verb.1);
         assert!(verb.1.contains(needle), "{what}: the verb: {}", verb.1);
         if what == "the task branch's head" {
@@ -1265,6 +1292,316 @@ fn a_completion_cut_at_the_amendment_merge_binds() {
     let result = ci_on(root, LINE, "plan/complete-tsk001", "");
     assert_passes(&result, "the completion pull request");
     assert!(binding_lines(&result).is_empty(), "{}", result.1);
+}
+
+#[test]
+fn planning_reopen_criteria_freeze_precedes_amendment_exemption() {
+    for recomplete in [false, true] {
+        for changed in [false, true] {
+            let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+            let root = dir.path();
+            let reviewed = head(root);
+            let old = block(
+                &reviewed,
+                &["AC-1: verified | test", "AC-2: verified | journey"],
+                "verified | test",
+                "none: done",
+            );
+            write(
+                root,
+                &record_path("TSK-001"),
+                &task("TSK-001", "complete", OWN_JOURNEY, &old),
+            );
+            commit(root, "docs: complete task");
+            git(root, &["switch", "-c", "plan/reopen"]);
+            let retired = old.replace(
+                "acceptance:",
+                "acceptance_superseded:\n  reason: regression",
+            );
+            let criteria = if changed {
+                OWN_JOURNEY.replace("shall work.", "shall mostly work.")
+            } else {
+                OWN_JOURNEY.to_string()
+            };
+            write(
+                root,
+                &record_path("TSK-001"),
+                &task("TSK-001", "todo", &criteria, &retired),
+            );
+            let revision = commit(root, "docs: reopen task");
+            if recomplete {
+                let active = block(
+                    &revision,
+                    &["AC-1: verified | test", "AC-2: verified | journey"],
+                    "verified | test",
+                    "none: done",
+                );
+                write(
+                    root,
+                    &record_path("TSK-001"),
+                    &task(
+                        "TSK-001",
+                        "complete",
+                        &criteria,
+                        &format!("{retired}\n{active}"),
+                    ),
+                );
+                commit(root, "docs: complete task again");
+            }
+            let result = ci_with(root, "plan/reopen", "Task: EPC-001");
+            if changed {
+                assert_blocks(
+                    &result,
+                    "reopen criteria frozen",
+                    &["work.criteria_frozen", "reopened task keeps its criteria"],
+                );
+            } else {
+                assert_passes(&result, "equal criteria reopen");
+            }
+        }
+    }
+}
+
+#[test]
+fn clean_line_merge_after_review_preserves_binding_but_product_resolution_does_not() {
+    for resolved in [false, true] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+        git(root, &["switch", "main"]);
+        write(root, "src/line.rs", "pub fn line() {}\n");
+        commit(root, "feat: advance line");
+        git(root, &["switch", BRANCH]);
+        git(root, &["merge", "--no-ff", "--no-commit", "main"]);
+        if resolved {
+            write(root, "src/lib.rs", "pub fn unreviewed_resolution() {}\n");
+        }
+        commit(root, "chore: merge line");
+        complete(root, "TSK-001", OWN_JOURNEY, &valid_block(&reviewed));
+        let result = ci(root, BRANCH, "TSK-001");
+        if resolved {
+            assert_blocks(&result, "product resolution", &["work.acceptance_binding"]);
+        } else {
+            assert_passes(&result, "clean line merge after review");
+        }
+    }
+}
+
+#[test]
+fn own_range_waiver_requires_a_record_only_amendment_before_review() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    code_change(root, BRANCH, "pub fn work() {}\n");
+    let revised = OWN_JOURNEY.replace("shall work.", "shall mostly work.");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &revised, "Pending.\n"),
+    );
+    let amendment = commit(root, "docs: amend own criterion");
+    write(root, "src/lib.rs", "pub fn reviewed_work() {}\n");
+    let reviewed = commit(root, "feat: implement amended criterion");
+    let waiver = block(
+        &reviewed,
+        &[
+            &format!("AC-1: waived | {amendment}"),
+            "AC-2: verified | journey",
+        ],
+        "verified | test",
+        "none: done",
+    );
+    complete(root, "TSK-001", &revised, &waiver);
+    assert_passes(
+        &ci(root, BRANCH, "TSK-001"),
+        "record-only pre-review waiver",
+    );
+    git(root, &["checkout", "--detach"]);
+    assert_passes(&ci(root, BRANCH, "TSK-001"), "detached CI own-range waiver");
+    git(root, &["switch", BRANCH]);
+    let release = codeflow_core::workgraph::acceptance::pull_request_findings(
+        root,
+        "main",
+        "HEAD",
+        &codeflow_core::workgraph::acceptance::Criteria::Amendable,
+    )
+    .unwrap();
+    assert!(
+        release.iter().any(|finding| !finding.note
+            && finding.message.contains("waiver")
+            && finding.message.contains("which is not on the target")),
+        "a release range cannot borrow the checkout's task context: {release:?}"
+    );
+}
+
+#[test]
+fn planning_branch_older_than_completion_is_not_a_reopen() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    git(root, &["switch", "-c", "plan/amend"]);
+    write(root, "docs/plan/extra.md", "planning work\n");
+    commit(root, "docs: plan more");
+    git(root, &["switch", "main"]);
+    let reviewed = head(root);
+    complete(root, "TSK-001", OWN_JOURNEY, &valid_block(&reviewed));
+    git(root, &["switch", "plan/amend"]);
+    git(
+        root,
+        &["merge", "--no-ff", "-m", "chore: update plan base", "main"],
+    );
+    let file = root.join(record_path("TSK-001"));
+    let text = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace("shall work.", "shall mostly work.");
+    std::fs::write(file, text).unwrap();
+    commit(root, "docs: amend completed task");
+    assert_passes(
+        &ci_with(root, "plan/amend", "Task: EPC-001"),
+        "ordinary planning amendment after merging completion",
+    );
+}
+
+#[test]
+fn a_batch_binds_two_heads_and_only_refuses_the_hand_resolved_task() {
+    for hand_resolved in [false, true] {
+        let dir = line_repo(&["TSK-001", "TSK-002"]);
+        let root = dir.path();
+        let first = build(root, "task/TSK-001-first", "src/first.rs");
+        write_done(root, "TSK-001", "complete", &first);
+        let first_completion = commit(root, "docs: complete first");
+        let second = build(root, "task/TSK-002-second", "src/second.rs");
+        land(root, "task/TSK-001-first");
+        git(root, &["switch", "task/TSK-002-second"]);
+        git(root, &["merge", "--no-ff", "--no-commit", LINE]);
+        if hand_resolved {
+            write(root, "src/second.rs", "// unreviewed resolution\n");
+        }
+        commit(root, "chore: merge line after review");
+        write_done(root, "TSK-002", "complete", &second);
+        let second_completion = commit(root, "docs: complete second");
+        land(root, "task/TSK-002-second");
+        let result = ci_on(root, "main", LINE, "Task: EPC-001");
+        assert!(result.1.contains(&first_completion), "{}", result.1);
+        assert!(result.1.contains(&second_completion), "{}", result.1);
+        if hand_resolved {
+            assert_blocks(
+                &result,
+                "only second binding fails",
+                &["TSK-002", "work.acceptance_binding"],
+            );
+            assert!(
+                !binding_lines(&result)
+                    .iter()
+                    .any(|line| line.contains("TSK-001")),
+                "{}",
+                result.1
+            );
+        } else {
+            assert_passes(&result, "two reviewed heads in one release range");
+        }
+    }
+}
+
+#[test]
+fn a_landed_task_cannot_disguise_an_unreviewed_side_merge_as_a_line_merge() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/task.rs");
+    build(root, "feat/unreviewed", "src/unreviewed.rs");
+    git(root, &["switch", "task/TSK-001-work"]);
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge unreviewed side",
+            "feat/unreviewed",
+        ],
+    );
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs: complete task");
+    land(root, "task/TSK-001-work");
+    let result = ci_on(root, "main", LINE, "Task: EPC-001");
+    assert_blocks(
+        &result,
+        "unreviewed side is not line history",
+        &["work.acceptance_binding", "TSK-001"],
+    );
+}
+
+#[test]
+fn prospective_recompletion_freezes_reopened_criteria_even_at_warn() {
+    for changed in [false, true] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], ", \"work_records\": \"warn\"");
+        let root = dir.path();
+        let reviewed = head(root);
+        let old = valid_block(&reviewed);
+        complete(root, "TSK-001", OWN_JOURNEY, &old);
+        git(root, &["switch", "-c", BRANCH]);
+        let retired = old.replace(
+            "acceptance:",
+            "acceptance_superseded:\n  reason: regression",
+        );
+        let criteria = if changed {
+            OWN_JOURNEY.replace("shall work.", "shall mostly work.")
+        } else {
+            OWN_JOURNEY.into()
+        };
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", &criteria, &retired),
+        );
+        let revision = commit(root, "docs: reopen task");
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task(
+                "TSK-001",
+                "todo",
+                &criteria,
+                &format!("{retired}\n{}", valid_block(&revision)),
+            ),
+        );
+        let before = std::fs::read(root.join(record_path("TSK-001"))).unwrap();
+        let result = status_complete(root, "TSK-001");
+        if changed {
+            assert_blocks(
+                &result,
+                "prospective reopen freeze",
+                &["reopened task keeps its criteria"],
+            );
+            assert_eq!(
+                std::fs::read(root.join(record_path("TSK-001"))).unwrap(),
+                before
+            );
+        } else {
+            assert_passes(&result, "equal-criteria recompletion");
+        }
+    }
+}
+
+#[test]
+fn mentioning_a_superseded_block_is_not_itself_a_reopen() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = head(root);
+    complete(root, "TSK-001", OWN_JOURNEY, &valid_block(&reviewed));
+    git(root, &["switch", "-c", "plan/amend"]);
+    let path = root.join(record_path("TSK-001"));
+    let text = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace(
+            "Work.\n",
+            "Work. An example token is `acceptance_superseded:`.\n",
+        )
+        .replace("shall work.", "shall mostly work.");
+    std::fs::write(path, text).unwrap();
+    commit(root, "docs: amend without reopening");
+    assert_passes(
+        &ci_with(root, "plan/amend", "Task: EPC-001"),
+        "a quoted field is not a reopen transition",
+    );
 }
 
 fn fix_block(reviewed: &str) -> String {
@@ -1448,7 +1785,7 @@ fn assert_invalid_fix(fault: &str) {
         "dropped" | "edited" => "old acceptance block",
         "reason" => "reason",
         "missing" | "unverified" => "AC-1",
-        "criteria" | "records-only-criteria" => "anchored criteria",
+        "criteria" | "records-only-criteria" => "reopened task keeps its criteria",
         "waiver" => "waiver",
         _ => unreachable!(),
     };
@@ -1890,7 +2227,11 @@ fn a_recompletion_keeps_a_criterion_amended_on_the_target() {
     );
     let loosened = status_complete(root, "TSK-001");
     assert_ne!(loosened.0, 0, "loosened criterion accepted: {}", loosened.1);
-    assert!(loosened.1.contains("anchored criteria"), "{}", loosened.1);
+    assert!(
+        loosened.1.contains("reopened task keeps its criteria"),
+        "{}",
+        loosened.1
+    );
     write(
         root,
         &record_path("TSK-001"),
@@ -1900,7 +2241,7 @@ fn a_recompletion_keeps_a_criterion_amended_on_the_target() {
     assert_blocks(
         &ci_on(root, LINE, "plan/loosen", ""),
         "records-only loosening after an amendment",
-        &["anchored criteria"],
+        &["reopened task keeps its criteria"],
     );
 
     git(root, &["switch", "-c", "plan/recomplete", LINE]);
@@ -1920,4 +2261,230 @@ fn a_recompletion_keeps_a_criterion_amended_on_the_target() {
         &ci_on(root, "main", LINE, ""),
         "line carrying the amendment and re-completion",
     );
+}
+
+/// TSK-140 and TSK-184 composed: a task pull request may merge its target
+/// after the review (TSK-184), but a one-PR fix reviews its own range and
+/// never stacks such a merge on that review (TSK-140, R-119).
+#[test]
+fn a_one_pr_fix_never_stacks_a_line_merge_on_its_review() {
+    for stacked in [false, true] {
+        let (dir, _, archived) = one_pr_fix();
+        let root = dir.path();
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        if stacked {
+            git(root, &["switch", "main"]);
+            write(root, "src/line.rs", "pub fn line() {}\n");
+            commit(root, "feat: advance the line");
+            git(root, &["switch", "task/TSK-001-fix"]);
+            git(
+                root,
+                &["merge", "--no-ff", "-m", "chore: merge line", "main"],
+            );
+        }
+        complete(
+            root,
+            "TSK-001",
+            OWN_JOURNEY,
+            &format!("{archived}{}", fix_block(&reviewed)),
+        );
+        let result = ci(root, "task/TSK-001-fix", "TSK-001");
+        if stacked {
+            assert_blocks(
+                &result,
+                "a fix range does not stack a line merge",
+                &["work.acceptance_binding", "TSK-001", "inside the fix range"],
+            );
+        } else {
+            assert_passes(&result, "one pull request fix");
+        }
+    }
+}
+
+/// TSK-140 and TSK-184 composed: the record-only amendment a task pull
+/// request names as its own-range waiver (TSK-184) is on the target once
+/// the task lands, so the line's judge, which binds without the task's
+/// own range as the release judge does, accepts the same waiver.
+#[test]
+fn an_own_range_waiver_is_the_target_amendment_once_the_task_lands() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    code_change(root, BRANCH, "pub fn work() {}\n");
+    let revised = OWN_JOURNEY.replace("shall work.", "shall mostly work.");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &revised, "Pending.\n"),
+    );
+    let amendment = commit(root, "docs: amend own criterion");
+    write(root, "src/lib.rs", "pub fn reviewed_work() {}\n");
+    let reviewed = commit(root, "feat: implement amended criterion");
+    let waiver = block(
+        &reviewed,
+        &[
+            &format!("AC-1: waived | {amendment}"),
+            "AC-2: verified | journey",
+        ],
+        "verified | test",
+        "none: done",
+    );
+    complete(root, "TSK-001", &revised, &waiver);
+    assert_passes(
+        &ci(root, BRANCH, "TSK-001"),
+        "own-range waiver in the task PR",
+    );
+    let before = git_out(root, &["rev-parse", "main"]);
+    git(root, &["switch", "main"]);
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "Merge the task pull request",
+            BRANCH,
+        ],
+    );
+    let landed = codeflow_core::workgraph::acceptance::pull_request_findings(
+        root,
+        &before,
+        "main",
+        &codeflow_core::workgraph::acceptance::Criteria::Amendable,
+    )
+    .unwrap();
+    assert!(
+        !landed
+            .iter()
+            .any(|finding| !finding.note && finding.rule == "work.acceptance_binding"),
+        "the landed waiver binds by the target route: {landed:?}"
+    );
+}
+
+/// A task still `todo` on main, completed and then reopened on its own fix
+/// branch; returns the archived block.
+fn reopened_in_its_own_range() -> (tempfile::TempDir, String) {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let first = code_change(root, "task/TSK-001-fix", "pub fn initial() {}\n");
+    let old = fix_block(&first);
+    complete(root, "TSK-001", OWN_JOURNEY, &old);
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: regression\n",
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &archived),
+    );
+    commit(root, "docs: reopen in the task range");
+    (dir, archived)
+}
+
+/// A completion made and reopened inside its own pull request is a
+/// reopening range too (R-119): a clean merge of the target after the fix
+/// review is not stacked on that review, by the verb or by CI.
+#[test]
+fn a_completion_reopened_in_its_own_range_never_stacks_a_line_merge() {
+    for stacked in [false, true] {
+        let (dir, archived) = reopened_in_its_own_range();
+        let root = dir.path();
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        if stacked {
+            git(root, &["switch", "main"]);
+            write(root, "src/line.rs", "pub fn line() {}\n");
+            commit(root, "feat: advance the line");
+            git(root, &["switch", "task/TSK-001-fix"]);
+            git(
+                root,
+                &["merge", "--no-ff", "-m", "chore: merge line", "main"],
+            );
+        }
+        let closeout = format!("{archived}{}", fix_block(&reviewed));
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+        );
+        let verb = status_complete(root, "TSK-001");
+        complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+        let result = ci(root, "task/TSK-001-fix", "TSK-001");
+        if stacked {
+            let needle = "src/line.rs changed after the reviewed commit";
+            assert_ne!(verb.0, 0, "the verb stacked a line merge: {}", verb.1);
+            assert!(verb.1.contains(needle), "{}", verb.1);
+            assert_blocks(&result, "an in-range reopen stacks nothing", &[needle]);
+        } else {
+            assert_passes(&verb, "the verb on an in-range reopen and fix");
+            assert_passes(&result, "an in-range reopen and fix");
+        }
+    }
+}
+
+/// Amend AC-1 on the fix branch, restore it, review a fix and complete with
+/// AC-1 waived by that own-branch amendment; returns the verb and CI.
+fn waive_by_own_amendment(root: &Path, archived: &str) -> [(i32, String); 2] {
+    let revised = OWN_JOURNEY.replace("shall work.", "shall mostly work.");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &revised, archived),
+    );
+    let amendment = commit(root, "docs: amend the reopened criterion");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, archived),
+    );
+    commit(root, "docs: restore the anchored criterion");
+    write(root, "src/lib.rs", "pub fn fixed() {}\n");
+    let reviewed = commit(root, "fix: repair the regression");
+    let waiver = block(
+        &reviewed,
+        &[
+            &format!("AC-1: waived | {amendment}"),
+            "AC-2: verified | journey",
+        ],
+        "verified | journey",
+        "none: done",
+    );
+    let closeout = format!("{archived}{waiver}");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+    );
+    let verb = status_complete(root, "TSK-001");
+    complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+    [verb, ci(root, "task/TSK-001-fix", "TSK-001")]
+}
+
+/// A reopening range has no own-range waiver route (R-60): a one-PR fix of
+/// a task complete on its target is refused by the verb as by CI.
+#[test]
+fn a_one_pr_fix_has_no_own_range_waiver() {
+    let (dir, _, archived) = one_pr_fix();
+    for result in waive_by_own_amendment(dir.path(), &archived) {
+        assert_blocks(
+            &result,
+            "an own-range waiver in a reopening range",
+            &["AC-1 waiver", "which is not on the target"],
+        );
+    }
+}
+
+/// The same refusal when the range itself completed and reopened the task,
+/// which is still `todo` on its target.
+#[test]
+fn a_completion_reopened_in_its_own_range_has_no_own_range_waiver() {
+    let (dir, archived) = reopened_in_its_own_range();
+    for result in waive_by_own_amendment(dir.path(), &archived) {
+        assert_blocks(
+            &result,
+            "an own-range waiver after an in-range reopen",
+            &["AC-1 waiver", "which is not on the target"],
+        );
+    }
 }

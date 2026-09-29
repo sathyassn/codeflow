@@ -604,6 +604,23 @@ const UNSHIPPED_FILES: [&str; 6] = [
     "ci/ci-generic.sh",
 ];
 
+/// Files an earlier version shipped and this one retires (TSK-184). They
+/// are removed from the asset tree and the manifest, nothing more: on an
+/// adopter, `codeflow update` reconciles each as an orphan, removing an
+/// unmodified copy with its baseline and record, keeping a modified copy
+/// unmanaged, and never re-adding it. Each stays out of both places.
+const RETIRED_FILES: [&str; 8] = [
+    "agents/skills/cf-model-orchestrator/references/other-hosts.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/hosts.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/review.md",
+    "agents/skills/cf-model-orchestrator/resources/routing/roles.md",
+    "agents/skills/cf-present/assets/review-document.example.json",
+    // Its registry check is a step of ci/codeflow-policy.yml now.
+    "ci/codeflow-registry.yml",
+];
+
 /// Directory prefixes under `assets/base` whose files are embedded and
 /// consumed by the binary at runtime, never scaffolded per-file:
 /// `codeflow test setup` reads the testing templates and schema directly.
@@ -655,6 +672,19 @@ fn every_authored_asset_is_in_the_manifest() {
          file here with its rationale):\n  {}",
         missing.join("\n  ")
     );
+
+    // A retired file is authored nowhere and shipped nowhere, so an update
+    // prunes an adopter's copy as an orphan and never writes it again.
+    for name in RETIRED_FILES {
+        assert!(
+            !base.join(name).exists(),
+            "retired file {name} is back under assets/base"
+        );
+        assert!(
+            !srcs.contains(name),
+            "retired file {name} is a manifest src again"
+        );
+    }
 
     // Keep the allowlist honest: an entry that no longer exists, or that got
     // wired into the manifest after all, must be removed from it.

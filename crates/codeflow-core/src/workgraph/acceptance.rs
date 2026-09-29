@@ -6,8 +6,9 @@
 //! Closeout changed after it. Task landings and release imports identify
 //! the source of that same reviewed span ([`bind_completion`]); `task status
 //! complete` and `codeflow ci` share that judge; a waiver names the planning amendment on the
-//! target that changed that criterion; a task pull request leaves its
-//! record's criteria as the target has them; and a range touching the
+//! target or in its own reviewed range that changed that criterion. The
+//! task may amend its own criteria until complete; reopened criteria stay
+//! frozen. A range touching the
 //! adopter-facing path set belongs to a task with a journey criterion.
 //!
 //! The checker proves structure and binding only ([`SCOPE_NOTE`]). It does
@@ -19,15 +20,16 @@ use git2::{Oid, Repository};
 use super::classify::is_planning_path;
 use super::lifecycle::{Graph, RecordView};
 use super::record_text::{
-    frontmatter_len, outcome_word, scan_record, section_span, AcceptanceBlock, Criterion,
+    acceptance_blocks, frontmatter_len, outcome_word, scan_record, section_span, AcceptanceBlock,
+    Criterion,
 };
 use super::work_start::RecordKind;
 
 /// The acceptance block names the reviewed commit, and waivers name their
 /// amendment (R-60). Level: `git.work_records`.
 pub const BINDING_RULE: &str = "work.acceptance_binding";
-/// A task pull request leaves its record's criteria as the target has them
-/// (R-52). Always blocks.
+/// Criteria changes outside the own-task or planning allowance, including
+/// changes to reopened criteria (R-52). Always blocks.
 pub const FROZEN_RULE: &str = "work.criteria_frozen";
 /// An adopter-facing range belongs to a task with a journey criterion, and a
 /// leaf serving the epic's journey says what ran (R-53). Level:
@@ -43,10 +45,16 @@ pub const SCOPE_NOTE: &str = "the acceptance check proves structure and binding 
 pub struct Finding {
     pub rule: &'static str,
     pub message: String,
+    /// Informational evidence, never a refusal.
+    pub note: bool,
 }
 
 pub(super) fn finding(rule: &'static str, message: String) -> Finding {
-    Finding { rule, message }
+    Finding {
+        rule,
+        message,
+        note: false,
+    }
 }
 
 /// The active (not superseded) acceptance block of a record, when exactly
@@ -62,10 +70,22 @@ pub(super) fn active_block(record: &RecordView) -> Option<AcceptanceBlock> {
 
 /// A commit named by its object id, never by a ref name: a branch named like
 /// the id cannot stand in for the reviewed commit or the amendment.
-fn commit_of(repo: &Repository, value: &str) -> Option<Oid> {
+pub(crate) fn commit_of(repo: &Repository, value: &str) -> Option<Oid> {
     super::work_start::commit_by_object_id(repo, value.trim())
         .ok()
         .map(|commit| commit.id())
+}
+
+fn is_first_parent_ancestor(repo: &Repository, ancestor: Oid, mut tip: Oid) -> bool {
+    loop {
+        if tip == ancestor {
+            return true;
+        }
+        let Ok(parent) = repo.find_commit(tip).and_then(|commit| commit.parent_id(0)) else {
+            return false;
+        };
+        tip = parent;
+    }
 }
 
 fn is_ancestor_or_same(repo: &Repository, ancestor: Oid, of: Oid) -> bool {
@@ -140,7 +160,8 @@ pub enum Transport {
 /// Closeout may differ in the reviewed segment. A clean task landing can
 /// transport that segment onto a line; a reopening range always reviews its
 /// own work. `base` pins the range's anchored old review when supplied.
-/// Waivers still require the criterion's planning amendment on its target.
+/// A waiver names the criterion's record-only amendment on its target;
+/// `bind_completion_with_amendment` adds the task's own range.
 #[must_use]
 pub fn bind_completion(
     repo: &Repository,
@@ -150,6 +171,37 @@ pub fn bind_completion(
     default_target: Option<Oid>,
     transport: Transport,
     base: Option<Oid>,
+) -> Vec<Finding> {
+    bind_completion_with_amendment(
+        repo,
+        task,
+        graph,
+        landing,
+        default_target,
+        transport,
+        base,
+        None,
+    )
+}
+
+/// [`bind_completion`] with the own-task waiver allowance (TSK-184): in the
+/// task's own pull request, before the task was ever complete on its
+/// target, a waiver may also name a record-only amendment commit of this
+/// record in that range, after `own_range_base` and strictly before the
+/// reviewed commit. Once the pull request lands, that commit is on the
+/// target, so a line and the release judge accept the same waiver under
+/// the target rule. `None`, or a range that reopens the task, keeps the
+/// target rule alone.
+#[allow(clippy::too_many_arguments)] // bind_completion's inputs and the own-range base.
+pub(crate) fn bind_completion_with_amendment(
+    repo: &Repository,
+    task: &RecordView,
+    graph: &Graph,
+    landing: Landing<'_>,
+    default_target: Option<Oid>,
+    transport: Transport,
+    base: Option<Oid>,
+    own_range_base: Option<Oid>,
 ) -> Vec<Finding> {
     let Some(block) = active_block(task) else {
         return Vec::new();
@@ -166,10 +218,13 @@ pub fn bind_completion(
             .head()
             .ok()
             .is_some_and(|head| head.shorthand().ok() == task.integration_target.as_deref());
-    // A reopen landed before this range, by its own pull request (R-119
-    // keeps that valid), is recovered from the history below. The fix then
-    // lands as any task does, so a task landing may carry its review.
-    let mut reopened_earlier = false;
+    // A completion reopened before this range is recovered from the history
+    // below. When that completion is on the target at the anchored base, a
+    // separate pull request reopened it (R-119 keeps that valid): the range
+    // does not reopen the task, and the fix lands as any task does, so a
+    // task landing may carry its review. Otherwise this range completed and
+    // reopened the task itself.
+    let mut recovered = false;
     let reopen = (!on_target)
         .then_some(anchor)
         .flatten()
@@ -200,9 +255,16 @@ pub fn bind_completion(
             }) {
                 old.criteria = anchored.criteria;
             }
-            reopened_earlier = true;
+            recovered = true;
             Some((at, old))
         });
+    let before_range = |at: Oid| anchor.is_some_and(|base| is_ancestor_or_same(repo, at, base));
+    // A reopening range reviews its own work: no task landing or clean line
+    // merge stacks on its review, and no own-range waiver (R-60).
+    let reopens_range = reopen
+        .as_ref()
+        .is_some_and(|(at, _)| !recovered || !before_range(*at));
+    let own_range_base = own_range_base.filter(|_| !reopens_range);
     let mut findings = Vec::new();
     if let Some((_, old)) = &reopen {
         findings.extend(
@@ -219,22 +281,18 @@ pub fn bind_completion(
         )),
         Some(reviewed) => {
             // The review lies after the reopened completion. One exception:
-            // a completion made and reopened inside this range (the range
-            // base holds no completion) stood last at `at`, and a review of
+            // a completion made and reopened inside this range (not on the
+            // target at the range base) stood last at `at`, and a review of
             // `at` covers every change the range made before the reopen;
             // the binding below still refuses any later change but this
             // record's status and Closeout (AC-2).
-            let completed_in_range = |at: Oid| {
-                reopened_earlier
-                    && anchor.is_some_and(|base| base != at && is_ancestor_or_same(repo, base, at))
-            };
+            let completed_in_range = |at: Oid| recovered && anchor.is_some() && !before_range(at);
             let problem = if reopen.as_ref().is_some_and(|(at, _)| {
                 (reviewed == *at && !completed_in_range(*at))
                     || !is_ancestor_or_same(repo, *at, reviewed)
             }) {
                 Some(format!("a reopened task's reviewed commit {reviewed} must lie inside the fix range, after its anchored base"))
-            } else if transport == Transport::TaskLanding && (reopen.is_none() || reopened_earlier)
-            {
+            } else if transport == Transport::TaskLanding && !reopens_range {
                 binding_problem(repo, task, landing, reviewed, transport)
             } else {
                 binding_problem(repo, task, landing, reviewed, Transport::Direct)
@@ -253,6 +311,7 @@ pub fn bind_completion(
                 &result.evidence,
                 landing,
                 task_target(repo, task, default_target),
+                own_range_base,
             ) {
                 bind(format!("{}: {id} waiver {problem}", task.id));
             }
@@ -331,13 +390,22 @@ fn binding_problem(
     reviewed: Oid,
     transport: Transport,
 ) -> Option<String> {
-    let direct = reviewed_span_problem(repo, task, landing, reviewed)?;
+    // A task landing's own span may stack (TSK-184): the task branch may
+    // re-merge its integration target cleanly after the review. Direct
+    // work, a reopening range and a completion bound at a head never stack.
+    let direct = reviewed_span_problem(
+        repo,
+        task,
+        landing,
+        reviewed,
+        transport == Transport::TaskLanding,
+    )?;
     if transport == Transport::Direct {
         return Some(direct);
     }
     match task_landing(repo, task, landing, reviewed) {
         Landed::NoMerge => Some(direct),
-        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed)
+        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, false)
             .map(|problem| format!("the landing merge {merge} brings {head}, and {problem}; review the result that landed")),
         Landed::Refused(problem) => Some(problem),
     }
@@ -345,11 +413,16 @@ fn binding_problem(
 
 /// The only binding predicate: the reviewed commit is the source head or
 /// its ancestor, with only the task's status and Closeout changed afterward.
+/// With `stacking`, a task pull request's own chain may also re-merge its
+/// integration target cleanly after the review (TSK-184); direct work, a
+/// reopening range and a completion bound at a head (SPC-013 R-120) never
+/// stack.
 fn reviewed_span_problem(
     repo: &Repository,
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
+    stacking: bool,
 ) -> Option<String> {
     if let Landing::Worktree { changed, .. } = landing {
         let outside: Vec<&str> = changed
@@ -377,9 +450,78 @@ fn reviewed_span_problem(
             "reviewed commit {reviewed} is not the head or an ancestor of it; review the result that lands"
         ));
     }
-    later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
-        format!("{problem} after the reviewed commit {reviewed}; review the result again")
-    })
+    // Reviewed stacking: after the review, the task branch may re-merge
+    // its integration target cleanly, and its own commits may change only
+    // this record's status and Closeout. Anything else is judged as the
+    // whole change from the reviewed commit to C.
+    let stack = if stacking {
+        stacked(repo, task, reviewed, at)
+    } else {
+        Stacked::No
+    };
+    match stack {
+        Stacked::Clean => {
+            let Some(then) = blob_at(repo, reviewed, &task.path) else {
+                return Some(format!(
+                    "{} is not in the reviewed commit, so its scope was never reviewed",
+                    task.path
+                ));
+            };
+            (reviewed_part(&then) != reviewed_part(&completed))
+                .then(|| "the record changed outside its status and Closeout after the reviewed commit; review the result again".into())
+        }
+        Stacked::Unclean(merge) => Some(format!(
+            "merge {merge} is not a clean re-merge from the task's integration target; review the result again"
+        )),
+        Stacked::No => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
+            format!("{problem} after the reviewed commit {reviewed}; review the result again")
+        }),
+    }
+}
+
+/// How C's first-parent chain back to the reviewed commit stacks on it.
+enum Stacked {
+    /// Every commit between is a clean re-merge from the task's integration
+    /// target or changes only this record's status and Closeout.
+    Clean,
+    /// A merge from the integration target whose tree is not the clean
+    /// re-merge of its parents.
+    Unclean(Oid),
+    /// The reviewed commit is not on the chain, or a commit between changes
+    /// more than a clean re-merge or the record allows.
+    No,
+}
+
+fn stacked(repo: &Repository, task: &RecordView, reviewed: Oid, at: Oid) -> Stacked {
+    let target = task_target(repo, task, None);
+    let mut cursor = at;
+    while cursor != reviewed {
+        let Ok(commit) = repo.find_commit(cursor) else {
+            return Stacked::No;
+        };
+        let Ok(parent) = commit.parent_id(0) else {
+            return Stacked::No;
+        };
+        if commit.parent_count() == 2 {
+            let from_target = target.is_some_and(|tip| {
+                commit
+                    .parent_id(1)
+                    .is_ok_and(|side| is_first_parent_ancestor(repo, side, tip))
+            });
+            if !from_target {
+                return Stacked::No;
+            }
+            if !is_clean_remerge(repo, &commit).unwrap_or(false) {
+                return Stacked::Unclean(cursor);
+            }
+        } else if blob_at(repo, cursor, &task.path).is_none_or(|content| {
+            later_change(repo, &task.path, &content, parent, cursor).is_some()
+        }) {
+            return Stacked::No;
+        }
+        cursor = parent;
+    }
+    Stacked::Clean
 }
 
 /// Provenance of a possible task landing.
@@ -481,7 +623,10 @@ fn task_landing(
 /// Whether `merge`'s tree is what merging its two parents gives with no
 /// conflict: a merge that added or dropped anything of its own (an evil
 /// merge) or resolved a conflict landed a result nobody reviewed.
-fn is_clean_remerge(repo: &Repository, merge: &git2::Commit<'_>) -> Result<bool, git2::Error> {
+pub(super) fn is_clean_remerge(
+    repo: &Repository,
+    merge: &git2::Commit<'_>,
+) -> Result<bool, git2::Error> {
     let merged = repo.merge_commits(&merge.parent(0)?, &merge.parent(1)?, None)?;
     if merged.has_conflicts() {
         return Ok(false);
@@ -559,6 +704,7 @@ fn waiver_problem(
     evidence: &str,
     landing: Landing<'_>,
     target_tip: Option<Oid>,
+    own_range_base: Option<Oid>,
 ) -> Option<String> {
     let Some(amendment) = commit_of(repo, evidence.trim()) else {
         return Some(format!(
@@ -576,11 +722,40 @@ fn waiver_problem(
     let Some(tip) = target_tip else {
         return Some("cannot be checked: the target does not resolve here".into());
     };
-    if !is_ancestor_or_same(repo, amendment, tip) {
-        return Some(format!(
-            "names {}, which is not on the target",
-            evidence.trim()
-        ));
+    let own_range = !is_ancestor_or_same(repo, amendment, tip);
+    if own_range {
+        // Without the task's own range (a line, a release range, a
+        // reopening range), the target route is the only one.
+        let Some(own_range_base) = own_range_base else {
+            return Some(format!(
+                "names {}, which is not on the target",
+                evidence.trim()
+            ));
+        };
+        let reviewed = active_block(task).and_then(|block| commit_of(repo, &block.reviewed));
+        if is_ancestor_or_same(repo, amendment, own_range_base)
+            || reviewed.is_none_or(|reviewed| {
+                amendment == reviewed || !is_ancestor_or_same(repo, amendment, reviewed)
+            })
+        {
+            return Some("is not on the target or a record-only amendment strictly before the reviewed revision in this task's range".into());
+        }
+        let Ok(commit) = repo.find_commit(amendment) else {
+            return Some("amendment cannot be read".into());
+        };
+        let paths = super::lifecycle::changed_paths(
+            repo,
+            &commit
+                .parent_id(0)
+                .map_or_else(|_| String::new(), |p| p.to_string()),
+            Some(&amendment.to_string()),
+        );
+        if paths.is_err()
+            || paths
+                .is_ok_and(|paths| paths.is_empty() || paths.iter().any(|path| path != &task.path))
+        {
+            return Some("must change only this task's record".into());
+        }
     }
     if !is_ancestor_or_same(repo, amendment, landing.commit()) {
         return Some(format!(
@@ -712,24 +887,160 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
 
 /// Records of the range whose criteria differ from the target's (R-52).
 #[must_use]
-pub fn frozen_criteria(head: &Graph, target: &Graph, changed_paths: &[String]) -> Vec<Finding> {
-    head.records
+pub fn frozen_criteria(
+    head: &Graph,
+    target: &Graph,
+    changed_paths: &[String],
+    exempt: Option<&str>,
+) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for record in head
+        .records
+        .values()
+        .filter(|record| record.kind == RecordKind::Task && changed_paths.contains(&record.path))
+    {
+        let before = target.records.get(&record.id);
+        let old = before
+            .map(|r| r.criteria.items.as_slice())
+            .unwrap_or_default();
+        let new = &record.criteria.items;
+        if before.is_some_and(|r| r.criteria.signature() == record.criteria.signature()) {
+            continue;
+        }
+        if exempt == Some(record.id.as_str()) {
+            let mut delta = Vec::new();
+            for item in old {
+                match new.iter().find(|next| next.id == item.id) {
+                    None => delta.push(format!(
+                        "{} removed: {} (give the reason in the PR body)",
+                        item.id, item.text
+                    )),
+                    Some(next) if next.text != item.text => delta.push(format!(
+                        "{} changed: {} -> {}",
+                        item.id, item.text, next.text
+                    )),
+                    _ => {}
+                }
+            }
+            for item in new
+                .iter()
+                .filter(|item| !old.iter().any(|prior| prior.id == item.id))
+            {
+                delta.push(format!("{} added: {}", item.id, item.text));
+            }
+            if !delta.is_empty() {
+                found.push(Finding {
+                    rule: FROZEN_RULE,
+                    message: format!("{} criteria delta: {}", record.id, delta.join("; ")),
+                    note: true,
+                });
+            }
+        } else if before.is_some() {
+            found.push(finding(FROZEN_RULE, format!("{} changes its criteria on this branch; another task's criteria change by its own PR or the epic amendment", record.id)));
+        }
+    }
+    found
+}
+
+/// Enforce reopen equality before any range-class amendment exemption.
+/// The prospective graph may include an uncommitted status transition.
+///
+/// # Errors
+/// Returns an error if the range cannot be read.
+pub fn reopened_criteria(
+    repo: &Repository,
+    base: &str,
+    head: &str,
+    after: &Graph,
+) -> Result<Vec<Finding>, String> {
+    Ok(reopened_ids(repo, base, head, after)?
+        .into_iter()
+        .map(|id| finding(FROZEN_RULE, reopened_message(&id)))
+        .collect())
+}
+
+/// Why a reopened task's changed criteria are refused: one statement for
+/// the reopen transition (R-119) and the range freeze (R-52).
+pub(super) const REOPENED_CRITERIA: &str = "a reopened task keeps its criteria as the anchored target has them; change them in the epic's batched amendment, a planning pull request on the target";
+
+/// The frozen finding's message for a reopened task whose criteria changed.
+pub(super) fn reopened_message(id: &str) -> String {
+    format!("{id}: {REOPENED_CRITERIA}")
+}
+
+/// The tasks complete at `base` whose criteria differ at `head` and which
+/// the range reopened: no longer complete, a block superseded, or a commit
+/// of the range moving them from complete.
+///
+/// # Errors
+/// Returns an error if the range cannot be read.
+pub(super) fn reopened_ids(
+    repo: &Repository,
+    base: &str,
+    head: &str,
+    after: &Graph,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let target = Graph::from_revision(repo, base)?;
+    let candidates: Vec<_> = after
+        .records
         .values()
         .filter(|record| record.kind == RecordKind::Task)
-        .filter(|record| changed_paths.contains(&record.path))
-        .filter_map(|record| {
-            let there = target.records.get(&record.id)?;
-            (there.criteria.signature() != record.criteria.signature()).then(|| {
-                finding(
-                    FROZEN_RULE,
-                    format!(
-                        "{} changes its criteria on this branch; criteria change only by a planning pull request on the target, then this branch rebases",
-                        record.id
-                    ),
-                )
+        .filter(|record| {
+            target.records.get(&record.id).is_some_and(|old| {
+                old.status == "complete" && old.criteria.signature() != record.criteria.signature()
             })
         })
-        .collect()
+        .collect();
+    if candidates.is_empty() {
+        return Ok(std::collections::BTreeSet::new());
+    }
+    let oid = |rev: &str| {
+        repo.revparse_single(rev)
+            .and_then(|o| o.peel_to_commit())
+            .map(|c| c.id())
+            .map_err(|e| e.to_string())
+    };
+    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    walk.push(oid(head)?).map_err(|e| e.to_string())?;
+    walk.hide(oid(base)?).map_err(|e| e.to_string())?;
+    let mut reopened = std::collections::BTreeSet::new();
+    for record in &candidates {
+        let old = &target.records[&record.id];
+        if record.status != "complete"
+            || acceptance_blocks(&record.body)
+                .iter()
+                .filter(|block| block.is_superseded())
+                .count()
+                > acceptance_blocks(&old.body)
+                    .iter()
+                    .filter(|block| block.is_superseded())
+                    .count()
+        {
+            reopened.insert(record.id.clone());
+        }
+    }
+    for oid in walk {
+        let oid = oid.map_err(|e| e.to_string())?;
+        for record in &candidates {
+            if let Some(content) = blob_at(repo, oid, &record.path) {
+                let then = RecordView::parse(RecordKind::Task, &record.path, &content)?;
+                if then.status != "complete" {
+                    let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+                    let transitioned = commit.parent_ids().any(|parent| {
+                        blob_at(repo, parent, &record.path)
+                            .and_then(|text| {
+                                RecordView::parse(RecordKind::Task, &record.path, &text).ok()
+                            })
+                            .is_some_and(|prior| prior.status == "complete")
+                    });
+                    if transitioned {
+                        reopened.insert(record.id.clone());
+                    }
+                }
+            }
+        }
+    }
+    Ok(reopened)
 }
 
 /// The binding findings of a range: every task record it completes, or
@@ -747,8 +1058,15 @@ pub fn completions_in_range(
     base: &str,
     head: &str,
     default_target: Option<Oid>,
-    criteria: Criteria,
+    criteria: &Criteria,
 ) -> Result<Vec<Finding>, String> {
+    let amendable = *criteria == Criteria::Amendable;
+    // The task a task pull request is for may waive a criterion by a
+    // record-only amendment in its own range (TSK-184); no other record may.
+    let own_task = match criteria {
+        Criteria::OwnTask(id) => Some(id.as_str()),
+        _ => None,
+    };
     let oid = |revision: &str| {
         repo.revparse_single(revision)
             .and_then(|object| object.peel_to_commit())
@@ -784,16 +1102,22 @@ pub fn completions_in_range(
             let introduced = block
                 .as_ref()
                 .map_or(head_oid, |block| introduced_at(repo, task, block, head_oid));
-            let source_base = (criteria == Criteria::Amendable)
+            let source_base = amendable
                 .then(|| source_landing_base(repo, head_oid, introduced))
                 .flatten();
-            let origin = if criteria == Criteria::Amendable && (!reopened || source_base.is_some())
-            {
+            let origin = if amendable && (!reopened || source_base.is_some()) {
                 introduced
             } else {
                 head_oid
             };
-            findings.extend(bind_completion(
+            if amendable {
+                findings.push(Finding {
+                    rule: BINDING_RULE,
+                    message: format!("{} completion bound at {origin}", task.id),
+                    note: true,
+                });
+            }
+            findings.extend(bind_completion_with_amendment(
                 repo,
                 task,
                 &after,
@@ -801,6 +1125,7 @@ pub fn completions_in_range(
                 default_target,
                 Transport::TaskLanding,
                 Some(source_base.unwrap_or(anchor)),
+                (own_task == Some(task.id.as_str())).then_some(anchor),
             ));
         }
     }
@@ -875,12 +1200,38 @@ pub fn journey_requirement_at(
 /// Whether a range may change task criteria (R-52): a planning-only change
 /// or a validated epic integration line. The caller decides it from the
 /// pull request's validated class, never from the branch prefix alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Criteria {
     /// Criteria stay as the target has them.
     Frozen,
+    /// Only the named, not previously complete task may amend its criteria.
+    OwnTask(String),
     /// A planning-only range or a validated epic line may change them.
     Amendable,
+}
+
+/// Select the own-task amendment only for a task not complete at the target.
+///
+/// # Errors
+/// Returns an error when the target records cannot be read.
+pub fn task_criteria(
+    root: &std::path::Path,
+    base: &str,
+    task_id: &str,
+) -> Result<Criteria, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let graph = Graph::from_revision(&repo, base)?;
+    Ok(
+        if graph
+            .records
+            .get(task_id)
+            .is_some_and(|record| record.status == "complete")
+        {
+            Criteria::Frozen
+        } else {
+            Criteria::OwnTask(task_id.to_string())
+        },
+    )
 }
 
 /// The findings of a pull request from `base` (the target tip) to `head`:
@@ -897,7 +1248,7 @@ pub fn pull_request_findings(
     repo_root: &std::path::Path,
     base: &str,
     head: &str,
-    criteria: Criteria,
+    criteria: &Criteria,
 ) -> Result<Vec<Finding>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
@@ -907,15 +1258,21 @@ pub fn pull_request_findings(
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
     let target_tip = oid(base)?;
-    let mut found = Vec::new();
-    if criteria == Criteria::Frozen {
+    let at_head = Graph::from_revision(&repo, head)?;
+    // Resolution 43: a reopened task keeps its criteria, whatever the
+    // range's class allows.
+    let mut found = reopened_criteria(&repo, base, head, &at_head)?;
+    if *criteria != Criteria::Amendable {
         let anchor = repo
             .merge_base(target_tip, oid(head)?)
             .map_err(|error| error.message().to_string())?;
         let paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
-        let at_head = Graph::from_revision(&repo, head)?;
         let at_target = Graph::from_revision(&repo, base)?;
-        found.extend(frozen_criteria(&at_head, &at_target, &paths));
+        let exempt = match criteria {
+            Criteria::OwnTask(id) => Some(id.as_str()),
+            _ => None,
+        };
+        found.extend(frozen_criteria(&at_head, &at_target, &paths, exempt));
     }
     found.extend(completions_in_range(
         &repo,

@@ -41,8 +41,8 @@ use std::path::Path;
 use git2::{Oid, Repository};
 
 use super::acceptance::{
-    active_block, bind_completion, blob_at, finding, introduced_at, Finding, Landing, Transport,
-    BINDING_RULE, FROZEN_RULE,
+    active_block, bind_completion, blob_at, commit_of, finding, introduced_at, is_clean_remerge,
+    Finding, Landing, Transport, BINDING_RULE, FROZEN_RULE,
 };
 use super::classify::is_planning_path;
 use super::lifecycle::{Brought, Graph, RecordView};
@@ -1193,7 +1193,14 @@ fn judge(
                     match source {
                         Some(source) => match landed_criteria(&repo, &now, path, source) {
                             Landed::Planning => {}
-                            Landed::Unreadable(found) => findings.push(found),
+                            Landed::OwnTask { landing } => notes.push(format!(
+                                "own-task amendment: {} changed its criteria in its own reviewed pull request, landed on its line at {}",
+                                now.id,
+                                short(landing)
+                            )),
+                            Landed::Unreadable(found) | Landed::Frozen(found) => {
+                                findings.push(found);
+                            }
                             Landed::WithCode { landing, changed } => {
                                 // The cutoff is the one of the line the task
                                 // itself targets, never whichever advertised
@@ -1232,7 +1239,7 @@ fn judge(
                                     findings.push(finding(
                                             FROZEN_RULE,
                                             format!(
-                                                "{} changes its criteria on its line at {}, which also changes {changed}{why}; a criteria change lands on a line by a planning pull request",
+                                                "{} changes its criteria on its line at {}, which also changes {changed}{why}; a criteria change lands on a line by a planning pull request or the task's own reviewed pull request; carry any other change in the epic's batched amendment",
                                                 now.id,
                                                 short(landing)
                                             ),
@@ -1640,17 +1647,25 @@ fn frozen(record: Option<&RecordView>, path: &str, where_: &str) -> Finding {
 enum Landed {
     /// The landing changed planning records only.
     Planning,
-    /// The landing also changed `changed`; refused unless the line's
-    /// release-rule cutoff covers it.
+    /// The landing also changed `changed` and is not the task's own
+    /// reviewed pull request; refused unless the line's release-rule cutoff
+    /// covers it.
     WithCode { landing: Oid, changed: String },
+    /// The landing is the task's own reviewed and completed pull request
+    /// (SPC-013 R-120, resolution 41): accepted.
+    OwnTask { landing: Oid },
     /// The landing cannot be read.
     Unreadable(Finding),
+    /// The landing reopened the task as it changed its criteria: frozen
+    /// before the planning-only exemption is considered.
+    Frozen(Finding),
 }
 
 /// A brought criteria change is judged again at the commit that landed it
 /// on its line: walking `source`'s first-parent chain, the first commit
 /// whose first parent does not carry the brought criteria. That landing
-/// must change planning records only.
+/// must change planning records only, or be the task's own reviewed pull
+/// request ([`own_task_landing`]).
 fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid) -> Landed {
     let signature = now.criteria.signature();
     let carries = |oid: Oid| {
@@ -1673,8 +1688,42 @@ fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid)
             _ => break commit,
         }
     };
+    // Resolution 43: a reopened task keeps its criteria. Judged first, as
+    // the task pull request rule judges it before the class exemptions.
+    if let Ok(parent) = landing.parent_id(0) {
+        let base = parent.to_string();
+        let head = landing.id().to_string();
+        let reopened = Graph::from_revision(repo, &head)
+            .and_then(|after| super::acceptance::reopened_ids(repo, &base, &head, &after));
+        match reopened {
+            Ok(ids) if ids.contains(&now.id) => {
+                return Landed::Frozen(finding(
+                    FROZEN_RULE,
+                    format!(
+                        "{}, landed on its line at {}",
+                        super::acceptance::reopened_message(&now.id),
+                        short(landing.id())
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                return Landed::Unreadable(finding(
+                    FROZEN_RULE,
+                    format!(
+                        "{}: the landing {} of its criteria change cannot be read: {error}",
+                        now.id,
+                        short(landing.id())
+                    ),
+                ));
+            }
+        }
+    }
     match super::acceptance::non_planning_change(repo, landing.parent_id(0).ok(), landing.id()) {
         Ok(None) => Landed::Planning,
+        Ok(Some(_)) if own_task_landing(repo, path, &landing) => Landed::OwnTask {
+            landing: landing.id(),
+        },
         Ok(Some(changed)) => Landed::WithCode {
             landing: landing.id(),
             changed,
@@ -1689,6 +1738,67 @@ fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid)
             ),
         )),
     }
+}
+
+/// Whether `landing` is the task's own reviewed pull request landing its
+/// criteria change with its completion (SPC-013 R-120 as reconciled by
+/// resolution 41): a two-parent merge whose range changes the criteria of
+/// exactly the record at `path`, not complete at the merge's first parent,
+/// complete at the merge with an acceptance block whose reviewed commit
+/// lies in the second-parent range and already carries the criteria, the
+/// merge being the clean re-merge of its parents. Any other landing that
+/// changed a criterion with code stays frozen.
+fn own_task_landing(repo: &Repository, path: &str, landing: &git2::Commit<'_>) -> bool {
+    if landing.parent_count() != 2 {
+        return false;
+    }
+    let (Ok(first), Ok(second)) = (landing.parent_id(0), landing.parent_id(1)) else {
+        return false;
+    };
+    let Ok(changed) = changes(repo, Some(first), landing.id()) else {
+        return false;
+    };
+    let mut amended = changed
+        .iter()
+        .filter_map(|(changed_path, (before, after))| {
+            (record_kind_for_tree_path(changed_path) == Some(RecordKind::Task)
+                && direct_criteria_changed(
+                    record_of(repo, before.as_ref(), changed_path).as_ref(),
+                    record_of(repo, after.as_ref(), changed_path).as_ref(),
+                ))
+            .then_some(changed_path.as_str())
+        });
+    if amended.next() != Some(path) || amended.next().is_some() {
+        return false;
+    }
+    if record_at(repo, first, path).is_some_and(|before| before.status == "complete") {
+        return false;
+    }
+    let Some(at_merge) = record_at(repo, landing.id(), path) else {
+        return false;
+    };
+    if at_merge.status != "complete" {
+        return false;
+    }
+    let Some(block) = active_block(&at_merge) else {
+        return false;
+    };
+    let Some(reviewed) = commit_of(repo, &block.reviewed) else {
+        return false;
+    };
+    // The review saw these criteria: a change after the reviewed commit is
+    // unreviewed, whatever the binding rule says of it.
+    if record_at(repo, reviewed, path)
+        .is_none_or(|at_review| at_review.criteria.signature() != at_merge.criteria.signature())
+    {
+        return false;
+    }
+    let reaches =
+        |from: Oid| from == reviewed || repo.graph_descendant_of(from, reviewed).unwrap_or(false);
+    if !reaches(second) || reaches(first) {
+        return false;
+    }
+    is_clean_remerge(repo, landing).unwrap_or(false)
 }
 
 /// What a commit's project config says of [`MARKER_KEY`]. Only config

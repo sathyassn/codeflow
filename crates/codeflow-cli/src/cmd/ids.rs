@@ -131,7 +131,8 @@ pub fn run(args: &IdsArgs) -> i32 {
                 }
                 Err(error) => {
                     eprintln!(
-                        "codeflow ids check: cannot determine durable-work tracking: {error}"
+                        "codeflow ids check: {}",
+                        codeflow_core::workgraph::work_start::tracking_state_message(error)
                     );
                     return 2;
                 }

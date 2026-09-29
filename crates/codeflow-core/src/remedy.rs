@@ -217,10 +217,10 @@ catalog! {
         "reconcile the target branch, then run `codeflow work start {id}`";
     /// A task whose planning record has not reached the target.
     WORK_START_MERGE_PLANNING = Step::Codeflow("codeflow work start"),
-        "merge the validated planning record into '{target}', then run `codeflow work start {id}`";
+        "merge the epic's planning change into '{target}', or for a standalone task commit its record on this branch, then run `codeflow work start {id}`";
     /// A task branch without a visible task record.
     TASK_RECORD_MISSING = Step::Codeflow("codeflow task new"),
-        "create the durable task record with `codeflow task new` on a planning branch and merge it into the target before implementation";
+        "create the record with `codeflow task new`: land an epic task in its batched planning amendment, or use `--standalone-reason` on the task branch";
     /// A workgraph that does not validate.
     WORKGRAPH_INVALID = Step::Codeflow("codeflow validate"),
         "repair the workgraph until `codeflow validate --docs` passes";
@@ -239,6 +239,12 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
+    /// A completion bound to its reviewed commit: evidence, not a refusal.
+    ACCEPTANCE_BOUND = Step::Codeflow("codeflow ci"),
+        "nothing to change: the completion is bound to its reviewed commit, which `codeflow ci` proves for binding only; a human reviewer confirms that the review the block names covers that commit";
+    /// A task's own criteria change in its PR: evidence, not a refusal.
+    CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
+        "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";
     /// A release-line legacy criteria change, landed before the release
     /// rule and covered by its line's cutoff (SPC-013 R-120).
     RELEASE_LEGACY_CHANGE = Step::Edit(".codeflow/project.toml"),
@@ -250,7 +256,7 @@ catalog! {
         "an operator confirms the record against its landing, which the release report names; the cutoff in `release_records_baseline` in .codeflow/project.toml is the 2.x to 3.0 transition record and is never edited, and no acceptance block is written for a legacy record, so the notice ends when the release lands";
     /// A task without a journey criterion for an adopter-facing range.
     JOURNEY_CRITERION = Step::Edit("{path}"),
-        "add a `(journey)` criterion to {path} by a planning pull request, or serve the epic's journey criterion there with `(serves EPC-NNN AC-n)`";
+        "add a `(journey)` criterion to {path} in the task's PR, or the epic amendment, or serve the epic's journey criterion there with `(serves EPC-NNN AC-n)`";
     /// An older record that breaks a rule its baseline exempts.
     RECORD_BASELINE_EXEMPT = Step::Edit("{path}"),
         "an older record keeps its baseline exemption, so this only warns; fix it in {path}, since its next status change applies the rules in full";
@@ -294,6 +300,9 @@ catalog! {
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
         "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+    /// A hook binary built from other hook or policy sources than the tree's.
+    JUDGE_SOURCE_DRIFT = Step::Codeflow("codeflow doctor"),
+        "rebuild the hook binary from the current hook and policy sources (`cargo build -p codeflow-cli`) and rerun; `codeflow doctor` reports the binary the hooks run; until then a human decides whether this judgment stands";
 
     // Commit messages, reworded with `git commit --amend`.
 

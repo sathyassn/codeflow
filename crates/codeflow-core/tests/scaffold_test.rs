@@ -1793,7 +1793,7 @@ fn update_records_the_work_records_baseline_once_for_existing_records() {
     );
 }
 
-// --- product paths (SPC-013 R-71, R-114; TSK-104) ---------------------------
+// --- product paths (SPC-013 R-70, R-114; TSK-104) ---------------------------
 
 fn product_paths(root: &Path) -> serde_json::Value {
     let policy: serde_json::Value =

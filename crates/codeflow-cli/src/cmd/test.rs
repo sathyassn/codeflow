@@ -3,7 +3,7 @@
 use clap::{ArgGroup, Args, Subcommand};
 use codeflow_core::registry::codeflow_home;
 use codeflow_core::testing::gate::{
-    gate_uses_cargo, run_gate, CoverageReport, FailureReport, GateOutcome,
+    gate_uses_cargo, run_gate_with_options, CoverageReport, FailureReport, GateOptions, GateOutcome,
 };
 use codeflow_core::testing::gate_guard::{
     acquire_full_gate_lock, check_cargo_target_dir, lock_dirs, GateLock,
@@ -30,6 +30,15 @@ pub struct TestArgs {
     /// broken.
     #[arg(long)]
     pub strict: bool,
+
+    /// Compare the entire candidate delta with a recorded green base.
+    /// An unproven base conservatively runs every target.
+    #[arg(long, conflicts_with = "all")]
+    pub since: Option<String>,
+
+    /// Run every target, including the binary determinism check at epic close.
+    #[arg(long)]
+    pub all: bool,
 }
 
 #[derive(Subcommand)]
@@ -77,7 +86,14 @@ pub fn run(args: &TestArgs) -> i32 {
         }
     };
 
-    match run_gate(&root, &args.mode) {
+    match run_gate_with_options(
+        &root,
+        &args.mode,
+        &GateOptions {
+            since: args.since.clone(),
+            all: args.all,
+        },
+    ) {
         Ok(GateOutcome::NoTargets { reason }) => {
             // AC #7: no stack = loud no-op. The banner is unmissable in both
             // modes. Default exits 0 (bootstrap/early-setup stays green);

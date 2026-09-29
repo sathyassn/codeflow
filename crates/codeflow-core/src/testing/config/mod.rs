@@ -52,6 +52,14 @@ pub struct ExecutionConfig {
     #[serde(default)]
     pub parallel: bool,
 
+    /// Maximum number of concurrently running targets. Omitted uses CPU count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_parallel: Option<usize>,
+
+    /// Changes to these shared inputs select every target.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub run_everything: Vec<String>,
+
     /// Stop on first target failure.
     #[serde(default)]
     pub fail_fast: bool,
@@ -88,6 +96,22 @@ pub struct TargetConfig {
     /// uses a different shell.
     #[serde(default, skip_serializing_if = "CommandShell::is_auto")]
     pub shell: CommandShell,
+
+    /// Producers that must finish successfully before this target starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+
+    /// Produced paths, relative to the repository (target/ follows `CARGO_TARGET_DIR`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
+
+    /// Input globs that can narrow selection. Empty means always selected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub narrow: Vec<String>,
+
+    /// Run with no other target alongside it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclusive: bool,
 
     /// Runner type.
     pub runner: RunnerType,
@@ -394,6 +418,11 @@ pub struct CoverageException {
     pub remove_when: String,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires a reference
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
 fn default_true() -> bool {
     true
 }
@@ -414,6 +443,11 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "structural",
         "tags",
         "test_files",
+        "shell",
+        "requires",
+        "outputs",
+        "narrow",
+        "exclusive",
     ];
     if let Some(targets) = raw.get("targets").and_then(|targets| targets.as_array()) {
         for (index, target) in targets.iter().enumerate() {
@@ -449,6 +483,12 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
 }
 
 fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
+    if config.execution.max_parallel == Some(0) {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: "max_parallel must be positive".into(),
+        });
+    }
     let mut seen_names = std::collections::HashSet::new();
     for target in &config.targets {
         if !seen_names.insert(&target.name) {
@@ -490,6 +530,74 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
                     target.name
                 ),
             });
+        }
+    }
+    Ok(())
+}
+
+/// Validate dependency closure for every enabled mode, before execution.
+///
+/// # Errors
+/// Returns a configuration error for missing, disabled, mode-inapplicable or
+/// cyclic prerequisites, or an unsafe output path.
+pub fn validate_prerequisites(path: &Path, targets: &[TargetConfig]) -> Result<(), TestingError> {
+    fn visit<'a>(
+        name: &'a str,
+        mode: &str,
+        targets: &'a [TargetConfig],
+        stack: &mut Vec<&'a str>,
+    ) -> Result<(), String> {
+        if stack.contains(&name) {
+            return Err(format!(
+                "cyclic prerequisites: {} -> {name}",
+                stack.join(" -> ")
+            ));
+        }
+        let target = targets
+            .iter()
+            .find(|t| t.name == name)
+            .ok_or_else(|| format!("missing prerequisite '{name}'"))?;
+        if !target.enabled {
+            return Err(format!("disabled prerequisite '{name}'"));
+        }
+        if !target.modes.contains_key(mode) {
+            return Err(format!(
+                "prerequisite '{name}' does not define mode '{mode}'"
+            ));
+        }
+        stack.push(name);
+        for required in &target.requires {
+            visit(required, mode, targets, stack)?;
+        }
+        stack.pop();
+        Ok(())
+    }
+    for target in targets {
+        for output in &target.outputs {
+            let output_path = Path::new(output);
+            if output_path.is_absolute()
+                || output_path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return Err(TestingError::ConfigInvalid {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "target '{}': output must be repository-relative: {output}",
+                        target.name
+                    ),
+                });
+            }
+        }
+        if target.enabled {
+            for mode in target.modes.keys() {
+                visit(&target.name, mode, targets, &mut Vec::new()).map_err(|message| {
+                    TestingError::ConfigInvalid {
+                        path: path.to_path_buf(),
+                        message,
+                    }
+                })?;
+            }
         }
     }
     Ok(())
@@ -541,6 +649,7 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
         })?;
 
     validate_targets(path, &config)?;
+    validate_prerequisites(path, &config.targets)?;
     Ok(config)
 }
 
@@ -561,6 +670,40 @@ pub fn write_test_config(path: &Path, config: &TestConfig) -> Result<(), Testing
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prerequisites_round_trip_and_reject_invalid_graphs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            r#"{"schema_version":"1.0",
+          "execution":{"parallel":true,"max_parallel":2,"run_everything":["crates/**"]},
+          "targets":[
+            {"name":"build","runner":"custom","outputs":["target/debug/codeflow"],
+             "exclusive":true,"modes":{"full":{"command":"true"}}},
+            {"name":"tests","runner":"custom","requires":["build"],"narrow":["docs/**"],
+             "modes":{"full":{"command":"true"}}}] }"#,
+        );
+        let config = load_test_config(&path).unwrap();
+        write_test_config(&path, &config).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["execution"]["max_parallel"], 2);
+        assert_eq!(raw["targets"][1]["requires"][0], "build");
+        for (requires, enabled, modes) in [
+            ("missing", true, "full"),
+            ("build", false, "full"),
+            ("build", true, "quick"),
+            ("tests", true, "full"),
+        ] {
+            let mut bad = raw.clone();
+            bad["targets"][1]["requires"] = serde_json::json!([requires]);
+            bad["targets"][0]["enabled"] = serde_json::json!(enabled);
+            bad["targets"][0]["modes"] = serde_json::json!({modes:{"command":"true"}});
+            std::fs::write(&path, serde_json::to_vec(&bad).unwrap()).unwrap();
+            assert!(load_test_config(&path).is_err(), "accepted {bad}");
+        }
+    }
 
     #[test]
     fn changed_files_scope_requires_comparison_base() {
@@ -799,6 +942,10 @@ mod tests {
                 cwd: None,
                 env: BTreeMap::new(),
                 shell: CommandShell::Auto,
+                requires: Vec::new(),
+                outputs: Vec::new(),
+                narrow: Vec::new(),
+                exclusive: false,
                 runner: RunnerType::Custom,
                 modes: BTreeMap::from([(
                     "full".to_string(),

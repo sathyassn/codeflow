@@ -3,6 +3,7 @@
 //! Spawns each enabled target's mode-specific command via `std::process::Command`
 //! in the target's cwd, capturing stdout/stderr.
 
+use std::fmt::Write as _;
 use std::io::Read;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -336,6 +337,213 @@ fn run_parallel(
         .collect()
 }
 
+/// Run a validated dependency graph with bounded concurrency and exclusive targets.
+/// Prerequisite failures remain named results, never fresh passes.
+#[must_use]
+pub fn run_dependency_targets(
+    targets: &[TargetConfig],
+    mode: &str,
+    project_dir: &Path,
+    parallel: bool,
+    max_parallel: Option<usize>,
+    fail_fast: bool,
+    run_dir: &Path,
+) -> Vec<Result<TargetRunResult, TestingError>> {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::mpsc::channel;
+    let bound = parallel_bound(parallel, max_parallel);
+    let baseline = match super::delivery::tracked(project_dir) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return vec![Err(error)],
+    };
+    let (tx, rx) = channel();
+    let mut pending: BTreeSet<usize> = (0..targets.len()).collect();
+    let mut running = BTreeSet::new();
+    let mut completed = BTreeMap::<String, bool>::new();
+    let mut results = BTreeMap::new();
+    let mut exclusive_running = false;
+    while !pending.is_empty() || !running.is_empty() {
+        for index in pending.clone() {
+            let target = &targets[index];
+            let prerequisite_failed = target
+                .requires
+                .iter()
+                .any(|r| completed.get(r) == Some(&false));
+            if prerequisite_failed || (fail_fast && completed.values().any(|ok| !ok)) {
+                let reason = if prerequisite_failed {
+                    "not run: prerequisite failed"
+                } else {
+                    "not run: fail_fast"
+                };
+                eprintln!("[codeflow test] {}: {reason}", target.name);
+                let result = not_run(target, reason);
+                completed.insert(target.name.clone(), false);
+                results.insert(index, Ok(result));
+                pending.remove(&index);
+                continue;
+            }
+            if exclusive_running
+                || running.len() >= bound
+                || !target
+                    .requires
+                    .iter()
+                    .all(|r| completed.get(r) == Some(&true))
+            {
+                continue;
+            }
+            if target.exclusive && !running.is_empty() {
+                break;
+            }
+            pending.remove(&index);
+            running.insert(index);
+            exclusive_running = target.exclusive;
+            let target = target.clone();
+            let mode = mode.to_string();
+            let root = project_dir.to_path_buf();
+            let baseline = baseline.clone();
+            let tx = tx.clone();
+            let run_dir = run_dir.to_path_buf();
+            std::thread::spawn(move || {
+                announce_start(&target, &mode);
+                let result = std::panic::catch_unwind(|| {
+                    run_owed_target(&target, &mode, &root, &baseline, &run_dir)
+                })
+                .unwrap_or_else(|_| {
+                    Err(TestingError::ParallelExecutionError {
+                        target: target.name.clone(),
+                        message: "target worker panicked".into(),
+                    })
+                });
+                let _ = tx.send((index, result));
+            });
+            if exclusive_running {
+                break;
+            }
+        }
+        if running.is_empty() {
+            if !pending.is_empty() {
+                return vec![Err(super::delivery::invalid(
+                    project_dir,
+                    "unsatisfied prerequisites in selected graph",
+                ))];
+            }
+            break;
+        }
+        let Ok((index, result)) = rx.recv() else {
+            break;
+        };
+        running.remove(&index);
+        if targets[index].exclusive {
+            exclusive_running = false;
+        }
+        let passed = result.as_ref().is_ok_and(|r| r.exit_code == 0);
+        eprintln!(
+            "[codeflow test] completed target '{}': {}",
+            targets[index].name,
+            if passed { "passed" } else { "FAILED" }
+        );
+        completed.insert(targets[index].name.clone(), passed);
+        results.insert(index, result);
+    }
+    results.into_values().collect()
+}
+
+fn parallel_bound(parallel: bool, configured: Option<usize>) -> usize {
+    if parallel {
+        configured.unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+        })
+    } else {
+        1
+    }
+}
+
+fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
+    TargetRunResult {
+        target_name: target.name.clone(),
+        exit_code: -1,
+        stdout: String::new(),
+        stderr: reason.into(),
+        stdout_truncated: false,
+        stderr_truncated: false,
+        duration_ms: 0,
+        report_path: None,
+        coverage_path: None,
+    }
+}
+
+fn run_owed_target(
+    target: &TargetConfig,
+    mode: &str,
+    root: &Path,
+    baseline: &std::collections::BTreeMap<String, String>,
+    run_dir: &Path,
+) -> Result<TargetRunResult, TestingError> {
+    if let Some(report) = &target.report {
+        let path = root
+            .join(target.cwd.as_deref().unwrap_or("."))
+            .join(&report.path);
+        if path.exists() && target.modes[mode].command.contains("nextest") {
+            std::fs::remove_file(path)?;
+        }
+    }
+    let mut result = run_target(target, mode, root)?;
+    if !target.outputs.is_empty() && result.exit_code == 0 {
+        let after = super::delivery::tracked(root)?;
+        let changed: Vec<_> = after
+            .iter()
+            .filter(|(p, hash)| baseline.get(*p) != Some(*hash))
+            .map(|(p, _)| p.as_str())
+            .collect();
+        if !changed.is_empty() {
+            result.exit_code = 1;
+            let _ = write!(
+                result.stderr,
+                "\ngeneration changed the candidate: {}",
+                changed.join(", ")
+            );
+        }
+        for output in &target.outputs {
+            if !root.join(output).exists() {
+                result.exit_code = 1;
+                let _ = write!(result.stderr, "\nproducer output missing: {output}");
+            }
+        }
+    }
+    let directory = if !target.name.is_empty()
+        && target.name != "."
+        && target.name != ".."
+        && target
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+    {
+        target.name.clone()
+    } else {
+        format!(
+            "target-{}",
+            &super::delivery::digest(target.name.as_bytes())[..16]
+        )
+    };
+    let destination = run_dir.join(directory);
+    std::fs::create_dir_all(&destination)?;
+    if let Some(path) = &result.report_path {
+        if path.exists() {
+            let saved = destination.join("junit.xml");
+            std::fs::copy(path, &saved)?;
+            result.report_path = Some(saved);
+        }
+    }
+    if let Some(path) = &result.coverage_path {
+        if path.exists() {
+            std::fs::copy(path, destination.join("coverage"))?;
+        }
+    }
+    std::fs::write(destination.join("stdout.log"), &result.stdout)?;
+    std::fs::write(destination.join("stderr.log"), &result.stderr)?;
+    Ok(result)
+}
+
 /// Returns `true` when the process is running inside a CI environment.
 ///
 /// Honours the de-facto standard `CI` environment variable: any non-empty
@@ -439,8 +647,14 @@ fn spawn_command(
         let _ = child.wait();
     })?;
 
-    let stdout_reader = child.stdout.take().map(spawn_reader);
-    let stderr_reader = child.stderr.take().map(spawn_reader);
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|pipe| spawn_progress_reader(pipe, target_name.to_string()));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|pipe| spawn_progress_reader(pipe, target_name.to_string()));
 
     let start = Instant::now();
     let mut timed_out = false;
@@ -575,7 +789,17 @@ struct CapturedOutput {
 /// Spawn a thread that drains a child pipe to EOF while retaining a bounded
 /// tail. Draining continues after the cap so the child cannot block on a full
 /// pipe.
-fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandle<CapturedOutput> {
+fn spawn_progress_reader<R: Read + Send + 'static>(
+    pipe: R,
+    name: String,
+) -> std::thread::JoinHandle<CapturedOutput> {
+    spawn_reader_with_progress(pipe, Some(name))
+}
+
+fn spawn_reader_with_progress<R: Read + Send + 'static>(
+    mut pipe: R,
+    name: Option<String>,
+) -> std::thread::JoinHandle<CapturedOutput> {
     std::thread::spawn(move || {
         let mut retained = Vec::with_capacity(OUTPUT_CAPTURE_LIMIT);
         let mut chunk = [0_u8; 8192];
@@ -584,6 +808,18 @@ fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandl
             let Ok(read) = pipe.read(&mut chunk) else {
                 break;
             };
+            if let Some(name) = &name {
+                for line in String::from_utf8_lossy(&chunk[..read]).lines() {
+                    if line.contains("Starting")
+                        || line.contains("Summary")
+                        || line.starts_with("journey gate:")
+                        || line.contains(" PASS ")
+                        || line.contains(" FAIL ")
+                    {
+                        eprintln!("[codeflow test] {name}: {line}");
+                    }
+                }
+            }
             if read == 0 {
                 break;
             }
@@ -707,6 +943,10 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             shell: CommandShell::Auto,
+            requires: Vec::new(),
+            outputs: Vec::new(),
+            narrow: Vec::new(),
+            exclusive: false,
             runner: RunnerType::Custom,
             modes: BTreeMap::from([(
                 "full".to_string(),

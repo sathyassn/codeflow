@@ -1,9 +1,8 @@
-//! Path classification for pull request ranges (SPC-013 R-70, R-71, R-114).
+//! Path classification for pull request ranges (SPC-013 R-70, R-114).
 //!
 //! One embedded table, `path_sets.toml`, defines the adopter-facing path set
-//! and the rest of the direct-change floor. `codeflow ci` reads it to refuse a
-//! direct change on a protected surface; later rules (the journey criterion,
-//! the release contract) read the same table. The planning-only and spike
+//! used by the journey criterion and release contract (R-114). Every PR
+//! names its task or epic (R-70). The planning-only and spike
 //! path rules live here too, so every caller judges a range the same way.
 
 use std::path::Path;
@@ -37,8 +36,6 @@ pub struct PathMember {
 pub struct PathSets {
     /// Surfaces that reach adopters (R-114).
     pub adopter_facing: Vec<PathMember>,
-    /// The rest of the direct-change floor (R-71).
-    pub direct_change_floor: Vec<PathMember>,
     /// Paths that are not behaviour for the local release preflight (R-93).
     #[serde(default)]
     pub not_behaviour: Vec<PathMember>,
@@ -148,19 +145,6 @@ impl PathSets {
             .find(|member| member_matches(member, path, project))
             .map(|member| member.member.as_str())
     }
-
-    /// The member of the direct-change floor (the adopter-facing set plus
-    /// policy, manifests and the record schema) that refuses a direct change
-    /// to `path`, if any.
-    #[must_use]
-    pub fn direct_change_refusal(&self, path: &str, project: &ProjectPaths) -> Option<&str> {
-        self.adopter_facing_member(path, project).or_else(|| {
-            self.direct_change_floor
-                .iter()
-                .find(|member| member_matches(member, path, project))
-                .map(|member| member.member.as_str())
-        })
-    }
 }
 
 impl PathSets {
@@ -208,7 +192,7 @@ mod tests {
     fn embedded_table_parses_and_every_fixed_member_has_an_example() {
         let sets = path_sets();
         assert!(!sets.adopter_facing.is_empty());
-        for member in sets.adopter_facing.iter().chain(&sets.direct_change_floor) {
+        for member in &sets.adopter_facing {
             if member.policy_key.is_none() {
                 assert!(member.example.is_some(), "{} has no example", member.member);
                 assert!(
@@ -267,19 +251,6 @@ mod tests {
                 );
             }
         }
-        for member in &sets.direct_change_floor {
-            let example = member.example.as_deref().unwrap();
-            assert_eq!(
-                sets.adopter_facing_member(example, &adopter),
-                None,
-                "{example}"
-            );
-            assert_eq!(
-                sets.direct_change_refusal(example, &adopter),
-                Some(member.member.as_str()),
-                "{example}"
-            );
-        }
     }
 
     /// The fixed set of R-114, for this repository: the scaffold, hook
@@ -316,9 +287,8 @@ mod tests {
         }
     }
 
-    /// TSK-106 AC-10: each release contract member is adopter-facing, is
-    /// refused as a direct change, and is watched by the release
-    /// configuration, so a range touching it is flagged by all three.
+    /// Each release contract member requires a journey criterion and is
+    /// watched by the release configuration.
     #[test]
     fn release_contract_members_are_adopter_facing_and_watched() {
         let sets = path_sets();
@@ -352,7 +322,7 @@ mod tests {
                     "{path}"
                 );
                 assert!(
-                    sets.direct_change_refusal(&path, &project).is_some(),
+                    sets.adopter_facing_member(&path, &project).is_some(),
                     "{path}"
                 );
                 assert!(
@@ -417,29 +387,12 @@ mod tests {
                 Some("product_paths"),
                 "{stack} {path}"
             );
-            assert_eq!(sets.direct_change_refusal("docs/guide.md", &project), None);
+            assert_eq!(sets.adopter_facing_member("docs/guide.md", &project), None);
         }
     }
 
     #[test]
-    fn manifests_match_at_the_root_and_nested() {
-        let sets = path_sets();
-        let none = ProjectPaths::default();
-        for path in [
-            "Cargo.toml",
-            "crates/codeflow-cli/Cargo.toml",
-            "web/package-lock.json",
-        ] {
-            assert_eq!(
-                sets.direct_change_refusal(path, &none),
-                Some("dependency_manifests"),
-                "{path}"
-            );
-        }
-    }
-
-    #[test]
-    fn ordinary_docs_and_records_are_outside_the_floor() {
+    fn ordinary_docs_and_records_are_outside_adopter_paths() {
         let sets = path_sets();
         let project = codeflow_paths();
         for path in [
@@ -448,7 +401,7 @@ mod tests {
             "project-management/tasks/TSK-001.md",
             "scripts/release.py",
         ] {
-            assert_eq!(sets.direct_change_refusal(path, &project), None, "{path}");
+            assert_eq!(sets.adopter_facing_member(path, &project), None, "{path}");
         }
     }
 

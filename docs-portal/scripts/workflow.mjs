@@ -5,15 +5,18 @@ import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertToolOutputRoots, withWorkflowLease } from "./publication.mjs";
 
 const workflow = process.argv[2];
-if (!["build", "check", "dev", "preview"].includes(workflow)) throw new Error("workflow must be build, check, dev, or preview");
+if (!["build", "check", "dev", "preview", "verify"].includes(workflow)) throw new Error("workflow must be build, check, dev, preview, or verify");
 const root = process.cwd();
 await withSignalAwareChildLifecycle(async (lifecycle) => {
   await withWorkflowLease(root, async () => {
     await assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]);
     if (workflow === "check") await run(lifecycle, process.execPath, ["--test", "tests/adapter.test.mjs"]);
     if (workflow !== "preview") await run(lifecycle, process.execPath, ["scripts/adapter.mjs"]);
-    await run(lifecycle, process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), workflow]);
-    if (workflow === "build") await run(lifecycle, process.execPath, ["scripts/evidence.mjs"]);
+    const astro = path.join("node_modules", "astro", "bin", "astro.mjs");
+    for (const stage of workflow === "verify" ? ["check", "build"] : [workflow]) {
+      await run(lifecycle, process.execPath, [astro, stage]);
+    }
+    if (workflow === "build" || workflow === "verify") await run(lifecycle, process.execPath, ["scripts/evidence.mjs"]);
   });
 });
 

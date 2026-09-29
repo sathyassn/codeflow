@@ -99,6 +99,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("ID_REGISTRY_RETARGET", Runs),
     ("ID_REGISTRY_UID", Runs),
     ("ACCEPTANCE_BINDING", Runs),
+    ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
+    ("CRITERIA_DELTA", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_RECORD", Excluded(HumanAuthority)),
     ("JOURNEY_CRITERION", Runs),
@@ -115,6 +117,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("BRANCH_NAME", Runs),
     ("ROOT_CHECKOUT_COMMIT", Runs),
     ("HOOK_INTEGRITY", Runs),
+    ("JUDGE_SOURCE_DRIFT", Excluded(HumanAuthority)),
     ("COMMIT_TYPE", Runs),
     ("COMMIT_LENGTH", Runs),
     ("COMMIT_BLANK_LINE", Runs),
@@ -772,7 +775,7 @@ fn clears_conflict_marker() {
 // Pull request bodies: edit the body, then `codeflow ci --pr-body-file`.
 // ---------------------------------------------------------------------------
 
-const BODY: &str = "## Summary\n\nAdds a thing.\n\n## Changes\n\n- one change\n\n\
+const BODY: &str = "## Summary\n\nAdds a thing.\n\nTask: TSK-001\n\n## Changes\n\n- one change\n\n\
                     ## Testing\n\n- cargo test: 12 passed\n- Not tested: Windows.\n\n\
                     ## Reviews\n\nNone: pending review.\n\n## Release impact\n\n\
                     - Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n\
@@ -909,16 +912,15 @@ fn clears_pr_template_remnant() {
 
 #[test]
 fn clears_pr_presentation() {
-    let long = "a line of output\n".repeat(20);
+    // TSK-184 (ADR-0071 rule 7): no line count judges a body; the
+    // presentation rule keeps the structural findings, such as a Testing
+    // section that names nothing as not tested.
     prove_body(
         "PR_PRESENTATION",
         DEFAULTS,
-        &BODY.replace(
-            "- cargo test: 12 passed\n",
-            &format!("- cargo test: 12 passed\n\n```text\n{long}```\n\n"),
-        ),
+        &BODY.replace("- Not tested: Windows.\n", ""),
         BODY,
-        "fenced block has",
+        "has no Not tested: line",
     );
 }
 

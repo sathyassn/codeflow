@@ -42,7 +42,8 @@ present chrome or Comment.
 ## 2. Shape the information before encoding it
 
 Anchor purpose, audience, decision/action, verified evidence, uncertainty, and
-needed depth. Apply `cf-editorial-review` to substantial prose. Write the
+needed depth. `cf-editorial-review` applies where its description triggers
+it. Write the
 page plainly: simple, straightforward and clear, no mannered prose (see
 `.codeflow/rules/writing.md`), in short prose and bullets. Keep it faithful
 to the session and project voice; preserve exact identifiers and technical

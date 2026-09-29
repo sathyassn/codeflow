@@ -116,6 +116,18 @@ pub struct CtrfTool {
     pub version: Option<String>,
 }
 
+impl CtrfTest {
+    /// Nextest identity: package, binary target (or --lib), and full test name.
+    /// The suite is retained verbatim in CTRF so identical names in different
+    /// binaries never collapse into one result.
+    #[must_use]
+    pub fn nextest_identity(&self) -> Option<(&str, &str, &str)> {
+        let suite = self.suite.as_deref()?;
+        let (package, target) = suite.split_once("::").unwrap_or((suite, "--lib"));
+        Some((package, target, &self.name))
+    }
+}
+
 /// Canonical test report — CTRF-shaped.
 ///
 /// This is the single data structure every downstream consumer reads.
@@ -183,6 +195,23 @@ impl CanonicalTestReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nextest_identity_separates_package_binary_and_full_name() {
+        let xml = r#"<testsuites><testsuite name="codeflow-cli::journeys"><testcase name="nested::control"/></testsuite><testsuite name="codeflow-core"><testcase name="nested::control"/></testsuite></testsuites>"#;
+        let report: CanonicalTestReport =
+            junit::parse_junit_str(xml, std::path::Path::new("junit.xml"))
+                .unwrap()
+                .into();
+        assert_eq!(
+            report.results.tests[0].nextest_identity(),
+            Some(("codeflow-cli", "journeys", "nested::control"))
+        );
+        assert_eq!(
+            report.results.tests[1].nextest_identity(),
+            Some(("codeflow-core", "--lib", "nested::control"))
+        );
+    }
 
     #[test]
     fn test_ctrf_status_serde_roundtrip() {

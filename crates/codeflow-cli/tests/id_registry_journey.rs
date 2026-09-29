@@ -719,15 +719,16 @@ fn a_follow_up_task_takes_its_number_from_the_registry() {
     );
 }
 
-/// The enforcing registry job must run on `pull_request_target` (its
-/// workflow from the default branch, never the PR), check out the PR's
-/// target, read the PR head only as git data, and hold a
-/// read-only token: then a PR that edits this file changes nothing about
-/// the verdict it receives. GitHub's own dispatch is not exercised here.
+/// The enforcing registry check is a step of the policy workflow (TSK-184:
+/// one target build serves both). It must run on `pull_request_target`
+/// (its workflow from the default branch, never the PR), check out the PR's
+/// target, read the PR head only as git data, and hold a read-only token:
+/// then a PR that edits this file changes nothing about the verdict it
+/// receives. GitHub's own dispatch is not exercised here.
 #[test]
 fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judges() {
     let asset =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/ci/codeflow-registry.yml");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/ci/codeflow-policy.yml");
     let workflow: serde_yaml::Value =
         serde_yaml::from_str(&std::fs::read_to_string(&asset).unwrap()).unwrap();
     let on = &workflow["on"];
@@ -741,8 +742,16 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
     );
     assert!(on.get("schedule").is_some() && on.get("push").is_some());
     assert_eq!(workflow["permissions"]["contents"], "read");
-    let job = &workflow["jobs"]["registry"];
-    assert_eq!(job["permissions"]["contents"], "read");
+    let job = &workflow["jobs"]["commit-lint"];
+    assert!(
+        job["steps"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|step| step.get("name").and_then(serde_yaml::Value::as_str)
+                == Some("codeflow ids check")),
+        "the registry check is a step of the enforcing job"
+    );
     let raw = std::fs::read_to_string(&asset).unwrap();
     assert!(!raw.contains("secrets."), "no secret reaches the job");
     for step in job["steps"].as_sequence().unwrap() {
@@ -795,8 +804,8 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
     assert!(raw.contains(
         "ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}"
     ));
-    assert!(raw.contains("refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"));
-    assert!(raw.contains("codeflow ids check --base \"$BASE_SHA\" --head refs/remotes/pr/head"));
+    assert!(raw.contains("refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"));
+    assert!(raw.contains("codeflow ids check --base \"$BASE_SHA\" --head refs/codeflow/pr-head"));
 }
 
 /// Review round 1, SL-3, through the CLI: a registered record is deleted

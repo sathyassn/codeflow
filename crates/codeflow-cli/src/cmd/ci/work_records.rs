@@ -7,16 +7,22 @@ use std::path::Path;
 
 use codeflow_core::hooks::{PolicyLevel, Violation};
 use codeflow_core::workgraph::durable_work_tracking_enabled;
-use codeflow_core::workgraph::lifecycle::{judge_pull_request_under, judge_release_range, Brought};
+use codeflow_core::workgraph::lifecycle::{
+    judge_line_under, judge_pull_request_under, judge_release_range, Brought,
+};
 
 /// Run the check for `codeflow ci`, record its findings and whether it ran,
 /// and print its notices. `authority` is the commit whose baseline list
-/// governs; `None` means the resolved base.
+/// governs; `None` means the resolved base. `on_line` says the range is a
+/// verified epic line, whose landings are judged one by one; `brought`, on a
+/// release range, names the records judged where each was introduced.
+#[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 pub(super) fn dispatch(
     root: &Path,
     base_candidates: &[String],
     head: &str,
     authority: Option<&str>,
+    on_line: bool,
     brought: Option<&Brought>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
@@ -26,6 +32,7 @@ pub(super) fn dispatch(
         super::resolve_base(root, base_candidates).as_deref(),
         head,
         authority,
+        on_line,
         brought,
     );
     if outcome.ran {
@@ -68,6 +75,7 @@ pub(super) fn check(
     base: Option<&str>,
     head: &str,
     authority: Option<&str>,
+    on_line: bool,
     brought: Option<&Brought>,
 ) -> Outcome {
     match durable_work_tracking_enabled(root) {
@@ -81,9 +89,7 @@ pub(super) fn check(
         }
         Err(error) => {
             return Outcome {
-                violations: vec![block(format!(
-                    "cannot determine durable-work tracking: {error}"
-                ))],
+                violations: vec![super::tracking_state_violation(error)],
                 notices: Vec::new(),
                 ran: true,
             }
@@ -96,9 +102,14 @@ pub(super) fn check(
             ran: false,
         };
     };
+    // A release range judges each brought record where it was introduced
+    // on its line (SPC-013 R-120); a verified epic line judges each landing
+    // on its own (R-60); any other range is judged whole.
+    let authority = authority.unwrap_or(base);
     let judged = match brought {
-        Some(brought) => judge_release_range(root, base, head, authority.unwrap_or(base), brought),
-        None => judge_pull_request_under(root, base, head, authority.unwrap_or(base)),
+        Some(brought) => judge_release_range(root, base, head, authority, brought),
+        None if on_line => judge_line_under(root, base, head, authority),
+        None => judge_pull_request_under(root, base, head, authority),
     };
     match judged {
         Ok(verdict) => {

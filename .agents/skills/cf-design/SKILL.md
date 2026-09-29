@@ -10,12 +10,10 @@ the creator, audience, context, subject, and systems in force. Design is a
 reasoned product decision, not decoration or a catalog of fashionable patterns.
 
 This supports `cf-model-orchestrator`, which owns Plan vN and settlement. The
-role qualified as `claude-judgment-primary` **produces** design
-in its own native interactive session; the Codex primary challenges
-feasibility, proportionality, failure modes, fidelity, and testability. A Grok
-or Codex host may pass options and review; it never drafts the direction for
-Claude to rubber-stamp. Model names and effort live in the ensemble binding,
-not here.
+role qualified as `claude-judgment-primary` **produces** design in its own
+native interactive session; the Codex primary challenges feasibility,
+proportionality, failure modes, fidelity, and testability. A Grok or Codex
+host may pass options and review; it never drafts the direction.
 
 ## 1. Select the process weight
 
@@ -36,19 +34,20 @@ materially open direction, primary composition, or experience
   -> render and compare materially different candidates, then settle
 ```
 
-Direction and composition are separate uncertainties. An accepted direction
+Direction and composition are separate uncertainties: an accepted direction
 does not settle how a surface must be composed, and an established system does
 not settle a genuinely new explanation, collection, comparison, journey, or
-interaction. Resolve each at the rung its own evidence requires. Do not promote
-a tweak into a redesign, and do not use an existing system as an excuse to
-avoid resolving something genuinely new.
+interaction. Resolve each at the rung its own evidence requires; neither
+promote a tweak into a redesign nor use an existing system to avoid resolving
+something new.
 
 ## 2. Inspect before inventing
 
-Read the brief, `docs/product.md`, relevant
-capabilities, architecture, accepted decisions, research, content, and
-project-owned brand or design guidance. Inspect the actual product and existing
-design system before proposing a parallel visual language:
+Reuse the current evidence set: what discovery and the plan already read. Read
+the brief, `docs/product.md`, relevant capabilities, architecture, accepted
+decisions, research, content, and project-owned brand or design guidance only
+where that set lacks them. Inspect the actual product and existing design
+system before proposing a parallel visual language:
 
 - the subject: real objects, data, artefacts, states, and vocabulary in play;
 - tokens, typography, colour roles, spacing, imagery, and motion;
@@ -91,12 +90,11 @@ Resolve only the dimensions that materially steer the surface:
    feasibility concerns; never silently override it and never amplify it
    without examination.
 
-Label the provenance of material claims. Audience facts come from the operator,
-repository, or real research. If a reversible inference is necessary, label it
-`inferred` and expose it for settlement. Never fabricate research, users,
-personas, preferences, quotes, metrics, testimonials, or brand history.
-
-Clarify when missing intent would materially change the outcome. Otherwise use
+Label the provenance of material claims: audience facts come from the
+operator, repository, or real research, and a necessary reversible inference
+is labeled `inferred` and exposed for settlement. Never fabricate research,
+users, personas, preferences, quotes, metrics, testimonials, or brand history.
+Clarify when missing intent would materially change the outcome; otherwise use
 the safest established convention and disclose the assumption.
 
 The consuming product owns its themes, palettes, and tokens; CodeFlow supplies
@@ -244,25 +242,17 @@ model seats is not that decision and never substitutes for it. No board is
 required once the operator has accepted the direction, when an accepted system
 governs the work, or for a conformance or cosmetic change.
 
-Material feedback on a settled direction produces Plan vN+1 carrying the exact
-reviewed version, the feedback authority, and the accepted and rejected
-rationale; the sourcing-and-revision reference owns that record. Bounded
-conformance feedback stays in the normal task record.
+Material feedback on a settled direction produces a new plan version carrying
+the exact reviewed version, the feedback authority, and the accepted and
+rejected rationale; the sourcing-and-revision reference owns that record.
+Bounded conformance feedback stays in the normal task record.
 
-The Claude judgment primary produces design intent and direction in its
-native session. Codex challenges the choice. Both standing primaries approve
-the exact Plan vN before implementation. Extra-family review, when a trigger
-fires and it is available, is evidence — never a silent third vote.
-
-The same Claude owner authors and implements real design and retains fidelity
-judgment under the orchestrator's canonical routing contract, including its
-same-Claude fallback. Until a matching evidenced tuple is scoped-qualified, the
-primary executes; candidates run only disposable fixtures. Another family needs
-an explicit task-specific operator override recorded in Plan vN—Claude absence
-is not one. Turning settled product/UX/UI into components, layout, styles, or
-interactions is design implementation; plumbing, asset transfer, and evidence
-are non-design only when they realize no design decision. Scoped routes gain no
-direction or fidelity authority.
+Who produces, challenges and approves the design, the same-Claude fallback,
+scoped routes and the operator override follow the orchestrator's "Claude
+leads design" invariant and its design routing section; this skill does not
+restate them. Turning settled product/UX/UI into components, layout, styles,
+or interactions is design implementation; plumbing, asset transfer, and
+evidence are non-design only when they realize no design decision.
 
 ## 8. Critique before build
 
@@ -332,12 +322,11 @@ comparisons, console/network evidence, and failure traces where material. Where
 responsive or cross-platform composition is material, the evidence covers the
 intermediate contexts where composition changes and shows the idea intact.
 Fidelity review inspects the surface as it actually renders and behaves; an
-approval statement, a green build, a passing schema check, or a description of
-the intended result is not fidelity evidence. Review only the dimensions the
-intent makes applicable, to the depth the quality contract requires, and record
-an evidenced `N/A` instead of simulating irrelevant coverage. Where language or
-appearance modes apply, verify real localized variants rather than English-only
-inference, mode preference and persistence, and no incorrect-mode flash.
+approval statement, a green build or a description of the intended result is
+not fidelity evidence. Review only the dimensions the intent makes applicable
+and record an evidenced `N/A` for the rest; where language or appearance modes
+apply, verify real localized variants, mode preference and persistence, and no
+incorrect-mode flash.
 
 A difference from the settled intent is not automatically a defect: determine
 whether it is an approved improvement, an evidence-backed implementation
@@ -349,10 +338,7 @@ graded by materiality. An unanchored taste preference remains non-blocking.
 
 Return the process weight and evidence; settled `DESIGN_INTENT` or collapse;
 governing idea and composition; rendered candidates and operator decision where
-owned; warranted alternatives, references, and system scope; unresolved
-decisions; review and fidelity evidence; and both primary-seat approvals of the
-same plan version.
-
-Do not claim a user was researched, a direction was approved, a composition was
-reviewed, a standard was met, or a rendered surface was verified without
-recheckable evidence.
+owned; system scope; unresolved decisions; review and fidelity evidence; and
+the plan approval the orchestrator records. Never claim a user was researched,
+a direction approved, a composition reviewed, a standard met or a surface
+verified without recheckable evidence.

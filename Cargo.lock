@@ -263,6 +263,7 @@ dependencies = [
  "rust-embed",
  "serde_json",
  "serde_yaml_ng",
+ "sha2",
  "tempfile",
  "tokio",
  "toml",

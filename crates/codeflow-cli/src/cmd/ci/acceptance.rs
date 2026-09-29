@@ -43,14 +43,32 @@ pub(super) fn dispatch(
     let found = match judge(root, range, names) {
         Some(judged) => judged,
         None => criteria(root, range, branch, class)
-            .and_then(|criteria| pull_request_findings(root, range.base, range.head, criteria)),
+            .and_then(|criteria| pull_request_findings(root, range.base, range.head, &criteria)),
     };
     match found {
-        Ok(found) => tagged.extend(found.into_iter().map(|found| violation(git, found))),
+        Ok(found) => {
+            for found in found {
+                if found.note {
+                    let remedy = if found.rule == FROZEN_RULE {
+                        codeflow_core::remedy::CRITERIA_DELTA.remedy()
+                    } else {
+                        codeflow_core::remedy::ACCEPTANCE_BOUND.remedy()
+                    };
+                    let note = codeflow_core::remedy::Finding::new(
+                        format!("{}: {}", found.rule, found.message),
+                        remedy,
+                    );
+                    println!("{}", note.line("codeflow ci", "note"));
+                } else {
+                    tagged.push(violation(git, found));
+                }
+            }
+        }
         Err(error) => tagged.push(violation(
             git,
             Finding {
                 rule: FROZEN_RULE,
+                note: false,
                 message: format!("cannot read the range to check acceptance: {error}"),
             },
         )),
@@ -174,6 +192,9 @@ fn criteria(
     branch: &str,
     class: Option<&Class>,
 ) -> Result<Criteria, String> {
+    if let Some(Class::Tracked { task_id, .. }) = class {
+        return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, task_id);
+    }
     let amendable = match class {
         Some(Class::PlanningOnly | Class::EpicLine(_)) => true,
         Some(_) => false,
@@ -184,8 +205,7 @@ fn criteria(
                     .all(|(_, path)| is_planning_path(path));
             planning_only
                 || (branch.starts_with("integration/")
-                    && check_epic_line(root, branch, range.base_ref, range.base, range.head)
-                        .is_ok())
+                    && check_epic_line(root, branch, range.target, range.base, range.head).is_ok())
         }
     };
     Ok(if amendable {
@@ -202,7 +222,7 @@ fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
         Violation::always_blocking(
             found.rule,
             found.message,
-            "change criteria by a planning pull request on the target, then rebase",
+            "another task's criteria change by its own PR or the epic amendment; a reopened task keeps its criteria",
         )
     } else {
         Violation::new(

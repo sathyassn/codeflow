@@ -151,6 +151,27 @@ pub(super) fn resolve(
     }
 }
 
+/// Put the unit name a matched profile supplies on a `Task:` line when the
+/// bot body has none: a bot names no task record, so the profile names the
+/// unit its pull requests are (TSK-184). A body with its own line is left to
+/// classification.
+pub(super) fn supply_task(profile: Option<&AutomationProfile>, body: &str) -> String {
+    let Some((profile, task)) = profile.and_then(|p| p.task.as_deref().map(|t| (p, t))) else {
+        return body.to_string();
+    };
+    if body
+        .lines()
+        .any(|line| line.trim_start().starts_with("Task:"))
+    {
+        return body.to_string();
+    }
+    println!(
+        "codeflow ci: `Task: {task}` supplied by automation profile '{}'",
+        profile.name
+    );
+    format!("Task: {task}\n\n{body}")
+}
+
 /// Add the content a matched profile supplies for each PR section the bot
 /// body omits. A section the body carries, even empty, is left to the check.
 pub(super) fn supply_sections(profile: Option<&AutomationProfile>, body: &str) -> String {
@@ -381,11 +402,24 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
+    #[test]
+    fn a_profile_supplies_the_task_line_only_when_the_body_has_none() {
+        let supplied = supply_task(Some(&profile()), "## Summary\n\nBump.\n");
+        assert!(supplied.starts_with("Task: release pull request\n\n## Summary"));
+        let own = "Task: TSK-001\n\n## Summary\n";
+        assert_eq!(supply_task(Some(&profile()), own), own);
+        assert_eq!(supply_task(None, own), own);
+        let mut silent = profile();
+        silent.task = None;
+        assert_eq!(supply_task(Some(&silent), "## Summary\n"), "## Summary\n");
+    }
+
     fn profile() -> AutomationProfile {
         AutomationProfile {
             name: "changesets".into(),
             actors: vec!["github-actions[bot]".into()],
             branch_pattern: "changeset-release/*".into(),
+            task: Some("release pull request".into()),
             sections: BTreeMap::from([
                 (
                     "Testing".to_string(),

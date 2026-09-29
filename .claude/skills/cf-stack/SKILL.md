@@ -10,8 +10,11 @@ judgment work, so it is yours, not the CLI's (CodeFlow ADR-0003): you read the p
 and decide; `codeflow` verifies the result deterministically.
 
 1. Detect the stack: manifests (Cargo.toml, package.json, pyproject.toml,
-   go.mod, ...), existing CI, and the user's hint. State what you found and
-   confirm with the user before writing anything — never assume.
+   go.mod, ...), existing CI, and the user's hint. State the discovered stack
+   with its evidence, then write the authorized, reversible configuration;
+   ask only for an owner choice the evidence leaves unresolved. Adopting a
+   new tool, a security policy or wider authority still needs the owner's
+   approval; never assume.
 2. Write `.codeflow/test-config.json`. Start from the closest shape among
    codeflow's shipped test-config templates (`codeflow test setup --list-templates`, then
    `--template <name>`), then tailor: real commands for

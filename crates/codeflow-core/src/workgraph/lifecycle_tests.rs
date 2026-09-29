@@ -2055,6 +2055,115 @@ fn spec_approval_travels_only_in_a_planning_only_change() {
     assert!(range.is_clean(), "{range:?}");
 }
 
+/// R4 on a line (TSK-184 AC-4): a spec approved by a planning pull request
+/// landed on a verified integration line travels in that landing, so a
+/// later task merge touching product files does not turn the line's pull
+/// request to main into a product change of the approval. The same history
+/// judged as an ordinary pull request is refused: a private merge inside a
+/// task branch is no landing, for an approval and for a supersession. An
+/// approval landed on a line by a merge that also carries product files is
+/// still refused.
+#[test]
+fn spec_approval_on_a_line_is_judged_by_its_landing() {
+    let line = "integration/EPC-001-line";
+    let repo = Repo::new();
+    repo.write(SPC_1, &spec("SPC-001", "draft", ""));
+    let base = repo.commit("draft");
+    repo.git(&["switch", "-q", "-c", line]);
+    repo.git(&["switch", "-q", "-c", "plan/approve-spc-001"]);
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    repo.commit("approve in a planning pull request");
+    repo.git(&["switch", "-q", line]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "Merge plan",
+        "plan/approve-spc-001",
+    ]);
+    repo.git(&["switch", "-q", "-c", "task/TSK-001-product"]);
+    repo.write("product.rs", "fn product() {}\n");
+    repo.commit("build the product");
+    repo.git(&["switch", "-q", line]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "Merge task",
+        "task/TSK-001-product",
+    ]);
+    let range = judge_line_under(repo.root(), &base, "HEAD", &base).unwrap();
+    assert!(range.is_clean(), "{range:?}");
+    // The same commits as a pull request: no verified line, judged whole.
+    let as_pr = judge_pull_request_under(repo.root(), &base, "HEAD", &base).unwrap();
+    let errors = as_pr.errors.join("\n");
+    assert!(errors.contains("planning-only change"), "{errors}");
+    assert!(errors.contains("product.rs"), "{errors}");
+
+    // A private merge inside a task branch, for approval and supersession.
+    for supersede in [false, true] {
+        let repo = Repo::new();
+        repo.write(SPC_1, &spec("SPC-001", "draft", ""));
+        let base = repo.commit("draft");
+        repo.git(&["switch", "-q", "-c", "task/TSK-001-work"]);
+        repo.git(&["switch", "-q", "-c", "plan/private"]);
+        if supersede {
+            repo.write(
+                SPC_1,
+                &spec("SPC-001", "superseded", "superseded_by: SPC-002\n"),
+            );
+            repo.write(SPC_2, &spec("SPC-002", "draft", "supersedes: [SPC-001]\n"));
+        } else {
+            repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+        }
+        repo.commit("move the spec on a private branch");
+        repo.git(&["switch", "-q", "task/TSK-001-work"]);
+        repo.git(&[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge private",
+            "plan/private",
+        ]);
+        repo.write("product.rs", "fn product() {}\n");
+        repo.commit("build the product");
+        let as_pr = judge_pull_request_under(repo.root(), &base, "HEAD", &base).unwrap();
+        let errors = as_pr.errors.join("\n");
+        assert!(
+            errors.contains("planning-only change"),
+            "{supersede}: {errors}"
+        );
+        assert!(errors.contains("product.rs"), "{supersede}: {errors}");
+    }
+
+    // The landing that brought the approval also carries product files.
+    let repo = Repo::new();
+    repo.write(SPC_1, &spec("SPC-001", "draft", ""));
+    let base = repo.commit("draft");
+    repo.git(&["switch", "-q", "-c", line]);
+    repo.git(&["switch", "-q", "-c", "task/TSK-001-mixed"]);
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    repo.commit("approve on the task branch");
+    repo.write("product.rs", "fn product() {}\n");
+    repo.commit("build the product");
+    repo.git(&["switch", "-q", line]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "Merge mixed",
+        "task/TSK-001-mixed",
+    ]);
+    let range = judge_line_under(repo.root(), &base, "HEAD", &base).unwrap();
+    let errors = range.errors.join("\n");
+    assert!(errors.contains("planning-only change"), "{errors}");
+    assert!(errors.contains("product.rs"), "{errors}");
+}
+
 /// R5: an unchanged complete task whose consumed spec is superseded in the
 /// same range no longer verifies the epic criterion it serves.
 #[test]
@@ -2742,6 +2851,30 @@ fn the_single_string_baseline_still_works() {
     repo.set_baselines(&[&commit, &commit]);
     assert_eq!(recorded_baseline(repo.root()), vec![commit]);
     assert!(validate_lifecycle(repo.root()).is_clean());
+}
+
+#[test]
+fn spec_approval_beside_template_edit_is_not_planning_only() {
+    let before = RecordView::parse(RecordKind::Spec, SPC_1, &spec("SPC-001", "draft", "")).unwrap();
+    let after =
+        RecordView::parse(RecordKind::Spec, SPC_1, &spec("SPC-001", "approved", "")).unwrap();
+    for (path, allowed) in [
+        ("project-management/templates/task.md", false),
+        ("project-management/tasks/TSK-001.md", true),
+        ("docs/plan/next.md", true),
+    ] {
+        assert_eq!(super::super::classify::is_planning_path(path), allowed);
+        let paths = vec![path.to_string()];
+        let problems = context_problems(
+            Some(&before),
+            &after,
+            ChangeContext {
+                changed_paths: Some(&paths),
+                ..ChangeContext::default()
+            },
+        );
+        assert_eq!(problems.is_empty(), allowed, "{path}: {problems:?}");
+    }
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //! completed with a valid acceptance block passes `task status complete` and
 //! `codeflow ci`, and each fault fails for its stated reason: a stale block
 //! after a later code change, a waiver without its planning amendment,
-//! criteria changed on the task branch, and an adopter-facing range whose
+//! another task's criteria changed on the task branch, and an adopter-facing range whose
 //! task has no journey. The binary under test is the one Cargo built; the
 //! installed `codeflow` on `PATH` is never used.
 
@@ -120,6 +120,10 @@ fn body(root: &Path, task: &str) -> String {
     std::fs::read_to_string(root.join(".github/pull_request_template.md"))
         .unwrap()
         .replace("Task: `TSK-NNN | none: <reason>`", &format!("Task: {task}"))
+        .replace(
+            "Task: `TSK-NNN | EPC-NNN | <unit name>`",
+            &format!("Task: {task}"),
+        )
         .replace("## Summary\n", "## Summary\n\nBuild the task.\n")
         .replace("\n-\n", "\n- Build the task.\n")
         .replace(
@@ -323,12 +327,12 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
             ],
         ),
         "a waiver naming a branch commit",
-        "which is not on the target",
+        "strictly before the reviewed revision",
     );
     let record = std::fs::read_to_string(root.join(TASK)).unwrap();
     assert!(!record.contains("\nstatus: complete"), "{record}");
 
-    // Fault: the task branch changes its record's criteria.
+    // The task branch may change its own criteria before completion.
     edit(
         &root,
         TASK,
@@ -336,11 +340,8 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
         "the command may succeed",
     );
     commit(&root, "chore: loosen AC-2");
-    fails(
-        &ci(&root, branch, "TSK-001"),
-        "criteria changed on the task branch",
-        "TSK-001 changes its criteria on this branch",
-    );
+    let amended = ok(&ci(&root, branch, "TSK-001"), "own task criteria amendment");
+    assert!(amended.contains("AC-2"), "{amended}");
 
     // Fault: an adopter-facing range whose task has no journey.
     git(&root, &["switch", "-q", "-c", "task/TSK-002-second", LINE]);

@@ -174,6 +174,27 @@ pub fn set_status(
     }
     let mut warnings = verdict.warnings;
     if kind == RecordKind::Task && change.target == "complete" {
+        let repo = git2::Repository::discover(repo_root)
+            .map_err(|e| VerbError::Refused(vec![e.to_string()]))?;
+        let target =
+            super::work_start::resolve_work_target(repo_root, after.integration_target.as_deref())
+                .ok_or_else(|| {
+                    VerbError::Refused(vec![
+                        "cannot resolve the task target for reopen criteria".into()
+                    ])
+                })?;
+        let frozen = super::acceptance::reopened_criteria(
+            &repo,
+            &target,
+            "HEAD",
+            &graph.with(after.clone()),
+        )
+        .map_err(|e| VerbError::Refused(vec![e]))?;
+        if !frozen.is_empty() {
+            return Err(VerbError::Refused(
+                frozen.into_iter().map(|f| f.message).collect(),
+            ));
+        }
         let findings = binding(repo_root, &graph.with(after.clone()), &after);
         let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
         if !findings.is_empty() {
@@ -269,15 +290,39 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
         .filter(|target| !target.is_empty());
     match super::release_line::checkout_scope(repo_root, into) {
         Ok(scope) if scope.release() => shown(at_head),
-        Ok(_) => shown(super::acceptance::bind_completion(
-            &repo,
-            task,
-            graph,
-            landing,
-            default_target,
-            super::acceptance::Transport::TaskLanding,
-            None,
-        )),
+        Ok(_) => {
+            // On the task's own branch, a waiver may name a record-only
+            // amendment commit in the pull request's own range (TSK-184).
+            // The binder withholds it from a range that reopens the task,
+            // as it does for CI.
+            let own_range_base = repo
+                .head()
+                .ok()
+                .and_then(|head| head.shorthand().ok().map(str::to_string))
+                .filter(|branch| {
+                    super::task_id_from_branch(repo_root, branch).as_deref()
+                        == Some(task.id.as_str())
+                })
+                .and_then(|_| {
+                    super::work_start::resolve_work_target(
+                        repo_root,
+                        task.integration_target.as_deref(),
+                    )
+                })
+                .and_then(|target| repo.revparse_single(&target).ok())
+                .and_then(|object| object.peel_to_commit().ok())
+                .and_then(|target| repo.merge_base(head, target.id()).ok());
+            shown(super::acceptance::bind_completion_with_amendment(
+                &repo,
+                task,
+                graph,
+                landing,
+                default_target,
+                super::acceptance::Transport::TaskLanding,
+                None,
+                own_range_base,
+            ))
+        }
         Err(error) => {
             let mut refused = shown(at_head);
             refused.push(format!(
