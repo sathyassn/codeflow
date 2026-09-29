@@ -71,4 +71,6 @@ records the required interactive seat unavailable and the reduced assurance.
       evidence, and report `none selected` rather than inventing ceremony.
 6. Report completion: first the result for its consumer and what still
    depends on other work, then the evidence (test output, review verdict,
-   file:line for each criterion). Hand off to `cf-ship` to land it.
+   file:line for each criterion). Write the report plainly: simple,
+   straightforward and clear, no mannered prose (see
+   `.codeflow/rules/writing.md`). Hand off to `cf-ship` to land it.

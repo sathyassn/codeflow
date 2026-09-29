@@ -929,6 +929,21 @@ publication date._
   self-hosted runner needs Actions runner 2.327.1 or later for Node 24
   actions.
 
+<!-- codeflow:release-impact minor -->
+- **Every writing surface states the plain-writing rule.** The managed
+  `AGENTS.md` block gains a "Write plainly." always rule at every tier:
+  everything an agent writes, replies and status updates included, is
+  simple, straightforward and clear, with no mannered prose. The writing
+  reference `.codeflow/rules/writing.md` leads with the same rule and a
+  default of short prose and bullets, and names the figure form for each
+  surface, including fenced ASCII in Markdown files. Each skill, the
+  `cf-reviewer` agent, the git rules and the PR template state the rule
+  once where they tell the agent to write, and the reply rule names
+  Markdown files for fenced ASCII figures. The size guidelines `codeflow
+  doctor` reports for five of those files rise by at most 768 bytes, and
+  the map's rule count and rule line guidelines rise to 13 and 480 bytes. `codeflow update` brings the new text and leaves a project's own
+  section of `AGENTS.md` untouched.
+
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
