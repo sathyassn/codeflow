@@ -48,9 +48,12 @@ use std::path::{Path, PathBuf};
 
 use super::init::{build_context, render_entry};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
+use super::prior_release;
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
-use super::settings_merge::{merge_settings_from_baseline, KEPT_REMOVAL};
+use super::settings_merge::{
+    merge_settings_from_baseline, merge_settings_from_prior_release, KEPT_REMOVAL,
+};
 use super::state::{
     guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file,
     write_record, Baseline, InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
@@ -468,12 +471,23 @@ fn update_entry(
                     .map_err(|e| ScaffoldError::io(&dest_path, e))?;
                 let previous = Baseline::read(root, &entry.dest);
                 let mut lines = vec![];
-                let merged = merge_settings_from_baseline(
-                    &current,
-                    previous.as_deref(),
-                    &rendered,
-                    &mut lines,
-                )?;
+                let prior = previous
+                    .is_none()
+                    .then(|| prior_release::settings(&entry.src))
+                    .flatten();
+                let merged = if let Some(prior) = prior {
+                    let merged =
+                        merge_settings_from_prior_release(&current, prior, &rendered, &mut lines)?;
+                    lines.insert(0, prior_release_note());
+                    merged
+                } else {
+                    merge_settings_from_baseline(
+                        &current,
+                        previous.as_deref(),
+                        &rendered,
+                        &mut lines,
+                    )?
+                };
                 record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;
                 if merged == current {
@@ -589,10 +603,25 @@ fn sync_user_owned_json(
     let mut added: Vec<String> = vec![];
     let mut moved: Vec<MovedDefault> = vec![];
     let mut recommended: Vec<String> = vec![];
-    if let Some(old) = old_default.as_ref() {
+    // Without a recorded baseline, the policies earlier versions shipped
+    // stand in for it: the oldest decides which keys are new, and a value
+    // still equal to any of their defaults moves.
+    let prior: Vec<serde_json::Value> = if old_default.is_none() {
+        prior_release::policies(&entry.src)
+            .into_iter()
+            .flatten()
+            .filter_map(|text| serde_json::from_str(text).ok())
+            .collect()
+    } else {
+        vec![]
+    };
+    if let Some(old) = old_default.as_ref().or(prior.first()) {
         add_new_keys(&mut user, Some(old), &new_default, "", &mut added);
         move_unchanged_defaults(&mut user, old, &new_default, "", &mut moved);
         recommended = recommend_defaults(&user, old, &new_default);
+    }
+    for old in prior.iter().skip(1) {
+        move_unchanged_defaults(&mut user, old, &new_default, "", &mut moved);
     }
 
     // Keys the new shipped default dropped and the schema deprecates are
@@ -609,7 +638,9 @@ fn sync_user_owned_json(
     if added.is_empty() && migrated.is_empty() && moved.is_empty() {
         let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
         notes.extend(recommended);
-        if old_default.is_none() {
+        if !prior.is_empty() {
+            notes.push(prior_release_note());
+        } else if old_default.is_none() {
             notes.push(
                 "no shipped-default baseline existed; key sync starts from this version"
                     .to_string(),
@@ -629,6 +660,9 @@ fn sync_user_owned_json(
         })
         .collect();
     notes.extend(moved.iter().map(MovedDefault::note));
+    if !prior.is_empty() {
+        notes.insert(0, prior_release_note());
+    }
     let migrated_any = !migrated.is_empty();
     notes.extend(migrated);
     notes.extend(recommended);
@@ -665,6 +699,15 @@ fn sync_user_owned_json(
     push_diff(diffs, &entry.dest, &current_text, &next);
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
+}
+
+/// The report line for an update that compared with an earlier release's
+/// shipped copy because no baseline was recorded.
+fn prior_release_note() -> String {
+    format!(
+        "no shipped-default baseline was recorded; compared with the copy CodeFlow {} shipped",
+        prior_release::RELEASE
+    )
 }
 
 /// The adopter's file with only the `added` keys (and removed deprecated

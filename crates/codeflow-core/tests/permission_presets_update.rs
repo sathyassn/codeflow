@@ -553,6 +553,65 @@ fn update_keeps_a_removed_sudo_deny_and_a_warn_privilege_level() {
     }
 }
 
+/// Grok review of TSK-171: an update that finds no recorded baseline
+/// compares with the copies 2.1.0 shipped, so the first run migrates: the
+/// asks retire, every new deny is added, the adopter's own denies keep their
+/// effect, the old `warn` defaults move and new policy keys are added. It
+/// reports the copy it used, and the next run changes nothing.
+#[test]
+fn update_without_a_baseline_compares_with_the_2_1_0_copy() {
+    let (_dir, root) = init_minimal();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/presets-2.1.0");
+    write(&root, ".claude/settings.json", &adopter_settings(false));
+    write(
+        &root,
+        ".codeflow/policy.json",
+        &text(&fixtures.join("policy.json")),
+    );
+    for baseline in [".claude/settings.json", ".codeflow/policy.json"] {
+        std::fs::remove_file(root.join(".codeflow/.baseline").join(baseline)).unwrap();
+    }
+
+    let report = scaffold::update(&assets(), &root, &update_opts()).unwrap();
+    let settings = text(&root.join(".claude/settings.json"));
+    assert!(
+        json(&settings)["permissions"].get("ask").is_none(),
+        "asks retired"
+    );
+    let deny = strings(&json(&settings)["permissions"]["deny"]);
+    for rule in strings(&json(&shipped("default.json"))["permissions"]["deny"]) {
+        assert!(deny.contains(&rule), "missing {rule}");
+    }
+    assert_effective(&settings, "update without a baseline");
+    assert!(!read_denied(&settings, SECRET_NAMED_SOURCE));
+    let after = policy(&root);
+    assert_eq!(after["security"]["privilege_escalation"], "block");
+    assert_eq!(after["security"]["script_bypass"], "warn", "new key added");
+    for dest in [".claude/settings.json", ".codeflow/policy.json"] {
+        let notes = notes_for(&report, dest);
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("compared with the copy CodeFlow 2.1.0 shipped")),
+            "{dest}: {notes:?}"
+        );
+    }
+    let notes = notes_for(&report, ".codeflow/policy.json");
+    assert!(
+        notes.iter().any(
+            |n| n.starts_with("moved security.privilege_escalation from \"warn\" to \"block\"")
+        ),
+        "{notes:?}"
+    );
+    codeflow_core::hooks::policy_schema::validate_policy(&root).unwrap();
+
+    let settings_before = text(&root.join(".claude/settings.json"));
+    let policy_before = text(&root.join(".codeflow/policy.json"));
+    scaffold::update(&assets(), &root, &update_opts()).unwrap();
+    assert_eq!(text(&root.join(".claude/settings.json")), settings_before);
+    assert_eq!(text(&root.join(".codeflow/policy.json")), policy_before);
+}
+
 /// AC-9: an adopter's own key in `.codex/config.toml` survives the managed
 /// three-way merge that brings the new profiles.
 #[test]

@@ -11,8 +11,11 @@
 //!   (ADR-0075, TSK-171): an entry the preset retired is removed, an entry
 //!   the project removed stays removed and is reported, a project-only entry
 //!   stays, and a new entry is added; shipped entries keep the preset's
-//!   order, since a `!` carve-out narrows only the rules before it. Without a
-//!   baseline for an array, nothing is removed and the missing shipped
+//!   order, since a `!` carve-out narrows only the rules before it. When no
+//!   baseline was recorded, update compares with the preset an earlier
+//!   release shipped instead ([`merge_settings_from_prior_release`]), and
+//!   then adds back any shipped entry the project lacks. Without a
+//!   previous copy for an array, nothing is removed and the missing shipped
 //!   entries go before the project's own, so no new exception can cancel a
 //!   deny the project already has. Scalar permission keys
 //!   (`defaultMode`) are set only when absent.
@@ -81,6 +84,45 @@ pub fn merge_settings_from_baseline(
     incoming: &str,
     report: &mut Vec<String>,
 ) -> Result<String, ScaffoldError> {
+    merge(current, previous, incoming, Removals::Kept, report)
+}
+
+/// Merges settings during an update that found no recorded baseline, using
+/// the preset an earlier release shipped (`prior`) in its place. Entries
+/// that release shipped and this preset dropped are retired, as with a
+/// baseline, but a shipped entry missing from the project is added back:
+/// without a recorded baseline, update cannot tell a removal the project
+/// made from an entry its older version never had.
+///
+/// # Errors
+///
+/// As [`merge_settings_from_baseline`].
+pub fn merge_settings_from_prior_release(
+    current: &str,
+    prior: &str,
+    incoming: &str,
+    report: &mut Vec<String>,
+) -> Result<String, ScaffoldError> {
+    merge(current, Some(prior), incoming, Removals::Unknown, report)
+}
+
+/// Whether the previous side records what the project removed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Removals {
+    /// A recorded baseline: a shipped entry missing from the project was
+    /// removed by it, and stays removed.
+    Kept,
+    /// An earlier release's copy: a missing shipped entry is added.
+    Unknown,
+}
+
+fn merge(
+    current: &str,
+    previous: Option<&str>,
+    incoming: &str,
+    removals: Removals,
+    report: &mut Vec<String>,
+) -> Result<String, ScaffoldError> {
     let mut current: Value = serde_json::from_str(current)?;
     let incoming: Value = serde_json::from_str(incoming)?;
     let previous: Option<Value> = previous.map(serde_json::from_str).transpose()?;
@@ -105,6 +147,7 @@ pub fn merge_settings_from_baseline(
                 cur,
                 previous.as_ref().and_then(|value| value.get("permissions")),
                 inc_val,
+                removals,
                 report,
             ),
             "sandbox" => merge_sandbox(
@@ -364,6 +407,7 @@ fn merge_permissions(
     cur: &mut Map<String, Value>,
     previous_perms: Option<&Value>,
     inc_perms: &Value,
+    removals: Removals,
     report: &mut Vec<String>,
 ) {
     let Some(inc_perms) = inc_perms.as_object() else {
@@ -407,7 +451,7 @@ fn merge_permissions(
         match (cur_perms.get_mut(key), inc_val) {
             (Some(Value::Array(cur_arr)), Value::Array(inc_arr)) => {
                 if let Some(prev_arr) = prev_arr {
-                    merge_array_three_ways(key, cur_arr, prev_arr, inc_arr, report);
+                    merge_array_three_ways(key, cur_arr, prev_arr, inc_arr, removals, report);
                     continue;
                 }
                 add_before_project_entries(key, cur_arr, inc_arr, report);
@@ -420,7 +464,7 @@ fn merge_permissions(
                 }
             }
             (None, _) => {
-                if prev_arr.is_some() && inc_val.is_array() {
+                if removals == Removals::Kept && prev_arr.is_some() && inc_val.is_array() {
                     report.push(format!(
                         "settings: {KEPT_REMOVAL} permissions.{key}; update does not restore it"
                     ));
@@ -470,12 +514,14 @@ fn add_before_project_entries(
 /// result lists the shipped entries in the new preset's order, since a `!`
 /// carve-out narrows only the rules before it, then the project's own
 /// entries in their order. A shipped entry the project removed stays
-/// removed and is reported; an entry the preset retired is removed.
+/// removed and is reported, when `removals` says the previous side records
+/// that; an entry the preset retired is removed.
 fn merge_array_three_ways(
     key: &str,
     current: &mut Vec<Value>,
     previous: &[Value],
     incoming: &[Value],
+    removals: Removals,
     report: &mut Vec<String>,
 ) {
     retire_entries(key, current, previous, incoming, report);
@@ -483,7 +529,7 @@ fn merge_array_three_ways(
     for item in incoming {
         if current.contains(item) {
             next.push(item.clone());
-        } else if previous.contains(item) {
+        } else if removals == Removals::Kept && previous.contains(item) {
             report.push(format!(
                 "settings: {KEPT_REMOVAL} permissions.{key} entry {item}; \
                  update does not restore it"
