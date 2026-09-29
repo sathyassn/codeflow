@@ -1373,7 +1373,7 @@
     ".codeflow/rules/writing.md": {
       "src": "rules/writing.md",
       "ownership": "managed",
-      "sha256": "bda38eaaf3aca860aa5e55c6614c16c67e4c0c9ea51680e2cc214faae3eb2595",
+      "sha256": "cb1b8a877bfde016579fd88ef47781b34f4e9449f36ba38a7820f25e9f482bf2",
       "exec": false
     },
     ".codeflow/schemas/present/document-v1.schema.json": {
@@ -1451,7 +1451,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "c390958d092437faae8cf0b74bb08063964201db6ff1f60816e9ba9457496799",
+      "sha256": "07fce575ca5c0b386ee1392266f87c3cb9a90525ac4e4b68c81e91c640bc4e4a",
       "exec": false
     },
     "CLAUDE.md": {
