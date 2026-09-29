@@ -557,6 +557,9 @@ catalog! {
     /// A session summary that could not be written.
     SESSION_SUMMARY_UNWRITTEN = Step::Edit("{path}"),
         "{repair}: {path}; the session ledger lives under git's common directory, and the next session end writes it";
+    /// A refusal the hook or guard could not write to the refusals ledger.
+    REFUSAL_UNRECORDED = Step::Edit("{path}"),
+        "{repair}: {path}; the refusals ledger lives under git's common directory, and the next refusal writes it";
     /// The per-user project registry that could not be written.
     REGISTRY_UNWRITTEN = Step::Edit("{path}"),
         "repair or delete {path}, the per-user project registry; the next codeflow command writes it again";

@@ -780,6 +780,22 @@ publication date._
   alone or agreeing with `Breaking`, so the two no longer disagree on it.
 
 <!-- codeflow:release-impact minor -->
+- **A ceremony report with a recorded baseline.** `codeflow report ceremony
+  --prs FIRST..LAST` (or `--since DATE [--until DATE]`) reports the process
+  cost of the merged pull requests in a window: pull requests per logical
+  change, where a task's pull requests count once and a pull request that
+  only moves a record's status, acceptance evidence or closeout has its own
+  row; review rounds per pull request; and refusals hit by the clone's hooks
+  and guards. Review rounds are asked of the host through `gh`, the one read
+  command that may use the network; when that call fails, or the host holds
+  no submitted review, the report prints `unknown` and never estimates. Each
+  operation a git hook or session guard stops now appends a `refusal` event
+  to `.git/codeflow/ledger/refusals/`, naming the plane, the level and the
+  rules, never the command; a warning is not recorded, and refusals from
+  before a clone began recording print `unknown`. `codeflow status` and the
+  work reads stay offline. Nothing to do on upgrade.
+
+<!-- codeflow:release-impact minor -->
 - **One full gate at a time, running the suite once.** Public behaviour
   change: `codeflow test --mode full` takes a gate lock before any target
   runs, and a second full gate on the machine refuses, naming the holder's

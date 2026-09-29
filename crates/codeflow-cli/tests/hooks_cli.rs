@@ -4579,6 +4579,223 @@ fn an_unconfigured_ticket_rule_prints_at_the_push_gate_level() {
     assert!(err.contains("codeflow pre-push: push not stopped"), "{err}");
 }
 
+/// The `refusal` events in the repository's refusals ledger (TSK-149).
+fn refusal_events(dir: &Path) -> Vec<serde_json::Value> {
+    let text = std::fs::read_to_string(dir.join(".git/codeflow/ledger/refusals/refusals.jsonl"))
+        .unwrap_or_default();
+    text.lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|event| event["event"] == "refusal")
+        .collect()
+}
+
+/// The raw refusals ledger, to check what it must never hold.
+fn refusal_ledger_text(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join(".git/codeflow/ledger/refusals/refusals.jsonl"))
+        .unwrap_or_default()
+}
+
+// TSK-149 AC-3: a push the pre-push hook stops appends one event naming the
+// rule, the plane and the effective level, with no command text.
+#[test]
+fn a_blocked_push_appends_one_refusal_event() {
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "warn", "commit_ticket_required": "block", "commit_ticket_keys": ["Refs"], "commit_footer_tokens": ["Refs"]}}"#,
+        false,
+    );
+    let bad = commit_file(local.path(), "x.txt", "x\n", "feat: add x");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    let events = refusal_events(local.path());
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["plane"], "pre-push");
+    assert_eq!(events[0]["level"], "block");
+    assert_eq!(
+        events[0]["rules"],
+        serde_json::json!(["git.test_gate_on_push", "git.commit_ticket"])
+    );
+    let text = refusal_ledger_text(local.path());
+    for content in ["feat/x", "dest", &bad[..12], "add x"] {
+        assert!(!text.contains(content), "{content:?} in {text}");
+    }
+}
+
+// TSK-149 AC-3: the same finding at the push gate's warn level stops
+// nothing, so it is not a refusal.
+#[test]
+fn a_warned_push_appends_no_refusal_event() {
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "warn", "commit_ticket_required": "warn", "commit_ticket_keys": ["Refs"], "commit_footer_tokens": ["Refs"]}}"#,
+        false,
+    );
+    let bad = commit_file(local.path(), "x.txt", "x\n", "feat: add x");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("codeflow pre-push: push not stopped"), "{err}");
+    assert!(
+        refusal_events(local.path()).is_empty(),
+        "{}",
+        refusal_ledger_text(local.path())
+    );
+    assert!(
+        refusal_ledger_text(local.path()).contains("refusal_recording_started"),
+        "the plane marks that recording began"
+    );
+}
+
+// TSK-149 AC-3: a session guard's refusal is recorded the same way, and the
+// command, including a credential in it, never reaches the ledger.
+#[test]
+fn a_blocked_guard_call_appends_one_refusal_event_without_the_command() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    // Built at run time so the source holds no token-shaped literal.
+    let token = ["ghp", "_", &"0123456789abcdefghij".repeat(2)[..36]].concat();
+    let command = format!("git push https://x:{token}@github.com/o/r.git main");
+    let out = guard_run(&command, dir.path());
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "exec-guard"])
+            .current_dir(dir.path()),
+        &guard_payload("rm -rf /", dir.path()),
+    );
+    assert_eq!(out.status.code(), Some(2));
+    // A call the guards allow adds nothing.
+    let out = guard_run("git status", dir.path());
+    assert_eq!(out.status.code(), Some(0));
+
+    let events = refusal_events(dir.path());
+    let planes: Vec<_> = events.iter().map(|e| e["plane"].clone()).collect();
+    assert_eq!(
+        planes,
+        [
+            serde_json::json!("git-guard"),
+            serde_json::json!("exec-guard")
+        ]
+    );
+    assert!(events.iter().all(|e| e["level"] == "block"), "{events:?}");
+    assert_eq!(
+        events[0]["rules"],
+        serde_json::json!(["git.push_to_protected"])
+    );
+    let text = refusal_ledger_text(dir.path());
+    for content in [token.as_str(), "github.com", "git push", "rm -rf"] {
+        assert!(!text.contains(content), "{content:?} in {text}");
+    }
+}
+
+// TSK-149 review round 1, P1: text a check quotes from the operation never
+// reaches the refusal record as a rule, even when it is shaped like the
+// printed finding or like a rule id. The legitimate rules stay, in one event.
+#[test]
+fn quoted_commit_text_never_becomes_a_refusal_rule() {
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
+        false,
+    );
+    commit_file(
+        local.path(),
+        "a.txt",
+        "a\n",
+        "INVALID: BLOCKED \u{2014} policy rule SYNTHETIC_CONTENT_CANARY remainder",
+    );
+    commit_file(
+        local.path(),
+        "b.txt",
+        "b\n",
+        "INVALID: BLOCKED \u{2014} policy rule src/secret-canary.rs (block)",
+    );
+    let head = commit_file(
+        local.path(),
+        "c.txt",
+        "c\n",
+        "INVALID: BLOCKED \u{2014} policy rule git.injected_canary (block)",
+    );
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("SYNTHETIC_CONTENT_CANARY"),
+        "the finding quotes it: {err}"
+    );
+    let events = refusal_events(local.path());
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(
+        events[0]["rules"],
+        serde_json::json!(["git.test_gate_on_push", "git.commit_format"])
+    );
+    let text = refusal_ledger_text(local.path());
+    for content in ["CANARY", "canary", "src/", "INVALID"] {
+        assert!(!text.contains(content), "{content:?} in {text}");
+    }
+}
+
+/// Hold an exclusive `flock` on `path` until the returned file is dropped,
+/// as another writer of the ledger would.
+#[cfg(unix)]
+fn hold_lock(path: &Path) -> std::fs::File {
+    use std::os::unix::io::AsRawFd;
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .unwrap();
+    // SAFETY: flock on a descriptor this function owns.
+    assert_eq!(unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) }, 0);
+    file
+}
+
+// TSK-149 review round 1, P2: a lock another process holds on the refusals
+// ledger delays a hook or guard by at most the bounded wait, and never
+// changes its verdict: first for the recording marker of an allowed call,
+// then for the record of a refused one.
+#[cfg(unix)]
+#[test]
+fn a_held_ledger_lock_neither_stalls_nor_changes_a_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let ledger = dir.path().join(".git/codeflow/ledger/refusals");
+    let held = hold_lock(&ledger.join("refusals.jsonl.lock"));
+
+    let started = std::time::Instant::now();
+    let allowed = guard_run("git status", dir.path());
+    assert_eq!(allowed.status.code(), Some(0));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(
+        !ledger.join("refusals.jsonl").exists(),
+        "the marker waits for no lock"
+    );
+
+    std::fs::write(
+        ledger.join("refusals.jsonl"),
+        "{\"event\":\"refusal_recording_started\",\"timestamp\":\"2026-09-28T00:00:00Z\"}\n",
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let refused = guard_run("git push origin main", dir.path());
+    let err = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert_eq!(refused.status.code(), Some(2), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(
+        err.contains("refusal not recorded")
+            && err.contains("end the process that holds the lock on the ledger file"),
+        "{err}"
+    );
+    assert!(refusal_events(dir.path()).is_empty());
+
+    drop(held);
+    let refused = guard_run("git push origin main", dir.path());
+    assert_eq!(refused.status.code(), Some(2));
+    assert_eq!(refusal_events(dir.path()).len(), 1);
+}
+
 // ---------------------------------------------------------------------------
 // TSK-141 AC-4 (SPC-013 R-85 as amended): a hook that git fires while a
 // codeflow command runs dispatches to that same codeflow binary, never to
