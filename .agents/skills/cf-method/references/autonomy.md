@@ -50,7 +50,11 @@ running report, never a pause. Rungs 3 and 4 hold only the one action.
 A hard gate follows `AGENTS.md`, "Match the gate to the blast radius": exact
 scope, a preview where supported, a verified checkpoint with a restore path,
 and explicit authenticated human approval. CodeFlow's non-relaxable class
-stays human-performed after approval.
+stays human-performed after approval, and so do the action families the
+permission presets refuse: privilege escalation, publishing packages and
+gists, releases and tag pushes, repository and account changes, keychain
+reads and user-level persistence. They are refused in agent sessions, and
+the operator runs them.
 
 ## What belongs to the operator
 
@@ -93,7 +97,8 @@ sample your own harness created in this run. Any other path goes to the
 operator. Decide by authorization and path identity: compare the resolved
 path with the task's worktree or with the sample path your harness recorded.
 A folder that another run created, or a path that only resembles
-yours, is foreign.
+yours, is foreign. A prompt to trust hook definitions, such as Codex's review
+of a project's hooks, is not a folder trust prompt: it goes to the operator.
 
 ## Settled dissent
 
@@ -123,7 +128,7 @@ to repair.
 | Routine landing mechanics: branch, worktree, integration branch, pull request shape | 1: choose them | `cf-plan` step 6 |
 | A step fails and a new hypothesis exists | 1: probe it, then reroute; never repeat the same attempt | `AGENTS.md` Navigate blockers; `cf-develop` |
 | A peer, tool or job is red | 1: classify and continue; fix an assertion-red check, push and poll again | `quality-contract.md` redness classes; `cf-ship` `references/pr-evidence.md` |
-| A sandboxed command fails for a trusted installed tool that needs host state | 1: take the one classified unsandboxed retry without asking | `CLAUDE.md` project preset; CodeFlow ADR-0029 |
+| A sandboxed command fails for a trusted installed tool that needs host state | 1: take the one classified unsandboxed retry without asking, never for an action the presets refuse | `CLAUDE.md` project preset; CodeFlow ADR-0029 |
 | A trust prompt | 1 for the task's own project or worktree, or a sample this run's harness created: answer it; 3 for any other path: ask | Trust prompts above |
 | A credit is missing, or a seat or tool is refused or unavailable after preflight | 2: do not purchase; name the gap, record reduced assurance and continue on the recorded fallback | `AGENTS.md` Entry points; `capability-routing.md` |
 | A seat is lost mid-run after approval | 2: move the unit to the recorded fallback; the available standing seats approve the reassignment as Plan vN+1; the lost seat's actual verdict stays recorded | CodeFlow ADR-0070, amending ADR-0035 |
@@ -139,6 +144,6 @@ to repair.
 | Sign-in or login is needed | 4: the operator signs in; never automate it | `cf-model-orchestrator` preflight |
 | A pull request into a protected target, including a protected `integration/` glob | 4: report it ready; a human merges | `AGENTS.md` Git rules |
 | Sending anything outside the conversation | 4 | `AGENTS.md` Act within legitimate intent |
-| A delete that version control, a backup or a scratch area cannot restore | 4 | `AGENTS.md` Match the gate; CodeFlow ADR-0066 |
+| A delete that version control, a backup or a scratch area cannot restore | 4 | `AGENTS.md` Match the gate; CodeFlow ADR-0075, which retires ADR-0066's delete prompts; exec-guard refuses rooted and home-anchored recursive deletes |
 | Credentials, IAM, privilege, secrets, production, or a system-level, cross-boundary, destructive-disk or security-weakening action | 4 | `AGENTS.md` Match the gate |
-| The session runs with `bypassPermissions`, `danger-full-access` or `--always-approve` | no rung changes: that launch is not a sandbox, so the boundaries rest on hooks, guards and this reference | CodeFlow ADR-0055 |
+| The session runs with `bypassPermissions`, `danger-full-access` or `--always-approve` | no rung changes: the launch removes prompts, not boundaries; the action families the presets refuse stay the operator's, and the route's sandbox where it has one, the guard hooks, git hooks and CI still apply | CodeFlow ADR-0055; ADR-0075 decision 1 |

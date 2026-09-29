@@ -1409,6 +1409,14 @@ fn autonomy_reference_keeps_its_owned_parts() {
                 "answer it yourself for a path inside your task's own authorized project or worktree",
             ),
             ("trust prompt identity", "Decide by authorization and path identity"),
+            (
+                "hook trust is the operator's",
+                "A prompt to trust hook definitions, such as Codex's review of a project's hooks, is not a folder trust prompt: it goes to the operator.",
+            ),
+            (
+                "refused families stay the operator's",
+                "and so do the action families the permission presets refuse: privilege escalation, publishing packages and gists, releases and tag pushes, repository and account changes, keychain reads and user-level persistence. They are refused in agent sessions, and the operator runs them.",
+            ),
             ("settled dissent record", "`SETTLED_DISSENT`"),
             (
                 "dissent is never approval",
@@ -1429,11 +1437,15 @@ fn autonomy_reference_keeps_its_owned_parts() {
             ),
             (
                 "classified retry",
-                "take the one classified unsandboxed retry without asking",
+                "take the one classified unsandboxed retry without asking, never for an action the presets refuse",
             ),
             (
-                "bypass is not a sandbox",
-                "that launch is not a sandbox",
+                "bypass removes prompts, not boundaries",
+                "the launch removes prompts, not boundaries; the action families the presets refuse stay the operator's",
+            ),
+            (
+                "delete row cites the retired prompts",
+                "CodeFlow ADR-0075, which retires ADR-0066's delete prompts",
             ),
             ("seat loss", "the available standing seats approve the reassignment"),
         ],
