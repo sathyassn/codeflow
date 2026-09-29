@@ -214,6 +214,194 @@ fn without_a_baseline_new_entries_are_added_and_nothing_is_removed() {
     assert!(!report.iter().any(|l| l.contains("removed")), "{report:?}");
 }
 
+/// Gitignore-style path glob, as in the CLI preset tests: `**/` spans zero
+/// or more directories and `*` any run inside one path segment.
+fn path_matches(pattern: &str, path: &str) -> bool {
+    if let Some(rest) = pattern.strip_prefix("**/") {
+        return path_matches(rest, path)
+            || path
+                .char_indices()
+                .filter(|(_, c)| *c == '/')
+                .any(|(i, _)| path_matches(rest, &path[i + 1..]));
+    }
+    if pattern == "**" {
+        return true;
+    }
+    if let Some(rest) = pattern.strip_prefix('*') {
+        let mut tail = path;
+        loop {
+            if path_matches(rest, tail) {
+                return true;
+            }
+            match tail.chars().next() {
+                Some(c) if c != '/' => tail = &tail[c.len_utf8()..],
+                _ => return false,
+            }
+        }
+    }
+    match (pattern.chars().next(), path.chars().next()) {
+        (None, None) => true,
+        (Some(p), Some(c)) if p == c => {
+            path_matches(&pattern[p.len_utf8()..], &path[c.len_utf8()..])
+        }
+        _ => false,
+    }
+}
+
+/// Evaluate the `Read` rules of a settings file in order: a matching rule
+/// denies, and a matching `!` exception lifts the rules before it.
+fn read_denied(settings: &str, path: &str) -> bool {
+    let mut denied = false;
+    for rule in strings(&json(settings)["permissions"]["deny"]) {
+        let Some(inner) = rule.strip_prefix("Read(").and_then(|r| r.strip_suffix(')')) else {
+            continue;
+        };
+        let (exception, pattern) = match inner.strip_prefix('!') {
+            Some(pattern) => (true, pattern),
+            None => (false, inner),
+        };
+        if path_matches(pattern.trim_start_matches('/'), path) {
+            denied = !exception;
+        }
+    }
+    denied
+}
+
+/// The adopter's own ordered read rules: two denies a shipped exception
+/// would otherwise reopen, and an exception of the adopter's own.
+const ADOPTER_READ_RULES: [&str; 4] = [
+    "Read(**/.env.example)",
+    "Read(**/team-secret.py)",
+    "Read(**/*.log)",
+    "Read(!**/keep.log)",
+];
+
+/// Paths the adopter's rules decide, with the result they must keep.
+const ADOPTER_PATHS: [(&str, bool); 5] = [
+    (".env.example", true),
+    ("app/team-secret.py", true),
+    ("logs/build.log", true),
+    ("logs/keep.log", false),
+    ("src/notes.md", false),
+];
+
+/// Secret files the shipped rules deny, whatever the adopter holds.
+const SHIPPED_DENIED: [&str; 3] = [".env", ".env.secret.py", "config/.env.credentials.ts"];
+
+/// A source file named after secrets, which the shipped exceptions reopen
+/// once the update knows the older shipped deny is its own.
+const SECRET_NAMED_SOURCE: &str = "src/secret_store.py";
+
+/// A 2.1.0 default preset holding the adopter's rules, with its deny array
+/// dropped first when `drop_deny` is set.
+fn adopter_settings(drop_deny: bool) -> String {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/presets-2.1.0");
+    let mut value = json(&text(&fixtures.join("default.json")));
+    let permissions = value["permissions"].as_object_mut().unwrap();
+    if drop_deny {
+        permissions.remove("deny");
+    }
+    let deny = permissions
+        .entry("deny")
+        .or_insert_with(|| Value::Array(vec![]))
+        .as_array_mut()
+        .unwrap();
+    for rule in ADOPTER_READ_RULES {
+        deny.push(Value::String(rule.to_string()));
+    }
+    serde_json::to_string_pretty(&value).unwrap() + "\n"
+}
+
+fn assert_effective(settings: &str, case: &str) {
+    let deny = strings(&json(settings)["permissions"]["deny"]);
+    for rule in ADOPTER_READ_RULES {
+        assert!(deny.iter().any(|r| r == rule), "{case}: dropped {rule}");
+    }
+    for path in SHIPPED_DENIED {
+        assert!(
+            read_denied(settings, path),
+            "{case}: {path} should be denied"
+        );
+    }
+    for (path, denied) in ADOPTER_PATHS {
+        assert_eq!(
+            read_denied(settings, path),
+            denied,
+            "{case}: {path} should be {}",
+            if denied { "denied" } else { "readable" }
+        );
+    }
+}
+
+/// Without a baseline for the deny array, the merge cannot tell shipped rules
+/// from the adopter's, so the new shipped rules go before the adopter's
+/// ordered block. No new exception can then cancel an adopter deny, and the
+/// adopter's own exception keeps its effect. Repeated updates, first still
+/// without a baseline and then from the new preset as baseline, keep it so.
+#[test]
+fn without_a_deny_baseline_new_exceptions_cannot_cancel_adopter_denies() {
+    let incoming = shipped("default.json");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/presets-2.1.0");
+    let mut no_deny_baseline = json(&text(&fixtures.join("default.json")));
+    no_deny_baseline["permissions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("deny");
+    let no_deny_baseline = serde_json::to_string_pretty(&no_deny_baseline).unwrap();
+
+    for (case, drop_deny, baseline) in [
+        ("absent baseline", false, None),
+        ("absent baseline, no deny array", true, None),
+        (
+            "baseline without deny",
+            false,
+            Some(no_deny_baseline.as_str()),
+        ),
+        (
+            "baseline without deny, no deny array",
+            true,
+            Some(no_deny_baseline.as_str()),
+        ),
+    ] {
+        let adopter = adopter_settings(drop_deny);
+
+        let mut report = vec![];
+        let first =
+            merge_settings_from_baseline(&adopter, baseline, &incoming, &mut report).unwrap();
+        assert_effective(&first, &format!("{case}: first update"));
+        let deny = strings(&json(&first)["permissions"]["deny"]);
+        for rule in strings(&json(&incoming)["permissions"]["deny"]) {
+            assert!(deny.contains(&rule), "{case}: missing {rule}");
+        }
+        assert!(
+            !report
+                .iter()
+                .any(|l| l.contains("removed") && l.contains("deny")),
+            "{case}: {report:?}"
+        );
+
+        let mut report = vec![];
+        let again = merge_settings_from_baseline(&first, baseline, &incoming, &mut report).unwrap();
+        assert_eq!(
+            again, first,
+            "{case}: a repeated update without a baseline moves nothing"
+        );
+
+        let mut report = vec![];
+        let later =
+            merge_settings_from_baseline(&first, Some(&incoming), &incoming, &mut report).unwrap();
+        assert_effective(&later, &format!("{case}: update from the new baseline"));
+        assert!(
+            !read_denied(&later, SECRET_NAMED_SOURCE),
+            "{case}: the shipped exception applies once the baseline is known"
+        );
+        let mut report = vec![];
+        let settled =
+            merge_settings_from_baseline(&later, Some(&incoming), &incoming, &mut report).unwrap();
+        assert_eq!(settled, later, "{case}: the baseline update settles");
+    }
+}
+
 // --- whole-update cases against the real assets ----------------------------
 
 fn isolate_git() {

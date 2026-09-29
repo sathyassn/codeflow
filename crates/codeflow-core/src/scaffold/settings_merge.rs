@@ -12,7 +12,9 @@
 //!   the project removed stays removed and is reported, a project-only entry
 //!   stays, and a new entry is added; shipped entries keep the preset's
 //!   order, since a `!` carve-out narrows only the rules before it. Without a
-//!   baseline the arrays are union-added and nothing is removed. Scalar permission keys
+//!   baseline for an array, nothing is removed and the missing shipped
+//!   entries go before the project's own, so no new exception can cancel a
+//!   deny the project already has. Scalar permission keys
 //!   (`defaultMode`) are set only when absent.
 //! - **sandbox entries** — recursively add missing keys and union shipped array
 //!   entries, while preserving every explicit user scalar. On update, the prior
@@ -408,12 +410,7 @@ fn merge_permissions(
                     merge_array_three_ways(key, cur_arr, prev_arr, inc_arr, report);
                     continue;
                 }
-                for item in inc_arr {
-                    if !cur_arr.contains(item) {
-                        cur_arr.push(item.clone());
-                        report.push(format!("settings: added permissions.{key} entry {item}"));
-                    }
-                }
+                add_before_project_entries(key, cur_arr, inc_arr, report);
             }
             (Some(existing), _) => {
                 if existing != inc_val {
@@ -434,6 +431,39 @@ fn merge_permissions(
             }
         }
     }
+}
+
+/// Add the shipped entries a project's array lacks when no baseline says
+/// which of its entries were shipped. They go before every existing entry:
+/// a `!` carve-out narrows only the rules listed before it, so a new shipped
+/// exception placed there can never cancel a deny the project already has,
+/// and the project's own ordered block keeps its effect. A new exception may
+/// then not reach an older shipped deny the project still carries, which
+/// errs toward denying.
+fn add_before_project_entries(
+    key: &str,
+    current: &mut Vec<Value>,
+    incoming: &[Value],
+    report: &mut Vec<String>,
+) {
+    let mut added: Vec<Value> = Vec::new();
+    for item in incoming {
+        if !current.contains(item) && !added.contains(item) {
+            report.push(format!("settings: added permissions.{key} entry {item}"));
+            added.push(item.clone());
+        }
+    }
+    if added.is_empty() {
+        return;
+    }
+    if !current.is_empty() {
+        report.push(format!(
+            "settings: placed the new permissions.{key} entries before the project's own, \
+             since no shipped baseline shows which entries were shipped"
+        ));
+    }
+    added.append(current);
+    *current = added;
 }
 
 /// Merge one permission array against the prior shipped baseline. The
