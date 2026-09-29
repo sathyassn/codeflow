@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|PowerShell)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codeflow hook git-guard --contract 3; s=$?; [ \"$s\" -eq 0 ] && exit 0; [ \"$s\" -eq 2 ] || echo \"codeflow git-guard did not run (exit $s); refusing until it does\" >&2; exit 2",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "codeflow hook exec-guard --contract 3; s=$?; [ \"$s\" -eq 0 ] && exit 0; [ \"$s\" -eq 2 ] || echo \"codeflow exec-guard did not run (exit $s); refusing until it does\" >&2; exit 2",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^(Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codeflow hook edit-guard --contract 3; s=$?; [ \"$s\" -eq 0 ] && exit 0; [ \"$s\" -eq 2 ] || echo \"codeflow edit-guard did not run (exit $s); refusing until it does\" >&2; exit 2",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codeflow hook session-orient --contract 3"
+          }
+        ]
+      }
+    ]
+  }
+}

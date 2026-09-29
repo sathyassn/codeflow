@@ -987,3 +987,59 @@ fn a_shallow_clone_is_refused_and_ids_check_judges_copies_by_their_landing() {
         "ids check after unshallow",
     );
 }
+
+/// TSK-141 AC-5: in a full-tier project, `task new` issues through the
+/// registry push while an older `codeflow` that refuses it is first on
+/// PATH, since the hook runs the calling binary (SPC-013 R-85).
+#[cfg(unix)]
+#[test]
+fn task_new_issues_with_an_older_codeflow_first_on_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, root, bare) = project_with_remote();
+    ok(&codeflow(&root, &["epic", "new", "dispatch"]), "epic new");
+    let older = dir.path().join("older");
+    std::fs::create_dir(&older).unwrap();
+    let stub = older.join("codeflow");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\n\
+         if [ \"$1 $2\" = \"git-hook capabilities\" ]; then echo 'hooks 1'; exit 0; fi\n\
+         echo \"older codeflow refused: $*\" >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(
+        [older.clone()]
+            .into_iter()
+            .chain(exe.parent().map(Path::to_path_buf))
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+    )
+    .unwrap();
+    let out = with_env(&mut Command::new(&exe))
+        .env("PATH", &path)
+        .args([
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            LINE,
+            "dispatched",
+        ])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let said = ok(&out, "task new with an older codeflow first on PATH");
+    assert!(
+        said.contains("TSK-001") && !said.contains("older codeflow"),
+        "{said}"
+    );
+    let listed = git(
+        &bare,
+        &["ls-tree", "-r", "--name-only", "codeflow/registry"],
+    );
+    assert!(listed.contains("ids/TSK/001.toml"), "{listed}");
+}

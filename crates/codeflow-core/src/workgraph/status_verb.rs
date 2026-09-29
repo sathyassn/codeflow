@@ -44,7 +44,7 @@ pub struct VerbOutcome {
     pub from: String,
     pub to: String,
     /// Non-blocking findings of the judge.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<crate::remedy::Finding>,
 }
 
 /// Why a verb wrote nothing.
@@ -169,7 +169,13 @@ pub fn set_status(
                 refused.push(super::acceptance::SCOPE_NOTE.to_string());
                 return Err(VerbError::Refused(refused));
             }
-            warnings.extend(findings);
+            let remedy =
+                crate::remedy::ACCEPTANCE_BINDING.with(&[("note", super::acceptance::SCOPE_NOTE)]);
+            warnings.extend(
+                findings
+                    .into_iter()
+                    .map(|finding| crate::remedy::Finding::new(finding, remedy.clone())),
+            );
         }
     }
     replace_if_unchanged(&path, digest.as_slice(), &proposed)?;

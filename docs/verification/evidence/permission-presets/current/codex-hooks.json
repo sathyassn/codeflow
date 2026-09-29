@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|PowerShell)$",
+        "hooks": [
+          { "type": "command", "command": "codeflow hook git-guard", "timeout": 10 },
+          { "type": "command", "command": "codeflow hook exec-guard", "timeout": 10 }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          { "type": "command", "command": "codeflow hook session-orient", "timeout": 10 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "codeflow hook session-orient", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

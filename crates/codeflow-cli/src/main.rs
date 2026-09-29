@@ -134,6 +134,13 @@ fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> 
 }
 
 fn main() -> anyhow::Result<()> {
+    // A hook git fires during this command runs this binary (SPC-013 R-85):
+    // the path goes only into git children's environment, so an inherited
+    // value is dropped here and no other child ever sees one.
+    std::env::remove_var(codeflow_core::git::HOOK_BINARY_ENV);
+    if let Ok(binary) = std::env::current_exe() {
+        codeflow_core::git::designate_calling_binary(binary);
+    }
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
 

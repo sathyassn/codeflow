@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
+use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
     pull_request_findings, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
 };
@@ -82,9 +82,10 @@ fn judge(
     if !scope.release() {
         return None;
     }
-    // A notice, so the pre-push hook shows it on a passing push too.
+    // The scope this range is judged under: a result, not a finding. The
+    // pre-push hook states a release push's scope itself.
     eprintln!(
-        "codeflow ci: notice: acceptance: release range ('{}'{}) under pattern '{}' ({}); each change is judged where it was introduced (SPC-013 R-120)",
+        "codeflow ci: acceptance: release range ('{}'{}) under pattern '{}' ({}); each change is judged where it was introduced (SPC-013 R-120)",
         names.branch,
         names
             .into
@@ -108,7 +109,11 @@ fn judge(
             }
             // A notice, so the pre-push hook shows it on a passing push too.
             for note in &judged.notes {
-                eprintln!("codeflow ci: notice: acceptance: {note}");
+                let notice = codeflow_core::remedy::Finding::new(
+                    format!("acceptance: {note}"),
+                    codeflow_core::remedy::RELEASE_LEGACY_CHANGE.remedy(),
+                );
+                eprintln!("{}", notice.line("codeflow ci", "notice"));
             }
             judged.findings
         }),
@@ -154,21 +159,22 @@ fn criteria(
 /// Criteria frozen always blocks (R-80); the binding and journey rules take
 /// the `git.work_records` level.
 fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
-    let (level, remedy) = if found.rule == FROZEN_RULE {
-        (
-            PolicyLevel::Block,
-            "change criteria by a planning pull request on the target, then rebase".to_string(),
+    let violation = if found.rule == FROZEN_RULE {
+        Violation::always_blocking(
+            found.rule,
+            found.message,
+            "change criteria by a planning pull request on the target, then rebase",
         )
     } else {
-        (
+        Violation::new(
+            found.rule,
             git.work_records_level(),
-            format!(
-                "review the pull request head and record it in the acceptance block; a waiver names the planning amendment commit on the target ({SCOPE_NOTE})"
-            ),
+            found.message,
+            codeflow_core::remedy::ACCEPTANCE_BINDING.with(&[("note", SCOPE_NOTE)]),
         )
     };
     super::TaggedViolation {
         sha: None,
-        violation: Violation::new(found.rule, level, found.message, remedy),
+        violation,
     }
 }
