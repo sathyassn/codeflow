@@ -616,3 +616,109 @@ fn a_runtime_case_override_decides_the_shared_rule_check() {
         "{ignore}"
     );
 }
+
+/// `codeflow ci` on a range, with the pull request `body` when given.
+fn ci(root: &Path, branch: &str, body: Option<&str>) -> Output {
+    let mut args = vec!["ci", "--base", "main", "--head", "HEAD", "--branch", branch];
+    if let Some(body) = body {
+        args.extend(["--pr-body", body]);
+    }
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    Command::new(&exe)
+        .args(&args)
+        .current_dir(root)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_NAME")
+        .env_remove("GITHUB_HEAD_REF")
+        .env_remove("GITHUB_BASE_REF")
+        .env_remove("CI_PIPELINE_SOURCE")
+        .env_remove("CI_MERGE_REQUEST_IID")
+        .env_remove("BITBUCKET_PR_ID")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("codeflow ci runs")
+}
+
+/// TSK-190 AC-3 (journey): a full-tier umbrella whose `main` the operator
+/// moved forward holds a task record. A range on the root branch that
+/// widens that record's criteria and adds code passes `codeflow ci` as the
+/// workspace root branch, with and without a pull request body; the same
+/// commits under another `integration/` name are still refused.
+#[test]
+fn journey_ci_accepts_the_workspace_root_branch_and_no_other_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = umbrella(dir.path());
+    let init = codeflow(&root, &["init", "--yes", "--full", "--workspace"]);
+    assert!(init.status.success(), "{}", both(&init));
+    let planned = codeflow(
+        &root,
+        &[
+            "task",
+            "new",
+            "Keep the workspace notes",
+            "--standalone-reason",
+            "umbrella upkeep",
+        ],
+    );
+    assert!(planned.status.success(), "{}", both(&planned));
+    let record = root.join("project-management/tasks/TSK-001.md");
+    let text = std::fs::read_to_string(&record).unwrap();
+    let text = text.replacen(
+        "\n- AC-1\n",
+        "\n- AC-1 When run, the notes shall list each project.\n",
+        1,
+    );
+    std::fs::write(&record, &text).unwrap();
+    git(&root, &["add", "-A"]);
+    let adopted = git_as(&root, None, &["commit", "-m", "chore: adopt codeflow"]);
+    assert!(adopted.status.success(), "{}", both(&adopted));
+    let moved = codeflow(
+        &root,
+        &["integrate", WORKSPACE_ROOT_BRANCH, "--into", "main"],
+    );
+    assert!(moved.status.success(), "{}", both(&moved));
+
+    std::fs::write(
+        &record,
+        text.replace("each project.", "each project and its owner."),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    git(&root, &["add", "-A"]);
+    let edited = git_as(&root, None, &["commit", "-m", "docs: widen the notes"]);
+    assert!(edited.status.success(), "{}", both(&edited));
+
+    let body = "## Summary\nWiden the workspace notes.\n\n## Changes\n- widen the notes\n\n\
+                ## Testing\n- fixture only\nNot tested: a hosted CI run.\n\n## Reviews\n\
+                None: awaiting the operator.\n\n## Release impact\n- Impact: patch\n\
+                - Breaking: no\n- Rationale: notes only.\n- Migration: none\n";
+    let with_body = ci(&root, WORKSPACE_ROOT_BRANCH, Some(body));
+    let said = both(&with_body);
+    assert!(with_body.status.success(), "{said}");
+    assert!(
+        said.contains(&format!(
+            "pull request class: workspace root branch {WORKSPACE_ROOT_BRANCH}"
+        )),
+        "{said}"
+    );
+    let without = ci(&root, WORKSPACE_ROOT_BRANCH, None);
+    let said = both(&without);
+    assert!(without.status.success(), "{said}");
+    assert!(!said.contains("work.criteria_frozen"), "{said}");
+
+    git(&root, &["branch", "integration/other", "HEAD"]);
+    let other = ci(&root, "integration/other", Some(body));
+    let said = both(&other);
+    assert!(!other.status.success(), "{said}");
+    assert!(said.contains("names no epic"), "{said}");
+    let other = ci(&root, "integration/other", None);
+    let said = both(&other);
+    assert!(!other.status.success(), "{said}");
+    assert!(said.contains("work.criteria_frozen"), "{said}");
+}

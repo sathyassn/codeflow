@@ -89,6 +89,9 @@ branch is judged, and `git.worktree_locations` lists where linked worktrees
 may live. An umbrella repository that holds several projects, each its own
 repository, uses workspace mode instead: see
 [workspace-mode.md](workspace-mode.md) and `codeflow init --workspace`.
+There `codeflow ci` accepts a range on the root branch the target's policy
+names, as it accepts a verified epic line, and still refuses any other
+`integration/*` branch that is not one.
 
 ## What each tier installs
 

@@ -3,8 +3,9 @@
 //! Every product pull request into a project with durable work tracking has
 //! exactly one class: tracked (`Task: TSK-NNN`, or the task id its branch
 //! carries), a direct change (`Task: none: <reason>`), planning-only (records
-//! and plans only), an epic's integration line landing on its target, or a
-//! trusted automation profile (the slot TSK-107 fills). An unclassified pull
+//! and plans only), an epic's integration line landing on its target, the
+//! workspace root branch that `git.root_branch` names, or a trusted
+//! automation profile (the slot TSK-107 fills). An unclassified pull
 //! request blocks. The paths come from one table plus the project's own
 //! policy, so the same rule holds in every project that installs it.
 
@@ -80,6 +81,10 @@ pub(super) enum Class {
     /// An epic's integration line landing on its target; each task on it was
     /// classified when it landed on the line.
     EpicLine(String),
+    /// The workspace root branch the target's `git.root_branch` names
+    /// (ADR-0074); small edits land on it directly, and each nested project
+    /// lands through its own repository.
+    RootBranch(String),
     /// A trusted automation profile (TSK-107 supplies the match).
     Automation { profile: String },
 }
@@ -97,6 +102,8 @@ pub(super) struct Input<'a> {
     /// For an `integration/` head: the epic it lands, or why it is not a
     /// verified epic line.
     pub epic_line: Option<Result<String, String>>,
+    /// Whether the head is the branch the target's `git.root_branch` names.
+    pub root_branch: bool,
 }
 
 /// Resolve the class, or the reason the pull request has none.
@@ -147,6 +154,9 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                     profile: profile.to_string(),
                 });
             }
+            if input.root_branch {
+                return Ok(Class::RootBranch(input.branch.to_string()));
+            }
             if input.branch.starts_with("integration/") {
                 return match &input.epic_line {
                     Some(Ok(epic)) => Ok(Class::EpicLine(epic.clone())),
@@ -180,6 +190,21 @@ pub(super) struct Range<'a> {
     pub base_ref: &'a str,
     pub base: &'a str,
     pub head: &'a str,
+}
+
+/// The branch `git.root_branch` names in the policy at `base`. It is read at
+/// the target, so a pull request cannot name its own head as the root.
+pub(super) fn root_branch_at(root: &Path, base: &str) -> Option<String> {
+    let out = codeflow_core::git::command()
+        .arg("-C")
+        .arg(root)
+        .args(["show", &format!("{base}:.codeflow/policy.json")])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())?;
+    let policy: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let name = policy["git"]["root_branch"].as_str()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Whether durable work tracking is on at the head or at the target, so a
@@ -254,6 +279,7 @@ pub(super) fn dispatch(
         epic_line: branch
             .starts_with("integration/")
             .then(|| check_epic_line(root, branch, range.base_ref, range.base, range.head)),
+        root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
     };
     let class = match classify(&input) {
         Ok(class) => class,
@@ -295,6 +321,9 @@ pub(super) fn dispatch(
         Class::PlanningOnly => println!("codeflow ci: pull request class: planning-only"),
         Class::EpicLine(epic) => {
             println!("codeflow ci: pull request class: epic integration line of {epic}");
+        }
+        Class::RootBranch(name) => {
+            println!("codeflow ci: pull request class: workspace root branch {name}");
         }
         Class::Automation { profile } => {
             println!("codeflow ci: pull request class: automation profile {profile}");
@@ -589,6 +618,7 @@ mod tests {
             branch_task: None,
             automation: None,
             epic_line: None,
+            root_branch: false,
         }
     }
 
@@ -638,6 +668,12 @@ mod tests {
         let mut line = input("", "integration/EPC-001-x", &code);
         line.epic_line = Some(Ok("EPC-001".into()));
         assert_eq!(classify(&line), Ok(Class::EpicLine("EPC-001".into())));
+        let mut root = input("", "integration/workspace", &code);
+        root.root_branch = true;
+        assert_eq!(
+            classify(&root),
+            Ok(Class::RootBranch("integration/workspace".into()))
+        );
         let mut bot = input("", "chore/deps-bump", &code);
         bot.automation = Some("dependabot");
         assert_eq!(
@@ -683,8 +719,12 @@ mod tests {
     #[test]
     fn a_prefix_or_a_direct_line_grants_no_lighter_class() {
         let code = paths(&["src/lib.rs"]);
-        // An integration/ head is an epic line only when verified.
+        // An integration/ head is an epic line only when verified, and the
+        // root branch only when the target's policy names it.
         assert!(classify(&input("", "integration/not-an-epic", &code))
+            .unwrap_err()
+            .contains("not a verified epic line"));
+        assert!(classify(&input("", "integration/workspace", &code))
             .unwrap_err()
             .contains("not a verified epic line"));
         let mut line = input("", "integration/EPC-009-x", &code);

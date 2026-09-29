@@ -1113,6 +1113,16 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **`codeflow ci` accepts a workspace's root branch.** In workspace mode,
+  a range on the branch `git.root_branch` names, such as
+  `integration/workspace`, is classified as the workspace root branch, the
+  way a verified epic line is: it needs no `Task:` line and may change task
+  criteria. Before, `ci` refused it as an unverified epic line and blocked
+  any criteria change on it. The branch is read from the policy on the
+  target, and any other `integration/*` branch that is not a verified epic
+  line is still refused (TSK-190).
+
+<!-- codeflow:release-impact patch -->
 - **An approved spec is amended until it ships, and frozen after.** The
   lifecycle guidance, the spec template and the refusal of an approved spec
   moved back to `draft` now agree with how specs change in practice. While

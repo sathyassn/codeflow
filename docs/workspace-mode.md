@@ -131,3 +131,9 @@ switches nothing; it says the folder looks like a workspace and names
 - `codeflow doctor` warns when the root checkout is on another branch, when
   a nested repository is not ignored by a tracked `.gitignore`, and when a
   linked worktree sits outside `git.worktree_locations`.
+- `codeflow ci` classifies a range headed by the root branch as the
+  workspace root branch, as it accepts a verified epic line: it needs no
+  `Task:` line and may change task criteria. It reads `git.root_branch`
+  from the policy on the target, so a pull request cannot name its own
+  branch as the root. Any other `integration/*` branch that is not a
+  verified epic line is still refused.
