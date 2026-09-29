@@ -114,11 +114,24 @@ the code.
 - **Areas:** `engine` = `crates/codeflow-core` + `crates/codeflow-cli` +
   `crates/codeflow-present`;
   `scaffold` = `assets/` (base scaffold + stack profiles); `docs` = `docs/`.
-- **Rust gates:** `cargo fmt --all -- --check`, `cargo test --workspace`,
-  `cargo clippy --workspace --all-targets -- -D warnings`, and
-  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` must be green
-  before push (workspace lints: clippy all = deny, pedantic = warn). Edition
-  2021, workspace-managed dependency versions in the root `Cargo.toml`.
+- **Rust gates:** before every push, `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, targeted
+  tests (`cargo test -p <crate> --test <name>`) and `codeflow test --mode
+  quick`; the pre-push hook's quick run is that evidence when it covers the
+  same tree. The full gate runs on the landing candidate (workspace lints:
+  clippy all = deny, pedantic = warn). Edition 2021, workspace-managed
+  dependency versions in the root `Cargo.toml`.
+- **Hook and policy tasks run the worktree's own binary.** For a task that
+  changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
+  (or `PATH`) at the worktree's `target/debug/codeflow`; never build inside
+  a hook. Rebuild it whenever `crates/codeflow-core/src/hooks/**`, the
+  policy parsing or the guard sources change: the binary embeds its source
+  revision, a dirty flag and a digest of its hook, guard and policy source
+  inputs, and the hook report prints path, version, source revision, input
+  digest and binary digest and warns whenever the current sources' digest
+  differs from the embedded one, a same-HEAD edit included. Path and
+  version alone identify the binary; they do not prove its source.
 - **This repo lands only through PRs (ADR-0006):** use a feature branch, the PR
   template, green CI and a human merge; agents never merge protected branches.
   `codeflow integrate` remains shipped for offline use, not this

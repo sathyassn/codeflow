@@ -1,7 +1,7 @@
 # Worktrees and branches
 
-The full text behind the branch row of the moment table in `AGENTS.md`.
-Managed by `codeflow update`.
+The full text behind the start, landing and cleanup rows of the map in
+`AGENTS.md`. Managed by `codeflow update`.
 
 ## Where work happens
 
@@ -33,6 +33,8 @@ delete mutation, make three ordered work-start assertions:
 
 ## Cleanup
 
+This section is the one home of the cleanup rules; the skills point here.
+
 At orientation and after a landing, use `codeflow status` to inventory
 linked worktrees and unattached local branches. Treat its
 removable/dirty/unproven classification as local Git evidence, not ownership
@@ -45,27 +47,49 @@ A landed task ends with cleanup that proves the merge and inspects worktree
 state first. Ancestry never proves a squash merge: require PR state `MERGED`
 and match the branch tip to its recorded head SHA, or show that `git cherry`
 against the updated target has no unapplied `+` entry, before any branch
-force-delete. Never force-remove a dirty worktree; preserve or harvest dirty
-or untracked work first. Unproven work is retained, never guessed safe.
+force-delete; ancestry proves only a normal merge. Never force-remove a
+dirty worktree; preserve or harvest dirty or untracked work first. Unproven
+work is retained, never guessed safe.
+
+- The cargo target directory of a worktree is `<worktree>/target`, reused
+  across that worktree's runs and deleted with it; never one per run and
+  never one shared between worktrees. Scratch evidence lives in one
+  directory per task and leaves with it.
+- Before a worktree or its `target/` is removed, every run artifact and
+  review reference the PR cites must already resolve in its durable home:
+  the CodeFlow home (`~/.codeflow/gate-runs/<repo>/<run-id>/`) for a gate
+  run, the PR itself for the review verdict. Cleanup checks that the
+  citations resolve before it removes anything.
 
 ## Parallel work and integration
 
 Parallelize independent work when it shortens the critical path, but make
 the settled task graph, file ownership, and integration order explicit
 first. Use the orchestrator's canonical node and edge notation for
-multi-task work (standard and full tiers); a material graph mutation
-requires a newly dual-approved plan version, while ordinary in-node detail
-does not. Each parallel task gets one owner, branch, and worktree; never let
-two sessions write the same worktree or concurrently edit a shared contract,
-schema, migration, or other merge hotspot. The host sets a bounded
+multi-task work (standard and full tiers); a change of outcome, cross-task
+interface, dependency graph or safety boundary goes through one reviewed
+epic amendment, while ordinary in-node detail does not. Each parallel task
+gets one owner, branch, and worktree; never let two sessions write the same
+worktree or concurrently edit a shared contract, schema, migration, or other
+merge hotspot. The host sets a bounded
 concurrency cap from available CPU, memory, disk, and tool limits, monitors
 pressure, and reduces fan-out before swapping, duplicate heavyweight builds,
 or context sprawl degrade quality. Dependent work stays sequential.
 
-For a multi-task body, integrate through `integration/<epic>` and serialize
-each landing with `codeflow integrate`; rerun the affected and aggregate
-gates after every merge. Rebase task branches, never a shared integration
-branch. Parallel output is not complete until the integration worktree is
-green and the combined diff has received the same executor verification,
-primary acceptance, cross-lineage unit review, and integrated
-Claude-judgment-primary review as a serial change.
+For a multi-task body, integrate through `integration/<epic>` in small
+batches, and serialize each landing: one candidate at a time. Before review,
+each builder merges the current line into the task branch and resolves the
+conflicts there. The primary assembles reviewed task heads on a candidate
+from the line tip in dependency order, resolves any remaining conflicts
+there, and reviews the resolved hunks and integration seams on product
+paths; the other lineage reviews those integration effects only when the
+primary hand-resolved a product hunk or two tasks touched one hotspot. Unit
+reviews are not repeated. Then one full gate runs on the exact candidate
+and is attached to the PRs it covers; a standalone PR is its own
+candidate. A red gate is diagnosed first: a member and its dependents are
+dropped only when evidence attributes the failure to it, and a shared
+runner or environment defect is fixed at its owner and the candidate
+regated. On green the line moves to a tree equal to the gated candidate.
+Generated files are regenerated, never hand-merged. Rebase task branches,
+never a shared integration branch; use `codeflow integrate` where no PR
+path exists.
