@@ -2224,9 +2224,10 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
 /// the version CI installs, a lowered pin, and an upgrade that carries
 /// `codeflow update` before its raised pin has landed (WARN, with the
 /// two-step order). An older scaffold's placeholder install step WARNS as an
-/// unarmed perimeter, and a CI file that installs codeflow its own way
-/// passes with no claim about the pin. No CI file at all passes cleanly: the
-/// repo opted out or predates the workflow. WARN only, never a block.
+/// unarmed perimeter, and a CI file without a shipped pinned install left
+/// unchanged passes with no claim about the pin (TSK-182). No CI file at all
+/// passes cleanly: the repo opted out or predates the workflow. WARN only,
+/// never a block.
 fn check_ci_perimeter(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -2263,15 +2264,15 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
         };
     }
 
-    // Every shipped pinned install reads `scaffold_version`; an install the
-    // project wired itself (a source build, its own installer) does not, and
-    // the pin says nothing about the binary it runs.
-    if !content.contains("scaffold_version") {
+    // The pin describes what CI runs only for a shipped pinned install left
+    // unchanged; for any other install (a source build, its own installer,
+    // an edited template) doctor makes no claim (TSK-182).
+    if !ci_pin::recognized(&content) {
         return CheckResult {
             name: "ci-perimeter".into(),
             status: Status::Pass,
             message: format!(
-                "{dest} installs codeflow its own way, not from the target's scaffold_version pin; doctor cannot tell which version it runs"
+                "{dest} does not carry the shipped target-pinned install unchanged, so doctor cannot verify how it installs codeflow, which version that is, or whether its checksum is checked"
             ),
             duration: start.elapsed(),
         };
@@ -4817,10 +4818,52 @@ mod tests {
 
     // --- ci-perimeter -------------------------------------------------------
 
+    /// The shipped CI templates, as a project copies them.
+    const SHIPPED_GITHUB_CI: &str = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
+    const SHIPPED_GITHUB_POLICY: &str =
+        include_str!("../../../../assets/base/ci/codeflow-policy.yml");
+    const SHIPPED_GITLAB: &str = include_str!("../../../../assets/base/ci/.gitlab-ci.yml");
+    const SHIPPED_BITBUCKET: &str =
+        include_str!("../../../../assets/base/ci/bitbucket-pipelines.yml");
+    const SHIPPED_GENERIC: &str = include_str!("../../../../assets/base/ci/ci-generic.sh");
+
     fn write_ci(root: &Path, body: &str) {
         let ci = root.join(CI_DEFAULT_DEST);
         std::fs::create_dir_all(ci.parent().unwrap()).unwrap();
         std::fs::write(&ci, body).unwrap();
+    }
+
+    /// A project pinning `1.2.3` whose CI file at `dest` holds `body`.
+    fn perimeter(dest: &str, body: &str) -> CheckResult {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(dest);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, body).unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/project.toml"),
+            "scaffold_version = \"1.2.3\"\n",
+        )
+        .unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        check_ci_perimeter(&opts)
+    }
+
+    /// The report for a CI file doctor cannot verify: no pin, version or
+    /// checksum claim, and it says so (TSK-182).
+    fn assert_unverified(r: &CheckResult) {
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+        assert!(r.message.contains("cannot verify"), "got: {}", r.message);
+        for claim in ["CI installs", "pins", "1.2.3", "verified against"] {
+            assert!(!r.message.contains(claim), "{claim}: {}", r.message);
+        }
+    }
+
+    /// `text` with the first line holding `from` replaced by `to`.
+    fn edit_line(text: &str, from: &str, to: &str) -> String {
+        let at = text.find(from).expect("the shipped line");
+        format!("{}{to}{}", &text[..at], &text[at + from.len()..])
     }
 
     #[test]
@@ -4844,20 +4887,7 @@ mod tests {
 
     #[test]
     fn test_ci_perimeter_wired_passes() {
-        let dir = tempfile::tempdir().unwrap();
-        write_ci(
-            dir.path(),
-            "steps:\n  - name: Install codeflow (target-pinned, checksum-verified)\n    # reads scaffold_version at the target\n",
-        );
-        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
-        std::fs::write(
-            dir.path().join(".codeflow/project.toml"),
-            "scaffold_version = \"1.2.3\"\n",
-        )
-        .unwrap();
-        let mut opts = test_opts();
-        opts.project_dir = dir.path().to_string_lossy().into_owned();
-        let r = check_ci_perimeter(&opts);
+        let r = perimeter(CI_DEFAULT_DEST, SHIPPED_GITHUB_CI);
         assert_eq!(r.status, Status::Pass, "got: {}", r.message);
         // The target-side pin, not the old placeholder story (TSK-095).
         assert!(
@@ -4869,13 +4899,32 @@ mod tests {
         assert!(r.message.contains("sha256.sum"), "got: {}", r.message);
     }
 
+    /// TSK-182 AC-4: every shipped template, as copied, keeps the TSK-095
+    /// pin report.
+    #[test]
+    fn test_ci_perimeter_recognizes_every_shipped_template() {
+        for (dest, body) in [
+            (CI_DEFAULT_DEST, SHIPPED_GITHUB_CI),
+            (CI_DEFAULT_DEST, SHIPPED_GITHUB_POLICY),
+            (".gitlab-ci.yml", SHIPPED_GITLAB),
+            ("bitbucket-pipelines.yml", SHIPPED_BITBUCKET),
+            (".gitlab-ci.yml", SHIPPED_GENERIC),
+        ] {
+            let r = perimeter(dest, body);
+            assert_eq!(r.status, Status::Pass, "{dest}: {}", r.message);
+            assert!(
+                r.message
+                    .contains("the codeflow version the target branch pins (1.2.3 here)"),
+                "{dest}: {}",
+                r.message
+            );
+        }
+    }
+
     #[test]
     fn test_ci_perimeter_warns_when_nothing_is_pinned() {
         let dir = tempfile::tempdir().unwrap();
-        write_ci(
-            dir.path(),
-            "steps:\n  - name: Install codeflow\n    # reads scaffold_version at the target\n",
-        );
+        write_ci(dir.path(), SHIPPED_GITHUB_CI);
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_ci_perimeter(&opts);
@@ -4889,21 +4938,7 @@ mod tests {
 
     #[test]
     fn test_ci_perimeter_finds_a_copied_in_platform_file() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("bitbucket-pipelines.yml"),
-            "# >>> codeflow pinned run (SPC-013 R-113)\ncodeflow_pin() { git show \"$1:.codeflow/project.toml\" | grep scaffold_version; }\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
-        std::fs::write(
-            dir.path().join(".codeflow/project.toml"),
-            "scaffold_version = \"1.2.3\"\n",
-        )
-        .unwrap();
-        let mut opts = test_opts();
-        opts.project_dir = dir.path().to_string_lossy().into_owned();
-        let r = check_ci_perimeter(&opts);
+        let r = perimeter("bitbucket-pipelines.yml", SHIPPED_BITBUCKET);
         assert_eq!(r.status, Status::Pass, "got: {}", r.message);
         assert!(
             r.message.starts_with("bitbucket-pipelines.yml"),
@@ -4914,23 +4949,72 @@ mod tests {
 
     #[test]
     fn test_ci_perimeter_does_not_claim_the_pin_for_an_own_install() {
-        let dir = tempfile::tempdir().unwrap();
-        write_ci(
-            dir.path(),
+        let r = perimeter(
+            CI_DEFAULT_DEST,
             "steps:\n  - name: Build codeflow from source\n    run: cargo install --path crates/codeflow-cli\n",
         );
-        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
-        std::fs::write(
-            dir.path().join(".codeflow/project.toml"),
-            "scaffold_version = \"1.2.3\"\n",
-        )
-        .unwrap();
-        let mut opts = test_opts();
-        opts.project_dir = dir.path().to_string_lossy().into_owned();
-        let r = check_ci_perimeter(&opts);
-        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
-        assert!(r.message.contains("its own way"), "got: {}", r.message);
-        assert!(!r.message.contains("1.2.3"), "got: {}", r.message);
+        assert_unverified(&r);
+    }
+
+    /// TSK-182 AC-1: the TSK-095 review probe's workflow, which names
+    /// `scaffold_version` only in a comment and installs nothing.
+    #[test]
+    fn test_ci_perimeter_does_not_claim_the_pin_from_a_comment() {
+        let r = perimeter(
+            CI_DEFAULT_DEST,
+            "# scaffold_version is not used here\nname: external\non: push\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo no codeflow installed\n",
+        );
+        assert_unverified(&r);
+    }
+
+    /// TSK-182 AC-2: the review probe's workflow, which reads the pin from
+    /// the head's own state, and the shipped install pointed at the head.
+    #[test]
+    fn test_ci_perimeter_does_not_claim_the_pin_for_a_head_read() {
+        let r = perimeter(
+            CI_DEFAULT_DEST,
+            "name: custom\non: push\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          version=$(sed -n /scaffold_version/p .codeflow/project.toml)\n          echo \"$version\"\n",
+        );
+        assert_unverified(&r);
+        let head = edit_line(
+            SHIPPED_GITHUB_CI,
+            "PIN_REF: ${{ github.event.pull_request.base.sha || github.sha }}",
+            "PIN_REF: ${{ github.event.pull_request.head.sha || github.sha }}",
+        );
+        assert_unverified(&perimeter(CI_DEFAULT_DEST, &head));
+        let head = edit_line(
+            SHIPPED_GITLAB,
+            "BASE=\"${CI_MERGE_REQUEST_TARGET_BRANCH_SHA:-}\"",
+            "BASE=\"$CI_COMMIT_SHA\"",
+        );
+        assert_unverified(&perimeter(".gitlab-ci.yml", &head));
+    }
+
+    /// TSK-182 AC-3: a pinned install whose checksum comparison is removed.
+    #[test]
+    fn test_ci_perimeter_does_not_claim_an_unchecked_install() {
+        let check = "          if [ \"$actual\" != \"$expected\" ]; then\n            echo \"::error::checksum mismatch for ${asset} (codeflow ${version}): expected ${expected}, got ${actual}; refusing it\"; exit 1\n          fi\n";
+        assert!(SHIPPED_GITHUB_CI.contains(check));
+        let unchecked = SHIPPED_GITHUB_CI.replace(check, "");
+        assert_unverified(&perimeter(CI_DEFAULT_DEST, &unchecked));
+    }
+
+    /// TSK-182 AC-5: one edited line of the shared pinned run, or of the
+    /// GitHub install, leaves the file unrecognized.
+    #[test]
+    fn test_ci_perimeter_does_not_claim_an_edited_template() {
+        let edited = edit_line(
+            SHIPPED_BITBUCKET,
+            "codeflow_fail() { echo \"codeflow: error: $*\" >&2; exit 1; }",
+            "codeflow_fail() { echo \"codeflow: error: $*\" >&2; }",
+        );
+        assert_unverified(&perimeter("bitbucket-pipelines.yml", &edited));
+        let edited = edit_line(
+            SHIPPED_GITHUB_CI,
+            "asset=codeflow-cli-x86_64-unknown-linux-gnu.tar.xz",
+            "asset=codeflow-cli-x86_64-unknown-linux-musl.tar.xz",
+        );
+        assert_unverified(&perimeter(CI_DEFAULT_DEST, &edited));
     }
 
     #[test]
