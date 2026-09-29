@@ -81,38 +81,47 @@ missing automation for adoption rather than silently enabling publication.
 - **Secrets:** never stage credentials, API keys, tokens, or `.env` files.
   The pre-commit secret scan (and the CI secret-scan job) block them, and it
   is the one gate never relaxed, not even during bootstrap grace.
-- **Protected branches** (`main`/`master` plus policy globs): never commit,
-  merge, push, force-push, delete, or hard-reset on them. Work lands by
-  exactly two paths: a PR with evidenced-green checks merged by a human, or
-  `codeflow integrate <branch> --into <target>`. Never set override envs
-  (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens), which is laundering, and never
-  `gh pr merge --delete-branch` (it can corrupt the root repo).
 - **Durability push:** with a remote configured, push the working branch
   after each committed logical unit so work survives a machine failure; use
   `git push --force-with-lease` (never bare `--force`) after a rewrite. It is
   backup, not a merge: the secret scan and every merge gate still stand.
   Forbid it with `git.force_push_unprotected` in `policy.json` (default
   allow).
-- **Bodies of work:** a multi-task epic lands task by task on a
-  non-protected `integration/<epic>` branch (agents merge there); only the
-  finished body reaches `main`, via one human-reviewed PR. See cf-method,
-  "Managing a body of work" (standard and full tiers).
-- **PR bodies:** follow the template: five fixed sections, plus conditional
-  ones when they apply (`cf-ship` owns the format where installed). A PR
-  names its work with `Task: TSK-NNN` or `Task: none: <reason>`. The Summary
-  anchors a reader with no context in a few lines: the result, why it
-  matters and where it stands; a key file name or number belongs there when
-  it is part of that context, and the details follow as bullets. Write the
-  body plainly: simple, straightforward and clear, no mannered prose (see
-  `.codeflow/rules/writing.md`). Match presentation to the shape of the
-  data: tables for matrices, fenced blocks for pasted output, one-line
-  bullets for the rest, never paragraph walls. A code PR **must** carry
-  real test evidence in `## Testing`: pasted test summary, coverage number,
-  new tests, and what was
-  NOT tested; "tests pass" as prose is a claim, not evidence. Docs-only PRs
-  say so in one line plus the doc checks run. A release-impact note agrees
-  with the authoritative release input; it is not a second calculator.
 - When a gate blocks you, fix the cause; never bypass (`--no-verify`,
   editing hooks, exporting gate tokens). Gates exist only where mistakes are
   irreversible or invisible. A guard's refusal names the policy rule it
   applied and the sanctioned path.
+
+## Protected branches
+
+**Protected branches** (`main`/`master` plus policy globs): never commit,
+merge, push, force-push, delete, or hard-reset on them. Work lands by
+exactly two paths: a PR with evidenced-green checks merged by a human, or
+`codeflow integrate <branch> --into <target>`. Never set override envs
+(`CODEFLOW_HUMAN_OVERRIDE`, gate tokens), which is laundering, and never
+`gh pr merge --delete-branch` (it can corrupt the root repo).
+
+## Bodies of work
+
+**Bodies of work:** a multi-task epic lands task by task on a
+non-protected `integration/<epic>` branch (agents merge there); only the
+finished body reaches `main`, via one human-reviewed PR. See cf-method,
+"Managing a body of work" (standard and full tiers).
+
+## PR bodies
+
+**PR bodies:** follow the template: five fixed sections, plus conditional
+ones when they apply (`cf-ship` owns the format where installed). A PR
+names its work with `Task: TSK-NNN` or `Task: none: <reason>`. The Summary
+anchors a reader with no context in a few lines: the result, why it
+matters and where it stands; a key file name or number belongs there when
+it is part of that context, and the details follow as bullets. Write the
+body plainly: simple, straightforward and clear, no mannered prose (see
+`.codeflow/rules/writing.md`). Match presentation to the shape of the
+data: tables for matrices, fenced blocks for pasted output, one-line
+bullets for the rest, never paragraph walls. A code PR **must** carry
+real test evidence in `## Testing`: pasted test summary, coverage number,
+new tests, and what was
+NOT tested; "tests pass" as prose is a claim, not evidence. Docs-only PRs
+say so in one line plus the doc checks run. A release-impact note agrees
+with the authoritative release input; it is not a second calculator.
