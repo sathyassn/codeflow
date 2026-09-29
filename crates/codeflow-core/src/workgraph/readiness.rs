@@ -1478,9 +1478,10 @@ mod tests {
         commit(root, "consumer");
     }
 
-    /// TSK-156 AC-3: fixed pins, never a random commit prefix. Unquoted, a
-    /// digit or exponent pin leaves the graph unreadable with the quote
-    /// remedy; quoted, each is read as an object id and judged as one.
+    /// TSK-156 AC-3 and TSK-142 AC-4: fixed pins, never a random commit
+    /// prefix. Unquoted, a digit or exponent pin YAML reads as a number
+    /// leaves the graph unreadable with the quote remedy; quoted, or kept as
+    /// text, each is read as an object id and judged as one.
     #[test]
     fn a_pin_is_judged_the_same_for_fixed_digit_exponent_and_letter_cases() {
         let dir = repo();
@@ -1500,15 +1501,25 @@ mod tests {
             let tree = repo.head().unwrap().peel_to_tree().unwrap();
             records_from_tree(&repo, &tree).map(|_| ())
         };
-        for pin in ["70283613", "949894e0"] {
+        for pin in ["70283613", "12345678", "949894e0"] {
             let error = graph(pin).unwrap_err().to_string();
             assert!(
                 error.contains("pin reads as a YAML number"),
                 "{pin}: {error}"
             );
-            assert!(error.contains("quote it"), "{pin}: {error}");
+            assert!(error.contains("must be quoted"), "{pin}: {error}");
+            assert!(!error.contains("not a commit id"), "{pin}: {error}");
         }
-        for pin in ["\"70283613\"", "\"949894e0\"", "0123abcd", "\"0123abcd\""] {
+        for pin in [
+            "\"70283613\"",
+            "\"12345678\"",
+            "\"949894e0\"",
+            "\"12e45678\"",
+            // Too large for a float, so YAML keeps it as text as written.
+            "12e45678",
+            "0123abcd",
+            "\"0123abcd\"",
+        ] {
             graph(pin).unwrap();
             let error = verdict(root, "TSK-002").unwrap_err().to_string();
             assert!(

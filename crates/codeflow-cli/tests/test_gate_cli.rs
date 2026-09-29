@@ -317,6 +317,105 @@ fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
     assert!(err.contains("reclaimed a stale gate lock"), "{err}");
 }
 
+/// A long target whose recorded pid is the one to watch: on Unix the shell
+/// that leads the target's process group, on Windows the target's
+/// grandchild (`cmd.exe` runs `powershell`), so its end shows the tree ended.
+#[cfg(unix)]
+const LONG_TARGET: &str = r#"{"schema_version": "1.0", "targets": [
+  {"name": "long", "runner": "custom",
+   "modes": {"full": {"command": "echo $$ > pid.txt; sleep 30"}}}
+]}"#;
+#[cfg(windows)]
+const LONG_TARGET: &str = r#"{"schema_version": "1.0", "targets": [
+  {"name": "long", "runner": "custom",
+   "modes": {"full": {"command": "powershell -NoProfile -NonInteractive -Command \"Set-Content -Path pid.txt -Value $PID; Start-Sleep -Seconds 120\""}}}
+]}"#;
+
+/// Whether the process (Windows) or process group (Unix) `pid` still runs.
+fn still_runs(pid: u32) -> bool {
+    if cfg!(windows) {
+        let out = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+            .expect("tasklist runs");
+        String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+    } else {
+        Command::new("kill")
+            .args(["-0", "--", &format!("-{pid}")])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+}
+
+/// TSK-142 AC-5 (journey): in a freshly scaffolded project driven by the
+/// real binary, a full gate killed during a long target never lets a second
+/// full gate run beside that target. On Windows the target's tree ends with
+/// the gate; on Unix the lock stays held until the target's process group
+/// exits (TSK-134). The next full gate then takes the lock.
+#[test]
+fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
+    let home = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let init = run(&root, home.path(), &["init", "--yes", "--minimal"]);
+    assert!(init.status.success(), "init: {}", stderr(&init));
+    std::fs::write(root.join(".codeflow/test-config.json"), LONG_TARGET).unwrap();
+
+    let (mut gate, rx) = spawn(command(&root, home.path(), &["test", "--mode", "full"]));
+    wait_for(&rx, "starting target 'long'");
+    let pid_file = root.join("pid.txt");
+    let pid = (0..1200)
+        .find_map(|_| {
+            let text = std::fs::read_to_string(&pid_file).unwrap_or_default();
+            let parsed = text.trim().parse::<u32>().ok();
+            if parsed.is_none() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            parsed
+        })
+        .expect("the target recorded its pid");
+    assert!(still_runs(pid), "the target runs under its gate");
+    gate.kill().unwrap();
+    gate.wait().unwrap();
+
+    let other = repo(QUICK_PASS);
+    if cfg!(unix) {
+        // The target outlives its gate, and no second gate runs beside it.
+        assert!(still_runs(pid), "the target outlived its gate");
+        let refused = run(other.path(), home.path(), &["test", "--mode", "full"]);
+        let err = stderr(&refused);
+        assert_eq!(refused.status.code(), Some(1), "{err}");
+        assert!(err.contains("targets are still running"), "{err}");
+        assert!(!err.contains("starting target"), "no target ran: {err}");
+        Command::new("kill")
+            .args(["-KILL", "--", &format!("-{pid}")])
+            .status()
+            .unwrap();
+    }
+    // Windows: the killed gate took its target's tree with it. Unix: the
+    // group was just stopped. Either way it ends.
+    let gone = (0..200).any(|_| {
+        let alive = still_runs(pid);
+        if alive {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        !alive
+    });
+    assert!(gone, "the target ended");
+
+    // The next full gate takes the lock, from the scaffold and elsewhere.
+    std::fs::write(root.join(".codeflow/test-config.json"), QUICK_PASS).unwrap();
+    for dir in [root.as_path(), other.path()] {
+        let after = run(dir, home.path(), &["test", "--mode", "full"]);
+        let err = stderr(&after);
+        assert_eq!(after.status.code(), Some(0), "{err}");
+        assert!(err.contains("starting target 'pass'"), "{err}");
+    }
+}
+
 #[test]
 fn a_stale_lock_from_a_dead_gate_is_reclaimed() {
     let home = tempfile::tempdir().unwrap();

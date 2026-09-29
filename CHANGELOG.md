@@ -1076,6 +1076,28 @@ publication date._
   executable. Git run outside codeflow still uses the `codeflow` on PATH.
   Run `codeflow update` to install the new shims.
 
+<!-- codeflow:release-impact patch -->
+- **A killed full gate on Windows ends its targets.** When a
+  `codeflow test --mode full` process was killed on Windows, its running
+  target kept going while the gate lock was freed, so a second full gate
+  could start beside it. Each target now runs in a job object that ends
+  the target's whole process tree when the gate exits, however it exits.
+  On Unix the lock still stays held until a killed gate's target exits.
+
+<!-- codeflow:release-impact patch -->
+- **Presentation cleanup on macOS no longer fails on a busy machine.**
+  Closing a presentation lists processes with `ps` to prove its browser is
+  gone. One process of any user caught mid-start could list bytes that are
+  not UTF-8, and the whole listing was refused, so cleanup failed and left
+  recovery evidence behind. Such a line is now read as it stands; it can
+  neither hide an owned browser process nor match as one.
+
+<!-- codeflow:release-impact patch -->
+- **An unquoted numeric pin is refused for its quoting.** A `depends_on`
+  pin such as `pin: 70283613`, which YAML reads as a number, was reported
+  as not a commit id. The message now says the pin must be quoted, as in
+  `pin: "70283613"`, since the text may well be a commit id.
+
 ### Changed
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
