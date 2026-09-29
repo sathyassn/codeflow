@@ -914,6 +914,17 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **An approved spec is amended until it ships.** The lifecycle guidance,
+  the spec template and the refusal of an approved spec moved back to
+  `draft` now agree with how specs change in practice. While a spec is
+  approved and not yet implemented, a change to it is amended in place
+  through a reviewed planning change, with a dated note for each change of
+  meaning and each bound consumer's disposition named; once implemented it
+  is frozen and a change is a new spec. They no longer say that approval
+  freezes the criteria. `codeflow update` brings the changed guidance and
+  template.
+
+<!-- codeflow:release-impact patch -->
 - **The writing reference carries every reply duty.** The rule map sends an
   agent about to report to `.codeflow/rules/writing.md`, the only reply
   guidance a minimal-tier project installs. It now states each duty of the

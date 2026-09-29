@@ -9,13 +9,18 @@ created: {{DATE}}
 
 # SPC-{{NNN}}: {{TITLE}}
 
-<!-- Specs are optional frozen work inputs, not living requirements. `codeflow spec new --for
-     EPC-NNN|TSK-NNN` allocates this file and links it from the consuming work
-     item. Write one only when interfaces, formats, or behavior need pinning
-     down before building; many work items need no spec. `approved` requires
-     an empty `open_questions` list and freezes the criteria. `implemented` is
-     derived, never written: every consumer is terminal and at least one is
-     complete. A changed contract is a new spec that lists
+<!-- Specs are optional settled work inputs, frozen once implemented, not living
+     requirements. `codeflow spec new --for EPC-NNN|TSK-NNN` allocates this
+     file and links it from the consuming work item. Write one only when
+     interfaces, formats, or behavior need pinning down before building; many
+     work items need no spec. `approved` requires an empty `open_questions`
+     list. `implemented` is derived, never written: every consumer is terminal
+     and at least one is complete. Until then, a change to an approved spec is
+     amended in place through a reviewed planning change, with a dated note
+     for each change of meaning and the superseded decision kept as history.
+     That change names each consumer bound to a changed requirement and its
+     disposition: unaffected, criteria amended, or reopened. Once implemented
+     the spec is frozen: a changed contract is a new spec that lists
      `supersedes: [SPC-old]`; `codeflow spec status SPC-old superseded --by
      SPC-new` records the link. Keep maintained requirements and executable
      schemas current at their declared authority. -->

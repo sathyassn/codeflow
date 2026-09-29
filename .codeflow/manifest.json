@@ -263,7 +263,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "c87ef9d1b239e1f682ec36986b1e79730ab4e1eeec05a34b957f50a28f4a087a",
+      "sha256": "fd133b21cff0f461b138f6776cba7f6cae00f1eddd062f93eb1e1443ef3c9760",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -329,7 +329,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "d8cb830dbc35089f82c6c51d8a055ca1d839d98a5e30fba35000455b89247e1e",
+      "sha256": "a40e3229e8b8dc471f3109d45888b12ce0a4ebb8cc866cb1de0c61232b22f036",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -941,7 +941,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "c87ef9d1b239e1f682ec36986b1e79730ab4e1eeec05a34b957f50a28f4a087a",
+      "sha256": "fd133b21cff0f461b138f6776cba7f6cae00f1eddd062f93eb1e1443ef3c9760",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1007,7 +1007,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "d8cb830dbc35089f82c6c51d8a055ca1d839d98a5e30fba35000455b89247e1e",
+      "sha256": "a40e3229e8b8dc471f3109d45888b12ce0a4ebb8cc866cb1de0c61232b22f036",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
@@ -1529,7 +1529,7 @@
     "project-management/templates/spec.md": {
       "src": "pm/spec.md.tmpl",
       "ownership": "managed",
-      "sha256": "db1cdaffe0589f4857db715fe06291e0072f61c192a67d9ec2a09fa5d5a509a3",
+      "sha256": "b29c8fa60fac075a8ea416288a2880757f98da1625a74855176cf107a3eff971",
       "exec": false
     },
     "project-management/templates/task.md": {
