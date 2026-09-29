@@ -1497,6 +1497,16 @@ fn judge_range_against(
             None if baseline.is_legacy_blob(record) => continue,
             None => baseline.copies(&record.id),
         };
+        // A spec approval landed on a line by a merge is judged by that
+        // landing's change, never by the whole line (R-32 on a line).
+        let landing = landing_paths(&repo, base, head, record);
+        let context = match &landing {
+            Some(paths) => ChangeContext {
+                changed_paths: Some(paths),
+                ..context
+            },
+            None => context,
+        };
         let judged: Vec<Verdict> = if olds.is_empty() {
             vec![judge_change(None, record, &after, &baseline, context)]
         } else {
@@ -1511,6 +1521,52 @@ fn judge_range_against(
     }
     verdict.sort();
     Ok(verdict)
+}
+
+/// The paths of the landing that brought a spec's approval or supersession
+/// into the range, when that landing is a merge on the first-parent chain
+/// from `head` back to `base`: the merged pull request's own change, judged
+/// as the planning-only change the transition must travel in. `None` when
+/// the transition arrived by a plain commit, or on the working tree, so the
+/// whole range is judged as before.
+fn landing_paths(
+    repo: &Repository,
+    base: &str,
+    head: Option<&str>,
+    record: &RecordView,
+) -> Option<Vec<String>> {
+    let to = record.status.as_str();
+    if record.kind != RecordKind::Spec || !matches!(to, "approved" | "superseded") {
+        return None;
+    }
+    let base = resolve_commit(repo, base)?;
+    let mut commit = repo.find_commit(resolve_commit(repo, head?)?).ok()?;
+    let status_at = |commit: &git2::Commit<'_>| -> Option<String> {
+        let entry = commit.tree().ok()?.get_path(Path::new(&record.path)).ok()?;
+        let blob = entry.to_object(repo).ok()?.into_blob().ok()?;
+        let text = String::from_utf8_lossy(blob.content()).into_owned();
+        RecordView::parse(record.kind, &record.path, &text)
+            .ok()
+            .map(|view| view.status)
+    };
+    while commit.id() != base {
+        let parent = commit.parent(0).ok()?;
+        let arrived =
+            status_at(&commit).as_deref() == Some(to) && status_at(&parent).as_deref() != Some(to);
+        if arrived {
+            if commit.parent_count() < 2 {
+                return None;
+            }
+            return changed_paths(
+                repo,
+                &parent.id().to_string(),
+                Some(&commit.id().to_string()),
+            )
+            .ok();
+        }
+        commit = parent;
+    }
+    None
 }
 
 /// The complete tasks without an acceptance block whose status was not

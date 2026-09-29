@@ -1777,6 +1777,70 @@ fn spec_approval_travels_only_in_a_planning_only_change() {
     assert!(range.is_clean(), "{range:?}");
 }
 
+/// R4 on a line (TSK-184 AC-4): a spec approved by a planning pull request
+/// landed on an integration line travels in that landing, so a later task
+/// merge touching product files does not turn the line's pull request to
+/// main into a product change of the approval. An approval landed by a
+/// merge that also carries product files is still refused.
+#[test]
+fn spec_approval_on_a_line_is_judged_by_its_landing() {
+    let line = "integration/EPC-001-line";
+    let repo = Repo::new();
+    repo.write(SPC_1, &spec("SPC-001", "draft", ""));
+    let base = repo.commit("draft");
+    repo.git(&["switch", "-q", "-c", line]);
+    repo.git(&["switch", "-q", "-c", "plan/approve-spc-001"]);
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    repo.commit("approve in a planning pull request");
+    repo.git(&["switch", "-q", line]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "Merge plan",
+        "plan/approve-spc-001",
+    ]);
+    repo.git(&["switch", "-q", "-c", "task/TSK-001-product"]);
+    repo.write("product.rs", "fn product() {}\n");
+    repo.commit("build the product");
+    repo.git(&["switch", "-q", line]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "Merge task",
+        "task/TSK-001-product",
+    ]);
+    let range = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    assert!(range.is_clean(), "{range:?}");
+
+    // The landing that brought the approval also carries product files.
+    let repo = Repo::new();
+    repo.write(SPC_1, &spec("SPC-001", "draft", ""));
+    let base = repo.commit("draft");
+    repo.git(&["switch", "-q", "-c", line]);
+    repo.git(&["switch", "-q", "-c", "task/TSK-001-mixed"]);
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    repo.commit("approve on the task branch");
+    repo.write("product.rs", "fn product() {}\n");
+    repo.commit("build the product");
+    repo.git(&["switch", "-q", line]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "Merge mixed",
+        "task/TSK-001-mixed",
+    ]);
+    let range = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    let errors = range.errors.join("\n");
+    assert!(errors.contains("planning-only change"), "{errors}");
+    assert!(errors.contains("product.rs"), "{errors}");
+}
+
 /// R5: an unchanged complete task whose consumed spec is superseded in the
 /// same range no longer verifies the epic criterion it serves.
 #[test]
