@@ -1,0 +1,11 @@
+id = "TSK-187"
+uid = "0baa1711-9ea5-4d16-8db7-e249b12b0fee"
+kind = "TSK"
+title = "the guide states the delivery process once and derives its CLI reference"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T17:16:44Z"
+target = "integration/release-3-0-0-r2"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
