@@ -17,12 +17,12 @@ description: Land finished work — docs and capability updates, then a PR throu
    Select the checks from what the change affects and the adopted policy,
    never from the PR's label: a check the project gate requires still runs,
    including for docs-only changes. Report a run as the evidence it is, not
-   invented code coverage or product behavior. Skip only genuinely
+   invented code coverage or product behavior; skip only genuinely
    inapplicable optional categories with an explicit N/A and never turn
-   “not run” into pass. Return only to the failed
-   owner: `cf-plan` for a materially changed contract, the responsible primary/
-   executor via `cf-develop` for an implementation defect, independent review
-   for a review gap, or the docs/evidence owner for documentation and PR-evidence
+   “not run” into pass. Return only to the failed owner: `cf-plan` for a
+   materially changed contract, the responsible primary/executor via
+   `cf-develop` for an implementation defect, independent review for a
+   review gap, or the docs/evidence owner for documentation and PR-evidence
    gaps. Never restart the whole lifecycle or force every failure through
    development.
 2. Same-PR doc mutations (this is how docs stay true):
@@ -44,11 +44,11 @@ description: Land finished work — docs and capability updates, then a PR throu
    impact rules in `references/pr-evidence.md`, which say when to read the
    release policy. Judge compatibility as the git rules' breaking-change rule
    says; a misleading commit type is not proof of compatibility. Reconcile
-   the project's authoritative release input and PR explanation. Where the
-   project adopts same-PR preparation, include the warranted notes and coupled
-   version updates now, reconciled with the current target and published
-   baseline.
-   A reviewed merge is not permission to publish or deploy.
+   the project's authoritative release input and PR explanation; where the
+   project adopts same-PR preparation, include the warranted notes and
+   coupled version updates now, reconciled with the current target and
+   published baseline. A reviewed merge is not permission to publish or
+   deploy.
 5. Apply `cf-editorial-review` where its description triggers it (by
    consequence). It refines the writing but cannot weaken the template,
    evidence, policy, or no-emoji requirements below.
@@ -57,10 +57,9 @@ description: Land finished work — docs and capability updates, then a PR throu
    release notes plainly: simple, straightforward and clear, no mannered
    prose (see `.codeflow/rules/writing.md`), in short prose and bullets.
    Follow the project template and conventional-commit policy; attribute
-   measured evidence to its
-   revision and scope. Missing required evidence keeps the PR draft. Lint the
-   body with `codeflow ci` before pushing and opening the PR. No AI attribution
-   or emoji.
+   measured evidence to its revision and scope. Missing required evidence
+   keeps the PR draft. Lint the body with `codeflow ci` before pushing and
+   opening the PR. No AI attribution or emoji.
 7. After opening, follow
    [references/pr-evidence.md](references/pr-evidence.md), "After opening":
    no polling by default. The builder's PR carries its cited evidence, and
