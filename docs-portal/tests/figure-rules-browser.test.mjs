@@ -391,7 +391,7 @@ test("rule 6 reads a value label past its sixtieth character", { skip: process.p
   } finally { await browser.close(); }
 });
 
-test("the specimens that hold every rule, and the doctrine conflicts the gate names in the rest", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+test("every specimen holds every rule", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
   const css = await sheet();
   const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
   const outcome = {};
@@ -411,8 +411,8 @@ test("the specimens that hold every rule, and the doctrine conflicts the gate na
     "05-state.json": [],
     "06-coverage.json": [],
     "07-extent.json": [],
-    "08-derivation.json": [8],
-    "09-graph.json": [3, 8],
+    "08-derivation.json": [],
+    "09-graph.json": [],
     "10-extent-derived.json": [],
   }, canonicalJson(outcome));
 });

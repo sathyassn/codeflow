@@ -222,7 +222,7 @@
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "38f3c162b155ff6728a41290a9134f83e78ee9872e2a58b88fbd514ce28ded6b"
+      "pristine_sha256": "17407d3ceaa3296685197171b17ae1033d085f3e38e4eecd2a005550f780ed1f"
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
@@ -238,7 +238,7 @@
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "f3fe52a5217968c2adb91b2ad8ebb38425fe12194315b30305c6b0e0d84cec1b"
+      "pristine_sha256": "7cb2977870e204f348598e6c51a56efc7a9629debc37a98ea4a75ea7820f34fb"
     },
     "tests/fixtures/altitude-words.json": {
       "ownership": "managed",
@@ -282,11 +282,11 @@
     },
     "tests/fixtures/figures/08-derivation.json": {
       "ownership": "managed",
-      "pristine_sha256": "acaa4b5ff0b12b3ade21ca6e892c6743717d5f2c55d90d436e0811c51cf801e0"
+      "pristine_sha256": "ac72e525759e22b4ca25c7f4017f06ced5e3d6a6a999b074b008b39b4e9604c3"
     },
     "tests/fixtures/figures/09-graph.json": {
       "ownership": "managed",
-      "pristine_sha256": "fbce933f403dbb3cf1272b639111868c6fcf62ed412f8ac8ee6c7d03180fbf92"
+      "pristine_sha256": "7cb9043d73e2985b2a8826b4f25f18c772fbbd98d1d2a5d8258acf28470c2c8b"
     },
     "tests/fixtures/figures/10-extent-derived.json": {
       "ownership": "managed",
@@ -342,11 +342,11 @@
     },
     "tests/fixtures/figures/rendered/08-derivation.html": {
       "ownership": "managed",
-      "pristine_sha256": "3db35de9d8a27c4e930b4705422df50dc4714b9a0e2ff22207fe85d86aa6934e"
+      "pristine_sha256": "2889fbe2250dca96dc6b50f7358f861dcf8e879bc8441bcd745b736da3809d67"
     },
     "tests/fixtures/figures/rendered/09-graph.html": {
       "ownership": "managed",
-      "pristine_sha256": "8d7ecce88611cbb9250716a0da07b7d36c30af7eb0111bb595a54bd4066d17bc"
+      "pristine_sha256": "0142594f11b1f2860bfc3570dfe913bf049a03700becc1da0bdb337df6146ac8"
     },
     "tests/fixtures/figures/rendered/10-extent-derived.html": {
       "ownership": "managed",

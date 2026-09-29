@@ -92,7 +92,7 @@
         {
           "state": "compares",
           "shape": "path",
-          "d": "M652 150H588",
+          "d": "M652 150H594",
           "square": "end",
           "id": "m4"
         },
@@ -106,7 +106,7 @@
         {
           "state": "compares",
           "shape": "path",
-          "d": "M664 130V80H588",
+          "d": "M664 130V80H594",
           "square": "end",
           "id": "m6"
         },
@@ -147,14 +147,14 @@
           "shape": "rect",
           "x": 426,
           "y": 56,
-          "w": 152,
+          "w": 160,
           "h": 48,
           "rx": 4,
           "id": "m9"
         },
         {
           "text": "generated page",
-          "x": 502,
+          "x": 506,
           "y": 85,
           "anchor": "middle",
           "for": [
@@ -166,14 +166,14 @@
           "shape": "rect",
           "x": 426,
           "y": 132,
-          "w": 152,
+          "w": 160,
           "h": 36,
           "rx": 4,
           "id": "m10"
         },
         {
           "text": "evidence manifest",
-          "x": 502,
+          "x": 506,
           "y": 155,
           "anchor": "middle",
           "style": "mono",
