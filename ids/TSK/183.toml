@@ -1,0 +1,11 @@
+id = "TSK-183"
+uid = "aa002c97-4570-44b4-855a-d89275ff2d09"
+kind = "TSK"
+title = "Fetch the Bitbucket destination when its commit variable is unset"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T02:10:30Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
