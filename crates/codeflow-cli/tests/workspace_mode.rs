@@ -383,6 +383,18 @@ fn journey_the_root_checkout_rule_through_the_real_hooks_and_doctor() {
     );
 }
 
+/// Whether git ignores `path` in `root`, by every rule it reads.
+fn git_ignores(root: &Path, path: &str) -> bool {
+    Command::new("git")
+        .args(["check-ignore", "-q", path])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .expect("git runs")
+        .success()
+}
+
 #[test]
 fn init_workspace_sets_the_root_branch_in_a_policy_without_a_git_object() {
     // A sparse policy is valid; init --workspace must add the key, not
@@ -417,4 +429,60 @@ fn init_workspace_sets_the_root_branch_in_a_policy_without_a_git_object() {
         !said.contains(&format!("is on '{WORKSPACE_ROOT_BRANCH}'")),
         "{said}"
     );
+}
+
+#[test]
+fn init_workspace_makes_a_negated_ignore_line_effective_and_a_rerun_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("workspace"));
+    repo_with_commit(&root.join("nested"));
+    std::fs::write(root.join(".gitignore"), "/nested/\n!/nested/\n").unwrap();
+    git(&root, &["add", ".gitignore"]);
+    git(&root, &["commit", "--quiet", "-m", "ignore"]);
+    assert!(!git_ignores(&root, "nested"));
+
+    let first = codeflow(&root, &["init", "--yes", "--minimal", "--workspace"]);
+    let said = both(&first);
+    assert!(first.status.success(), "{said}");
+    assert!(
+        said.contains("ignored the nested git repository /nested/ in .gitignore"),
+        "{said}"
+    );
+    assert!(git_ignores(&root, "nested"));
+    let written = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+
+    let again = codeflow(&root, &["init", "--yes", "--minimal", "--workspace"]);
+    let said = both(&again);
+    assert!(again.status.success(), "{said}");
+    assert!(
+        said.contains("the nested git repository 'nested' is already in .gitignore"),
+        "{said}"
+    );
+    assert!(git_ignores(&root, "nested"));
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitignore")).unwrap(),
+        written
+    );
+}
+
+#[test]
+fn init_workspace_ignores_a_nested_repository_under_a_locally_excluded_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("workspace"));
+    repo_with_commit(&root.join("group/nested"));
+    std::fs::write(root.join(".git/info/exclude"), "/group/\n").unwrap();
+
+    let doctor = codeflow(&root, &["doctor", "--check", "repo-integrity"]);
+    let said = both(&doctor);
+    assert!(said.contains("group/nested"), "{said}");
+
+    let out = codeflow(&root, &["init", "--yes", "--minimal", "--workspace"]);
+    let said = both(&out);
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("ignored the nested git repository /group/nested/ in .gitignore"),
+        "{said}"
+    );
+    let ignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert!(ignore.lines().any(|l| l == "/group/nested/"), "{ignore}");
 }

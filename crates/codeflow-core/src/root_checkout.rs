@@ -558,11 +558,26 @@ pub struct NestedRepo {
 }
 
 impl NestedRepo {
-    /// The `.gitignore` line that ignores it.
+    /// The `.gitignore` line that ignores it, its path escaped so git reads
+    /// each character literally.
     #[must_use]
     pub fn ignore_line(&self) -> String {
-        format!("/{}/", self.path)
+        format!("/{}/", escape_ignore_path(&self.path))
     }
+}
+
+/// `path` as literal `.gitignore` pattern text: the glob characters and the
+/// backslash are escaped. The line ends in `/`, so git trims no space from
+/// it, and it starts with `/`, so a leading `!` or `#` is literal already.
+fn escape_ignore_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if matches!(c, '*' | '?' | '[' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Run git in `root` with `input` on stdin; stdout on success.
@@ -589,21 +604,82 @@ fn git_stdin(root: &Path, args: &[&str], input: &[u8]) -> Option<Vec<u8>> {
 /// For each relative directory path, the ignore file that matches it, if
 /// any, from one `git check-ignore -v -n` call.
 fn ignore_sources(root: &Path, dirs: &[String]) -> Vec<Option<String>> {
+    check_ignore(root, &[], dirs).unwrap_or_else(|| vec![None; dirs.len()])
+}
+
+/// A throwaway repository with an empty exclude file, removed on drop.
+struct ScratchRepo(PathBuf);
+
+impl ScratchRepo {
+    fn new() -> Option<Self> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("codeflow-ignore-{}-{nanos}", std::process::id()));
+        let scratch = Self(dir);
+        let made = crate::git::command()
+            .args(["init", "--quiet"])
+            .arg(&scratch.0)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .ok()?
+            .success();
+        made.then_some(scratch)
+    }
+}
+
+impl Drop for ScratchRepo {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Like [`ignore_sources`], but reading only the `.gitignore` files in the
+/// working tree: the rules a clone shares once they are committed. git runs
+/// against a scratch repository, so this repository's `.git/info/exclude`
+/// and any global excludes file take no part. Falls back to
+/// [`ignore_sources`] when no scratch repository can be made.
+fn tree_ignore_sources(root: &Path, dirs: &[String]) -> Vec<Option<String>> {
+    let scratch = ScratchRepo::new();
+    let git_dir = scratch
+        .as_ref()
+        .and_then(|s| s.0.join(".git").to_str().map(str::to_string));
+    let work_tree = root.to_str();
+    match (git_dir, work_tree) {
+        (Some(git_dir), Some(work_tree)) => check_ignore(
+            root,
+            &[
+                "--git-dir",
+                &git_dir,
+                "--work-tree",
+                work_tree,
+                "-c",
+                "core.excludesFile=",
+            ],
+            dirs,
+        )
+        .unwrap_or_else(|| ignore_sources(root, dirs)),
+        _ => ignore_sources(root, dirs),
+    }
+}
+
+/// One `git <prefix> check-ignore -v -n` call over `dirs`: for each, the
+/// ignore file whose positive rule decides it. `None` when git fails.
+fn check_ignore(root: &Path, prefix: &[&str], dirs: &[String]) -> Option<Vec<Option<String>>> {
     if dirs.is_empty() {
-        return Vec::new();
+        return Some(Vec::new());
     }
     let mut input = Vec::new();
     for dir in dirs {
         input.extend_from_slice(dir.as_bytes());
         input.push(0);
     }
-    let Some(out) = git_stdin(
-        root,
-        &["check-ignore", "-v", "-n", "--no-index", "--stdin", "-z"],
-        &input,
-    ) else {
-        return vec![None; dirs.len()];
-    };
+    let mut args = prefix.to_vec();
+    args.extend(["check-ignore", "-v", "-n", "--no-index", "--stdin", "-z"]);
+    let out = git_stdin(root, &args, &input)?;
     // Records of four NUL-terminated fields: source, line, pattern, path.
     let fields: Vec<&[u8]> = out.split(|b| *b == 0).collect();
     let mut by_path = std::collections::HashMap::new();
@@ -618,9 +694,11 @@ fn ignore_sources(root: &Path, dirs: &[String]) -> Vec<Option<String>> {
         let ignored = !source.is_empty() && !pattern.starts_with('!');
         by_path.insert(path, ignored.then_some(source));
     }
-    dirs.iter()
-        .map(|d| by_path.get(d).cloned().flatten())
-        .collect()
+    Some(
+        dirs.iter()
+            .map(|d| by_path.get(d).cloned().flatten())
+            .collect(),
+    )
 }
 
 /// Classify an ignore source: a tracked `.gitignore` in the tree, or a
@@ -713,7 +791,7 @@ fn stray_gitlinks(repo: &git2::Repository, submodules: &BTreeSet<String>) -> Vec
 
 /// Find the nested repositories under the root checkout at `root`, by
 /// git's own marker, at any depth. The walk skips `.git`, `.worktrees/`,
-/// registered submodules, symbolic links and folders an ignore rule covers,
+/// registered submodules, symbolic links and folders a tracked ignore rule covers,
 /// and does not descend into a nested repository once found. Linked
 /// worktrees of this repository are not nested repositories.
 #[must_use]
@@ -755,6 +833,7 @@ pub fn nested_repositories(repo: &git2::Repository) -> Vec<NestedRepo> {
         let mut next = Vec::new();
         for (rel, source) in candidates.into_iter().zip(sources) {
             let abs = root.join(&rel);
+            let ignore = classify_source(repo, source.as_deref());
             if let Some(marker) = git_marker(&abs) {
                 if marker.is_file() && is_own_worktree(&marker, &common_dir) {
                     continue;
@@ -765,17 +844,40 @@ pub fn nested_repositories(repo: &git2::Repository) -> Vec<NestedRepo> {
                     NestedKind::GitRepository
                 };
                 found.push(NestedRepo {
-                    ignore: classify_source(repo, source.as_deref()),
+                    ignore,
                     path: rel,
                     kind,
                 });
-            } else if source.is_none() {
+            } else if ignore != IgnoreState::Tracked {
+                // Only a shared rule may hide a folder: one ignored by a
+                // local exclude, a global excludes file or an uncommitted
+                // .gitignore is still searched.
                 next.push(rel);
             }
         }
         level = next;
     }
+    prefer_shared_rules(repo, &root, &mut found);
     found
+}
+
+/// Classify each found repository by the working tree's own `.gitignore`
+/// files first: a local rule on a parent folder hides from git the shared
+/// rule that a clone would apply, so the shared one decides when it
+/// exists, and the local rule only when no shared rule matches.
+fn prefer_shared_rules(repo: &git2::Repository, root: &Path, found: &mut [NestedRepo]) {
+    let pending: Vec<usize> = (0..found.len())
+        .filter(|i| found[*i].ignore != IgnoreState::Tracked)
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+    let paths: Vec<String> = pending.iter().map(|i| found[*i].path.clone()).collect();
+    for (i, source) in pending.into_iter().zip(tree_ignore_sources(root, &paths)) {
+        if source.is_some() {
+            found[i].ignore = classify_source(repo, source.as_deref());
+        }
+    }
 }
 
 /// Doctor's findings for nested repositories.
@@ -1434,19 +1536,22 @@ pub fn policy_with_root_branch(text: &str, branch: &str) -> Result<Option<String
         .ok_or_else(|| "the key could not be written in place".to_string())
 }
 
-/// The `.gitignore` text with a line for each nested repository that no
-/// tracked `.gitignore` ignores, under one comment. `None` when every one
-/// is already ignored.
+/// Whether a rule other clones share keeps `n` out of the index: a tracked
+/// `.gitignore`, or the root `.gitignore` this run writes for the user to
+/// commit.
+fn shared_ignore(n: &NestedRepo) -> bool {
+    match &n.ignore {
+        IgnoreState::Tracked => true,
+        IgnoreState::LocalOnly(source) => source == ".gitignore",
+        IgnoreState::NotIgnored => false,
+    }
+}
+
+/// The `.gitignore` text with a line for each of `nested`, under one
+/// comment. `None` when `nested` is empty.
 #[must_use]
 pub fn gitignore_with_nested(text: &str, nested: &[NestedRepo]) -> Option<String> {
-    let lines: BTreeSet<&str> = text.lines().map(str::trim).collect();
-    let missing: Vec<String> = nested
-        .iter()
-        .filter(|n| n.ignore != IgnoreState::Tracked)
-        .map(NestedRepo::ignore_line)
-        .filter(|l| !lines.contains(l.as_str()))
-        .collect();
-    if missing.is_empty() {
+    if nested.is_empty() {
         return None;
     }
     let mut out = text.to_string();
@@ -1459,8 +1564,8 @@ pub fn gitignore_with_nested(text: &str, nested: &[NestedRepo]) -> Option<String
     out.push_str(
         "# nested repositories, each its own git repository (codeflow init --workspace)\n",
     );
-    for line in missing {
-        out.push_str(&line);
+    for n in nested {
+        out.push_str(&n.ignore_line());
         out.push('\n');
     }
     Some(out)
@@ -1522,15 +1627,14 @@ pub fn finish(root: &Path, branch: BranchStep) -> Result<WorkspaceReport, Worksp
             "rerun codeflow init --workspace".to_string(),
         )
     })?;
-    let nested = nested_repositories(&repo);
+    let (already_ignored, ignored): (Vec<_>, Vec<_>) = nested_repositories(&repo)
+        .into_iter()
+        .partition(shared_ignore);
     let gitignore = root.join(".gitignore");
     let current = std::fs::read_to_string(&gitignore).unwrap_or_default();
-    let present: BTreeSet<&str> = current.lines().map(str::trim).collect();
-    let (ignored, already_ignored): (Vec<_>, Vec<_>) = nested.into_iter().partition(|n| {
-        n.ignore != IgnoreState::Tracked && !present.contains(n.ignore_line().as_str())
-    });
     if let Some(updated) = gitignore_with_nested(&current, &ignored) {
         std::fs::write(&gitignore, updated).map_err(|e| io("write .gitignore", e))?;
+        verify_ignored(root, &ignored)?;
     }
     Ok(WorkspaceReport {
         branch,
@@ -1538,6 +1642,32 @@ pub fn finish(root: &Path, branch: BranchStep) -> Result<WorkspaceReport, Worksp
         ignored,
         already_ignored,
     })
+}
+
+/// Check through git that the root `.gitignore` now ignores each of
+/// `nested`: a later rule, such as a negation in a deeper `.gitignore`, can
+/// still un-ignore one.
+fn verify_ignored(root: &Path, nested: &[NestedRepo]) -> Result<(), WorkspaceError> {
+    let paths: Vec<String> = nested.iter().map(|n| n.path.clone()).collect();
+    let still: Vec<&str> = paths
+        .iter()
+        .zip(tree_ignore_sources(root, &paths))
+        .filter(|(_, source)| source.as_deref() != Some(".gitignore"))
+        .map(|(path, _)| path.as_str())
+        .collect();
+    if still.is_empty() {
+        return Ok(());
+    }
+    Err(stop(
+        format!(
+            "codeflow init --workspace added the nested repositories to .gitignore, but git \
+             still does not ignore {} through it",
+            still.join(", ")
+        ),
+        "find the rule that wins with `git check-ignore -v --no-index <path>`, remove it, then \
+         rerun codeflow init --workspace"
+            .to_string(),
+    ))
 }
 
 impl fmt::Display for WorkspaceReport {

@@ -938,6 +938,86 @@ fn a_folder_already_ignored_is_not_searched() {
 }
 
 #[test]
+fn a_parent_ignored_only_locally_is_still_searched() {
+    // Only a tracked .gitignore may hide a folder from the search: a local
+    // exclude, a global excludes file or an uncommitted .gitignore is not
+    // shared, so the nested repository under it is still found.
+    let dir = tempfile::tempdir().unwrap();
+    let global = dir.path().join("global-excludes");
+    std::fs::write(&global, "/group/\n").unwrap();
+    for (i, source) in [".git/info/exclude", ".gitignore", "global"]
+        .into_iter()
+        .enumerate()
+    {
+        let root = repo_with_commit(&dir.path().join(format!("u{i}")));
+        repo_with_commit(&root.join("group/nested"));
+        if source == "global" {
+            git(
+                &root,
+                &["config", "core.excludesFile", global.to_str().unwrap()],
+            );
+        } else {
+            std::fs::write(root.join(source), "/group/\n").unwrap();
+        }
+        let nested = found(&root);
+        assert_eq!(nested.len(), 1, "{source}: {nested:?}");
+        assert_eq!(nested[0].path, "group/nested", "{source}");
+        assert!(
+            matches!(nested[0].ignore, IgnoreState::LocalOnly(_)),
+            "{source}: {:?}",
+            nested[0].ignore
+        );
+    }
+}
+
+/// Whether git ignores `path` in `root` (`git check-ignore`).
+fn git_ignores(root: &Path, path: &str) -> bool {
+    crate::git::command()
+        .args(["check-ignore", "-q", "--no-index", path])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .expect("git runs")
+        .success()
+}
+
+#[cfg(unix)]
+#[test]
+fn ignore_lines_match_the_literal_folder_name_through_git() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("u"));
+    let names = [
+        "project[1]",
+        "a*b",
+        "q?x",
+        "back\\slash",
+        "!bang",
+        "#hash",
+        "trail ",
+    ];
+    for name in names {
+        repo_with_commit(&root.join(name));
+    }
+    // Plain folders the glob reading of those names would also match.
+    for decoy in ["project1", "aXb", "qZx"] {
+        std::fs::create_dir_all(root.join(decoy)).unwrap();
+        std::fs::write(root.join(decoy).join("f"), "f\n").unwrap();
+    }
+    let lines: String = found(&root)
+        .iter()
+        .map(|n| n.ignore_line() + "\n")
+        .collect();
+    std::fs::write(root.join(".gitignore"), lines).unwrap();
+    for name in names {
+        assert!(git_ignores(&root, name), "{name} is not ignored");
+    }
+    for decoy in ["project1", "aXb", "qZx"] {
+        assert!(!git_ignores(&root, decoy), "{decoy} is ignored");
+    }
+}
+
+#[test]
 fn linked_worktrees_and_the_worktrees_folder_are_not_nested_repositories() {
     let dir = tempfile::tempdir().unwrap();
     let root = repo_with_commit(&dir.path().join("u"));
@@ -1568,6 +1648,60 @@ fn finish_on_a_policy_without_a_git_object_sets_the_key() {
     assert!(report.policy_changed);
     let (policy, _) = crate::hooks::policy::Policy::load_effective(&root);
     assert_eq!(policy.git.root_branch, WORKSPACE_ROOT_BRANCH);
+}
+
+#[test]
+fn finish_makes_an_existing_but_negated_ignore_line_effective() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("u"));
+    repo_with_commit(&root.join("nested"));
+    std::fs::write(root.join(".gitignore"), "/nested/\n!/nested/\n").unwrap();
+    git(&root, &["add", ".gitignore"]);
+    git(&root, &["commit", "--quiet", "-m", "ignore"]);
+    write_policy(&root, "{\n  \"git\": {}\n}\n");
+    let report = finish(&root, prepare_branch(&root, &GitPolicy::default()).unwrap()).unwrap();
+    assert_eq!(report.ignored.len(), 1, "{report:?}");
+    assert!(git_ignores(&root, "nested"));
+    let written = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+    let again = finish(&root, prepare_branch(&root, &umbrella_policy()).unwrap()).unwrap();
+    assert!(again.ignored.is_empty(), "{again:?}");
+    assert_eq!(again.already_ignored.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitignore")).unwrap(),
+        written
+    );
+    assert!(git_ignores(&root, "nested"));
+}
+
+#[test]
+fn finish_ignores_a_nested_repository_under_a_locally_ignored_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("u"));
+    repo_with_commit(&root.join("group/nested"));
+    std::fs::write(root.join(".git/info/exclude"), "/group/\n").unwrap();
+    write_policy(&root, "{\n  \"git\": {}\n}\n");
+    let report = finish(&root, prepare_branch(&root, &GitPolicy::default()).unwrap()).unwrap();
+    assert_eq!(
+        report
+            .ignored
+            .iter()
+            .map(|n| n.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["group/nested"]
+    );
+    let ignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert!(ignore.lines().any(|l| l == "/group/nested/"), "{ignore}");
+    // A rerun, before and after the commit, adds nothing.
+    let again = finish(&root, prepare_branch(&root, &umbrella_policy()).unwrap()).unwrap();
+    assert!(again.ignored.is_empty(), "{again:?}");
+    git(&root, &["add", ".gitignore"]);
+    git(&root, &["commit", "--quiet", "-m", "ignore"]);
+    let nested = found(&root);
+    assert_eq!(nested[0].ignore, IgnoreState::Tracked, "{nested:?}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitignore")).unwrap(),
+        ignore
+    );
 }
 
 // ---- plain init and update --------------------------------------------------
