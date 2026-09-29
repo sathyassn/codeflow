@@ -1003,7 +1003,8 @@ fn string_map(value: &Value) -> bool {
 /// Validate `git.automation_profiles`: every entry an object with a
 /// non-empty `name`, a non-empty `actors` list of non-empty strings, a valid
 /// non-empty `branch_pattern` glob, an optional `sections` map of heading to
-/// content, and no other field. A malformed profile would otherwise be
+/// content, an optional non-empty `task` unit name, and no other field. A
+/// malformed profile would otherwise be
 /// dropped by the loader and its bot would fail, or worse, a typo would read
 /// as a wider pattern.
 fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
@@ -1024,16 +1025,26 @@ fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
         for key in obj.keys() {
             if !matches!(
                 key.as_str(),
-                "name" | "actors" | "branch_pattern" | "sections"
+                "name" | "actors" | "branch_pattern" | "sections" | "task"
             ) {
                 nested_error(
                     errors,
                     &at,
                     &format!(
-                        "unknown field `{key}`; expected name, actors, branch_pattern, sections"
+                        "unknown field `{key}`; expected name, actors, branch_pattern, sections, task"
                     ),
                 );
             }
+        }
+        if obj
+            .get("task")
+            .is_some_and(|task| task.as_str().is_none_or(|t| t.trim().is_empty()))
+        {
+            nested_error(
+                errors,
+                &at,
+                "`task` must be a non-empty string when present",
+            );
         }
         if obj
             .get("name")

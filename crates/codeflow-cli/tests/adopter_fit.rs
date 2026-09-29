@@ -116,10 +116,11 @@ fn shipped_policy() -> serde_json::Value {
 const RELEASE_IMPACT: &str =
     "- Impact: patch\n- Breaking: no\n- Rationale: dependency update only.\n- Migration: none";
 
-/// The shipped policy plus a Dependabot and a Changesets profile. The
-/// Dependabot profile supplies every section except Release impact when
-/// `omit_release_impact` is set, so its body misses that section.
-fn policy_with_profiles(omit_release_impact: bool) -> String {
+/// The shipped policy plus a Dependabot and a Changesets profile, each
+/// naming the unit its pull requests are. The Dependabot profile supplies
+/// every section except Reviews when `omit_reviews` is set, so its body
+/// misses that required section.
+fn policy_with_profiles(omit_reviews: bool) -> String {
     let mut policy = shipped_policy();
     let mut dependabot = serde_json::json!({
         "Summary": "Automated dependency update opened by Dependabot.",
@@ -128,8 +129,8 @@ fn policy_with_profiles(omit_release_impact: bool) -> String {
         "Reviews": "None: automated update, reviewed at merge.",
         "Release impact": RELEASE_IMPACT,
     });
-    if omit_release_impact {
-        dependabot.as_object_mut().unwrap().remove("Release impact");
+    if omit_reviews {
+        dependabot.as_object_mut().unwrap().remove("Reviews");
     }
     policy["git"]["automation_profiles"] = serde_json::json!([
         {
@@ -137,11 +138,13 @@ fn policy_with_profiles(omit_release_impact: bool) -> String {
             "actors": ["dependabot[bot]"],
             "branch_pattern": "dependabot/**",
             "sections": dependabot,
+            "task": "dependency update",
         },
         {
             "name": "changesets",
             "actors": ["github-actions[bot]"],
             "branch_pattern": "changeset-release/*",
+            "task": "release pull request",
             "sections": {
                 "Summary": "Release pull request opened by the Changesets action.",
                 "Changes": "- version bumps and changelog entries listed below",
@@ -414,7 +417,7 @@ fn a_bot_body_missing_a_section_fails_for_every_actor() {
         let all = text(&out);
         assert_eq!(out.status.code(), Some(1), "{actor}: {all}");
         assert!(
-            all.contains("missing required section '## Release impact'"),
+            all.contains("missing required section '## Reviews'"),
             "{actor}: {all}"
         );
     }
@@ -428,6 +431,34 @@ fn a_bot_body_missing_a_section_fails_for_every_actor() {
     let all = text(&out);
     assert!(!all.contains("git.branch_naming [block]"), "{all}");
     assert!(all.contains("1 blocking"), "{all}");
+}
+
+/// A profile that names no unit supplies no `Task:` line, so the bot's pull
+/// request is refused like any other body without one (TSK-184).
+#[test]
+fn a_profile_without_a_unit_name_leaves_the_bot_pr_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut policy: serde_json::Value = serde_json::from_str(&policy_with_profiles(false)).unwrap();
+    policy["git"]["automation_profiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("task");
+    bot_repo(
+        dir.path(),
+        &serde_json::to_string_pretty(&policy).unwrap(),
+        DEPENDABOT_BRANCH,
+        DEPENDABOT_COMMIT,
+    );
+    let out = ci_as(
+        dir.path(),
+        "dependabot[bot]",
+        DEPENDABOT_BRANCH,
+        DEPENDABOT_BODY,
+    );
+    let all = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{all}");
+    assert!(all.contains("work.classification"), "{all}");
+    assert!(!all.contains("`Task:"), "{all}");
 }
 
 #[test]
@@ -596,10 +627,10 @@ const PROJECT_TEMPLATE: &str = "## Description\n\n<!-- What and why. -->\n\n## C
 const TEMPLATE_PATH: &str = ".github/PULL_REQUEST_TEMPLATE.md";
 
 /// A PR body written in the project's template.
-const PROJECT_BODY: &str = "## Description\n\nAdds the widget endpoint.\n\n## Changes\n\n- add the endpoint\n\n## How has this been tested?\n\nUnit tests pass locally.\n\n## Checklist\n\nNone: reviewed by the team.\n\n## Release notes\n\n- Impact: minor\n- Breaking: no\n- Rationale: new endpoint.\n- Migration: none\n";
+const PROJECT_BODY: &str = "Task: widget endpoint\n\n## Description\n\nAdds the widget endpoint.\n\n## Changes\n\n- add the endpoint\n\n## How has this been tested?\n\nUnit tests pass locally.\n\n## Checklist\n\nNone: reviewed by the team.\n\n## Release notes\n\n- Impact: minor\n- Breaking: no\n- Rationale: new endpoint.\n- Migration: none\n";
 
 /// A PR body written in `CodeFlow`'s shipped sections.
-const SHIPPED_BODY: &str = "## Summary\n\nAdds the widget endpoint.\n\n## Changes\n\n- add the endpoint\n\n## Testing\n\nUnit tests pass locally.\n\n## Reviews\n\nNone: reviewed by the team.\n\n## Release impact\n\n- Impact: minor\n- Breaking: no\n- Rationale: new endpoint.\n- Migration: none\n";
+const SHIPPED_BODY: &str = "Task: widget endpoint\n\n## Summary\n\nAdds the widget endpoint.\n\n## Changes\n\n- add the endpoint\n\n## Testing\n\nUnit tests pass locally.\n\n## Reviews\n\nNone: reviewed by the team.\n\n## Release impact\n\n- Impact: minor\n- Breaking: no\n- Rationale: new endpoint.\n- Migration: none\n";
 
 /// An existing repository with a kept template and, when `prior_policy` is
 /// given, an existing `CodeFlow` policy file (an upgrade).
@@ -929,7 +960,7 @@ fn accepted_mapping_checks_the_template_headings_at_block() {
 fn refused_mapping_appends_the_headings_and_checks_the_shipped_ones() {
     let dir = decided("refuse");
     let template = std::fs::read_to_string(dir.path().join(TEMPLATE_PATH)).unwrap();
-    for heading in ["Summary", "Reviews", "Release impact", "Testing"] {
+    for heading in ["Summary", "Reviews", "Testing"] {
         assert!(
             template.contains(&format!("\n## {heading}\n")),
             "{template}"
@@ -953,7 +984,7 @@ fn custom_mapping_checks_the_policy_list_the_project_sets() {
     // The reviewed human change: the project's own section list.
     let path = dir.path().join(".codeflow/policy.json");
     let edited = std::fs::read_to_string(&path).unwrap().replace(
-        "\"pr_required_sections\": [\"Summary\", \"Changes\", \"Reviews\", \"Release impact\"]",
+        "\"pr_required_sections\": [\"Summary\", \"Changes\", \"Reviews\"]",
         "\"pr_required_sections\": [\"Description\", \"Changes\", \"Checklist\", \"Release notes\"]",
     ).replace(
         "\"pr_code_sections\": [\"Testing\"]",

@@ -265,6 +265,8 @@ pub fn run(args: &CiArgs) -> i32 {
         pr_body.is_some(),
     );
     let git = &adoption.git;
+    // A trusted profile names the unit before classification reads the body.
+    let pr_body = pr_body.map(|body| adopter::supply_task(adoption.profile.as_ref(), &body));
     tagged.extend(
         adoption
             .violations

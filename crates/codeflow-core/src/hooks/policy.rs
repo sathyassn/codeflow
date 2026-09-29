@@ -88,6 +88,10 @@ pub struct AutomationProfile {
     pub branch_pattern: String,
     #[serde(default)]
     pub sections: std::collections::BTreeMap<String, String>,
+    /// The unit name the profile supplies as the pull request's `Task:`
+    /// line when the bot body has none; a bot never names a task record.
+    #[serde(default)]
+    pub task: Option<String>,
 }
 
 impl AutomationProfile {
