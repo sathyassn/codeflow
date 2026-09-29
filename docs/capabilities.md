@@ -216,7 +216,7 @@ Other checks on these planes:
 |---|---|---|
 | Unresolved conflict markers (TSK-170) | `git.conflict_markers`, block | The lines a change adds to a text file: in pre-commit over the staged diff, and in `codeflow ci` over the range, which also catches a marker left while resolving `git rebase --continue`. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in `.gitattributes` |
 | En and em dashes (ADR-0067) | `policy_characters`, warn; CodeFlow's own policy sets block | Added lines. The scan skips a file only when its bytes equal the whole-file managed asset the running binary ships for that path, so unmodified scaffold content never trips it and a project record proves nothing |
-| Pull request sections by change class (TSK-135) | `pr_sections` | Read from one checked merge-base tree diff that includes merge resolutions, deletions, both rename sides and file modes. A range of only regular Markdown under `docs/` or `project-management/`, outside every shared path set (product and watched contract paths from the checkout and the target, shipped templates, the record schema, dependency manifests, hooks, instructions and CI), needs Summary and Changes, under a mapped heading where the project accepted a mapping. An absent Release impact there reads as no impact unless a commit is marked breaking. A range that cannot be listed is code |
+| Pull request sections by change class (TSK-135) | `pr_sections` | Read from one checked merge-base tree diff that includes merge resolutions, deletions, both rename sides and file modes. A range of only regular Markdown under `docs/` or `project-management/`, outside every shared path set (product and watched contract paths from the checkout and the target, shipped templates, the record schema, dependency manifests, hooks, instructions and CI), needs Summary and Changes, under a mapped heading where the project accepted a mapping. An absent Release impact there reads as no impact unless a commit is marked breaking. The Release impact section is required only on a pull request into a protected branch or one that carries a breaking commit; elsewhere it is optional and checked when present (ADR-0076). A range that cannot be listed is code |
 | Local release state | `release.backend = "codeflow"` with `scripts/release.py`, for a project that adopted CodeFlow's release calculator | Pre-push runs the preflight for each pushed branch: a warning for a behaviour change with no pending entry, a block only for a push that breaks a tree its base kept valid. `codeflow integrate` runs the structural state check in its test stage. Both say what was not checked against the host, and the pull request's `release impact` job stays the gate. `codeflow ci` reads the Release impact block with the calculator's parser, and both pass one shared fixture set. The release jobs live in the project's own workflow, never in the managed CI file |
 
 | Refusal record and report | Behaviour |
@@ -298,9 +298,9 @@ epics: [EPC-001]
 adrs: [ADR-0021, ADR-0031]
 ```
 
-`codeflow test [--mode full|quick|essential] [--strict]` runs the generic test
-engine against the targets in `.codeflow/test-config.json` or a detected
-stack. With no stack detected it is a loud no-op that exits 0, and `--strict`
+`codeflow test [--mode full|quick|essential] [--strict] [--since <rev>] [--all]`
+runs the generic test engine against the targets in `.codeflow/test-config.json`
+or a detected stack. With no stack detected it is a loud no-op that exits 0, and `--strict`
 turns that into a non-zero exit for unattended callers. With a stack it is a
 real gate, re-run in CI. Coverage thresholds count toward the verdict
 (ADR-0021). `codeflow test setup` fills absent configs and never auto-replaces
@@ -317,9 +317,13 @@ populated ones.
 
 | Full gate | Behaviour |
 |---|---|
+| Scheduling | a target may declare `requires`, `outputs`, `narrow` inputs and `exclusive`: producers and prerequisites run first, targets with no producer and consumer relation run in parallel up to `max_parallel`, a dependent of a red target reports "not run: prerequisite failed", and a missing or cyclic prerequisite fails the run before any target starts. The run names its candidate tree after the producers ran and fails when generation changed tracked bytes |
+| Change-aware selection | a target is skipped only when its declared inputs are unchanged since a `--since` base that has a recorded green run for the same config; an unmatched path, a Rust, asset, build, config or workflow change, a rename or deletion, no base, and `--all` (the epic close) run every target, and the run prints what it selected and skipped and why |
+| Preflight | refuses before any target when the temp directory is not writable, a configured lock cannot be taken, or a tool a selected target needs is missing |
 | Concurrency | one full gate runs at a time on a machine; a second refuses, naming the holder |
 | Cargo | a gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the worktree |
-| Progress | each target prints a start line on stderr as it begins |
+| Progress | each target prints a start line and a completion line on stderr |
+| Result artifact | a full run writes a result bound to its revision, tree hash and config digest and copies it to `~/.codeflow/gate-runs/<repo>/<run-id>/`, outside any worktree, for pull request bodies to cite. CodeFlow's own gate runs the Rust suite once, instrumented, and its journey check reads that run's results |
 | Killed gate on Unix | the lock stays held until the target's process group exits, so no second gate runs beside the target |
 | Killed gate on Windows | the target's job object ends its process tree with the gate; if Windows cannot put a suspended target in that job, it ends the target and reports a failed test before the target command runs |
 
@@ -441,9 +445,14 @@ epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, 
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060, ADR-0069]
 ```
 
-`/cf-model-orchestrator` is the host-neutral default for every non-trivial
-repository task. It selects the smallest complete outcome mode, so research or
-planning work stops before implementation.
+`/cf-model-orchestrator` is the host-neutral entry for routed repository
+work, decided by touched paths: adopter-facing paths, research that will
+drive such a change, and plan, design, security or irreversible work. It
+selects the smallest complete outcome mode, so research or planning work
+stops before implementation. Planning happens once at the breakdown, each
+task lands through one pull request and one review, and reviewed heads land
+in small batches with one full gate (ADR-0076); the flow is on
+[how work moves to main](delivery.md).
 Both seats independently research, analyze risks, and draft complete plans from
 the same immutable brief before either sees the other's conclusions.
 Claude then leads design. The host reconciles a versioned plan that names
@@ -455,11 +464,11 @@ The work records a plan produces are judged by one core (SPC-013):
 
 | Work record rule | Behaviour |
 |---|---|
-| Planning anchor | `codeflow work start` checks the anchor of the task the branch carries on any work prefix except `plan/` and `integration/`; CI applies the same read-only merge-base check once per pull request, and the per-commit hook no longer does. Both report at the `git.work_planning` level, `block` by default or `warn` |
-| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a direct change, planning-only, an epic's integration line or an automation profile |
+| Planning anchor | `codeflow work start` checks the anchor of the task the branch carries on any work prefix except `plan/` and `integration/`: the epic's planning change, or the record at head for a standalone task whose record arrives in its own pull request; CI applies the same read-only merge-base check once per pull request, and the per-commit hook no longer does. Both report at the `git.work_planning` level, `block` by default or `warn`. A reviewed but incomplete predecessor is accepted only through `--on TSK-NNN@<sha>` |
+| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, an epic's planning-only range, an epic's integration line or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer |
 | Readiness | one readiness core judges a task for `work next`, `work claim`, `work start`, `status`, `orient` and CI |
 | Record status | `task status`, `epic status` and `spec status` move records only by legal transitions; the same judge rules on hand edits (`validate --docs --since <ref>`) and on each record a pull request changes |
-| Completion and release | a completion is bound to the reviewed commit, and on a release branch each change is judged where it was introduced |
+| Completion and release | a completion is bound to the reviewed commit, at a batch landing at the commit that introduced its block; on a release branch each change is judged where it was introduced |
 | Release integration workflow | CodeFlow's own workflow imports verified epic-line tips into the release branch; it is not a task pull request gate and is not installed for adopters |
 
 Detail:
