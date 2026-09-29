@@ -71,8 +71,14 @@ class GateContracts(unittest.TestCase):
                 for dep in targets[node].get('requires', []): visit(dep)
             visit(name)
             return found
-        for name in ['rust-build', 'codeflow-bin', 'rust-coverage', 'rust-doctest', 'rust-clippy', 'rustdoc', 'docs-validation', 'docs-portal', 'journey-gate', 'cf-present-qualification', 'present-browser', 'read-benchmark']:
+        for name in ['rust-build', 'codeflow-bin', 'rust-coverage', 'rust-doctest', 'rustdoc', 'docs-validation', 'docs-portal', 'journey-gate', 'cf-present-qualification', 'present-browser', 'read-benchmark']:
             self.assertIn('present-web-build', closure(name), name)
+        # The quick gate stays light: no quick target pulls in a build producer
+        # (fmt and clippy need no web build; there is no present build.rs).
+        quick = {name for name, t in targets.items() if 'quick' in t['modes']}
+        self.assertEqual(quick, {'rust-format', 'rust-clippy', 'gate-parity', 'skill-triggers', 'herdr-delivery'})
+        for name in quick:
+            self.assertLessEqual(closure(name), quick, name)
         for name in ['present-browser', 'read-benchmark', 'present-web-build']:
             self.assertTrue(targets[name]['exclusive'], name)
         self.assertEqual(targets['journey-gate']['requires'], ['rust-coverage'])
