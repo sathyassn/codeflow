@@ -85,7 +85,7 @@ impl History {
 }
 
 fn command(root: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .args(args)
         .current_dir(root)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
