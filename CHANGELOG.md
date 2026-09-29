@@ -878,6 +878,15 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **doctor claims the CI pin only for a shipped install.** The
+  `ci-perimeter` check reported that CI installs the version the target
+  pins, verified against its `sha256.sum`, for any CI file that mentioned
+  `scaffold_version`, even in a comment. It now makes that claim only when
+  the file carries a shipped template's target-pinned install unchanged; a
+  comment, a pin read from the head, a removed checksum check or an edited
+  install is reported as one doctor cannot verify.
+
+<!-- codeflow:release-impact patch -->
 - **The writing reference carries every reply duty.** The rule map sends an
   agent about to report to `.codeflow/rules/writing.md`, the only reply
   guidance a minimal-tier project installs. It now states each duty of the
