@@ -664,7 +664,7 @@ fn a_sixteen_kib_project_section_fits_under_the_codex_limit_at_every_tier() {
         let project = scaffold(&source, tier);
         let path = project.path().join("AGENTS.md");
         let mut text = read(&path);
-        text.push_str(&project_section(16 * 1024));
+        text.push_str(&project_section(rule_map::PROJECT_SECTION_ROOM_BYTES));
         std::fs::write(&path, &text).unwrap();
         assert_eq!(
             codex_overflow(&text),

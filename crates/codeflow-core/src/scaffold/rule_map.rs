@@ -31,12 +31,20 @@ pub const RULES_GUIDELINE: usize = 13;
 /// failure; one line per rule is the structural rule.
 pub const RULE_LINE_GUIDELINE_BYTES: usize = 480;
 
+/// The project section a complete `AGENTS.md` must leave room for: a
+/// realistic adopter section of this size still fits Codex's instruction
+/// limit at every tier (`rule_map_contract`, TSK-150).
+pub const PROJECT_SECTION_ROOM_BYTES: usize = 16 * 1024;
+
 /// Guideline for the managed block of one tier's `AGENTS.md`, markers
-/// included: the always-read kernel. It leaves a realistic project section
-/// room under Codex's instruction limit. `codeflow doctor` reports the kernel
-/// against it, apart from the size of the complete installed `AGENTS.md`
-/// (its `instructions` check); it is never a failure (TSK-150, TSK-184).
-pub const MANAGED_BLOCK_GUIDELINE_BYTES: usize = 12 * 1024;
+/// included: the always-read kernel. It is what Codex's instruction limit
+/// leaves after [`PROJECT_SECTION_ROOM_BYTES`] and 1 KiB for the header, so
+/// a block within it keeps the adopter's section whole. `codeflow doctor`
+/// reports the kernel against it, apart from the size of the complete
+/// installed `AGENTS.md` (its `instructions` check); a fresh scaffold is
+/// within it, and it is never a failure (TSK-150, TSK-184).
+pub const MANAGED_BLOCK_GUIDELINE_BYTES: usize =
+    CODEX_INSTRUCTION_LIMIT_BYTES - PROJECT_SECTION_ROOM_BYTES - 1024;
 
 /// Codex reads at most this many bytes of project instructions
 /// (`project_doc_max_bytes`) and silently cuts the rest of an `AGENTS.md`.
@@ -681,10 +689,11 @@ see = [{ target = "cf-plan", must_open = true }, { target = "cf-ship", reason = 
         assert!(!is_agent_pointer("cf-plan"));
     }
 
-    /// The managed-block guideline is 12 KiB, reported and never failed.
+    /// The managed-block guideline is what Codex's limit leaves after a
+    /// 16 KiB project section and the header: 15 KiB.
     #[test]
-    fn the_block_guideline_is_twelve_kib() {
-        assert_eq!(MANAGED_BLOCK_GUIDELINE_BYTES, 12 * 1024);
+    fn the_block_guideline_leaves_room_for_the_project_section() {
+        assert_eq!(MANAGED_BLOCK_GUIDELINE_BYTES, 15 * 1024);
     }
 
     #[test]

@@ -137,7 +137,7 @@ text = """
 [[rule]]
 id = "outcome"
 title = "Work to the outcome."
-text = "Name the result, who uses it and the evidence that would establish it, and let that result decide each step; a gate or criterion is evidence toward the result, never the result. Separate what is done here from what still depends on other work. Work in small verified steps until the outcome is proven or a real blocker is surfaced."
+text = "Name the result, who uses it and the evidence that would establish it, and let it decide each step; a gate or criterion is evidence toward the result, never the result. Separate what is done here from what still depends on other work."
 see = [".codeflow/rules/workflow-discipline.md"]
 
 [[rule]]
@@ -167,7 +167,7 @@ see = [".codeflow/rules/workflow-discipline.md"]
 [[rule]]
 id = "proof"
 title = "Prove it where it runs."
-text = "Verify at the surface the change affects and what it touches upstream and downstream; disclose a mocked boundary. Builders publish targeted evidence; the primary runs the full gate once on each exact landing candidate, one at a time; adopted push and CI gates still run."
+text = "Verify at the surface the change affects and what it touches upstream and downstream; disclose a mocked boundary. Builders publish targeted evidence; the primary runs the full gate once on each exact landing candidate."
 see = [".codeflow/rules/workflow-discipline.md"]
 
 [[rule]]
@@ -263,7 +263,7 @@ see = [".codeflow/rules/git-rules.md"]
 key = "session"
 group = "delivery"
 when = "start a session, or resume after compaction or a break"
-action = "`codeflow orient` (the hook runs it where wired); re-read this block; state lives in its durable home, not chat; on a resume, recheck the target tip, seats and findings"
+action = "`codeflow orient` (the hook runs it where wired); re-read this block; state lives in its durable home, not chat"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Sessions and state" }]
 
 [[moment]]
@@ -390,7 +390,7 @@ key = "verify"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "verify before asking for review"
-action = "drive the real path of a changed journey and name what was not exercised; `codeflow validate --docs` when records or docs changed"
+action = "drive the real path of a changed journey; name what was not exercised; `codeflow validate --docs` for records or docs"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Prove it at every surface" }]
 
 [[moment]]
@@ -535,35 +535,35 @@ see = [{ target = ".codeflow/rules/git-rules.md", section = "Enforcement", note 
 key = "cleanup"
 group = "delivery"
 when = "clean up after a landing"
-action = "cleanup needs merge proof (PR `MERGED` at the head SHA, no unapplied `+` from `git cherry`, or ancestry for a normal merge), an inactive owner and a clean worktree; never force-remove a dirty one"
-see = [{ target = ".codeflow/rules/worktrees.md", section = "Cleanup", note = "before removing anything", must_open = true, reason = "the proof, retention and citation rules" }]
+action = "cleanup needs merge proof, an inactive owner and a clean worktree; never force-remove a dirty one"
+see = [{ target = ".codeflow/rules/worktrees.md", section = "Cleanup", note = "before removing anything", must_open = true, reason = "what counts as proof" }]
 
 [[moment]]
 key = "status"
 group = "delivery"
 when = "report status or hand off"
-action = "the result and where it stands first, each item by its outcome in words, IDs after; operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed"
+action = "the result first, each item by its outcome in words, IDs after; operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed"
 see = [{ target = ".codeflow/rules/writing.md", section = "Replies and status" }]
 
 [[moment]]
 key = "failure"
 group = "situation"
 when = "hit a failure, a red check, a blocker or a cancellation"
-action = "classify it; reproduce, then one bounded probe on a new hypothesis, never the same retry; an unfinished CI job is missing evidence; escalate only an external dependency or operator-owned choice, with a recommendation; a cancellation preserves evidence and dirty state"
+action = "classify it; reproduce, then one bounded probe on a new hypothesis, never the same retry; an unfinished CI job is missing evidence; escalate only an external dependency or operator choice"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Navigate blockers" }]
 
 [[moment]]
 key = "refusal"
 group = "situation"
 when = "see a guard, hook or CI refuse a command"
-action = "read the message: it names the rule and the sanctioned path; fix the cause; never `--no-verify`, a hook edit or an override env, which is laundering even when the remote plane is unarmed"
+action = "the message names the rule and the sanctioned path; fix the cause; never `--no-verify`, a hook edit or an override env"
 see = [{ target = ".codeflow/rules/git-rules.md", section = "Enforcement" }]
 
 [[moment]]
 key = "secret"
 group = "situation"
 when = "touch a secret, a protected branch or an irreversible action"
-action = "never stage credentials, keys, tokens or `.env`; never commit, merge, push, force-push, delete or hard-reset on `main` or `master`; an irreversible step waits for scope, a dry run, a restorable backup and human approval"
+action = "never stage credentials, keys, tokens or `.env`; never commit, merge, push, force-push, delete or hard-reset on `main` or `master`; an irreversible step waits for human approval"
 see = [
   { target = ".codeflow/rules/git-rules.md", section = "Protected branches" },
   { target = ".codeflow/rules/workflow-discipline.md", section = "Match the gate", note = "before acting", must_open = true, reason = "scope, recovery, approval" },
@@ -573,7 +573,7 @@ see = [
 key = "unclear"
 group = "situation"
 when = "meet an unclear requirement"
-action = "verify a discoverable fact yourself; decide a reversible choice from evidence and disclose it; ask the operator only intent, public behaviour, authority, security or an irreversible tradeoff, with a recommendation"
+action = "verify a fact yourself; decide a reversible choice and disclose it; ask the operator only intent, public behaviour, authority, security or irreversible tradeoffs"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Planning" }]
 
 [[moment]]
@@ -666,7 +666,7 @@ key = "instruction-change"
 group = "situation"
 tiers = ["standard", "full"]
 when = "change this file, a rule, a skill, a model or a harness"
-action = "project rules go below the managed block, which `codeflow update` replaces; qualify a material model, harness or instruction change; keep `AGENTS.md` under 32 KiB"
+action = "project rules go below the managed block; qualify a material model, harness or instruction change; keep `AGENTS.md` under 32 KiB"
 see = ["cf-evaluate-model", { target = ".codeflow/rules/workflow-discipline.md", section = "Changing these instructions" }]
 
 [[moment]]
@@ -674,7 +674,7 @@ key = "instruction-change"
 group = "situation"
 tiers = ["minimal"]
 when = "change this file or a rule"
-action = "project rules go below the managed block, which `codeflow update` replaces; keep `AGENTS.md` under 32 KiB"
+action = "project rules go below the managed block; keep `AGENTS.md` under 32 KiB"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Changing these instructions" }]
 
 # --- CLAUDE.md --------------------------------------------------------------
