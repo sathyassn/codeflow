@@ -44,6 +44,74 @@ publication date._
 
 ### Added
 
+<!-- codeflow:release-impact major -->
+- **Agent sessions refuse instead of prompting (ADR-0075).** The Claude,
+  Codex and Grok presets are generated from one action table and carry no
+  ask rules, so delegated and primary sessions no longer stop on prompts.
+  Agent sessions refuse these actions, and the operator performs them:
+  privilege escalation (`sudo`, `su`, `doas`, `pkexec`, `gsudo`, `runas`,
+  `Start-Process -Verb RunAs`, `osascript ... with administrator
+  privileges`); package and gist publishing; release changes and tag
+  pushes; repository deletion, archiving, renaming and visibility, `git
+  push --mirror`, `gh secret` set and delete, `gh auth` login, switch,
+  setup-git, token, refresh and logout, and `git credential`; keychain
+  reads; and user-level persistence (`defaults write`, `launchctl`,
+  `crontab -e` and `-r`, `systemctl enable`, registry writes). Codex gets
+  `.codex/rules/codeflow.rules` and a `cf-builder` profile beside
+  `cf-guard`, which now runs the network proxy (tested on Codex 0.157.1;
+  earlier versions are unqualified). Grok gets `.grok/sandbox.toml`,
+  written only when absent. `security.privilege_escalation` and
+  `security.headless_peer_runs` default to `block`, and new policy keys
+  ship for the guard checks. exec-guard refuses a launcher run directly,
+  chained or wrapped in a shell `-c` string or `eval`; a shell string that
+  reaches no launcher, `source` and `LD_LIBRARY_PATH` are not refused.
+  - Order: install the new `codeflow` on `PATH`, then run `codeflow
+    update`. Update merges the permission arrays three ways against the
+    last shipped copy: a rule the preset retired is removed, the 2.x ask
+    rules included; a rule you removed stays removed and is reported on
+    every run; your own rules stay, and none of them moves where that would
+    change what a `!` exception lifts. A policy value still equal to the
+    previous shipped default moves to the new default and is reported; a
+    value you set is kept. Where no shipped copy was recorded, update
+    compares with the files 2.1.0 shipped, says so, and adds back every
+    shipped deny.
+  - Relief: to let agents run one of these actions in a project, remove its
+    deny entry from `.claude/settings.json`, or set its policy level in
+    `.codeflow/policy.json`; update keeps both. A local ask rule cannot
+    restore a denied action, because a deny rule wins.
+  - Credentials (D9): agents use their own fine-grained token in
+    `GH_TOKEN`, without workflow, administration or gist permission. This
+    route narrows credential exposure only on a host that carries the
+    agent token alone. The operator's login stays on this host for setup
+    and workflow pushes, so the token narrows what agents use by default
+    and does not stop a deliberate read of a stored login outside the
+    refused forms. A push that introduces a `.github/workflows/` change is
+    refused and queued for the operator.
+  - Integration: agent sessions replace `git pull` with `git fetch`, then a
+    checked `git merge --ff-only` or `git rebase`. A human terminal is
+    unaffected.
+  - Enforcement baseline: `codeflow update`, `codeflow init` or the first
+    `codeflow baseline approve` binds the repository root, with a
+    binding-only confirmation for an identity already approved on the
+    machine. An outer workspace takes one `codeflow baseline bind
+    --inventory` for its nested repositories. A local landing that changes
+    an enforcement path waits for the operator's `codeflow baseline approve
+    --merge <source> --into <target>`, bound to the source and target
+    commits and the method. An agent's `gh pr merge` passes only in an
+    immediate mode and only when no commit on the pull request changes an
+    enforcement path; auto-merge and merge queues are the operator's.
+  - Seats (D7): seats are briefed only through `herdr agent prompt`, folder
+    trust is granted at launch, `Escape` is the only key sent to a seat,
+    and `/compact`, `/clear` and `/new` are the only slash commands.
+  - Guard hooks (D8) fail closed at every tier, with no fail-open switch.
+    A session starts with a line naming the outdated side and its exact
+    command, and the options: update, continue other work, or roll back
+    the binary.
+  - Operator actions: every step that needs the operator is recorded on
+    `.codeflow/operator-actions.jsonl` in the main checkout and shown by
+    `codeflow status`, the orient digest and the orchestrator's status
+    report.
+
 <!-- codeflow:release-impact minor -->
 - **Guidance retention evaluations.** `cf-evaluate-model` gains a scripted
   multi-turn case kind: the fixture supplies warm-up turns, the case prompt
@@ -618,19 +686,6 @@ publication date._
   No policy key restores the old behavior: `git.direct_changes` only allows
   or forbids direct changes, and classification is off only where durable
   work tracking is off.
-
-<!-- codeflow:release-impact patch -->
-- **Privilege escalation asks in both shells.** The scaffolded Claude
-  settings presets now ask before `pkexec`, `gsudo`, `runas` and
-  `Start-Process -Verb RunAs`, as well as `sudo`, `su` and `doas`, for both
-  the Bash and the PowerShell tool, including path-qualified launchers,
-  Windows `.exe` spellings and PowerShell elevation started from Bash. These
-  ask rules are a textual checkpoint, not a security boundary: they match
-  command text, so a command that merely contains `-Verb RunAs` also asks,
-  while other casings in Bash and renamed or indirect launchers are not
-  caught. The fail-closed sandbox remains the boundary, and exec-guard still
-  reports privilege escalation it detects. Deny rules are unchanged. `codeflow update` refreshes the managed region of
-  `.claude/settings.json` and keeps project-owned keys.
 
 <!-- codeflow:release-impact minor -->
 - **A pre-push gate under a minute that blocks.** Public behaviour change:

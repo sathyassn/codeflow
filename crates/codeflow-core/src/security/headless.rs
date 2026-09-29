@@ -4,7 +4,7 @@
 //! Peer seats run interactively, never headless (cf-delegate): a one-shot
 //! headless run has no verified native session, no task tools or guards, and
 //! no recheckable thread. This classifier finds such a run in a shell command
-//! so exec-guard can warn (the default) or refuse.
+//! so exec-guard can refuse it (the default since ADR-0075 D4) or warn.
 //!
 //! The headless forms come from each CLI's own help (Claude Code 2.1.283,
 //! Codex CLI 0.157.1, Grok 1.0.41):
@@ -26,8 +26,9 @@
 //! resolved (a here-string, a substitution or variable as the program, an
 //! alias, a shell reading its script from stdin) is judged on its raw text:
 //! a peer name followed by one of its headless markers is flagged. That can
-//! over-flag an unusual line, which the default `warn` level tolerates; the
-//! message says the line was not fully parsed.
+//! over-flag an unusual line, which the default `block` level then refuses;
+//! the message says the line was not fully parsed, and a project that needs
+//! such a run sets `security.headless_peer_runs` to `warn`.
 
 use crate::hooks::git_guard::simple_commands;
 

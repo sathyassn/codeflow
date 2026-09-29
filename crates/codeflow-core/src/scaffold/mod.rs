@@ -27,6 +27,7 @@ pub mod json_edit;
 pub mod manifest;
 pub mod portal;
 pub mod pr_template;
+pub mod prior_release;
 pub mod region;
 pub mod report;
 pub mod rule_map;

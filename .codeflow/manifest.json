@@ -683,7 +683,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "9a610f6a771675e8f25763d0e1330bc1623c308e3c67f61870bdf566ee5de1c8",
+      "sha256": "53ea1f1a739927902b56576a6d62823ce63cb53ccd0cb1d1b227f462ce346253",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -1397,7 +1397,7 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "6dea25c424aacdb860bd7ed1476389342311b862ffb378ee17d12be910807464",
+      "sha256": "46055e483ed8b0e33048dd614d38717d7345c4c659d9e7ec9a55a8bec75240c7",
       "exec": false
     },
     ".codeflow/rules/git-rules.md": {
@@ -1445,13 +1445,19 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "862b5e1001f54d11d24271ef5c49790483c31f879112114929cc14478d731c8a",
+      "sha256": "d8e6db825a8cf309090c6a74343ad88c1f6ccec0ebf807dae62d9567e003c672",
       "exec": false
     },
     ".codex/hooks.json": {
       "src": "codex/hooks.json",
       "ownership": "managed",
       "sha256": "9bc5c918c9e243ca888bf37366f6c434fb81b723a3dcc1f4db8d07c0a7a22595",
+      "exec": false
+    },
+    ".codex/rules/codeflow.rules": {
+      "src": "codex/rules/codeflow.rules",
+      "ownership": "managed",
+      "sha256": "faee868b5ca0eb72637bbd8784b75392de8e29fddb83eb16aef9bc7fdc92b653",
       "exec": false
     },
     ".github/pull_request_template.md": {
@@ -1488,6 +1494,12 @@
       "src": "grok/hooks.json",
       "ownership": "managed",
       "sha256": "fbdb4dfa10544748b64b28c7ac74a54801a94b20a77345e58b505ddaaee78f12",
+      "exec": false
+    },
+    ".grok/sandbox.toml": {
+      "src": "grok/sandbox.toml",
+      "ownership": "user-owned",
+      "sha256": "7b0a0b6c46f9a16468d588f4db4f871302109150166bff01e644bd2c502cd686",
       "exec": false
     },
     "AGENTS.md": {

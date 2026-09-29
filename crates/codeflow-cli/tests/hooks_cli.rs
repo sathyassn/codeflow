@@ -1290,8 +1290,9 @@ fn exec_guard_classifies_every_review_probe() {
 
 #[test]
 fn exec_guard_flags_headless_peer_runs_per_level() {
-    // TSK-136 AC-1: each headless form warns by default with the rule and the
-    // interactive path, is refused at block, and nothing else is touched.
+    // TSK-136 AC-1 as amended by ADR-0075 D4: each headless form is refused
+    // by default and at block, warns with the rule and the interactive path
+    // at warn, and nothing else is touched.
     let runs = [
         "claude -p 'review this'",
         "codex exec 'fix it'",
@@ -1325,7 +1326,7 @@ fn exec_guard_flags_headless_peer_runs_per_level() {
             let out = guard(command);
             let err = String::from_utf8_lossy(&out.stderr).to_string();
             match level {
-                "block" => {
+                "block" | "default" => {
                     assert_eq!(out.status.code(), Some(2), "{level}: {command}: {err}");
                     assert!(err.contains("security.headless_peer_runs"), "{err}");
                 }
