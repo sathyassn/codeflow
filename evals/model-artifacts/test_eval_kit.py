@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Tests for the CodeFlow model-evaluation kit."""
+"""Tooling tests for the CodeFlow model-evaluation kit.
+
+They exercise the kit's own code on synthetic observations. They are a
+tooling check, like `validate-suite` is a structural one: neither runs a
+model case, so neither is behavioural evidence.
+"""
 
 from __future__ import annotations
 
@@ -1490,8 +1495,8 @@ class ResultScoringTests(unittest.TestCase):
         trial = next(
             trial for trial in result["trials"] if trial["case_id"] == "model-independent-plans"
         )
-        trial["observed"]["signals"] = ["single_plan_then_critique"]
-        trial["observed"]["violations"] = ["codex_critique_only"]
+        trial["observed"]["signals"] = ["plan_drafted_before_findings_exchange"]
+        trial["observed"]["violations"] = ["codex_challenge_without_independent_findings"]
         errors = eval_kit.validate_result(result)
         self.assertTrue(any("expected 'fail'" in error for error in errors))
 
