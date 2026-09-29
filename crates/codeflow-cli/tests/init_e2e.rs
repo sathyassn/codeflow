@@ -697,12 +697,22 @@ fn doctor_warns_for_an_oversized_nested_instruction_chain() {
 /// `git` with the binary under test first on `PATH`, so the scaffolded hook
 /// shims run it.
 fn git_with_binary(dir: &Path, args: &[&str]) {
+    let out = git_output_with_binary(dir, args);
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// [`git_with_binary`], returning the output (hook messages go to stderr).
+fn git_output_with_binary(dir: &Path, args: &[&str]) -> Output {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
     let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    let out = Command::new("git")
+    Command::new("git")
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
@@ -717,12 +727,7 @@ fn git_with_binary(dir: &Path, args: &[&str]) {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .output()
-        .expect("git runs");
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+        .expect("git runs")
 }
 
 /// TSK-133 AC-4 (journey): a freshly scaffolded full-tier project ships
@@ -1858,4 +1863,201 @@ fn a_fresh_project_installs_the_work_lifecycle_and_every_command_it_names_runs()
             }
         }
     }
+}
+
+/// The step a finding names, as printed between the backticks after `run `.
+fn printed_step(output: &str, finding: &str) -> Vec<String> {
+    let at = output
+        .find(finding)
+        .unwrap_or_else(|| panic!("no {finding:?} in: {output}"));
+    let rest = &output[at..];
+    let start = rest.find("run `").expect("the finding names a step to run") + "run `".len();
+    let end = start + rest[start..].find('`').expect("the step closes");
+    rest[start..end]
+        .split_whitespace()
+        .map(String::from)
+        .collect()
+}
+
+/// TSK-147 AC-5 (journey): in a freshly scaffolded standard-tier project
+/// driven by the binary under test, every finding names a step that clears
+/// it. A commit on a watched path prints a note pointing at the Release
+/// impact fields, and `codeflow ci` given a body that declares `Breaking: no`
+/// with a `Rationale` reports nothing. A pre-push with a ci finding at warn
+/// and a stale task prints both with their steps and does not stop the push;
+/// run as printed, the steps leave the next push without either finding.
+#[test]
+fn a_fresh_standard_project_prints_steps_that_clear_each_finding() {
+    let (tmp, root) = fresh("--standard");
+    let target = git_stdout(&root, &["branch", "--show-current"]);
+    let target = target.trim().to_string();
+
+    // The destination holds the seed: commit format reported at warn and a
+    // declared contract surface. It takes the seed by fetching, so no
+    // client hook runs on the protected branch.
+    git_with_binary(&root, &["switch", "-q", "-c", "chore/seed"]);
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    policy["git"]["commit_format"] = "warn".into();
+    policy["git"]["breaking_watch_paths"] = serde_json::json!(["src/api.rs"]);
+    std::fs::write(
+        &policy_path,
+        format!("{}\n", serde_json::to_string_pretty(&policy).unwrap()),
+    )
+    .unwrap();
+    git_with_binary(&root, &["add", ".codeflow/policy.json"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "chore: seed the journey"]);
+    let dest = tmp.path().join("dest.git");
+    let dest_str = dest.to_str().unwrap();
+    git_stdout(
+        tmp.path(),
+        &["init", "-q", "--bare", "-b", &target, dest_str],
+    );
+    git_with_binary(&root, &["remote", "add", "origin", dest_str]);
+    seed(&root, &dest, &target);
+    let base = format!("origin/{target}");
+
+    watched_path_settles_by_release_impact(&root, tmp.path(), &base);
+    stale_findings_clear_by_their_printed_steps(&root, &dest, &target);
+}
+
+/// Let the destination take `chore/seed` as `target` by fetching, so no
+/// client hook runs on the protected branch, and refresh `origin`.
+fn seed(root: &Path, dest: &Path, target: &str) {
+    let refspec = format!("chore/seed:{target}");
+    git_stdout(dest, &["fetch", "-q", root.to_str().unwrap(), &refspec]);
+    git_with_binary(root, &["fetch", "-q", "origin"]);
+}
+
+fn stderr_text(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).to_string()
+}
+
+/// AC-5, first half: a commit on the watched path prints the local note,
+/// and a body that settles it leaves `codeflow ci` with nothing to report.
+fn watched_path_settles_by_release_impact(root: &Path, tmp: &Path, base: &str) {
+    // A commit on the watched path: the local note, then a body that settles it.
+    git_with_binary(root, &["switch", "-q", "-c", "feat/api", base]);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/api.rs"), "pub fn api() {}\n").unwrap();
+    git_with_binary(root, &["add", "src/api.rs"]);
+    let commit = git_output_with_binary(root, &["commit", "-q", "-m", "feat: add the api"]);
+    let err = stderr_text(&commit);
+    assert!(commit.status.success(), "{err}");
+    assert!(
+        err.contains(
+            "codeflow commit-msg: note: commit touches a declared contract surface (src/api.rs)"
+        ) && err.contains("`Breaking: no` with a `Rationale` under Release impact")
+            && err.contains("codeflow commit-msg: commit not stopped")
+            && !err.contains("warning"),
+        "{err}"
+    );
+    let body = tmp.join("body.md");
+    std::fs::write(
+        &body,
+        "Task: none: a new api function\n\n## Summary\n\nAdds the api.\n\n\
+         ## Changes\n\n- the api\n\n## Testing\n\n- `codeflow ci` over the range\n\
+         - Not tested: nothing else\n\n## Reviews\n\n- none yet\n\n\
+         ## Release impact\n\n- Impact: minor\n- Breaking: no\n\
+         - Rationale: a new function; nothing existing changes\n- Migration: none\n",
+    )
+    .unwrap();
+    let settled = codeflow(
+        root,
+        &[
+            "ci",
+            "--base",
+            base,
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/api",
+            "--pr-body-file",
+            body.to_str().unwrap(),
+        ],
+    );
+    let err = stderr_text(&settled);
+    assert_eq!(settled.status.code(), Some(0), "{err}");
+    assert!(
+        !err.contains("contract surface")
+            && !err.contains("warning")
+            && !err.contains("BLOCKED")
+            && !err.contains("note:"),
+        "{err}"
+    );
+}
+
+/// AC-5, second half: a pre-push with a ci finding at warn and a stale task
+/// prints both with their steps; run as printed, the next push has neither.
+fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target: &str) {
+    let base = format!("origin/{target}");
+    // The destination gains a task left `in_progress` by an older release.
+    git_with_binary(root, &["switch", "-q", "chore/seed"]);
+    let task = codeflow(
+        root,
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "a journey fixture",
+            "a stale task",
+        ],
+    );
+    assert!(task.status.success(), "{}", output_text(&task));
+    let record = root.join("project-management/tasks/TSK-001.md");
+    let text = std::fs::read_to_string(&record).unwrap();
+    assert!(text.contains("\nstatus: todo "), "{text}");
+    std::fs::write(
+        &record,
+        text.replacen("\nstatus: todo ", "\nstatus: in_progress ", 1),
+    )
+    .unwrap();
+    git_with_binary(root, &["add", "project-management"]);
+    git_with_binary(root, &["commit", "-q", "-m", "docs: record a legacy task"]);
+    seed(root, dest, target);
+
+    // A pre-push with a ci finding at warn and the stale task.
+    git_with_binary(root, &["switch", "-q", "-c", "feat/x", &base]);
+    std::fs::write(root.join("x.txt"), "x\n").unwrap();
+    git_with_binary(root, &["add", "x.txt"]);
+    git_with_binary(root, &["commit", "-q", "-m", "Not conventional."]);
+    let push = git_output_with_binary(root, &["push", "-q", "origin", "feat/x"]);
+    let err = stderr_text(&push);
+    assert!(push.status.success(), "{err}");
+    assert!(
+        err.contains("warning — policy rule git.commit_format (warn)")
+            && err.contains("reword it with `git commit --amend` as `type(scope): description`")
+            && err.contains("stale status: in_progress with no active branch carrying TSK-001")
+            && err.contains("codeflow pre-push: push not stopped")
+            && !err.contains("BLOCKED"),
+        "{err}"
+    );
+
+    // Each step, run as printed.
+    git_with_binary(root, &["commit", "-q", "--amend", "-m", "feat: add x"]);
+    let step = printed_step(&err, "stale status: in_progress");
+    assert_eq!(step[..2], ["codeflow", "task"], "{step:?}");
+    let args: Vec<&str> = step[1..].iter().map(String::as_str).collect();
+    let status = codeflow(root, &args);
+    assert!(status.status.success(), "{}", output_text(&status));
+    git_with_binary(root, &["add", "project-management"]);
+    git_with_binary(
+        root,
+        &["commit", "-q", "-m", "docs: return the stale task to todo"],
+    );
+
+    let again = git_output_with_binary(
+        root,
+        &["push", "-q", "--force-with-lease", "origin", "feat/x"],
+    );
+    let err = stderr_text(&again);
+    assert!(again.status.success(), "{err}");
+    assert!(
+        !err.contains("git.commit_format")
+            && !err.contains("stale status")
+            && !err.contains("warning")
+            && err.contains("codeflow pre-push: push not stopped"),
+        "{err}"
+    );
 }

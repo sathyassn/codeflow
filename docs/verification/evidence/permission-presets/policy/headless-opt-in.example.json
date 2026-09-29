@@ -1,0 +1,11 @@
+{
+  "security": {
+    "headless_opt_in": {
+      "families": [
+        "codex"
+      ],
+      "reason": "Example only: the CI runner that hosts this project's agents has no terminal host, so no interactive Codex seat can start"
+    }
+  },
+  "_about": "Proposal v8, section 2.7: `families` takes catalog family ids (claude, codex, grok); it replaces the unshipped `harnesses` field. Doctor names the matching catalog harnesses (claude-code, codex-cli, codex-app, grok-cli)."
+}

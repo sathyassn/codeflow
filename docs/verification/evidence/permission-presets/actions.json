@@ -1,0 +1,695 @@
+{
+ "_about": "One action table for the three harnesses (review finding F6), version 3. generate.py builds the Claude permission arrays, the delegate settings fragment and the Codex rules file from it, and fails when a family lacks an entry or a stated reason for any harness. Grok reads the Claude command rules from .claude/settings.json (grok-build f0e3be11: xai-grok-workspace/src/permission/resolution.rs:28-68). Text rules are defense in depth: exec-guard parses the unwrapped argv for every family here (proposal v3, section 3), and the guard hooks fail closed (departure D8).",
+ "families": [
+  {
+   "id": "privilege",
+   "decision": "deny",
+   "why": "The operator runs privileged commands personally (settled S15 rung 4; operator decision D5 of 2026-09-28: block, including wrapped forms and `osascript ... with administrator privileges`).",
+   "claude": [
+    "Bash(sudo *)",
+    "Bash(su *)",
+    "Bash(doas *)",
+    "Bash(pkexec *)",
+    "Bash(gsudo *)",
+    "Bash(runas *)",
+    "Bash(*/sudo *)",
+    "Bash(*/su *)",
+    "Bash(*/doas *)",
+    "Bash(*/pkexec *)",
+    "Bash(*/gsudo *)",
+    "Bash(*/runas *)",
+    "Bash(*/sudo)",
+    "Bash(*/su)",
+    "Bash(*/doas)",
+    "Bash(*/pkexec)",
+    "Bash(gsudo.exe *)",
+    "Bash(runas.exe *)",
+    "Bash(*/gsudo.exe *)",
+    "Bash(*/runas.exe *)",
+    "Bash(Start-Process -Verb RunAs*)",
+    "Bash(Start-Process * -Verb RunAs*)",
+    "Bash(*-Verb RunAs*)",
+    "Bash(*-Verb runas*)",
+    "Bash(*-verb RunAs*)",
+    "Bash(*-verb runas*)",
+    "Bash(*-VERB RUNAS*)",
+    "PowerShell(sudo *)",
+    "PowerShell(su *)",
+    "PowerShell(doas *)",
+    "PowerShell(pkexec *)",
+    "PowerShell(gsudo *)",
+    "PowerShell(runas *)",
+    "PowerShell(Start-Process -Verb RunAs*)",
+    "PowerShell(Start-Process * -Verb RunAs*)",
+    "PowerShell(*gsudo.exe *)",
+    "PowerShell(*runas.exe *)",
+    "PowerShell(*-Verb RunAs*)",
+    "Bash(env sudo *)",
+    "Bash(env * sudo *)",
+    "Bash(env su *)",
+    "Bash(env * su *)",
+    "Bash(env doas *)",
+    "Bash(env * doas *)",
+    "Bash(env pkexec *)",
+    "Bash(env * pkexec *)",
+    "Bash(osascript *with administrator privileges*)",
+    "Bash(*/osascript *with administrator privileges*)"
+   ],
+   "codex": [
+    {
+     "pattern": [
+      [
+       "sudo",
+       "su",
+       "doas",
+       "pkexec",
+       "gsudo",
+       "runas"
+      ]
+     ],
+     "match": [
+      "sudo true",
+      "doas reboot"
+     ],
+     "not_match": [
+      "sudoku --help"
+     ]
+    },
+    {
+     "pattern": [
+      [
+       "/usr/bin/sudo",
+       "/bin/sudo",
+       "/usr/local/bin/sudo",
+       "/bin/su",
+       "/usr/bin/su",
+       "/usr/bin/doas",
+       "/usr/local/bin/doas",
+       "/usr/bin/pkexec"
+      ]
+     ],
+     "match": [
+      "/usr/bin/sudo true"
+     ]
+    },
+    {
+     "pattern": [
+      "env",
+      [
+       "sudo",
+       "su",
+       "doas",
+       "pkexec"
+      ]
+     ],
+     "match": [
+      "env sudo true"
+     ],
+     "not_match": [
+      "env cargo test"
+     ]
+    }
+   ],
+   "codex_note": "Codex matches argv exactly and splits plain `bash -lc` scripts before matching (docs: rules, 'Shell wrappers and compound commands'), so `bash -lc 'sudo -n id'` is forbidden. `env -i sudo`, other absolute paths and interpreter calls are left to exec-guard's unwrapper. `osascript -e '... with administrator privileges'` arrives as one `-e` string; exec-guard carries it."
+  },
+  {
+   "id": "publish",
+   "decision": "deny",
+   "why": "Publishing is outward and irreversible. The operator publishes from a terminal; no agent session publishes (settled S19, rung 4 of S15). A gist is publication of content, and the current token carries the `gist` scope.",
+   "claude": [
+    "Bash(cargo publish)",
+    "Bash(cargo publish *)",
+    "Bash(npm publish)",
+    "Bash(npm publish *)",
+    "Bash(pnpm publish)",
+    "Bash(pnpm publish *)",
+    "Bash(yarn publish)",
+    "Bash(yarn publish *)",
+    "Bash(yarn npm publish)",
+    "Bash(yarn npm publish *)",
+    "Bash(uv publish)",
+    "Bash(uv publish *)",
+    "Bash(twine upload *)",
+    "Bash(python3 -m twine upload *)",
+    "Bash(python -m twine upload *)",
+    "Bash(gem push *)",
+    "Bash(gh gist create*)",
+    "Bash(gh gist edit*)"
+   ],
+   "codex": [
+    {
+     "pattern": [
+      [
+       "cargo",
+       "npm",
+       "pnpm",
+       "uv",
+       "yarn"
+      ],
+      "publish"
+     ],
+     "match": [
+      "cargo publish",
+      "npm publish",
+      "yarn publish"
+     ]
+    },
+    {
+     "pattern": [
+      "yarn",
+      "npm",
+      "publish"
+     ],
+     "match": [
+      "yarn npm publish"
+     ]
+    },
+    {
+     "pattern": [
+      "twine",
+      "upload"
+     ]
+    },
+    {
+     "pattern": [
+      [
+       "python",
+       "python3"
+      ],
+      "-m",
+      "twine",
+      "upload"
+     ]
+    },
+    {
+     "pattern": [
+      "gem",
+      "push"
+     ]
+    },
+    {
+     "pattern": [
+      "env",
+      [
+       "cargo",
+       "npm",
+       "pnpm",
+       "uv",
+       "yarn"
+      ],
+      "publish"
+     ],
+     "match": [
+      "env cargo publish"
+     ]
+    },
+    {
+     "pattern": [
+      "gh",
+      "gist",
+      [
+       "create",
+       "edit"
+      ]
+     ],
+     "not_match": [
+      "gh gist list"
+     ]
+    }
+   ],
+   "codex_note": "Flags before the subcommand (`cargo +stable publish`, `npm --ignore-scripts publish`) are left to exec-guard's outward check, which parses the subcommand; a text rule for them also denied ordinary commands such as `cargo +nightly test --features publish` (Grok round 2, R2-4).",
+   "codex_why": "Publishing is an operator action; check a release with `cargo package` or `npm pack --dry-run`."
+  },
+  {
+   "id": "release",
+   "decision": "deny",
+   "why": "Creating or changing a release, or pushing a tag, starts a release. The operator does it (settled S19). `gh release view` and `list` stay available.",
+   "claude": [
+    "Bash(gh release create*)",
+    "Bash(gh release edit*)",
+    "Bash(gh release delete*)",
+    "Bash(gh release upload*)",
+    "Bash(gh * release create*)",
+    "Bash(gh * release edit*)",
+    "Bash(gh * release delete*)",
+    "Bash(gh * release upload*)",
+    "Bash(git push --tags*)",
+    "Bash(git push * --tags*)",
+    "Bash(git push --follow-tags*)",
+    "Bash(git push * --follow-tags*)",
+    "Bash(git push *refs/tags/*)"
+   ],
+   "codex": [
+    {
+     "pattern": [
+      "gh",
+      "release",
+      [
+       "create",
+       "edit",
+       "delete",
+       "upload"
+      ]
+     ],
+     "not_match": [
+      "gh release view v1",
+      "gh release list"
+     ]
+    },
+    {
+     "pattern": [
+      "git",
+      "push",
+      [
+       "--tags",
+       "--follow-tags"
+      ]
+     ],
+     "match": [
+      "git push --tags",
+      "git push --follow-tags"
+     ]
+    },
+    {
+     "pattern": [
+      "git",
+      "push",
+      [
+       "origin",
+       "upstream"
+      ],
+      [
+       "--tags",
+       "--follow-tags"
+      ]
+     ],
+     "match": [
+      "git push origin --tags"
+     ]
+    }
+   ],
+   "codex_why": "Creating or changing a release, or pushing tags, is an operator action. `gh release view` and `list` stay available.",
+   "codex_note": "A bare tag name (`git push origin v1.2.3`), `refs/tags/` refspecs and `gh -R o/r release` are found by exec-guard: it resolves the refspec against the repository's tags."
+  },
+  {
+   "id": "account",
+   "decision": "deny",
+   "why": "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+   "claude": [
+    "Bash(gh repo delete*)",
+    "Bash(gh repo archive*)",
+    "Bash(gh repo rename*)",
+    "Bash(gh repo edit --visibility*)",
+    "Bash(gh repo edit * --visibility*)",
+    "Bash(gh auth token*)",
+    "Bash(gh auth refresh*)",
+    "Bash(gh auth logout*)",
+    "Bash(gh auth git-credential*)",
+    "Bash(gh secret set*)",
+    "Bash(gh secret delete*)",
+    "Bash(gh secret remove*)",
+    "Bash(git push --mirror*)",
+    "Bash(git push * --mirror*)",
+    "Bash(git credential*)",
+    "Bash(git-credential-*)",
+    "Bash(*/git-credential-*)",
+    "Bash(gh api -X DELETE*)",
+    "Bash(gh api * -X DELETE*)",
+    "Bash(gh api -XDELETE*)",
+    "Bash(gh api * -XDELETE*)",
+    "Bash(gh api --method DELETE*)",
+    "Bash(gh api * --method DELETE*)",
+    "Bash(gh api --method=DELETE*)",
+    "Bash(gh api * --method=DELETE*)",
+    "Bash(gh auth switch*)",
+    "Bash(gh auth login*)",
+    "Bash(gh auth setup-git*)"
+   ],
+   "codex": [
+    {
+     "pattern": [
+      "gh",
+      "repo",
+      [
+       "delete",
+       "archive",
+       "rename"
+      ]
+     ],
+     "not_match": [
+      "gh repo view"
+     ]
+    },
+    {
+     "pattern": [
+      "gh",
+      "api",
+      [
+       "-X",
+       "--method"
+      ],
+      [
+       "DELETE",
+       "delete"
+      ]
+     ],
+     "match": [
+      "gh api -X DELETE repos/o/r"
+     ]
+    },
+    {
+     "pattern": [
+      "gh",
+      "api",
+      [
+       "-XDELETE",
+       "--method=DELETE"
+      ]
+     ]
+    },
+    {
+     "pattern": [
+      "gh",
+      "auth",
+      [
+       "token",
+       "refresh",
+       "logout",
+       "git-credential",
+       "switch",
+       "login",
+       "setup-git"
+      ]
+     ],
+     "not_match": [
+      "gh auth status"
+     ]
+    },
+    {
+     "pattern": [
+      "gh",
+      "secret",
+      [
+       "set",
+       "delete",
+       "remove"
+      ]
+     ],
+     "not_match": [
+      "gh secret list"
+     ]
+    },
+    {
+     "pattern": [
+      "git",
+      "push",
+      "--mirror"
+     ]
+    },
+    {
+     "pattern": [
+      "git",
+      "push",
+      [
+       "origin",
+       "upstream"
+      ],
+      "--mirror"
+     ],
+     "match": [
+      "git push origin --mirror"
+     ]
+    },
+    {
+     "pattern": [
+      "git",
+      [
+       "credential",
+       "credential-osxkeychain",
+       "credential-manager",
+       "credential-store",
+       "credential-cache",
+       "credential-libsecret"
+      ]
+     ],
+     "match": [
+      "git credential fill"
+     ]
+    },
+    {
+     "pattern": [
+      [
+       "git-credential-osxkeychain",
+       "git-credential-manager",
+       "git-credential-store",
+       "git-credential-libsecret"
+      ]
+     ]
+    }
+   ],
+   "codex_note": "`gh repo edit --visibility` and a DELETE placed after the endpoint cannot be a Codex prefix without forbidding every `gh repo edit` or `gh api`; exec-guard's outward check and the token scope (D6) carry them."
+  },
+  {
+   "id": "keychain",
+   "decision": "deny",
+   "why": "A sandboxed command can reach the macOS keychain service (observed 2026-09-28), so keychain reads need a rule.",
+   "claude": [
+    "Bash(security find-generic-password*)",
+    "Bash(security find-internet-password*)",
+    "Bash(security dump-keychain*)"
+   ],
+   "codex": [
+    {
+     "pattern": [
+      "security",
+      [
+       "find-generic-password",
+       "find-internet-password",
+       "dump-keychain"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "id": "persistence",
+   "decision": "deny",
+   "why": "User-level persistence and settings that need no elevation. Root-only system commands are left to the privilege family (review finding F9).",
+   "claude": [
+    "Bash(defaults write *)",
+    "Bash(defaults delete *)",
+    "Bash(launchctl load *)",
+    "Bash(launchctl bootstrap *)",
+    "Bash(launchctl enable *)",
+    "Bash(crontab -e*)",
+    "Bash(crontab -r*)",
+    "Bash(systemctl --user enable *)",
+    "Bash(reg add HKCU*)",
+    "Bash(reg delete HKCU*)",
+    "PowerShell(reg add HKCU*)",
+    "PowerShell(reg delete HKCU*)",
+    "PowerShell(Set-ExecutionPolicy *)",
+    "Bash(systemctl enable *)",
+    "Bash(systemctl disable *)",
+    "Bash(systemctl mask *)",
+    "Bash(systemctl --user disable *)",
+    "Bash(systemctl --user mask *)"
+   ],
+   "codex": [
+    {
+     "pattern": [
+      "defaults",
+      [
+       "write",
+       "delete"
+      ]
+     ],
+     "not_match": [
+      "defaults read com.apple.finder"
+     ]
+    },
+    {
+     "pattern": [
+      "launchctl",
+      [
+       "load",
+       "bootstrap",
+       "enable"
+      ]
+     ]
+    },
+    {
+     "pattern": [
+      "crontab",
+      [
+       "-e",
+       "-r"
+      ]
+     ],
+     "not_match": [
+      "crontab -l"
+     ]
+    },
+    {
+     "pattern": [
+      "systemctl",
+      "--user",
+      "enable"
+     ]
+    },
+    {
+     "pattern": [
+      "systemctl",
+      [
+       "enable",
+       "disable",
+       "mask"
+      ]
+     ],
+     "match": [
+      "systemctl enable fixture"
+     ],
+     "not_match": [
+      "systemctl status fixture"
+     ]
+    },
+    {
+     "pattern": [
+      "systemctl",
+      "--user",
+      [
+       "disable",
+       "mask"
+      ]
+     ]
+    },
+    {
+     "pattern": [
+      "reg",
+      [
+       "add",
+       "delete"
+      ]
+     ]
+    }
+   ],
+   "codex_note": "PowerShell `Set-ExecutionPolicy` arrives as one `-Command` string, which a prefix cannot match; exec-guard and the elevated Windows sandbox carry it."
+  }
+ ],
+ "claude_read_denies": [
+  "Read(**/.env)",
+  "Read(**/.env.*)",
+  "Read(**/*.pem)",
+  "Read(**/*.key)",
+  "Read(**/*.p12)",
+  "Read(**/*.pfx)",
+  "Read(**/*credentials*)",
+  "Read(**/*secret*)",
+  "Read(**/.netrc)",
+  "Read(**/id_rsa*)",
+  "Read(**/id_ed25519*)",
+  "Read(~/.ssh/**)",
+  "Read(~/.aws/**)",
+  "Read(~/.gnupg/**)",
+  "Read(~/.kube/**)",
+  "Read(~/.cargo/credentials*)",
+  "Read(~/.codex/auth.json)",
+  "Read(~/.grok/auth.json)",
+  "Read(~/.grok/mcp_credentials.json)",
+  "Read(~/.pypirc)",
+  "Read(~/.gem/credentials)",
+  "Read(~/.password-store/**)",
+  "Read(~/.claude/.credentials.json)",
+  "Read(~/.claude/backups/**)",
+  "Read(~/.claude/debug/**)",
+  "Read(~/.claude/file-history/**)",
+  "Read(~/.claude/history.jsonl)",
+  "Read(~/.claude/mcp-needs-auth-cache.json)",
+  "Read(~/.claude/memory/**)",
+  "Read(~/.claude/paste-cache/**)",
+  "Read(~/.claude/projects/**/*.jsonl)",
+  "Read(~/.claude/session-env/**)",
+  "Read(~/.claude/sessions/**)",
+  "Read(~/.claude/settings.json)",
+  "Read(~/.claude/settings.local.json)",
+  "Read(~/.claude/settings-bkup.json)",
+  "Read(~/.claude/shell-snapshots/**)",
+  "Read(~/.claude/tasks/**)",
+  "Read(~/.claude/teams/**)"
+ ],
+ "claude_edit_denies": [
+  "Edit(/.claude/settings.json)",
+  "Edit(/.claude/settings.local.json)",
+  "Edit(/.codeflow/policy.json)",
+  "Edit(/.codeflow/git-hooks/**)",
+  "Edit(/.git/config)",
+  "Edit(/.git/hooks/**)",
+  "Edit(/.codex/**)",
+  "Edit(/.grok/**)",
+  "Edit(/.github/workflows/codeflow-ci.yml)",
+  "Edit(~/.claude/settings.json)",
+  "Edit(~/.codex/config.toml)",
+  "Edit(~/.codex/rules/**)",
+  "Edit(~/.grok/config.toml)",
+  "Edit(~/.grok/hooks/**)",
+  "Edit(~/.grok/sandbox.toml)",
+  "Edit(/.codeflow/project.toml)",
+  "Edit(~/.claude/settings.local.json)",
+  "Edit(~/.codex/hooks.json)",
+  "Edit(~/.grok/trusted_folders.toml)"
+ ],
+ "sandbox_env_denies": [
+  "XAI_API_KEY",
+  "GEMINI_API_KEY",
+  "AZURE_OPENAI_API_KEY",
+  "CARGO_REGISTRY_TOKEN",
+  "TWINE_PASSWORD",
+  "UV_PUBLISH_TOKEN"
+ ],
+ "sandbox_read_denies": [
+  "~/.pypirc",
+  "~/.gem/credentials",
+  "~/.password-store",
+  "~/.codex/auth.json",
+  "~/.grok/auth.json",
+  "~/.grok/mcp_credentials.json"
+ ],
+ "claude_read_carveouts": [
+  "Read(!**/.env.example)",
+  "Read(!**/.env.sample)",
+  "Read(!**/.env.template)",
+  "Read(!**/.env.dist)",
+  "Read(!**/*secret*.rs)",
+  "Read(!**/*secret*.py)",
+  "Read(!**/*secret*.ts)",
+  "Read(!**/*secret*.tsx)",
+  "Read(!**/*secret*.js)",
+  "Read(!**/*secret*.mjs)",
+  "Read(!**/*secret*.cjs)",
+  "Read(!**/*secret*.go)",
+  "Read(!**/*secret*.java)",
+  "Read(!**/*secret*.kt)",
+  "Read(!**/*secret*.rb)",
+  "Read(!**/*secret*.swift)",
+  "Read(!**/*secret*.md)",
+  "Read(!**/*credentials*.rs)",
+  "Read(!**/*credentials*.py)",
+  "Read(!**/*credentials*.ts)",
+  "Read(!**/*credentials*.tsx)",
+  "Read(!**/*credentials*.js)",
+  "Read(!**/*credentials*.mjs)",
+  "Read(!**/*credentials*.cjs)",
+  "Read(!**/*credentials*.go)",
+  "Read(!**/*credentials*.java)",
+  "Read(!**/*credentials*.kt)",
+  "Read(!**/*credentials*.rb)",
+  "Read(!**/*credentials*.swift)",
+  "Read(!**/*credentials*.md)"
+ ],
+ "delegate_denies": {
+  "why": "Written by `codeflow delegate init` into the task-scoped `--settings` file. A delegated Claude seat never leaves the sandbox: the parameter rule refuses every unsandboxed retry in every mode without a prompt (CC permissions, 'Match by input parameter'; CC sandboxing, 'The unsandboxed retry escape hatch').",
+  "claude": [
+   "Bash(dangerouslyDisableSandbox:true)"
+  ]
+ }
+}

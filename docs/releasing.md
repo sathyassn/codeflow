@@ -28,10 +28,21 @@ An edit of a pending major entry is assessed at major, so it declares the
 break and keeps its migration guidance, and a field left at the template's
 alternatives fails.
 The legacy `Contract` field is accepted during the transition and must agree
-with `Breaking` when both appear. `scripts/release.py check-pr` compares
+with `Breaking` when both appear. Alone, `not-applicable` and `compatible`
+mean `Breaking: no` and `breaking` means `Breaking: yes`, with `Migration`
+then needed only for a break; `codeflow ci` and `release.py` read it alike.
+`scripts/release.py check-pr` compares
 the declaration with the current target, actual proposed merge tree, pending
 annotations, coupled stamps, and conventional-marker floor. It checks known
-contradictions and watched contracts; it does not infer compatibility. Put one
+contradictions and watched contracts; it does not infer compatibility. It
+reads the body with the `codeflow` binary its caller names
+(`--codeflow-bin`, or `CODEFLOW_BIN`), the same reader `codeflow ci` uses,
+and never takes one from `PATH`: CI builds it from the checked-out tree, and
+the pre-push preflight passes the `codeflow` running the hook. CI's reader
+is therefore current; the pre-push reader is as current as the installed
+`codeflow` enforcing the push. The answer carries a protocol version, and
+`release.py` refuses a binary that answers another, but a binary answering
+the same version is trusted to read with its semantics. Put one
 `codeflow:release-impact patch|minor|major` HTML marker directly before
 each new pending entry. A withdrawal removes the affected entry/marker and
 explains in the PR body why the remaining net contract permits the lower target.

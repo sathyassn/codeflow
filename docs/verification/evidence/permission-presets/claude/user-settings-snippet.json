@@ -1,0 +1,10 @@
+{
+  "autoMode": {
+    "classifyAllShell": true,
+    "allow": [
+      "$defaults",
+      "git push --force-with-lease to a task/, fix/, feat/, docs/, chore/ or plan/ branch of the repository being worked, after a rebase",
+      "Merges into an integration/ branch of the working repository are routine landings; main and master are refused by git-guard and remote protection"
+    ]
+  }
+}

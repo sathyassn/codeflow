@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "git": {
+    "work_planning": "block",
+    "product_paths": [
+      "assets/**",
+      "crates/**"
+    ],
+    "protected_branches": [
+      "main",
+      "master"
+    ],
+    "commit_to_protected": "block",
+    "push_to_protected": "block",
+    "force_push_protected": "block",
+    "force_push_unprotected": "allow",
+    "delete_protected": "block",
+    "hard_reset_protected": "block",
+    "merge_to_protected": "block",
+    "pr_merge_to_protected": "block",
+    "local_ref_protection": "block",
+    "hook_integrity": "block",
+    "commit_format": "block",
+    "commit_types": [
+      "feat",
+      "fix",
+      "docs",
+      "refactor",
+      "test",
+      "chore",
+      "ci",
+      "perf",
+      "build",
+      "revert"
+    ],
+    "commit_desc_max_len": 50,
+    "commit_subject_max_len": 72,
+    "commit_body": "block",
+    "commit_body_max_bullets": 3,
+    "commit_body_bullet_max_len": 72,
+    "commit_footer_tokens": [],
+    "commit_required_footers": [],
+    "commit_ticket_keys": [],
+    "commit_ticket_required": "off",
+    "commit_ticket_pattern": "",
+    "breaking_watch_paths": [
+      "crates/codeflow-core/src/hooks/policy.rs",
+      "assets/base/scaffold-manifest.toml",
+      "assets/base/policy.json",
+      "crates/codeflow-cli/src/main.rs"
+    ],
+    "ai_attribution": "block",
+    "commit_emoji": "block",
+    "policy_characters": "block",
+    "branch_naming": "block",
+    "branch_prefixes": [
+      "feat/",
+      "fix/",
+      "docs/",
+      "refactor/",
+      "test/",
+      "chore/",
+      "ci/",
+      "hotfix/",
+      "plan/",
+      "task/",
+      "spike/",
+      "experiment/",
+      "integration/"
+    ],
+    "secret_scan": "block",
+    "test_gate_on_push": "block",
+    "security_review": "block",
+    "dep_audit": "block",
+    "pr_sections": "block",
+    "pr_release_impact": "warn",
+    "pr_breaking_level": "major",
+    "pr_required_sections": [
+      "Summary",
+      "Changes",
+      "Reviews",
+      "Release impact"
+    ],
+    "pr_code_sections": [
+      "Testing"
+    ],
+    "work_records": "block",
+    "automation_profiles": []
+  },
+  "security": {
+    "dangerous_commands": "block",
+    "privilege_escalation": "warn",
+    "headless_peer_runs": "warn"
+  }
+}

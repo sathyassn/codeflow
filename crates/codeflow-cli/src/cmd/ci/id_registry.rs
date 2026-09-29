@@ -60,13 +60,28 @@ pub(super) fn dispatch(
 }
 
 fn push(tagged: &mut Vec<super::TaggedViolation>, level: PolicyLevel, message: String) {
+    let remedy = clearing(&message).remedy();
     tagged.push(super::TaggedViolation {
         sha: None,
-        violation: Violation::new(
-            RULE,
-            level,
-            message,
-            "issue ids with `codeflow task|epic|spec new`; a maintainer admits a hand-written record with `codeflow ids admit`".to_string(),
-        ),
+        violation: Violation::new(RULE, level, message, remedy),
     });
+}
+
+/// The step that clears a merge-rule message: each names its own cause.
+fn clearing(message: &str) -> &'static codeflow_core::remedy::Clearing {
+    use codeflow_core::remedy::{
+        ID_REGISTRY, ID_REGISTRY_RETARGET, ID_REGISTRY_UID, ID_REGISTRY_UNFETCHED,
+    };
+    if message.contains("no `codeflow/registry` was fetched") {
+        &ID_REGISTRY_UNFETCHED
+    } else if message.contains("the uid of an existing record") {
+        &ID_REGISTRY_UID
+    } else if message.starts_with("collision:")
+        || message.contains("retarget")
+        || message.contains("it is a different record")
+    {
+        &ID_REGISTRY_RETARGET
+    } else {
+        &ID_REGISTRY
+    }
 }

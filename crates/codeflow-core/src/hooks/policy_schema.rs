@@ -649,7 +649,7 @@ fn deprecated_key(key: &str) -> Option<&'static str> {
 /// One warning per deprecated key present in `<root>/.codeflow/policy.json`.
 /// An absent or unreadable file gives none; [`validate_policy`] reports that.
 #[must_use]
-pub fn deprecation_warnings(root: &Path) -> Vec<String> {
+pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
     let Ok(data) = std::fs::read_to_string(root.join(".codeflow").join("policy.json")) else {
         return Vec::new();
     };
@@ -659,9 +659,9 @@ pub fn deprecation_warnings(root: &Path) -> Vec<String> {
     obj.keys()
         .filter_map(|key| {
             deprecated_key(key).map(|why| {
-                format!(
-                    "policy key {key} is deprecated and ignored: {why}; `codeflow update` \
-                     removes it, or delete it from .codeflow/policy.json"
+                crate::remedy::Finding::new(
+                    format!("policy key {key} is deprecated and ignored: {why}"),
+                    crate::remedy::POLICY_DEPRECATED.with(&[("key", key)]),
                 )
             })
         })
@@ -1233,7 +1233,14 @@ mod tests {
         assert!(validate_policy(dir.path()).is_ok());
         let warnings = deprecation_warnings(dir.path());
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("human_authorization is deprecated"));
+        assert!(warnings[0]
+            .text
+            .contains("human_authorization is deprecated"));
+        assert!(
+            warnings[0].remedy.contains("codeflow update"),
+            "{}",
+            warnings[0]
+        );
         std::fs::write(dir.path().join(".codeflow/policy.json"), r#"{"git":{}}"#).unwrap();
         assert!(deprecation_warnings(dir.path()).is_empty());
     }

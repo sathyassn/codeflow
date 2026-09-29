@@ -45,6 +45,22 @@ impl PolicyLevel {
     pub fn is_active(self) -> bool {
         matches!(self, Self::Block | Self::Warn)
     }
+
+    /// The lower of two levels, in the order block, warn, allow, off.
+    #[must_use]
+    pub fn lower(self, other: Self) -> Self {
+        let rank = |level: Self| match level {
+            Self::Block => 3,
+            Self::Warn => 2,
+            Self::Allow => 1,
+            Self::Off => 0,
+        };
+        if rank(other) < rank(self) {
+            other
+        } else {
+            self
+        }
+    }
 }
 
 impl fmt::Display for PolicyLevel {

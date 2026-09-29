@@ -29,6 +29,10 @@ pub fn adopted(root: &Path) -> bool {
     matches!(release_backend(root), Ok(ReleaseBackend::Codeflow)) && root.join(SCRIPT).is_file()
 }
 
+/// How `release.py preflight` opens the note that reports a valid release
+/// tree, a result with nothing to clear.
+pub const TREE_VALID: &str = "release tree valid at ";
+
 /// What `release.py preflight` found for one pushed branch.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Preflight {
@@ -49,12 +53,20 @@ impl Preflight {
 }
 
 /// Run `release.py preflight` for the branch `branch` pushed at `head`, with
-/// `remote` naming where its target's tracking refs live.
+/// `remote` naming where its target's tracking refs live. `codeflow` is the
+/// binary release.py reads a PR draft with: the caller passes itself, so
+/// the reader is the same binary as the enforcer (TSK-147 F4).
 ///
 /// # Errors
 /// The calculator could not run or printed no result; the caller reports
 /// that the check did not run.
-pub fn preflight(root: &Path, head: &str, branch: &str, remote: &str) -> Result<Preflight, String> {
+pub fn preflight(
+    root: &Path,
+    head: &str,
+    branch: &str,
+    remote: &str,
+    codeflow: &Path,
+) -> Result<Preflight, String> {
     let output = Command::new(PYTHON)
         .args([
             "-B",
@@ -67,6 +79,9 @@ pub fn preflight(root: &Path, head: &str, branch: &str, remote: &str) -> Result<
             "--remote",
             remote,
         ])
+        // An environment variable, not an argument: a project's older
+        // release.py ignores it instead of refusing the call.
+        .env("CODEFLOW_BIN", codeflow)
         .current_dir(root)
         .output()
         .map_err(|error| format!("{PYTHON} {SCRIPT}: {error}"))?;
@@ -123,6 +138,15 @@ fn failure(output: &std::process::Output) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_valid_tree_note_is_the_one_release_py_prints() {
+        let script = include_str!("../../../scripts/release.py");
+        assert!(
+            script.contains(&format!("f\"{TREE_VALID}{{")),
+            "release.py no longer opens its valid-tree note with {TREE_VALID:?}"
+        );
+    }
+
     fn project(backend: &str, script: Option<&str>) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
@@ -155,12 +179,15 @@ mod tests {
         if !python_available() {
             return;
         }
-        let script = "import json, sys\nblocked = 'break' in sys.argv\nprint(json.dumps({'status': 'blocked' if blocked else 'warn', 'notes': ['n']}))\nsys.exit(1 if blocked else 0)\n";
+        // The stand-in calculator echoes the reader it was given, so the
+        // test sees the caller's binary reach it by name (TSK-147 F4).
+        let script = "import json, sys\nblocked = 'break' in sys.argv\nimport os\nreader = os.environ['CODEFLOW_BIN']\nprint(json.dumps({'status': 'blocked' if blocked else 'warn', 'notes': [reader]}))\nsys.exit(1 if blocked else 0)\n";
         let dir = project("codeflow", Some(script));
-        let warn = preflight(dir.path(), "HEAD", "task/x", "origin").unwrap();
+        let reader = Path::new("/opt/the-running-codeflow");
+        let warn = preflight(dir.path(), "HEAD", "task/x", "origin", reader).unwrap();
         assert!(!warn.blocked());
-        assert_eq!(warn.notes, ["n"]);
-        let blocked = preflight(dir.path(), "HEAD", "break", "origin").unwrap();
+        assert_eq!(warn.notes, ["/opt/the-running-codeflow"]);
+        let blocked = preflight(dir.path(), "HEAD", "break", "origin", reader).unwrap();
         assert!(blocked.blocked());
     }
 
@@ -174,13 +201,15 @@ mod tests {
             Some("import sys\nsys.stderr.write('release error: boom')\nsys.exit(2)\n"),
         );
         assert_eq!(
-            preflight(dir.path(), "HEAD", "b", "origin").unwrap_err(),
+            preflight(dir.path(), "HEAD", "b", "origin", Path::new("codeflow")).unwrap_err(),
             "release error: boom"
         );
         let silent = project("codeflow", Some("print('not json')\n"));
-        assert!(preflight(silent.path(), "HEAD", "b", "origin")
-            .unwrap_err()
-            .contains("printed no result"));
+        assert!(
+            preflight(silent.path(), "HEAD", "b", "origin", Path::new("codeflow"))
+                .unwrap_err()
+                .contains("printed no result")
+        );
     }
 
     #[test]
