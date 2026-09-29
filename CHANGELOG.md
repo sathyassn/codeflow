@@ -1013,6 +1013,16 @@ publication date._
   template.
 
 <!-- codeflow:release-impact patch -->
+- **Pre-push landing base.** Fast-forwards of protected and integration
+  branches check from their advertised tip. Branches with a declared task
+  target check from the merge base with that target's advertised tip and
+  name the target, preserving every commit the destination lacks in the
+  checked range. Branches without a declared target keep the existing
+  advertised-history check. A landing from another line now checks that
+  line's records against the receiving line's baseline. A legacy record
+  missing from that baseline can block the push, as it would in PR CI.
+
+<!-- codeflow:release-impact patch -->
 - **Herdr delivery confirms a started turn.** `cf-herdr` delivers through
   `scripts/deliver.py`. For a Codex or Grok seat it sends one Enter and
   confirms within 20 s that the seat started working, and otherwise reports
