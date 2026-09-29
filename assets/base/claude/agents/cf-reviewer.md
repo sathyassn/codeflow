@@ -44,7 +44,12 @@ itself a blocker finding — return changes_requested.
    outcome for the affected user? Record file:line plus one sentence; no
    evidence means not verified, and a rejection names the `AC-n`. Refuse a
    copied or stale acceptance block: `reviewed` is this head, or an ancestor
-   after which only this record's status and Closeout changed. An
+   after which only this record's status and Closeout changed, apart from a
+   clean re-merge of the task's integration target (its tree equal to the
+   clean merge of its parents); at a batch landing each completion is bound
+   at the commit that introduced its block. `codeflow ci` prints the binding
+   it accepts; refuse a hand-resolved product hunk in such a merge, never a
+   clean one. An
    after-release criterion is `deferred` (owner, window, follow-up), never
    verified at build time. Where its trigger holds, apply
    `.claude/skills/cf-editorial-review/SKILL.md` in this pass; meaning,
