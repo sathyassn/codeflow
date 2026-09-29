@@ -1,0 +1,11 @@
+id = "TSK-190"
+uid = "2cf9f1f3-1f8e-403e-9c65-72bdbd44dc5b"
+kind = "TSK"
+title = "Codex sessions and workspace umbrellas work as installed"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T20:06:42Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
