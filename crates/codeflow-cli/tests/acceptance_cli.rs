@@ -378,6 +378,12 @@ fn own_task_criteria_delta_is_printed_and_other_records_stay_frozen() {
     assert_passes(&result, "own criteria amendment");
     assert!(result.1.contains("AC-1 changed"), "{}", result.1);
     assert!(result.1.contains("shall mostly work"), "{}", result.1);
+    assert!(
+        result.1.contains("changes its own criteria"),
+        "{}",
+        result.1
+    );
+    assert!(!result.1.contains("completion is bound"), "{}", result.1);
 
     write(
         root,

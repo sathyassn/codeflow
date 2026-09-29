@@ -242,6 +242,9 @@ catalog! {
     /// A completion bound to its reviewed commit: evidence, not a refusal.
     ACCEPTANCE_BOUND = Step::Codeflow("codeflow ci"),
         "nothing to change: the completion is bound to its reviewed commit, which `codeflow ci` proves for binding only; a human reviewer confirms that the review the block names covers that commit";
+    /// A task's own criteria change in its PR: evidence, not a refusal.
+    CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
+        "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before it completes";
     /// A release-line legacy criteria change, landed before the release
     /// rule and covered by its line's cutoff (SPC-013 R-120).
     RELEASE_LEGACY_CHANGE = Step::Edit(".codeflow/project.toml"),

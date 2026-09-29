@@ -49,9 +49,14 @@ pub(super) fn dispatch(
         Ok(found) => {
             for found in found {
                 if found.note {
+                    let remedy = if found.rule == FROZEN_RULE {
+                        codeflow_core::remedy::CRITERIA_DELTA.remedy()
+                    } else {
+                        codeflow_core::remedy::ACCEPTANCE_BOUND.remedy()
+                    };
                     let note = codeflow_core::remedy::Finding::new(
                         format!("{}: {}", found.rule, found.message),
-                        codeflow_core::remedy::ACCEPTANCE_BOUND.remedy(),
+                        remedy,
                     );
                     println!("{}", note.line("codeflow ci", "note"));
                 } else {
