@@ -292,4 +292,5 @@ Downgrade is never destructive: stop managing, do not delete.
   in-session is laundering — blocked wherever a PreToolUse guard binds (Claude
   Code always; interactive codex after the one-time `/hooks` trust), while the
   git-hook plane honors the env by design as the sanctioned human path; the
-  remote perimeter is the hard line. Never `gh pr merge --delete-branch`.
+  remote perimeter is the hard line. Never `gh pr merge --delete-branch`;
+  cleanup deletes the pushed branch after merge proof.

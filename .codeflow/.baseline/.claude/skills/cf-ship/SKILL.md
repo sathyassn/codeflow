@@ -78,16 +78,24 @@ description: Land finished work — docs and capability updates, then a PR throu
    waits, reruns, or overrides — that is merge authorization, not a failed
    test. Or `codeflow integrate <branch> --into <target>` when there is no
    remote. An agent never merges into a protected branch — no `gh pr merge`
-   into a protected base, no by-hand merge, never `gh pr merge --delete-branch`.
+   into a protected base, no by-hand merge, never `gh pr merge --delete-branch`
+   (step 10 deletes the pushed branch after proof).
    Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 9. Confirm the landed state with `codeflow status`; report the final epic and
    capability state.
-10. Clean up after the human merge, with proof, from outside the task
-    worktree, as the worktree rules' "Cleanup" section sets out. The proof
-    commands: `git merge-base --is-ancestor <branch> origin/<target>` for a
-    normal merge; for a squash merge, require `gh pr view <n> --json
+10. Clean up after every landing, with proof, in the same step: whoever
+    landed it runs cleanup, the primary after an integration-line landing
+    and the session confirming a human merge into `main`, from outside the
+    task worktree, as the worktree rules' "Cleanup" section sets out. The
+    proof commands: `git merge-base --is-ancestor <branch> origin/<target>`
+    for a normal merge; for a squash merge, require `gh pr view <n> --json
     state,headRefOid` to report `MERGED` and the branch-tip SHA, or
     `git cherry origin/<target> <branch>` to contain no unapplied `+` entry.
     Then remove the clean worktree (never use `git worktree remove --force`)
     and delete the branch with `git branch -d`, or `-D` only after the squash
-    proof. Retain anything unproven.
+    proof. Delete the pushed branch with `git push origin --delete <branch>`
+    only when the PR is `MERGED` and `git ls-remote origin
+    refs/heads/<branch>` shows its recorded head SHA. Remove the task's build
+    output: its `target/`, any `CARGO_TARGET_DIR` made for it outside the
+    worktree, and its review builds; a folder another active task uses
+    stays. Retain anything unproven.

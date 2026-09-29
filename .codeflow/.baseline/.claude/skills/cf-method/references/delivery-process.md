@@ -334,8 +334,8 @@ no epic, with the event that revisits it), or drop with the reason.
                 acceptance block, PR body with evidence      hooks, guards, policy, CI,
                                                              credentials or deps change)
  land           candidate SHA, full gate output cited by    primary; other lineage when
-                run id, landing merge on the line           a product hunk was
-                                                             hand-resolved or two tasks
+                run id, landing merge on the line,          a product hunk was
+                cleanup with merge proof                     hand-resolved or two tasks
                                                              touched one hotspot
  close          epic acceptance block, one PR to main,      operator merges main
                 cleanup with merge proof

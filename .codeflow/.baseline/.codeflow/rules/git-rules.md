@@ -88,7 +88,9 @@ merge, push, force-push, delete, or hard-reset on them. Work lands by
 exactly two paths: a PR with evidenced-green checks merged by a human, or
 `codeflow integrate <branch> --into <target>`. Never set override envs
 (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens), which is laundering, and never
-`gh pr merge --delete-branch` (it can corrupt the root repo).
+`gh pr merge --delete-branch` (it can corrupt the root repo). The pushed
+branch is deleted later, in cleanup after merge proof (`worktrees.md`
+"Cleanup").
 
 ## Bodies of work
 
