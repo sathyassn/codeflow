@@ -5,6 +5,7 @@
 
 mod bounded_file;
 pub mod capability;
+pub mod ceremony;
 pub mod delegate;
 pub mod doctor;
 pub mod error;
@@ -21,6 +22,7 @@ pub mod reading;
 pub mod recall;
 pub mod registry;
 pub mod release_local;
+pub mod remedy;
 pub mod remote;
 pub mod scaffold;
 pub mod security;

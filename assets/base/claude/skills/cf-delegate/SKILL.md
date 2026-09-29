@@ -125,6 +125,9 @@ guard binding when `agy` is someone's harness, read
   approved processor; route qualification is not data authority. An
   already-authorized scoped handoff needs no new approval; the lead verifies
   effects and claims.
+- **Plain briefs.** Write each delegate prompt plainly: simple,
+  straightforward and clear, no mannered prose (see
+  `.codeflow/rules/writing.md`).
 - **Synthesize, never paste.** A finding is input, not conclusion: re-derive and
   cite it, state agreement/disagreement; unverified remains unverifiable.
 - **Stay within ToS.** This process-boundary composition is sanctioned (OpenAI

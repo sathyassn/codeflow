@@ -32,6 +32,9 @@ const BOOTSTRAP_COMMIT_TIMEOUT_MS = 120_000;
 const BROWSER_CLOSE_TIMEOUT_MS = 15_000;
 const BROWSER_TERMINATION_GRACE_MS = 2_500;
 const PROCESS_INVENTORY_TIMEOUT_MS = 10_000;
+// A busy machine lists more than execFileSync's 1 MiB default; the inventory
+// must not fail on the length of other processes' command lines.
+const PROCESS_INVENTORY_MAX_BUFFER = 64 * 1024 * 1024;
 
 class BoundedTimeoutError extends Error {
   constructor(timeout, phase) {
@@ -935,7 +938,7 @@ function processInventory() {
       const raw = execFileSync(powershell, [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
         "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress",
-      ], { env: browserEnvironment, encoding: "utf8", timeout: PROCESS_INVENTORY_TIMEOUT_MS });
+      ], { env: browserEnvironment, encoding: "utf8", timeout: PROCESS_INVENTORY_TIMEOUT_MS, maxBuffer: PROCESS_INVENTORY_MAX_BUFFER });
       const parsed = JSON.parse(raw || "[]");
       return (Array.isArray(parsed) ? parsed : [parsed]).map((entry) => ({
         pid: Number(entry.ProcessId),
@@ -948,6 +951,7 @@ function processInventory() {
       env: browserEnvironment,
       encoding: "utf8",
       timeout: PROCESS_INVENTORY_TIMEOUT_MS,
+      maxBuffer: PROCESS_INVENTORY_MAX_BUFFER,
     });
     return raw.split("\n").flatMap((line) => {
       const match = line.match(/^\s*(\d+)\s+(\d+)\s+((?:\S+\s+){4}\d{4})\s+(.+)$/u);

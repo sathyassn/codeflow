@@ -281,10 +281,7 @@ class HerdrDeliveryTests(unittest.TestCase):
         print(f"\ncanary: tab {label} ({tab_id}), agent {name}, pane {pane_id}")
         try:
             wait_for_shell(self, pane_id)
-            subprocess.check_call(
-                ["herdr", "agent", "start", name, "--kind", kind, "--pane", pane_id,
-                 "--", *native]
-            )
+            start_agent(self, name, kind, pane_id, native)
             with tempfile.TemporaryDirectory() as tmp:
                 prompt = Path(tmp) / "canary.md"
                 prompt.write_text("Reply with the single word ok.\n", encoding="utf-8")
@@ -300,22 +297,64 @@ class HerdrDeliveryTests(unittest.TestCase):
             subprocess.call(["herdr", "tab", "close", tab_id])
 
 
+SHELLS = {"zsh", "bash", "sh"}
+
+
+def shell_is_idle(foreground: list[dict]) -> bool:
+    """True when the pane's foreground group is only a shell: a startup child
+    (a prompt plugin, `sleep`, an rc command) still running means the shell
+    has not reached its prompt yet."""
+    names = [proc.get("name", "") for proc in foreground]
+    return bool(names) and all(name in SHELLS for name in names)
+
+
 def wait_for_shell(case: unittest.TestCase, pane_id: str) -> None:
-    deadline = time.time() + 10
+    """Wait until the pane shows an idle shell on two polls in a row."""
+    deadline = time.time() + 20
+    idle = 0
     while time.time() < deadline:
         info = herdr("pane", "process-info", "--pane", pane_id)
-        names = [
-            proc.get("name", "")
-            for proc in info["result"]["process_info"].get("foreground_processes", [])
-        ]
-        if any(name in {"zsh", "bash", "sh"} for name in names):
+        foreground = info["result"]["process_info"].get("foreground_processes", [])
+        idle = idle + 1 if shell_is_idle(foreground) else 0
+        if idle >= 2:
             return
         time.sleep(0.2)
-    case.fail("new pane never reached a shell prompt")
+    case.fail("new pane never reached an idle shell prompt")
+
+
+def start_agent(
+    case: unittest.TestCase, name: str, kind: str, pane_id: str, native: list[str]
+) -> None:
+    """Start the seat. Only Herdr's pre-launch `agent_pane_busy` refusal is
+    retried, and only while no agent of that name is registered; any other
+    failure is final, and no prompt is ever resent."""
+    deadline = time.time() + 20
+    while True:
+        run = subprocess.run(
+            ["herdr", "agent", "start", name, "--kind", kind, "--pane", pane_id,
+             "--", *native],
+            capture_output=True, text=True,
+        )
+        if run.returncode == 0:
+            return
+        busy = "agent_pane_busy" in run.stdout + run.stderr
+        registered = subprocess.run(
+            ["herdr", "agent", "get", name], capture_output=True, text=True
+        ).returncode == 0
+        if not busy or registered or time.time() >= deadline:
+            case.fail(f"herdr agent start failed: {run.stdout}{run.stderr}")
+        time.sleep(0.5)
 
 
 class StubDeliveryTests(unittest.TestCase):
     """AC-1 and AC-2 against a stand-in `herdr`."""
+
+    def test_a_shell_still_running_startup_is_not_ready(self):
+        """A pane whose shell still runs a startup child is not ready for a
+        seat; only a foreground group of shells alone is."""
+        self.assertFalse(shell_is_idle([{"name": "zsh"}, {"name": "sleep"}]))
+        self.assertFalse(shell_is_idle([]))
+        self.assertTrue(shell_is_idle([{"name": "zsh"}]))
 
     def seat(self, **scenario: object) -> StubSeat:
         tmp = tempfile.TemporaryDirectory()

@@ -13,7 +13,6 @@
 //! the hard line (charter §6.5).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use thiserror::Error;
 
@@ -249,7 +248,7 @@ pub fn integrate(
     // `update-ref` advances the ref in place — compare-and-swap against the
     // pre-rebase oid (safe under concurrency), with the gate token set so the
     // reference-transaction hook admits this sanctioned landing.
-    let update = Command::new("git")
+    let update = crate::git::command()
         .args([
             "update-ref",
             &format!("refs/heads/{target}"),
@@ -395,7 +394,7 @@ fn resolve_branch(repo: &git2::Repository, name: &str) -> Result<git2::Oid, Inte
 /// Tracked-file modifications that block integrate (untracked files are
 /// permitted — they survive checkout/rebase untouched).
 fn dirty_files(repo_root: &Path) -> Result<Vec<String>, IntegrateError> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(["status", "--porcelain", "--untracked-files=no"])
         .current_dir(repo_root)
         .output()
@@ -414,7 +413,7 @@ fn dirty_files(repo_root: &Path) -> Result<Vec<String>, IntegrateError> {
 }
 
 fn checkout(repo_root: &Path, name: &str) -> Result<(), IntegrateError> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(["checkout", name])
         .current_dir(repo_root)
         .output()
@@ -433,7 +432,7 @@ fn checkout(repo_root: &Path, name: &str) -> Result<(), IntegrateError> {
 }
 
 fn restore_checkout(repo_root: &Path, name: &str) -> Result<(), String> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(["checkout", name])
         .current_dir(repo_root)
         .output()
@@ -446,7 +445,7 @@ fn restore_checkout(repo_root: &Path, name: &str) -> Result<(), String> {
 }
 
 fn current_checkout(repo_root: &Path) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(["symbolic-ref", "--short", "HEAD"])
         .current_dir(repo_root)
         .output()
@@ -464,7 +463,7 @@ fn refresh_target_worktrees(
     tested_oid: git2::Oid,
 ) -> Vec<String> {
     let mut warnings = Vec::new();
-    let Ok(output) = Command::new("git")
+    let Ok(output) = crate::git::command()
         .args(["worktree", "list", "--porcelain"])
         .current_dir(repo_root)
         .output()
@@ -498,7 +497,7 @@ fn refresh_target_worktrees(
         }
         match worktree_clean_at(&path, old_target_oid) {
             Ok(true) => {
-                let reset = Command::new("git")
+                let reset = crate::git::command()
                     .args([
                         "-C",
                         path.to_string_lossy().as_ref(),
@@ -529,7 +528,7 @@ fn refresh_target_worktrees(
 
 fn worktree_clean_at(path: &Path, old_target_oid: git2::Oid) -> Result<bool, ()> {
     let git = |args: &[&str]| {
-        Command::new("git")
+        crate::git::command()
             .arg("-C")
             .arg(path)
             .args(args)
@@ -582,9 +581,10 @@ fn count_commits(repo: &git2::Repository, old: git2::Oid, new: git2::Oid) -> usi
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) -> std::process::Output {
-        let output = Command::new("git")
+        let output = crate::git::command()
             .args(args)
             .env("GIT_AUTHOR_NAME", "Test")
             .env("GIT_AUTHOR_EMAIL", "test@example.com")

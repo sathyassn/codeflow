@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "git": {
+    "work_planning": "block",
+    "product_paths": [
+      "assets/**",
+      "crates/**"
+    ],
+    "protected_branches": [
+      "main",
+      "master"
+    ],
+    "commit_to_protected": "block",
+    "push_to_protected": "block",
+    "force_push_protected": "block",
+    "force_push_unprotected": "allow",
+    "delete_protected": "block",
+    "hard_reset_protected": "block",
+    "merge_to_protected": "block",
+    "pr_merge_to_protected": "block",
+    "local_ref_protection": "block",
+    "hook_integrity": "block",
+    "commit_format": "block",
+    "commit_types": [
+      "feat",
+      "fix",
+      "docs",
+      "refactor",
+      "test",
+      "chore",
+      "ci",
+      "perf",
+      "build",
+      "revert"
+    ],
+    "commit_desc_max_len": 50,
+    "commit_subject_max_len": 72,
+    "commit_body": "block",
+    "commit_body_max_bullets": 3,
+    "commit_body_bullet_max_len": 72,
+    "commit_footer_tokens": [],
+    "commit_required_footers": [],
+    "commit_ticket_keys": [],
+    "commit_ticket_required": "off",
+    "commit_ticket_pattern": "",
+    "breaking_watch_paths": [
+      "crates/codeflow-core/src/hooks/policy.rs",
+      "assets/base/scaffold-manifest.toml",
+      "assets/base/policy.json",
+      "crates/codeflow-cli/src/main.rs"
+    ],
+    "ai_attribution": "block",
+    "commit_emoji": "block",
+    "policy_characters": "block",
+    "branch_naming": "block",
+    "branch_prefixes": [
+      "feat/",
+      "fix/",
+      "docs/",
+      "refactor/",
+      "test/",
+      "chore/",
+      "ci/",
+      "hotfix/",
+      "plan/",
+      "task/",
+      "spike/",
+      "experiment/",
+      "integration/"
+    ],
+    "secret_scan": "block",
+    "test_gate_on_push": "block",
+    "security_review": "block",
+    "dep_audit": "block",
+    "pr_sections": "block",
+    "pr_release_impact": "warn",
+    "pr_breaking_level": "major",
+    "pr_required_sections": [
+      "Summary",
+      "Changes",
+      "Reviews",
+      "Release impact"
+    ],
+    "pr_code_sections": [
+      "Testing"
+    ],
+    "work_records": "block",
+    "automation_profiles": [],
+    "discard_uncommitted": "block",
+    "clean_regenerable": [
+      "target/",
+      "node_modules/",
+      "dist/",
+      "build/",
+      ".venv/",
+      "__pycache__/",
+      "coverage/"
+    ]
+  },
+  "security": {
+    "dangerous_commands": "block",
+    "privilege_escalation": "block",
+    "script_bypass": "warn",
+    "outward_actions": "block",
+    "interpreter_scan": "block",
+    "secret_reads": "block",
+    "enforcement_baseline": "block",
+    "headless_peer_runs": "block",
+    "sandbox_retry": "allowlist",
+    "sandbox_retry_allow": [
+      {
+        "program": "node",
+        "script": "~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs",
+        "program_options": [],
+        "cwd": "project",
+        "refuse_if_env": [
+          "NODE_OPTIONS",
+          "NODE_PATH",
+          "NODE_REPL_EXTERNAL_MODULE"
+        ],
+        "subcommands": {
+          "review": {
+            "flags": [
+              "--wait",
+              "--background",
+              "--json"
+            ],
+            "values": {
+              "--base": "git-ref",
+              "--scope": [
+                "auto",
+                "working-tree",
+                "branch"
+              ],
+              "--model": "word"
+            },
+            "positionals": 0
+          },
+          "adversarial-review": {
+            "flags": [
+              "--wait",
+              "--background",
+              "--json"
+            ],
+            "values": {
+              "--base": "git-ref",
+              "--scope": [
+                "auto",
+                "working-tree",
+                "branch"
+              ],
+              "--model": "word"
+            },
+            "positionals": "text"
+          },
+          "task": {
+            "flags": [
+              "--background",
+              "--write",
+              "--resume-last",
+              "--resume",
+              "--fresh",
+              "--json"
+            ],
+            "values": {
+              "--model": "word",
+              "--effort": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ]
+            },
+            "positionals": "text"
+          },
+          "status": {
+            "flags": [
+              "--all",
+              "--wait",
+              "--json"
+            ],
+            "values": {
+              "--timeout-ms": "integer",
+              "--poll-interval-ms": "integer"
+            },
+            "positionals": "job-id"
+          },
+          "result": {
+            "flags": [
+              "--json"
+            ],
+            "values": {},
+            "positionals": "job-id"
+          },
+          "cancel": {
+            "flags": [
+              "--json"
+            ],
+            "values": {},
+            "positionals": "job-id"
+          }
+        },
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>",
+        "script_digest": {
+          "scripts/codex-companion.mjs": "<sha256 at qualification>",
+          "scripts/lib/*.mjs": "<sha256 per file at qualification>"
+        },
+        "child_executables": {
+          "codex": "<absolute path recorded at qualification>"
+        },
+        "refuse_writable_path_entries": true
+      }
+    ]
+  }
+}

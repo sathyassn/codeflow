@@ -341,12 +341,11 @@ fn pointer_paths(root: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::process::Command;
 
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

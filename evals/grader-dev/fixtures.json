@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "grader-dev-greeting",
+      "tier": "standard",
+      "state": {
+        "branch": "main",
+        "records": "none"
+      },
+      "files": {
+        "README.md": "# Greeting\n\n`greet(name)` returns the greeting the front desk prints.\n\nRun the tests with `PYTHONPATH=src python3 -m unittest discover -s tests`.\n",
+        "src/greet.py": "\"\"\"The front desk greeting.\"\"\"\n\n\ndef greet(name):\n    return \"Hello \" + name\n",
+        "tests/test_greet.py": "import unittest\n\nfrom greet import greet\n\n\nclass GreetTest(unittest.TestCase):\n    def test_names_the_guest(self):\n        self.assertIn(\"Ada\", greet(\"Ada\"))\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n",
+        "ISSUE.md": "# Greeting punctuation\n\nThe greeting should read `Hello, Ada!` for a guest named Ada.\n"
+      }
+    }
+  ]
+}

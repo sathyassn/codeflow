@@ -78,8 +78,10 @@ secret-bearing environment filter pinned on. Claude-hosted plugin turns pass
 the current ensemble's model and effort explicitly so they cannot inherit a
 different user default. Claude
 ships a fail-closed sandbox on macOS, Linux, and WSL2, public web/tool access,
-raw model/cloud credential removal for sandboxed Bash, and ask rules for
-destructive source-control operations. A sandbox failure may request an
+raw model/cloud credential removal for sandboxed Bash, and no ask rules:
+the actions the operator performs are denied by rules generated from one
+action table, which also generates the Codex command rules; Grok gets a
+sandbox profile (ADR-0075). A sandbox failure may request an
 auto-classified unsandboxed retry
 only for a trusted installed tool that needs host state; this enables the
 official Codex plugin without granting a general bypass. Project `acceptEdits`
@@ -103,7 +105,10 @@ adrs: [ADR-0011, ADR-0019]
 unmodified files are replaced, user-modified files get a 3-way merge from
 `.codeflow/.baseline/` (conflicts produce `.new` + report), managed regions
 (AGENTS.md markers, settings.json codeflow keys) are surgically updated, and
-user-owned schema-versioned files only gain new keys with defaults. It also
+user-owned schema-versioned files gain new keys with defaults; a policy scalar
+still equal to the prior shipped default moves to the new default and is
+reported, and a value that differs is kept. Where no baseline was recorded,
+the settings and policy are compared with the copies 2.1.0 shipped. It also
 installs any manifest entry that is in-tier but missing on disk — so a file that
 became in-tier since the last install (e.g. an old `--minimal` repo gaining the
 enforcement floor under ADR-0019) is reconciled into place and recorded, not just
@@ -119,7 +124,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "scripts/test_release.py"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
@@ -195,6 +200,16 @@ the managed CI file.
 Secret scanning fails closed if libgit2 cannot traverse the complete staged
 diff. Hook stdin read failures remain advisory but print an explicit degraded
 ref-check warning instead of passing silently.
+Each operation a git hook or session guard stops appends one `refusal` event
+to the clone's ledger, naming the plane, the effective level and the rules,
+never the command; a finding at warn stops nothing and is not written.
+`codeflow report ceremony` reads it with the merge history over a window of
+pull requests or dates: pull requests per logical change, record status pull
+requests on their own row, review rounds asked of the host (`unknown` when the
+host cannot answer, the one host-backed read of SPC-013 R-103) and refusals
+(`unknown` before the clone began recording). The baseline over pull requests
+568 to 644 is `docs/verification/ceremony-baseline-2026-09-28.md`, and the
+release checklist compares each release's window with it.
 
 ## CAP-004 — test-gate
 
@@ -217,12 +232,20 @@ detected is a loud no-op (exit 0) so the bootstrap/early-setup path stays green;
 (CI, the pipeline verify gate) where "ran nothing" must not read as a pass. With a
 stack it is a real gate, re-run in CI. The pre-push hook runs the push set (the
 targets with a `quick` mode) plus `codeflow validate --docs` and `codeflow ci` on
-the pushed range, blocking by default under `test_gate_on_push`. It blocks on
+the pushed range, blocking by default under `test_gate_on_push`. An existing
+protected or `integration/` branch fast-forward starts at its advertised tip.
+Branches with a declared target use the merge base with its advertised tip,
+reading the target from the task record at the pushed commit; the hook names
+that target. Line rewrites, undeclared branches and unavailable targets retain
+the advertised-history fallback. An advertised target missing locally is noted. It blocks on
 what it can see and names what it left to CI (an unresolved range, a sibling
 ref, a dirty, sparse or submodule-incomplete checkout); the test suite belongs
 to the full gate. One full gate runs at a time on a machine (a second refuses,
 naming the holder), a gate that runs cargo warns about a `CARGO_TARGET_DIR`
 outside the worktree, and each target prints a start line on stderr as it begins.
+A killed gate never lets a second one run beside its target: on Unix the lock
+stays held until the target's process group exits, and on Windows the target's
+job object ends its process tree with the gate.
 File and aggregate coverage thresholds all contribute to the gate
 verdict; `changed_files` rules are rejected until an explicit comparison base is
 available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
@@ -730,7 +753,7 @@ id: CAP-013
 name: model-binding-evaluation
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "evals/model-artifacts/test_retention_pack.py", "codeflow-cli tests/retention_pack.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/live_eval_pack.rs (with the live delivery holdout checked out)", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "evals/model-artifacts/test_retention_pack.py", "codeflow-cli tests/retention_pack.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017, EPC-020]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060]
 ```
@@ -763,6 +786,26 @@ local settings. The materializer refuses a scaffold without the rule map and
 re-injection hooks; `check-session` checks one session, the scripted turns
 and the compaction before extracting the probe turn, and `retention-report`
 applies the bar. Offline checks prove the kit, not live behaviour.
+
+A case may also carry `expected.files` and `expected.effects`, graded by
+`eval_kit.py grade` on the work a session left: file state, coherent reviews
+in the reviewer's verdict format, branches and their tracking, records
+consistent with the id registry, changed paths, judgements bound to the exact
+text from a judge whose calibration meets every labelled control (otherwise
+the assertion is ungraded and the trial never scores as a pass), confined
+product checks with expected output, and the shipped `codeflow validate
+--docs` and `codeflow ci`, which must finish their checks. It does not prove CLI use, readiness checks or
+review before completion; those need the harness's own record of the session
+(TSK-116), and a command's process record is reported as supporting evidence
+only. Graded cases live in a graded suite outside the shipped kit and binary:
+a public development suite in `evals/grader-dev/`, and the live delivery
+holdout of SPC-013 R-105 on the private archive's `test/live-delivery-holdout`
+ref, which is never merged; `evals/holdout.json` records its paths, digests
+and text fingerprints, and `holdout-check` keeps it out of the tracked tree.
+Subjects work in a separate subjects root under a fixture boundary that covers
+both roots. A trial's status is recomputed from a grade bound to the current
+case, fixture and grader; a timed-out or errored session is kept and graded as
+a failure, and a pack result must keep every trial (TSK-111).
 
 The kit separates durable doctrine from fast-changing bindings. A
 source-controlled harness catalog marks a harness `capability-supported` only
@@ -1048,10 +1091,10 @@ adrs: [ADR-0048, ADR-0058]
 
 `codeflow portal setup --path <repository-relative-directory>` explicitly
 adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
-portal build requires Node 22.19.0 or newer. The aggregate CI gate runs on Node
-26.4.0, and its full strict target installs, checks, builds, and validates the
-dogfood portal; the portal-local `.node-version` and the Windows adapter-test
-lane pin Node 24.18.0.
+portal build requires Node 22.19.0 or newer. The full strict gate installs,
+checks, builds, and validates the dogfood portal on the Node 24.18.0 its
+`.node-version` pins, as the Windows adapter-test lane does, and runs the
+presentation renderer's target on the 26.4.0 its own `.node-version` pins.
 The starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
 replace-only updates without pristine runtime copies or source merges. Runtime

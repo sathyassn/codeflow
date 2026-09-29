@@ -46,6 +46,9 @@ const SYSTEM_DIRS: &[&str] = &[
 /// harness workspace sandbox remains the boundary for those scoped paths.
 const ROOT_COLLECTION_DIRS: &[&str] = &["Users", "home", "Volumes", "mnt", "media"];
 
+/// The collections whose direct children are home directories.
+const HOME_COLLECTION_DIRS: &[&str] = &["Users", "home"];
+
 /// Split a shell command into tokens without treating Windows path backslashes
 /// as escapes. This is intentionally a small classifier, not a shell parser:
 /// it preserves quoted paths such as `C:\Program Files` and is conservative
@@ -72,7 +75,7 @@ fn command_tokens(command: &str) -> Vec<String> {
     tokens
 }
 
-fn program_name(token: &str) -> String {
+pub(super) fn program_name(token: &str) -> String {
     token
         .rsplit(['/', '\\'])
         .next()
@@ -86,7 +89,7 @@ fn program_name(token: &str) -> String {
 /// stop at `sudo`, Windows `runas`/`gsudo`, a shell `-c`, or `PowerShell`'s
 /// `Start-Process`. This deliberately handles only structured, well-known
 /// launch forms; it is not intended to emulate a shell.
-fn effective_invocation(tokens: &[String]) -> Vec<String> {
+pub(super) fn effective_invocation(tokens: &[String]) -> Vec<String> {
     let mut current = tokens.to_vec();
     for _ in 0..4 {
         let Some(program) = current.first().map(|token| program_name(token)) else {
@@ -294,7 +297,7 @@ fn unquote_unescape(tok: &str) -> String {
 /// Normalize a path operand so filesystem-equivalent spellings reduce to their
 /// real target: collapse repeated and `.` slashes and resolve leading `..`, so
 /// `//`, `/./`, `//etc`, `/./etc`, `/usr/..`, and `/tmp/..` classify correctly.
-fn normalize_path(op: &str) -> String {
+pub(super) fn normalize_path(op: &str) -> String {
     let leading = op.starts_with('/');
     let mut segs: Vec<&str> = Vec::new();
     for s in op.split('/') {
@@ -333,7 +336,7 @@ fn is_home_root_operand(op: &str) -> bool {
 /// depth). It recognizes ordinary command paths and direct `sh -c`/`eval`
 /// quoting without stripping quotes from an entire line, which would
 /// false-positive on ordinary `echo` and commit-message strings.
-fn dangerous_rm_target(raw: &str) -> Option<&'static str> {
+pub(super) fn dangerous_rm_target(raw: &str) -> Option<&'static str> {
     let op = unquote_unescape(raw);
     let op = op.trim();
     if is_home_root_operand(op) {
@@ -376,6 +379,22 @@ fn has_known_identity(raw: &str) -> bool {
     !raw.contains(['\\', '$', '`', '\'', '"'])
 }
 
+/// The names directly below `dir` whose deletion is refused whole, so a
+/// glob the disk does not resolve is still matched against them.
+pub(super) fn protected_names(dir: &str) -> Vec<&'static str> {
+    match dir {
+        "/" => SYSTEM_DIRS
+            .iter()
+            .chain(ROOT_COLLECTION_DIRS)
+            .chain(&["tmp"])
+            .copied()
+            .collect(),
+        "/private" => vec!["tmp", "var"],
+        "/var" | "/private/var" => vec!["tmp"],
+        _ => Vec::new(),
+    }
+}
+
 /// Classify a normalized absolute path as the root, a system directory or a
 /// whole top-level user or mount collection.
 fn protected_path(norm: &str) -> Option<&'static str> {
@@ -388,9 +407,17 @@ fn protected_path(norm: &str) -> Option<&'static str> {
     if SYSTEM_DIRS.contains(&first) {
         return Some("system directory");
     }
-    let remainder = parts.collect::<Vec<_>>().join("/");
+    let rest: Vec<&str> = parts.collect();
+    let remainder = rest.join("/");
     if ROOT_COLLECTION_DIRS.contains(&first) && (remainder.is_empty() || remainder == "*") {
         return Some("top-level user or mount collection");
+    }
+    // A home directory spelled as its literal path (`/Users/<name>`,
+    // `/home/<name>`), or a glob over its whole tree, is the home directory
+    // (TSK-141). Its descendants stay project-scoped.
+    let whole_home = matches!(rest.as_slice(), [name] | [name, "*"] if *name != "*");
+    if HOME_COLLECTION_DIRS.contains(&first) && whole_home {
+        return Some("home directory");
     }
     None
 }
@@ -649,6 +676,9 @@ impl SecurityModule for DangerousModule {
         if let Some(v) = check_recursive_delete(cmd) {
             return Some(v);
         }
+        if let Some(found) = super::deletion::composed_deletion(cmd) {
+            return Some(composed_verdict(&found));
+        }
 
         // Disk operation checks.
         if let Some(v) = check_disk_operations(cmd) {
@@ -669,6 +699,35 @@ impl SecurityModule for DangerousModule {
     }
 }
 
+/// The refusal for a deletion the composed reader finds. A target reached
+/// on only some paths through the line is still refused (TSK-141 round
+/// 1), and one the reader cannot prove is refused as unproven (round 2);
+/// each message says why.
+fn composed_verdict(found: &super::deletion::Found) -> Verdict {
+    let reason = match &found.unproven {
+        Some(unproven) if unproven.cwd => format!(
+            "Recursive deletion whose target cannot be proven: it runs in a working \
+             directory that depends on {}, which the guard does not follow exactly; \
+             name the project path literally, for example `rm -rf ./build` after a \
+             literal `cd` to the project",
+            unproven.reason
+        ),
+        Some(unproven) => format!(
+            "Recursive deletion whose target cannot be proven: it depends on {}, which \
+             the guard does not follow exactly; name the project path literally, for \
+             example `rm -rf ./build`",
+            unproven.reason
+        ),
+        None if found.ambiguous => "Recursive deletion of a protected location: it is one \
+             of several values the command may reach here (after a branch, loop, \
+             subshell or earlier value), and any of them is refused; name the target \
+             directly"
+            .to_string(),
+        None => "Recursive deletion of a protected location".to_string(),
+    };
+    block("Dangerous Command", &reason, found.target)
+}
+
 /// Block recursive `rm` of a protected location, however the flags and operand
 /// are spelled. Tokenizes each simple command instead of pattern-matching the
 /// raw string, so `rm -r -f /`, `rm --recursive --force /`, `rm -rf -- /`, and
@@ -679,37 +738,9 @@ fn check_recursive_delete(cmd: &str) -> Option<Verdict> {
         if tokens.first().map(|token| program_name(token)).as_deref() != Some("rm") {
             continue;
         }
-
-        let mut recursive = false;
-        let mut operands: Vec<&str> = Vec::new();
-        let mut operands_only = false; // everything after a lone `--`
-        for a in tokens.iter().skip(1).map(String::as_str) {
-            if operands_only {
-                operands.push(a);
-                continue;
-            }
-            if a == "--" {
-                operands_only = true;
-            } else if let Some(long) = a.strip_prefix("--") {
-                if matches!(long, "recursive" | "dir") {
-                    recursive = true;
-                }
-            } else if let Some(short) = a.strip_prefix('-') {
-                if !short.is_empty() && short.chars().all(|c| c.is_ascii_alphabetic()) {
-                    if short.contains('r') || short.contains('R') {
-                        recursive = true;
-                    }
-                } else {
-                    operands.push(a); // not a clean flag bundle → treat as operand
-                }
-            } else {
-                operands.push(a);
-            }
-        }
-
-        if !recursive {
+        let Some(operands) = recursive_rm_operands(&tokens[1..]) else {
             continue;
-        }
+        };
         for op in operands {
             if let Some(target) = dangerous_rm_target(op) {
                 return Some(block(
@@ -721,6 +752,38 @@ fn check_recursive_delete(cmd: &str) -> Option<Verdict> {
         }
     }
     check_windows_recursive_delete(cmd)
+}
+
+/// The operands of an `rm` whose arguments are `args`, when it is recursive;
+/// `None` when it is not.
+pub(super) fn recursive_rm_operands(args: &[String]) -> Option<Vec<&str>> {
+    let mut recursive = false;
+    let mut operands: Vec<&str> = Vec::new();
+    let mut operands_only = false; // everything after a lone `--`
+    for a in args.iter().map(String::as_str) {
+        if operands_only {
+            operands.push(a);
+            continue;
+        }
+        if a == "--" {
+            operands_only = true;
+        } else if let Some(long) = a.strip_prefix("--") {
+            if matches!(long, "recursive" | "dir") {
+                recursive = true;
+            }
+        } else if let Some(short) = a.strip_prefix('-') {
+            if !short.is_empty() && short.chars().all(|c| c.is_ascii_alphabetic()) {
+                if short.contains('r') || short.contains('R') {
+                    recursive = true;
+                }
+            } else {
+                operands.push(a); // not a clean flag bundle → treat as operand
+            }
+        } else {
+            operands.push(a);
+        }
+    }
+    recursive.then_some(operands)
 }
 
 fn check_windows_recursive_delete(cmd: &str) -> Option<Verdict> {
@@ -1156,6 +1219,21 @@ mod tests {
         }
     }
 
+    // TSK-141 AC-1 (amended): this row was allowed, commented "== /home/user,
+    // not protected". It resolves to a home directory, so it is refused as
+    // its `rm -rf /home/user` equivalent is.
+    #[test]
+    fn test_rm_home_directory_through_dot_dot_blocked() {
+        let form = DangerousModule
+            .check(&ctx("rm -rf /home/user/proj/.."))
+            .expect("refused");
+        let equivalent = DangerousModule
+            .check(&ctx("rm -rf /home/user"))
+            .expect("refused");
+        assert_eq!(form.pattern, equivalent.pattern);
+        assert_eq!(form.pattern, "home directory");
+    }
+
     // Recursive rm of a non-protected path stays allowed (no false positives).
     #[test]
     fn test_rm_recursive_safe_paths_allowed() {
@@ -1164,9 +1242,9 @@ mod tests {
             "rm -r /tmp/scratch",
             "rm -rf target",
             "rm -rf node_modules",
-            "rm -f /etc/hosts.bak",      // not recursive
-            "rm -rf /home/user/proj/..", // == /home/user, not protected
-            "rm -rf ./scratch/..",       // relative, not protected
+            "rm -f /etc/hosts.bak",             // not recursive
+            "rm -rf /home/user/proj/target/..", // == /home/user/proj, a project
+            "rm -rf ./scratch/..",              // relative, not protected
             "rm -rf ~/code/app/target",
             "rm -rf $HOME/code/app/build",
             "rm -rf ${HOME}/work/project/node_modules",

@@ -1283,3 +1283,91 @@ fn an_unreadable_tracking_state_blocks_work_start_and_ci_at_any_level() {
         assert!(out.contains("TSK-002"), "{level}: {out}");
     }
 }
+
+// -- watched contract paths (TSK-147 AC-4) -----------------------------------
+
+/// A code range whose commit touches `thing.rs`, which the policy watches as a
+/// contract surface.
+fn repo_touching_a_watched_path(dir: &Path) {
+    repo_with_range(dir, "code");
+    std::fs::create_dir_all(dir.join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.join(".codeflow/policy.json"),
+        r#"{"git": {"breaking_watch_paths": ["thing.rs"]}}"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_body_declaring_no_break_with_a_rationale_settles_a_watched_path() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let out = ci_with_body(dir.path(), FULL_BODY);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(!text.contains("contract surface"), "{text}");
+    assert!(!text.contains("git.breaking_watch_paths"), "{text}");
+}
+
+#[test]
+fn a_bodyless_run_notes_a_watched_path_and_points_at_release_impact() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let out = ci_range(dir.path());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(
+        text.contains("codeflow ci: note: commit touches a declared contract surface (thing.rs)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("`Breaking: no` with a `Rationale` under Release impact"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("warning — policy rule git.breaking_watch_paths"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_quoted_example_of_the_fields_keeps_the_watched_path_warning() {
+    // TSK-147 F4: fields quoted from another pull request are an example,
+    // not this change's assessment.
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let fields = "- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n";
+    let quoted = fields.replace("- ", "> - ");
+    let body = FULL_BODY.replace(
+        fields,
+        &format!("Not assessed yet; an example from another pull request:\n\n{quoted}\n"),
+    );
+    assert_ne!(body, FULL_BODY);
+    let out = ci_with_body(dir.path(), &body);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("warning — policy rule git.breaking_watch_paths (warn)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_body_without_the_declaration_keeps_the_watched_path_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let body = FULL_BODY.replace("- Rationale: Preserve public behavior.\n", "");
+    let out = ci_with_body(dir.path(), &body);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("warning — policy rule git.breaking_watch_paths (warn)"),
+        "{text}"
+    );
+}
