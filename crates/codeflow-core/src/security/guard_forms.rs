@@ -1430,6 +1430,155 @@ pub const REVIEW_ROUND_THREE_PROBES: &[(&str, &str, Expect)] = &[
     ),
 ];
 
+/// The Codex round 4 follow-up (TSK-180), read in the same project as
+/// round 2: a trap reset or a removed hook takes its action away from the
+/// reset on, and a reset or removal that may not run, or that names a
+/// signal or hook the reader cannot resolve, leaves the action feasible.
+pub const REVIEW_ROUND_FOUR_PROBES: &[(&str, &str, Expect)] = &[
+    (
+        "trap-reset-debug",
+        "trap 'D=/' DEBUG; trap - DEBUG; D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "trap-ignore-debug",
+        "trap 'D=/' DEBUG; trap '' DEBUG; D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "trap-reset-exit",
+        "trap 'D=/' EXIT; trap - EXIT; D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "trap-reset-err-after-dashes",
+        "trap 'D=/' ERR; trap -- - ERR; D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "trap-reset-return",
+        "trap 'D=/' RETURN; trap - RETURN; D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "trap-reset-signal",
+        "trap 'D=/' INT; trap - INT; D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "trap-set-again-harmless",
+        "trap 'D=/' DEBUG; trap ':' DEBUG; D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "hook-unfunction-chpwd",
+        "chpwd() { D=/; }; unfunction chpwd; D=build; cd empty; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "hook-unfunction-trapdebug",
+        "TRAPDEBUG() { D=/; }; unfunction TRAPDEBUG; D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "hook-unset-f-precmd",
+        "precmd() { D=/; }; unset -f precmd; D=build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "hook-redefined-harmless",
+        "chpwd() { D=/; }; chpwd() { :; }; D=build; cd empty; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "trap-reset-in-if",
+        "trap 'D=/' DEBUG; if test -f x; then trap - DEBUG; fi; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-after-or",
+        "trap 'D=/' DEBUG; test -f x || trap - DEBUG; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-in-subshell",
+        "trap 'D=/' DEBUG; (trap - DEBUG); D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-in-uncalled-function",
+        "trap 'D=/' DEBUG; f() { trap - DEBUG; }; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-in-called-function",
+        "trap 'D=/' DEBUG; f() { trap - DEBUG; }; f; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-unresolved-signal",
+        "trap 'D=/' DEBUG; trap - \"$SIG\"; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-one-of-two-signals",
+        "S=DEBUG; test -f x && S=EXIT; trap 'D=/' DEBUG; trap - \"$S\"; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-after-unknown-signal",
+        "trap 'D=/' DEBUG; trap - BOGUS DEBUG; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-in-pipeline",
+        "trap 'D=/' DEBUG; echo | trap - DEBUG; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "hook-unset-without-f",
+        "precmd() { D=/; }; unset precmd; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "hook-readonly-unset",
+        "command_not_found_handle() { D=/; }; readonly -f command_not_found_handle; \
+         unset -f command_not_found_handle; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-other-signal",
+        "trap 'D=/' DEBUG; trap - EXIT; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-set-again-after-reset",
+        "trap 'D=/' DEBUG; trap - DEBUG; trap 'D=/' DEBUG; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-set-again-in-if-after-reset",
+        "trap 'D=/' DEBUG; trap - DEBUG; if test -f x; then trap 'D=/' DEBUG; fi; \
+         D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-keeps-other-signal",
+        "trap 'D=/' DEBUG EXIT; trap - DEBUG; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "hook-unfunction-other",
+        "chpwd() { D=/; }; unfunction precmd; D=build; cd empty; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-reset-keeps-hook",
+        "TRAPDEBUG() { D=/; }; trap - DEBUG; D=build; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+];
+
 /// The probe's two symlink cases: `root-link` is a project entry that
 /// links to `/`, so both reach the root.
 pub const REVIEW_SYMLINK_PROBES: &[(&str, &str)] = &[

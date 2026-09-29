@@ -439,6 +439,16 @@ fn diverged_runs(fx: &Fixture, d: &Diverged) -> Vec<(String, Output, Vec<String>
         fx.output(&mut gitlab(&[("CI_MERGE_REQUEST_EVENT_TYPE", "detached")])),
     );
 
+    // A Bitbucket pull request step without the destination commit
+    // variable, which Atlassian's variable table does not list: the step
+    // fetches the destination branch from `origin` (TSK-183).
+    let mut bitbucket = fx.script_command(Platform::Bitbucket);
+    bitbucket
+        .env("BITBUCKET_COMMIT", &d.head)
+        .env("BITBUCKET_BRANCH", "feat/x")
+        .env("BITBUCKET_PR_DESTINATION_BRANCH", "main");
+    record("bitbucket by branch", fx.output(&mut bitbucket));
+
     // A fork's pipeline: `origin` is the fork, whose `main` is stale; the
     // target branch comes from the merge request's project.
     let fork = fx.dir.path().join("fork.git");
@@ -770,6 +780,62 @@ fn gitlab_refuses_a_target_it_cannot_fetch() {
         text(&out)
     );
     assert!(fx.calls().is_empty(), "{:?}", fx.calls());
+}
+
+/// Bitbucket without the destination commit fails closed when the
+/// destination branch cannot be fetched, and never falls back to the head
+/// or a merge base (TSK-183 AC-2).
+#[test]
+fn bitbucket_refuses_a_destination_it_cannot_fetch() {
+    let fx = Fixture::new();
+    let d = diverged(&fx, "invalid message");
+    let origin = fx.dir.path().join("origin.git");
+    bare_copy(&fx, &origin, &d.target);
+    git(
+        &fx.repo(),
+        &["remote", "add", "origin", &origin.display().to_string()],
+    );
+    let mut command = fx.script_command(Platform::Bitbucket);
+    command
+        .env("BITBUCKET_COMMIT", &d.head)
+        .env("BITBUCKET_BRANCH", "feat/x")
+        .env("BITBUCKET_PR_DESTINATION_BRANCH", "gone");
+    let out = fx.output(&mut command);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("cannot fetch the pull request's destination branch gone"),
+        "{}",
+        text(&out)
+    );
+    assert!(fx.calls().is_empty(), "{:?}", fx.calls());
+}
+
+/// Bitbucket's destination commit, full or abbreviated to 12 characters,
+/// is the target, and the destination branch is then not fetched
+/// (TSK-183 AC-3).
+#[test]
+fn bitbucket_takes_the_destination_commit_when_it_is_set() {
+    let fx = Fixture::new();
+    let target = fx.project("1.2.3");
+    fx.publish("1.2.3", &Binary::Real);
+    std::fs::write(fx.repo().join("a.txt"), "a\n").unwrap();
+    let head = fx.commit("feat: add a file");
+    for named in [target.as_str(), &target[..12]] {
+        let mut command = fx.script_command(Platform::Bitbucket);
+        command
+            .env("BITBUCKET_COMMIT", &head)
+            .env("BITBUCKET_BRANCH", "feat/x")
+            .env("BITBUCKET_PR_DESTINATION_COMMIT", named)
+            // No `origin` exists: a fetch would fail the step.
+            .env("BITBUCKET_PR_DESTINATION_BRANCH", "main");
+        let out = fx.output(&mut command);
+        assert!(out.status.success(), "{named}: {}", text(&out));
+        assert!(
+            ran(&fx.calls(), "1.2.3", &format!("ci --base {target}")),
+            "{named}: {:?}",
+            fx.calls()
+        );
+    }
 }
 
 /// A branch that started before the target raised its pin, and never

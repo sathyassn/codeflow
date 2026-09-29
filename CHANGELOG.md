@@ -126,6 +126,13 @@ publication date._
   pre-commit hook.
 
 <!-- codeflow:release-impact minor -->
+- **Release integration after landings.** CodeFlow's repository workflow imports
+  verified epic lines after a landing and daily, checking the combined release
+  before pushing. A conflict or finding leaves the release branch unchanged and
+  names its owning task with local reproduction commands. Task pull requests do
+  not wait for integration; adopters receive only conditional shipping guidance.
+
+<!-- codeflow:release-impact minor -->
 - **Guidance retention evaluations.** `cf-evaluate-model` gains a scripted
   multi-turn case kind: the fixture supplies warm-up turns, the case prompt
   is the probe, and only the probe turn is graded. A new
@@ -392,6 +399,16 @@ publication date._
   `ci-perimeter` check now names the version CI installs, and warns on a
   missing or lowered pin and on policy keys or schema carried before a
   raised pin has landed, naming the two-step order.
+
+<!-- codeflow:release-impact patch -->
+- **The Bitbucket template finds its destination without the commit
+  variable.** Atlassian does not list `BITBUCKET_PR_DESTINATION_COMMIT`,
+  and without it the step stopped at "no target commit". It now fetches
+  `BITBUCKET_PR_DESTINATION_BRANCH` from `origin` and judges by that
+  branch's current commit, failing with the branch's name when it cannot
+  fetch it. The template also records that Bitbucket runs `codeflow test`
+  and `validate --docs` on the merge of the destination into the source,
+  while `codeflow ci` judges `BITBUCKET_COMMIT`.
 
 <!-- codeflow:release-impact patch -->
 - **Commit subject separator.** The commit-msg hook and `codeflow ci` now
@@ -1118,6 +1135,15 @@ publication date._
   records, and fails closed when it cannot read it.
 
 <!-- codeflow:release-impact patch -->
+- **doctor claims the CI pin only for a shipped install.** The
+  `ci-perimeter` check reported that CI installs the version the target
+  pins, verified against its `sha256.sum`, for any CI file that mentioned
+  `scaffold_version`, even in a comment. It now makes that claim only when
+  the file carries a shipped template's target-pinned install unchanged; a
+  comment, a pin read from the head, a removed checksum check or an edited
+  install is reported as one doctor cannot verify.
+
+<!-- codeflow:release-impact patch -->
 - **Pre-push landing base.** Fast-forwards of protected and integration
   branches check from their advertised tip. Branches with a declared task
   target check from the merge base with that target's advertised tip and
@@ -1272,6 +1298,17 @@ publication date._
   is refused as unproven, and the message asks for the project path written
   literally. A deletion inside the project, such as
   `find . -name '*.o' -delete`, still runs.
+
+<!-- codeflow:release-impact patch -->
+- **A reset trap no longer refuses a later cleanup.** exec-guard kept a
+  `trap` action or zsh hook function feasible for the rest of the line
+  after it was reset or removed, so
+  `trap 'D=/' DEBUG; trap - DEBUG; D=build; rm -rf "$D"` was refused. A
+  reset (`trap - SIG`, `trap '' SIG`, a new action), `unfunction`,
+  `unset -f` or a new hook body now takes the action away where it runs on
+  every path, outside any function call, and names the same signal or
+  function. A reset inside an `if`, after `||`, in a subshell or a function,
+  or of a signal the guard cannot resolve still leaves the action feasible.
 
 <!-- codeflow:release-impact patch -->
 - **A peer CLI's help no longer counts as a headless run.** `claude --help
