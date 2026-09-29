@@ -2061,3 +2061,90 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
         "{err}"
     );
 }
+
+/// The refusals line of `codeflow report ceremony` over every date.
+fn refusals_line(root: &Path) -> String {
+    let out = codeflow(root, &["report", "ceremony", "--since", "2000-01-01"]);
+    let text = output_text(&out);
+    assert!(out.status.success(), "{text}");
+    text.lines()
+        .find(|line| line.starts_with("Refusals hit by this clone's hooks and guards: "))
+        .unwrap_or_else(|| panic!("no refusals line in: {text}"))
+        .to_string()
+}
+
+/// TSK-149 AC-6 (journey): in a freshly scaffolded standard-tier project
+/// driven by the binary under test, a push the pre-push hook refuses shows
+/// in `codeflow report ceremony`, and a push it only warns about does not.
+#[test]
+fn a_refused_push_shows_in_the_ceremony_report_and_a_warned_push_does_not() {
+    let (tmp, root) = fresh("--standard");
+    let target = git_stdout(&root, &["branch", "--show-current"]);
+    let target = target.trim().to_string();
+
+    // The destination holds the seed, with commit format reported at warn.
+    git_with_binary(&root, &["switch", "-q", "-c", "chore/seed"]);
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    policy["git"]["commit_format"] = "warn".into();
+    std::fs::write(
+        &policy_path,
+        format!("{}\n", serde_json::to_string_pretty(&policy).unwrap()),
+    )
+    .unwrap();
+    git_with_binary(&root, &["add", ".codeflow/policy.json"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "chore: seed the journey"]);
+    let dest = tmp.path().join("dest.git");
+    let dest_str = dest.to_str().unwrap();
+    git_stdout(
+        tmp.path(),
+        &["init", "-q", "--bare", "-b", &target, dest_str],
+    );
+    git_with_binary(&root, &["remote", "add", "origin", dest_str]);
+    seed(&root, &dest, &target);
+    let base = format!("origin/{target}");
+    // The hooks that ran marked when recording began; nothing was refused.
+    let line = refusals_line(&root);
+    assert!(line.contains(": 0 since recording began at "), "{line}");
+
+    // A push straight to the protected target is refused.
+    git_with_binary(&root, &["switch", "-q", "-c", "feat/x", &base]);
+    std::fs::write(root.join("x.txt"), "x\n").unwrap();
+    git_with_binary(&root, &["add", "x.txt"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "feat: add x"]);
+    let refused = git_output_with_binary(
+        &root,
+        &["push", "-q", "origin", &format!("feat/x:{target}")],
+    );
+    let err = stderr_text(&refused);
+    assert!(!refused.status.success(), "{err}");
+    assert!(
+        err.contains("BLOCKED — policy rule git.push_to_protected (block)")
+            && err.contains("codeflow pre-push: push stopped"),
+        "{err}"
+    );
+    let line = refusals_line(&root);
+    assert!(
+        line.contains(": 1 since recording began at ") && line.ends_with(" (pre-push 1)"),
+        "{line}"
+    );
+
+    // A push with a finding at warn goes through and is not a refusal.
+    std::fs::write(root.join("y.txt"), "y\n").unwrap();
+    git_with_binary(&root, &["add", "y.txt"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "Not conventional."]);
+    let warned = git_output_with_binary(&root, &["push", "-q", "origin", "feat/x"]);
+    let err = stderr_text(&warned);
+    assert!(warned.status.success(), "{err}");
+    assert!(
+        err.contains("warning — policy rule git.commit_format (warn)")
+            && err.contains("codeflow pre-push: push not stopped"),
+        "{err}"
+    );
+    let line = refusals_line(&root);
+    assert!(
+        line.contains(": 1 since recording began at ") && line.ends_with(" (pre-push 1)"),
+        "{line}"
+    );
+}
