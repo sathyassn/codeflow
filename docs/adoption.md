@@ -797,7 +797,7 @@ permissions. Local checks are required feedback, but remain editable.
 | Push / force-push / delete to protected | pre-push | git-guard | — | yes |
 | `gh pr merge` into a protected base | — (hooks can't see a PR) | git-guard | — | yes |
 | Destructive command (`rm -rf /`, `mkfs`, fork bomb) | — | exec-guard (block) | — | — |
-| Privilege escalation (`sudo`, `LD_PRELOAD`) | — | exec-guard (warn) | — | — |
+| Privilege escalation (`sudo`, `LD_PRELOAD`) | no | preset deny rules, exec-guard (block) | no | no |
 | Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | — |
 | Override-token laundering, `--no-verify` bypass | — | git-guard (structural) | — | — |
 

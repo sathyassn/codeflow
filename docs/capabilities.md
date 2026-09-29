@@ -78,8 +78,10 @@ secret-bearing environment filter pinned on. Claude-hosted plugin turns pass
 the current ensemble's model and effort explicitly so they cannot inherit a
 different user default. Claude
 ships a fail-closed sandbox on macOS, Linux, and WSL2, public web/tool access,
-raw model/cloud credential removal for sandboxed Bash, and ask rules for
-destructive source-control operations. A sandbox failure may request an
+raw model/cloud credential removal for sandboxed Bash, and no ask rules:
+the actions the operator performs are denied by rules generated from one
+action table, which also generates the Codex command rules; Grok gets a
+sandbox profile (ADR-0075). A sandbox failure may request an
 auto-classified unsandboxed retry
 only for a trusted installed tool that needs host state; this enables the
 official Codex plugin without granting a general bypass. Project `acceptEdits`
