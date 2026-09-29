@@ -3856,3 +3856,87 @@ fn automation_rechecks_the_existing_combined_release() {
     assert!(report.contains("binding"), "{report}");
     assert_eq!(before, fx.remote_release());
 }
+
+/// SPC-013 R-120 as reconciled by resolution 41 (WP7 row 20): a criteria
+/// change the task's own reviewed and completed pull request landed on its
+/// line is accepted when the release imports the line; unchanged criteria
+/// are the control. Astra's review probe A184-1, kept as the regression.
+#[test]
+fn an_own_task_amendment_landed_by_its_reviewed_pr_is_accepted() {
+    for criteria in [CRITERIA, STRONGER] {
+        let fx = Fx::new(false);
+        fx.git(&["switch", "-q", "-C", "task/TSK-001-work", LINE_A]);
+        fx.write(
+            &path("TSK-001"),
+            &record("TSK-001", "todo", criteria, "Pending.\n"),
+        );
+        fx.write("src/one.rs", "// reviewed implementation\n");
+        let reviewed = fx.commit("feat: build reviewed work");
+        fx.write(
+            &path("TSK-001"),
+            &record("TSK-001", "complete", criteria, &block(&reviewed)),
+        );
+        fx.commit("docs(records): complete task");
+        let out = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+            .args([
+                "ci",
+                "--base",
+                LINE_A,
+                "--head",
+                "HEAD",
+                "--branch",
+                "task/TSK-001-work",
+                "--into",
+                LINE_A,
+                "--pr-body",
+                "## Summary\nA change.\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n",
+            ])
+            .current_dir(&fx.root)
+            .output()
+            .unwrap();
+        passes(&output(&out), "the task PR");
+        fx.land(LINE_A, "task/TSK-001-work");
+        fx.cut_release();
+        fx.import(LINE_A);
+        let result = agree(&fx, "reviewed own-task amendment");
+        passes(&result, "a reviewed own-task amendment brought to release");
+        if criteria == STRONGER {
+            assert!(
+                result.1.contains("own-task amendment: TSK-001"),
+                "{}",
+                result.1
+            );
+        }
+    }
+}
+
+/// Negative twin of the own-task amendment: the task's own branch changes
+/// its criteria with code but never completes, so the landing is not a
+/// reviewed pull request of that record and stays frozen.
+#[test]
+fn an_own_task_criteria_change_landed_without_completion_is_frozen() {
+    let fx = Fx::new(false);
+    fx.cut_release();
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-work", LINE_A]);
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "todo", STRONGER, "Pending.\n"),
+    );
+    fx.write("src/one.rs", "// unreviewed implementation\n");
+    fx.commit("feat: code and a stronger criterion");
+    let landing = fx.land(LINE_A, "task/TSK-001-work");
+    fx.import(LINE_A);
+    let result = agree(&fx, "own criteria landed without completion");
+    blocks(
+        &result,
+        "own criteria landed without completion",
+        &[
+            "work.criteria_frozen",
+            &format!(
+                "TSK-001 changes its criteria on its line at {}",
+                &landing[..9]
+            ),
+            "the task's own reviewed pull request",
+        ],
+    );
+}

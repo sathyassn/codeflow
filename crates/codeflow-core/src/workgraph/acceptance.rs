@@ -522,7 +522,10 @@ fn landed_problem(
 /// Whether `merge`'s tree is what merging its two parents gives with no
 /// conflict: a merge that added or dropped anything of its own (an evil
 /// merge) or resolved a conflict landed a result nobody reviewed.
-fn is_clean_remerge(repo: &Repository, merge: &git2::Commit<'_>) -> Result<bool, git2::Error> {
+pub(super) fn is_clean_remerge(
+    repo: &Repository,
+    merge: &git2::Commit<'_>,
+) -> Result<bool, git2::Error> {
     let merged = repo.merge_commits(&merge.parent(0)?, &merge.parent(1)?, None)?;
     if merged.has_conflicts() {
         return Ok(false);
