@@ -15,7 +15,7 @@ struct Args {
     /// Release branch configured by the repository's integration workflow.
     #[arg(long)]
     release: Option<String>,
-    /// Just the landed epic line; omit for the daily catch-up over all lines.
+    /// Narrow a local reproduction to one line; workflows omit this to catch up all lines.
     #[arg(long)]
     line: Option<String>,
     /// Publish the checked result. Without this flag, only reproduce checks.
@@ -90,8 +90,9 @@ pub fn integrate(
     push: bool,
     codeflow: &Path,
 ) -> Result<String, String> {
-    let configured = std::fs::read_to_string(root.join(".github/workflows/codeflow-release.yml"))
-        .is_ok_and(|workflow| workflow.contains("\n  release-integration:"));
+    let configured =
+        std::fs::read_to_string(root.join(".github/workflows/codeflow-release-integration.yml"))
+            .is_ok_and(|workflow| workflow.contains("\n  release-integration:"));
     let Some(release) = release.filter(|_| configured) else {
         return Ok("no release integration configured\n".into());
     };
@@ -151,7 +152,12 @@ fn prepare(
         .find(|(name, _)| name == release)
         .map(|(_, oid)| oid.to_string())
         .ok_or("configured release branch does not exist")?;
-    git(&clone, &["checkout", "--quiet", "--detach", &before])?;
+    // The release may predate its owner assignment. Read the destination's
+    // default target before any attempted merge can conflict.
+    git(
+        &clone,
+        &["checkout", "--quiet", "--detach", &default_tip.to_string()],
+    )?;
     let holders = release_owners(&clone);
     if !holders.is_empty() {
         *owner = holders.join(", ");
@@ -159,6 +165,7 @@ fn prepare(
     if holders.len() > 1 {
         return Err("more than one open release-integration task".into());
     }
+    git(&clone, &["checkout", "--quiet", "--detach", &before])?;
     let mut report = format!("Release: {release} at {before}\nOwner: {owner}\n");
     let mut changed = false;
     if let Some(line) = line {

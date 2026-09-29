@@ -170,6 +170,9 @@ carries the role, report "no release-integration task to own it". Follow the
 result's local reproduction commands. The CodeFlow-only integration workflow
 and runner are not installed for adopters. For that workflow, reproduce the
 current result without pushing with
-`cargo run -p codeflow-cli --example release_integration -- --release <branch> --line <line>`;
-omit `--line` for the daily entry. Without a configured release argument and
+`cargo run -p codeflow-cli --example release_integration -- --release <branch>`.
+Every surviving run catches up all verified lines; if a pending run was replaced,
+inspect the later run's result for the landed tip. Add `--line <line>` only to
+narrow a local investigation, not to reproduce the full workflow batch.
+Without a configured release argument and
 workflow, the runner reports no configured integration and does nothing.

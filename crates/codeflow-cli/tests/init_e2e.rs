@@ -1898,4 +1898,8 @@ fn installed_ship_reads_release_integration_only_when_configured() {
         .path()
         .join(".github/workflows/codeflow-release.yml")
         .exists());
+    assert!(!dir
+        .path()
+        .join(".github/workflows/codeflow-release-integration.yml")
+        .exists());
 }

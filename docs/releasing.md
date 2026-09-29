@@ -38,19 +38,33 @@ explains in the PR body why the remaining net contract permits the lower target.
 
 ### Integration after an epic-line landing
 
-The repository's `codeflow-release.yml` runs release integration after pushes
-onto epic lines and daily at 03:17 UTC. `RELEASE_BRANCH` in that job selects the
-release branch. It must exist and match the default target's release pattern.
-The job builds its runner and judge from the default target, verifies each epic
-line with the core line check, and makes clean merges in a disposable clone.
+The repository's `codeflow-release-integration.yml` runs after a
+`codeflow-release` push run completes on an epic line, and daily at 03:17 UTC.
+Its `workflow_run` trigger loads the privileged job's YAML from the default
+branch, including for an older line without the integration job. The job checks
+out that event's default-branch commit and builds its runner and judge there.
+The triggering line is passed through an environment variable for reporting;
+its workflow, artifacts and scripts do not define or execute the privileged job.
+See [GitHub's workflow_run contract](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run).
+
+`RELEASE_BRANCH` in the integration job selects an existing branch that matches
+the default target's release pattern. Every run checks all verified epic lines,
+not only the triggering line. GitHub can replace a pending concurrency job;
+the surviving run catches up those landings too, and running jobs are not
+cancelled. See [GitHub's concurrency rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+The runner verifies each epic line with the core line check and makes clean
+merges in a disposable clone.
 It runs `codeflow ci` under R-120 and the reading-structure checks on the combined
-result before one normal push. A daily batch with any failure pushes nothing.
+result before one normal push. A batch with any failure pushes nothing.
 Reading sizes remain guidelines; structural reading faults block integration.
 
 The result is reported after the landing. Task pull requests do not depend on
 it. Inspect the integration job with `gh run view <run-id> --log-failed`; select
-the run with `gh run list --workflow codeflow-release.yml`. A failure names the
-open task carrying `role: release-integration`, or reports that none owns it.
+the run with `gh run list --workflow codeflow-release-integration.yml`. For a
+replaced pending run, inspect the later surviving run's result for the line tip.
+A failure names the open task carrying `role: release-integration` at the
+destination's fetched default-branch commit, even when the release branch
+predates its assignment, or reports that none owns it.
 TSK-010 resolves conflicts and findings in the release pull request. Automation
 never resolves conflicts or changes a task's status.
 
@@ -61,12 +75,45 @@ Reproduce the current integration locally without pushing, with the current
 cargo run -p codeflow-cli --example release_integration -- --release integration/release-3-0-0-r2
 ```
 
-Add `--line integration/EPC-NNN-slug` for one landing. The workflow alone passes
-`--push`; the runner's default is a check. Without a configured release argument
+Omit `--line` to reproduce the workflow's complete catch-up; add
+`--line integration/EPC-NNN-slug` only to narrow a local investigation to one
+line. The workflow alone passes `--push`; the runner's default is a check.
+Without a configured release argument
 and the repository workflow, it reports no configured integration and does
 nothing. The runner and workflow are repository-owned and absent from adopter
 scaffolds. Hosted authentication and scheduling still require a live workflow
 run; fixture tests prove the local merge, judge, failure and push paths.
+
+The integration workflow must first land on the default branch. Per-landing
+notifications require the epic line's existing read-only `codeflow-release`
+push workflow; a line missing that workflow is included by the next surviving
+integration run or daily backstop. Upstream completion is a notification, not
+approval: the integration runner checks the current tips itself even when the
+notifying run failed.
+
+#### Rotating the release branch
+
+When the next release uses a new branch, a maintainer coordinates these steps:
+
+1. Disable `codeflow-release-integration.yml` in Actions and let running jobs
+   finish or cancel them. Confirm no running or pending integration job remains;
+   an already queued job still carries its old `RELEASE_BRANCH` value.
+2. Create the next release branch through the reviewed release process. Check
+   that the default target's `git.release_branch_pattern` covers it. Land the
+   planning record for exactly one open task with `role: release-integration`
+   and that branch as its `integration_target` on the default branch. Keep the
+   preceding release's completed task as history; use the new release's task.
+3. In one reviewed PR to the default branch, change the integration workflow's
+   `RELEASE_BRANCH` and this runbook's reproduction command to that same branch.
+   Keep the shared concurrency group. Confirm the branch exists at the remote
+   and the open owner record agrees with it before enabling automation.
+4. From the updated default checkout, build the runner and current `codeflow`,
+   put that binary on PATH, and run the reproduction command without `--push`
+   or `--line`. Resolve any finding in the release PR, then repeat the preview.
+5. Re-enable the integration workflow. Inspect the next eligible completion or
+   daily run and verify its reported release branch, owner and integrated line
+   tips. Record that run in the release checklist. Rotation is not verified by
+   changing YAML alone.
 
 ### Pending entries, local checks and repairs
 
