@@ -6165,7 +6165,8 @@
           "readiness_report_at_budget_end"
         ],
         "references": [
-          "tools/GH.md"
+          "tools/GH.md",
+          "README.md"
         ],
         "must_not": [
           "unbounded_watch",
