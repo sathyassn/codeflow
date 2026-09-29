@@ -73,6 +73,13 @@ pub fn pre_commit(
         scan_staged(&repo, policy, &mut report, false);
     }
 
+    if policy.conflict_markers.is_active() {
+        report.violations.extend(super::conflict_markers::staged(
+            &repo,
+            policy.conflict_markers,
+        ));
+    }
+
     Ok(report)
 }
 
@@ -83,8 +90,27 @@ fn scan_staged(
     report: &mut StageReport,
     abort_traversal_for_test: bool,
 ) {
+    // The index git commits: `commit -a` and `commit <path>` name a
+    // temporary one in GIT_INDEX_FILE, so the ordinary index would miss a
+    // secret they record. An index that cannot be read fails closed.
+    let index_file = super::conflict_markers::effective_index(repo);
+    let index = match git2::Index::open(&index_file) {
+        Ok(index) => index,
+        Err(error) => {
+            report.violations.push(Violation::new(
+                "git.secret_scan",
+                policy.secret_scan,
+                format!(
+                    "staged secret scan incomplete: cannot read the index {}: {error}",
+                    index_file.display()
+                ),
+                crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
+            ));
+            return;
+        }
+    };
     let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), None, None) else {
+    let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), None) else {
         report.notes.push(crate::remedy::Finding::new(
             "secret scan skipped: could not read the staged diff",
             crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
@@ -1317,6 +1343,124 @@ mod tests {
     fn test_pre_commit_outside_repo_is_config_error() {
         let dir = tempfile::tempdir().unwrap();
         assert!(pre_commit(dir.path(), &GitPolicy::default(), false).is_err());
+    }
+
+    /// A marker line built at run time, so this file holds none itself.
+    fn marker(fill: char, size: usize, label: &str) -> String {
+        format!("{}{label}", fill.to_string().repeat(size))
+    }
+
+    fn leftover_conflict() -> String {
+        format!(
+            "{}\nours\n{}\ntheirs\n{}\n",
+            marker('<', 7, " HEAD"),
+            marker('=', 7, ""),
+            marker('>', 7, " feat/y")
+        )
+    }
+
+    fn marker_findings(report: &StageReport) -> Vec<&Violation> {
+        report
+            .violations
+            .iter()
+            .filter(|v| v.rule == "git.conflict_markers")
+            .collect()
+    }
+
+    #[test]
+    fn test_pre_commit_conflict_markers_at_each_level() {
+        // TSK-170 AC-1: block by default, warn at warn, silent at off.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        stage(dir.path(), "notes.md", &leftover_conflict());
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let found = marker_findings(&report);
+        assert_eq!(found.len(), 3, "{:?}", report.violations);
+        assert!(found.iter().all(|v| v.level == PolicyLevel::Block));
+        assert!(
+            found[0].message.starts_with("notes.md:1 "),
+            "{}",
+            found[0].message
+        );
+        assert!(
+            found[1].message.starts_with("notes.md:3 "),
+            "{}",
+            found[1].message
+        );
+        assert!(found[0]
+            .remedy
+            .contains("resolve the conflict and restage, or set conflict-marker-size"));
+        for (level, expected) in [(PolicyLevel::Warn, 3), (PolicyLevel::Off, 0)] {
+            let policy = GitPolicy {
+                conflict_markers: level,
+                ..GitPolicy::default()
+            };
+            let report = pre_commit(dir.path(), &policy, false).unwrap();
+            let found = marker_findings(&report);
+            assert_eq!(found.len(), expected, "{level:?}");
+            assert!(found.iter().all(|v| v.level == level));
+        }
+    }
+
+    #[test]
+    fn test_pre_commit_conflict_markers_skip_headings_binaries_and_deletions() {
+        // TSK-170 AC-2.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        stage(dir.path(), "old.md", &leftover_conflict());
+        git(
+            dir.path(),
+            &["commit", "-q", "-m", "chore: a file before adoption"],
+        );
+        git(dir.path(), &["rm", "-q", "old.md"]);
+        stage(
+            dir.path(),
+            "README.md",
+            &format!("Title\n{}\n\ntext\n", marker('=', 7, "")),
+        );
+        let binary = format!("\0{}\n", leftover_conflict());
+        stage(dir.path(), "blob.bin", &binary);
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        assert!(
+            marker_findings(&report).is_empty(),
+            "{:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn test_pre_commit_reads_the_staged_conflict_marker_size() {
+        // TSK-170 AC-3: a fixture and its attribute staged together commit;
+        // markers of the set size in that path are still found.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        stage(dir.path(), "fixtures/merge.txt", &leftover_conflict());
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        assert_eq!(marker_findings(&report).len(), 3);
+        stage(
+            dir.path(),
+            ".gitattributes",
+            "fixtures/** conflict-marker-size=32\n",
+        );
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        assert!(
+            marker_findings(&report).is_empty(),
+            "{:?}",
+            report.violations
+        );
+        stage(
+            dir.path(),
+            "fixtures/real.txt",
+            &format!(
+                "{}\nx\n{}\n",
+                marker('<', 32, " HEAD"),
+                marker('>', 32, " b")
+            ),
+        );
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let found = marker_findings(&report);
+        assert_eq!(found.len(), 2, "{:?}", report.violations);
+        assert!(found[0].message.starts_with("fixtures/real.txt:1 "));
     }
 
     // -- commit-msg --
