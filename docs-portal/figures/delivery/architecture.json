@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "delivery-actors",
+    "family": "layering",
+    "binding": "authored",
+    "question": "Which actor covers which stage of a task, and where does the operator's boundary sit?",
+    "idea": "The builder covers start to review, the other lineage reviews once, the primary owns the candidate and its gate, and the operator alone closes the epic into main.",
+    "title": "Who acts at each stage",
+    "kicker": "Delivery",
+    "caption": "Each stage has one owner, and the merge into main belongs to the operator alone.",
+    "states": [
+      { "name": "layer", "mark": "layer", "means": "The stages an actor covers" },
+      { "name": "layer-remote", "mark": "layer-remote", "means": "The operator's stages, the boundary" },
+      { "name": "act", "mark": "act", "means": "Where the actor acts" },
+      { "name": "done", "mark": "done", "means": "The task's path" }
+    ],
+    "facts": [
+      {
+        "claim": "the primary runs the full gate once on the exact candidate",
+        "source": "docs/delivery.md#architecture",
+        "derive": "the primary bullet",
+        "check": { "kind": "contains", "text": "runs the full gate once on that exact candidate" },
+        "value": true
+      },
+      {
+        "claim": "review ends on evidence, never on a round count",
+        "source": "docs/delivery.md#architecture",
+        "derive": "the reviewer bullet",
+        "check": { "kind": "contains", "text": "never on a round count." },
+        "value": true
+      },
+      {
+        "claim": "agents never merge into main",
+        "source": "docs/delivery.md#architecture",
+        "derive": "the operator bullet",
+        "check": { "kind": "contains", "text": "Agents never merge there." },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 248,
+      "draw": [
+        { "text": "start", "x": 190, "y": 22, "anchor": "middle", "style": "mute" },
+        { "text": "build", "x": 260, "y": 22, "anchor": "middle", "style": "mute" },
+        { "text": "review", "x": 330, "y": 22, "anchor": "middle", "style": "mute" },
+        { "text": "candidate", "x": 400, "y": 22, "anchor": "middle", "style": "mute" },
+        { "text": "gate", "x": 470, "y": 22, "anchor": "middle", "style": "mute" },
+        { "text": "line moves", "x": 540, "y": 22, "anchor": "middle", "style": "mute" },
+        { "text": "close", "x": 610, "y": 22, "anchor": "middle", "style": "mute" },
+        { "text": "main", "x": 680, "y": 22, "anchor": "middle", "style": "mute" },
+        { "deco": "rule", "shape": "line", "x1": 160, "y1": 42, "x2": 710, "y2": 42 },
+        { "deco": "tick", "shape": "line", "x1": 190, "y1": 36, "x2": 190, "y2": 42 },
+        { "deco": "tick", "shape": "line", "x1": 260, "y1": 36, "x2": 260, "y2": 42 },
+        { "deco": "tick", "shape": "line", "x1": 330, "y1": 36, "x2": 330, "y2": 42 },
+        { "deco": "tick", "shape": "line", "x1": 400, "y1": 36, "x2": 400, "y2": 42 },
+        { "deco": "tick", "shape": "line", "x1": 470, "y1": 36, "x2": 470, "y2": 42 },
+        { "deco": "tick", "shape": "line", "x1": 540, "y1": 36, "x2": 540, "y2": 42 },
+        { "deco": "tick", "shape": "line", "x1": 610, "y1": 36, "x2": 610, "y2": 42 },
+        { "deco": "tick", "shape": "line", "x1": 680, "y1": 36, "x2": 680, "y2": 42 },
+        { "text": "Builder, an agent seat", "x": 0, "y": 89 },
+        { "text": "Reviewer, other lineage", "x": 0, "y": 137 },
+        { "text": "Primary", "x": 0, "y": 185 },
+        { "text": "Operator", "x": 0, "y": 233, "style": "strong" },
+        { "state": "layer", "shape": "rect", "x": 160, "y": 72, "w": 200, "h": 24, "rx": 6, "id": "m1" },
+        { "state": "layer", "shape": "rect", "x": 300, "y": 120, "w": 70, "h": 24, "rx": 6, "id": "m2" },
+        { "state": "layer", "shape": "rect", "x": 370, "y": 168, "w": 200, "h": 24, "rx": 6, "id": "m3" },
+        { "state": "layer-remote", "shape": "rect", "x": 580, "y": 216, "w": 130, "h": 24, "rx": 6, "cap": "end", "id": "m4" },
+        { "state": "done", "shape": "polyline", "points": [[190, 84], [260, 84], [330, 132], [400, 180], [540, 180], [610, 228], [680, 228]], "id": "m5" },
+        { "state": "act", "shape": "circle", "cx": 190, "cy": 84, "r": 8, "id": "m6" },
+        { "state": "act", "shape": "circle", "cx": 260, "cy": 84, "r": 8, "id": "m7" },
+        { "state": "act", "shape": "circle", "cx": 330, "cy": 132, "r": 8, "id": "m8" },
+        { "state": "act", "shape": "circle", "cx": 400, "cy": 180, "r": 8, "id": "m9" },
+        { "state": "act", "shape": "circle", "cx": 470, "cy": 180, "r": 8, "id": "m10" },
+        { "state": "act", "shape": "circle", "cx": 540, "cy": 180, "r": 8, "id": "m11" },
+        { "state": "act", "shape": "circle", "cx": 610, "cy": 228, "r": 8, "id": "m12" },
+        { "state": "act", "shape": "circle", "cx": 680, "cy": 228, "r": 8, "id": "m13" }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 360,
+      "draw": [
+        { "text": "Builder", "x": 130, "y": 24, "anchor": "middle", "style": "head" },
+        { "text": "Reviewer", "x": 190, "y": 24, "anchor": "middle", "style": "head" },
+        { "text": "Primary", "x": 250, "y": 24, "anchor": "middle", "style": "head" },
+        { "text": "Operator", "x": 310, "y": 24, "anchor": "middle", "style": "head" },
+        { "text": "start", "x": 0, "y": 65, "style": "mute" },
+        { "text": "build", "x": 0, "y": 105, "style": "mute" },
+        { "text": "review", "x": 0, "y": 145, "style": "mute" },
+        { "text": "candidate", "x": 0, "y": 185, "style": "mute" },
+        { "text": "gate", "x": 0, "y": 225, "style": "mute" },
+        { "text": "line moves", "x": 0, "y": 265, "style": "mute" },
+        { "text": "close", "x": 0, "y": 305, "style": "mute" },
+        { "text": "main", "x": 0, "y": 345, "style": "mute" },
+        { "state": "layer", "shape": "rect", "x": 118, "y": 44, "w": 24, "h": 112, "rx": 6, "id": "m1" },
+        { "state": "layer", "shape": "rect", "x": 178, "y": 126, "w": 24, "h": 28, "rx": 6, "id": "m2" },
+        { "state": "layer", "shape": "rect", "x": 238, "y": 166, "w": 24, "h": 108, "rx": 6, "id": "m3" },
+        { "state": "layer-remote", "shape": "rect", "x": 298, "y": 286, "w": 24, "h": 68, "rx": 6, "cap": "end", "id": "m4" },
+        { "state": "done", "shape": "polyline", "points": [[130, 60], [130, 100], [190, 140], [250, 180], [250, 260], [310, 300], [310, 340]], "id": "m5" },
+        { "state": "act", "shape": "circle", "cx": 130, "cy": 60, "r": 8, "id": "m6" },
+        { "state": "act", "shape": "circle", "cx": 130, "cy": 100, "r": 8, "id": "m7" },
+        { "state": "act", "shape": "circle", "cx": 190, "cy": 140, "r": 8, "id": "m8" },
+        { "state": "act", "shape": "circle", "cx": 250, "cy": 180, "r": 8, "id": "m9" },
+        { "state": "act", "shape": "circle", "cx": 250, "cy": 220, "r": 8, "id": "m10" },
+        { "state": "act", "shape": "circle", "cx": 250, "cy": 260, "r": 8, "id": "m11" },
+        { "state": "act", "shape": "circle", "cx": 310, "cy": 300, "r": 8, "id": "m12" },
+        { "state": "act", "shape": "circle", "cx": 310, "cy": 340, "r": 8, "id": "m13" }
+      ]
+    },
+    "twin": {
+      "columns": ["Stage", "Who acts", "What they do"],
+      "rows": [
+        ["start", "the builder", "starts from the line tip or a predecessor's reviewed head (`--on TSK-NNN@<sha>`)"],
+        ["build", "the builder", "builds with tests in the same change, merges the line in, opens one pull request with the whole task and cites its quick gate"],
+        ["review", "the reviewer, other lineage", "one holistic pass; material findings fixed in the same pull request and confirmed by the finder; nits recorded"],
+        ["candidate", "the primary", "assembles reviewed heads into a small candidate in dependency order and inspects resolved hunks and seams"],
+        ["gate", "the primary", "runs the full gate once on the exact candidate; red is diagnosed before any member is dropped"],
+        ["line moves", "the primary", "advances the integration line and cleans up with merge proof"],
+        ["close", "the operator", "the epic proves its criteria once; one pull request goes to `main`"],
+        ["main", "the operator", "merges; agents never do"]
+      ]
+    }
+  }
+}

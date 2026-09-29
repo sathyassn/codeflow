@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "delivery-concept",
+    "family": "flow",
+    "binding": "authored",
+    "question": "How does a request become a change on main, and what is never done on the way?",
+    "idea": "A request becomes one task or one epic planned once, every task lands through one pull request and one review, a batch runs one full gate, and only the operator merges main.",
+    "title": "From a request to main",
+    "kicker": "Delivery",
+    "caption": "Planning happens once at the breakdown, so no task ever goes back for a planning pull request of its own.",
+    "states": [
+      { "name": "human", "mark": "human", "means": "A person: the request, and the merge into main" },
+      { "name": "record", "mark": "state", "means": "A record the work rests on" },
+      { "name": "agent", "mark": "agent", "means": "An agent's task, delivered in one pull request" },
+      { "name": "flows", "mark": "trans", "means": "Moves on to" },
+      { "name": "gate", "mark": "merge", "means": "Batch candidate with its one full gate" },
+      { "name": "blocked", "mark": "blocked", "means": "Never done" }
+    ],
+    "facts": [
+      {
+        "claim": "a standalone task's record and code land in one reviewed pull request",
+        "source": "docs/delivery.md#concept",
+        "derive": "the standalone sentence",
+        "check": { "kind": "contains", "text": "record and code land in the same reviewed pull request" },
+        "value": true
+      },
+      {
+        "claim": "a body of work is broken down once into an epic and its tasks",
+        "source": "docs/delivery.md#concept",
+        "derive": "the breakdown sentence",
+        "check": { "kind": "contains", "text": "broken down once into an epic and its tasks" },
+        "value": true
+      },
+      {
+        "claim": "only a person merges into main",
+        "source": "docs/delivery.md#concept",
+        "derive": "the last sentence of the first paragraph",
+        "check": { "kind": "contains", "text": "a person merges there." },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 330,
+      "draw": [
+        { "state": "human", "shape": "circle", "cx": 40, "cy": 150, "r": 9, "id": "rq" },
+        { "text": "a request", "x": 40, "y": 178, "anchor": "middle", "style": "strong", "for": ["rq"] },
+        { "state": "flows", "shape": "path", "d": "M49 145C110 145 120 70 190 70", "head": "end", "id": "f1" },
+        { "text": "one outcome", "x": 110, "y": 58, "anchor": "middle", "style": "mute", "for": ["f1"] },
+        { "state": "agent", "shape": "circle", "cx": 200, "cy": 70, "r": 8, "id": "a1" },
+        { "text": "a standalone task: record and code in one PR", "x": 200, "y": 50, "style": "strong", "for": ["a1"] },
+        { "state": "flows", "shape": "path", "d": "M208 70H400C470 70 480 150 542 150", "head": "end", "id": "f3" },
+        { "text": "one PR, one review", "x": 300, "y": 94, "anchor": "middle", "style": "mute", "for": ["f3"] },
+        { "state": "flows", "shape": "path", "d": "M49 155C110 155 120 230 140 230", "head": "end", "id": "f2" },
+        { "text": "a body of work", "x": 88, "y": 262, "anchor": "middle", "style": "mute", "for": ["f2"] },
+        { "state": "record", "shape": "rect", "x": 142, "y": 212, "w": 120, "h": 36, "rx": 8, "id": "s1" },
+        { "text": "spec, approved", "x": 202, "y": 235, "anchor": "middle", "for": ["s1"] },
+        { "state": "flows", "shape": "path", "d": "M264 230H288", "head": "end", "id": "f4" },
+        { "state": "record", "shape": "rect", "x": 290, "y": 212, "w": 130, "h": 36, "rx": 8, "id": "s2" },
+        { "text": "breakdown, once", "x": 355, "y": 235, "anchor": "middle", "for": ["s2"] },
+        { "text": "one planning PR", "x": 355, "y": 200, "anchor": "middle", "style": "mute", "for": ["s2"] },
+        { "state": "flows", "shape": "path", "d": "M422 230H460", "head": "end", "id": "f5" },
+        { "state": "agent", "shape": "circle", "cx": 470, "cy": 230, "r": 8, "id": "a2" },
+        { "text": "one PR per task, one review", "x": 486, "y": 256, "style": "strong", "for": ["a2"] },
+        { "state": "flows", "shape": "path", "d": "M478 230H552V158", "head": "end", "id": "f6" },
+        { "state": "gate", "shape": "diamond", "cx": 560, "cy": 150, "r": 16, "id": "d1" },
+        { "text": "batch candidate,", "x": 584, "y": 188, "style": "mute", "for": ["d1"] },
+        { "text": "one full gate", "x": 584, "y": 206, "style": "mute", "for": ["d1"] },
+        { "state": "flows", "shape": "path", "d": "M576 150H649", "head": "end", "id": "f7" },
+        { "state": "human", "shape": "circle", "cx": 660, "cy": 150, "r": 9, "id": "op" },
+        { "text": "the operator merges to main", "x": 712, "y": 122, "anchor": "end", "style": "strong", "for": ["op"] },
+        { "state": "blocked", "shape": "path", "d": "M470 238V292H355V250", "cross": { "cx": 412, "cy": 292, "size": 12 }, "id": "bl" },
+        { "text": "planning again per task", "x": 412, "y": 318, "anchor": "middle", "style": "mute", "for": ["bl"] }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 450,
+      "draw": [
+        { "state": "human", "shape": "circle", "cx": 24, "cy": 24, "r": 9, "id": "rq" },
+        { "text": "a request", "x": 42, "y": 46, "style": "strong", "for": ["rq"] },
+        { "state": "flows", "shape": "path", "d": "M24 34V82", "head": "end", "id": "f1" },
+        { "text": "one outcome", "x": 36, "y": 70, "style": "mute", "for": ["f1"] },
+        { "state": "agent", "shape": "circle", "cx": 24, "cy": 92, "r": 8, "id": "a1" },
+        { "text": "a standalone task", "x": 42, "y": 90, "style": "strong", "for": ["a1"] },
+        { "text": "record and code in one PR", "x": 42, "y": 108, "style": "mute", "for": ["a1"] },
+        { "state": "flows", "shape": "path", "d": "M24 102V350H162", "head": "end", "id": "f3" },
+        { "state": "flows", "shape": "path", "d": "M33 24H240V120", "head": "end", "id": "f2" },
+        { "text": "a body of work", "x": 250, "y": 60, "style": "mute", "for": ["f2"] },
+        { "state": "record", "shape": "rect", "x": 140, "y": 122, "w": 200, "h": 36, "rx": 8, "id": "s1" },
+        { "text": "spec, approved", "x": 240, "y": 145, "anchor": "middle", "for": ["s1"] },
+        { "state": "flows", "shape": "path", "d": "M180 160V190", "head": "end", "id": "f4" },
+        { "text": "one planning PR", "x": 250, "y": 180, "anchor": "middle", "style": "mute", "for": ["s2"] },
+        { "state": "record", "shape": "rect", "x": 140, "y": 192, "w": 200, "h": 36, "rx": 8, "id": "s2" },
+        { "text": "breakdown, once", "x": 240, "y": 215, "anchor": "middle", "for": ["s2"] },
+        { "state": "flows", "shape": "path", "d": "M180 230V262", "head": "end", "id": "f5" },
+        { "state": "agent", "shape": "circle", "cx": 180, "cy": 272, "r": 8, "id": "a2" },
+        { "text": "one PR per task", "x": 196, "y": 270, "style": "strong", "for": ["a2"] },
+        { "text": "one review", "x": 196, "y": 288, "style": "mute", "for": ["a2"] },
+        { "state": "blocked", "shape": "path", "d": "M172 272H96V215H138", "cross": { "cx": 96, "cy": 244, "size": 12 }, "id": "bl" },
+        { "text": "plan again per task", "x": 40, "y": 306, "style": "mute", "for": ["bl"] },
+        { "state": "flows", "shape": "path", "d": "M180 282V334", "head": "end", "id": "f6" },
+        { "state": "gate", "shape": "diamond", "cx": 180, "cy": 350, "r": 16, "id": "d1" },
+        { "text": "batch candidate", "x": 204, "y": 346, "style": "mute", "for": ["d1"] },
+        { "text": "one full gate", "x": 204, "y": 364, "style": "mute", "for": ["d1"] },
+        { "state": "flows", "shape": "path", "d": "M180 366V400", "head": "end", "id": "f7" },
+        { "state": "human", "shape": "circle", "cx": 180, "cy": 412, "r": 9, "id": "op" },
+        { "text": "the operator merges", "x": 196, "y": 410, "style": "strong", "for": ["op"] },
+        { "text": "to main", "x": 196, "y": 428, "style": "strong", "for": ["op"] }
+      ]
+    },
+    "twin": {
+      "columns": ["Stage", "Unit", "Produces", "Reviewed by"],
+      "rows": [
+        ["a request", "one outcome", "a standalone task: record and code in one pull request", "the other lineage, once"],
+        ["a request", "a body of work", "a spec, then one planning pull request with the epic, every task and the edges", "the operator settles intent; the other lineage, once"],
+        ["build", "one task", "one pull request with code, tests, docs, the record and its acceptance block", "the other lineage, one holistic pass"],
+        ["land", "a small batch of reviewed heads", "one candidate, one full gate, the integration line moves", "the primary"],
+        ["close", "the epic", "one pull request into `main`", "the operator merges"],
+        ["never", "a task", "a planning pull request of its own, a review round cap, a full gate per pull request", ""]
+      ]
+    }
+  }
+}
