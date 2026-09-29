@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use git2::{Repository, TreeWalkMode, TreeWalkResult};
+use git2::{Oid, Repository, TreeWalkMode, TreeWalkResult};
 use thiserror::Error;
 
 use crate::workgraph::deps::{parse_dependencies, Dependency, DependencyKind};
@@ -796,6 +796,30 @@ pub fn task_id_from_branch(repo_root: &Path, branch: &str) -> Option<String> {
         .max_by_key(String::len)
 }
 
+/// The task id a work branch carries, read from the records at `head`
+/// rather than the checkout: CI judges a pull request head from a base
+/// checkout, where the head's own standalone record is not on disk.
+#[must_use]
+pub fn task_id_from_branch_at(repo_root: &Path, branch: &str, head: &str) -> Option<String> {
+    let suffix = work_branch_suffix(repo_root, branch)?;
+    let repo = Repository::discover(repo_root).ok()?;
+    let tree = repo
+        .revparse_single(head)
+        .and_then(|object| object.peel_to_commit())
+        .and_then(|commit| commit.tree())
+        .ok()?;
+    records_from_tree(&repo, &tree)
+        .ok()?
+        .into_iter()
+        .filter(|(id, record)| {
+            record.kind == RecordKind::Task
+                && is_valid_task_format_id(id)
+                && suffix.starts_with(&format!("{id}-"))
+        })
+        .map(|(id, _)| id)
+        .max_by_key(String::len)
+}
+
 /// Whether a work branch names a task id by shape (`<prefix>/TSK-<digits>-`),
 /// whether or not a record for it is visible. A branch that claims an id the
 /// workgraph does not hold is refused rather than treated as untracked.
@@ -979,7 +1003,7 @@ pub fn check_work_start_on(
         .ok()
         .and_then(|r| r.shorthand().ok().map(str::to_string))
         .unwrap_or_default();
-    check_task_anchor(root, task_id, target, &branch, false, pins)
+    check_task_anchor(root, task_id, target, &branch, false, pins, None)
 }
 
 /// Validate that `task_id` is safe to begin on the current branch.
@@ -1061,11 +1085,14 @@ pub fn check_work_start_anchored(
         .ok()
         .and_then(|head| head.shorthand().ok().map(str::to_string))
         .unwrap_or_default();
-    check_task_anchor(repo_root, task_id, target, &branch, false, &[])
+    check_task_anchor(repo_root, task_id, target, &branch, false, &[], None)
 }
 
 /// CI admission shares structural readiness but does not try to start a closed task.
 /// A new standalone record must already exist in the revision its review names.
+/// `head` is the pull request head CI judges; the hosted workflows check out
+/// the base and pass the head as data, so the records are read from that
+/// revision, never from the checkout.
 ///
 /// # Errors
 /// Returns an identity, anchor or structural readiness refusal.
@@ -1074,8 +1101,9 @@ pub fn check_work_admission(
     task_id: &str,
     target: &str,
     branch: &str,
+    head: &str,
 ) -> Result<WorkStartReport, WorkStartError> {
-    check_task_anchor(repo_root, task_id, target, branch, true, &[])
+    check_task_anchor(repo_root, task_id, target, branch, true, &[], Some(head))
 }
 
 fn check_task_anchor(
@@ -1085,6 +1113,7 @@ fn check_task_anchor(
     branch: &str,
     admission: bool,
     pins: &[ReviewedPin],
+    head: Option<&str>,
 ) -> Result<WorkStartReport, WorkStartError> {
     if !is_valid_task_format_id(task_id) {
         return Err(WorkStartError::InvalidGraph(format!(
@@ -1094,10 +1123,11 @@ fn check_task_anchor(
     if !is_stable_work_target(target) {
         return Err(WorkStartError::UnstableTarget(target.to_string()));
     }
-    let (merge_base, mut records) = anchored_records(repo_root, target)?;
     let repo = Repository::discover(repo_root)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    standalone_at_head(&repo, &mut records, task_id, branch, admission)?;
+    let head_id = head_commit(&repo, head)?;
+    let (merge_base, mut records) = anchored_records(&repo, target, head_id)?;
+    standalone_at_head(&repo, &mut records, task_id, branch, admission, head_id)?;
     let anchored = validate_task_structure(&repo, &records, task_id, target, pins)?;
     if !admission {
         start_gate(&records[task_id], task_id)?;
@@ -1115,19 +1145,32 @@ fn check_task_anchor(
     })
 }
 
+/// The commit the check reads: `head` when a caller names one (CI's pull
+/// request head), else the checkout's `HEAD`.
+fn head_commit(repo: &Repository, head: Option<&str>) -> Result<Oid, WorkStartError> {
+    match head {
+        Some(revision) => repo
+            .revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| {
+                WorkStartError::Repository(format!("head {revision}: {}", error.message()))
+            }),
+        None => repo
+            .head()
+            .map_err(|error| WorkStartError::Repository(error.to_string()))?
+            .target()
+            .ok_or_else(|| WorkStartError::Repository("HEAD has no commit".to_string())),
+    }
+}
+
 fn anchored_records(
-    repo_root: &Path,
+    repo: &Repository,
     target: &str,
+    head_id: Oid,
 ) -> Result<(String, BTreeMap<String, Record>), WorkStartError> {
-    let repo = Repository::discover(repo_root)
-        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    let head_id = repo
-        .head()
-        .map_err(|error| WorkStartError::Repository(error.to_string()))?
-        .target()
-        .ok_or_else(|| WorkStartError::Repository("HEAD has no commit".to_string()))?;
-    let target_commit = target_reference(&repo, target)
-        .ok_or_else(|| WorkStartError::Target(target.to_string()))?;
+    let target_commit =
+        target_reference(repo, target).ok_or_else(|| WorkStartError::Target(target.to_string()))?;
     let merge_base = repo
         .merge_base(head_id, target_commit.id())
         .map_err(|_| WorkStartError::MergeBase(target.to_string()))?;
@@ -1135,7 +1178,7 @@ fn anchored_records(
         .find_commit(merge_base)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let records = records_from_tree(
-        &repo,
+        repo,
         &commit
             .tree()
             .map_err(|error| WorkStartError::Repository(error.to_string()))?,
@@ -1149,6 +1192,7 @@ fn standalone_at_head(
     task_id: &str,
     branch: &str,
     admission: bool,
+    head_id: Oid,
 ) -> Result<(), WorkStartError> {
     if records.contains_key(task_id) {
         return Ok(());
@@ -1156,12 +1200,15 @@ fn standalone_at_head(
     let root = repo
         .workdir()
         .ok_or_else(|| WorkStartError::Repository("no working tree".into()))?;
-    if task_id_from_branch(root, branch).as_deref() != Some(task_id) {
+    // The branch names the task by shape; the record itself is read at the
+    // head, which need not be the checkout (CI judges from the base).
+    let carries = work_branch_suffix(root, branch)
+        .is_some_and(|suffix| suffix.starts_with(&format!("{task_id}-")));
+    if !carries {
         return Err(WorkStartError::TaskNotAnchored(task_id.into()));
     }
     let head = repo
-        .head()
-        .and_then(|r| r.peel_to_commit())
+        .find_commit(head_id)
         .map_err(|e| WorkStartError::Repository(e.to_string()))?;
     let at_head = records_from_tree(
         repo,
@@ -1181,7 +1228,7 @@ fn standalone_at_head(
         return Err(WorkStartError::MissingStandaloneReason(task_id.into()));
     }
     let task = if admission && task.status == "complete" {
-        let graph = super::lifecycle::Graph::from_revision(repo, "HEAD")
+        let graph = super::lifecycle::Graph::from_revision(repo, &head_id.to_string())
             .map_err(WorkStartError::InvalidGraph)?;
         let view = &graph.records[task_id];
         let blocks = view.active_blocks();

@@ -310,6 +310,124 @@ fn standalone_allocation_claim_start_complete_and_ci_is_one_pr() {
         .success());
 }
 
+/// The hosted policy workflow checks out the base and passes the pull
+/// request head as data. Judged that way, the standalone one-PR route is
+/// admitted from the head revision, and a task PR whose record is already
+/// on the target is admitted alike.
+/// Commit a code change on the current branch, then complete `id` with an
+/// acceptance block and commit that; returns the resulting head.
+fn complete(root: &Path, id: &str, file: &str) -> String {
+    write(root, file, "pub fn fixed() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "fix: build the outcome"]);
+    let reviewed = git(root, &["rev-parse", "HEAD"]);
+    let evidence = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(evidence.path(), format!("acceptance:\n  reviewed: {reviewed}\n  review: session:fixture@sha256:00\n  criteria:\n    AC-1: verified | standalone journey\n  journey: verified | standalone journey\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n")).unwrap();
+    succeeds(&cli(
+        root,
+        &[
+            "task",
+            "status",
+            id,
+            "complete",
+            "--acceptance",
+            evidence.path().to_str().unwrap(),
+        ],
+        None,
+    ));
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: complete the outcome"]);
+    git(root, &["rev-parse", "HEAD"])
+}
+
+#[test]
+fn base_checkout_ci_admits_the_standalone_route_and_a_task_pr() {
+    let dir = fixture();
+    let root = dir.path();
+    succeeds(&cli(root, &["ids", "seed"], None));
+    let main = git(root, &["rev-parse", "main"]);
+    let body = |id: &str| {
+        format!("Task: {id}\n## Summary\nDeliver the bounded fix.\n## Changes\n- Implement the fix.\n## Testing\nNot tested: Windows.")
+    };
+
+    // The standalone route: record and code on one branch, absent from main.
+    git(root, &["switch", "-qc", "feat/standalone"]);
+    succeeds(&cli(
+        root,
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "bounded independent fix",
+            "--into",
+            "main",
+            "standalone outcome",
+        ],
+        None,
+    ));
+    let path = "project-management/tasks/TSK-003.md";
+    let record = std::fs::read_to_string(root.join(path)).unwrap();
+    write(
+        root,
+        path,
+        &record.replace(
+            "- AC-1\n",
+            "- AC-1 When run, the command shall succeed (journey).\n",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: record standalone criteria"]);
+    succeeds(&cli(root, &["work", "claim", "TSK-003"], None));
+    let standalone = git(root, &["branch", "--show-current"]);
+    succeeds(&cli(root, &["work", "start", "TSK-003"], None));
+    let standalone_head = complete(root, "TSK-003", "src/fix.rs");
+
+    // A task PR whose record main already holds.
+    git(root, &["switch", "-q", "main"]);
+    succeeds(&cli(root, &["work", "claim", "TSK-001"], None));
+    let task = git(
+        root,
+        &[
+            "branch",
+            "--list",
+            "task/TSK-001-*",
+            "--format=%(refname:short)",
+        ],
+    );
+    git(root, &["switch", "-q", &task]);
+    succeeds(&cli(root, &["work", "start", "TSK-001"], None));
+    let task_head = complete(root, "TSK-001", "src/one.rs");
+
+    // Judged from the base checkout, the head named as data.
+    git(root, &["switch", "-q", "main"]);
+    for (branch, head, id) in [
+        (&standalone, &standalone_head, "TSK-003"),
+        (&task, &task_head, "TSK-001"),
+    ] {
+        let out = cli(
+            root,
+            &[
+                "ci",
+                "--base",
+                &main,
+                "--head",
+                head,
+                "--branch",
+                branch,
+                "--pr-body",
+                &body(id),
+            ],
+            None,
+        );
+        assert!(
+            out.status.success(),
+            "{id} from the base checkout:\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 #[test]
 #[cfg(unix)]
 fn stacked_pins_refuse_wrong_identity_advanced_tip_and_nonancestor_head() {

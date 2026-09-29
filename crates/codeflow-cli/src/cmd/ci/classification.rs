@@ -12,8 +12,9 @@ use codeflow_core::workgraph::classify::{
     is_planning_path, is_spike_path, path_sets, ProjectPaths,
 };
 use codeflow_core::workgraph::{
-    check_epic_line, declared_work_target, durable_work_tracking_enabled,
-    durable_work_tracking_enabled_at, resolve_work_target_checked, task_id_from_branch,
+    check_epic_line, declared_work_target, declared_work_target_at_revision,
+    durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
+    task_id_from_branch,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -270,8 +271,13 @@ pub(super) fn dispatch(
                 .map(|(_, path)| path.as_str())
                 .collect();
             let level = git.work_planning_level();
-            let anchor = Anchor { own_branch, level };
-            tracked(root, task_id, anchor, branch, &files, &added, tagged);
+            let anchor = Anchor {
+                own_branch,
+                level,
+                branch,
+                head: range.head,
+            };
+            tracked(root, task_id, anchor, &files, &added, tagged);
             journey(root, git, task_id, range.head, &files, tagged);
         }
         Class::PlanningOnly => println!("codeflow ci: pull request class: planning-only"),
@@ -336,9 +342,13 @@ fn push(tagged: &mut Vec<super::TaggedViolation>, rule: &str, message: String, h
 /// branch (the own-branch preflight reports it), else at the
 /// `git.work_planning` level (TSK-133).
 #[derive(Clone, Copy)]
-struct Anchor {
+struct Anchor<'a> {
     own_branch: bool,
     level: PolicyLevel,
+    /// The branch under judgement and the head its records are read at:
+    /// CI judges a pull request head from a base checkout.
+    branch: &'a str,
+    head: &'a str,
 }
 
 fn anchor_failure(
@@ -356,13 +366,12 @@ fn anchor_failure(
 fn tracked(
     root: &Path,
     task_id: &str,
-    anchor: Anchor,
-
-    branch: &str,
+    anchor: Anchor<'_>,
     files: &[String],
     added: &[&str],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
+    let Anchor { branch, head, .. } = anchor;
     let added_records: Vec<_> = added
         .iter()
         .filter(|path| {
@@ -385,7 +394,12 @@ fn tracked(
             "put the other records in the epic amendment",
         );
     }
-    let declared = declared_work_target(root, task_id);
+    // The record at the head first: a standalone record is on its branch,
+    // not in a base checkout.
+    let declared = declared_work_target_at_revision(root, branch, head)
+        .ok()
+        .flatten()
+        .or_else(|| declared_work_target(root, task_id));
     // The own-branch preflight prints any resolution note and reports a
     // diverged target; this check reports it only for another task's claim.
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
@@ -401,8 +415,9 @@ fn tracked(
             return;
         }
     };
-    match codeflow_core::workgraph::work_start::check_work_admission(root, task_id, &target, branch)
-    {
+    match codeflow_core::workgraph::work_start::check_work_admission(
+        root, task_id, &target, branch, head,
+    ) {
         Ok(report) => {
             let spike =
                 report.work_type.as_deref() == Some("spike") || branch.starts_with("spike/");

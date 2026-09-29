@@ -38,8 +38,9 @@ use codeflow_core::hooks::{
 use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::{
-    branch_claims_task_id, declared_work_target, durable_work_tracking_enabled,
-    resolve_work_target_checked, task_id_from_branch,
+    branch_claims_task_id, declared_work_target, declared_work_target_at_revision,
+    durable_work_tracking_enabled, resolve_work_target_checked, task_id_from_branch,
+    task_id_from_branch_at,
 };
 use pr_body::find_section;
 
@@ -367,7 +368,7 @@ pub fn run(args: &CiArgs) -> i32 {
     );
 
     let level = git.work_planning_level();
-    let own_task = own_branch_preflight(&root, &branch, level, &mut tagged, &mut ran);
+    let own_task = own_branch_preflight(&root, &branch, &head, level, &mut tagged, &mut ran);
     // The visible workgraph is checked once for tracked work, whether the
     // task comes from the branch or from the `Task:` line (TSK-133).
     if own_task || tracked_claim {
@@ -734,6 +735,7 @@ pub(super) fn tracking_state_violation(error: impl std::fmt::Display) -> Violati
 fn own_branch_preflight(
     root: &Path,
     branch: &str,
+    head: &str,
     level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
@@ -741,7 +743,7 @@ fn own_branch_preflight(
     if branch.starts_with("task/") || branch_claims_task_id(root, branch) {
         match durable_work_tracking_enabled(root) {
             Ok(true) => {
-                evaluate_work_start(root, branch, level, tagged);
+                evaluate_work_start(root, branch, head, level, tagged);
                 ran.push("work-start");
                 return true;
             }
@@ -786,11 +788,19 @@ fn visible_graph_check(root: &Path, level: PolicyLevel, tagged: &mut Vec<TaggedV
 fn evaluate_work_start(
     root: &Path,
     branch: &str,
+    head: &str,
     level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
 ) {
-    if let Some(task_id) = task_id_from_branch(root, branch) {
-        let declared = declared_work_target(root, &task_id);
+    // The head's records first: from a base checkout (the hosted policy
+    // workflow) the branch's own standalone record is not on disk.
+    let task_at_head =
+        task_id_from_branch_at(root, branch, head).or_else(|| task_id_from_branch(root, branch));
+    if let Some(task_id) = task_at_head {
+        let declared = declared_work_target_at_revision(root, branch, head)
+            .ok()
+            .flatten()
+            .or_else(|| declared_work_target(root, &task_id));
         let target = match resolve_work_target_checked(root, declared.as_deref()) {
             Ok(resolved) => {
                 let resolved =
@@ -814,7 +824,7 @@ fn evaluate_work_start(
             }
         };
         if let Err(error) = codeflow_core::workgraph::work_start::check_work_admission(
-            root, &task_id, &target, branch,
+            root, &task_id, &target, branch, head,
         ) {
             tagged.push(TaggedViolation {
                 sha: None,
