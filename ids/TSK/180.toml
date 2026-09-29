@@ -1,0 +1,11 @@
+id = "TSK-180"
+uid = "f0775dee-b270-4035-9b69-b037dae79821"
+kind = "TSK"
+title = "Retract a removed trap or hook in the deletion reader"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T00:38:53Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
