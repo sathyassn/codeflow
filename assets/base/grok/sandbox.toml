@@ -1,0 +1,157 @@
+# Grok Build sandbox profiles for a CodeFlow-managed repository (ADR-0075,
+# operator decision D3). `codeflow init` and `codeflow update` install this
+# file when it is absent and never overwrite it; a changed copy is yours.
+#
+# A Grok builder seat keeps `--always-approve` (ADR-0055) and adds a sandbox.
+# Every Grok seat is launched in its own task worktree, the exact directory its
+# folder trust names, because Grok treats a nested checkout as a separate
+# workspace. Builders select `cf-guard-worktree`, which adds the common `.git`
+# of the `.worktrees/<slug>` layout (`../../.git`) to the write set, since a
+# linked worktree keeps its index, HEAD and objects there. Whether Grok resolves
+# a relative entry with `..` against the working directory is not yet
+# verified. `cf-guard` is for a seat launched in a main checkout. The sandbox
+# adds no prompt; it limits what an approved call can do. `workspace` writes
+# only the canonical cwd, `~/.grok` and temp, and write-denies Grok's own
+# config, hooks and trust files.
+#
+# `deny` is kernel-enforced for reads and writes. A `~` is not expanded and a
+# relative glob matches only inside the workspace, so home stores are written
+# as absolute globs, where `*` stays inside one path segment. On macOS a glob
+# is applied at run time; on Linux it covers only files that exist at launch,
+# so a `.env` created later in the session is not covered there. Brace
+# alternation is unsupported and makes Grok refuse to start, so every form is
+# its own entry. Grok has no carve-out, so `.env.example` stays unreadable in
+# a Grok seat (Claude carves it out). macOS and Linux only: on Windows the
+# Grok sandbox is a stub.
+#
+# The guard hooks run inside this sandbox and read the harness files, so the
+# enforcement files cannot be denied. `read_only` takes directories only, so
+# it covers `.claude`, `.grok`, `.codex` and the hook and workflow
+# directories. `.codeflow/policy.json`, `.codeflow/project.toml` and
+# `.git/config` sit in directories a seat must write. The guards do not take
+# their policy from those files, from HEAD or from the index: they evaluate
+# the policy stored in the operator-approved enforcement baseline under the
+# CodeFlow state root, which is outside this profile's write set. A
+# working-copy difference in an enforcement file is reported, not refused; a
+# commit or ref transition whose enforcement entries match no approved
+# identity is refused. `.git/config` is not part of the baseline: every call
+# resolves the effective `core.hooksPath` for the command and refuses one
+# that is not the shipped hooks path. Whether a `read_only` directory inside
+# the writable cwd wins over the cwd grant is not yet verified.
+#
+# Grok runs hooks inside this sandbox, so guard receipts go under
+# `~/.grok/codeflow-probe/`, which a seat can also write: a Grok guard-readiness
+# preflight is cooperative evidence, not proof that the guards ran.
+
+[profiles.cf-guard]
+extends = "workspace"
+restrict_network = false
+read_only = [
+  ".claude",
+  ".grok",
+  ".codex",
+  ".codeflow/git-hooks",
+  ".git/hooks",
+  ".github/workflows",
+]
+deny = [
+  "/Users/*/.ssh",
+  "/home/*/.ssh",
+  "/root/.ssh",
+  "/Users/*/.aws",
+  "/home/*/.aws",
+  "/root/.aws",
+  "/Users/*/.gnupg",
+  "/home/*/.gnupg",
+  "/root/.gnupg",
+  "/Users/*/.netrc",
+  "/home/*/.netrc",
+  "/root/.netrc",
+  "/Users/*/.kube",
+  "/home/*/.kube",
+  "/root/.kube",
+  "/Users/*/.cargo/credentials",
+  "/home/*/.cargo/credentials",
+  "/Users/*/.cargo/credentials.toml",
+  "/home/*/.cargo/credentials.toml",
+  "/Users/*/.codex/auth.json",
+  "/home/*/.codex/auth.json",
+  "/Users/*/.claude/.credentials.json",
+  "/home/*/.claude/.credentials.json",
+  "/Users/*/.grok/auth.json",
+  "/home/*/.grok/auth.json",
+  "/Users/*/.grok/mcp_credentials.json",
+  "/home/*/.grok/mcp_credentials.json",
+  "/Users/*/.pypirc",
+  "/home/*/.pypirc",
+  "/Users/*/.gem/credentials",
+  "/home/*/.gem/credentials",
+  "/Users/*/.password-store",
+  "/home/*/.password-store",
+  "**/.env",
+  "**/.env.*",
+  "**/*.pem",
+  "**/*.key",
+  "**/*.p12",
+  "**/*.pfx",
+]
+
+# Builder profile for a seat launched in its own `.worktrees/<slug>`:
+# `cf-guard` plus the common git dir, with its hooks read-only. Grok profiles
+# cannot extend a custom profile, so the lists are repeated.
+[profiles.cf-guard-worktree]
+extends = "workspace"
+restrict_network = false
+read_write = [
+  "../../.git",
+]
+read_only = [
+  "../../.git/hooks",
+  ".claude",
+  ".grok",
+  ".codex",
+  ".codeflow/git-hooks",
+  ".git/hooks",
+  ".github/workflows",
+]
+deny = [
+  "/Users/*/.ssh",
+  "/home/*/.ssh",
+  "/root/.ssh",
+  "/Users/*/.aws",
+  "/home/*/.aws",
+  "/root/.aws",
+  "/Users/*/.gnupg",
+  "/home/*/.gnupg",
+  "/root/.gnupg",
+  "/Users/*/.netrc",
+  "/home/*/.netrc",
+  "/root/.netrc",
+  "/Users/*/.kube",
+  "/home/*/.kube",
+  "/root/.kube",
+  "/Users/*/.cargo/credentials",
+  "/home/*/.cargo/credentials",
+  "/Users/*/.cargo/credentials.toml",
+  "/home/*/.cargo/credentials.toml",
+  "/Users/*/.codex/auth.json",
+  "/home/*/.codex/auth.json",
+  "/Users/*/.claude/.credentials.json",
+  "/home/*/.claude/.credentials.json",
+  "/Users/*/.grok/auth.json",
+  "/home/*/.grok/auth.json",
+  "/Users/*/.grok/mcp_credentials.json",
+  "/home/*/.grok/mcp_credentials.json",
+  "/Users/*/.pypirc",
+  "/home/*/.pypirc",
+  "/Users/*/.gem/credentials",
+  "/home/*/.gem/credentials",
+  "/Users/*/.password-store",
+  "/home/*/.password-store",
+  "**/.env",
+  "**/.env.*",
+  "**/*.pem",
+  "**/*.key",
+  "**/*.p12",
+  "**/*.pfx",
+]

@@ -1,0 +1,207 @@
+# CodeFlow command rules for Codex, generated from actions.json.
+# Loaded only when the project `.codex/` layer is trusted. `forbidden`
+# refuses without prompting under every approval policy and sandbox,
+# including danger-full-access (codex-rs core/src/exec_policy.rs:393-404,
+# unified_exec/process_manager.rs:1479-1504 at 4fd5745e).
+
+prefix_rule(
+    pattern = [["sudo", "su", "doas", "pkexec", "gsudo", "runas"]],
+    decision = "forbidden",
+    justification = "The operator runs privileged commands personally (settled S15 rung 4; operator decision D5 of 2026-09-28: block, including wrapped forms and `osascript ... with administrator privileges`).",
+    match = ["sudo true", "doas reboot"],
+    not_match = ["sudoku --help"],
+)
+
+prefix_rule(
+    pattern = [["/usr/bin/sudo", "/bin/sudo", "/usr/local/bin/sudo", "/bin/su", "/usr/bin/su", "/usr/bin/doas", "/usr/local/bin/doas", "/usr/bin/pkexec"]],
+    decision = "forbidden",
+    justification = "The operator runs privileged commands personally (settled S15 rung 4; operator decision D5 of 2026-09-28: block, including wrapped forms and `osascript ... with administrator privileges`).",
+    match = ["/usr/bin/sudo true"],
+)
+
+prefix_rule(
+    pattern = ["env", ["sudo", "su", "doas", "pkexec"]],
+    decision = "forbidden",
+    justification = "The operator runs privileged commands personally (settled S15 rung 4; operator decision D5 of 2026-09-28: block, including wrapped forms and `osascript ... with administrator privileges`).",
+    match = ["env sudo true"],
+    not_match = ["env cargo test"],
+)
+
+prefix_rule(
+    pattern = [["cargo", "npm", "pnpm", "uv", "yarn"], "publish"],
+    decision = "forbidden",
+    justification = "Publishing is an operator action; check a release with `cargo package` or `npm pack --dry-run`.",
+    match = ["cargo publish", "npm publish", "yarn publish"],
+)
+
+prefix_rule(
+    pattern = ["yarn", "npm", "publish"],
+    decision = "forbidden",
+    justification = "Publishing is an operator action; check a release with `cargo package` or `npm pack --dry-run`.",
+    match = ["yarn npm publish"],
+)
+
+prefix_rule(
+    pattern = ["twine", "upload"],
+    decision = "forbidden",
+    justification = "Publishing is an operator action; check a release with `cargo package` or `npm pack --dry-run`.",
+)
+
+prefix_rule(
+    pattern = [["python", "python3"], "-m", "twine", "upload"],
+    decision = "forbidden",
+    justification = "Publishing is an operator action; check a release with `cargo package` or `npm pack --dry-run`.",
+)
+
+prefix_rule(
+    pattern = ["gem", "push"],
+    decision = "forbidden",
+    justification = "Publishing is an operator action; check a release with `cargo package` or `npm pack --dry-run`.",
+)
+
+prefix_rule(
+    pattern = ["env", ["cargo", "npm", "pnpm", "uv", "yarn"], "publish"],
+    decision = "forbidden",
+    justification = "Publishing is an operator action; check a release with `cargo package` or `npm pack --dry-run`.",
+    match = ["env cargo publish"],
+)
+
+prefix_rule(
+    pattern = ["gh", "gist", ["create", "edit"]],
+    decision = "forbidden",
+    justification = "Publishing is an operator action; check a release with `cargo package` or `npm pack --dry-run`.",
+    not_match = ["gh gist list"],
+)
+
+prefix_rule(
+    pattern = ["gh", "release", ["create", "edit", "delete", "upload"]],
+    decision = "forbidden",
+    justification = "Creating or changing a release, or pushing tags, is an operator action. `gh release view` and `list` stay available.",
+    not_match = ["gh release view v1", "gh release list"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", ["--tags", "--follow-tags"]],
+    decision = "forbidden",
+    justification = "Creating or changing a release, or pushing tags, is an operator action. `gh release view` and `list` stay available.",
+    match = ["git push --tags", "git push --follow-tags"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", ["origin", "upstream"], ["--tags", "--follow-tags"]],
+    decision = "forbidden",
+    justification = "Creating or changing a release, or pushing tags, is an operator action. `gh release view` and `list` stay available.",
+    match = ["git push origin --tags"],
+)
+
+prefix_rule(
+    pattern = ["gh", "repo", ["delete", "archive", "rename"]],
+    decision = "forbidden",
+    justification = "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+    not_match = ["gh repo view"],
+)
+
+prefix_rule(
+    pattern = ["gh", "api", ["-X", "--method"], ["DELETE", "delete"]],
+    decision = "forbidden",
+    justification = "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+    match = ["gh api -X DELETE repos/o/r"],
+)
+
+prefix_rule(
+    pattern = ["gh", "api", ["-XDELETE", "--method=DELETE"]],
+    decision = "forbidden",
+    justification = "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+)
+
+prefix_rule(
+    pattern = ["gh", "auth", ["token", "refresh", "logout", "git-credential", "switch", "login", "setup-git"]],
+    decision = "forbidden",
+    justification = "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+    not_match = ["gh auth status"],
+)
+
+prefix_rule(
+    pattern = ["gh", "secret", ["set", "delete", "remove"]],
+    decision = "forbidden",
+    justification = "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+    not_match = ["gh secret list"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "--mirror"],
+    decision = "forbidden",
+    justification = "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+)
+
+prefix_rule(
+    pattern = ["git", "push", ["origin", "upstream"], "--mirror"],
+    decision = "forbidden",
+    justification = "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+    match = ["git push origin --mirror"],
+)
+
+prefix_rule(
+    pattern = ["git", ["credential", "credential-osxkeychain", "credential-manager", "credential-store", "credential-cache", "credential-libsecret"]],
+    decision = "forbidden",
+    justification = "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+    match = ["git credential fill"],
+)
+
+prefix_rule(
+    pattern = [["git-credential-osxkeychain", "git-credential-manager", "git-credential-store", "git-credential-libsecret"]],
+    decision = "forbidden",
+    justification = "Repository deletion, archiving, visibility, secrets and the GitHub credential belong to the operator. The token's scope is the control that still holds against an API call the text rules miss (D6).",
+)
+
+prefix_rule(
+    pattern = ["security", ["find-generic-password", "find-internet-password", "dump-keychain"]],
+    decision = "forbidden",
+    justification = "A sandboxed command can reach the macOS keychain service (observed 2026-09-28), so keychain reads need a rule.",
+)
+
+prefix_rule(
+    pattern = ["defaults", ["write", "delete"]],
+    decision = "forbidden",
+    justification = "User-level persistence and settings that need no elevation. Root-only system commands are left to the privilege family (review finding F9).",
+    not_match = ["defaults read com.apple.finder"],
+)
+
+prefix_rule(
+    pattern = ["launchctl", ["load", "bootstrap", "enable"]],
+    decision = "forbidden",
+    justification = "User-level persistence and settings that need no elevation. Root-only system commands are left to the privilege family (review finding F9).",
+)
+
+prefix_rule(
+    pattern = ["crontab", ["-e", "-r"]],
+    decision = "forbidden",
+    justification = "User-level persistence and settings that need no elevation. Root-only system commands are left to the privilege family (review finding F9).",
+    not_match = ["crontab -l"],
+)
+
+prefix_rule(
+    pattern = ["systemctl", "--user", "enable"],
+    decision = "forbidden",
+    justification = "User-level persistence and settings that need no elevation. Root-only system commands are left to the privilege family (review finding F9).",
+)
+
+prefix_rule(
+    pattern = ["systemctl", ["enable", "disable", "mask"]],
+    decision = "forbidden",
+    justification = "User-level persistence and settings that need no elevation. Root-only system commands are left to the privilege family (review finding F9).",
+    match = ["systemctl enable fixture"],
+    not_match = ["systemctl status fixture"],
+)
+
+prefix_rule(
+    pattern = ["systemctl", "--user", ["disable", "mask"]],
+    decision = "forbidden",
+    justification = "User-level persistence and settings that need no elevation. Root-only system commands are left to the privilege family (review finding F9).",
+)
+
+prefix_rule(
+    pattern = ["reg", ["add", "delete"]],
+    decision = "forbidden",
+    justification = "User-level persistence and settings that need no elevation. Root-only system commands are left to the privilege family (review finding F9).",
+)

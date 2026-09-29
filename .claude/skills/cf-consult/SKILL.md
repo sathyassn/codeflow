@@ -83,7 +83,9 @@ counts as independent cross-lineage review.
    host's own vendor or label same-family scrutiny as cross-lineage review.
 4. Synthesize: compare the second opinion against your own analysis point by
    point, citing where you **agree** and **disagree** and why — with your own
-   evidence (file:line, command output). Label each finding `axis: standards`
+   evidence (file:line, command output). Write the synthesis plainly:
+   simple, straightforward and clear, no mannered prose (see
+   `.codeflow/rules/writing.md`). Label each finding `axis: standards`
    or `axis: spec`; when both apply, label both so one cannot mask the other.
    For task acceptance, ask `cf-reviewer`'s two questions per criterion and
    refuse a block copied from an older commit. Disposition
