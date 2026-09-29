@@ -1,0 +1,164 @@
+# Grok Build sandbox profile for a CodeFlow-managed repository (proposed new
+# managed file, `.grok/sandbox.toml`; installed when absent, otherwise
+# `codeflow doctor` reports a missing or different `cf-guard` profile and
+# nothing is overwritten).
+#
+# Operator decision D3 of 2026-09-28: a Grok builder seat keeps
+# `--always-approve` (ADR-0055) and adds a sandbox. Since proposal v11 (Grok
+# round 5) every Grok seat is launched in its own task worktree, the exact
+# directory its folder trust names, because a nested checkout is a separate
+# Grok workspace (Grok user guide 10-hooks). Builders select
+# `cf-guard-worktree`, which adds the common `.git` of the `.worktrees/<slug>`
+# layout (`../../.git`) to the write set, since a linked worktree keeps its
+# index, HEAD and objects there; that is the write set the earlier main-root
+# launch gave. Whether Grok resolves a relative entry with `..` against the
+# working directory is unverified (unit 5 AC-2). `cf-guard` stays for a seat
+# launched in a main checkout. The sandbox adds no prompt; it limits what an
+# approved call can do (Grok user guide 18-sandbox). `workspace` writes only the canonical cwd,
+# `~/.grok` and temp, and write-denies Grok's own config, hooks and trust
+# files (18-sandbox, "Direct global write protection").
+#
+# `deny` is kernel-enforced for reads and writes. A `~` is not expanded (Grok
+# review GS-4, 22-permissions), and a relative glob matches only inside the
+# workspace, so home stores are written as absolute globs, where `*` stays
+# inside one path segment (18-sandbox, "Globs in deny"). On macOS a glob is
+# applied at run time; on Linux it covers only files that exist at launch, so
+# a `.env` created later in the session is not covered there (review GS-9).
+# Brace alternation is unsupported and makes Grok refuse to start, so every
+# form is its own entry. Grok has no carve-out, so `.env.example` stays
+# unreadable in a Grok seat (Claude carves it out). macOS and Linux only:
+# on Windows the Grok sandbox is a stub (grok-build f0e3be11: xai-grok-sandbox/src/lib.rs:242-249).
+#
+# The guard hooks run inside this sandbox and read the harness files, so the
+# enforcement files cannot be denied. `read_only` takes directories only, so
+# it covers `.claude`, `.grok`, `.codex` and the hook and workflow
+# directories. `.codeflow/policy.json`, `.codeflow/project.toml` and
+# `.git/config` sit in directories a seat must write. The guards do not take
+# their policy from those files, from HEAD or from the index: they evaluate
+# the policy stored in the operator-approved enforcement baseline under the
+# CodeFlow state root, which is outside this profile's write set (proposal
+# v6, section 2). A working-copy difference in an enforcement file is
+# reported, not refused; a commit or ref transition whose enforcement entries
+# match no approved identity is refused. `.git/config` is not part of the
+# baseline: every call resolves the effective `core.hooksPath` for the
+# command and refuses one that is not the shipped hooks path. Whether a
+# `read_only` directory inside the writable cwd wins over the cwd grant is
+# unverified (proposal v4, section 11; closed by unit 5's D3 check).
+#
+# Grok runs hooks inside this sandbox, so guard receipts go under
+# `~/.grok/codeflow-probe/`, which a seat can also write. A Grok preflight is
+# cooperative readiness evidence, not proof that the guards ran (proposal
+# v6, section 1.4).
+
+[profiles.cf-guard]
+extends = "workspace"
+restrict_network = false
+read_only = [
+  ".claude",
+  ".grok",
+  ".codex",
+  ".codeflow/git-hooks",
+  ".git/hooks",
+  ".github/workflows",
+]
+deny = [
+  "/Users/*/.ssh",
+  "/home/*/.ssh",
+  "/root/.ssh",
+  "/Users/*/.aws",
+  "/home/*/.aws",
+  "/root/.aws",
+  "/Users/*/.gnupg",
+  "/home/*/.gnupg",
+  "/root/.gnupg",
+  "/Users/*/.netrc",
+  "/home/*/.netrc",
+  "/root/.netrc",
+  "/Users/*/.kube",
+  "/home/*/.kube",
+  "/root/.kube",
+  "/Users/*/.cargo/credentials",
+  "/home/*/.cargo/credentials",
+  "/Users/*/.cargo/credentials.toml",
+  "/home/*/.cargo/credentials.toml",
+  "/Users/*/.codex/auth.json",
+  "/home/*/.codex/auth.json",
+  "/Users/*/.claude/.credentials.json",
+  "/home/*/.claude/.credentials.json",
+  "/Users/*/.grok/auth.json",
+  "/home/*/.grok/auth.json",
+  "/Users/*/.grok/mcp_credentials.json",
+  "/home/*/.grok/mcp_credentials.json",
+  "/Users/*/.pypirc",
+  "/home/*/.pypirc",
+  "/Users/*/.gem/credentials",
+  "/home/*/.gem/credentials",
+  "/Users/*/.password-store",
+  "/home/*/.password-store",
+  "**/.env",
+  "**/.env.*",
+  "**/*.pem",
+  "**/*.key",
+  "**/*.p12",
+  "**/*.pfx",
+]
+
+# Builder profile for a seat launched in `.worktrees/<slug>` (proposal v11,
+# section 1.5): `cf-guard` plus the common git dir, with its hooks read-only.
+# Grok profiles cannot extend a custom profile, so the lists are repeated.
+[profiles.cf-guard-worktree]
+extends = "workspace"
+restrict_network = false
+read_write = [
+  "../../.git",
+]
+read_only = [
+  "../../.git/hooks",
+  ".claude",
+  ".grok",
+  ".codex",
+  ".codeflow/git-hooks",
+  ".git/hooks",
+  ".github/workflows",
+]
+deny = [
+  "/Users/*/.ssh",
+  "/home/*/.ssh",
+  "/root/.ssh",
+  "/Users/*/.aws",
+  "/home/*/.aws",
+  "/root/.aws",
+  "/Users/*/.gnupg",
+  "/home/*/.gnupg",
+  "/root/.gnupg",
+  "/Users/*/.netrc",
+  "/home/*/.netrc",
+  "/root/.netrc",
+  "/Users/*/.kube",
+  "/home/*/.kube",
+  "/root/.kube",
+  "/Users/*/.cargo/credentials",
+  "/home/*/.cargo/credentials",
+  "/Users/*/.cargo/credentials.toml",
+  "/home/*/.cargo/credentials.toml",
+  "/Users/*/.codex/auth.json",
+  "/home/*/.codex/auth.json",
+  "/Users/*/.claude/.credentials.json",
+  "/home/*/.claude/.credentials.json",
+  "/Users/*/.grok/auth.json",
+  "/home/*/.grok/auth.json",
+  "/Users/*/.grok/mcp_credentials.json",
+  "/home/*/.grok/mcp_credentials.json",
+  "/Users/*/.pypirc",
+  "/home/*/.pypirc",
+  "/Users/*/.gem/credentials",
+  "/home/*/.gem/credentials",
+  "/Users/*/.password-store",
+  "/home/*/.password-store",
+  "**/.env",
+  "**/.env.*",
+  "**/*.pem",
+  "**/*.key",
+  "**/*.p12",
+  "**/*.pfx",
+]

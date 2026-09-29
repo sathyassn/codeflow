@@ -1,0 +1,13 @@
+{
+  "_about": "Sample fixture-root record (proposal v11, section 2.6, SET-R7-2). An entry of kind fixture-root in bindings.json under the CodeFlow authority root, whose location comes from the account database, never HOME or XDG_STATE_HOME. Written only by the operator's `codeflow baseline bind --fixture-root <path>` and removed only by `codeflow baseline bind --remove-fixture-root <path>`. A fixture seat's CODEFLOW_ADMISSION carries authority root, fixture root, admission_id and trial real path; a record removed, or replaced (another admission_id, or another device or inode at the same path), is binding lost for every trial under it.",
+  "kind": "fixture-root",
+  "admission_id": "<random, made by the operator command>",
+  "root": "<real path of the harness-created temporary root, for example under the operator's TMPDIR>",
+  "root_device": "<device of the root at admission>",
+  "root_inode": "<inode of the root at admission>",
+  "contract": "<hook contract of the admitting binary>",
+  "builtin_floor": "<identity of the admitting binary's built-in policy>",
+  "remote_actions": "refused, except push or fetch to a local repository eligible under this root",
+  "recorded_by": "codeflow baseline bind --fixture-root",
+  "recorded_at": "<time of admission>"
+}

@@ -49,6 +49,9 @@ itself a blocker finding — return changes_requested.
    For substantial documentation or user-facing copy, read and apply
    `.claude/skills/cf-editorial-review/SKILL.md`; treat meaning, evidence,
    policy, and contextual voice defects as findings, not taste preferences.
+   Mannered prose in any changed text is a finding, and your own report is
+   written plainly: simple, straightforward and clear, no mannered prose
+   (see `.codeflow/rules/writing.md`).
 4. Run the mechanical gates and capture their output:
    - `codeflow test`
    - `codeflow validate --docs` wherever `docs/` is installed: the docs spine

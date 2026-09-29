@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 mod acceptance;
 mod adopter;
@@ -81,6 +81,23 @@ pub struct CiArgs {
     /// branch's current tip, since its base bounds every destination tip.
     #[arg(long, value_name = "REF", hide = true)]
     pub baseline_from: Option<String>,
+
+    /// The level of the rule of a plane that runs this check (pre-push
+    /// passes `git.test_gate_on_push`): each finding prints at the lower of
+    /// its own level and this one where its rule permits a downgrade
+    /// (SPC-013 R-80).
+    #[arg(long, value_name = "LEVEL", hide = true, value_parser = parse_level)]
+    pub run_level: Option<PolicyLevel>,
+
+    /// Read PR bodies for `scripts/release.py`, the one reader both use:
+    /// a JSON array of body strings on stdin, and on stdout
+    /// `{"protocol": READ_PROTOCOL, "readings": [...]}`, each reading the
+    /// Release impact fields (`null` without exactly one section), the
+    /// Breaking change sections' visible text, and this check's Release
+    /// impact findings under the default policy. Reads no repository and no
+    /// range.
+    #[arg(long, hide = true, exclusive = true)]
+    pub read_release_impact: bool,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -148,13 +165,16 @@ fn policy_verifiable(root: &Path) -> bool {
         return false;
     }
     for warning in policy_schema::deprecation_warnings(root) {
-        eprintln!("codeflow ci: warning: {warning}");
+        eprintln!("{}", warning.line("codeflow ci", "warning"));
     }
     true
 }
 
 #[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 pub fn run(args: &CiArgs) -> i32 {
+    if args.read_release_impact {
+        return read_release_impact();
+    }
     let root = super::repo_root();
     // An invalid policy cannot verify the consumer's intent — fail loudly,
     // naming each offending key, rather than silently verify against the
@@ -259,7 +279,11 @@ pub fn run(args: &CiArgs) -> i32 {
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {
-        println!("codeflow ci: no branch name resolved — branch-naming check skipped");
+        let finding = codeflow_core::remedy::Finding::new(
+            "no branch name resolved; branch-naming check skipped",
+            codeflow_core::remedy::CI_BRANCH_UNRESOLVED.remedy(),
+        );
+        println!("{}", finding.line("codeflow ci", "note"));
         skipped.push("branch-naming");
     } else {
         println!("codeflow ci: branch '{branch}'");
@@ -318,7 +342,62 @@ pub fn run(args: &CiArgs) -> i32 {
         ran.push("PR-body");
     }
 
+    settle_watched_paths(&mut tagged, pr_body.as_deref());
+    if let Some(running) = args.run_level {
+        run_under(&root, running, &mut tagged);
+    }
     report(&tagged, &ran, &skipped)
+}
+
+/// The contract-surface findings under the pull request's Release impact
+/// (TSK-147 AC-4): a body that states `Breaking: no` with a `Rationale`
+/// settles them; with no body they print as notes pointing at those fields;
+/// any other body keeps them as warnings.
+fn settle_watched_paths(tagged: &mut Vec<TaggedViolation>, body: Option<&str>) {
+    let watched = |t: &TaggedViolation| t.violation.rule == git_hook::WATCHED_PATH_RULE;
+    match body {
+        Some(body) if pr_body::declares_no_break(body) => tagged.retain(|t| !watched(t)),
+        Some(_) => {}
+        None => {
+            let (notes, kept): (Vec<TaggedViolation>, Vec<TaggedViolation>) =
+                std::mem::take(tagged).into_iter().partition(watched);
+            *tagged = kept;
+            for t in notes {
+                let text = match &t.sha {
+                    Some(sha) => format!("{} in {}", t.violation.message, short(sha)),
+                    None => t.violation.message,
+                };
+                let note = codeflow_core::remedy::Finding::new(text, t.violation.remedy);
+                eprintln!("{}", note.line("codeflow ci", "note"));
+            }
+        }
+    }
+}
+
+/// Lower each finding to its effective level under the running plane's
+/// rule, and say so on the finding (R-80).
+fn run_under(root: &Path, running: PolicyLevel, tagged: &mut [TaggedViolation]) {
+    let raw = codeflow_core::hooks::adoption::raw_policy(root);
+    for t in tagged {
+        let level = t.violation.level_under(running, &raw);
+        if level != t.violation.level {
+            t.violation.message = format!(
+                "{} (printed at {level}: the running plane's rule is {running}; CI applies {})",
+                t.violation.message, t.violation.level
+            );
+            t.violation.level = level;
+        }
+    }
+}
+
+fn parse_level(text: &str) -> Result<PolicyLevel, String> {
+    match text {
+        "block" => Ok(PolicyLevel::Block),
+        "warn" => Ok(PolicyLevel::Warn),
+        "allow" => Ok(PolicyLevel::Allow),
+        "off" => Ok(PolicyLevel::Off),
+        other => Err(format!("unknown level '{other}' (block, warn, allow, off)")),
+    }
 }
 
 /// Pull request classification (TSK-104), which needs the body, and
@@ -400,7 +479,7 @@ fn evaluate_pr_checks(
             "git.pr_sections",
             git.pr_sections,
             "PR body is missing or empty".into(),
-            "provide a PR body with real content".into(),
+            codeflow_core::remedy::PR_BODY_MISSING.remedy(),
         ));
     }
     findings.extend(evaluate_pr_body(git, body));
@@ -470,10 +549,14 @@ fn evaluate_commit_range(
     git: &codeflow_core::hooks::policy::GitPolicy,
 ) -> CommitRangeEvaluation {
     let Some(base_sha) = resolve_base(root, base_candidates) else {
-        eprintln!(
-            "codeflow ci: warning: could not resolve a base ref (tried: {}) — commit checks skipped. Pass --base/--head explicitly.",
-            base_candidates.join(", ")
+        let finding = codeflow_core::remedy::Finding::new(
+            format!(
+                "could not resolve a base ref (tried: {}); commit checks skipped",
+                base_candidates.join(", ")
+            ),
+            codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
         );
+        eprintln!("{}", finding.line("codeflow ci", "warning"));
         return CommitRangeEvaluation {
             base_sha: None,
             violations: Vec::new(),
@@ -506,9 +589,13 @@ fn evaluate_commit_range(
                         Some(true)
                     }
                     Err(error) => {
-                        eprintln!(
-                            "codeflow ci: warning: could not diff the range ({error}); added-lines check skipped"
+                        let finding = codeflow_core::remedy::Finding::new(
+                            format!(
+                                "could not diff the range ({error}); added-lines check skipped"
+                            ),
+                            codeflow_core::remedy::CI_RANGE_UNREADABLE.remedy(),
                         );
+                        eprintln!("{}", finding.line("codeflow ci", "warning"));
                         Some(false)
                     }
                 }
@@ -526,9 +613,11 @@ fn evaluate_commit_range(
             }
         }
         Err(error) => {
-            eprintln!(
-                "codeflow ci: warning: could not enumerate commits ({error}) — commit checks skipped"
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("could not enumerate commits ({error}); commit checks skipped"),
+                codeflow_core::remedy::CI_RANGE_UNREADABLE.remedy(),
             );
+            eprintln!("{}", finding.line("codeflow ci", "warning"));
             CommitRangeEvaluation {
                 base_sha: None,
                 violations: Vec::new(),
@@ -564,11 +653,10 @@ fn own_branch_preflight(
             Err(error) => {
                 tagged.push(TaggedViolation {
                     sha: None,
-                    violation: Violation::new(
+                    violation: Violation::always_blocking(
                         "work.tracking_state",
-                        PolicyLevel::Block,
                         format!("cannot determine durable-work tracking: {error}"),
-                        "repair CodeFlow state or task-home access before task work".to_string(),
+                        "repair CodeFlow state or task-home access before task work",
                     ),
                 });
                 ran.push("work-start");
@@ -595,7 +683,7 @@ fn visible_graph_check(root: &Path, level: PolicyLevel, tagged: &mut Vec<TaggedV
                 "work.valid_graph",
                 level,
                 format!("visible durable workgraph is invalid: {findings}"),
-                "repair the workgraph until `codeflow validate --docs` passes".to_string(),
+                codeflow_core::remedy::WORKGRAPH_INVALID.remedy(),
             ),
         });
     }
@@ -616,7 +704,7 @@ fn evaluate_work_start(
                 let resolved =
                     resolved.map_or_else(|| ("main".to_string(), None), |r| (r.target, r.note));
                 if let Some(note) = resolved.1 {
-                    eprintln!("codeflow ci: note: {note}");
+                    eprintln!("{}", note.line("codeflow ci", "note"));
                 }
                 resolved.0
             }
@@ -627,9 +715,7 @@ fn evaluate_work_start(
                         "work.stable_planning_anchor",
                         level,
                         error.to_string(),
-                        format!(
-                            "reconcile the target branch, then run `codeflow work start {task_id}`"
-                        ),
+                        codeflow_core::remedy::WORK_START_RECONCILE.with(&[("id", &task_id)]),
                     ),
                 });
                 return;
@@ -642,9 +728,8 @@ fn evaluate_work_start(
                     "work.stable_planning_anchor",
                     level,
                     error.to_string(),
-                    format!(
-                        "merge the validated planning record into '{target}', then run `codeflow work start {task_id}`"
-                    ),
+                    codeflow_core::remedy::WORK_START_MERGE_PLANNING
+                        .with(&[("target", &target), ("id", &task_id)]),
                 ),
             });
         }
@@ -655,7 +740,7 @@ fn evaluate_work_start(
                 "work.task_record",
                 level,
                 format!("task branch '{branch}' does not identify a visible task record"),
-                "create and merge the durable task record before implementation".to_string(),
+                codeflow_core::remedy::TASK_RECORD_MISSING.remedy(),
             ),
         });
     }
@@ -806,10 +891,8 @@ fn evaluate_branch(git: &GitPolicy, branch: &str) -> Option<TaggedViolation> {
             "git.branch_naming",
             git.branch_naming,
             format!("branch '{branch}' does not match `{{prefix}}/{{kebab-name}}`"),
-            format!(
-                "rename with a sanctioned prefix: {}",
-                git.branch_prefixes.join(" ")
-            ),
+            codeflow_core::remedy::BRANCH_NAME
+                .with(&[("prefixes", &git.branch_prefixes.join(" "))]),
         ),
     })
 }
@@ -825,7 +908,7 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
                 "git.ai_attribution",
                 git.ai_attribution,
                 format!("PR body contains AI attribution ({which})"),
-                "remove the attribution — project policy forbids AI attribution in commits and PR bodies (charter §6.4)".to_string(),
+                codeflow_core::remedy::PR_AI_ATTRIBUTION.remedy(),
             ));
         }
     }
@@ -835,7 +918,7 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
                 "git.commit_emoji",
                 git.commit_emoji,
                 format!("PR body contains emoji ('{c}')"),
-                "remove emoji from the PR body (charter §6.4)".to_string(),
+                codeflow_core::remedy::PR_EMOJI.remedy(),
             ));
         }
     }
@@ -866,10 +949,7 @@ fn evaluate_added_lines(git: &GitPolicy, lines: &[AddedLine]) -> Vec<Violation> 
                     added.line,
                     standards::policy_character_name(c)
                 ),
-                format!(
-                    "{}; existing lines are grandfathered, only this added line changes",
-                    standards::POLICY_CHARACTER_FIX
-                ),
+                codeflow_core::remedy::FILE_POLICY_CHARACTER.with(&[("path", &added.path)]),
             ))
         })
         .collect()
@@ -929,22 +1009,22 @@ fn evaluate_pr_structure(git: &GitPolicy, body: &str, class: ChangeClass) -> Vec
             SectionState::Present => continue,
             SectionState::Duplicate => (
                 format!("PR body has duplicate section '## {section}'{why}"),
-                "keep one authoritative section for each required heading",
+                &codeflow_core::remedy::PR_SECTION_DUPLICATE,
             ),
             SectionState::Empty => (
                 format!("PR body section '## {section}' is present but empty{why}"),
-                "fill the section in — HTML comments and bare '-' bullets do not count as content",
+                &codeflow_core::remedy::PR_SECTION_EMPTY,
             ),
             SectionState::Missing => (
                 format!("PR body is missing required section '## {section}'{why}"),
-                "add the section with real content — the shipped PR template carries the required structure",
+                &codeflow_core::remedy::PR_SECTION_MISSING,
             ),
         };
         out.push(Violation::new(
             "git.pr_sections",
             git.pr_sections,
             found,
-            detail.to_string(),
+            detail.remedy(),
         ));
     }
 
@@ -955,7 +1035,7 @@ fn evaluate_pr_structure(git: &GitPolicy, body: &str, class: ChangeClass) -> Vec
             "git.pr_sections",
             PolicyLevel::Warn,
             format!("PR body line {line_no} is a template remnant ({what}): '{line}'"),
-            "replace the placeholder with real content, or delete the line".to_string(),
+            codeflow_core::remedy::PR_TEMPLATE_REMNANT.remedy(),
         ));
     }
     out
@@ -1173,7 +1253,11 @@ fn resolve_pr_body(args: &CiArgs) -> Result<Option<String>, String> {
     }
     let body = std::env::var(PR_BODY_ENV).ok();
     if body.is_none() && std::env::var("BITBUCKET_PR_ID").is_ok_and(|value| !value.is_empty()) {
-        eprintln!("codeflow ci: warning: Bitbucket PR body was not supplied; body checks skipped. Pass CODEFLOW_PR_BODY, --pr-body or --pr-body-file to check it.");
+        let finding = codeflow_core::remedy::Finding::new(
+            "the Bitbucket pull request body was not supplied; body checks skipped",
+            codeflow_core::remedy::CI_BODY_UNSUPPLIED.remedy(),
+        );
+        eprintln!("{}", finding.line("codeflow ci", "warning"));
         Ok(None)
     } else if is_pr_event(|key| std::env::var(key).ok()) {
         Ok(Some(body.unwrap_or_default()))
@@ -1190,7 +1274,7 @@ fn resolve_base(root: &Path, candidates: &[String]) -> Option<String> {
 /// `git rev-parse --verify --quiet <rev>^{commit}` — returns the resolved sha,
 /// or `None` when the rev does not name a commit.
 fn rev_parse(root: &Path, rev: &str) -> Option<String> {
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--verify", "--quiet"])
@@ -1208,7 +1292,7 @@ fn rev_parse(root: &Path, rev: &str) -> Option<String> {
 /// message) records flagged merge or not. Uses a NUL-delimited `git log` so
 /// multi-line bodies parse unambiguously.
 fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRecord>, String> {
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["log", "-z", "--format=%H %P%n%B"])
@@ -1288,9 +1372,13 @@ fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, St
 fn shipped_scaffold() -> Option<ScaffoldManifest> {
     ScaffoldManifest::load(&EmbeddedAssets)
         .map_err(|error| {
-            eprintln!(
-                "codeflow ci: warning: cannot load the shipped scaffold manifest ({error}); managed files are scanned like any other"
+            let finding = codeflow_core::remedy::Finding::new(
+                format!(
+                    "cannot load the shipped scaffold manifest ({error}); managed files are scanned like any other"
+                ),
+                codeflow_core::remedy::SCAFFOLD_MANIFEST_BROKEN.remedy(),
             );
+            eprintln!("{}", finding.line("codeflow ci", "warning"));
         })
         .ok()
 }
@@ -1312,7 +1400,7 @@ fn read_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeMap<String, Vec<u8>>, 
     if blobs.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let mut child = Command::new("git")
+    let mut child = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["cat-file", "--batch"])
@@ -1367,7 +1455,7 @@ fn parse_batch(stdout: &[u8], queried: &[&str]) -> Result<BTreeMap<String, Vec<u
 
 /// Run `git -C root <args>` and return its stdout, or its stderr as the error.
 fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -1506,7 +1594,7 @@ fn hunk_header(header: &str) -> Option<(usize, usize, usize)> {
 /// Empty on any error — the tripwire is advisory, so an unavailable list means
 /// no nudge.
 fn commit_files(root: &Path, sha: &str) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["diff-tree", "--no-commit-id", "--name-only", "-r", sha])
@@ -1548,8 +1636,56 @@ fn short(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
+/// The version of the `--read-release-impact` answer. Raise it whenever a
+/// reading's shape or meaning changes: `scripts/release.py` refuses any
+/// other version (its `READER_PROTOCOL`), so a stale binary cannot answer
+/// with older semantics in the same shape.
+const READ_PROTOCOL: u32 = 1;
+
+/// `codeflow ci --read-release-impact`: the PR-body reading `release.py`
+/// takes from this binary, so the release calculator and this check read a
+/// body with one parser (TSK-147 F4). Exit 2 on input that is not a JSON
+/// array of strings.
+fn read_release_impact() -> i32 {
+    let mut input = String::new();
+    if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input) {
+        eprintln!("codeflow ci --read-release-impact: cannot read stdin: {error}");
+        return 2;
+    }
+    let bodies: Vec<String> = match serde_json::from_str(&input) {
+        Ok(bodies) => bodies,
+        Err(error) => {
+            eprintln!(
+                "codeflow ci --read-release-impact: stdin must be a JSON array of PR body strings: {error}"
+            );
+            return 2;
+        }
+    };
+    let readings: Vec<serde_json::Value> =
+        bodies.iter().map(|body| pr_body::reading(body)).collect();
+    let answer = serde_json::json!({ "protocol": READ_PROTOCOL, "readings": readings });
+    match serde_json::to_writer(std::io::stdout().lock(), &answer) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("codeflow ci --read-release-impact: cannot write stdout: {error}");
+            2
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// The reader protocol `release.py` reads is the one this binary
+    /// answers; raising one without the other fails here.
+    #[test]
+    fn release_py_reads_the_protocol_this_binary_answers() {
+        let script = include_str!("../../../../scripts/release.py");
+        assert!(
+            script.contains(&format!("\nREADER_PROTOCOL = {}\n", super::READ_PROTOCOL)),
+            "scripts/release.py READER_PROTOCOL differs from READ_PROTOCOL"
+        );
+    }
+
     use super::*;
     use codeflow_core::workgraph::classify::ProjectPaths;
 
@@ -2592,7 +2728,7 @@ mod tests {
                 "git.commit_format",
                 PolicyLevel::Block,
                 "bad subject".to_string(),
-                "fix it".to_string(),
+                codeflow_core::remedy::COMMIT_BLANK_LINE.remedy(),
             ),
         }
     }

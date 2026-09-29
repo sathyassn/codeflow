@@ -1,0 +1,67 @@
+{
+  "_about": "Sample authority registry after the one operator-reviewed inventory of the agentic-systems workspace (proposal v7, section 2.3; workspace mode as of proposal v11, section 2.8). Lives under the CodeFlow authority root (macOS: <home from the user database>/Library/Application Support/codeflow/bindings.json), never in a repository. Written only by operator commands. Observed on 2026-09-28: codeflow, agent-os and agent-workstation-kit carry .codeflow/policy.json; agent-os-portal and agentic-development-model are git repositories without it; project-organization-guide and design are plain folders. The two exclusions are the operator's decision, shown here as proposed. Workspace mode: the umbrella's own .codeflow/policy.json sets git.root_branch to \"integration/workspace\" (the CodeFlow convention, applied by `codeflow init --workspace`; for this workspace a post-release adoption step, RELEASE-PLAN.md:546). The registry does not record it; doctor reads the key from the umbrella's policy and compares the umbrella's harness preset with each enrolled child below.",
+  "version": 1,
+  "roots": [
+    {
+      "root": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems",
+      "kind": "enrolled",
+      "common_dir": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/.git",
+      "baseline": "baselines/<key of the common dir>.json",
+      "recorded_by": "codeflow baseline bind --inventory",
+      "recorded_at": "<time of the inventory>"
+    },
+    {
+      "root": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow",
+      "kind": "enrolled",
+      "parent": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems",
+      "common_dir": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.git",
+      "baseline": "baselines/<key of the common dir>.json",
+      "recorded_by": "codeflow baseline bind --inventory (adopt)",
+      "recorded_at": "<time of the inventory>"
+    },
+    {
+      "root": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/agent-os",
+      "kind": "enrolled",
+      "parent": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems",
+      "common_dir": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/agent-os/.git",
+      "baseline": "baselines/<key of the common dir>.json",
+      "recorded_by": "codeflow baseline bind --inventory (adopt)",
+      "recorded_at": "<time of the inventory>"
+    },
+    {
+      "root": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/agent-workstation-kit",
+      "kind": "enrolled",
+      "parent": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems",
+      "common_dir": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/agent-workstation-kit/.git",
+      "baseline": "baselines/<key of the common dir>.json",
+      "recorded_by": "codeflow baseline bind --inventory (adopt)",
+      "recorded_at": "<time of the inventory>"
+    },
+    {
+      "root": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/agent-os-portal",
+      "kind": "excluded",
+      "parent": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems",
+      "common_dir": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/agent-os-portal/.git",
+      "authority": "built-in policy",
+      "seats": "unavailable",
+      "reason": "<operator's reason: CodeFlow not adopted in this repository>",
+      "recorded_by": "codeflow baseline bind --inventory (exclude)",
+      "recorded_at": "<time of the inventory>"
+    },
+    {
+      "root": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/agentic-development-model",
+      "kind": "excluded",
+      "parent": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems",
+      "common_dir": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/agentic-development-model/.git",
+      "authority": "built-in policy",
+      "seats": "unavailable",
+      "reason": "<operator's reason: CodeFlow not adopted in this repository>",
+      "recorded_by": "codeflow baseline bind --inventory (exclude)",
+      "recorded_at": "<time of the inventory>"
+    }
+  ],
+  "_plain_folders": [
+    "project-organization-guide",
+    "design"
+  ]
+}
