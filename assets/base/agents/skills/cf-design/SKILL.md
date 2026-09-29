@@ -45,10 +45,11 @@ avoid resolving something genuinely new.
 
 ## 2. Inspect before inventing
 
-Read the brief, `docs/product.md`, relevant
-capabilities, architecture, accepted decisions, research, content, and
-project-owned brand or design guidance. Inspect the actual product and existing
-design system before proposing a parallel visual language:
+Reuse the current evidence set: what discovery and the plan already read. Read
+the brief, `docs/product.md`, relevant capabilities, architecture, accepted
+decisions, research, content, and project-owned brand or design guidance only
+where that set lacks them. Inspect the actual product and existing design
+system before proposing a parallel visual language:
 
 - the subject: real objects, data, artefacts, states, and vocabulary in play;
 - tokens, typography, colour roles, spacing, imagery, and motion;
@@ -244,25 +245,17 @@ model seats is not that decision and never substitutes for it. No board is
 required once the operator has accepted the direction, when an accepted system
 governs the work, or for a conformance or cosmetic change.
 
-Material feedback on a settled direction produces Plan vN+1 carrying the exact
-reviewed version, the feedback authority, and the accepted and rejected
-rationale; the sourcing-and-revision reference owns that record. Bounded
-conformance feedback stays in the normal task record.
+Material feedback on a settled direction produces a new plan version carrying
+the exact reviewed version, the feedback authority, and the accepted and
+rejected rationale; the sourcing-and-revision reference owns that record.
+Bounded conformance feedback stays in the normal task record.
 
-The Claude judgment primary produces design intent and direction in its
-native session. Codex challenges the choice. Both standing primaries approve
-the exact Plan vN before implementation. Extra-family review, when a trigger
-fires and it is available, is evidence — never a silent third vote.
-
-The same Claude owner authors and implements real design and retains fidelity
-judgment under the orchestrator's canonical routing contract, including its
-same-Claude fallback. Until a matching evidenced tuple is scoped-qualified, the
-primary executes; candidates run only disposable fixtures. Another family needs
-an explicit task-specific operator override recorded in Plan vN—Claude absence
-is not one. Turning settled product/UX/UI into components, layout, styles, or
-interactions is design implementation; plumbing, asset transfer, and evidence
-are non-design only when they realize no design decision. Scoped routes gain no
-direction or fidelity authority.
+Who produces, challenges and approves the design, the same-Claude fallback,
+scoped routes and the operator override follow the orchestrator's "Claude
+leads design" invariant and its design routing section; this skill does not
+restate them. Turning settled product/UX/UI into components, layout, styles,
+or interactions is design implementation; plumbing, asset transfer, and
+evidence are non-design only when they realize no design decision.
 
 ## 8. Critique before build
 
@@ -350,8 +343,8 @@ graded by materiality. An unanchored taste preference remains non-blocking.
 Return the process weight and evidence; settled `DESIGN_INTENT` or collapse;
 governing idea and composition; rendered candidates and operator decision where
 owned; warranted alternatives, references, and system scope; unresolved
-decisions; review and fidelity evidence; and both primary-seat approvals of the
-same plan version.
+decisions; review and fidelity evidence; and the plan approval the orchestrator
+records.
 
 Do not claim a user was researched, a direction was approved, a composition was
 reviewed, a standard was met, or a rendered surface was verified without
