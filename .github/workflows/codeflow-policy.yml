@@ -28,6 +28,13 @@ name: codeflow-policy
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main, master, "integration/**"]
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+# No concurrency group: registry events must not replace queued runs.
 
 permissions:
   contents: read
@@ -41,7 +48,7 @@ jobs:
       # binary, the pin and the policy all come from this checkout.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
           fetch-depth: 0
 
       # This repository IS codeflow, so it builds the checked-out TARGET
@@ -51,12 +58,15 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: Build codeflow from the target's source
         run: |
           cargo build --release -p codeflow-cli
           echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
       - name: Fetch the pull request head as data
+        if: github.event_name == 'pull_request_target'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -70,6 +80,7 @@ jobs:
       # The PR body reaches `codeflow ci` through `env:`, never interpolated
       # into the script, so an untrusted body cannot inject shell.
       - name: codeflow ci (commit + branch + PR-body standards)
+        if: github.event_name == 'pull_request_target'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -77,3 +88,22 @@ jobs:
           CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
         run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
+
+      - name: Fetch the shared registry
+        run: |
+          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
+            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+          else
+            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
+          fi
+
+      - name: codeflow ids check
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request_target ]; then
+            codeflow ids check --base "$BASE_SHA" --head refs/codeflow/pr-head
+          else
+            codeflow ids check
+          fi
