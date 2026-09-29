@@ -22,9 +22,7 @@ const SETTINGS_ACCEPT_EDITS: &str =
 const SETTINGS_BYPASS_SANDBOXED: &str =
     include_str!("../../tests/fixtures/presets-2.1.0/bypass-sandboxed.json");
 const POLICY: &str = include_str!("../../tests/fixtures/presets-2.1.0/policy.json");
-const STAGING_POLICY: &str = include_str!(
-    "../../../../docs/verification/evidence/permission-presets/current/policy-asset.json"
-);
+const STAGING_POLICY: &str = include_str!("../../tests/fixtures/presets-3.0.0-staging/policy.json");
 
 /// The Claude preset the release shipped from the asset `src`
 /// (`settings/default.json` and the other two), or `None` for any other

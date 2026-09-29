@@ -939,11 +939,12 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
                     "{tier} {wiring} {help}: {stderr}"
                 );
                 assert!(stderr.is_empty(), "{tier} {wiring} {help}: {stderr}");
+                // A fresh install blocks headless peer runs (ADR-0075 D4).
                 let out = run_wired(&root, &hook, twin);
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 assert_eq!(
                     out.status.code(),
-                    Some(0),
+                    Some(2),
                     "{tier} {wiring} {twin}: {stderr}"
                 );
                 assert!(
