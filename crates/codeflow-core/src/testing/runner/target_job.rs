@@ -18,6 +18,20 @@ use std::ffi::c_void;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::process::Child;
 
+use super::AdoptError;
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_FOR_TEST: std::cell::RefCell<Option<std::path::PathBuf>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(test)]
+pub(super) fn fail_adoption_for_test(pid_file: Option<std::path::PathBuf>) {
+    FAIL_FOR_TEST.with(|slot| *slot.borrow_mut() = pid_file);
+}
+
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
@@ -38,22 +52,26 @@ pub struct TargetJob(OwnedHandle);
 
 impl TargetJob {
     /// Place `child`, started with [`CREATE_SUSPENDED`], in a new
-    /// kill-on-close job, then resume it. The child is resumed on every
-    /// path, so an error here never leaves it suspended; the error names
-    /// what failed so the caller can report that the tree is unguarded.
+    /// kill-on-close job, then resume it. A job failure leaves the child
+    /// suspended for the caller to end before it can run a command.
     ///
     /// # Errors
     ///
     /// Returns the OS error when the job cannot be created, configured or
-    /// joined (the child still runs), or when the child cannot be resumed
-    /// (the caller then kills it).
+    /// joined, or when the child cannot be resumed. The caller ends the
+    /// child on either failure.
     pub fn adopt(child: &Child) -> Result<Self, AdoptError> {
-        let job = Self::for_child(child);
+        let job = Self::for_child(child).map_err(AdoptError::Job)?;
         resume(child.id()).map_err(AdoptError::Resume)?;
-        job.map_err(AdoptError::Unguarded)
+        Ok(job)
     }
 
     fn for_child(child: &Child) -> std::io::Result<Self> {
+        #[cfg(test)]
+        if let Some(path) = FAIL_FOR_TEST.with(|slot| slot.borrow().clone()) {
+            std::fs::write(path, child.id().to_string())?;
+            return Err(std::io::Error::from_raw_os_error(5));
+        }
         // SAFETY: null attributes give a default, non-inheritable handle,
         // and a null name gives an unnamed job; the handle is owned below.
         let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
@@ -98,15 +116,6 @@ impl TargetJob {
     fn handle(&self) -> HANDLE {
         self.0.as_raw_handle() as HANDLE
     }
-}
-
-/// Why a target could not be placed in its job.
-#[derive(Debug)]
-pub enum AdoptError {
-    /// The target runs, but outside a job: a killed gate would not end it.
-    Unguarded(std::io::Error),
-    /// The target could not be resumed; it must be killed.
-    Resume(std::io::Error),
 }
 
 /// Resume every thread of the suspended process `pid`. A process started
