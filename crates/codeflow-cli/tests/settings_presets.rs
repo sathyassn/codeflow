@@ -1622,13 +1622,22 @@ fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     files
 }
 
-const ADOPTER_DENY: &str = "Bash(terraform apply *)";
+/// The adopter's own denies: a command, and two reads that overlap the
+/// shipped exceptions.
+const ADOPTER_DENIES: [&str; 3] = [
+    "Bash(terraform apply *)",
+    "Read(**/.env.example)",
+    "Read(**/team-secret.py)",
+];
 const ADOPTER_COMMAND: &str = "terraform apply -auto-approve";
 
 /// A project made by `init --minimal`, holding the 2.1.0 Claude preset and
-/// policy as its files and, unless `with_settings_baseline` is false, as
-/// their baseline copies; the settings carry one deny of the adopter's own.
-fn planted_2_1_0_project(with_settings_baseline: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
+/// policy as its files and their baseline copies. An adopter project adds
+/// its own denies; `settings_baseline: false` deletes the settings baseline.
+fn planted_2_1_0_project(
+    adopter: bool,
+    settings_baseline: bool,
+) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("proj");
     let home = dir.path().join("home");
@@ -1641,11 +1650,11 @@ fn planted_2_1_0_project(with_settings_baseline: bool) -> (tempfile::TempDir, Pa
     let fixtures = repo_root().join("crates/codeflow-core/tests/fixtures/presets-2.1.0");
     let settings = std::fs::read_to_string(fixtures.join("default.json")).unwrap();
     let policy = std::fs::read_to_string(fixtures.join("policy.json")).unwrap();
-    let mut adopter: serde_json::Value = serde_json::from_str(&settings).unwrap();
-    adopter["permissions"]["deny"]
-        .as_array_mut()
-        .unwrap()
-        .push(ADOPTER_DENY.into());
+    let mut project: serde_json::Value = serde_json::from_str(&settings).unwrap();
+    if adopter {
+        let deny = project["permissions"]["deny"].as_array_mut().unwrap();
+        deny.extend(ADOPTER_DENIES.map(serde_json::Value::from));
+    }
     let plant = |rel: &str, content: &str| {
         let path = root.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1653,88 +1662,108 @@ fn planted_2_1_0_project(with_settings_baseline: bool) -> (tempfile::TempDir, Pa
     };
     plant(
         ".claude/settings.json",
-        &(serde_json::to_string_pretty(&adopter).unwrap() + "\n"),
+        &(serde_json::to_string_pretty(&project).unwrap() + "\n"),
     );
     plant(".codeflow/policy.json", &policy);
     plant(".codeflow/.baseline/.codeflow/policy.json", &policy);
-    let settings_baseline = root.join(".codeflow/.baseline/.claude/settings.json");
-    if with_settings_baseline {
-        plant(".codeflow/.baseline/.claude/settings.json", &settings);
-    } else if settings_baseline.exists() {
-        std::fs::remove_file(settings_baseline).unwrap();
+    plant(".codeflow/.baseline/.claude/settings.json", &settings);
+    if !settings_baseline {
+        std::fs::remove_file(root.join(".codeflow/.baseline/.claude/settings.json")).unwrap();
     }
     (dir, root, home)
 }
 
-/// The updated settings hold every deny of the new preset and the adopter's
-/// own, and the documented matcher of AC-1 refuses the adopter's command.
-fn assert_upgraded_denies(root: &Path, case: &str) -> serde_json::Value {
+/// The effective rules of the updated settings: every deny of the new
+/// preset is present; an adopter's command and reads are refused; in the
+/// ordinary project, secret env variants are denied while a source file
+/// named after secrets and `.env.example` stay readable.
+fn assert_effective_rules(root: &Path, case: &str, adopter: bool) -> serde_json::Value {
     let text = std::fs::read_to_string(root.join(".claude/settings.json")).unwrap();
     let updated: serde_json::Value = serde_json::from_str(&text).unwrap();
     let deny = perm_array(&updated, "deny");
     for rule in perm_array(&load("default.json"), "deny") {
         assert!(deny.contains(&rule), "{case}: missing new deny {rule}");
     }
-    assert!(
-        deny.iter().any(|r| r == ADOPTER_DENY),
-        "{case}: lost {ADOPTER_DENY}"
-    );
-    assert!(
+    let expected: &[(&str, bool)] = if adopter {
+        &[(".env.example", true), ("app/team-secret.py", true)]
+    } else {
+        &[
+            (".env.secret.py", true),
+            ("config/.env.credentials.ts", true),
+            ("crates/scan/src/secret_scan.rs", false),
+            (".env.example", false),
+        ]
+    };
+    for (path, denied_read) in expected {
+        assert_eq!(
+            read_denied(&deny, path),
+            *denied_read,
+            "{case}: reading {path} should be {}",
+            if *denied_read { "denied" } else { "allowed" }
+        );
+    }
+    assert_eq!(
         denied(&deny, "Bash", ADOPTER_COMMAND),
-        "{case}: {ADOPTER_COMMAND} is no longer refused"
+        adopter,
+        "{case}: {ADOPTER_COMMAND}"
     );
     updated
 }
 
-/// AC-7 journey: a project on the 2.1.0 preset and policy upgrades through
-/// the installed CLI. The first update retires the asks, adds the new
-/// denies, keeps the adopter's deny and moves `privilege_escalation` from
-/// warn to block, reporting both; a second update changes no file and
-/// `validate` is clean. Without the settings baseline, every new deny is
-/// still added and the adopter's command is still refused.
+/// AC-7 journey: three projects on the 2.1.0 preset and policy upgrade
+/// through the installed CLI, an ordinary one and two adopters, one of
+/// which lost its settings baseline. The first update retires the asks and
+/// moves `privilege_escalation` from warn to block, reporting both, and
+/// without a baseline says it compared with the 2.1.0 copy. After each
+/// update the effective rules hold; the second changes no file and
+/// `validate` is clean.
 #[test]
 fn a_2_1_0_project_upgrades_through_the_installed_cli() {
-    let (_dir, root, home) = planted_2_1_0_project(true);
-    let first = succeeded(&run_codeflow(&root, &home, &["update"]), "first update");
-    let updated = assert_upgraded_denies(&root, "with baseline");
-    assert!(
-        updated["permissions"].get("ask").is_none(),
-        "the shipped asks are retired:\n{first}"
-    );
-    assert!(
-        first.contains("removed retired permissions.ask entry \"Bash(sudo *)\""),
-        "the retired asks are reported:\n{first}"
-    );
-    let policy: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(root.join(".codeflow/policy.json")).unwrap())
-            .unwrap();
-    assert_eq!(policy["security"]["privilege_escalation"], "block");
-    assert!(
-        first.contains("moved security.privilege_escalation from \"warn\" to \"block\""),
-        "the moved default is reported:\n{first}"
-    );
+    for (case, adopter, settings_baseline) in [
+        ("ordinary", false, true),
+        ("adopter", true, true),
+        ("adopter without a settings baseline", true, false),
+    ] {
+        let (_dir, root, home) = planted_2_1_0_project(adopter, settings_baseline);
+        let first = succeeded(&run_codeflow(&root, &home, &["update"]), "first update");
+        let updated = assert_effective_rules(&root, case, adopter);
+        assert!(
+            updated["permissions"].get("ask").is_none(),
+            "{case}: the shipped asks are retired:\n{first}"
+        );
+        assert!(
+            first.contains("removed retired permissions.ask entry \"Bash(sudo *)\""),
+            "{case}: the retired asks are reported:\n{first}"
+        );
+        assert_eq!(
+            first.contains("compared with the copy CodeFlow 2.1.0 shipped"),
+            !settings_baseline,
+            "{case}: the copy used is reported only without a baseline:\n{first}"
+        );
+        let policy: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".codeflow/policy.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            policy["security"]["privilege_escalation"], "block",
+            "{case}"
+        );
+        assert!(
+            first.contains("moved security.privilege_escalation from \"warn\" to \"block\""),
+            "{case}: the moved default is reported:\n{first}"
+        );
 
-    let before = snapshot(&root);
-    succeeded(&run_codeflow(&root, &home, &["update"]), "second update");
-    assert!(
-        snapshot(&root) == before,
-        "the second update changed a file"
-    );
-    let validate = succeeded(&run_codeflow(&root, &home, &["validate"]), "validate");
-    assert!(
-        !validate.to_lowercase().contains("warn"),
-        "validate is not clean:\n{validate}"
-    );
-
-    let (_dir, root, home) = planted_2_1_0_project(false);
-    let update = succeeded(
-        &run_codeflow(&root, &home, &["update"]),
-        "update without a settings baseline",
-    );
-    let updated = assert_upgraded_denies(&root, "without baseline");
-    assert!(
-        !update.contains("removed retired permissions")
-            && updated["permissions"].get("ask").is_some(),
-        "without a baseline no permission entry is removed:\n{update}"
-    );
+        let before = snapshot(&root);
+        succeeded(&run_codeflow(&root, &home, &["update"]), "second update");
+        assert!(
+            snapshot(&root) == before,
+            "{case}: the second update changed a file"
+        );
+        assert_effective_rules(&root, &format!("{case}, second update"), adopter);
+        let validate = succeeded(&run_codeflow(&root, &home, &["validate"]), "validate");
+        assert!(
+            !validate.to_lowercase().contains("warn"),
+            "{case}: validate is not clean:\n{validate}"
+        );
+    }
 }
