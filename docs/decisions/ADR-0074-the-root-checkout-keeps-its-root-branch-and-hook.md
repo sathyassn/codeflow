@@ -55,9 +55,10 @@ hooks read the harness markers in the process environment:
 
 Any non-empty marker makes the actor an agent and the hook applies the
 level. With no marker the hook cannot tell, treats the actor as a human, and
-only warns. `CODEFLOW_HUMAN_OVERRIDE`, the override ADR-0007 already
+only warns. `CODEFLOW_HUMAN_OVERRIDE=1`, the override ADR-0007 already
 honours in the git layer and git-guard never trusts, makes the hook treat
-the actor as a human too. The markers live in one list in
+the actor as a human too; like the rest of the git layer, only the value
+`1` counts. The markers live in one list in
 `root_checkout.rs`, so a new harness is one entry.
 
 An umbrella uses workspace mode: its root branch is `integration/workspace`

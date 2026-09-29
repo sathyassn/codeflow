@@ -92,8 +92,9 @@ pub fn process_env(name: &str) -> Option<String> {
 pub enum Actor {
     /// A harness marker is set; the named variable is the first one found.
     Agent(&'static str),
-    /// `CODEFLOW_HUMAN_OVERRIDE` is set: the git layer treats the actor as a
-    /// human even inside a marked shell (ADR-0007). git-guard never reads it.
+    /// `CODEFLOW_HUMAN_OVERRIDE` is set to `1`, the only value the git layer
+    /// honours: the actor is treated as a human even inside a marked shell
+    /// (ADR-0007). git-guard never reads it.
     HumanOverride,
     /// No marker: the hook cannot tell, and treats the actor as a human.
     Unmarked,
@@ -102,7 +103,7 @@ pub enum Actor {
 /// Decide the actor from the environment.
 #[must_use]
 pub fn actor(env: EnvLookup<'_>) -> Actor {
-    if env(HUMAN_OVERRIDE_ENV).is_some_and(|v| !v.trim().is_empty()) {
+    if env(HUMAN_OVERRIDE_ENV).is_some_and(|v| v == "1") {
         return Actor::HumanOverride;
     }
     AGENT_MARKERS
@@ -136,7 +137,7 @@ pub fn actor_note(actor: Actor) -> String {
             format!("{marker} is set, so this commit comes from an agent session")
         }
         Actor::HumanOverride => format!(
-            "{HUMAN_OVERRIDE_ENV} is set, so this commit is treated as a human's and proceeds"
+            "{HUMAN_OVERRIDE_ENV} is 1, so this commit is treated as a human's and proceeds"
         ),
         Actor::Unmarked => "no harness marker is set, so this commit is treated as a \
                             human's and proceeds"

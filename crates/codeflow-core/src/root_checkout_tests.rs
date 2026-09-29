@@ -258,6 +258,20 @@ fn the_human_override_wins_over_a_marker() {
 }
 
 #[test]
+fn only_the_value_1_counts_as_the_human_override() {
+    // The git layer honours the override only when it is exactly "1"
+    // (`human_override_present`); any other value leaves a marked shell an agent.
+    for value in ["true", "yes", "0", " 1", ""] {
+        let env = env_of(&[("CLAUDECODE", "1"), (HUMAN_OVERRIDE_ENV, value)]);
+        assert_eq!(
+            actor(&env),
+            Actor::Agent("CLAUDECODE"),
+            "override value {value:?}"
+        );
+    }
+}
+
+#[test]
 fn hooks_block_agents_and_only_warn_everyone_else() {
     assert_eq!(
         hook_level(PolicyLevel::Block, Actor::Agent("CLAUDECODE")),
@@ -293,7 +307,7 @@ fn the_actor_notes_name_how_the_hook_judged() {
     );
     assert_eq!(
         actor_note(Actor::HumanOverride),
-        "CODEFLOW_HUMAN_OVERRIDE is set, so this commit is treated as a human's and proceeds"
+        "CODEFLOW_HUMAN_OVERRIDE is 1, so this commit is treated as a human's and proceeds"
     );
 }
 
@@ -665,7 +679,7 @@ fn the_hook_blocks_each_marker_and_warns_without_one_or_with_the_override() {
     .expect("override");
     assert_eq!(v.level, PolicyLevel::Warn);
     assert!(v.message.ends_with(
-        "CODEFLOW_HUMAN_OVERRIDE is set, so this commit is treated as a human's and proceeds"
+        "CODEFLOW_HUMAN_OVERRIDE is 1, so this commit is treated as a human's and proceeds"
     ));
     assert!(
         v.remedy.contains("`git switch main`"),
