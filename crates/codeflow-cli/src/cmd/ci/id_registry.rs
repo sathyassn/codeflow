@@ -3,7 +3,7 @@
 //! fetched `codeflow/registry`, no existing `uid` may change, and no other
 //! ref may hold a different record under the same id. Only projects with
 //! durable work tracking run it. The enforcing copy runs from the target
-//! branch's `codeflow-registry` workflow; this row gives the same verdict
+//! branch's `codeflow-policy` workflow; this row gives the same verdict
 //! in the ordinary PR job.
 
 use std::path::Path;

@@ -14,7 +14,6 @@ use std::process::{Command, Output};
 
 const CI: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
 const POLICY: &str = include_str!("../../../assets/base/ci/codeflow-policy.yml");
-const REGISTRY: &str = include_str!("../../../assets/base/ci/codeflow-registry.yml");
 const ASSET: &str = "codeflow-cli-x86_64-unknown-linux-gnu";
 
 /// The `run:` script of every step whose name starts with `prefix`: the
@@ -193,19 +192,14 @@ fn every_install_step_is_the_same_verified_script() {
     let mut blocks = run_blocks(CI, "Install codeflow");
     blocks.extend(run_blocks(CI, "Install candidate codeflow"));
     blocks.extend(run_blocks(POLICY, "Install codeflow"));
-    blocks.extend(run_blocks(REGISTRY, "Install codeflow"));
-    assert_eq!(
-        blocks.len(),
-        4,
-        "gates, candidate and the two enforcing jobs"
-    );
+    assert_eq!(blocks.len(), 3, "gates, candidate and the enforcing job");
     assert!(blocks.iter().all(|b| b == &blocks[0]));
     assert!(blocks[0].contains("sha256.sum"));
-    for workflow in [CI, POLICY, REGISTRY] {
+    for workflow in [CI, POLICY] {
         assert!(!workflow.contains("PLACEHOLDER"));
     }
-    // The enforcing jobs read the pin from the target checkout.
-    assert!(POLICY.contains("PIN_REF: HEAD") && REGISTRY.contains("PIN_REF: HEAD"));
+    // The enforcing job reads the pin from the target checkout.
+    assert!(POLICY.contains("PIN_REF: HEAD"));
 }
 
 #[test]
@@ -297,6 +291,12 @@ fn job<'w>(workflow: &'w str, id: &str) -> &'w str {
 /// The expression that selects the pull request's base commit.
 const BASE_SHA_REF: &str = "${{ github.event.pull_request.base.sha }}";
 
+/// The checkout of the enforcing job: the pull request's base commit, and
+/// the event's own commit for the registry's push, schedule and dispatch
+/// runs.
+const TARGET_REF: &str =
+    "${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}";
+
 /// The `with:` block of the first checkout step in `job_text`.
 fn checkout_block(job_text: &str) -> &str {
     job_text
@@ -318,16 +318,10 @@ fn checkout_ref(checkout: &str) -> Option<String> {
 /// run checks out, or `None` for GitHub's default checkout. Only the forms
 /// the shipped workflows use are understood; anything else fails the test.
 fn resolve_ref(expr: Option<&str>, event: &str, base_sha: &str) -> Option<String> {
-    let conditional = format!(
-        "${{{{ github.event_name == 'pull_request_target' && {} || '' }}}}",
-        BASE_SHA_REF
-            .trim_start_matches("${{ ")
-            .trim_end_matches(" }}")
-    );
     match expr {
         None => None,
         Some(e) if e == BASE_SHA_REF => Some(base_sha.to_string()),
-        Some(e) if e == conditional => {
+        Some(e) if e == TARGET_REF => {
             (event == "pull_request_target").then(|| base_sha.to_string())
         }
         Some(other) => panic!("unrecognised checkout ref {other}"),
@@ -336,17 +330,22 @@ fn resolve_ref(expr: Option<&str>, event: &str, base_sha: &str) -> Option<String
 
 #[test]
 fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
-    // Only pull_request_target: GitHub runs this file from the default
-    // branch, never from the pull request.
+    // pull_request_target, never pull_request: GitHub runs this file from
+    // the default branch, never from the pull request. Push, schedule and
+    // dispatch are the registry check's own events, on the event's commit.
     let on = POLICY
         .split("\non:\n")
         .nth(1)
         .and_then(|rest| rest.split("\n\n").next())
         .unwrap();
     assert!(on.contains("pull_request_target:"), "{on}");
+    assert!(!on.contains("  pull_request:"), "{on}");
+    for event in ["push:", "schedule:", "workflow_dispatch:"] {
+        assert!(on.contains(event), "{on}");
+    }
     assert!(
-        !on.contains("  pull_request:") && !on.contains("push:"),
-        "{on}"
+        !POLICY.contains("concurrency:"),
+        "a registry run is never replaced by a queued event"
     );
     assert!(POLICY.contains("\npermissions:\n  contents: read\n"));
     assert!(
@@ -362,7 +361,7 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     let checkout = checkout_block(enforcing);
     assert_eq!(
         checkout_ref(checkout).as_deref(),
-        Some(BASE_SHA_REF),
+        Some(TARGET_REF),
         "{checkout}"
     );
     assert!(
@@ -618,16 +617,13 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
         Some("codeflow 1.2.3")
     );
 
-    // Both enforcing workflows select the base commit for a pull request;
+    // The enforcing workflow selects the base commit for a pull request;
     // the registry's push, schedule and dispatch runs keep their own commit.
-    for (name, workflow) in [("policy", POLICY), ("registry", REGISTRY)] {
-        let expr = checkout_ref(checkout_block(workflow));
-        let selected = resolve_ref(expr.as_deref(), "pull_request_target", &base);
-        assert_eq!(selected.as_deref(), Some(base.as_str()), "{name}");
-    }
-    let registry_ref = checkout_ref(checkout_block(REGISTRY));
+    let policy_ref = checkout_ref(checkout_block(POLICY));
+    let selected = resolve_ref(policy_ref.as_deref(), "pull_request_target", &base);
+    assert_eq!(selected.as_deref(), Some(base.as_str()));
     for event in ["push", "schedule", "workflow_dispatch"] {
-        assert_eq!(resolve_ref(registry_ref.as_deref(), event, &base), None);
+        assert_eq!(resolve_ref(policy_ref.as_deref(), event, &base), None);
     }
 
     // The run as the workflows specify it: the base commit checked out.
