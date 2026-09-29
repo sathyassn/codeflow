@@ -170,14 +170,12 @@ fn gitlinks(root: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, Strin
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-
     use codeflow_core::hooks::git_hook;
 
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = codeflow_core::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -286,7 +284,7 @@ mod tests {
     }
 
     fn stdout(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = codeflow_core::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -326,7 +324,7 @@ mod tests {
         git(&root, &["switch", "-q", "-c", "feat/x"]);
         let policy = GitPolicy::default();
         for oid in [&first, &second] {
-            let absent = Command::new("git")
+            let absent = codeflow_core::git::command()
                 .args(["cat-file", "-e", oid])
                 .current_dir(&root)
                 .env_remove("GIT_DIR")
