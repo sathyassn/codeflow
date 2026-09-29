@@ -128,6 +128,13 @@ fn write_policy(dir: &Path, json: &str) {
     std::fs::write(cf.join("policy.json"), json).unwrap();
 }
 
+/// The protected-branch policy of the retargeting fixtures. Their scratch
+/// repositories commit at a root checkout on a feature branch on purpose,
+/// to probe protected-branch targeting, so the root-checkout rule
+/// (TSK-165, judged in its own tests) is off.
+const TARGETING_POLICY: &str =
+    r#"{"git":{"protected_branches":["main","master"],"root_checkout_commits":"off"}}"#;
+
 fn wire_reference_transaction_hook(dir: &Path) {
     let hook = dir.join(".git/hooks/reference-transaction");
     std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
@@ -313,14 +320,8 @@ fn git_guard_judges_the_repository_a_command_targets() {
         std::fs::create_dir_all(dir).unwrap();
         init_repo(dir, branch);
     }
-    write_policy(
-        &session,
-        r#"{"git":{"protected_branches":["main","master"]}}"#,
-    );
-    write_policy(
-        &scratch,
-        r#"{"git":{"protected_branches":["main","master"]}}"#,
-    );
+    write_policy(&session, TARGETING_POLICY);
+    write_policy(&scratch, TARGETING_POLICY);
     let s = scratch.to_string_lossy();
     let b = bare.to_string_lossy();
     let sg = session.join(".git");
@@ -384,6 +385,8 @@ fn git_guard_blocks_targets_it_cannot_prove() {
         std::fs::create_dir_all(dir).unwrap();
         init_repo(dir, branch);
     }
+    write_policy(&session, TARGETING_POLICY);
+    write_policy(&feature, TARGETING_POLICY);
     // A directory literally named `$R` inside the session, a repository on main.
     let literal = session.join("$R");
     std::fs::create_dir_all(&literal).unwrap();
@@ -537,7 +540,7 @@ fn git_guard_resolves_aliases_and_rebase_branches() {
     for (dir, branch) in [(&main, "main"), (&feat, "feat/x")] {
         std::fs::create_dir_all(dir).unwrap();
         init_repo(dir, branch);
-        write_policy(dir, r#"{"git":{"protected_branches":["main","master"]}}"#);
+        write_policy(dir, TARGETING_POLICY);
     }
     let inc = tmp.path().join("aliases.ini");
     std::fs::write(&inc, "[alias]\n    x = commit\n").unwrap();
@@ -615,7 +618,7 @@ fn git_guard_round_5_boundaries() {
         if on != "main" {
             git(&dir, &["checkout", "-q", on]);
         }
-        write_policy(&dir, r#"{"git":{"protected_branches":["main","master"]}}"#);
+        write_policy(&dir, TARGETING_POLICY);
         dir
     };
     let commit = "commit --allow-empty -m \"fix: probe\"";
@@ -3514,6 +3517,52 @@ fn push_set_checks_only_the_own_commits_of_a_branch_rebased_onto_a_moved_line() 
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
     assert!(!err.contains("Legacy line subject two."), "{err}");
+}
+
+#[test]
+fn push_set_checks_only_the_own_commits_of_a_branch_that_merged_the_line_twice() {
+    // TSK-165: a pushed task branch merges its moved line, the line moves
+    // again, and the branch merges it once more before the next push. Both
+    // line tips border the range; the older one's successors are history the
+    // destination holds through the line, so they are never checked again.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
+    let merge = |message: &str| {
+        git(
+            local.path(),
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                message,
+                "dest/integration/line",
+            ],
+        );
+    };
+    merge("chore: take the line");
+    git(local.path(), &["checkout", "-q", "line"]);
+    commit_file(
+        local.path(),
+        "line3.txt",
+        "line3\n",
+        "Legacy line subject three.",
+    );
+    receive(bare.path(), local.path(), "line:integration/line");
+    git(local.path(), &["fetch", "-q", "dest"]);
+    git(local.path(), &["checkout", "-q", "task/t"]);
+    merge("chore: take the line again");
+    let head = commit_file(local.path(), "u.txt", "u\n", "feat: add u");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &head, &old);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("Legacy line subject"), "{err}");
+
+    // A bad own commit after the second merge still blocks.
+    let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject"), "{err}");
 }
 
 #[test]
