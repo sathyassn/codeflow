@@ -1,0 +1,543 @@
+//! The target-side binary pin on every scaffolded CI platform besides the
+//! GitHub workflow (TSK-095; SPC-013 R-113): `ci-generic.sh`, the GitLab job
+//! and the Bitbucket pipeline install the `codeflow` release the target pins,
+//! verified against its published `sha256.sum`, test a raised candidate
+//! without enforcing with it, judge the change with the target's binary, and
+//! fail a lowered pin.
+//!
+//! Each platform's shipped script runs against a local `file://` release. The
+//! pinned release is a wrapper around this build of `codeflow`, so `codeflow
+//! ci`, `test` and `validate` really run; a raised candidate is a stub that
+//! stands for a newer binary. Every wrapper logs its version and arguments.
+#![cfg(unix)]
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+const GENERIC: &str = include_str!("../../../assets/base/ci/ci-generic.sh");
+const GITLAB: &str = include_str!("../../../assets/base/ci/.gitlab-ci.yml");
+const BITBUCKET: &str = include_str!("../../../assets/base/ci/bitbucket-pipelines.yml");
+const BEGIN: &str = "# >>> codeflow pinned run";
+const END: &str = "# <<< codeflow pinned run";
+/// A pull request body in the shipped template's shape. GitLab passes the
+/// merge request description as `CODEFLOW_PR_BODY`; the other platforms read
+/// it from the same variable when a project supplies it.
+const BODY: &str = "## Summary\n\nAdds a file.\n\n## Changes\n\n- add a file\n\n## Testing\n\nThe probe target passes.\n\n## Reviews\n\nNone: reviewed by the team.\n\n## Release impact\n\n- Impact: minor\n- Breaking: no\n- Rationale: new file.\n- Migration: none\n";
+
+#[derive(Clone, Copy, Debug)]
+enum Platform {
+    Generic,
+    GitLab,
+    Bitbucket,
+}
+
+const PLATFORMS: [Platform; 3] = [Platform::Generic, Platform::GitLab, Platform::Bitbucket];
+
+/// The release triple this machine's pinned install asks for.
+fn triple() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        other => panic!("no codeflow release for {other:?}"),
+    }
+}
+
+/// The literal block of the last `- |` item in a YAML script list, with its
+/// indentation removed.
+fn yaml_script(workflow: &str) -> String {
+    let lines: Vec<&str> = workflow.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|l| l.trim() == "- |")
+        .expect("a `- |` script item");
+    let indent = lines[start + 1].len() - lines[start + 1].trim_start().len();
+    lines[start + 1..]
+        .iter()
+        .take_while(|l| l.trim().is_empty() || l.len() - l.trim_start().len() >= indent)
+        .map(|l| l.get(indent..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+/// The shared pinned run inside a script, from its begin to its end marker.
+fn pinned_run(script: &str) -> &str {
+    let start = script.find(BEGIN).expect("begin marker");
+    let end = script.find(END).expect("end marker") + END.len();
+    &script[start..end]
+}
+
+fn script(platform: Platform) -> String {
+    match platform {
+        Platform::Generic => GENERIC.to_string(),
+        Platform::GitLab => yaml_script(GITLAB),
+        Platform::Bitbucket => yaml_script(BITBUCKET),
+    }
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("CODEFLOW_INTEGRATE_TOKEN", "test")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn sha256(path: &Path) -> String {
+    let out = Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(path)
+        .output()
+        .expect("shasum runs");
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+/// What a published release's binary does.
+enum Binary {
+    /// This build of codeflow, reporting `version`.
+    Real,
+    /// A newer binary the fixture cannot build: it logs and succeeds.
+    Stub,
+}
+
+struct Fixture {
+    dir: tempfile::TempDir,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        Self {
+            dir: tempfile::tempdir().unwrap(),
+        }
+    }
+    fn releases(&self) -> PathBuf {
+        self.dir.path().join("releases")
+    }
+    fn log(&self) -> PathBuf {
+        self.dir.path().join("calls.log")
+    }
+    fn repo(&self) -> PathBuf {
+        self.dir.path().join("repo")
+    }
+    fn home(&self) -> PathBuf {
+        self.dir.path().join("home")
+    }
+
+    /// Publish `version` locally: the archive holding a logging wrapper and
+    /// `sha256.sum` listing it. Returns the release directory.
+    fn publish(&self, version: &str, binary: &Binary) -> PathBuf {
+        let asset = format!("codeflow-cli-{}", triple());
+        let dir = self.releases().join(format!("v{version}"));
+        let stage = self
+            .releases()
+            .join(format!("stage-{version}"))
+            .join(&asset);
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = match binary {
+            Binary::Real => format!("exec '{}' \"$@\"", env!("CARGO_BIN_EXE_codeflow")),
+            Binary::Stub => "exit 0".to_string(),
+        };
+        let bin = stage.join("codeflow");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\necho \"{version} $*\" >> '{}'\nif [ \"$1\" = --version ]; then echo \"codeflow {version}\"; exit 0; fi\n{run}\n",
+                self.log().display()
+            ),
+        )
+        .unwrap();
+        Command::new("chmod").arg("755").arg(&bin).status().unwrap();
+        let archive = dir.join(format!("{asset}.tar.xz"));
+        let status = Command::new("tar")
+            .arg("-cJf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(stage.parent().unwrap())
+            .arg(&asset)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::write(
+            dir.join("sha256.sum"),
+            format!(
+                "{}  {asset}.tar.xz\n0000  codeflow-cli-installer.sh\n",
+                sha256(&archive)
+            ),
+        )
+        .unwrap();
+        dir
+    }
+
+    /// A scaffolded project whose `main` pins `version`, with one test
+    /// target, and a `feat/x` branch checked out. Returns the target commit.
+    fn project(&self, version: &str) -> String {
+        let repo = self.repo();
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["config", "user.email", "t@example.com"]);
+        git(&repo, &["config", "user.name", "t"]);
+        let init = self
+            .codeflow(&repo)
+            .args(["init", "--minimal", "--yes"])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "{}", text(&init));
+        // The fixture judges the CI scripts, not the local hooks.
+        git(&repo, &["config", "core.hooksPath", "/dev/null"]);
+        set_pin(&repo, version);
+        std::fs::write(
+            repo.join(".codeflow/test-config.json"),
+            r#"{"schema_version":"1.0","targets":[{"name":"probe","enabled":true,"runner":"custom","modes":{"quick":{"command":"true"},"full":{"command":"true"}}}]}"#,
+        )
+        .unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "chore: scaffold"]);
+        let target = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["checkout", "-q", "-b", "feat/x"]);
+        target
+    }
+
+    /// Commit the working tree on `feat/x` and return the head.
+    fn commit(&self, message: &str) -> String {
+        let repo = self.repo();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", message]);
+        git(&repo, &["rev-parse", "HEAD"])
+    }
+
+    fn codeflow(&self, cwd: &Path) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+        command
+            .current_dir(cwd)
+            .env("CODEFLOW_HOME", self.home())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        command
+    }
+
+    /// Run `platform`'s shipped script for the change `target..head`, as that
+    /// platform presents it. `None` for the target leaves it unset.
+    fn run(&self, platform: Platform, target: Option<&str>, head: &str) -> Output {
+        // Scratch space inside the fixture, so the scripts' temporary
+        // directories go away with it.
+        let scratch = self.dir.path().join("tmp");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let mut command = Command::new("sh");
+        command
+            .current_dir(self.repo())
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("HOME", self.home())
+            .env("TMPDIR", &scratch)
+            .env("CODEFLOW_HOME", self.home())
+            .env("CODEFLOW_PR_BODY", BODY)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env(
+                "CODEFLOW_RELEASE_URL",
+                format!("file://{}", self.releases().display()),
+            );
+        match platform {
+            Platform::Generic => {
+                command.arg("-c").arg(GENERIC).arg("ci-generic.sh");
+                if let Some(target) = target {
+                    command.arg(target).arg(head);
+                }
+            }
+            Platform::GitLab => {
+                command.arg("-c").arg(script(platform));
+                command
+                    .env("CI_PIPELINE_SOURCE", "merge_request_event")
+                    .env("CI_COMMIT_SHA", head)
+                    .env("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME", "feat/x");
+                if let Some(target) = target {
+                    command.env("CI_MERGE_REQUEST_DIFF_BASE_SHA", target);
+                }
+            }
+            Platform::Bitbucket => {
+                command.arg("-c").arg(script(platform));
+                command
+                    .env("BITBUCKET_COMMIT", head)
+                    .env("BITBUCKET_BRANCH", "feat/x");
+                if let Some(target) = target {
+                    command.env("BITBUCKET_PR_DESTINATION_COMMIT", target);
+                }
+            }
+        }
+        let _ = std::fs::remove_file(self.log());
+        command.output().expect("sh runs")
+    }
+
+    /// The logged calls, one `<version> <args>` per line.
+    fn calls(&self) -> Vec<String> {
+        std::fs::read_to_string(self.log())
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+fn text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+fn set_pin(repo: &Path, version: &str) {
+    let path = repo.join(".codeflow/project.toml");
+    let state = std::fs::read_to_string(&path).unwrap();
+    let pinned: Vec<String> = state
+        .lines()
+        .map(|line| {
+            if line.starts_with("scaffold_version") {
+                format!("scaffold_version = \"{version}\"")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    std::fs::write(&path, pinned.join("\n") + "\n").unwrap();
+}
+
+/// Whether a call by `version` ran `args`.
+fn ran(calls: &[String], version: &str, args: &str) -> bool {
+    calls
+        .iter()
+        .any(|c| c.starts_with(&format!("{version} {args}")))
+}
+
+#[test]
+fn every_platform_runs_the_same_pinned_script() {
+    let generic = pinned_run(GENERIC);
+    for platform in [Platform::GitLab, Platform::Bitbucket] {
+        assert_eq!(pinned_run(&script(platform)), generic, "{platform:?}");
+    }
+    assert!(generic.contains("sha256.sum"));
+}
+
+#[test]
+fn no_shipped_ci_file_installs_or_suggests_the_latest_release() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/ci");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("releases/latest"),
+            "{} names releases/latest",
+            path.display()
+        );
+        assert!(!text.contains("PLACEHOLDER"), "{}", path.display());
+        checked += 1;
+    }
+    assert!(checked >= 7, "read every shipped CI file");
+}
+
+#[test]
+fn the_pinned_install_verifies_the_release_and_fails_closed() {
+    for platform in PLATFORMS {
+        let fx = Fixture::new();
+        let target = fx.project("1.2.3");
+        let release = fx.publish("1.2.3", &Binary::Real);
+        let asset = release.join(format!("codeflow-cli-{}.tar.xz", triple()));
+
+        let ok = fx.run(platform, Some(&target), &target);
+        assert!(ok.status.success(), "{platform:?}: {}", text(&ok));
+        assert!(text(&ok).contains("codeflow 1.2.3 installed and verified"));
+
+        // A tampered asset installs nothing and runs nothing.
+        let original = std::fs::read(&asset).unwrap();
+        let mut tampered = original.clone();
+        tampered.extend_from_slice(b"tampered");
+        std::fs::write(&asset, &tampered).unwrap();
+        let bad = fx.run(platform, Some(&target), &target);
+        assert!(!bad.status.success(), "{platform:?}");
+        assert!(text(&bad).contains("checksum mismatch"), "{}", text(&bad));
+        assert!(fx.calls().is_empty(), "{platform:?}: {:?}", fx.calls());
+        std::fs::write(&asset, &original).unwrap();
+
+        // A missing checksum file, or one without this asset, fails closed.
+        let sums = release.join("sha256.sum");
+        let listed = std::fs::read_to_string(&sums).unwrap();
+        std::fs::remove_file(&sums).unwrap();
+        let missing = fx.run(platform, Some(&target), &target);
+        assert!(!missing.status.success());
+        assert!(
+            text(&missing).contains("no published checksum file"),
+            "{}",
+            text(&missing)
+        );
+        std::fs::write(&sums, "0000  codeflow-cli-installer.sh\n").unwrap();
+        let unlisted = fx.run(platform, Some(&target), &target);
+        assert!(!unlisted.status.success());
+        assert!(
+            text(&unlisted).contains("lists no checksum"),
+            "{}",
+            text(&unlisted)
+        );
+        std::fs::write(&sums, listed).unwrap();
+        assert!(fx.calls().is_empty(), "{platform:?}: {:?}", fx.calls());
+
+        // A version with no release fails naming it.
+        set_pin(&fx.repo(), "7.7.7");
+        let unpublished_target = fx.commit("chore: pin an unpublished release");
+        let unpublished = fx.run(platform, Some(&unpublished_target), &unpublished_target);
+        assert!(!unpublished.status.success());
+        assert!(
+            text(&unpublished).contains("codeflow 7.7.7 has no published checksum file"),
+            "{}",
+            text(&unpublished)
+        );
+
+        // No pin at all fails naming the file.
+        let state = std::fs::read_to_string(fx.repo().join(".codeflow/project.toml")).unwrap();
+        let unpinned = state
+            .lines()
+            .filter(|l| !l.starts_with("scaffold_version"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(fx.repo().join(".codeflow/project.toml"), unpinned).unwrap();
+        let bare = fx.commit("chore: drop the pin");
+        let none = fx.run(platform, Some(&bare), &bare);
+        assert!(!none.status.success());
+        assert!(
+            text(&none).contains("no scaffold_version pinned"),
+            "{}",
+            text(&none)
+        );
+    }
+}
+
+#[test]
+fn a_run_without_the_target_commit_is_refused() {
+    for platform in PLATFORMS {
+        let fx = Fixture::new();
+        let target = fx.project("1.2.3");
+        fx.publish("1.2.3", &Binary::Real);
+        let out = fx.run(platform, None, &target);
+        assert!(!out.status.success(), "{platform:?}");
+        assert!(
+            text(&out).contains("no target commit"),
+            "{platform:?}: {}",
+            text(&out)
+        );
+        assert!(fx.calls().is_empty(), "{platform:?}");
+    }
+}
+
+/// Equal, raised and lowered pins, and an update whose raised pin has not
+/// landed: the target's binary always judges.
+#[test]
+fn the_target_pin_judges_every_change_to_the_pin() {
+    for platform in PLATFORMS {
+        let fx = Fixture::new();
+        let target = fx.project("1.2.3");
+        fx.publish("1.2.3", &Binary::Real);
+        fx.publish("1.2.4", &Binary::Stub);
+        fx.publish("1.0.0", &Binary::Stub);
+
+        // Equal pins: the target's binary runs every gate, and nothing else.
+        std::fs::write(fx.repo().join("a.txt"), "a\n").unwrap();
+        let head = fx.commit("feat: add a file");
+        let equal = fx.run(platform, Some(&target), &head);
+        assert!(equal.status.success(), "{platform:?}: {}", text(&equal));
+        let calls = fx.calls();
+        for gate in ["ci --base", "test --strict", "validate --docs"] {
+            assert!(ran(&calls, "1.2.3", gate), "{platform:?} {gate}: {calls:?}");
+        }
+        assert!(calls.iter().all(|c| c.starts_with("1.2.3 ")), "{calls:?}");
+
+        // A raised pin and nothing else: the target's binary judges, and the
+        // candidate is only tested.
+        set_pin(&fx.repo(), "1.2.4");
+        let raised = fx.commit("chore: raise the codeflow pin");
+        let out = fx.run(platform, Some(&target), &raised);
+        assert!(out.status.success(), "{platform:?}: {}", text(&out));
+        let calls = fx.calls();
+        assert!(ran(&calls, "1.2.4", "--version"), "{calls:?}");
+        assert!(ran(&calls, "1.2.4", "validate --docs"), "{calls:?}");
+        assert!(!ran(&calls, "1.2.4", "ci"), "{calls:?}");
+        assert!(!ran(&calls, "1.2.4", "test"), "{calls:?}");
+        for gate in ["ci --base", "test --strict", "validate --docs"] {
+            assert!(ran(&calls, "1.2.3", gate), "{platform:?} {gate}: {calls:?}");
+        }
+
+        // The update carried before the raised pin landed: the target's
+        // binary cannot read the new key and names the two-step order.
+        let policy_path = fx.repo().join(".codeflow/policy.json");
+        let policy = std::fs::read_to_string(&policy_path).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&policy).unwrap();
+        value["git"]["future_key"] = serde_json::json!("block");
+        std::fs::write(&policy_path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        let update = fx.commit("chore: run codeflow update");
+        let early = fx.run(platform, Some(&target), &update);
+        assert!(!early.status.success(), "{platform:?}");
+        assert!(
+            text(&early).contains("Upgrades take two pull requests, in order"),
+            "{platform:?}: {}",
+            text(&early)
+        );
+        assert!(ran(&fx.calls(), "1.2.3", "ci --base"), "{:?}", fx.calls());
+
+        // A lowered pin: the target's binary still judges, then the run fails.
+        std::fs::write(&policy_path, policy).unwrap();
+        set_pin(&fx.repo(), "1.0.0");
+        let lowered = fx.commit("chore: lower the codeflow pin");
+        let out = fx.run(platform, Some(&target), &lowered);
+        assert!(!out.status.success(), "{platform:?}");
+        assert!(
+            text(&out).contains("lowers scaffold_version from 1.2.3 to 1.0.0"),
+            "{platform:?}: {}",
+            text(&out)
+        );
+        let calls = fx.calls();
+        assert!(ran(&calls, "1.2.3", "ci --base"), "{calls:?}");
+        assert!(calls.iter().all(|c| !c.starts_with("1.0.0 ")), "{calls:?}");
+    }
+}
+
+/// The range is judged by the target's policy, not a relaxed one the head
+/// carries.
+#[test]
+fn the_head_cannot_relax_the_policy_that_judges_it() {
+    for platform in PLATFORMS {
+        let fx = Fixture::new();
+        let target = fx.project("1.2.3");
+        fx.publish("1.2.3", &Binary::Real);
+        let policy_path = fx.repo().join(".codeflow/policy.json");
+        let policy = std::fs::read_to_string(&policy_path).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&policy).unwrap();
+        value["git"]["commit_format"] = serde_json::json!("off");
+        std::fs::write(&policy_path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        let head = fx.commit("Relax every check");
+        let out = fx.run(platform, Some(&target), &head);
+        assert!(!out.status.success(), "{platform:?}: {}", text(&out));
+        assert!(
+            text(&out).contains("git.commit_format"),
+            "{platform:?}: {}",
+            text(&out)
+        );
+    }
+}

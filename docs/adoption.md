@@ -363,8 +363,32 @@ branch's. An upgrade therefore takes two pull requests, in order:
 
 A pull request that adds policy keys before step 1 has landed fails with a
 message naming this order: the enforcing job reads the head's policy as data
-and fails when the pinned binary cannot read it. The git hook shims check the binary first and warn
+and fails when the pinned binary cannot read it. A pull request that lowers
+the pin is still judged by the target's binary. `codeflow doctor` reports
+which state a checkout is in: the version CI installs, a raise alone (step
+1), a lowered pin, or new policy keys or schema carried before the raise has
+landed, with this order. The git hook shims check the binary first and warn
 when it is older than they are, then run the checks it has.
+
+The other CI templates carry the same pin. `.gitlab-ci.yml`,
+`bitbucket-pipelines.yml` and `ci-generic.sh` (in `assets/base/ci/` of the
+CodeFlow repository; copy the one your host needs) run one shared script: it
+reads the pin from the target commit (`CI_MERGE_REQUEST_DIFF_BASE_SHA` on
+GitLab, `BITBUCKET_PR_DESTINATION_COMMIT` on Bitbucket, the first argument of
+`ci-generic.sh`, which refuses to run without it), installs that release with
+the same checksum verification, and runs `codeflow ci` from a checkout of the
+target, so the target's policy judges the change. A raised pin's release is
+installed separately and only tested; a lowered pin is judged by the
+target's binary and then fails the job.
+
+The pin does not defend the CI file itself. On a GitHub `pull_request` event,
+and on every GitLab and Bitbucket pipeline, the job file runs from the pull
+request, so a pull request that edits it can change its own install step.
+Only `codeflow-policy.yml` and `codeflow-registry.yml` run from the default
+branch. Require review of your CI files (`.github/workflows/`,
+`.gitlab-ci.yml`, `bitbucket-pipelines.yml`) and `.codeflow/` in your host's
+rules, for example with a code owners file and a branch rule that requires
+code owner review; CodeFlow does not configure those settings.
 
 Work records follow the same order. `codeflow update` adds
 `git.work_records` (`block` or `warn`; an `off` from an unreleased build is
