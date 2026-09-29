@@ -156,7 +156,7 @@ class NodePinControls(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "requires cmd.exe and the Windows CI Node install")
     def test_docs_portal_target_runs_through_cmd_on_windows(self):
         command = full_command(CONFIG, PORTAL)
-        run = subprocess.run(["cmd.exe", "/D", "/S", "/C", command], cwd=ROOT,
+        run = subprocess.run(f'cmd.exe /D /S /C "{command}"', cwd=ROOT,
                              capture_output=True, text=True, check=False)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn("with-node: Node 24.18.0", run.stderr)

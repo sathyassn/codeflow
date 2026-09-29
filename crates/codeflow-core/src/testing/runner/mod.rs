@@ -4,6 +4,8 @@
 //! in the target's cwd, capturing stdout/stderr.
 
 use std::io::Read;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -523,6 +525,12 @@ fn build_command(
         }
         CommandShell::Cmd => {
             let mut command_process = Command::new("cmd.exe");
+            // cmd.exe parses the command line itself, so preserve the inner quotes.
+            #[cfg(windows)]
+            command_process
+                .args(["/D", "/S", "/C"])
+                .raw_arg(format!("\"{command}\""));
+            #[cfg(not(windows))]
             command_process.args(["/D", "/S", "/C", command]);
             command_process
         }
@@ -1345,6 +1353,19 @@ mod tests {
             "powershell -NoProfile -NonInteractive -Command \"Set-Content -Path pid.txt -Value $PID; Start-Sleep -Seconds 120\"",
         );
         let _ = run_target(&target, "full", Path::new(&dir));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cmd_preserves_a_quoted_argument_with_shell_operators() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = make_target(
+            "quoted",
+            "python -c \"import sys; print(len(sys.argv))\" \"a && b\"",
+        );
+        let result = run_target(&target, "full", dir.path()).unwrap();
+        assert_eq!(result.exit_code, 0, "{}", result.stderr);
+        assert_eq!(result.stdout.trim(), "2");
     }
 
     /// TSK-142 AC-3: when a gate is killed on Windows, its running target's
