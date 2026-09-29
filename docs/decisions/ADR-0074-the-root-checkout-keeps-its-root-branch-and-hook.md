@@ -3,7 +3,7 @@ id: ADR-0074
 uid: e637024b-bdf7-477d-b11b-83b3acbe7f36
 title: "The root checkout keeps its root branch, and hooks tell agents by harness markers"
 date: 2026-09-28
-status: proposed          # proposed | accepted | superseded
+status: accepted
 superseded_by: null       # ADR id, set on supersession; a dated Note may also be appended
 architecture_impact: "`docs/architecture.md`: the enforcement modules gain `root_checkout.rs`, which holds the root-checkout rule, the actor read from harness markers, and workspace mode (TSK-165)."
 ---
