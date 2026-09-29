@@ -104,13 +104,13 @@
       "runner": "custom",
       "modes": {
         "quick": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py"
         },
         "essential": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py"
         },
         "full": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py"
         }
       }
     },
@@ -189,7 +189,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "npm ci --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web && npm run supply-chain --prefix crates/codeflow-present/web && npm run check --prefix crates/codeflow-present/web && npm run check:browser --prefix crates/codeflow-present/web && npm run check:windows-profile-confinement --prefix crates/codeflow-present/web && cargo test -p codeflow-present -- --test-threads=1 && cargo test -p codeflow-cli --test present_cli --test init_e2e -- --test-threads=1 && node scripts/check-present-binary-delta.mjs && cargo build -p codeflow-cli && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web"
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version 'npm ci --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web && npm run supply-chain --prefix crates/codeflow-present/web && npm run check --prefix crates/codeflow-present/web && npm run check:browser --prefix crates/codeflow-present/web && npm run check:windows-profile-confinement --prefix crates/codeflow-present/web && cargo test -p codeflow-present -- --test-threads=1 && cargo test -p codeflow-cli --test present_cli --test init_e2e -- --test-threads=1 && node scripts/check-present-binary-delta.mjs && cargo build -p codeflow-cli && CF_PRESENT_CODEFLOW=\"$(cd \"${CARGO_TARGET_DIR:-target}\" && pwd -P)/debug/codeflow\" npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web'"
         }
       },
       "timeout_seconds": 900
@@ -200,7 +200,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "npm run deps:install --prefix docs-portal && npm run check --prefix docs-portal && npm run build --prefix docs-portal && cargo run --quiet -p codeflow-cli -- validate --portal docs-portal"
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version 'npm run deps:install --prefix docs-portal && npm run check --prefix docs-portal && npm run build --prefix docs-portal && cargo run --quiet -p codeflow-cli -- validate --portal docs-portal'"
         }
       },
       "timeout_seconds": 300

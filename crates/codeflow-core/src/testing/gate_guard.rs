@@ -17,12 +17,19 @@
 //! names the holder recorded in the file. A file that still names a holder
 //! while its lock is free was left by a process that died, and is reclaimed.
 //!
-//! **Targets outlive a killed gate.** Each target runs in its own process
-//! group, so killing the gate process frees its lock while the target keeps
-//! running. While a gate holds the lock, the runner records each running
-//! target's process group in the holder record ([`target_group_started`]).
-//! A free lock whose record names a process group with a live process is
-//! still held: the next gate refuses until that group exits.
+//! **Targets outlive a killed gate on Unix.** Each target runs in its own
+//! process group, so killing the gate process frees its lock while the
+//! target keeps running. While a gate holds the lock, the runner records
+//! each running target's process group in the holder record
+//! ([`target_group_started`]). A free lock whose record names a process
+//! group with a live process is still held: the next gate refuses until
+//! that group exits.
+//!
+//! **On Windows they end with it** (TSK-142). Each target runs in a
+//! kill-on-close job object whose only handle the gate process holds, so
+//! the OS ends the target's tree when it closes that handle as the gate
+//! exits, and the lock never frees while a target of the gate runs. No
+//! group is recorded there.
 //!
 //! **Target directory.** `CARGO_TARGET_DIR` outside the worktree lets builds
 //! in parallel worktrees overwrite each other's binaries. A shared directory
@@ -292,8 +299,9 @@ fn group_alive(pgid: u32) -> bool {
 
 #[cfg(not(unix))]
 fn group_alive(_pgid: u32) -> bool {
-    // Targets are not placed in their own process group here, so there is
-    // no group to outlive the gate.
+    // No group is recorded here: on Windows each target's tree ends with
+    // its gate through the target's job object (TSK-142), so nothing can
+    // outlive the gate.
     false
 }
 

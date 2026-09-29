@@ -531,7 +531,7 @@ fn advertised_commits(root: &Path, url: &str) -> Advertised {
 /// terminal, askpass or SSH password prompt, at most [`LS_REMOTE_DEADLINE`]
 /// (then the whole process group is killed) and [`LS_REMOTE_MAX_BYTES`].
 fn ls_remote(root: &Path, url: &str) -> Result<String, String> {
-    let mut command = Command::new("git");
+    let mut command = codeflow_core::git::command();
     command
         .arg("-C")
         .arg(root)
@@ -918,7 +918,7 @@ fn incomplete_checkout(root: &Path) -> Option<String> {
 /// Git for the hook's own queries: never fetches a missing object, even in
 /// a partial clone.
 fn git(root: &Path, args: &[&str]) -> Option<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -931,7 +931,7 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
 
 /// [`git`] with `input` on stdin.
 fn git_input(root: &Path, args: &[&str], input: &str) -> Option<String> {
-    let mut child = Command::new("git")
+    let mut child = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(args)

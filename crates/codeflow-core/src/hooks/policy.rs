@@ -346,6 +346,13 @@ pub struct GitPolicy {
     pub test_gate_on_push: PolicyLevel,
     pub security_review: PolicyLevel,
     pub dep_audit: PolicyLevel,
+    /// Discarding locally unique uncommitted work (`checkout -- .`, `reset
+    /// --hard`, `clean`, `stash drop`), judged by git-guard (TSK-172).
+    /// Default `block`.
+    pub discard_uncommitted: PolicyLevel,
+    /// Regenerable directories `git clean` may remove without refusal
+    /// (TSK-172).
+    pub clean_regenerable: Vec<String>,
 }
 
 impl Default for GitPolicy {
@@ -422,6 +429,19 @@ impl Default for GitPolicy {
             test_gate_on_push: PolicyLevel::Block,
             security_review: PolicyLevel::Warn,
             dep_audit: PolicyLevel::Warn,
+            discard_uncommitted: PolicyLevel::Block,
+            clean_regenerable: [
+                "target/",
+                "node_modules/",
+                "dist/",
+                "build/",
+                ".venv/",
+                "__pycache__/",
+                "coverage/",
+            ]
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
         }
     }
 }
@@ -512,10 +532,12 @@ impl GitPolicy {
 }
 
 /// The `security` section of `.codeflow/policy.json` — the exec-guard posture
-/// (ADR-0008). Separate from the `git` section: `dangerous_commands` is accepted
-/// only as the explicit `block` marker and remains enforced as a block despite
-/// a stale or hand-edited weaker value.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// (ADR-0008, amended by ADR-0075). Separate from the `git` section:
+/// `dangerous_commands` is accepted only as the explicit `block` marker and
+/// remains enforced as a block despite a stale or hand-edited weaker value.
+/// The keys after `headless_peer_runs` are read by the guard families of
+/// TSK-172 to TSK-174; this unit ships their defaults (TSK-171).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecuritySection {
     /// Destructive commands the `dangerous` module catches (rm -rf on `/`, `~`,
@@ -524,25 +546,128 @@ pub struct SecuritySection {
     /// project, so no sanctioned path exists — the guard is the hard line.
     pub dangerous_commands: PolicyLevel,
     /// Privilege escalation the `privilege` module catches (Unix and Windows
-    /// launchers, shell `-c` chains, `LD_PRELOAD`/PATH injection). Default `warn`, NOT
-    /// block: a hook exit-2 here would override even an explicit human
-    /// ask-approval, and the settings `ask` tier is what owns sudo prompting.
-    /// The exec-guard only surfaces in-session feedback; it never vetoes the
-    /// human decision the ask tier exists to capture.
+    /// launchers, direct, chained or wrapped in a shell `-c` string or
+    /// `eval`; `LD_PRELOAD` and a `PATH` through `/tmp`). Default
+    /// `block` (operator decision D5 of 2026-09-28, ADR-0075): the presets
+    /// deny the plain forms without a prompt and the guard refuses the
+    /// wrapped ones; the operator runs privileged commands.
     pub privilege_escalation: PolicyLevel,
     /// A headless peer run (`claude -p`, `codex exec`, `grok -p`), TSK-136.
     /// Peer seats run interactively; a headless run has no verified native
-    /// session or recheckable thread. Default `warn`: scripting outside a
-    /// delegation stays possible, and `block` refuses it.
+    /// session or recheckable thread. Default `block` (D4, ADR-0075); a
+    /// project that needs one names its family in `headless_opt_in`.
     pub headless_peer_runs: PolicyLevel,
+    /// The families whose headless runs a project opts into, with its reason
+    /// (D4). Absent by default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headless_opt_in: Option<HeadlessOptIn>,
+    /// Findings in a script file a command runs (TSK-172). Default `warn`.
+    pub script_bypass: PolicyLevel,
+    /// Outward actions the text rules cannot spell: publishing, releases,
+    /// tag pushes and account changes behind flags or wrappers (TSK-172).
+    /// Default `block`.
+    pub outward_actions: PolicyLevel,
+    /// Interpreter-embedded forms of the refused actions (TSK-172). Default
+    /// `block`.
+    pub interpreter_scan: PolicyLevel,
+    /// Shell reads of the secret stores (TSK-172). Default `block`.
+    pub secret_reads: PolicyLevel,
+    /// Commits and ref moves whose enforcement entries match no approved
+    /// identity of the enforcement baseline (TSK-172). Default `block`.
+    pub enforcement_baseline: PolicyLevel,
+    /// A push that introduces a `.github/workflows/` change: `queue` refuses
+    /// it and queues it for the operator, `allow` lets it through for an
+    /// agent credential with workflow rights (D9, TSK-172 AC-23).
+    pub workflow_pushes: String,
+    /// Claude's unsandboxed retry: `allowlist` permits only an argument
+    /// vector an entry of `sandbox_retry_allow` spells out, `block` refuses
+    /// every retry (TSK-174).
+    pub sandbox_retry: String,
+    /// The argument-bound retry entries (TSK-174). The shipped entry is the
+    /// Codex plugin companion; its qualification fields are filled by
+    /// TSK-174.
+    pub sandbox_retry_allow: Vec<serde_json::Value>,
+}
+
+/// `security.headless_opt_in`: the catalog families (`claude`, `codex`,
+/// `grok`) whose headless runs this project allows, and why (D4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeadlessOptIn {
+    /// Catalog family ids: `claude`, `codex` or `grok`.
+    pub families: Vec<String>,
+    /// Why this project needs headless runs.
+    pub reason: String,
+}
+
+/// The catalog family ids `security.headless_opt_in.families` accepts.
+pub const HEADLESS_FAMILIES: [&str; 3] = ["claude", "codex", "grok"];
+
+/// The shipped retry entry: the Codex plugin companion, argument-bound. The
+/// placeholders are replaced by the values TSK-174 records at qualification;
+/// until then no command can match the entry, since its program path is not
+/// absolute.
+fn default_retry_allow() -> Vec<serde_json::Value> {
+    let flags_review = serde_json::json!(["--wait", "--background", "--json"]);
+    let values_review = serde_json::json!({
+        "--base": "git-ref",
+        "--scope": ["auto", "working-tree", "branch"],
+        "--model": "word"
+    });
+    vec![serde_json::json!({
+        "program": "node",
+        "script": "~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs",
+        "program_options": [],
+        "cwd": "project",
+        "refuse_if_env": ["NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE"],
+        "subcommands": {
+            "review": {"flags": flags_review, "values": values_review, "positionals": 0},
+            "adversarial-review": {
+                "flags": flags_review,
+                "values": values_review,
+                "positionals": "text"
+            },
+            "task": {
+                "flags": ["--background", "--write", "--resume-last", "--resume", "--fresh", "--json"],
+                "values": {
+                    "--model": "word",
+                    "--effort": ["none", "minimal", "low", "medium", "high", "xhigh"]
+                },
+                "positionals": "text"
+            },
+            "status": {
+                "flags": ["--all", "--wait", "--json"],
+                "values": {"--timeout-ms": "integer", "--poll-interval-ms": "integer"},
+                "positionals": "job-id"
+            },
+            "result": {"flags": ["--json"], "values": {}, "positionals": "job-id"},
+            "cancel": {"flags": ["--json"], "values": {}, "positionals": "job-id"}
+        },
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>",
+        "script_digest": {
+            "scripts/codex-companion.mjs": "<sha256 at qualification>",
+            "scripts/lib/*.mjs": "<sha256 per file at qualification>"
+        },
+        "child_executables": {"codex": "<absolute path recorded at qualification>"},
+        "refuse_writable_path_entries": true
+    })]
 }
 
 impl Default for SecuritySection {
     fn default() -> Self {
         Self {
             dangerous_commands: PolicyLevel::Block,
-            privilege_escalation: PolicyLevel::Warn,
-            headless_peer_runs: PolicyLevel::Warn,
+            privilege_escalation: PolicyLevel::Block,
+            headless_peer_runs: PolicyLevel::Block,
+            headless_opt_in: None,
+            script_bypass: PolicyLevel::Warn,
+            outward_actions: PolicyLevel::Block,
+            interpreter_scan: PolicyLevel::Block,
+            secret_reads: PolicyLevel::Block,
+            enforcement_baseline: PolicyLevel::Block,
+            workflow_pushes: "queue".to_string(),
+            sandbox_retry: "allowlist".to_string(),
+            sandbox_retry_allow: default_retry_allow(),
         }
     }
 }
@@ -884,19 +1009,32 @@ mod tests {
 
     #[test]
     fn test_security_section_defaults() {
-        // Owner posture (ADR-0008): destructive commands are the hard line,
-        // privilege escalation is advisory (the settings `ask` tier prompts).
+        // ADR-0075: agent sessions refuse instead of prompting, so the
+        // operator's action families default to block (D4, D5).
         let s = SecuritySection::default();
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
-        assert_eq!(s.privilege_escalation, PolicyLevel::Warn);
-        assert_eq!(s.headless_peer_runs, PolicyLevel::Warn);
+        assert_eq!(s.privilege_escalation, PolicyLevel::Block);
+        assert_eq!(s.headless_peer_runs, PolicyLevel::Block);
+        assert!(s.headless_opt_in.is_none());
+        assert_eq!(s.script_bypass, PolicyLevel::Warn);
+        for level in [
+            s.outward_actions,
+            s.interpreter_scan,
+            s.secret_reads,
+            s.enforcement_baseline,
+        ] {
+            assert_eq!(level, PolicyLevel::Block);
+        }
+        assert_eq!(s.workflow_pushes, "queue");
+        assert_eq!(s.sandbox_retry, "allowlist");
+        assert_eq!(s.sandbox_retry_allow.len(), 1);
     }
 
     #[test]
     fn test_policy_default_carries_security_section() {
         let p = Policy::default();
         assert_eq!(p.security.dangerous_commands, PolicyLevel::Block);
-        assert_eq!(p.security.privilege_escalation, PolicyLevel::Warn);
+        assert_eq!(p.security.privilege_escalation, PolicyLevel::Block);
     }
 
     #[test]
@@ -905,28 +1043,26 @@ mod tests {
         // struct-level serde default must fill it with the strict baseline.
         let p: Policy = serde_json::from_str(r#"{"schema_version":1,"git":{}}"#).unwrap();
         assert_eq!(p.security.dangerous_commands, PolicyLevel::Block);
-        assert_eq!(p.security.privilege_escalation, PolicyLevel::Warn);
+        assert_eq!(p.security.privilege_escalation, PolicyLevel::Block);
     }
 
     #[test]
     fn test_shipped_asset_security_matches_defaults() {
         let asset = include_str!("../../../../assets/base/policy.json");
         let from_asset: Policy = serde_json::from_str(asset).unwrap();
-        let defaults = SecuritySection::default();
+        // Every shipped security value is the built-in default, so a project
+        // without the section is judged exactly as a fresh install.
         assert_eq!(
-            from_asset.security.dangerous_commands,
-            defaults.dangerous_commands
+            serde_json::to_value(&from_asset.security).unwrap(),
+            serde_json::to_value(SecuritySection::default()).unwrap()
         );
+        assert_eq!(from_asset.git.discard_uncommitted, PolicyLevel::Block);
         assert_eq!(
-            from_asset.security.privilege_escalation,
-            defaults.privilege_escalation
-        );
-        assert_eq!(
-            from_asset.security.headless_peer_runs,
-            defaults.headless_peer_runs
+            from_asset.git.clean_regenerable,
+            GitPolicy::default().clean_regenerable
         );
         assert!(
-            asset.contains("\"headless_peer_runs\": \"warn\""),
+            asset.contains("\"headless_peer_runs\": \"block\""),
             "the shipped policy states the headless peer level"
         );
     }
@@ -1106,7 +1242,7 @@ mod tests {
     /// the given `policy_armed` value.
     fn committed_repo_with_armed(dir: &Path, armed: bool) {
         let run = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
+            let ok = crate::git::command()
                 .args(args)
                 .current_dir(dir)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -1154,7 +1290,7 @@ mod tests {
         // repo with an unborn HEAD (no commit yet) and policy_armed=false is
         // graced, so the first scaffold commit is not walled.
         let dir = tempfile::tempdir().unwrap();
-        std::process::Command::new("git")
+        crate::git::command()
             .args(["init", "-b", "main"])
             .current_dir(dir.path())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

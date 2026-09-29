@@ -3,7 +3,7 @@
 //! A thin adapter over two existing security modules — [`DangerousModule`] and
 //! [`PrivilegeModule`] — that runs them against a Bash command, plus the
 //! headless peer run check (`claude -p`, `codex exec`, `grok -p`; TSK-136) at
-//! the level `security.headless_peer_runs` sets, `warn` by default. Catastrophic
+//! the level `security.headless_peer_runs` sets, `block` by default. Catastrophic
 //! commands are a non-relaxable block; privilege escalation maps to the level
 //! configured in `policy.json`'s `security` section. It sits alongside
 //! `git-guard` on the `PreToolUse` (Bash/PowerShell) event and
@@ -20,14 +20,17 @@
 //!   `dd` to a block device; `mkfs`; fork bombs; recursive chmod/chown on system
 //!   paths. None of these is ever a legitimate project operation, so there is no
 //!   sanctioned path to offer — a hard block is the whole point.
-//! - **`privilege_escalation` = warn, deliberately NOT block.** sudo/su/doas/
-//!   pkexec, shell `-c` chains, `LD_PRELOAD`/PATH injection. A hook that exited 2
-//!   here would override even an explicit human approval, because a `PreToolUse`
-//!   deny wins unconditionally. The guard therefore advises on stderr; the agent
-//!   obtains applicable task authority in the authenticated conversation and
-//!   observes effective harness controls. Some production modes show no
-//!   permission prompt. Set `block` in `policy.json` to harden a specific repo;
-//!   authorization never relaxes the catastrophic floor above.
+//! - **`privilege_escalation` = block** (operator decision D5, ADR-0075,
+//!   amending ADR-0008's warn). sudo/su/doas/pkexec/runuser and the Windows
+//!   launchers, run directly, chained, piped to, or wrapped in a shell `-c`
+//!   string or `eval`; `LD_PRELOAD` and a `PATH` through `/tmp`. A shell
+//!   `-c` string that reaches no launcher, `source` and `LD_LIBRARY_PATH`
+//!   are ordinary work and are not reported. Agent sessions no longer prompt for these:
+//!   the presets deny the plain forms and this guard refuses the rest, and
+//!   the operator runs privileged commands personally. A project may set
+//!   `warn` in `policy.json`; `codeflow update` keeps a value that differs
+//!   from the shipped default. Authorization never relaxes the catastrophic
+//!   floor above.
 //!
 //! These two are the only scanner modules; the unwired v1 modules were
 //! removed (TSK-137). The live git protections are `hooks/git_guard.rs`.
@@ -85,7 +88,7 @@ fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Violation {
     let enforcement = if level == PolicyLevel::Block {
         "configured policy refuses it"
     } else {
-        "the default warn level lets a script outside a delegation run"
+        "the configured warn level lets a script outside a delegation run"
     };
     Violation::new(
         "security.headless_peer_runs",
@@ -120,9 +123,9 @@ fn dangerous_violation(verdict: &Verdict) -> Violation {
 
 fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
     let enforcement = if level == PolicyLevel::Block {
-        "configured policy denies this action"
+        "policy refuses it; the operator runs privileged commands"
     } else {
-        "the default warn policy advises only"
+        "the configured warn level advises only"
     };
     Violation::new(
         "security.privilege_escalation",
@@ -147,26 +150,28 @@ mod tests {
             dangerous_commands: dangerous,
             privilege_escalation: privilege,
             headless_peer_runs: PolicyLevel::Warn,
+            ..SecuritySection::default()
         }
     }
 
     #[test]
-    fn test_headless_peer_run_warns_by_default_and_blocks_when_set() {
+    fn test_headless_peer_run_blocks_by_default_and_warns_when_set() {
         let v = evaluate("codex exec 'fix it'", &SecuritySection::default());
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "security.headless_peer_runs");
-        assert_eq!(v[0].level, PolicyLevel::Warn);
-        assert!(!any_blocking(&v));
+        assert_eq!(v[0].level, PolicyLevel::Block);
+        assert!(any_blocking(&v));
         assert!(v[0].message.contains("`codex exec`"));
         assert!(v[0].remedy.contains("codeflow delegate"));
 
-        let block = SecuritySection {
-            headless_peer_runs: PolicyLevel::Block,
+        let warn = SecuritySection {
+            headless_peer_runs: PolicyLevel::Warn,
             ..SecuritySection::default()
         };
-        let v = evaluate("claude -p 'review'", &block);
-        assert_eq!(v[0].level, PolicyLevel::Block);
-        assert!(any_blocking(&v));
+        let v = evaluate("claude -p 'review'", &warn);
+        assert_eq!(v[0].level, PolicyLevel::Warn);
+        assert!(!any_blocking(&v));
+        let block = SecuritySection::default();
 
         let off = SecuritySection {
             headless_peer_runs: PolicyLevel::Off,
@@ -176,11 +181,100 @@ mod tests {
         assert!(evaluate("codex --version", &block).is_empty());
     }
 
+    /// A help or version invocation raises nothing at `warn` or `block`; the
+    /// same tokens given as data still raise the headless rule (TSK-141 AC-3).
     #[test]
-    fn test_default_levels_are_block_and_warn() {
+    fn a_help_invocation_passes_and_its_data_twin_is_reported_at_every_level() {
+        for level in [PolicyLevel::Warn, PolicyLevel::Block] {
+            let section = SecuritySection {
+                headless_peer_runs: level,
+                ..SecuritySection::default()
+            };
+            for (help, twin) in crate::security::guard_forms::HELP_PAIRS {
+                assert!(evaluate(help, &section).is_empty(), "{level:?}: {help}");
+                let v = evaluate(twin, &section);
+                assert_eq!(v.len(), 1, "{level:?}: {twin}");
+                assert_eq!(v[0].rule, "security.headless_peer_runs", "{twin}");
+                assert_eq!(v[0].level, level, "{twin}");
+                assert_eq!(any_blocking(&v), level == PolicyLevel::Block, "{twin}");
+            }
+        }
+    }
+
+    /// A peer run through a package runner is reported as its direct form
+    /// at `warn` and `block`, and its help passes (TSK-141 AC-6).
+    #[test]
+    fn a_package_runner_peer_run_is_reported_as_its_direct_form_at_every_level() {
+        for level in [PolicyLevel::Warn, PolicyLevel::Block] {
+            let section = SecuritySection {
+                headless_peer_runs: level,
+                ..SecuritySection::default()
+            };
+            for (direct, runner) in crate::security::guard_forms::PACKAGE_RUNNER_PAIRS {
+                let expected = evaluate(direct, &section);
+                let v = evaluate(runner, &section);
+                assert_eq!(v.len(), expected.len(), "{level:?}: {runner}");
+                for (got, want) in v.iter().zip(&expected) {
+                    assert_eq!(got.rule, want.rule, "{runner}");
+                    assert_eq!(got.level, level, "{runner}");
+                }
+                assert_eq!(any_blocking(&v), any_blocking(&expected), "{runner}");
+            }
+        }
+    }
+
+    /// Each composed deletion is refused under `security.dangerous_commands`
+    /// with the message its `rm -rf` equivalent gets, alone and nested; a
+    /// project deletion raises nothing (TSK-141 AC-1, AC-2).
+    #[test]
+    fn a_composed_deletion_is_refused_as_its_rm_equivalent() {
+        use crate::security::guard_forms::{COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS};
+        let section = SecuritySection::default();
+        for (form, equivalent) in COMPOSED_PAIRS {
+            let expected = evaluate(equivalent, &section);
+            assert_eq!(expected.len(), 1, "{equivalent}");
+            assert_eq!(expected[0].rule, "security.dangerous_commands");
+            for nesting in NESTINGS {
+                let nested = nesting.replace("{}", form);
+                let v = evaluate(&nested, &section);
+                let refused: Vec<_> = v
+                    .iter()
+                    .filter(|v| v.rule == "security.dangerous_commands")
+                    .collect();
+                assert_eq!(refused.len(), 1, "{nested}");
+                assert!(any_blocking(&v), "{nested}");
+                if *nesting == "{}" {
+                    // A target reached on only some paths says so; the
+                    // pattern it names is the equivalent's either way.
+                    let pattern = |m: &str| m.rfind("(pattern").map(|at| m[at..].to_string());
+                    if refused[0].message.contains("one of several values") {
+                        assert_eq!(
+                            pattern(&refused[0].message),
+                            pattern(&expected[0].message),
+                            "{form} as {equivalent}"
+                        );
+                    } else {
+                        assert_eq!(
+                            refused[0].message, expected[0].message,
+                            "{form} as {equivalent}"
+                        );
+                    }
+                }
+            }
+        }
+        for command in PROJECT_DELETIONS {
+            for nesting in NESTINGS {
+                let nested = nesting.replace("{}", command);
+                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_default_levels_block() {
         let s = SecuritySection::default();
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
-        assert_eq!(s.privilege_escalation, PolicyLevel::Warn);
+        assert_eq!(s.privilege_escalation, PolicyLevel::Block);
     }
 
     #[test]
@@ -211,18 +305,25 @@ mod tests {
     }
 
     #[test]
-    fn test_privilege_warns_not_blocks_by_default() {
-        // sudo produces advice, not a veto; task authority and technical harness
-        // prompting are separate, and some production modes show no prompt.
+    fn test_privilege_blocks_by_default_and_can_be_set_to_warn() {
+        // D5 (ADR-0075): the operator runs privileged commands; a project
+        // may still set warn, which only advises.
         let v = evaluate("sudo apt-get install foo", &SecuritySection::default());
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "security.privilege_escalation");
-        assert_eq!(v[0].level, PolicyLevel::Warn);
-        assert!(
-            !any_blocking(&v),
-            "privilege escalation must not block by default"
+        assert_eq!(v[0].level, PolicyLevel::Block);
+        assert!(any_blocking(&v));
+        assert!(v[0]
+            .remedy
+            .contains("the operator runs privileged commands"));
+
+        let v = evaluate(
+            "sudo apt-get install foo",
+            &levels(PolicyLevel::Block, PolicyLevel::Warn),
         );
-        assert!(v[0].remedy.contains("default warn policy advises only"));
+        assert_eq!(v[0].level, PolicyLevel::Warn);
+        assert!(!any_blocking(&v));
+        assert!(v[0].remedy.contains("configured warn level advises only"));
         assert!(v[0].remedy.contains("may show no permission prompt"));
         assert!(!v[0].remedy.contains("approve it there"));
     }
@@ -236,7 +337,7 @@ mod tests {
         assert_eq!(v[0].rule, "security.privilege_escalation");
         assert_eq!(v[0].level, PolicyLevel::Block);
         assert!(any_blocking(&v));
-        assert!(v[0].remedy.contains("configured policy denies"));
+        assert!(v[0].remedy.contains("policy refuses it"));
         assert!(!v[0].remedy.contains("advises only"));
     }
 
@@ -262,6 +363,25 @@ mod tests {
         assert!(v.iter().any(|x| {
             x.rule == "security.privilege_escalation" && x.level == PolicyLevel::Warn
         }));
+    }
+
+    /// Grok review of TSK-171: blocking escalation by default must not
+    /// refuse ordinary shell work.
+    #[test]
+    fn test_ordinary_shell_work_is_not_blocked_by_default() {
+        for cmd in [
+            "bash -c 'printf ok'",
+            "source .venv/bin/activate",
+            "LD_LIBRARY_PATH=/opt/lib cargo test",
+        ] {
+            let v = evaluate(cmd, &SecuritySection::default());
+            assert!(!any_blocking(&v), "{cmd}: {v:?}");
+        }
+        for cmd in ["sudo id", "bash -c 'sudo id'", "LD_PRELOAD=/tmp/x.so ls"] {
+            let v = evaluate(cmd, &SecuritySection::default());
+            assert!(any_blocking(&v), "{cmd}");
+            assert_eq!(v[0].rule, "security.privilege_escalation");
+        }
     }
 
     #[test]
