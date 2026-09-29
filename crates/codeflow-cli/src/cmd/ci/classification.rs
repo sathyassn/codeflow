@@ -202,6 +202,22 @@ pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool
     }
 }
 
+/// Where durable tracking is off: whether the body names exactly one unit
+/// that matches the branch, or the range is on the root branch the target's
+/// policy names, which carries no `Task:` line.
+fn names_its_unit(root: &Path, body: &str, branch: &str, range: Option<&Range<'_>>) -> bool {
+    match task_lines(body).as_slice() {
+        [TaskLine::Tracked(id)] => {
+            task_id_from_branch(root, branch).is_none_or(|carried| carried == *id)
+        }
+        [TaskLine::Epic(_) | TaskLine::Unit(_)] => task_id_from_branch(root, branch).is_none(),
+        [] => {
+            range.is_some_and(|range| root_branch_at(root, range.base).as_deref() == Some(branch))
+        }
+        _ => false,
+    }
+}
+
 /// Run the classification for `codeflow ci`. Classification judges the
 /// whole range against the target's own state: tracking is on when it is on
 /// at the target or at the head, and the paths are the range's diff from
@@ -220,20 +236,7 @@ pub(super) fn dispatch(
         Ok(true) => {}
         Ok(false) => {
             ran.push("classification");
-            let lines = task_lines(body);
-            let valid = match lines.as_slice() {
-                [TaskLine::Tracked(id)] => {
-                    task_id_from_branch(root, branch).is_none_or(|carried| carried == *id)
-                }
-                [TaskLine::Epic(_) | TaskLine::Unit(_)] => {
-                    task_id_from_branch(root, branch).is_none()
-                }
-                [] => range.is_some_and(|range| {
-                    root_branch_at(root, range.base).as_deref() == Some(branch)
-                }),
-                _ => false,
-            };
-            if !valid {
+            if !names_its_unit(root, body, branch, range) {
                 push(tagged, RULE, "the PR must have exactly one non-empty, non-placeholder Task: unit name matching its branch".into(), HINT);
             }
             return None;
