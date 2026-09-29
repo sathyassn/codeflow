@@ -263,8 +263,11 @@ binding, permission or selector changed since it ran.
      trusted installed tool may receive one classified unsandboxed retry;
      arbitrary unsandboxed commands remain out of bounds.
    - Codex: prefer app-server (`codex app-server daemon version` running);
-     otherwise interactive CLI. Production: `--ask-for-approval never` and
-     `--sandbox danger-full-access`. public network and live search are enabled.
+     otherwise interactive CLI. Builders: `--ask-for-approval never` and
+     `--sandbox danger-full-access` (ADR-0075 D1). Reviewers and consults:
+     `--ask-for-approval never` with no `--sandbox` flag, which selects the
+     project's `cf-guard` profile (D2). Public network and live search are
+     enabled.
      Auto-review is not human authorization; catastrophic work still stops for
      the operator.
    - Grok, when a Grok seat is used: the autonomy flags in the seat section.

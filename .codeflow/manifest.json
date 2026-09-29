@@ -11,7 +11,7 @@
     ".agents/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "9b351d1e27ffdf7a3e24c3d452647c3aec68835a1e6264835294a84449e71c72",
+      "sha256": "2b3c69f1e8b46a41205f60e53a378a1a7e05b5f58b9c5765d0eec61df080ca75",
       "exec": false
     },
     ".agents/skills/cf-customize/references/claude-context-policy.md": {
@@ -317,7 +317,7 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "0f433e6e56c280b21b2c3c471eb7b2d6ef5b0ebf35d3e9b72aed328588528e96",
+      "sha256": "ef362d58ac8c4c24fe6b532460be31df86ade5f5c4ec0983c1c7e40882bbdb29",
       "exec": false
     },
     ".agents/skills/cf-herdr/scripts/deliver.py": {
@@ -359,7 +359,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "08bd53b36da7fb1a008adb3991ee1f0ee9017ade05a7ce9924d26898d15e38ba",
+      "sha256": "abf40c1b280a091a8e9367250c919e7d9b3021f75879255cea3d926f6a5af65c",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -671,7 +671,7 @@
     ".claude/skills/cf-customize/SKILL.md": {
       "src": "agents/skills/cf-customize/SKILL.md",
       "ownership": "managed",
-      "sha256": "9b351d1e27ffdf7a3e24c3d452647c3aec68835a1e6264835294a84449e71c72",
+      "sha256": "2b3c69f1e8b46a41205f60e53a378a1a7e05b5f58b9c5765d0eec61df080ca75",
       "exec": false
     },
     ".claude/skills/cf-customize/references/claude-context-policy.md": {
@@ -977,7 +977,7 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "0f433e6e56c280b21b2c3c471eb7b2d6ef5b0ebf35d3e9b72aed328588528e96",
+      "sha256": "ef362d58ac8c4c24fe6b532460be31df86ade5f5c4ec0983c1c7e40882bbdb29",
       "exec": false
     },
     ".claude/skills/cf-herdr/scripts/deliver.py": {
@@ -1019,7 +1019,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "08bd53b36da7fb1a008adb3991ee1f0ee9017ade05a7ce9924d26898d15e38ba",
+      "sha256": "abf40c1b280a091a8e9367250c919e7d9b3021f75879255cea3d926f6a5af65c",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {
