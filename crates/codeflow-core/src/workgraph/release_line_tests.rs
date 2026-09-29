@@ -5,7 +5,6 @@
 //! that the shipped judge refuses the same tables through CI and pre-push.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::*;
 
@@ -39,7 +38,7 @@ fn record(id: &str, status: &str, criteria: &str, closeout: &str) -> String {
 }
 
 fn git_in(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = crate::git::command()
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -585,7 +584,7 @@ fn a_resolution_keeping_a_backfilled_uid_changes_no_criteria() {
         ]);
         // Both sides add the record: the resolution writes one side's body
         // with the case's `uid`, never line A's record as it came.
-        let _ = Command::new("git")
+        let _ = crate::git::command()
             .args([
                 "merge",
                 "-q",
