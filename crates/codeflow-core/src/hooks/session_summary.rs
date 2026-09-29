@@ -7,12 +7,12 @@
 //! callers map every error to a warning + exit 0.
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use git2::Repository;
 
-use crate::error::HookError;
-use crate::ledger::{files, Event, JsonlWriter, LedgerWriter};
+use crate::ledger::{files, Event, JsonlWriter, LedgerError, LedgerWriter};
 
 use super::policy::Policy;
 use super::repo::RepoInfo;
@@ -30,6 +30,53 @@ pub struct SessionRecord {
     pub timestamp: String,
 }
 
+/// A ledger (the session or the refusals ledger) could not be written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerUnwritten {
+    /// What keeps the ledger from being written, from the path the write
+    /// failed on: a file in the way of a directory, a directory in the way
+    /// of a file, or the nearest existing part of that path this user
+    /// cannot write.
+    pub path: PathBuf,
+    /// The error the write gave.
+    pub cause: String,
+    /// What clears it.
+    pub repair: Repair,
+}
+
+/// The repair a ledger path needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repair {
+    /// A file stands where the ledger needs a directory.
+    RemoveFile,
+    /// A directory stands where the ledger writes a file.
+    RemoveDirectory,
+    /// The path exists but this user cannot write it.
+    MakeWritable,
+    /// Another process holds the ledger file's lock (the refusal record,
+    /// which waits a bounded time).
+    EndLockHolder,
+}
+
+impl Repair {
+    /// The remedy's words for this repair.
+    #[must_use]
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::RemoveFile => {
+                "remove or rename the file that stands where the ledger needs a directory"
+            }
+            Self::RemoveDirectory => {
+                "remove the directory that stands where the ledger writes a file"
+            }
+            Self::MakeWritable => "give this user write access",
+            Self::EndLockHolder => {
+                "end the process that holds the lock on the ledger file, or wait for it"
+            }
+        }
+    }
+}
+
 /// Build and append the session record for the repo containing `root`.
 ///
 /// `payload_json` is the `SessionEnd` hook payload from stdin; unknown or
@@ -37,15 +84,17 @@ pub struct SessionRecord {
 ///
 /// # Errors
 ///
-/// Returns [`HookError`] when `root` is not in a git repository or the
-/// ledger append fails. Callers treat errors as warnings (exit 0).
-pub fn record(root: &Path, payload_json: &str) -> Result<PathBuf, HookError> {
+/// Returns [`LedgerUnwritten`] when the ledger append fails; callers treat
+/// it as a warning (exit 0). Outside a git repository there is no session
+/// to record: `Ok(None)`.
+pub fn record(root: &Path, payload_json: &str) -> Result<Option<PathBuf>, LedgerUnwritten> {
     let payload: serde_json::Value =
         serde_json::from_str(payload_json.trim()).unwrap_or(serde_json::Value::Null);
-    let info = RepoInfo::discover(root)
-        .ok_or_else(|| HookError::Config("not inside a git repository".to_string()))?;
+    let Some(info) = RepoInfo::discover(root) else {
+        return Ok(None);
+    };
     let summary = build(&info, &payload);
-    append(&info, &summary)
+    append(&info, &summary).map(Some)
 }
 
 /// Gather the session facts from the repository state.
@@ -119,8 +168,9 @@ fn diff_stats(root: &Path, base: Option<&str>) -> (Option<String>, usize, usize)
 }
 
 /// Append the record to the sessions ledger under the shared state dir.
-fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, HookError> {
+fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnwritten> {
     let ledger_dir = info.ledger_dir();
+    let unwritten = |error: LedgerError| unwritten(&ledger_dir, error);
     let session_id = summary
         .session_id
         .as_ref()
@@ -151,17 +201,58 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, HookError
         data,
     };
 
-    let writer = JsonlWriter::new_with_session(&ledger_dir, session_id.clone())
-        .map_err(|e| HookError::Config(e.to_string()))?;
-    writer
-        .append_event(event)
-        .map_err(|e| HookError::Config(e.to_string()))?;
+    let writer =
+        JsonlWriter::new_with_session(&ledger_dir, session_id.clone()).map_err(unwritten)?;
+    writer.append_event(event).map_err(unwritten)?;
 
     let file = match &session_id {
         Some(sid) => format!("{t}/{t}-{sid}.jsonl", t = files::SESSIONS),
         None => format!("{t}/{t}.jsonl", t = files::SESSIONS),
     };
     Ok(ledger_dir.join(file))
+}
+
+/// What keeps the ledger from being written, from the path the writer
+/// failed on: a file in the way of a directory it creates, a directory in
+/// the way of a file it opens, or else the nearest existing part of that
+/// path, which this user cannot write. The refusal record reads it too.
+#[must_use]
+pub fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
+    let cause = error.to_string();
+    if let LedgerError::LockTimeout { path, .. } = error {
+        return LedgerUnwritten {
+            path,
+            cause,
+            repair: Repair::EndLockHolder,
+        };
+    }
+    let LedgerError::IoAt { path, source } = error else {
+        return LedgerUnwritten {
+            path: ledger_dir.to_path_buf(),
+            cause,
+            repair: Repair::MakeWritable,
+        };
+    };
+    let existing = |path: &Path| {
+        path.ancestors()
+            .find(|part| part.exists())
+            .map_or_else(|| path.to_path_buf(), Path::to_path_buf)
+    };
+    let (path, repair) = match source.kind() {
+        ErrorKind::NotADirectory | ErrorKind::AlreadyExists => (
+            path.ancestors()
+                .find(|part| part.exists() && !part.is_dir())
+                .map_or_else(|| existing(&path), Path::to_path_buf),
+            Repair::RemoveFile,
+        ),
+        ErrorKind::IsADirectory => (path, Repair::RemoveDirectory),
+        _ => (existing(&path), Repair::MakeWritable),
+    };
+    LedgerUnwritten {
+        path,
+        cause,
+        repair,
+    }
 }
 
 /// Session fragment files follow the `…-ses-{id}.jsonl` convention the
@@ -177,12 +268,11 @@ fn normalize_session_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::process::Command;
 
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -221,7 +311,7 @@ mod tests {
         repo_with_branch_work(dir.path());
         let payload = r#"{"session_id":"abc123","reason":"clear","hook_event_name":"SessionEnd"}"#;
 
-        let path = record(dir.path(), payload).unwrap();
+        let path = record(dir.path(), payload).unwrap().unwrap();
         assert!(
             path.ends_with("sessions/sessions-ses-abc123.jsonl"),
             "{path:?}"
@@ -251,7 +341,7 @@ mod tests {
     fn test_record_without_session_id_uses_base_file() {
         let dir = tempfile::tempdir().unwrap();
         repo_with_branch_work(dir.path());
-        let path = record(dir.path(), "{}").unwrap();
+        let path = record(dir.path(), "{}").unwrap().unwrap();
         assert!(path.ends_with("sessions/sessions.jsonl"), "{path:?}");
         assert!(path.exists());
     }
@@ -261,14 +351,76 @@ mod tests {
         // Zero ceremony: malformed payloads must not lose the record.
         let dir = tempfile::tempdir().unwrap();
         repo_with_branch_work(dir.path());
-        let path = record(dir.path(), "not json at all").unwrap();
+        let path = record(dir.path(), "not json at all").unwrap().unwrap();
         assert!(path.exists());
     }
 
     #[test]
-    fn test_record_outside_repo_errors_for_caller_to_soften() {
+    fn test_record_outside_repo_records_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(record(dir.path(), "{}").is_err());
+        assert_eq!(record(dir.path(), "{}"), Ok(None));
+    }
+
+    #[test]
+    fn a_ledger_blocked_by_a_file_names_that_file() {
+        // TSK-147 review F5: the warning names what keeps the ledger from
+        // being written, under git's common directory, not `.codeflow/`.
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_branch_work(dir.path());
+        let blocker = dir.path().join(".git/codeflow");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let err = record(dir.path(), "{}").unwrap_err();
+        assert_eq!(
+            err.path.canonicalize().unwrap(),
+            blocker.canonicalize().unwrap()
+        );
+        assert_eq!(err.repair, Repair::RemoveFile);
+    }
+
+    /// TSK-147 round 3 F5: the failed path itself, not an ancestor, with
+    /// the repair its kind needs: a directory where the data file or its
+    /// lock goes is removed.
+    #[test]
+    fn a_ledger_file_that_is_a_directory_names_that_directory() {
+        for (payload, name) in [
+            ("{}", "sessions.jsonl"),
+            (r#"{"session_id":"s1"}"#, "sessions-ses-s1.jsonl"),
+            ("{}", "sessions.jsonl.lock"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            repo_with_branch_work(dir.path());
+            let sessions = dir.path().join(".git/codeflow/ledger/sessions");
+            let blocker = sessions.join(name);
+            std::fs::create_dir_all(&blocker).unwrap();
+            let err = record(dir.path(), payload).unwrap_err();
+            assert_eq!(
+                err.path.canonicalize().unwrap(),
+                blocker.canonicalize().unwrap(),
+                "{name}: {err:?}"
+            );
+            assert_eq!(err.repair, Repair::RemoveDirectory, "{name}");
+            assert!(!err.cause.is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_ledger_directory_without_write_access_names_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_branch_work(dir.path());
+        let sessions = dir.path().join(".git/codeflow/ledger/sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let err = record(dir.path(), "{}");
+        std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = err.unwrap_err();
+        assert_eq!(
+            err.path.canonicalize().unwrap(),
+            sessions.canonicalize().unwrap(),
+            "{err:?}"
+        );
+        assert_eq!(err.repair, Repair::MakeWritable);
     }
 
     #[test]
@@ -281,7 +433,9 @@ mod tests {
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-m", "chore: init"]);
 
-        let path = record(dir.path(), r#"{"session_id":"s1"}"#).unwrap();
+        let path = record(dir.path(), r#"{"session_id":"s1"}"#)
+            .unwrap()
+            .unwrap();
         let line = std::fs::read_to_string(&path).unwrap();
         let event: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(event["commits_on_branch"], 0);
@@ -292,7 +446,9 @@ mod tests {
     fn test_record_unborn_head_degrades_to_zero() {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-b", "main"]);
-        let path = record(dir.path(), r#"{"session_id":"s2"}"#).unwrap();
+        let path = record(dir.path(), r#"{"session_id":"s2"}"#)
+            .unwrap()
+            .unwrap();
         let line = std::fs::read_to_string(&path).unwrap();
         let event: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(event["changed_files"], 0);
@@ -304,7 +460,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         repo_with_branch_work(dir.path());
         let payload = r#"{"session_id":"s3","timestamp":"2026-06-12T10:00:00Z"}"#;
-        let path = record(dir.path(), payload).unwrap();
+        let path = record(dir.path(), payload).unwrap().unwrap();
         let line = std::fs::read_to_string(&path).unwrap();
         assert!(line.contains("2026-06-12T10:00:00Z"));
     }
@@ -321,7 +477,7 @@ mod tests {
             &["worktree", "add", wt.to_str().unwrap(), "-b", "feat/wt"],
         );
 
-        let path = record(&wt, r#"{"session_id":"wt1"}"#).unwrap();
+        let path = record(&wt, r#"{"session_id":"wt1"}"#).unwrap().unwrap();
         // The record lands in the MAIN repo's .git/codeflow, not the worktree's.
         assert!(
             path.canonicalize()

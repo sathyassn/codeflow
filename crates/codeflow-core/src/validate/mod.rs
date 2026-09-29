@@ -53,11 +53,22 @@ impl std::fmt::Display for ValidationError {
     }
 }
 
-/// A non-blocking validation warning.
+/// A non-blocking validation warning, with the step that clears it; a
+/// `{path}` in the remedy is the record's path.
 #[derive(Debug, Clone)]
 pub struct ValidationWarning {
     pub field: String,
     pub message: String,
+    pub clearing: &'static crate::remedy::Clearing,
+}
+
+impl ValidationWarning {
+    /// The warning for the record at `path`, with its remedy filled in.
+    #[must_use]
+    pub fn finding(&self, path: &Path) -> crate::remedy::Finding {
+        let display = path.display().to_string();
+        crate::remedy::Finding::new(self.to_string(), self.clearing.with(&[("path", &display)]))
+    }
 }
 
 impl std::fmt::Display for ValidationWarning {
@@ -88,8 +99,10 @@ pub struct ValidateOptions {
 pub struct WorkgraphValidationReport {
     pub checked_records: usize,
     pub issues: Vec<String>,
-    pub warnings: Vec<String>,
-    pub notes: Vec<String>,
+    /// Warnings, each with the step that clears it (R-80).
+    pub warnings: Vec<crate::remedy::Finding>,
+    /// Notes, each with the step that clears it (R-80).
+    pub notes: Vec<crate::remedy::Finding>,
 }
 
 impl WorkgraphValidationReport {
@@ -156,8 +169,8 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
                     );
                     report.warnings.extend(
                         warnings
-                            .into_iter()
-                            .map(|warning| format!("{display}: {warning}")),
+                            .iter()
+                            .map(|warning| warning.finding(Path::new(&display)).prefixed(&display)),
                     );
                 }
                 Err(error) => report.issues.push(format!("{display}: {error}")),
@@ -465,6 +478,7 @@ pub(crate) fn canonical_identity(
         warnings.push(ValidationWarning {
             field: "format_id".into(),
             message: "historical dual-identity record; new records use one stable id".into(),
+            clearing: &crate::remedy::DUAL_IDENTITY,
         });
         alias
     } else {
@@ -628,6 +642,7 @@ pub fn validate_task(
                     message: format!(
                         "standalone task {id} was completed by {pulls} pull requests; a standalone task is one reviewable pull request (SPC-013 R-66)"
                     ),
+                    clearing: &crate::remedy::STANDALONE_SPLIT,
                 });
             }
         }
@@ -698,7 +713,7 @@ fn awaiting_selection_errors(
 /// from merge commit subjects (`Merge pull request #N from <prefix>/TSK-NNN-...`
 /// or `Merge branch '<prefix>/TSK-NNN-...'`). Zero when git is unavailable.
 fn landed_pull_requests(repo_root: &Path, task_id: &str) -> usize {
-    let Ok(out) = std::process::Command::new("git")
+    let Ok(out) = crate::git::command()
         .arg("-C")
         .arg(repo_root)
         .args(["log", "--merges", "--format=%s", "HEAD"])

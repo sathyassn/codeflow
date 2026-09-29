@@ -1371,15 +1371,24 @@ fn update_adds_new_policy_keys_without_mutating_user_values() {
 }
 
 #[test]
-fn update_keeps_test_gate_on_push_and_recommends_block() {
-    // T132-4: a value equal to the old default may still be the adopter's
-    // choice, so update keeps it and recommends the new default.
+fn update_moves_test_gate_on_push_at_the_old_default_and_recommends_block() {
+    // T132-4 as amended by ADR-0075 (TSK-171 AC-7): a value still equal to
+    // the old shipped default moves to the new one, reported; a value that
+    // differs from both is kept and the new default recommended.
     isolate_git();
-    for (value, recommends) in [
-        ("warn", true),
-        ("off", true),
-        ("allow", true),
-        ("block", false),
+    for (value, expected, note) in [
+        (
+            "warn",
+            "block",
+            Some("moved git.test_gate_on_push from \"warn\" to \"block\""),
+        ),
+        ("off", "off", Some("kept git.test_gate_on_push = \"off\"")),
+        (
+            "allow",
+            "allow",
+            Some("kept git.test_gate_on_push = \"allow\""),
+        ),
+        ("block", "block", None),
     ] {
         let (_p, root) = project_dir();
         let _v1 = init_v1(&root);
@@ -1397,21 +1406,17 @@ fn update_keeps_test_gate_on_push_and_recommends_block() {
 
         let after: serde_json::Value =
             serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
-        assert_eq!(after["git"]["test_gate_on_push"], value, "value kept");
+        assert_eq!(after["git"]["test_gate_on_push"], expected, "{value}");
         let notes = &report
             .files
             .iter()
             .find(|f| f.dest == ".codeflow/policy.json")
             .unwrap()
             .notes;
-        let note = notes.iter().find(|n| n.contains("git.test_gate_on_push"));
-        assert_eq!(note.is_some(), recommends, "{value}: {notes:?}");
-        if let Some(note) = note {
-            assert!(
-                note.contains(&format!("kept git.test_gate_on_push = \"{value}\"")),
-                "{note}"
-            );
-            assert!(note.contains("set it to \"block\""), "{note}");
+        let found = notes.iter().find(|n| n.contains("git.test_gate_on_push"));
+        assert_eq!(found.is_some(), note.is_some(), "{value}: {notes:?}");
+        if let (Some(found), Some(note)) = (found, note) {
+            assert!(found.starts_with(note), "{found}");
         }
     }
 }
@@ -1700,6 +1705,48 @@ fn update_adds_work_planning_and_keeps_an_explicit_level() {
         let after: serde_json::Value =
             serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
         assert_eq!(after["git"]["work_planning"], expected, "from {value:?}");
+    }
+}
+
+/// TSK-170 AC-5: `codeflow update` adds `git.conflict_markers` at the
+/// shipped default, `block`, reports the added key, and keeps a level the
+/// project set.
+#[test]
+fn update_adds_conflict_markers_and_reports_it() {
+    isolate_git();
+    let real: serde_json::Value =
+        serde_json::from_str(include_str!("../../../assets/base/policy.json")).unwrap();
+    assert_eq!(real["git"]["conflict_markers"], "block");
+    for (value, expected) in [(None, "block"), (Some("warn"), "warn")] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        if let Some(value) = value {
+            set_policy_key(&root, "conflict_markers", value);
+        }
+        let (dir, _) = fixture_assets(true);
+        let path = dir.path().join("base/policy.json");
+        let mut shipped: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        shipped["git"]["conflict_markers"] = real["git"]["conflict_markers"].clone();
+        std::fs::write(&path, serde_json::to_string_pretty(&shipped).unwrap()).unwrap();
+        let assets = DirSource::new(dir.path());
+        let report = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(after["git"]["conflict_markers"], expected, "from {value:?}");
+        let notes = &report
+            .files
+            .iter()
+            .find(|f| f.dest == ".codeflow/policy.json")
+            .unwrap()
+            .notes;
+        assert_eq!(
+            notes
+                .iter()
+                .any(|n| n.contains("added key git.conflict_markers")),
+            value.is_none(),
+            "{notes:?}"
+        );
     }
 }
 

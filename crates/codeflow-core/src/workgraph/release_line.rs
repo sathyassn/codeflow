@@ -55,10 +55,10 @@ pub const BUILTIN_PATTERN: &str = "integration/release-*";
 /// The finding for direct code on a release range that no task owns.
 pub const NO_OWNER: &str = "no release-integration task to own it";
 /// The project-config table mapping each epic line to its release-rule
-/// cutoff commit (SPC-013 R-120, planning resolution 22).
+/// cutoff commit (SPC-013 R-120, planning resolution 28).
 pub const BASELINE_KEY: &str = "release_rule_baseline";
 /// The project-config key marking where a project adopted R-120, with its
-/// one value `1` (SPC-013 R-120, planning resolution 23). It fixes only the
+/// one value `1` (SPC-013 R-120, planning resolution 29). It fixes only the
 /// point the transition tables stop at; R-120 is enforced whatever it says
 /// or whether it is there. Once the default target carries it, removing it
 /// or changing its value refuses every release check.

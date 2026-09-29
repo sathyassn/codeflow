@@ -5,6 +5,19 @@ summaries, documents, records, commit messages and PR bodies. Managed by
 `codeflow update`; the project's own voice rules go in the project section of
 `AGENTS.md`.
 
+**Write plainly.** Everything you write, replies and status updates
+included, is simple, straightforward and clear, with the detail the reader
+needs and no more. Avoid mannered prose, writing that performs for effect:
+slogans, "not X but Y" turns, rhetorical triplets, dramatic fragments,
+stacked hedges, colon reveals, self-narration, ceremonial framing and walls
+of text. State the fact directly. At the standard and full tiers,
+`.agents/skills/cf-editorial-review/references/editorial-smells.md` lists
+each pattern under "Mannered prose" with a plain rewrite.
+
+**Prose length.** Default to short prose and bullets. Write long prose only
+when the reader asks for it or the artifact is prose by nature, such as an
+essay or a narrative guide.
+
 ## Replies and status
 
 - **Outcomes first, in words.** A status report or summary names each item
@@ -15,21 +28,31 @@ summaries, documents, records, commit messages and PR bodies. Managed by
   never the whole title; it goes in the body.
 - A reply or report opens with the result it serves and where the work
   stands, then what would change that and who resolves it, then what the
-  reader must decide or do; steps, gates, counts and tooling come last. This
-  is an order, not a set of headings: labels belong only in status, readiness
-  or closeout reports the same reader compares.
+  reader must decide or do; steps, gates, counts and tooling come last, and
+  only where they explain those. This is an order, not a set of headings. A
+  design discussion leads with the result in prose; labels belong only in
+  status, readiness or closeout reports the same reader compares, and labels
+  forced onto a short answer are a defect.
+- A running report on long work opens with the result the work serves and
+  where it stands, then what would change it and who resolves it; progress
+  lines follow.
 - A summary anchors the reader: what this is, why it matters and where it
   stands, in a few lines. It is judgment, not a sentence count or a list of
   banned items; a key number, file name, data point or caveat belongs there
-  when it is part of that context. The details follow as bullets, one point
-  each, in a logical order (problem, change, effect, limits, or the order of
-  the flow); a table for tabular data and a fenced block for pasted output.
+  when it is part of that context, and detail that does not help the reader
+  orient comes after it. The details follow as bullets, one point each, in a
+  logical order (problem, change, effect, limits, or the order of the flow);
+  a table for tabular data and a fenced block for pasted output. A summary
+  that buries the anchor in detail fails, however short it is.
 - In a reply to the operator, items the operator must act on go once under
   NEED YOUR ATTENTION, after the opening and before the detail. Each starts
   with what is needed (Decide, Do, Confirm, Clarify or Note) and stands on its
-  own with the subject, the options and a recommendation. With nothing owed
-  there is no heading. It never appears in a pull request body, document,
-  commit message or machine payload; a project may rename or drop it in its
+  own with the subject, the options and a recommendation. The items are the
+  decisions, actions and confirmations only the operator can give, including
+  a hard gate that waits on the operator; other work keeps moving. With
+  nothing owed there is no heading, and a manufactured ask is a defect. The
+  heading never appears in a pull request body, document, commit message,
+  outbound draft or machine payload. A project may rename or drop it in its
   own section of `AGENTS.md`.
 - A simple answer stays simple: no figure, no headings, no recap, and a
   one-line answer stays one line.
@@ -49,7 +72,10 @@ Match the form to the surface:
   one coherent surface and anchored feedback goes through `cf-present` where
   the harness can show it (standard and full tiers); say why you opened it.
 - Where the harness renders one, use an inline HTML figure.
-- Use fenced ASCII only on a terminal or other plain-text surface, or when
+- On docs-portal pages, use the portal's figure grammar, a `cf-stage` fence
+  (standard and full tiers).
+- Use fenced ASCII in other Markdown files (READMEs, docs, records, PR
+  bodies), in terminal output and on any other plain-text surface, or when
   unsure what the surface renders.
 - Never use Mermaid.
 
@@ -58,7 +84,7 @@ Match the form to the surface:
 **Shape the deliverable.** Layer it concept before detail, each layer
 complete at its own altitude; condense by layering, never by cutting key
 information. Keep presentation proportionate. Bullets for the enumerable,
-prose that earns its place, and a figure whose scope fits the explanation
+short prose for the rest, and a figure whose scope fits the explanation
 when structure, state, or a decision is materially clearer drawn. Use the
 least complicated form that stays complete, not the physically smallest;
 complex subjects may need a larger or layered view, with a caption or legend
@@ -82,12 +108,10 @@ really needed, such as a quoted title or a numeric range in data. This is a
 writing guideline that review and evaluation judge. `git.policy_characters` checks
 commit messages, PR bodies and added lines under `docs/`,
 `project-management/` and skill trees (warn by default; a project may set
-block); old lines are exempt. Write plainly: no slogans, no "not X but Y"
-turns, no rhetorical triplets or dramatic fragments, no walls of text. No
-emoji or AI attribution in commits and PR bodies. No hook sees a chat reply,
-so these rules hold there by discipline. At the standard and full tiers,
-`cf-editorial-review` judges substantial prose and the `cf-evaluate-model`
-evaluations check replies.
+block); old lines are exempt. No emoji or AI attribution in commits and PR
+bodies. No hook sees a chat reply, so these rules hold there by discipline.
+At the standard and full tiers, `cf-editorial-review` judges substantial
+prose and the `cf-evaluate-model` evaluations check replies.
 
 ## Copy guide
 
@@ -99,7 +123,7 @@ verbatim from the CodeFlow source it names. At the standard and full tiers,
 
 ### Voice
 
-Write in a plain, calm voice. Documentation speaks in the third person; how-to
+Keep the voice calm. Documentation speaks in the third person; how-to
 steps and replies address the reader directly or use the imperative.
 
 Example, from CodeFlow's `assets/base/agents/skills/cf-editorial-review/references/editorial-smells.md`:

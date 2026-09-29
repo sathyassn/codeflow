@@ -8,7 +8,7 @@
 
 use std::io::Read as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// How long `ls-remote` may take to answer.
@@ -69,7 +69,7 @@ enum Failure {
 }
 
 fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure> {
-    let mut command = Command::new("git");
+    let mut command = crate::git::command();
     command
         .arg("-C")
         .arg(root)
@@ -151,7 +151,7 @@ fn batch_ssh_command(root: &Path) -> String {
         .ok()
         .filter(|command| !command.trim().is_empty())
         .or_else(|| {
-            Command::new("git")
+            crate::git::command()
                 .arg("-C")
                 .arg(root)
                 .args(["config", "--get", "core.sshCommand"])

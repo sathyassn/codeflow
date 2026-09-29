@@ -56,8 +56,11 @@ description: Land finished work — docs and capability updates, then a PR throu
    the PR narrative. It refines the writing but cannot weaken the template,
    evidence, policy, or no-emoji requirements below.
 6. Prepare the whole-branch PR using
-   [references/pr-evidence.md](references/pr-evidence.md). Follow the project
-   template and conventional-commit policy; attribute measured evidence to its
+   [references/pr-evidence.md](references/pr-evidence.md). Write the body and
+   release notes plainly: simple, straightforward and clear, no mannered
+   prose (see `.codeflow/rules/writing.md`), in short prose and bullets.
+   Follow the project template and conventional-commit policy; attribute
+   measured evidence to its
    revision and scope. Missing required evidence keeps the PR draft. Lint the
    body with `codeflow ci` before pushing and opening the PR. No AI attribution
    or emoji.

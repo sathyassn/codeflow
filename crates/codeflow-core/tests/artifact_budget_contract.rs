@@ -712,11 +712,15 @@ const TURN_ADAPTER_READ_EDGES: &[(&str, &str)] = &[
          through the delegated lifecycle, **read and follow** \
          `.claude/skills/cf-delegate/resources/claude-turn-completion.md`.",
     ),
+    // TSK-163: the lane reaches the adapter before launch, where the launch
+    // sequence, turn detection and sibling Stop-hook preflight now live.
     (
         "claude/skills/cf-delegate/resources/lane-lifecycle.md",
-        "On this Codex host lane, use the shipped [turn lifecycle \
-         adapter](claude-turn-completion.md) for exact mechanics; never improvise \
-         a parser, scrape transcripts, or use pane stability as completion.",
+        "On this Codex host lane, before launching Claude, read and follow the \
+         shipped [turn lifecycle adapter](claude-turn-completion.md), which states \
+         the launch sequence, turn detection and the sibling Stop-hook preflight; \
+         never improvise a parser, scrape transcripts, or use pane stability as \
+         completion.",
     ),
 ];
 
@@ -1636,4 +1640,379 @@ fn no_owner_keeps_the_retired_summary_or_dash_wording() {
             );
         }
     }
+}
+
+/// Each reply duty the lifecycle reply rule owns (SPC-013 R-117), with the
+/// clause that states it in the owner's section, and the section and clause
+/// that state it in the writing reference. The writing reference is what an
+/// agent reads at the moment it reports, at every tier: the rule map routes
+/// "report status" to it, and the minimal tier installs no lifecycle. A
+/// clause that ends the owner's sentence carries its full stop, so a
+/// qualifier inside that sentence fails. A separate sentence that contradicts
+/// a duty is not caught here; review judges meaning.
+const REPLY_DUTIES_AT_THE_REPORTING_MOMENT: &[(&str, &str, &str, &str)] = &[
+    ("report order", "A reply or report opens with the result it serves and where the work stands", "Replies and status", "A reply or report opens with the result it serves and where the work stands"),
+    ("steps last", "steps, gates, counts and tooling come last, and only where they explain those.", "Replies and status", "steps, gates, counts and tooling come last, and only where they explain those."),
+    ("order not headings", "This is an order, not a set of headings.", "Replies and status", "This is an order, not a set of headings."),
+    ("design talk in prose", "A design discussion leads with the result in prose", "Replies and status", "A design discussion leads with the result in prose"),
+    ("no forced labels", "labels forced onto a short answer are a defect.", "Replies and status", "labels forced onto a short answer are a defect."),
+    ("running report", "A running report on long work opens with the result the work serves and where it stands", "Replies and status", "A running report on long work opens with the result the work serves and where it stands"),
+    ("anchoring summary", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines.", "Replies and status", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines."),
+    ("detail after the anchor", "detail that does not help the reader orient comes after it.", "Replies and status", "detail that does not help the reader orient comes after it."),
+    ("buried anchor", "A summary that buries the anchor in detail fails, however short it is.", "Replies and status", "A summary that buries the anchor in detail fails, however short it is."),
+    ("attention placement", "NEED YOUR ATTENTION, at most once per reply, after the opening and before the detail.", "Replies and status", "go once under NEED YOUR ATTENTION, after the opening and before the detail."),
+    ("attention verbs", "(Decide, Do, Confirm, Clarify or Note)", "Replies and status", "(Decide, Do, Confirm, Clarify or Note)"),
+    ("operator-only items", "the decisions, actions and confirmations only the operator can give", "Replies and status", "the decisions, actions and confirmations only the operator can give"),
+    ("hard gate", "including a hard gate that waits on the operator; other work keeps moving.", "Replies and status", "including a hard gate that waits on the operator; other work keeps moving."),
+    ("no manufactured ask", "With nothing owed there is no heading, and a manufactured ask is a defect.", "Replies and status", "With nothing owed there is no heading, and a manufactured ask is a defect."),
+    ("heading exclusions", "never appears in a pull request body, document, commit message, outbound draft or machine payload.", "Replies and status", "never appears in a pull request body, document, commit message, outbound draft or machine payload."),
+    ("simple answer", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.", "Replies and status", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line."),
+    ("figure by surface", "Use fenced ASCII on a terminal or other plain-text surface, in a Markdown file (a README, doc, record or PR body), or when unsure what the surface renders.", "Figures by surface", "Use fenced ASCII in other Markdown files (READMEs, docs, records, PR bodies), in terminal output and on any other plain-text surface, or when unsure what the surface renders."),
+    ("no Mermaid", "Never use Mermaid", "Figures by surface", "Never use Mermaid"),
+    ("exact links", "Never guess a URL, port, or pull request number; state an unknown link as unknown.", "Replies and status", "Never guess a URL, port, or pull request number; state an unknown link as unknown."),
+    ("dash guideline", "Avoid em and en dashes in prose", "Written content policy", "avoid em and en dashes in prose"),
+    ("replies judged without a hook", "no hook sees a reply", "Written content policy", "No hook sees a chat reply"),
+];
+
+const REPLY_RULE_OWNER_SECTION: &str = "Evidence, safety, and closeout";
+
+/// The text of one `##` section of a whitespace-normalized Markdown file, or
+/// an empty string when the heading is missing.
+fn normalized_section<'a>(text: &'a str, heading: &str) -> &'a str {
+    let marker = format!("## {heading} ");
+    let start = text
+        .match_indices(&marker)
+        .find(|(at, _)| *at == 0 || text[..*at].ends_with(' '))
+        .map(|(at, _)| at + marker.len());
+    start.map_or("", |start| {
+        let rest = &text[start..];
+        &rest[..rest.find(" ## ").unwrap_or(rest.len())]
+    })
+}
+
+fn missing_reply_duties(owner: &str, reporting: &str) -> Vec<String> {
+    let (owner, reporting) = (normalized(owner), normalized(reporting));
+    let owner = normalized_section(&owner, REPLY_RULE_OWNER_SECTION);
+    let mut missing = Vec::new();
+    for (duty, owner_clause, section, reporting_clause) in REPLY_DUTIES_AT_THE_REPORTING_MOMENT {
+        if !owner.contains(owner_clause) {
+            missing.push(format!("owner lost {duty}"));
+        }
+        if !normalized_section(&reporting, section).contains(reporting_clause) {
+            missing.push(format!("writing reference lacks {duty} under {section}"));
+        }
+    }
+    missing
+}
+
+/// TSK-138 AC-1: the writing reference, read when an agent reports at every
+/// tier, states each reply duty its owner states, so the two cannot drift
+/// apart and the minimal tier loses none of them.
+#[test]
+fn reply_duties_read_when_reporting_match_their_owner() {
+    let root = repo_root();
+    let owner = read_text(
+        &root.join("assets/base/claude/skills/cf-method/references/workflow-lifecycle.md"),
+    );
+    for path in [
+        "assets/base/rules/writing.md",
+        ".codeflow/rules/writing.md",
+        ".codeflow/.baseline/.codeflow/rules/writing.md",
+    ] {
+        let reporting = read_text(&root.join(path));
+        let missing = missing_reply_duties(&owner, &reporting);
+        assert!(missing.is_empty(), "{path}: {missing:#?}");
+    }
+
+    // Negative controls: a duty dropped from either side, qualified inside
+    // the owner's sentence, or moved out of its section is named.
+    let reporting = normalized(&read_text(&root.join("assets/base/rules/writing.md")));
+    let dropped = reporting.replacen("a manufactured ask is a defect", "an ask is fine", 1);
+    assert_eq!(
+        missing_reply_duties(&owner, &dropped),
+        vec!["writing reference lacks no manufactured ask under Replies and status".to_string()]
+    );
+    let qualified = reporting.replacen(
+        "labels forced onto a short answer are a defect.",
+        "labels forced onto a short answer are a defect unless the operator asks for them.",
+        1,
+    );
+    assert_eq!(
+        missing_reply_duties(&owner, &qualified),
+        vec!["writing reference lacks no forced labels under Replies and status".to_string()]
+    );
+    let relocated = format!(
+        "{} With nothing owed there is no heading, and a manufactured ask is a defect.",
+        reporting.replacen("a manufactured ask is a defect.", "an ask may help.", 1)
+    );
+    assert_eq!(
+        missing_reply_duties(&owner, &relocated),
+        vec!["writing reference lacks no manufactured ask under Replies and status".to_string()]
+    );
+    let owner_dropped = owner.replacen("other work keeps moving", "all work waits", 1);
+    assert_eq!(
+        missing_reply_duties(&owner_dropped, &reporting),
+        vec!["owner lost hard gate".to_string()]
+    );
+}
+
+/// The figure proportionality duties, as the author reads them in the
+/// lifecycle (CF-OUT-003), the reviewer grades them in the duo quality
+/// contract and the editor applies them in `cf-editorial-review`. Each clause
+/// is that file's own wording, ending at its full stop where its sentence
+/// ends there.
+const FIGURE_DUTIES_BY_READER: &[(&str, [&str; 3])] = &[
+    (
+        "form follows the surface",
+        [
+            "Match the form to the surface.",
+            "in the form the surface renders as the lifecycle reply rule sets out.",
+            "in the form the surface renders as the lifecycle reply rule sets out.",
+        ],
+    ),
+    (
+        "scope fits the explanation",
+        [
+            "Use a diagram whose scope and detail fit the explanation",
+            "diagram whose scope and detail fit the explanation",
+            "diagram whose scope and detail fit the explanation",
+        ],
+    ),
+    (
+        "least complicated complete form",
+        [
+            "prefer the least complicated form that remains complete, not the physically smallest;",
+            "Prefer the least complicated form that remains complete, not the physically smallest;",
+            "Prefer the least complicated form that remains complete, not the physically smallest;",
+        ],
+    ),
+    (
+        "complex subjects may need more",
+        [
+            "complex subjects may need a larger, layered, or multi-view diagram",
+            "complex subjects may need a larger, layered, or multi-view diagram.",
+            "complex subjects may need a larger, layered, or multi-view diagram.",
+        ],
+    ),
+    (
+        "caption or legend",
+        [
+            "caption or legend when it aids orientation.",
+            "caption or legend when it aids orientation.",
+            "caption or legend when it aids orientation.",
+        ],
+    ),
+    (
+        "nothing decorative or forced",
+        [
+            "Never add decorative or forced diagrams, headings, tables, or recaps.",
+            "Decorative or forced diagrams, headings, tables, and recaps are findings, not polish.",
+            "A decorative or forced diagram, heading, table, or recap is a defect, not polish.",
+        ],
+    ),
+];
+
+const FIGURE_DUTY_READERS: [&str; 3] = [
+    "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+    "assets/base/agents/skills/cf-model-orchestrator/resources/quality/editorial.md",
+    "assets/base/agents/skills/cf-editorial-review/SKILL.md",
+];
+
+fn missing_figure_duties(texts: &[String; 3]) -> Vec<String> {
+    let mut missing = Vec::new();
+    for (duty, clauses) in FIGURE_DUTIES_BY_READER {
+        for ((path, text), clause) in FIGURE_DUTY_READERS.iter().zip(texts).zip(clauses) {
+            if !normalized(text).contains(clause) {
+                missing.push(format!("{path} lacks {duty}"));
+            }
+        }
+    }
+    missing
+}
+
+/// TSK-138 AC-1: the author, reviewer and editor copies of the figure
+/// proportionality rule state the same duties, each in its reader's voice.
+#[test]
+fn figure_duties_match_for_author_reviewer_and_editor() {
+    let root = repo_root();
+    let texts = FIGURE_DUTY_READERS.map(|path| read_text(&root.join(path)));
+    let missing = missing_figure_duties(&texts);
+    assert!(missing.is_empty(), "{missing:#?}");
+
+    // Negative control: a qualifier after the reviewer's full stop is named.
+    let mut qualified = texts.clone().map(|text| normalized(&text));
+    qualified[1] = qualified[1].replacen(
+        "are findings, not polish.",
+        "are findings, not polish, unless the author prefers them.",
+        1,
+    );
+    assert_eq!(
+        missing_figure_duties(&qualified),
+        vec![format!(
+            "{} lacks nothing decorative or forced",
+            FIGURE_DUTY_READERS[1]
+        )]
+    );
+}
+
+/// The short form of the plain-writing rule (TSK-177), as each skill and
+/// agent states it once where it tells the agent to write.
+const PLAIN_SHORT_FORM: &str =
+    "simple, straightforward and clear, no mannered prose (see `.codeflow/rules/writing.md`)";
+
+/// TSK-177: each writing surface with the clauses that place the rule
+/// there, and the retired wording the rule replaced.
+const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
+    (
+        "assets/base/rules/writing.md",
+        &[
+            "**Write plainly.** Everything you write, replies and status updates included, is simple, straightforward and clear, with the detail the reader needs and no more.",
+            "`.agents/skills/cf-editorial-review/references/editorial-smells.md` lists each pattern under \"Mannered prose\" with a plain rewrite.",
+            "**Prose length.** Default to short prose and bullets. Write long prose only when the reader asks for it or the artifact is prose by nature",
+            "Bullets for the enumerable, short prose for the rest",
+            "On docs-portal pages, use the portal's figure grammar, a `cf-stage` fence",
+        ],
+        &[
+            "Write plainly: no slogans",
+            "Write in a plain, calm voice",
+            "prose that earns its place",
+            "Use fenced ASCII only on a terminal",
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-editorial-review/SKILL.md",
+        &[
+            "**Write plainly.** Everything an agent writes, replies and status updates included, is simple, straightforward and clear, with the detail the reader needs and no more. Avoid mannered prose, writing that performs for effect: slogans, \"not X but Y\" turns, rhetorical triplets, dramatic fragments, stacked hedges, colon reveals, self-narration, ceremonial framing and walls of text. State the fact directly.",
+            "Default to short prose and bullets, and write long prose only when the reader asks for it or the artifact is prose by nature.",
+            "\"Mannered prose\" in [references/editorial-smells.md](references/editorial-smells.md) lists each pattern with its plain rewrite.",
+            "In a Markdown file (a README, doc, record or PR body) that form is fenced ASCII, and on a docs-portal page it is the portal's figure grammar.",
+        ],
+        &[],
+    ),
+    ("assets/base/agents/skills/cf-consult/SKILL.md", &["Write the synthesis plainly:"], &[]),
+    (
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        &["Write every brief, status update and report plainly:"],
+        &[],
+    ),
+    ("assets/base/claude/skills/cf-delegate/SKILL.md", &["Write each delegate prompt plainly:"], &[]),
+    (
+        "assets/base/agents/skills/cf-plan/SKILL.md",
+        &["Write each record plainly:", "in short prose and bullets, with a fenced ASCII figure where a flow or structure carries the point."],
+        &[],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        &["Write the body and release notes plainly:", "in short prose and bullets."],
+        &[],
+    ),
+    ("assets/base/agents/skills/cf-develop/SKILL.md", &["Write the report plainly:"], &[]),
+    (
+        "assets/base/agents/skills/cf-present/SKILL.md",
+        &["Write the page plainly:", "in short prose and bullets."],
+        &["Keep language plain, direct, calm"],
+    ),
+    (
+        "assets/base/agents/skills/cf-docs-portal/SKILL.md",
+        &[
+            "Write the pages plainly:",
+            "with descriptive titles and short prose and bullets by default.",
+            "drawn in the portal's figure grammar (a `cf-stage` fence).",
+        ],
+        &["Prefer plain language"],
+    ),
+    ("assets/base/agents/skills/cf-design/SKILL.md", &["Write the copy plainly:"], &[]),
+    ("assets/base/agents/skills/cf-estimate/SKILL.md", &["Write the report plainly:"], &[]),
+    ("assets/base/agents/skills/cf-evaluate-model/SKILL.md", &["Write grader notes plainly:"], &[]),
+    (
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+        &[
+            "Operator-facing replies follow the written content policy (ADR-0067) and are written plainly:",
+            "Use fenced ASCII on a terminal or other plain-text surface, in a Markdown file (a README, doc, record or PR body), or when unsure what the surface renders.",
+        ],
+        &["Use fenced ASCII only on a terminal"],
+    ),
+    (
+        "assets/base/claude/agents/cf-reviewer.md",
+        &["Mannered prose in any changed text is a finding, and your own report is written plainly:"],
+        &[],
+    ),
+    ("assets/base/rules/git-rules.md", &["Write the body plainly:"], &[]),
+    ("assets/base/ci/pull_request_template.md", &["Write it plainly:"], &[]),
+    (".github/pull_request_template.md", &["Write it plainly:"], &[]),
+];
+
+/// The faults of one surface: a placing clause missing, a retired line
+/// kept, or the short form stated other than once (the full-form files
+/// state the rule in their own words and carry no short form).
+fn plain_writing_faults(path: &str, text: &str, placed: &[&str], retired: &[&str]) -> Vec<String> {
+    let text = normalized(text);
+    let mut faults = Vec::new();
+    for clause in placed {
+        if !text.contains(clause) {
+            faults.push(format!("{path} lacks {clause:?}"));
+        }
+    }
+    for line in retired {
+        if text.contains(line) {
+            faults.push(format!("{path} keeps {line:?}"));
+        }
+    }
+    let full_form = path.ends_with("rules/writing.md") || path.contains("cf-editorial-review");
+    let count = text.matches(PLAIN_SHORT_FORM).count();
+    if !full_form && count != 1 {
+        faults.push(format!("{path} states the short form {count} times"));
+    }
+    faults
+}
+
+/// TSK-177 AC-2 to AC-4: the plain-writing rule sits once at every surface
+/// where an agent writes, with the short-prose default and the figure forms
+/// where documents are written, and the lines it replaced are gone. The
+/// writing reference's installed copy and baseline carry the same text.
+#[test]
+fn every_writing_surface_states_the_plain_writing_rule() {
+    let root = repo_root();
+    let mut faults = Vec::new();
+    for (path, placed, retired) in PLAIN_WRITING_SURFACES {
+        let text = read_text(&root.join(path));
+        faults.extend(plain_writing_faults(path, &text, placed, retired));
+    }
+    let writing = read_text(&root.join("assets/base/rules/writing.md"));
+    for copy in [
+        ".codeflow/rules/writing.md",
+        ".codeflow/.baseline/.codeflow/rules/writing.md",
+    ] {
+        if read_text(&root.join(copy)) != writing {
+            faults.push(format!("{copy} differs from assets/base/rules/writing.md"));
+        }
+    }
+    assert!(faults.is_empty(), "{faults:#?}");
+
+    // Negative controls: a dropped line, a second copy and a kept retired
+    // line are each named.
+    let (path, placed, retired) = PLAIN_WRITING_SURFACES[4];
+    let text = read_text(&root.join(path));
+    let dropped = text.replacen(
+        "Write each delegate prompt plainly:",
+        "Write each delegate prompt:",
+        1,
+    );
+    assert_eq!(
+        plain_writing_faults(path, &dropped, placed, retired),
+        vec![format!(
+            "{path} lacks \"Write each delegate prompt plainly:\""
+        )]
+    );
+    let twice = format!("{text}\nAlso: {PLAIN_SHORT_FORM}.");
+    assert_eq!(
+        plain_writing_faults(path, &twice, placed, retired),
+        vec![format!("{path} states the short form 2 times")]
+    );
+    let (path, placed, retired) = PLAIN_WRITING_SURFACES[0];
+    let kept = format!("{writing}\nWrite in a plain, calm voice.");
+    assert_eq!(
+        plain_writing_faults(path, &kept, placed, retired),
+        vec![format!("{path} keeps \"Write in a plain, calm voice\"")]
+    );
 }

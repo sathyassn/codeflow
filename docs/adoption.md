@@ -363,8 +363,39 @@ branch's. An upgrade therefore takes two pull requests, in order:
 
 A pull request that adds policy keys before step 1 has landed fails with a
 message naming this order: the enforcing job reads the head's policy as data
-and fails when the pinned binary cannot read it. The git hook shims check the binary first and warn
+and fails when the pinned binary cannot read it. A pull request that lowers
+the pin is still judged by the target's binary. `codeflow doctor` reports
+which state a checkout is in: the version CI installs, a raise alone (step
+1), a lowered pin, or new policy keys or schema carried before the raise has
+landed, with this order. The git hook shims check the binary first and warn
 when it is older than they are, then run the checks it has.
+
+The other CI templates carry the same pin. `.gitlab-ci.yml`,
+`bitbucket-pipelines.yml` and `ci-generic.sh` (in `assets/base/ci/` of the
+CodeFlow repository; copy the one your host needs) run one shared script: it
+reads the pin from the target branch's current commit, installs that
+release with the same checksum verification, and runs `codeflow ci` from a
+checkout of that commit, so the target's policy judges the change. On GitLab
+the target is `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` in a merged results
+pipeline; an ordinary merge request pipeline leaves that empty, so the job
+fetches `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` from the merge request's
+project and fails when it cannot. It never uses
+`CI_MERGE_REQUEST_DIFF_BASE_SHA`, the diff's base, which stays behind when
+the target advances. Bitbucket uses `BITBUCKET_PR_DESTINATION_COMMIT`, and
+`ci-generic.sh` takes the target commit as its first argument and refuses to
+run without it. A raised pin's release is installed separately and only
+tested; a lowered pin is judged by the target's binary and then fails the
+job. A branch that started before the target raised its pin, and kept the
+pin it started from, lowers nothing and is judged by the new binary.
+
+The pin does not defend the CI file itself. On a GitHub `pull_request` event,
+and on every GitLab and Bitbucket pipeline, the job file runs from the pull
+request, so a pull request that edits it can change its own install step.
+Only `codeflow-policy.yml` and `codeflow-registry.yml` run from the default
+branch. Require review of your CI files (`.github/workflows/`,
+`.gitlab-ci.yml`, `bitbucket-pipelines.yml`) and `.codeflow/` in your host's
+rules, for example with a code owners file and a branch rule that requires
+code owner review; CodeFlow does not configure those settings.
 
 Work records follow the same order. `codeflow update` adds
 `git.work_records` (`block` or `warn`; an `off` from an unreleased build is
@@ -382,6 +413,14 @@ adds the line `- reopened: <text>`.
 planning checks: a valid workgraph, a record for the task the branch
 carries, and that record anchored on its target. Pre-commit does not run
 them. A value the project set is kept.
+
+`codeflow update` also adds `git.conflict_markers` (default `block`) and
+reports the added key. The pre-commit hook and `codeflow ci` then refuse an
+unresolved conflict marker on a line a change adds to a text file; existing
+lines are not judged. A file that must hold markers, such as a test fixture
+or a page about git, sets `conflict-marker-size` for its path in
+`.gitattributes` to a length its markers do not have. A team that wants a
+softer start sets the key to `warn` or `off` in a reviewed policy change.
 
 ## Optional repository guide portal
 
@@ -464,10 +503,13 @@ The home page names the exact repository commit the guide was built from. A
 `release_version` value renders as a release label, so it stays `null` unless
 a verified published release exists for the built commit.
 
-Node roles differ by lane, and neither pin changes here: the aggregate CI gate
-runs on Node 26.4.0, and its full strict target installs, checks, builds, and
-validates this portal; the portal-local `.node-version` and the Windows
-adapter-test lane use 24.18.0; the starter itself accepts 22.19.0 or newer.
+Each Node target runs on the version its own version file pins, locally and
+in CI: the portal's full strict target installs, checks, builds, and validates
+this portal on the 24.18.0 in `docs-portal/.node-version`, as the Windows
+adapter-test lane does, and the presentation renderer's target runs on the
+26.4.0 in `crates/codeflow-present/web/.node-version`. `scripts/with-node.py`
+selects each version for its target, and `gate-parity` holds the CI pins to
+those files. The starter itself accepts 22.19.0 or newer.
 
 ## Optional interactive review documents
 
@@ -797,7 +839,7 @@ permissions. Local checks are required feedback, but remain editable.
 | Push / force-push / delete to protected | pre-push | git-guard | — | yes |
 | `gh pr merge` into a protected base | — (hooks can't see a PR) | git-guard | — | yes |
 | Destructive command (`rm -rf /`, `mkfs`, fork bomb) | — | exec-guard (block) | — | — |
-| Privilege escalation (`sudo`, `LD_PRELOAD`) | — | exec-guard (warn) | — | — |
+| Privilege escalation (`sudo`, `LD_PRELOAD`) | no | preset deny rules, exec-guard (block) | no | no |
 | Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | — |
 | Override-token laundering, `--no-verify` bypass | — | git-guard (structural) | — | — |
 

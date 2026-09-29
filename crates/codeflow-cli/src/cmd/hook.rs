@@ -211,7 +211,8 @@ fn git_guard(stdin: &str) -> i32 {
         Err(e) => {
             // Fail open with a visible warning: a malformed payload must not
             // veto every shell call (charter principle 8 — legible, not silent).
-            eprintln!("codeflow git-guard: warning: unreadable hook payload ({e}); allowing");
+            let finding = payload_finding("git-guard", &e);
+            eprintln!("{}", finding.line("codeflow git-guard", "warning"));
             return 0;
         }
     };
@@ -252,8 +253,23 @@ fn git_guard(stdin: &str) -> i32 {
         alias_lookup: Some(&alias),
     };
     let report = git_guard::evaluate_report(command, &ctx);
-    super::render_outcome("git-guard", &report.violations, &report.notes, 2)
+    super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
 }
+
+/// The finding for a guard input it could not read. Fail open with a
+/// visible warning: an unread payload must not veto every shell call
+/// (charter principle 8: legible, not silent).
+fn payload_finding(guard: &str, error: &git_guard::PayloadError) -> codeflow_core::remedy::Finding {
+    let remedy = codeflow_core::remedy::GUARD_PAYLOAD_MALFORMED
+        .with(&[("guard", guard), ("path", HARNESS_HOOK_FILES)]);
+    codeflow_core::remedy::Finding::new(
+        format!("unreadable hook payload ({error}); allowing"),
+        remedy,
+    )
+}
+
+/// Where each harness wires the guards.
+const HARNESS_HOOK_FILES: &str = "`.claude/settings.json`, `.codex/hooks.json` or `.grok/hooks/`";
 
 /// `exec-guard` (`PreToolUse` Bash/PowerShell): run the dangerous/privilege security
 /// modules against the command per the `security` policy section (ADR-0008).
@@ -265,7 +281,8 @@ fn exec_guard(stdin: &str) -> i32 {
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("codeflow exec-guard: warning: unreadable hook payload ({e}); allowing");
+            let finding = payload_finding("exec-guard", &e);
+            eprintln!("{}", finding.line("codeflow exec-guard", "warning"));
             return 0;
         }
     };
@@ -284,7 +301,7 @@ fn exec_guard(stdin: &str) -> i32 {
     // enough — no need for `load_effective`.
     let policy = Policy::load(&root);
     let violations = exec_guard::evaluate(command, &policy.security);
-    super::render_outcome("exec-guard", &violations, &[], 2)
+    super::render_outcome("exec-guard", &root, &violations, &[], 2)
 }
 
 /// Resolve a `gh pr merge <arg>` target to its base branch via `gh pr view`
@@ -318,12 +335,25 @@ fn gh_pr_base_blocking(arg: &str) -> Option<String> {
 fn session_summary(stdin: &str) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     match session_summary::record(&super::project_root(&cwd), stdin) {
-        Ok(path) => {
+        Ok(Some(path)) => {
             eprintln!("codeflow session-summary: recorded to {}", path.display());
             0
         }
+        Ok(None) => {
+            eprintln!("codeflow session-summary: not in a git repository, nothing to record");
+            0
+        }
         Err(e) => {
-            eprintln!("codeflow session-summary: warning: {e} — session unaffected");
+            let path = e.path.display().to_string();
+            let finding = codeflow_core::remedy::Finding::new(
+                format!(
+                    "session ledger not written ({}); session unaffected",
+                    e.cause
+                ),
+                codeflow_core::remedy::SESSION_SUMMARY_UNWRITTEN
+                    .with(&[("repair", e.repair.words()), ("path", &path)]),
+            );
+            eprintln!("{}", finding.line("codeflow session-summary", "warning"));
             0
         }
     }

@@ -1285,3 +1285,280 @@ fn an_unreadable_tracking_state_blocks_work_start_and_ci_at_any_level() {
         assert!(out.contains("TSK-002"), "{level}: {out}");
     }
 }
+
+// -- watched contract paths (TSK-147 AC-4) -----------------------------------
+
+/// A code range whose commit touches `thing.rs`, which the policy watches as a
+/// contract surface.
+fn repo_touching_a_watched_path(dir: &Path) {
+    repo_with_range(dir, "code");
+    std::fs::create_dir_all(dir.join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.join(".codeflow/policy.json"),
+        r#"{"git": {"breaking_watch_paths": ["thing.rs"]}}"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_body_declaring_no_break_with_a_rationale_settles_a_watched_path() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let out = ci_with_body(dir.path(), FULL_BODY);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(!text.contains("contract surface"), "{text}");
+    assert!(!text.contains("git.breaking_watch_paths"), "{text}");
+}
+
+#[test]
+fn a_bodyless_run_notes_a_watched_path_and_points_at_release_impact() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let out = ci_range(dir.path());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(
+        text.contains("codeflow ci: note: commit touches a declared contract surface (thing.rs)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("`Breaking: no` with a `Rationale` under Release impact"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("warning — policy rule git.breaking_watch_paths"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_quoted_example_of_the_fields_keeps_the_watched_path_warning() {
+    // TSK-147 F4: fields quoted from another pull request are an example,
+    // not this change's assessment.
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let fields = "- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n";
+    let quoted = fields.replace("- ", "> - ");
+    let body = FULL_BODY.replace(
+        fields,
+        &format!("Not assessed yet; an example from another pull request:\n\n{quoted}\n"),
+    );
+    assert_ne!(body, FULL_BODY);
+    let out = ci_with_body(dir.path(), &body);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("warning — policy rule git.breaking_watch_paths (warn)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_body_without_the_declaration_keeps_the_watched_path_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_touching_a_watched_path(dir.path());
+    let body = FULL_BODY.replace("- Rationale: Preserve public behavior.\n", "");
+    let out = ci_with_body(dir.path(), &body);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("warning — policy rule git.breaking_watch_paths (warn)"),
+        "{text}"
+    );
+}
+
+// -- conflict markers (TSK-170) ------------------------------------------------
+
+/// A marker line built at run time, so this file holds none itself.
+fn marker(fill: char, size: usize, label: &str) -> String {
+    format!("{}{label}", fill.to_string().repeat(size))
+}
+
+fn output_text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// TSK-170 AC-4: `codeflow ci` judges the lines a range adds to every text
+/// path with the hook's matcher, level, messages and attribute rule, and
+/// names the check it ran. One finding per case of AC-1 and AC-3.
+#[test]
+fn ci_refuses_conflict_markers_one_finding_per_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    repo_with_range(root, "code");
+    // A clean range names the check among those that passed.
+    let clean = ci_range(root);
+    let text = output_text(&clean);
+    assert_eq!(clean.status.code(), Some(0), "{text}");
+    assert!(text.contains("conflict-markers"), "{text}");
+    let cases = [
+        ("opening.txt", marker('<', 7, " HEAD")),
+        ("opening-bare.txt", marker('<', 7, "")),
+        ("closing.txt", marker('>', 7, " feat/y")),
+        ("closing-bare.txt", marker('>', 7, "")),
+        ("base.txt.d", marker('|', 7, " merged common ancestors")),
+        ("base-bare.txt.d", marker('|', 7, "")),
+        ("fixtures/sized.txt", marker('<', 32, " HEAD")),
+    ];
+    for (path, line) in &cases {
+        let full = root.join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, format!("before\n{line}\nafter\n")).unwrap();
+    }
+    // A separator between an opening and a closing marker.
+    std::fs::write(
+        root.join("separator.md"),
+        format!("text\n{}\n", marker('=', 7, "")),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pair.md"),
+        format!(
+            "{}\nours\n{}\ntheirs\n{}\n",
+            marker('<', 7, " a"),
+            marker('=', 7, ""),
+            marker('>', 7, " b")
+        ),
+    )
+    .unwrap();
+    // Seven-character markers under a path whose attribute sets 32.
+    std::fs::write(
+        root.join("fixtures/seven.txt"),
+        format!("{}\nx\n{}\n", marker('<', 7, " a"), marker('>', 7, " b")),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".gitattributes"),
+        "fixtures/** conflict-marker-size=32\n",
+    )
+    .unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "feat: add the fixtures"]);
+
+    let out = ci_range(root);
+    let all = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "{all}");
+    for (path, _) in &cases {
+        assert_eq!(
+            all.matches(&format!("{path}:2 adds an unresolved")).count(),
+            1,
+            "{path}: {all}"
+        );
+    }
+    // The setext underline alone is text; the pair's three lines are found.
+    assert!(!all.contains("separator.md"), "{all}");
+    assert!(
+        all.contains("pair.md:1 adds an unresolved opening"),
+        "{all}"
+    );
+    assert!(
+        all.contains("pair.md:3 adds an unresolved separator"),
+        "{all}"
+    );
+    assert!(
+        all.contains("pair.md:5 adds an unresolved closing"),
+        "{all}"
+    );
+    assert!(!all.contains("fixtures/seven.txt"), "{all}");
+    assert_eq!(
+        all.matches("policy rule git.conflict_markers (block)")
+            .count(),
+        cases.len() + 3,
+        "{all}"
+    );
+    assert!(
+        all.contains(
+            "resolve the conflict and restage, or set conflict-marker-size for the path in .gitattributes"
+        ),
+        "{all}"
+    );
+
+    // At warn the same findings warn and the run passes; at off it is silent.
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    for (level, code) in [("warn", 0), ("off", 0)] {
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            format!(r#"{{"schema_version":1,"git":{{"conflict_markers":"{level}"}}}}"#),
+        )
+        .unwrap();
+        let out = ci_range(root);
+        let all = output_text(&out);
+        assert_eq!(out.status.code(), Some(code), "{level}: {all}");
+        let expected = if level == "warn" { cases.len() + 3 } else { 0 };
+        assert_eq!(
+            all.matches("policy rule git.conflict_markers (warn)")
+                .count(),
+            expected,
+            "{level}: {all}"
+        );
+    }
+}
+
+/// TSK-170 review P3: a git without `check-attr --source` (older than 2.40)
+/// leaves the check incomplete, and the remedy is to upgrade Git, not to
+/// fetch. The old git is simulated by a wrapper that refuses only that
+/// option; every other call reaches the real git.
+#[cfg(unix)]
+#[test]
+fn ci_names_a_git_upgrade_when_check_attr_has_no_source() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    repo_with_range(&root, "code");
+    let real = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
+    let wrapper = dir.path().join("old-git");
+    std::fs::create_dir(&wrapper).unwrap();
+    std::fs::write(
+        wrapper.join("git"),
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in --source=*) echo \"error: unknown option \\`source'\" >&2; exit 129;; esac\ndone\nexec {real} \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(wrapper.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(wrapper.clone()).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )),
+    )
+    .unwrap();
+    let out = codeflow()
+        .args([
+            "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+        ])
+        .current_dir(&root)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let all = output_text(&out);
+    assert_eq!(out.status.code(), Some(1), "{all}");
+    let at = all
+        .find("conflict-marker check incomplete")
+        .unwrap_or_else(|| panic!("{all}"));
+    let finding = &all[at..all[at..]
+        .find("policy file:")
+        .map_or(all.len(), |end| at + end)];
+    assert!(finding.contains("unknown option"), "{finding}");
+    assert!(
+        finding.contains("Git release build of 2.40 or later"),
+        "{finding}"
+    );
+    assert!(!finding.contains("fetch the whole range"), "{finding}");
+}
