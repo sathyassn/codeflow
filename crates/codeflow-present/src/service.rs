@@ -2646,7 +2646,9 @@ mod tests {
     /// TSK-120: the page shows each form's latest answer and its state as it
     /// loads, so a reload keeps stored, delivered and acknowledged; a
     /// correction names its original; an answer to a question that has since
-    /// changed is not shown on the new question.
+    /// changed is not shown on the new question. TSK-176: it also carries
+    /// what the latest answer or correction sent, escaped as an attribute,
+    /// which the page puts back in the form's controls.
     #[tokio::test]
     async fn the_page_renders_each_forms_latest_answer_state() {
         let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
@@ -2660,21 +2662,21 @@ mod tests {
                 let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                     .await
                     .unwrap();
-                let html = String::from_utf8(body.to_vec()).unwrap();
-                let at = html.find("data-cf-form=\"store-choice\"").unwrap();
-                let tag = &html[at..at + html[at..].find('>').unwrap()];
-                let attribute = |name: &str| {
-                    tag.split_once(&format!("{name}=\""))
-                        .map(|(_, rest)| rest.split('"').next().unwrap().to_string())
-                };
+                let html = scraper::Html::parse_document(std::str::from_utf8(&body).unwrap());
+                let selector =
+                    scraper::Selector::parse("article[data-cf-form='store-choice']").unwrap();
+                let article = html.select(&selector).next().unwrap().value();
+                let attribute = |name: &str| article.attr(name).map(str::to_string);
                 (
                     attribute("data-cf-answer-id"),
                     attribute("data-cf-latest-answer-id"),
                     attribute("data-cf-answer-state"),
+                    attribute("data-cf-answer-sent")
+                        .map(|sent| serde_json::from_str::<serde_json::Value>(&sent).unwrap()),
                 )
             }
         };
-        assert_eq!(page().await, (None, None, None), "an unanswered form");
+        assert_eq!(page().await, (None, None, None, None), "an unanswered form");
         let (_, receipt) = post_answer(
             &state,
             application_headers(&state, true),
@@ -2682,30 +2684,48 @@ mod tests {
         )
         .await;
         let answer = receipt["answer_id"].as_str().unwrap().to_string();
-        let shown = |original: &str, latest: &str, status: &str| {
+        let first = serde_json::json!({
+            "outcome": "submit",
+            "values": { "home": "local", "keep-days": 30 },
+            "rationales": { "home": "Answers can hold private text." },
+        });
+        let shown = |original: &str, latest: &str, status: &str, sent: &serde_json::Value| {
             (
                 Some(original.to_string()),
                 Some(latest.to_string()),
                 Some(status.to_string()),
+                Some(sent.clone()),
             )
         };
-        assert_eq!(page().await, shown(&answer, &answer, "stored"));
+        assert_eq!(page().await, shown(&answer, &answer, "stored", &first));
         let id: Uuid = answer.parse().unwrap();
         state.store.deliver(state.session_id, &[id]).unwrap();
-        assert_eq!(page().await, shown(&answer, &answer, "delivered"));
+        assert_eq!(page().await, shown(&answer, &answer, "delivered", &first));
         state.store.acknowledge(state.session_id, id).unwrap();
-        assert_eq!(page().await, shown(&answer, &answer, "acknowledged"));
+        assert_eq!(
+            page().await,
+            shown(&answer, &answer, "acknowledged", &first)
+        );
+        // The correction's own values are shown, markup characters and all.
         let (_, correction) = post_answer(
             &state,
             application_headers(&state, true),
             answer_body(&state, |body| {
                 body["request_id"] = serde_json::json!(Uuid::new_v4());
                 body["amends"] = serde_json::json!(answer);
+                body["values"]["keep-days"] = serde_json::json!(45);
+                body["values"]["contact"] = serde_json::json!("a&b@example.org");
+                body["rationales"]["home"] = serde_json::json!("<b>\"Local\"</b> & 'safe'");
             }),
         )
         .await;
         let latest = correction["answer_id"].as_str().unwrap().to_string();
-        assert_eq!(page().await, shown(&answer, &latest, "stored"));
+        let corrected = serde_json::json!({
+            "outcome": "submit",
+            "values": { "home": "local", "keep-days": 45, "contact": "a&b@example.org" },
+            "rationales": { "home": "<b>\"Local\"</b> & 'safe'" },
+        });
+        assert_eq!(page().await, shown(&answer, &latest, "stored", &corrected));
 
         let mut changed: serde_json::Value = serde_json::from_slice(&forms).unwrap();
         changed["blocks"]
@@ -2721,7 +2741,7 @@ mod tests {
                 crate::document::parse_document(&serde_json::to_vec(&changed).unwrap()).unwrap(),
             )
             .unwrap();
-        assert_eq!(page().await, (None, None, None), "a changed question");
+        assert_eq!(page().await, (None, None, None, None), "a changed question");
     }
 
     #[test]

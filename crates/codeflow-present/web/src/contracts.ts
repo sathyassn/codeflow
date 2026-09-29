@@ -197,6 +197,17 @@ export interface FormAnswerEntry {
   readonly state: "stored" | "delivered" | "acknowledged";
 }
 
+/**
+ * What a form's latest answer or correction sent, as the service renders it
+ * on the form (`data-cf-answer-sent`): the page puts it back in the controls.
+ */
+export interface SentAnswer {
+  readonly outcome: "submit" | "decline" | "cancel";
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly rationales: Readonly<Record<string, string>>;
+  readonly reason?: string;
+}
+
 export interface SessionEvent {
   readonly cursor: string;
   readonly kind: "feedback_state" | "revision" | "session_closed" | "answer_state";

@@ -777,7 +777,9 @@ fn safe_markdown_destination(destination: &str) -> bool {
 /// the runtime adds (flags, hints, "Recommended", the actions) is marked
 /// `data-cf-review-skip`. An export shows the question with its controls
 /// disabled and no actions. A form already answered carries its latest
-/// answer and that answer's state (TSK-120), which the page shows on load.
+/// answer and that answer's state (TSK-120), which the page shows on load,
+/// and what that answer sent, which the page puts back in its controls so a
+/// reload shows it and a correction starts from it (TSK-176).
 fn render_form(
     view: &FormView<'_>,
     framing: &Framing,
@@ -805,6 +807,11 @@ fn render_form(
         output.push_str(&answer.latest.to_string());
         output.push_str("\" data-cf-answer-state=\"");
         output.push_str(answer.status.page_state());
+        // Serializing a JSON map and strings cannot fail.
+        if let Ok(sent) = serde_json::to_string(&answer.sent) {
+            output.push_str("\" data-cf-answer-sent=\"");
+            escape_attr_to(&sent, output);
+        }
     }
     output.push_str("\" role=\"group\" aria-labelledby=\"");
     escape_attr_to(&title_id, output);
