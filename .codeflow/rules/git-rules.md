@@ -10,10 +10,10 @@ Four planes provide defense in depth: git hooks, in-session `git-guard` and
 and CI share `.codeflow/policy.json` and the `codeflow ci` checks; remote
 setup derives its supported rules from that policy (CodeFlow ADR-0017). Every
 tier, minimal included, ships the same armed policy and all five git-hook
-shims: **pre-commit** (protected-branch commits, staged secrets,
-unresolved conflict markers), **commit-msg** (commit format, AI
-attribution, emoji), **pre-push** (branch naming, protected-branch push,
-force-push and delete), and
+shims: **pre-commit** (protected-branch commits, commits at the root
+checkout off its root branch, staged secrets, unresolved conflict markers),
+**commit-msg** (commit format, AI attribution, emoji), **pre-push** (branch
+naming, protected-branch push, force-push and delete), and
 **pre-merge-commit** and **reference-transaction** (the protected-branch
 merge and ref backstops). At the minimal tier the installed and load-bearing
 files are `AGENTS.md` and `CLAUDE.md`, `.codeflow/policy.json`, `.gitignore`,
@@ -88,6 +88,10 @@ missing automation for adoption rather than silently enabling publication.
   `codeflow integrate <branch> --into <target>`. Never set override envs
   (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens), which is laundering, and never
   `gh pr merge --delete-branch` (it can corrupt the root repo).
+- **Root checkout:** task work happens in a linked worktree; the root
+  checkout stays on its root branch (`git.root_branch`, by default the
+  repository's default branch). An agent's commit there on any other branch
+  is refused; a human at their own terminal is warned. See `worktrees.md`.
 - **Durability push:** with a remote configured, push the working branch
   after each committed logical unit so work survives a machine failure; use
   `git push --force-with-lease` (never bare `--force`) after a rewrite. It is

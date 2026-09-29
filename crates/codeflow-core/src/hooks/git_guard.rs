@@ -23,6 +23,7 @@ use super::git_target::{
 };
 use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
+use crate::root_checkout::RootCheckout;
 
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
 /// empty means the current branch's PR) to its base branch name, when it can
@@ -52,6 +53,9 @@ pub struct TargetRepo {
     /// repository with no policy file carries the defaults, which protect
     /// `main` and `master`.
     pub policy: Option<GitPolicy>,
+    /// The repository's root checkout when the location is one, judged by
+    /// its own policy; `None` in a linked worktree (TSK-165).
+    pub root: Option<RootCheckout>,
 }
 
 /// Resolves a retargeted repository location to its branch and policy, so a
@@ -176,7 +180,17 @@ pub fn read_target(
             super::policy::Policy::load_effective(root).0.git
         }))
     };
-    Some(TargetRepo { branch, policy })
+    let root = repo
+        .workdir()
+        .filter(|_| crate::root_checkout::is_root_checkout(&repo))
+        .and_then(|dir| {
+            RootCheckout::read(&repo, &super::policy::Policy::load_effective(dir).0.git)
+        });
+    Some(TargetRepo {
+        branch,
+        policy,
+        root,
+    })
 }
 
 fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
@@ -330,6 +344,10 @@ pub struct GuardContext<'a> {
     /// How to resolve a subcommand that is not a git builtin to the alias it
     /// names (injected). `None` leaves every such subcommand unclassifiable.
     pub alias_lookup: AliasLookup<'a>,
+    /// The session's root checkout, when the command runs in one: a commit
+    /// there off its root branch is judged by `git.root_checkout_commits`
+    /// (TSK-165). `None` in a linked worktree.
+    pub root_checkout: Option<&'a RootCheckout>,
 }
 
 /// The outcome of one guard run.
@@ -1889,12 +1907,12 @@ fn check_git(
             || judged
                 .cases
                 .iter()
-                .any(|(branch, rules)| rules.branch_is_protected(branch));
+                .any(|(branch, rules, _)| rules.branch_is_protected(branch));
         if exposed {
             let strictest = judged
                 .cases
                 .iter()
-                .filter_map(|(_, rules)| u.violation(rules, known))
+                .filter_map(|(_, rules, _)| u.violation(rules, known))
                 .max_by_key(|v| severity(v.level));
             out.extend(strictest);
         }
@@ -1915,7 +1933,7 @@ fn check_git(
     }
 
     let mut found: Vec<Violation> = Vec::new();
-    for (branch, rules) in &judged.cases {
+    for (branch, rules, root) in &judged.cases {
         let view = GuardContext {
             policy: rules,
             current_branch: ctx.current_branch,
@@ -1923,9 +1941,11 @@ fn check_git(
             pr_base_lookup: ctx.pr_base_lookup,
             dir_target_lookup: ctx.dir_target_lookup,
             alias_lookup: ctx.alias_lookup,
+            root_checkout: ctx.root_checkout,
         };
         let mut case = Vec::new();
         judge_git_sub(sub, rest, branch, &view, &mut case);
+        case.extend(root_checkout_case(sub, rest, branch, rules, root.as_ref()));
         for v in case {
             if !found
                 .iter()
@@ -1939,6 +1959,24 @@ fn check_git(
         notes.push(disclose_unresolved(sub, &why, &mut found));
     }
     out.extend(found);
+}
+
+/// The root-checkout rule for one case (TSK-165): a commit-creating
+/// subcommand run in a root checkout off its root branch. A rebase given a
+/// `<branch>` checks that branch out first, so it is judged there.
+fn root_checkout_case(
+    sub: &str,
+    rest: &[String],
+    branch: &str,
+    rules: &GitPolicy,
+    root: Option<&RootCheckout>,
+) -> Option<Violation> {
+    let on = if sub == "rebase" {
+        rebase_branch(rest).unwrap_or(branch)
+    } else {
+        branch
+    };
+    crate::root_checkout::guard_violation(sub, rest, on, root?, rules.root_checkout_commits)
 }
 
 /// Name an unresolved target on each finding judged as protected, and the
@@ -2482,10 +2520,14 @@ enum Track {
     Unplaced,
 }
 
-/// The branch and policy pairs a git op is judged against.
+/// A branch a git op is judged on, the policy it is judged by, and the root
+/// checkout it runs in, if it runs in one.
+type Case<'p> = (String, Cow<'p, GitPolicy>, Option<RootCheckout>);
+
+/// The cases a git op is judged against.
 struct Judged<'p> {
     track: Track,
-    cases: Vec<(String, Cow<'p, GitPolicy>)>,
+    cases: Vec<Case<'p>>,
     /// Set when the target could not be resolved; the cases then assume a
     /// protected branch.
     unresolved: Option<String>,
@@ -2506,15 +2548,16 @@ fn judge_target<'p>(
     ctx: &GuardContext<'p>,
 ) -> Judged<'p> {
     let resolved = compose_targets(args, moved).and_then(|specs| {
-        let mut cases: Vec<(String, Cow<'p, GitPolicy>)> = Vec::new();
+        let mut cases: Vec<Case<'p>> = Vec::new();
         for spec in &specs {
             match spec {
-                None => cases.extend(
-                    branches
-                        .session()
-                        .iter()
-                        .map(|b| (b.clone(), Cow::Borrowed(ctx.policy))),
-                ),
+                None => cases.extend(branches.session().iter().map(|b| {
+                    (
+                        b.clone(),
+                        Cow::Borrowed(ctx.policy),
+                        ctx.root_checkout.cloned(),
+                    )
+                })),
                 Some(spec) => cases.extend(
                     resolve_target(spec, branches, ctx)
                         .ok_or_else(|| format!("no readable repository at `{}`", spec.path))?,
@@ -2524,11 +2567,11 @@ fn judge_target<'p>(
         // A branch an unplaced checkout moved may be checked out here too.
         let moved: Vec<_> = cases
             .iter()
-            .flat_map(|(_, rules)| {
+            .flat_map(|(_, rules, root)| {
                 branches
                     .anywhere()
                     .iter()
-                    .map(move |b| (b.clone(), rules.clone()))
+                    .map(move |b| (b.clone(), rules.clone(), root.clone()))
             })
             .collect();
         cases.extend(moved);
@@ -2550,7 +2593,7 @@ fn judge_target<'p>(
                 .unwrap_or_default();
             Judged {
                 track: Track::Unplaced,
-                cases: vec![(branch, Cow::Borrowed(ctx.policy))],
+                cases: vec![(branch, Cow::Borrowed(ctx.policy), None)],
                 unresolved: Some(why),
             }
         }
@@ -2683,7 +2726,7 @@ fn resolve_target<'p>(
     spec: &TargetSpec,
     branches: &BranchTracker,
     ctx: &GuardContext<'p>,
-) -> Option<Vec<(String, Cow<'p, GitPolicy>)>> {
+) -> Option<Vec<Case<'p>>> {
     let repo = lookup(
         &Retarget {
             path: &spec.path,
@@ -2696,7 +2739,13 @@ fn resolve_target<'p>(
         branches
             .in_dir(&spec.path)
             .into_iter()
-            .map(|b| (b.unwrap_or_else(|| repo.branch.clone()), rules.clone()))
+            .map(|b| {
+                (
+                    b.unwrap_or_else(|| repo.branch.clone()),
+                    rules.clone(),
+                    repo.root.clone(),
+                )
+            })
             .collect(),
     )
 }
@@ -4262,6 +4311,7 @@ mod registry_guard_tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            root_checkout: None,
         };
         evaluate(command, &ctx)
             .into_iter()
@@ -4324,6 +4374,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            root_checkout: None,
         }
     }
 
@@ -4340,6 +4391,7 @@ mod tests {
             pr_base_lookup: Some(lookup),
             dir_target_lookup: None,
             alias_lookup: None,
+            root_checkout: None,
         }
     }
 
@@ -4356,6 +4408,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: Some(resolver),
             alias_lookup: Some(&fixture_alias),
+            root_checkout: None,
         }
     }
 
@@ -4369,6 +4422,7 @@ mod tests {
         Some(TargetRepo {
             branch: branch.to_string(),
             policy: None,
+            root: None,
         })
     }
 
@@ -4510,6 +4564,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            root_checkout: None,
         };
         assert!(evaluate("git commit -m 'feat: x'", &c).is_empty());
     }
@@ -4533,6 +4588,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            root_checkout: None,
         };
         assert!(evaluate("git merge feat/x", &c).is_empty());
     }
@@ -6234,6 +6290,7 @@ mod tests {
             Some(TargetRepo {
                 branch: branch.to_string(),
                 policy: Some(policy),
+                root: None,
             })
         };
         match (spec.path, spec.git_dir) {
