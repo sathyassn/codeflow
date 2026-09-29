@@ -11,6 +11,7 @@ pub mod browser;
 pub mod config;
 #[cfg(test)]
 mod contract_tests;
+pub mod delivery;
 pub mod document;
 pub mod entity;
 pub mod error;

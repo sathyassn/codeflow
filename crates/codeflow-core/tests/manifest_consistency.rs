@@ -521,6 +521,54 @@ fn every_manifest_catalog_artifact_matches_live_and_baseline_copies() {
     );
 }
 
+/// The repository's own installed record must stay loadable and honest: a
+/// merge that leaves conflict markers, or a stale hash for a changed managed
+/// source, breaks `codeflow update` here without failing any shipped-asset
+/// check. Managed hashes are the pristine shipped copy, so each must equal
+/// both its source asset and its baseline copy.
+#[test]
+fn installed_manifest_loads_and_matches_managed_sources_and_baselines() {
+    use codeflow_core::scaffold::sha256_hex;
+    use codeflow_core::scaffold::state::InstalledManifest;
+
+    let root = repo_root();
+    assert!(
+        InstalledManifest::path(&root).is_file(),
+        "the repository keeps an installed manifest"
+    );
+    let installed = InstalledManifest::load_or_default(&root, "unused")
+        .expect("installed .codeflow/manifest.json parses");
+    let base = root.join("assets/base");
+    let mut compared = 0usize;
+    let mut problems = Vec::new();
+    for (dest, file) in &installed.files {
+        if file.ownership != Ownership::Managed {
+            continue;
+        }
+        compared += 1;
+        for copy in [
+            base.join(&file.src),
+            root.join(".codeflow/.baseline").join(dest),
+        ] {
+            match std::fs::read(&copy) {
+                Ok(bytes) if sha256_hex(&bytes) == file.sha256 => {}
+                Ok(_) => problems.push(format!("{dest}: {} differs", rel(&root, &copy))),
+                Err(error) => problems.push(format!("{dest}: {}: {error}", rel(&root, &copy))),
+            }
+        }
+    }
+    assert!(
+        compared > 0,
+        "expected managed entries in the installed manifest"
+    );
+    problems.sort();
+    assert!(
+        problems.is_empty(),
+        "installed manifest hashes drifted from source or baseline:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
 #[test]
 fn ci_downloads_verify_pinned_checksums() {
     let workflow = std::fs::read_to_string(repo_root().join("assets/base/ci/codeflow-ci.yml"))

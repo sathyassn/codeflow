@@ -49,6 +49,8 @@ pub fn export_session(
                     session_id: "export",
                     revision: revision.revision,
                     event_sequence: 0,
+                    response_sequence: 0,
+                    answers: None,
                     script_path: None,
                     style_path: None,
                     prepaint_source: None,

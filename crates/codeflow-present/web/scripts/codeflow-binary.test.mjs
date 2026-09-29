@@ -24,7 +24,7 @@ test("the repository target directory is the fallback", () => {
 
 test("every browser check resolves its binary through the helper", async () => {
   const scripts = dirname(fileURLToPath(import.meta.url));
-  for (const name of ["entity-browser-check.mjs", "figure-browser-check.mjs", "form-browser-check.mjs", "matrix-browser-check.mjs", "real-browser-check.mjs"]) {
+  for (const name of ["delivery-browser-check.mjs", "entity-browser-check.mjs", "figure-browser-check.mjs", "form-browser-check.mjs", "matrix-browser-check.mjs", "real-browser-check.mjs"]) {
     const source = await readFile(join(scripts, name), "utf8");
     assert.match(source, /codeflowBinary\(repoRoot\)/u, `${name} resolves its binary through codeflowBinary`);
     assert.doesNotMatch(source, /target\/debug\/codeflow/u, `${name} hard-codes the repository target directory`);

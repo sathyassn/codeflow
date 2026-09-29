@@ -64,6 +64,8 @@ pub(crate) fn render(document: &PresentationDocument, interactive: bool) -> Stri
             session_id: "00000000-0000-4000-8000-000000000000",
             revision: 1,
             event_sequence: 0,
+            response_sequence: 0,
+            answers: None,
             script_path: None,
             style_path: None,
             prepaint_source: None,

@@ -1858,7 +1858,7 @@
           "path": ".agents/skills/cf-present/SKILL.md",
           "markers": [
             "let `codeflow present open",
-            "Deduplicate by stable `event_id`",
+            "deduplicate by `event_id`",
             "use `codeflow present resolve",
             "a stale or cross-session transition fails closed",
             "Never inject old presentation history",

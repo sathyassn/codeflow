@@ -72,6 +72,22 @@ publication date._
   of the kicker and "Table twin"; the portal gate fails a figure whose title
   is not visible.
 
+<!-- codeflow:release-impact minor -->
+- **Form answers reach the agent (SPC-014).** `codeflow present feedback
+  --wait --format v2` blocks until an answer, a correction (an `amendment`
+  event) or a review arrives, `--timeout` bounds it with exit 6, and a closed session exits 7.
+  `present responses list` reads events without delivering them, and
+  `present ack` records that the agent handled one, so the page moves from
+  "Stored, waiting for agent" to "Delivered to agent" to "Acknowledged by
+  agent". A second copy of a page cannot send a second original answer; it
+  offers a correction instead. The cf-present skill runs the wait as a
+  background loop in Claude Code and Grok Build, so each answer wakes the
+  agent. Codex CLI has no such background task: with Codex, an answer, a
+  correction or a review is stored at once and delivered on the agent's
+  next turn, and an answer's page state stays "Stored, waiting for agent"
+  until then. The v1 `feedback` stream is
+  unchanged and names pending answers on stderr.
+
 ### Changed
 
 <!-- codeflow:release-impact patch -->

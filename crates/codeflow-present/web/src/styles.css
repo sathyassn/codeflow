@@ -667,7 +667,7 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .cf-form__actions .cf-form__submit, .cf-form__actions [data-cf-form-action="confirm"], .cf-form__actions [data-cf-form-action="resend"] { border-color: var(--cf-accent); background: var(--cf-accent); color: var(--cf-on-accent); }
 .cf-form__state { flex-basis: 100%; margin: 0; color: var(--cf-text-muted); font-size: var(--cf-fs-caption); }
 .cf-form__state:empty { display: none; }
-.cf-form__state[data-cf-form-state="stored"], .cf-form__state-stored { color: var(--cf-positive); font-weight: 650; }
+.cf-form__state[data-cf-form-state="stored"], .cf-form__state[data-cf-form-state="delivered"], .cf-form__state[data-cf-form-state="acknowledged"], .cf-form__state-stored { color: var(--cf-positive); font-weight: 650; }
 .cf-form__state[data-cf-form-state="failed"], .cf-form__state[data-cf-form-state="closed"] { color: var(--cf-danger); }
 .cf-form__state[data-cf-form-state="stale"], .cf-form__state[data-cf-form-state="changed"] { color: var(--cf-warning); }
 .cf-form__kept { display: grid; gap: var(--cf-space-1); max-inline-size: 36rem; margin: 0; padding-inline-start: var(--cf-space-5); font-size: var(--cf-fs-caption); overflow-wrap: anywhere; }

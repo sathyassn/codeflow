@@ -1093,6 +1093,7 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false, limit
     session_id: "019f9b53-a341-7fa7-84c2-5f198ceea001",
     revision: 1,
     event_sequence: 0,
+    response_sequence: 0,
     title: proseOnly ? "Plain-language review" : "Runtime review",
     shortcuts_enabled: true,
     review_limits: {

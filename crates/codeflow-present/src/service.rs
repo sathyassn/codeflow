@@ -32,6 +32,7 @@ use uuid::Uuid;
 
 use crate::{
     config::UtilityTokens,
+    delivery::{AnswerState, AnswerStates},
     error::{PresentError, Result},
     limits,
     platform::is_link_like,
@@ -162,6 +163,13 @@ struct SessionEvent {
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    /// For `answer_state`: each answer whose state changed, with its state
+    /// now (stored and pending, delivered, acknowledged).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    answers: Vec<AnswerState>,
+    /// For `session_closed`: each form's answer as a reload shows it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    forms: Vec<crate::delivery::FormAnswerState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -491,6 +499,16 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
         Ok(sequence) => sequence,
         Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
+    let response_sequence = match state.store.latest_response_sequence(state.session_id) {
+        Ok(sequence) => sequence,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
+    // Read after the cursor: a state change between the two reads is then
+    // both shown and reported again by the poll, never missed.
+    let answers = match state.store.form_answers(state.session_id) {
+        Ok(answers) => answers,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
     let manifest = &state.assets.service;
     let style = manifest
         .entrypoints
@@ -521,6 +539,8 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
                 session_id: &state.session_id.to_string(),
                 revision: revision.revision,
                 event_sequence,
+                response_sequence,
+                answers: Some(&answers),
                 script_path: script,
                 style_path: style,
                 prepaint_source: prepaint.map(|asset| asset.source.as_str()),
@@ -692,6 +712,14 @@ async fn submit_review(
             message,
             details,
         }) => typed_error(review_status(code), code, &message, &details),
+        // No room to acknowledge the review later: it is not stored, and
+        // sending it again with the same event id is safe.
+        Err(PresentError::ServiceUnavailable(reason)) => typed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            &format!("the review store is out of capacity: {reason}; the review was not stored, and sending it again is safe"),
+            &serde_json::json!({}),
+        ),
         Err(error) => plain(StatusCode::BAD_REQUEST, &error.to_string()),
     }
 }
@@ -786,7 +814,7 @@ fn answer_too_large() -> Response<Body> {
 /// The HTTP status of a typed refusal (SPC-014 I3).
 fn review_status(code: &str) -> StatusCode {
     match code {
-        "stale_revision" | "request_id_conflict" => StatusCode::CONFLICT,
+        "stale_revision" | "request_id_conflict" | "answer_exists" => StatusCode::CONFLICT,
         "session_closed" => StatusCode::GONE,
         "answer_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
         _ => StatusCode::UNPROCESSABLE_ENTITY,
@@ -832,8 +860,16 @@ async fn poll_events(
         Ok(sequence) => sequence,
         Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
-    let (after_revision, after_sequence) = match request.cursor.as_deref() {
-        None => (initial_session.current_revision, initial_sequence),
+    let initial_responses = match state.store.latest_response_sequence(state.session_id) {
+        Ok(sequence) => sequence,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
+    let (after_revision, after_sequence, after_responses) = match request.cursor.as_deref() {
+        None => (
+            initial_session.current_revision,
+            initial_sequence,
+            initial_responses,
+        ),
         Some(cursor) => match parse_event_cursor(cursor) {
             Some(cursor) => cursor,
             None => return plain(StatusCode::BAD_REQUEST, "event cursor is invalid"),
@@ -850,28 +886,27 @@ async fn poll_events(
             Ok(latest) => latest,
             Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
         };
-        let terminal = session.status == SessionStatus::Closed;
-        let revised = session.current_revision > after_revision;
-        if revised || latest > after_sequence || terminal || tokio::time::Instant::now() >= deadline
-        {
-            let response = SessionEvent {
-                cursor: format!("{}:{latest}", session.current_revision),
-                kind: if terminal {
-                    "session_closed"
-                } else if revised {
-                    "revision"
-                } else {
-                    "feedback_state"
-                },
-                message: if revised {
-                    Some(format!(
-                        "Revision {} is available.",
-                        session.current_revision
-                    ))
-                } else {
-                    (latest > after_sequence).then(|| "Review state changed.".to_string())
-                },
-            };
+        let answers = match if session.status == SessionStatus::Closed {
+            state
+                .store
+                .closing_states(state.session_id, limits::MAX_EVENTS_PER_RESPONSE)
+        } else {
+            state.store.answer_states_since(
+                state.session_id,
+                after_responses,
+                limits::MAX_EVENTS_PER_RESPONSE,
+            )
+        } {
+            Ok(answers) => answers,
+            Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+        };
+        if let Some(response) = session_event(
+            &session,
+            latest,
+            (after_revision, after_sequence, after_responses),
+            answers,
+            tokio::time::Instant::now() >= deadline,
+        ) {
             let body = match serde_json::to_vec(&response) {
                 Ok(body) if body.len() <= limits::MAX_EVENT_RESPONSE_BYTES => body,
                 Ok(_) => {
@@ -895,9 +930,65 @@ async fn poll_events(
     }
 }
 
-fn parse_event_cursor(cursor: &str) -> Option<(u64, u64)> {
-    let (revision, sequence) = cursor.split_once(':')?;
-    Some((revision.parse().ok()?, sequence.parse().ok()?))
+/// What the poll answers, if anything changed after its cursor or it timed
+/// out: closure, then a revision, then answer states, then review state.
+fn session_event(
+    session: &crate::state::SessionRecord,
+    latest: u64,
+    (after_revision, after_sequence, after_responses): (u64, u64, u64),
+    answers: AnswerStates,
+    timed_out: bool,
+) -> Option<SessionEvent> {
+    let terminal = session.status == SessionStatus::Closed;
+    let revised = session.current_revision > after_revision;
+    // The answer ledger's cursor moves only with the answer states it
+    // reports, so a revision never hides a delivery from the forms. A
+    // closure ends the poll, so it carries each form's answer as a reload
+    // shows it (`SessionStore::closing_states`), which neither a backlog nor
+    // the answer a page followed can hide.
+    let answered = !terminal && !revised && answers.through > after_responses;
+    if !(revised || answered || latest > after_sequence || terminal || timed_out) {
+        return None;
+    }
+    let carried = answered || terminal;
+    let responses = if carried {
+        answers.through
+    } else {
+        after_responses
+    };
+    Some(SessionEvent {
+        cursor: format!("{}:{latest}:{responses}", session.current_revision),
+        kind: if terminal {
+            "session_closed"
+        } else if revised {
+            "revision"
+        } else if answered {
+            "answer_state"
+        } else {
+            "feedback_state"
+        },
+        message: if revised {
+            Some(format!(
+                "Revision {} is available.",
+                session.current_revision
+            ))
+        } else {
+            (!answered && latest > after_sequence).then(|| "Review state changed.".to_string())
+        },
+        forms: if terminal { answers.forms } else { Vec::new() },
+        answers: if answered { answers.states } else { Vec::new() },
+    })
+}
+
+/// The poll cursor `revision:event_sequence:response_sequence`.
+fn parse_event_cursor(cursor: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = cursor.split(':');
+    let cursor = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(cursor)
 }
 
 async fn not_found() -> Response<Body> {
@@ -1407,6 +1498,23 @@ mod tests {
 
     /// The answer as the page sends it for `store-choice` of the forms
     /// fixture, with a body change applied.
+    /// A new request for the form: its original answer while it has none,
+    /// then a correction of that original, as one form holds one original.
+    fn fresh_answer(state: &AppState) -> Vec<u8> {
+        let original = ledger_bytes(state).and_then(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .find(|line| line["event"] == "answer" && line["form_id"] == "store-choice")
+                .map(|line| line["answer_id"].clone())
+        });
+        answer_body(state, |body| {
+            if let Some(original) = original {
+                body["amends"] = original;
+            }
+        })
+    }
+
     fn answer_body(state: &AppState, change: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
         let crate::state::RevisionContent::Supported { document } = state
             .store
@@ -1491,6 +1599,7 @@ mod tests {
         assert_eq!(ledger_bytes(&state).unwrap(), stored);
 
         let request_id = receipt["request_id"].clone();
+        let original = receipt["answer_id"].clone();
         let reused = answer_body(&state, |body| {
             body["request_id"] = request_id;
             body["values"]["keep-days"] = 7.into();
@@ -1526,8 +1635,15 @@ mod tests {
                 "invalid_answer",
             ),
             (
-                "a missing required field",
+                "a second original answer",
+                answer_body(&state, |_| {}),
+                StatusCode::CONFLICT,
+                "answer_exists",
+            ),
+            (
+                "a correction missing a required field",
                 answer_body(&state, |body| {
+                    body["amends"] = original.clone();
                     body["values"].as_object_mut().unwrap().remove("keep-days");
                 }),
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -1583,9 +1699,16 @@ mod tests {
                 "{name}: ledger changed"
             );
         }
+        // A second original answer names the stored one and its state, so
+        // the page can show it and offer a correction (answer_exists).
+        let (_, exists) = post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        assert_eq!(
+            exists["details"],
+            serde_json::json!({ "answer_id": original, "latest_answer_id": original, "state": "stored" })
+        );
         // Exactly 64 KiB is inside the bound: trailing whitespace keeps the
-        // JSON valid and the answer stores.
-        let mut at_limit = answer_body(&state, |_| {});
+        // JSON valid and the correction stores.
+        let mut at_limit = answer_body(&state, |body| body["amends"] = original.clone());
         at_limit.resize(limits::MAX_ANSWER_REQUEST_BYTES, b' ');
         let (status, at_limit_receipt) = post_answer(&state, headers.clone(), at_limit).await;
         assert_eq!(status, StatusCode::OK, "{at_limit_receipt}");
@@ -1595,6 +1718,7 @@ mod tests {
             &state,
             headers.clone(),
             answer_body(&state, |body| {
+                body["amends"] = original.clone();
                 body["values"].as_object_mut().unwrap().remove("keep-days");
             }),
         )
@@ -1716,7 +1840,7 @@ mod tests {
             ("lock fails", session_dir.join(".lock")),
         ] {
             let before = ledger_bytes(&state);
-            let body = answer_body(&state, |_| {});
+            let body = fresh_answer(&state);
             chmod(&path, 0o400);
             let (status, refused) = post_answer(&state, headers.clone(), body.clone()).await;
             chmod(&path, 0o600);
@@ -1740,7 +1864,7 @@ mod tests {
         // succeeds (I4). While syncs keep failing, a resend is refused;
         // once one succeeds, the resend is its receipt.
         let count = lines(&state);
-        let late = answer_body(&state, |_| {});
+        let late = fresh_answer(&state);
         inject(Fault::SyncFailsLineStays);
         let (status, body) = post_answer(&state, headers.clone(), late.clone()).await;
         unavailable(status, &body, "sync fails");
@@ -1823,7 +1947,7 @@ mod tests {
 
         // A project bound that holds the project as it is, but is below one
         // line and the control reserve (the shared check's other refusal).
-        let small = answer_body(&state, |_| {});
+        let small = fresh_answer(&state);
         let before = ledger_bytes(&state);
         let held = crate::state::directory_size_bounded(state.store.root(), u64::MAX).unwrap();
         assert!(
@@ -1850,8 +1974,10 @@ mod tests {
     }
 
     /// The ledger's line and byte bounds sit exactly where the constants
-    /// say: the answer that reaches a bound is stored, the next is a typed
-    /// 503 naming the bound, and nothing past it is stored. The bounds are
+    /// say, counting the delivered and acknowledged lines each stored
+    /// answer keeps room for (R120-1): the answer that reaches a bound is
+    /// stored, the next is a typed 503 naming the bound, and nothing past
+    /// it is stored. The bounds are
     /// lowered on this thread only (`fault::lower_bounds`, test-only), so
     /// the same checks as for 100,000 lines and 64 MiB run on a few lines.
     #[tokio::test]
@@ -1885,61 +2011,90 @@ mod tests {
             assert!(message.contains("no receipt was given"), "{message}");
         };
 
-        // The line bound, lowered to 2: the second answer reaches it and is
-        // stored; the third is refused and the ledger is unchanged.
-        lower_bounds(Some(2), None);
-        for sequence in 1..=2 {
-            let (status, receipt) =
-                post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
-            stored(status, &receipt, sequence);
-        }
-        let full = ledger_bytes(&state);
-        let third = answer_body(&state, |_| {});
-        let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
-        refused(status, &body, "the answer ledger holds at most 2 lines");
-        assert_eq!(ledger_bytes(&state), full, "line bound: the ledger changed");
-        assert_eq!(lines(&state), 2);
+        // One form holds one original answer; the later requests are
+        // corrections of it, every one the same length.
+        let (status, receipt) = post_answer(&state, headers.clone(), fresh_answer(&state)).await;
+        stored(status, &receipt, 1);
+        let original = length(&state);
 
-        // The byte bound. Every line here has the same length, so one byte
-        // short of three lines refuses the third, exactly three lines stores
-        // it, and the fourth is refused.
-        let bytes = full.unwrap();
-        let line = bytes.len() / 2;
-        assert_eq!(
-            bytes.iter().position(|byte| *byte == b'\n'),
-            Some(line - 1),
-            "the lines differ in length"
-        );
-        let bound = |lines: usize| u64::try_from(lines * line).unwrap();
-        lower_bounds(None, Some(bound(3) - 1));
+        // The line bound, lowered to 6: the original, one correction and the
+        // four lines kept for them reach it; the next is refused and the
+        // ledger is unchanged.
+        lower_bounds(Some(6), None);
+        let (status, receipt) = post_answer(&state, headers.clone(), fresh_answer(&state)).await;
+        stored(status, &receipt, 2);
+        let full = ledger_bytes(&state);
+        let third = fresh_answer(&state);
         let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
         refused(
             status,
             &body,
-            &format!("the answer ledger reached its {} byte bound", bound(3) - 1),
+            "the answer ledger holds at most 6 lines, with room kept",
         );
-        assert_eq!(length(&state), 2 * line, "byte bound: the ledger changed");
-        lower_bounds(None, Some(bound(3)));
+        assert_eq!(ledger_bytes(&state), full, "line bound: the ledger changed");
+        assert_eq!(lines(&state), 2);
+
+        // The byte bound. Each answer keeps room for two state lines, so one
+        // byte short of the original, two corrections and their room refuses
+        // the second correction, exactly that stores it, and the next is
+        // refused.
+        let line = length(&state) - original;
+        let bound = |corrections: usize| {
+            u64::try_from(original + corrections * line).unwrap()
+                + u64::try_from(1 + corrections).unwrap() * 2 * crate::responses::STATE_LINE_BYTES
+        };
+        lower_bounds(None, Some(bound(2) - 1));
+        let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
+        refused(
+            status,
+            &body,
+            &format!("the answer ledger reached its {} byte bound", bound(2) - 1),
+        );
+        assert_eq!(
+            length(&state),
+            original + line,
+            "byte bound: the ledger changed"
+        );
+        lower_bounds(None, Some(bound(2)));
         let (status, receipt) = post_answer(&state, headers.clone(), third).await;
         stored(status, &receipt, 3);
         assert_eq!(
             length(&state),
-            3 * line,
-            "the ledger does not end at its bound"
+            original + 2 * line,
+            "the correction is not stored"
         );
         let at_bound = ledger_bytes(&state);
-        let (status, body) =
-            post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        let (status, body) = post_answer(&state, headers.clone(), fresh_answer(&state)).await;
         refused(
             status,
             &body,
-            &format!("the answer ledger reached its {} byte bound", bound(3)),
+            &format!("the answer ledger reached its {} byte bound", bound(2)),
         );
         assert_eq!(
             ledger_bytes(&state),
             at_bound,
             "byte bound: the ledger changed"
         );
+        // A review keeps room for its acknowledgment too: at the bound it is
+        // refused as the store at its capacity, and nothing is stored.
+        let review = serde_json::from_value::<ReviewRequest>(serde_json::json!({
+            "event_id": Uuid::new_v4().to_string(),
+            "session_id": state.session_id.to_string(),
+            "revision": 1,
+            "verdict": "approve",
+            "notes": [],
+        }))
+        .unwrap();
+        let response = submit_review(State(state.clone()), headers.clone(), Json(review)).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["error"], "store_unavailable", "{body}");
+        assert!(state.store.events(state.session_id).unwrap().is_empty());
         assert_eq!(lines(&state), 3);
         lower_bounds(None, None);
     }
@@ -2010,19 +2165,24 @@ mod tests {
         submit["rationales"][id(0)] = serde_json::json!("x".repeat(short + 1));
         let submit = serde_json::to_vec(&submit).unwrap();
         assert_eq!(submit.len(), limits::MAX_ANSWER_REQUEST_BYTES);
-        // Decline with the longest reason; dismiss with nothing.
+        // Then, as corrections of that answer (one form holds one original),
+        // decline with the longest reason and dismiss with nothing.
+        let (status, receipt) = post_answer(&state, headers.clone(), submit).await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
         let mut decline = request("decline");
         decline["reason"] = serde_json::json!(wide(limits::MAX_DECLINE_REASON_BYTES / 4));
-        let cancel = request("cancel");
+        decline["amends"] = receipt["answer_id"].clone();
+        let mut cancel = request("cancel");
+        cancel["amends"] = receipt["answer_id"].clone();
 
         for (sequence, body) in [
-            submit,
             serde_json::to_vec(&decline).unwrap(),
             serde_json::to_vec(&cancel).unwrap(),
         ]
         .into_iter()
         .enumerate()
         {
+            let sequence = sequence + 1;
             let (status, receipt) = post_answer(&state, headers.clone(), body).await;
             assert_eq!(
                 (
@@ -2260,7 +2420,7 @@ mod tests {
             State(state.clone()),
             application_headers(&state, true),
             Json(PollRequest {
-                cursor: Some("1:0".to_string()),
+                cursor: Some("1:0:0".to_string()),
             }),
         )
         .await;
@@ -2270,7 +2430,298 @@ mod tests {
             .unwrap();
         let event: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(event["kind"], "revision");
-        assert_eq!(event["cursor"], "2:0");
+        assert_eq!(event["cursor"], "2:0:0");
+    }
+
+    /// TSK-120: the page's poll reports each answer's state after "stored"
+    /// as `answer_state`, with a cursor into the answer ledger, so a form
+    /// shows its delivery and acknowledgment; a revision does not move that
+    /// cursor, so no state is skipped.
+    #[tokio::test]
+    async fn the_poll_reports_answer_states_after_stored() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let poll = |cursor: &str| {
+            let state = state.clone();
+            let cursor = cursor.to_string();
+            async move {
+                let response = poll_events(
+                    State(state.clone()),
+                    application_headers(&state, true),
+                    Json(PollRequest {
+                        cursor: Some(cursor),
+                    }),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let body =
+                    axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+                        .await
+                        .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+            }
+        };
+        let (status, receipt) = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |_| {}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        let answer: Uuid = serde_json::from_value(receipt["answer_id"].clone()).unwrap();
+        let event = poll("1:0:0").await;
+        assert_eq!(event["kind"], "answer_state");
+        assert_eq!(event["cursor"], "1:0:1");
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": answer, "status": "pending" }])
+        );
+
+        state.store.deliver(state.session_id, &[answer]).unwrap();
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(&forms).unwrap(),
+            )
+            .unwrap();
+        let event = poll("1:0:1").await;
+        assert_eq!(event["kind"], "revision");
+        assert_eq!(
+            event["cursor"], "2:0:1",
+            "a revision keeps the answer cursor"
+        );
+        let event = poll("2:0:1").await;
+        assert_eq!(event["kind"], "answer_state");
+        assert_eq!(event["cursor"], "2:0:2");
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": answer, "status": "delivered" }])
+        );
+        state.store.acknowledge(state.session_id, answer).unwrap();
+        let event = poll("2:0:2").await;
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": answer, "status": "acknowledged" }])
+        );
+        for cursor in ["2:0", "2:0:2:1", "2:x:2"] {
+            let response = poll_events(
+                State(state.clone()),
+                application_headers(&state, true),
+                Json(PollRequest {
+                    cursor: Some(cursor.to_string()),
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{cursor}");
+        }
+    }
+
+    /// C120-R2-1: a closure ends the poll, so it carries each form's answer
+    /// as a reload shows it (form, digest, original, latest and its state),
+    /// every time it is polled, and no `answer_state` batch.
+    #[tokio::test]
+    async fn a_closure_carries_each_forms_answer_as_a_reload_shows_it() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let answer = post_answer(&state, headers.clone(), answer_body(&state, |_| {}))
+            .await
+            .1["answer_id"]
+            .clone();
+        let correction = post_answer(
+            &state,
+            headers.clone(),
+            answer_body(&state, |body| body["amends"] = answer.clone()),
+        )
+        .await
+        .1["answer_id"]
+            .clone();
+        let correction: Uuid = serde_json::from_value(correction).unwrap();
+        state
+            .store
+            .deliver(state.session_id, &[correction])
+            .unwrap();
+        let digest = state.store.responses(state.session_id).unwrap()[0]
+            .answer()
+            .unwrap()
+            .form_digest
+            .clone();
+        state.store.close(state.session_id).unwrap();
+        let poll = |cursor: &str| {
+            let request = Json(PollRequest {
+                cursor: Some(cursor.to_string()),
+            });
+            let (state, headers) = (state.clone(), headers.clone());
+            async move {
+                let response = poll_events(State(state), headers, request).await;
+                let body =
+                    axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+                        .await
+                        .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+            }
+        };
+        let event = poll("1:0:1").await;
+        assert_eq!(event["kind"], "session_closed");
+        assert_eq!(event["cursor"], "1:0:3");
+        assert!(event.get("answers").is_none(), "{event}");
+        assert_eq!(
+            event["forms"],
+            serde_json::json!([{
+                "form_id": "store-choice",
+                "form_digest": digest,
+                "answer_id": answer,
+                "latest_answer_id": correction,
+                "state": "delivered",
+            }])
+        );
+        let again = poll("1:0:3").await;
+        assert_eq!(again["kind"], "session_closed");
+        assert_eq!(again["forms"], event["forms"]);
+    }
+
+    /// Grok 2: a closure behind a backlog longer than one batch of ledger
+    /// lines still carries each form's latest state. 121 answer lines wait
+    /// unread; the batch after the page's cursor ends before the latest
+    /// correction, and the closure carries that correction as delivered.
+    #[tokio::test]
+    async fn a_closure_behind_a_long_backlog_carries_each_forms_latest_state() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let (_, original) = post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        let original = original["answer_id"].clone();
+        let mut latest = Uuid::nil();
+        for _ in 0..120 {
+            let (status, receipt) = post_answer(
+                &state,
+                headers.clone(),
+                answer_body(&state, |body| body["amends"] = original.clone()),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{receipt}");
+            latest = serde_json::from_value(receipt["answer_id"].clone()).unwrap();
+        }
+        state.store.deliver(state.session_id, &[latest]).unwrap();
+        let batch = state
+            .store
+            .answer_states_since(state.session_id, 0, limits::MAX_EVENTS_PER_RESPONSE)
+            .unwrap();
+        assert!(
+            batch.states.iter().all(|entry| entry.answer_id != latest),
+            "the backlog fits one batch"
+        );
+        state.store.close(state.session_id).unwrap();
+        let response = poll_events(
+            State(state.clone()),
+            headers,
+            Json(PollRequest {
+                cursor: Some("1:0:0".to_string()),
+            }),
+        )
+        .await;
+        let body = axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+            .await
+            .unwrap();
+        let event: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(event["kind"], "session_closed");
+        assert_eq!(event["cursor"], "1:0:122");
+        let forms = event["forms"].as_array().unwrap();
+        assert_eq!(forms.len(), 1, "{event}");
+        assert_eq!(
+            (
+                &forms[0]["answer_id"],
+                &forms[0]["latest_answer_id"],
+                &forms[0]["state"]
+            ),
+            (
+                &original,
+                &serde_json::json!(latest),
+                &serde_json::json!("delivered")
+            )
+        );
+    }
+
+    /// TSK-120: the page shows each form's latest answer and its state as it
+    /// loads, so a reload keeps stored, delivered and acknowledged; a
+    /// correction names its original; an answer to a question that has since
+    /// changed is not shown on the new question.
+    #[tokio::test]
+    async fn the_page_renders_each_forms_latest_answer_state() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let page = || {
+            let state = state.clone();
+            async move {
+                let response =
+                    application(State(state.clone()), application_headers(&state, false)).await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let html = String::from_utf8(body.to_vec()).unwrap();
+                let at = html.find("data-cf-form=\"store-choice\"").unwrap();
+                let tag = &html[at..at + html[at..].find('>').unwrap()];
+                let attribute = |name: &str| {
+                    tag.split_once(&format!("{name}=\""))
+                        .map(|(_, rest)| rest.split('"').next().unwrap().to_string())
+                };
+                (
+                    attribute("data-cf-answer-id"),
+                    attribute("data-cf-latest-answer-id"),
+                    attribute("data-cf-answer-state"),
+                )
+            }
+        };
+        assert_eq!(page().await, (None, None, None), "an unanswered form");
+        let (_, receipt) = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |_| {}),
+        )
+        .await;
+        let answer = receipt["answer_id"].as_str().unwrap().to_string();
+        let shown = |original: &str, latest: &str, status: &str| {
+            (
+                Some(original.to_string()),
+                Some(latest.to_string()),
+                Some(status.to_string()),
+            )
+        };
+        assert_eq!(page().await, shown(&answer, &answer, "stored"));
+        let id: Uuid = answer.parse().unwrap();
+        state.store.deliver(state.session_id, &[id]).unwrap();
+        assert_eq!(page().await, shown(&answer, &answer, "delivered"));
+        state.store.acknowledge(state.session_id, id).unwrap();
+        assert_eq!(page().await, shown(&answer, &answer, "acknowledged"));
+        let (_, correction) = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |body| {
+                body["request_id"] = serde_json::json!(Uuid::new_v4());
+                body["amends"] = serde_json::json!(answer);
+            }),
+        )
+        .await;
+        let latest = correction["answer_id"].as_str().unwrap().to_string();
+        assert_eq!(page().await, shown(&answer, &latest, "stored"));
+
+        let mut changed: serde_json::Value = serde_json::from_slice(&forms).unwrap();
+        changed["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|block| block["id"] == "store-choice")
+            .unwrap()["title"] = serde_json::json!("A changed question");
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(&serde_json::to_vec(&changed).unwrap()).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(page().await, (None, None, None), "a changed question");
     }
 
     #[test]

@@ -55,14 +55,16 @@ Agents author **document blocks**. They do not rebuild Comment UI.
 ### Feedback → harness
 
 ```text
-Submit review
-  → session store (FeedbackEnvelope)
-  → codeflow present feedback <session-id> [--follow]
-  → harness includes envelope in active turn
-  → codeflow present resolve … addressed|dismissed
+Submit review or answer
+  → session store (events.jsonl, responses.jsonl)
+  → codeflow present feedback <session-id> --wait --format v2   (exit 6 re-arms)
+  → harness takes each event into its active turn
+  → codeflow present ack <session-id> <event-id>
+  → reviews: codeflow present resolve … addressed|dismissed
 ```
 
-Delivery is at-least-once by `event_id`. No harness-specific transport.
+Delivery is at least once by `event_id`. No harness-specific transport;
+the loop is in `references/feedback-loop.md`.
 
 ### Runtime mapping
 

@@ -427,6 +427,9 @@ try {
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
     await page.getByTestId("toast").getByText(/Restored 1 unsent note/u).waitFor({ timeout: 20_000 });
+    // The reload shows the stored decline; a new choice starts from Amend.
+    assert.equal((await stateOf(decision)).state, "stored", "reload: the stored decline is not shown");
+    await decision.locator("[data-cf-form-action='amend']").click();
     await decision.locator("input[value='a']").check();
     await page.route(`**${ANSWERS}`, (route) => route.fulfill({
       status: 410,
@@ -451,6 +454,7 @@ try {
     await field("keep-days").locator("input").fill("5");
     await field("channels").locator("input[value='rail']").check();
     await field("contact").locator("input").fill("reviewer@example.org");
+    await decision.locator("[data-cf-form-action='amend']").click();
     await decision.locator("input[value='a']").check();
     const before = (await ledger()).length;
     let release;
@@ -486,7 +490,9 @@ try {
     const failedLate = await stateOf(decision);
     assert.equal(storedLate.state, "closed", "late receipt: the form reopened");
     assert.equal(failedLate.state, "closed", "late failure: the form reopened");
-    assert.match(failedLate.says, /session is closed/u);
+    // The decision's correction failed, but its stored decline stands: it
+    // closes on that answer's state, as a reload shows it.
+    assert.equal(failedLate.says, "Stored, waiting for agent. This session is now closed; nothing more can be sent.");
     // The late receipt reads as stored first, in the stored colour, inside
     // the one status region; the closed sentence follows it.
     const colours = await form.locator("[data-cf-form-state]").evaluate((line) => {
@@ -506,7 +512,7 @@ try {
     assert.ok(await decision.locator("input[value='a']").isDisabled(), "late failure: the draft is editable");
     assert.deepEqual(await draftOf(), kept, "closed: the draft changed");
     assert.equal((await ledger()).length, before + 1, "in flight: the store holds the answer once");
-    passed.push(`closed in flight: a receipt that lands after closure says "${storedLate.says}", its stored part first in the stored colour, and a failure says "${failedLate.says}"; neither form reopens, and the draft stays read only`);
+    passed.push(`closed in flight: a receipt that lands after closure says "${storedLate.says}", its stored part first in the stored colour, and a failed correction keeps its stored answer: "${failedLate.says}"; neither form reopens, and the draft stays read only`);
   }
   // The page never sends null: an unanswered field is absent. (The one
   // malformed body above was sent by the test, not the page.)

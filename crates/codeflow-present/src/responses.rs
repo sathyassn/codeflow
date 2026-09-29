@@ -1,7 +1,9 @@
-//! The answer ledger `responses.jsonl` (SPC-014 B6, B7, I4).
+//! The answer ledger `responses.jsonl` (SPC-014 B6, B7, B8, I4).
 //!
 //! Answers and amendments are appended to `responses.jsonl` in the session
-//! directory, beside the v1 `events.jsonl`, which keeps its exact shape. The
+//! directory, beside the v1 `events.jsonl`, which keeps its exact shape, and
+//! so are the `delivered` line of each answer and the `acknowledged` line of
+//! each answer or review the agent acknowledges (`delivery.rs`). The
 //! ledger lives in the private local session store, owner-only like the rest
 //! of it, and is never written into the repository (B7). A session with no
 //! answer has no ledger file.
@@ -12,11 +14,12 @@
 //! opened, a final line with no newline, or one that does not parse, is a
 //! torn append from a crash: it is truncated under the lock. Its request
 //! never got a receipt, so the page's retry appends it again. Any other line
-//! that does not parse, or a ledger whose sequence, ids or amendments do not
-//! hold together, is corrupt state and is never rewritten.
+//! that does not parse, or a ledger whose sequence, ids, amendments or
+//! delivery states do not hold together, is corrupt state and is never
+//! rewritten.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
@@ -72,20 +75,44 @@ pub struct AnswerRecord {
     pub amends: Option<Uuid>,
 }
 
-/// One line of `responses.jsonl` (I4). This task writes answers and
-/// amendments; later event kinds extend the enum additively.
+/// A `delivered` or `acknowledged` line of I4, without its `event` tag: the
+/// state an event reached, by its id. Delivery names an answer or an
+/// amendment (a review's delivery stays in `events.jsonl`); acknowledgment
+/// names a delivered answer, amendment or review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateRecord {
+    pub sequence: u64,
+    pub target: Uuid,
+    pub at_unix: u64,
+}
+
+/// One line of `responses.jsonl` (I4). Later event kinds (replies, reopens,
+/// tombstones) extend the enum additively.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ResponseEvent {
     Answer(AnswerRecord),
     Amendment(AnswerRecord),
+    Delivered(StateRecord),
+    Acknowledged(StateRecord),
 }
 
 impl ResponseEvent {
+    /// The answer an `answer` or `amendment` line holds.
     #[must_use]
-    pub const fn record(&self) -> &AnswerRecord {
+    pub const fn answer(&self) -> Option<&AnswerRecord> {
         match self {
-            Self::Answer(record) | Self::Amendment(record) => record,
+            Self::Answer(record) | Self::Amendment(record) => Some(record),
+            Self::Delivered(_) | Self::Acknowledged(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        match self {
+            Self::Answer(record) | Self::Amendment(record) => record.sequence,
+            Self::Delivered(record) | Self::Acknowledged(record) => record.sequence,
         }
     }
 }
@@ -123,9 +150,10 @@ impl AnswerReceipt {
 }
 
 /// The ledger of one session, read under the caller's session lock.
-struct Ledger {
+pub(crate) struct Ledger {
     path: PathBuf,
-    events: Vec<ResponseEvent>,
+    session_id: Uuid,
+    pub(crate) events: Vec<ResponseEvent>,
     length: u64,
     /// Whether the file exists; a failed first append removes the file it
     /// created, so the store is as it was.
@@ -135,11 +163,12 @@ struct Ledger {
 impl Ledger {
     /// Reads the ledger, truncating a torn final line. The caller holds the
     /// session lock. An absent file is an empty ledger.
-    fn open(path: PathBuf, session_id: Uuid) -> Result<Self> {
+    pub(crate) fn open(path: PathBuf, session_id: Uuid) -> Result<Self> {
         let mut file = match std::fs::symlink_metadata(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self {
                     path,
+                    session_id,
                     events: Vec::new(),
                     length: 0,
                     exists: false,
@@ -180,6 +209,7 @@ impl Ledger {
         validate_ledger(&path, &events, session_id)?;
         Ok(Self {
             path,
+            session_id,
             events,
             length: keep,
             exists: true,
@@ -200,15 +230,89 @@ impl Ledger {
             .map_err(|error| PresentError::io(&self.path, error))
     }
 
-    fn next_sequence(&self) -> u64 {
+    /// The state lines each stored event still needs and has not written:
+    /// an answer or amendment its delivered and acknowledged lines (two, one
+    /// or none), a review of `reviews` its acknowledged line (one or none; a
+    /// review's delivery is kept in `events.jsonl`). The ledger keeps this
+    /// room free under both bounds, so no stored event is stranded.
+    fn open_reservations(&self, reviews: &[Uuid]) -> HashMap<Uuid, usize> {
+        let mut open: HashMap<Uuid, usize> = reviews.iter().map(|review| (*review, 1)).collect();
+        for event in &self.events {
+            match event {
+                ResponseEvent::Answer(record) | ResponseEvent::Amendment(record) => {
+                    open.insert(record.answer_id, 2);
+                }
+                ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state) => {
+                    if let Some(left) = open.get_mut(&state.target) {
+                        *left = left.saturating_sub(1);
+                    }
+                }
+            }
+        }
+        open
+    }
+
+    /// Whether a line of `line_bytes` (none for `None`) fits with `kept`
+    /// state lines of room left free under both bounds.
+    fn fits(&self, line_bytes: Option<u64>, kept: usize) -> Result<()> {
+        let lines = self.events.len() + usize::from(line_bytes.is_some()) + kept;
+        let room = if kept > 0 { KEPT_ROOM } else { "" };
+        if lines > max_events() {
+            return Err(PresentError::ServiceUnavailable(format!(
+                "the answer ledger holds at most {} lines{room}",
+                max_events()
+            )));
+        }
+        if self.length + line_bytes.unwrap_or(0) + kept as u64 * STATE_LINE_BYTES > max_log_bytes()
+        {
+            return Err(PresentError::ServiceUnavailable(format!(
+                "the answer ledger reached its {} byte bound{room}",
+                max_log_bytes()
+            )));
+        }
+        Ok(())
+    }
+
+    /// A new review is admitted only when the room for its acknowledgment
+    /// is free besides the room every stored answer and review keeps. The
+    /// caller holds the session lock and passes the reviews already stored.
+    pub(crate) fn admit_review(&self, reviews: &[Uuid]) -> Result<()> {
+        let reserved: usize = self.open_reservations(reviews).values().sum();
+        self.fits(None, reserved + 1)
+    }
+
+    pub(crate) fn next_sequence(&self) -> u64 {
         self.events.len() as u64 + 1
     }
 
     fn by_request(&self, request_id: Uuid) -> Option<&AnswerRecord> {
         self.events
             .iter()
-            .map(ResponseEvent::record)
+            .filter_map(ResponseEvent::answer)
             .find(|record| record.request_id == request_id)
+    }
+
+    /// One form digest holds at most one original answer (B6): a second is
+    /// refused with what a reload shows, so the page can show it and offer a
+    /// correction: the original answer (what `amends` names), the latest
+    /// answer or correction, and that latest record's state (C120-1).
+    fn check_no_answer(&self, form_id: &str, form_digest: &str) -> Result<()> {
+        let answers = crate::delivery::form_answers_of(&self.events);
+        match answers.get(&(form_id.to_string(), form_digest.to_string())) {
+            None => Ok(()),
+            Some(stored) => Err(PresentError::review(
+                "answer_exists",
+                format!(
+                    "form {form_id} already has an answer; send a correction with amends naming {}",
+                    stored.original
+                ),
+                serde_json::json!({
+                    "answer_id": stored.original,
+                    "latest_answer_id": stored.latest,
+                    "state": stored.status.page_state(),
+                }),
+            )),
+        }
     }
 
     /// An amendment names an original answer of the same form (B6).
@@ -220,17 +324,17 @@ impl Ledger {
                 serde_json::json!({ "amends": amends }),
             )
         };
-        match self
-            .events
-            .iter()
-            .find(|event| event.record().answer_id == amends)
-        {
+        match self.events.iter().find(|event| {
+            event
+                .answer()
+                .is_some_and(|record| record.answer_id == amends)
+        }) {
             Some(ResponseEvent::Answer(original)) if original.form_id == form_id => Ok(()),
             Some(ResponseEvent::Answer(_)) => Err(refuse("amends names an answer to another form")),
             Some(ResponseEvent::Amendment(_)) => Err(refuse(
                 "amends names an amendment; an amendment names the original answer",
             )),
-            None => Err(refuse("amends names no answer in this session")),
+            _ => Err(refuse("amends names no answer in this session")),
         }
     }
 
@@ -239,13 +343,25 @@ impl Ledger {
     /// fails too, the line stays whole or torn: no receipt was given, the
     /// next open cuts a torn line, and a resend with the same request id
     /// replays a whole one, so a resend is always safe.
-    fn append(&mut self, store: &SessionStore, event: ResponseEvent) -> Result<()> {
-        if self.events.len() >= max_events() {
-            return Err(PresentError::ServiceUnavailable(format!(
-                "the answer ledger holds at most {} lines",
-                max_events()
-            )));
-        }
+    ///
+    /// Each stored answer keeps room for its delivered and acknowledged
+    /// lines, and each stored review for its acknowledged line: an answer or
+    /// amendment is admitted only when its own room fits too, and a state
+    /// line that draws on its event's room needs only the bounds themselves,
+    /// so capacity never strands an accepted answer or review (R120-1,
+    /// C120-2). A review's room is kept when the review is stored.
+    pub(crate) fn append(&mut self, store: &SessionStore, event: ResponseEvent) -> Result<()> {
+        let open = self.open_reservations(&review_ids(store, self.session_id)?);
+        let reserved: usize = open.values().sum();
+        let kept = match &event {
+            ResponseEvent::Answer(_) | ResponseEvent::Amendment(_) => reserved + 2,
+            ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state)
+                if open.get(&state.target).copied().unwrap_or(0) > 0 =>
+            {
+                0
+            }
+            ResponseEvent::Delivered(_) | ResponseEvent::Acknowledged(_) => reserved,
+        };
         let mut line = serde_json::to_vec(&event)?;
         if line.len() as u64 > limits::MAX_RESPONSE_RECORD_BYTES {
             return Err(PresentError::InvalidDocument(format!(
@@ -254,13 +370,8 @@ impl Ledger {
             )));
         }
         line.push(b'\n');
+        self.fits(Some(line.len() as u64), kept)?;
         let grown = self.length + line.len() as u64;
-        if grown > max_log_bytes() {
-            return Err(PresentError::ServiceUnavailable(format!(
-                "the answer ledger reached its {} byte bound",
-                max_log_bytes()
-            )));
-        }
         store.enforce_retention_unlocked()?;
         // A project bound too small for this line and the control reserve is
         // capacity too, whatever the shared check calls it.
@@ -284,6 +395,31 @@ impl Ledger {
         self.events.push(event);
         Ok(())
     }
+}
+
+/// The most bytes a `delivered` or `acknowledged` line takes with its
+/// newline: its largest sequence and time come to 136. Each stored answer
+/// keeps this much room twice under the byte bound, each review once.
+pub(crate) const STATE_LINE_BYTES: u64 = 136;
+
+/// Why a bound refuses a line while the ledger may still have room: that
+/// room is kept for the answers it already holds.
+const KEPT_ROOM: &str = ", with room kept to deliver and acknowledge each stored answer and review";
+
+/// The event ids of the session's reviews, read under the caller's lock.
+fn review_ids(store: &SessionStore, session_id: Uuid) -> Result<Vec<Uuid>> {
+    Ok(reviews_of(&store.read_events_unlocked(session_id)?))
+}
+
+/// The event ids of the reviews among `events.jsonl` events.
+pub(crate) fn reviews_of(events: &[crate::state::FeedbackEvent]) -> Vec<Uuid> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            crate::state::FeedbackEvent::Received { envelope, .. } => Some(envelope.event_id),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The ledger's line bound. Only a test can lower it, on its own thread:
@@ -344,7 +480,7 @@ fn parse_ledger(path: &Path, bytes: &[u8]) -> Result<(Vec<ResponseEvent>, usize)
             None if last => return Ok((events, start)),
             None => {
                 return Err(PresentError::CorruptState(format!(
-                    "{} line {} is not an answer record",
+                    "{} line {} is not a response record",
                     path.display(),
                     events.len() + 1
                 )));
@@ -356,8 +492,11 @@ fn parse_ledger(path: &Path, bytes: &[u8]) -> Result<(Vec<ResponseEvent>, usize)
 }
 
 /// The ledger holds together: sequences count from 1, each answer and
-/// request id is used once, and each amendment names an earlier original
-/// answer of its form.
+/// request id is used once, each amendment names an earlier original answer
+/// of its form, each answer is delivered at most once and after it was
+/// stored, and each event is acknowledged at most once, an answer only after
+/// its delivery. An acknowledgment of an id that is no answer names a review,
+/// which `events.jsonl` holds; the store checked it when it wrote the line.
 fn validate_ledger(path: &Path, events: &[ResponseEvent], session_id: Uuid) -> Result<()> {
     let corrupt = |message: String| {
         Err(PresentError::CorruptState(format!(
@@ -370,12 +509,34 @@ fn validate_ledger(path: &Path, events: &[ResponseEvent], session_id: Uuid) -> R
     }
     let mut answers = HashSet::new();
     let mut requests = HashSet::new();
+    let mut delivered = HashSet::new();
+    let mut acknowledged = HashSet::new();
     for (index, event) in events.iter().enumerate() {
-        let record = event.record();
         let line = index + 1;
-        if record.sequence != line as u64 {
-            return corrupt(format!("line {line} has sequence {}", record.sequence));
+        if event.sequence() != line as u64 {
+            return corrupt(format!("line {line} has sequence {}", event.sequence()));
         }
+        let record = match event {
+            ResponseEvent::Answer(record) | ResponseEvent::Amendment(record) => record,
+            ResponseEvent::Delivered(state) => {
+                if !answers.contains(&state.target) || !delivered.insert(state.target) {
+                    return corrupt(format!(
+                        "line {line} delivers no stored answer, or one already delivered"
+                    ));
+                }
+                continue;
+            }
+            ResponseEvent::Acknowledged(state) => {
+                let undelivered_answer =
+                    answers.contains(&state.target) && !delivered.contains(&state.target);
+                if undelivered_answer || !acknowledged.insert(state.target) {
+                    return corrupt(format!(
+                        "line {line} acknowledges an undelivered answer, or an event again"
+                    ));
+                }
+                continue;
+            }
+        };
         if record.session_id != session_id {
             return corrupt(format!("line {line} names another session"));
         }
@@ -409,7 +570,8 @@ impl SessionStore {
     ///
     /// Order: body, session, request id (so a retry whose first response
     /// was lost replays even after a newer revision), session state,
-    /// revision, form, form digest, amendment, values.
+    /// revision, form, form digest, an existing original answer, amendment,
+    /// values.
     pub fn submit_answer(&self, session_id: Uuid, body: &[u8]) -> Result<AnswerReceipt> {
         let submission = AnswerSubmission::parse(body)?;
         let request = &submission.request;
@@ -445,8 +607,9 @@ impl SessionStore {
         let current = self.revision(session_id, session.current_revision)?;
         let form = current_form(&current.content, session.current_revision, request)?;
         let form_digest = form.digest();
-        if let Some(amends) = request.amends {
-            ledger.check_amendment(amends, &request.form_id)?;
+        match request.amends {
+            Some(amends) => ledger.check_amendment(amends, &request.form_id)?,
+            None => ledger.check_no_answer(&request.form_id, &form_digest)?,
         }
         form.validate_answer(request)?;
         let record = AnswerRecord {
@@ -487,7 +650,7 @@ impl SessionStore {
         Ok(Ledger::open(self.responses_path(session_id)?, session_id)?.events)
     }
 
-    fn responses_path(&self, session_id: Uuid) -> Result<PathBuf> {
+    pub(crate) fn responses_path(&self, session_id: Uuid) -> Result<PathBuf> {
         self.ensure_session_layout(session_id)?;
         Ok(self.session_dir(session_id).join(RESPONSES_FILE))
     }
@@ -647,6 +810,20 @@ mod crash {
 mod tests {
     use super::*;
 
+    /// The room each answer keeps holds the longest state line there is.
+    #[test]
+    fn a_state_line_fits_the_room_an_answer_keeps() {
+        for event in [ResponseEvent::Delivered, ResponseEvent::Acknowledged] {
+            let line = serde_json::to_vec(&event(StateRecord {
+                sequence: u64::MAX,
+                target: Uuid::max(),
+                at_unix: u64::MAX,
+            }))
+            .unwrap();
+            assert!((line.len() as u64) < STATE_LINE_BYTES, "{}", line.len());
+        }
+    }
+
     /// The largest record the bounds allow, with every part at its worst:
     /// question text of control characters (a six-byte escape each), the
     /// request's share as one string of its full size, `u64::MAX` numbers,
@@ -745,12 +922,12 @@ mod tests {
         assert!(validate_ledger(path, &events[1..], Uuid::nil()).is_err());
         let mut repeated = events.clone();
         if let ResponseEvent::Answer(record) = &mut repeated[1] {
-            record.request_id = events[0].record().request_id;
+            record.request_id = events[0].answer().unwrap().request_id;
         }
         assert!(validate_ledger(path, &repeated, Uuid::nil()).is_err());
         let mut amending = events.clone();
         if let ResponseEvent::Answer(record) = &mut amending[1] {
-            record.amends = Some(events[0].record().answer_id);
+            record.amends = Some(events[0].answer().unwrap().answer_id);
         }
         assert!(
             validate_ledger(path, &amending, Uuid::nil()).is_err(),
@@ -770,6 +947,66 @@ mod tests {
         );
     }
 
+    /// TSK-120: a `delivered` line follows the answer it names, once; an
+    /// `acknowledged` line follows the delivery of an answer, once. An
+    /// acknowledgment of an id that is no answer names a review.
+    #[test]
+    fn delivery_lines_hold_together_with_their_answers() {
+        let path = Path::new("responses.jsonl");
+        let answer = Uuid::from_u128(1);
+        let answer_line = serde_json::json!({
+            "event": "answer", "sequence": 1, "answer_id": answer,
+            "request_id": Uuid::from_u128(101), "payload_digest": "a".repeat(64),
+            "session_id": Uuid::nil(), "revision": 1, "form_id": "f", "form_digest": "b".repeat(64),
+            "outcome": "cancel", "values": {}, "rationales": {},
+            "question": { "title": "T", "fields": [] }, "actor": "operator", "created_at_unix": 1
+        });
+        let state = |event: &str, sequence: u64, target: Uuid| {
+            serde_json::json!({
+                "event": event, "sequence": sequence, "target": target, "at_unix": 2
+            })
+        };
+        let check = |lines: &[serde_json::Value]| {
+            let mut text = String::new();
+            for line in lines {
+                text.push_str(&line.to_string());
+                text.push('\n');
+            }
+            let (events, _) = parse_ledger(path, text.as_bytes()).unwrap();
+            assert_eq!(events.len(), lines.len(), "every line parses");
+            validate_ledger(path, &events, Uuid::nil())
+        };
+        let review = Uuid::from_u128(7);
+        let delivered = state("delivered", 2, answer);
+        assert!(check(&[answer_line.clone(), delivered.clone()]).is_ok());
+        assert!(check(&[
+            answer_line.clone(),
+            delivered.clone(),
+            state("acknowledged", 3, answer),
+            state("acknowledged", 4, review),
+        ])
+        .is_ok());
+        for broken in [
+            vec![state("delivered", 1, answer), answer_line.clone()],
+            vec![answer_line.clone(), state("delivered", 2, review)],
+            vec![
+                answer_line.clone(),
+                delivered.clone(),
+                state("delivered", 3, answer),
+            ],
+            vec![answer_line.clone(), state("acknowledged", 2, answer)],
+            vec![
+                answer_line.clone(),
+                delivered.clone(),
+                state("acknowledged", 3, answer),
+                state("acknowledged", 4, answer),
+            ],
+            vec![answer_line.clone(), state("delivered", 3, answer)],
+        ] {
+            assert!(check(&broken).is_err(), "{broken:?}");
+        }
+    }
+
     /// AC-5: an append interrupted by a crash leaves the ledger whole or
     /// without the line. The test re-runs its own binary as a child that
     /// writes part of the line through the test-only hook, syncs it and
@@ -784,18 +1021,26 @@ mod tests {
         let session = FormsSession::open();
         let first = crate::contract_tests::fixture_json("answers/submit-valid.json");
         let stored = session.submit(&session.body(&first, &[])).unwrap();
+        // A correction: one form holds one original answer.
         let mut second = first.clone();
         second["request_id"] = serde_json::json!(Uuid::from_u128(0x00c0_ffee));
         second["values"]["keep-days"] = serde_json::json!(90);
-        let body = session.body(&second, &[]);
+        let correct = |request: &serde_json::Value, original: Uuid| {
+            let mut request = request.clone();
+            request["amends"] = serde_json::json!(original);
+            request
+        };
+        let body = session.body(&correct(&second, stored.answer_id), &[]);
         let body_path = session.store.root().with_file_name("crash-body.json");
         std::fs::write(&body_path, &body).unwrap();
         let before = session.ledger_bytes().unwrap();
         let line_len = {
             // The line the child writes has the length of an equal record.
             let probe = FormsSession::open();
-            probe.submit(&probe.body(&first, &[])).unwrap();
-            probe.submit(&probe.body(&second, &[])).unwrap();
+            let original = probe.submit(&probe.body(&first, &[])).unwrap().answer_id;
+            probe
+                .submit(&probe.body(&correct(&second, original), &[]))
+                .unwrap();
             let bytes = probe.ledger_bytes().unwrap();
             bytes.len() - (bytes.iter().position(|byte| *byte == b'\n').unwrap() + 1)
         };
@@ -830,14 +1075,16 @@ mod tests {
             } else {
                 assert_eq!(events.len(), 1, "cut {cut}: the torn line is cut");
                 assert_eq!(after, before, "cut {cut}");
-                assert_eq!(events[0].record().answer_id, stored.answer_id);
+                assert_eq!(events[0].answer().unwrap().answer_id, stored.answer_id);
             }
         }
         // The session still works: the interrupted request stores on retry
         // when it was cut, and the next answer takes the next sequence.
         let mut third = first.clone();
         third["request_id"] = serde_json::json!(Uuid::from_u128(0x00c0_ffef));
-        let receipt = session.submit(&session.body(&third, &[])).unwrap();
+        let receipt = session
+            .submit(&session.body(&correct(&third, stored.answer_id), &[]))
+            .unwrap();
         assert_eq!((receipt.sequence, receipt.replayed), (3, false));
         assert_eq!(session.store.responses(session.id).unwrap().len(), 3);
     }
@@ -948,19 +1195,52 @@ mod tests {
                 } else {
                     "d-scope"
                 };
+                // The form's original answer and its latest answer or
+                // correction: the one digest never changes here, so a form
+                // holds at most one original.
+                let original = sent
+                    .iter()
+                    .find(|earlier| earlier.form == form && !earlier.amendment)
+                    .map(|earlier| earlier.receipt.answer_id);
+                let latest = sent
+                    .iter()
+                    .rev()
+                    .find(|earlier| earlier.form == form)
+                    .map(|earlier| earlier.receipt.answer_id);
                 match next(7) {
-                    // A new answer.
+                    // A new answer: stored, or refused when the form has one.
                     0 | 1 => {
                         let body = valid(form, fresh(), None, next(1000));
-                        let receipt = session.submit(&body).unwrap();
-                        assert_eq!(receipt.sequence, sent.len() as u64 + 1, "{context}");
-                        assert!(!receipt.replayed, "{context}");
-                        sent.push(Sent {
-                            body,
-                            receipt,
-                            amendment: false,
-                            form,
-                        });
+                        let result = session.submit(&body);
+                        if let Some(original) = original {
+                            match result {
+                                Err(PresentError::Review {
+                                    code: "answer_exists",
+                                    details,
+                                    ..
+                                }) => assert_eq!(
+                                    details,
+                                    serde_json::json!({
+                                        "answer_id": original,
+                                        "latest_answer_id": latest,
+                                        "state": "stored",
+                                    }),
+                                    "{context}"
+                                ),
+                                other => panic!("{context}: {other:?}"),
+                            }
+                            assert_eq!(session.ledger_bytes(), before, "{context}");
+                        } else {
+                            let receipt = result.unwrap();
+                            assert_eq!(receipt.sequence, sent.len() as u64 + 1, "{context}");
+                            assert!(!receipt.replayed, "{context}");
+                            sent.push(Sent {
+                                body,
+                                receipt,
+                                amendment: false,
+                                form,
+                            });
+                        }
                     }
                     // A retry of an earlier request, even after an update.
                     2 if !sent.is_empty() => {
@@ -1047,6 +1327,8 @@ mod tests {
                         let result = session.submit(&serde_json::to_vec(&body).unwrap());
                         let expected = if stale {
                             "stale_revision"
+                        } else if original.is_some() {
+                            "answer_exists"
                         } else {
                             "invalid_answer"
                         };
@@ -1073,7 +1355,7 @@ mod tests {
                 let events = session.store.responses(session.id).unwrap();
                 assert_eq!(events.len(), sent.len(), "{context}");
                 for (event, model) in events.iter().zip(&sent) {
-                    let record = event.record();
+                    let record = event.answer().unwrap();
                     assert_eq!(record.answer_id, model.receipt.answer_id, "{context}");
                     assert_eq!(record.sequence, model.receipt.sequence, "{context}");
                     assert_eq!(

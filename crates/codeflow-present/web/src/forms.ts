@@ -6,7 +6,7 @@
 // is never written to any browser storage. Annotating a form never changes a
 // value and never sends.
 
-import { parseServiceError, REQUEST_HEADER, type ChromeConfig } from "./contracts";
+import { parseServiceError, REQUEST_HEADER, type AnswerDelivery, type AnswerStateEntry, type ChromeConfig, type FormAnswerEntry } from "./contracts";
 import {
   MAX_ANSWER_REQUEST_BYTES,
   MAX_DECLINE_REASON_BYTES,
@@ -24,8 +24,22 @@ import {
 /** The chrome forwards session events to the document root under this name. */
 export const SESSION_EVENT = "cf-present:session-event";
 export type SessionEventDetail = "revision" | "session_closed";
+/** The chrome forwards the poll's answer states under this name (SPC-014 B8). */
+export const ANSWER_STATE_EVENT = "cf-present:answer-state";
+export type AnswerStateDetail = readonly AnswerStateEntry[];
+/** A closure's answers, one per form, which the forms bind to before closing. */
+export const FORM_ANSWERS_EVENT = "cf-present:form-answers";
+export type FormAnswersDetail = readonly FormAnswerEntry[];
 
-type FormState = "editing" | "submitting" | "stored" | "failed" | "stale" | "changed" | "closed";
+type FormState = "editing" | "submitting" | "stored" | "delivered" | "acknowledged" | "failed" | "stale" | "changed" | "closed";
+
+const STORED_TEXT = "Stored, waiting for agent";
+// After "stored": the agent's read delivers the answer, then it acknowledges it.
+const DELIVERY_TEXT: Readonly<Record<Exclude<AnswerDelivery, "pending">, string>> = {
+  delivered: "Delivered to agent",
+  acknowledged: "Acknowledged by agent",
+};
+const DELIVERY_ORDER: Readonly<Record<AnswerDelivery, number>> = { pending: 0, delivered: 1, acknowledged: 2 };
 type Action = "submit" | "decline" | "cancel" | "resend" | "confirm" | "amend";
 
 const ANSWERS_PATH = "/app/api/answers";
@@ -54,11 +68,31 @@ interface StaleTarget {
 }
 
 export function enhanceForms(root: HTMLElement, config: ChromeConfig): void {
+  // Every answer state the poll reported, never moving back: a state may
+  // arrive before the receipt of the answer it names.
+  const delivery = new Map<string, AnswerDelivery>();
   const forms = [...root.querySelectorAll<HTMLElement>("article[data-cf-form]")]
     .filter((article) => article.querySelector("[data-cf-form-action]"))
-    .map((article) => new FormController(article, config, root));
+    .map((article) => new FormController(article, config, root, delivery));
   if (forms.length === 0) return;
   guardAnnotation(root);
+  root.addEventListener(ANSWER_STATE_EVENT, (event) => {
+    for (const entry of (event as CustomEvent<AnswerStateDetail>).detail) {
+      const known = delivery.get(entry.answer_id) ?? "pending";
+      if (DELIVERY_ORDER[entry.status] > DELIVERY_ORDER[known]) delivery.set(entry.answer_id, entry.status);
+    }
+    for (const form of forms) form.showDelivery();
+  });
+  // A closure carries each form's answer as a reload renders it: every form
+  // binds to its own, whichever answer it followed, before it latches closed.
+  root.addEventListener(FORM_ANSWERS_EVENT, (event) => {
+    for (const entry of (event as CustomEvent<FormAnswersDetail>).detail) {
+      const status: AnswerDelivery = entry.state === "stored" ? "pending" : entry.state;
+      const known = delivery.get(entry.latest_answer_id) ?? "pending";
+      if (DELIVERY_ORDER[status] > DELIVERY_ORDER[known]) delivery.set(entry.latest_answer_id, status);
+    }
+    for (const form of forms) form.bind((event as CustomEvent<FormAnswersDetail>).detail);
+  });
   // The chrome forwards the poll's events here; a form refused with
   // session_closed reports it here too, so every form and the chrome close.
   root.addEventListener(SESSION_EVENT, (event) => {
@@ -101,6 +135,8 @@ class FormController {
   private revision: number;
   private digest: string;
   private original: string | null = null;
+  // The answer or correction this form stored last: its delivery is shown.
+  private latest: string | null = null;
   private amending = false;
   private declining = false;
   private sent: Sent | null = null;
@@ -110,8 +146,19 @@ class FormController {
   // Closure is latched: no later reply or action reopens the form.
   private closed = false;
   private kept: HTMLElement | null = null;
+  // The state of the stored answer this form shows last, which a closed
+  // form keeps showing whatever reply lands after the closure.
+  private answered: "stored" | "delivered" | "acknowledged" | null = null;
+  // A closure snapshot named this form's answer: its words are what a reload
+  // shows. Until one does, a closed form marks its words as last known.
+  private confirmed = false;
 
-  public constructor(private readonly article: HTMLElement, private readonly config: ChromeConfig, private readonly root: HTMLElement) {
+  public constructor(
+    private readonly article: HTMLElement,
+    private readonly config: ChromeConfig,
+    private readonly root: HTMLElement,
+    private readonly delivery: ReadonlyMap<string, AnswerDelivery>,
+  ) {
     this.id = article.dataset.cfForm ?? "";
     this.digest = article.dataset.cfFormDigest ?? "";
     this.revision = config.revision;
@@ -123,7 +170,18 @@ class FormController {
     );
     this.buttons.forEach((button, action) => button.addEventListener("click", () => this.act(action)));
     this.article.addEventListener("input", () => this.clearFieldError());
-    this.render("");
+    // An answer stored before this page loaded: the service renders it with
+    // its state, so a reload keeps showing stored, delivered or acknowledged.
+    const answered = article.dataset.cfAnswerState;
+    const original = article.dataset.cfAnswerId;
+    const latest = article.dataset.cfLatestAnswerId;
+    if (original && latest && (answered === "stored" || answered === "delivered" || answered === "acknowledged")) {
+      this.original = original;
+      this.latest = latest;
+      this.render(answered === "stored" ? STORED_TEXT : DELIVERY_TEXT[answered], answered);
+    } else {
+      this.render("");
+    }
   }
 
   public newerRevision(): void {
@@ -135,10 +193,47 @@ class FormController {
     }
   }
 
+  // Stored, then delivered, then acknowledged: only a stored answer moves on,
+  // and never back.
+  public showDelivery(): void {
+    if (this.latest === null || this.closed) return;
+    const status = this.delivery.get(this.latest) ?? "pending";
+    if (status === "pending") return;
+    const shown = this.state === "stored" ? 0 : this.state === "delivered" ? 1 : this.state === "acknowledged" ? 2 : -1;
+    if (shown < 0 || DELIVERY_ORDER[status] <= shown) return;
+    this.render(DELIVERY_TEXT[status], status);
+  }
+
+  // Takes the answer a reload would render for this form and digest: the
+  // original stays the correction target, the latest's state is shown. The
+  // draft stays in the controls; nothing is sent. A form already closed,
+  // by a refused request before the snapshot came, takes it too: it only
+  // updates the words shown, and nothing reopens.
+  public bind(entries: readonly FormAnswerEntry[]): void {
+    const entry = entries.find((candidate) => candidate.form_id === this.id && candidate.form_digest === this.digest);
+    if (!entry) return;
+    this.original = entry.answer_id;
+    this.latest = entry.latest_answer_id;
+    this.article.dataset.cfAnswerId = entry.answer_id;
+    this.answered = entry.state;
+    this.confirmed = true;
+    this.sent = null;
+    this.stale = null;
+    this.amending = false;
+    this.declining = false;
+    this.render(stateText(entry.state), entry.state);
+  }
+
+  // An answered form keeps its stored answer's state words before the
+  // closed sentence, as a reload shows it, even while a correction was
+  // being drafted; any other form keeps its draft, read only.
   public close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.render(CLOSED_TEXT, "closed");
+    const state = this.state;
+    const shown = state === "stored" || state === "delivered" || state === "acknowledged" ? state : this.gone ? null : this.answered;
+    if (shown) this.render(stateText(shown), shown);
+    else this.render(CLOSED_TEXT, "closed");
   }
 
   private act(action: Action): void {
@@ -239,6 +334,13 @@ class FormController {
   }
 
   private stored(text: string, target: StaleTarget | null): void {
+    if (this.closed && this.confirmed) {
+      // The closure snapshot already holds this receipt's answer, as a
+      // reload shows it: a late receipt changes nothing.
+      this.sent = null;
+      this.render(STORED_TEXT, "stored");
+      return;
+    }
     let receipt: Receipt;
     try {
       receipt = JSON.parse(text) as Receipt;
@@ -256,11 +358,13 @@ class FormController {
     }
     if (!this.amending || !this.original) this.original = receipt.answer_id;
     this.article.dataset.cfAnswerId = this.original;
+    this.latest = receipt.answer_id;
     this.sent = null;
     this.stale = null;
     this.amending = false;
     this.declining = false;
-    this.render("Stored, waiting for agent", "stored");
+    this.render(STORED_TEXT, "stored");
+    this.showDelivery();
   }
 
   private refused(status: number, text: string, target: StaleTarget | null): void {
@@ -298,6 +402,28 @@ class FormController {
         this.refusedDefinitively(target);
         this.render("That request was already used for a different answer. Send again to make a new request.", "editing");
         return;
+      case "answer_exists": {
+        // One form holds one original answer (SPC-014 B6): another page
+        // stored it. Take what a reload would show: the original, which a
+        // correction names, and the latest answer or correction, whose state
+        // is shown and followed. The draft stays, unsent.
+        if (typeof details.answer_id !== "string" || typeof details.latest_answer_id !== "string") break;
+        this.refusedDefinitively(target);
+        if (this.closed && this.confirmed) {
+          this.render(STORED_TEXT, "stored");
+          return;
+        }
+        const answered: AnswerDelivery = details.state === "delivered" || details.state === "acknowledged" ? details.state : "pending";
+        this.original = details.answer_id;
+        this.latest = details.latest_answer_id;
+        this.article.dataset.cfAnswerId = details.answer_id;
+        this.amending = false;
+        this.declining = false;
+        const words = answered === "pending" ? STORED_TEXT : DELIVERY_TEXT[answered];
+        this.render(`${words}. This question was already answered from another copy of this page; your draft is kept here, unsent. Use Correct this answer to send it as a correction.`, answered === "pending" ? "stored" : answered);
+        this.showDelivery();
+        return;
+      }
       case "answer_too_large":
         this.refusedDefinitively(target);
         this.render(`This answer is over the ${MAX_ANSWER_REQUEST_BYTES / 1024} KiB limit; shorten it.`, "editing");
@@ -424,11 +550,15 @@ class FormController {
 
   private render(message: string, state: FormState = this.state): void {
     let storedLate: string | null = null;
+    const answerState = state === "stored" || state === "delivered" || state === "acknowledged" ? state : null;
+    if (answerState && !this.closed) this.answered = answerState;
     if (this.closed && state !== "closed") {
       // A reply that lands after closure may still confirm a receipt, but
-      // the form stays closed. The receipt reads first, as stored.
-      if (state === "stored") {
-        storedLate = "Stored, waiting for agent.";
+      // the form stays closed. The stored answer's state reads first, in
+      // the stored colour, as a reload shows it.
+      const words = this.gone ? answerState : this.answered ?? answerState;
+      if (words) {
+        storedLate = this.confirmed ? stateText(words) : `Last known: ${stateText(words)}`;
         message = "This session is now closed; nothing more can be sent.";
       } else {
         message = CLOSED_TEXT;
@@ -445,7 +575,7 @@ class FormController {
       const stored = document.createElement("span");
       stored.className = "cf-form__state-stored";
       stored.textContent = storedLate;
-      this.stateLine.replaceChildren(stored, ` ${message}`);
+      this.stateLine.replaceChildren(stored, `. ${message}`);
     } else {
       this.stateLine.textContent = message;
     }
@@ -458,7 +588,7 @@ class FormController {
       cancel: editable && !this.stale && !this.declining,
       resend: state === "failed" && this.sent !== null,
       confirm: state === "stale" && this.stale !== null,
-      amend: state === "stored",
+      amend: state === "stored" || state === "delivered" || state === "acknowledged",
     };
     this.buttons.forEach((button, action) => {
       button.hidden = !show[action];
@@ -470,6 +600,11 @@ class FormController {
     if (submit) submit.textContent = this.amending ? "Send correction" : "Submit answer";
     if (this.declineArea) this.declineArea.hidden = !(this.declining && editable);
   }
+}
+
+// The words for an answer's state, as the form shows them.
+function stateText(state: "stored" | "delivered" | "acknowledged"): string {
+  return state === "stored" ? STORED_TEXT : DELIVERY_TEXT[state];
 }
 
 // The field's label as the reviewer read it, without the "(required)" flag.

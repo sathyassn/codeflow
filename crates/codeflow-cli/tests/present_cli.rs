@@ -501,7 +501,7 @@ fn update_export_close_and_clear(
             fixture.second.to_str().unwrap(),
         ],
     ));
-    let poll_body = r#"{"cursor":"1:0"}"#;
+    let poll_body = r#"{"cursor":"1:0:0"}"#;
     let wrong_origin = http(
         running.port,
         &format!(
@@ -524,7 +524,7 @@ fn update_export_close_and_clear(
     );
     assert!(poll.starts_with("HTTP/1.1 200 "));
     assert!(poll.contains("\"kind\":\"revision\""));
-    assert!(poll.contains("\"cursor\":\"2:3\""));
+    assert!(poll.contains("\"cursor\":\"2:3:0\""));
 
     let exported_path = fixture.project.join("review.html");
     require_success(&codeflow(
@@ -1367,11 +1367,25 @@ fn form_fixtures_and_answer_lines_match_their_schemas() {
     );
     amendment["amends"] = line["answer_id"].clone();
     assert_eq!(registry.errors(responses, &amendment), Vec::<String>::new());
+    // TSK-120: the delivered and acknowledged lines of the query ledger.
+    for line in contract_fixture("ledger/queries.jsonl").lines() {
+        let line: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            registry.errors(responses, &line),
+            Vec::<String>::new(),
+            "{line}"
+        );
+    }
     let mut delivered = line;
     delivered["event"] = "delivered".into();
     assert!(
         !registry.errors(responses, &delivered).is_empty(),
-        "responses v1 describes answer and amendment lines only"
+        "a delivered line carries no answer fields"
+    );
+    let state = serde_json::json!({ "event": "acknowledged", "sequence": 2, "at_unix": 0 });
+    assert!(
+        !registry.errors(responses, &state).is_empty(),
+        "a state line names its target"
     );
 }
 
@@ -1736,5 +1750,704 @@ fn update_with_an_expected_revision_refuses_a_stale_base() {
 
     require_success(&update(None));
     assert_eq!(revisions(), 3);
+    close_and_clear(&fixture, &session_id);
+}
+
+fn post_review(port: u16, authority: &str, cookie: &str, review: &str) -> String {
+    http(
+        port,
+        &format!(
+            "POST /app/api/reviews HTTP/1.1\r\nHost: {authority}\r\nOrigin: http://{authority}\r\nCookie: {cookie}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{review}",
+            review.len()
+        ),
+    )
+}
+
+/// The value of `attribute` on the element the page renders for `marker`.
+fn attribute_after(page: &str, marker: &str, attribute: &str) -> String {
+    let at = page
+        .find(marker)
+        .unwrap_or_else(|| panic!("no {marker} on the page"));
+    between(&page[at..], &format!("{attribute}=\""), "\"").to_string()
+}
+
+/// The TSK-117 stream fixture (`streams/session.json`) on the real service:
+/// its entity review on the framed document at revision 1, then its answer
+/// on the forms document at revision 2. Returns the session and answer ids.
+fn stream_session(fixture: &TestProject) -> (String, String) {
+    let spec: serde_json::Value =
+        serde_json::from_str(&contract_fixture("streams/session.json")).unwrap();
+    let document = fixture.project.join("framed.json");
+    fs::write(
+        &document,
+        contract_fixture(spec["document"].as_str().unwrap()),
+    )
+    .unwrap();
+    let (session_id, opened) = open_no_launch(fixture, &document);
+    let (port, authority, cookie) = bootstrap_cookie(&opened);
+    let page = application_page(port, &authority, &cookie);
+    let digest = attribute_after(
+        &page,
+        "data-cf-block-id=\"landing\"",
+        "data-cf-block-digest",
+    );
+    let mut review: serde_json::Value = serde_json::from_str(
+        &contract_fixture(spec["reviews"][0].as_str().unwrap())
+            .replace("{{digest:landing}}", &digest),
+    )
+    .unwrap();
+    review["session_id"] = session_id.clone().into();
+    let label = attribute_after(&page, "data-cf-block-id=\"landing\"", "data-cf-block-label");
+    for note in review["notes"].as_array_mut().unwrap() {
+        let id = note.as_object_mut().unwrap().remove("id").unwrap();
+        note["client_id"] = id;
+        note["block_label"] = label.clone().into();
+    }
+    let posted = post_review(port, &authority, &cookie, &review.to_string());
+    assert!(posted.starts_with("HTTP/1.1 201 "), "{posted}");
+
+    let forms = fixture.project.join("forms.json");
+    fs::write(
+        &forms,
+        contract_fixture(spec["answers_document"].as_str().unwrap()),
+    )
+    .unwrap();
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "update", &session_id, forms.to_str().unwrap()],
+    ));
+    let page = application_page(port, &authority, &cookie);
+    let form_digest = attribute_after(
+        &page,
+        "data-cf-form=\"store-choice\"",
+        "data-cf-form-digest",
+    );
+    let mut answer: serde_json::Value = serde_json::from_str(
+        &contract_fixture(spec["answers"][0].as_str().unwrap())
+            .replace("{{form_digest:store-choice}}", &form_digest),
+    )
+    .unwrap();
+    answer["session_id"] = session_id.clone().into();
+    answer["revision"] = 2.into();
+    let stored = post_answer(port, &authority, &cookie, &answer.to_string());
+    assert!(stored.starts_with("HTTP/1.1 200 "), "{stored}");
+    let answer_id = response_json(&stored)["answer_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    (session_id, answer_id)
+}
+
+/// A stream with the ids and times that change on every run replaced by
+/// placeholders, so it compares with a golden file.
+fn normalized(text: &str, session_id: &str, answer_id: &str) -> String {
+    const KEY: &str = "\"created_at_unix\":";
+    let text = text
+        .replace(session_id, "{{session_id}}")
+        .replace(answer_id, "{{answer_id:1}}");
+    let mut output = String::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find(KEY) {
+        output.push_str(&rest[..at + KEY.len()]);
+        rest = &rest[at + KEY.len()..];
+        rest = rest.trim_start_matches(|character: char| character.is_ascii_digit());
+        output.push('0');
+    }
+    output.push_str(rest);
+    output
+}
+
+fn stream_golden(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../codeflow-present/tests/fixtures/contract-v2/streams")
+        .join(name)
+}
+
+/// TSK-120 AC-2, the architecture fitness check: on the TSK-117 stream
+/// fixture, the v1 `feedback` stream is byte for byte what the build before
+/// this task printed (`feedback-v1.jsonl`, captured at d1056b471), with the
+/// pending answer named on stderr only; `--format v2` prints the review and
+/// the answer as typed events in sequence order (`feedback-v2.jsonl`).
+#[test]
+fn the_v1_and_v2_feedback_streams_match_their_goldens() {
+    let fixture = setup_project();
+    let (session_id, answer_id) = stream_session(&fixture);
+    let directory = session_dir(&fixture, &session_id);
+    let events = fs::read(directory.join("events.jsonl")).unwrap();
+    let responses = fs::read(directory.join("responses.jsonl")).unwrap();
+
+    let v1 = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "feedback", &session_id],
+    );
+    let v1_stdout = normalized(&require_success(&v1), &session_id, &answer_id);
+    assert_eq!(
+        v1_stdout,
+        fs::read_to_string(stream_golden("feedback-v1.jsonl")).unwrap()
+    );
+    assert_eq!(
+        String::from_utf8(v1.stderr).unwrap(),
+        "present: 1 pending answer event is not on the v1 stream; read it with --format v2\n"
+    );
+    assert!(!v1_stdout.contains("entity_selector") && !v1_stdout.contains("untrusted"));
+
+    // The same session as it was before the v1 read delivered its review.
+    fs::write(directory.join("events.jsonl"), &events).unwrap();
+    fs::write(directory.join("responses.jsonl"), &responses).unwrap();
+    let v2 = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "feedback", &session_id, "--format", "v2"],
+    );
+    let v2_stdout = normalized(&require_success(&v2), &session_id, &answer_id);
+    assert!(
+        v2.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&v2.stderr)
+    );
+    assert_eq!(
+        v2_stdout,
+        fs::read_to_string(stream_golden("feedback-v2.jsonl")).unwrap()
+    );
+    close_and_clear(&fixture, &session_id);
+}
+
+/// A `submit` answer to one form of `documents/v2-forms.json`, as the page
+/// sends it; `amends` names an earlier answer for a correction.
+fn forms_answer(
+    session_id: &str,
+    revision: u64,
+    (form, digest): (&str, &str),
+    request: u128,
+    values: &str,
+    amends: Option<&str>,
+) -> String {
+    let amends = amends.map_or(String::new(), |id| format!(r#","amends":"{id}""#));
+    format!(
+        r#"{{"request_id":"3f2a0c11-0000-4000-8000-{request:012x}","session_id":"{session_id}","revision":{revision},"form_id":"{form}","form_digest":"{digest}","outcome":"submit","values":{values},"rationales":{{}}{amends}}}"#
+    )
+}
+
+/// A session on `documents/v2-forms.json` served by the real service.
+struct FormsService {
+    session_id: String,
+    port: u16,
+    authority: String,
+    cookie: String,
+}
+
+impl FormsService {
+    fn open(fixture: &TestProject) -> Self {
+        let document = fixture.project.join("forms.json");
+        fs::write(&document, contract_fixture("documents/v2-forms.json")).unwrap();
+        let (session_id, opened) = open_no_launch(fixture, &document);
+        let (port, authority, cookie) = bootstrap_cookie(&opened);
+        Self {
+            session_id,
+            port,
+            authority,
+            cookie,
+        }
+    }
+
+    /// Posts an answer to `form` on `revision`; returns its answer id.
+    fn answer(
+        &self,
+        revision: u64,
+        form: &str,
+        request: u128,
+        values: &str,
+        amends: Option<&str>,
+    ) -> String {
+        let page = application_page(self.port, &self.authority, &self.cookie);
+        let digest = attribute_after(
+            &page,
+            &format!("data-cf-form=\"{form}\""),
+            "data-cf-form-digest",
+        );
+        let body = forms_answer(
+            &self.session_id,
+            revision,
+            (form, &digest),
+            request,
+            values,
+            amends,
+        );
+        let stored = post_answer(self.port, &self.authority, &self.cookie, &body);
+        assert!(stored.starts_with("HTTP/1.1 200 "), "{stored}");
+        response_json(&stored)["answer_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+}
+
+/// The event ids of v2 lines, in order.
+fn event_ids(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(|line| {
+            let line: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(
+                (line["format"].as_u64(), line["untrusted"].as_bool()),
+                (Some(2), Some(true)),
+                "{line}"
+            );
+            line["event_id"].as_str().unwrap().to_string()
+        })
+        .collect()
+}
+
+const V1_NOTICE: &str =
+    "present: 1 pending answer event is not on the v1 stream; read it with --format v2\n";
+
+/// TSK-120 AC-1, SPC-014 B8 and I5: `feedback --wait` exits 0 once it has
+/// printed pending events, 6 when `--timeout` passes first and 7 when the
+/// session closes with nothing pending; `--wait` with `--follow`, a timeout
+/// out of range or without `--wait` are usage errors (2). The v1 wait does
+/// not end on an answer and names it on stderr at the start and on exit.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn feedback_wait_exits_with_the_spc014_statuses() {
+    let fixture = setup_project();
+    let service = FormsService::open(&fixture);
+    let session_id = service.session_id.clone();
+    let feedback = |args: &[&str]| {
+        let mut all = vec!["present", "feedback", session_id.as_str()];
+        all.extend_from_slice(args);
+        codeflow(&fixture.project, &fixture.home, &all)
+    };
+
+    for args in [
+        &["--wait", "--follow"][..],
+        &["--wait", "--timeout", "0"],
+        &["--wait", "--timeout", "86401"],
+        &["--timeout", "5"],
+        &["--wait", "--format", "v3"],
+    ] {
+        let usage = feedback(args);
+        assert_eq!(
+            usage.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&usage.stderr)
+        );
+        assert!(usage.stdout.is_empty(), "{args:?}");
+    }
+
+    let started = Instant::now();
+    let timeout = feedback(&["--wait", "--timeout", "1", "--format", "v2"]);
+    assert_eq!(
+        timeout.status.code(),
+        Some(6),
+        "{}",
+        String::from_utf8_lossy(&timeout.stderr)
+    );
+    assert!(timeout.stdout.is_empty());
+    assert!(started.elapsed() >= Duration::from_secs(1));
+
+    // A wait with no timeout blocks until an answer arrives, then prints it.
+    let waiting = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args([
+            "present",
+            "feedback",
+            &session_id,
+            "--wait",
+            "--format",
+            "v2",
+        ])
+        .current_dir(&fixture.project)
+        .env("HOME", &fixture.home)
+        .env("XDG_STATE_HOME", fixture.home.join("state"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut waiting = waiting;
+    thread::sleep(Duration::from_millis(800));
+    assert!(
+        waiting.try_wait().unwrap().is_none(),
+        "the wait ended with nothing pending"
+    );
+    let first = service.answer(
+        1,
+        "store-choice",
+        1,
+        r#"{"home":"local","keep-days":30}"#,
+        None,
+    );
+    let woken = waiting.wait_with_output().unwrap();
+    assert_eq!(
+        woken.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&woken.stderr)
+    );
+    let woken = String::from_utf8(woken.stdout).unwrap();
+    assert_eq!(event_ids(&woken), std::slice::from_ref(&first));
+    let line: serde_json::Value = serde_json::from_str(woken.trim()).unwrap();
+    assert_eq!(
+        (line["kind"].as_str(), line["status"].as_str()),
+        (Some("answer"), Some("delivered"))
+    );
+
+    // The v1 stream carries no answer: its wait times out and names the
+    // pending answer on stderr when it starts and again when it ends.
+    let second = service.answer(1, "d-scope", 2, r#"{"choice":"a"}"#, None);
+    let v1 = feedback(&["--wait", "--timeout", "1"]);
+    assert_eq!(v1.status.code(), Some(6));
+    assert!(v1.stdout.is_empty());
+    assert_eq!(String::from_utf8(v1.stderr).unwrap(), V1_NOTICE.repeat(2));
+    let plain = feedback(&[]);
+    assert_eq!(plain.status.code(), Some(0));
+    assert!(plain.stdout.is_empty());
+    assert_eq!(String::from_utf8(plain.stderr).unwrap(), V1_NOTICE);
+    let v2 = feedback(&["--wait", "--format", "v2"]);
+    assert_eq!(v2.status.code(), Some(0));
+    assert_eq!(event_ids(&String::from_utf8(v2.stdout).unwrap()), [second]);
+    assert!(v2.stderr.is_empty());
+
+    // Closed with an event pending, the wait still delivers it; closed with
+    // nothing pending, it exits 7 at once, in either format. The form holds
+    // its original answer, so the pending event is a correction.
+    let third = service.answer(
+        1,
+        "store-choice",
+        3,
+        r#"{"home":"repo","keep-days":7}"#,
+        Some(&first),
+    );
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "close", &session_id],
+    ));
+    let last = feedback(&["--wait", "--format", "v2"]);
+    assert_eq!(last.status.code(), Some(0));
+    assert_eq!(event_ids(&String::from_utf8(last.stdout).unwrap()), [third]);
+    for format in ["v1", "v2"] {
+        let started = Instant::now();
+        let closed = feedback(&["--wait", "--format", format]);
+        assert_eq!(closed.status.code(), Some(7), "{format}");
+        assert!(
+            closed.stdout.is_empty() && closed.stderr.is_empty(),
+            "{format}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{format}: the closed wait hung"
+        );
+    }
+    let unknown = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "feedback",
+            "019f9b53-a341-7fa7-84c2-5f198ceea099",
+            "--wait",
+        ],
+    );
+    assert_eq!(unknown.status.code(), Some(3));
+    let cleared = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", &session_id, "--older-than", "0h"],
+    ));
+    assert!(
+        cleared.contains(&format!("removed {session_id}")),
+        "{cleared}"
+    );
+}
+
+/// TSK-120 AC-3 and AC-4 on the real binary: the session of the TSK-117
+/// query fixture (`ledger/queries.json`) built through the service, with
+/// answers across two revisions, two forms and every status. Every query
+/// lists exactly its ids, alone and combined, however often it runs, and
+/// changes nothing; the wait after them still returns every pending event.
+/// `ack` refuses an undelivered or unknown event (2), records a delivered
+/// one, and a second ack changes nothing.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn responses_list_filters_never_consume_and_ack_is_recorded_once() {
+    let fixture = setup_project();
+    let service = FormsService::open(&fixture);
+    let session_id = service.session_id.clone();
+    let run = |args: &[&str]| codeflow(&fixture.project, &fixture.home, args);
+    let a1 = service.answer(
+        1,
+        "store-choice",
+        1,
+        r#"{"home":"local","keep-days":30}"#,
+        None,
+    );
+    let a2 = service.answer(1, "d-scope", 2, r#"{"choice":"a"}"#, None);
+
+    let undelivered = run(&["present", "ack", &session_id, &a1]);
+    assert_eq!(undelivered.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&undelivered.stderr).contains("not delivered"));
+    let delivered = require_success(&run(&[
+        "present",
+        "feedback",
+        &session_id,
+        "--format",
+        "v2",
+    ]));
+    assert_eq!(event_ids(&delivered), [a1.clone(), a2.clone()]);
+    assert_eq!(
+        require_success(&run(&["present", "ack", &session_id, &a1])).trim(),
+        format!("acknowledged {a1}")
+    );
+    let ledger_path = session_dir(&fixture, &session_id).join("responses.jsonl");
+    let acknowledged = fs::read(&ledger_path).unwrap();
+    assert_eq!(
+        require_success(&run(&["present", "ack", &session_id, &a1])).trim(),
+        format!("{a1} was already acknowledged")
+    );
+    assert_eq!(
+        fs::read(&ledger_path).unwrap(),
+        acknowledged,
+        "a second ack wrote"
+    );
+    for unknown in ["019f9b53-a341-7fa7-84c2-5f198ceea099", "not-an-event"] {
+        let refused = run(&["present", "ack", &session_id, unknown]);
+        assert_eq!(refused.status.code(), Some(2), "{unknown}");
+    }
+
+    // Revision 2 retitles both forms: a changed question takes a new
+    // original answer, as one form digest holds one (SPC-014 B6).
+    let mut second: serde_json::Value =
+        serde_json::from_str(&contract_fixture("documents/v2-forms.json")).unwrap();
+    for block in second["blocks"].as_array_mut().unwrap() {
+        if block["type"] == "form" || block["type"] == "decision" {
+            let title = format!("{}, revised", block["title"].as_str().unwrap());
+            block["title"] = serde_json::json!(title);
+        }
+    }
+    let document = fixture.project.join("forms-2.json");
+    fs::write(&document, serde_json::to_vec_pretty(&second).unwrap()).unwrap();
+    require_success(&run(&[
+        "present",
+        "update",
+        &session_id,
+        document.to_str().unwrap(),
+    ]));
+    let a3 = service.answer(
+        2,
+        "store-choice",
+        3,
+        r#"{"home":"repo","keep-days":7}"#,
+        None,
+    );
+    let a4 = service.answer(
+        2,
+        "store-choice",
+        4,
+        r#"{"home":"local","keep-days":7}"#,
+        Some(&a3),
+    );
+    let a5 = service.answer(2, "d-scope", 5, r#"{"choice":"b"}"#, None);
+    let ours = [&a1, &a2, &a3, &a4, &a5];
+    let mapped = |value: &serde_json::Value| -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| {
+                let id = id.as_str().unwrap();
+                let index = usize::from_str_radix(&id[id.len() - 2..], 16).unwrap() - 1;
+                ours[index].clone()
+            })
+            .collect()
+    };
+
+    let before = fs::read(&ledger_path).unwrap();
+    let queries: serde_json::Value =
+        serde_json::from_str(&contract_fixture("ledger/queries.json")).unwrap();
+    let mut then = None;
+    for case in queries["cases"].as_array().unwrap() {
+        let Some(args) = case["args"].as_array() else {
+            then = Some(case);
+            continue;
+        };
+        let mut command = vec!["present", "responses", "list", session_id.as_str()];
+        command.extend(args.iter().map(|arg| arg.as_str().unwrap()));
+        for _ in 0..2 {
+            let listed = require_success(&run(&command));
+            assert_eq!(
+                event_ids(&listed),
+                mapped(&case["expect_event_ids"]),
+                "{args:?}"
+            );
+        }
+    }
+    assert_eq!(
+        fs::read(&ledger_path).unwrap(),
+        before,
+        "listing changed the ledger"
+    );
+    let then = then.unwrap();
+    let waited = run(&[
+        "present",
+        "feedback",
+        &session_id,
+        "--wait",
+        "--timeout",
+        "5",
+        "--format",
+        "v2",
+    ]);
+    assert_eq!(waited.status.code(), Some(0));
+    assert_eq!(
+        event_ids(&String::from_utf8(waited.stdout).unwrap()),
+        mapped(&then["expect_event_ids"]),
+        "{}",
+        then["why"]
+    );
+    let pending = require_success(&run(&[
+        "present",
+        "responses",
+        "list",
+        &session_id,
+        "--status",
+        "pending",
+    ]));
+    assert!(pending.is_empty(), "{pending}");
+    let unknown = run(&[
+        "present",
+        "responses",
+        "list",
+        "019f9b53-a341-7fa7-84c2-5f198ceea099",
+    ]);
+    assert_eq!(unknown.status.code(), Some(3));
+
+    let registry = schema_registry();
+    let lines = fs::read_to_string(&ledger_path).unwrap();
+    let kinds = lines
+        .lines()
+        .map(|line| {
+            let line: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(
+                registry.errors("urn:codeflow:schema:present:session-responses:1", &line),
+                Vec::<String>::new(),
+                "{line}"
+            );
+            line["event"].as_str().unwrap().to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        [
+            "answer",
+            "answer",
+            "delivered",
+            "delivered",
+            "acknowledged",
+            "answer",
+            "amendment",
+            "answer",
+            "delivered",
+            "delivered",
+            "delivered"
+        ]
+    );
+    // The schema root is closed, and a state line carries no answer field.
+    let state = lines
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|line| line["event"] == "delivered")
+        .unwrap();
+    for (field, value) in [
+        ("note", serde_json::json!("x")),
+        ("answer_id", state["target"].clone()),
+    ] {
+        let mut invalid = state.clone();
+        invalid[field] = value;
+        assert!(
+            !registry
+                .errors("urn:codeflow:schema:present:session-responses:1", &invalid)
+                .is_empty(),
+            "{invalid}"
+        );
+    }
+    close_and_clear(&fixture, &session_id);
+}
+
+/// TSK-120 AC-6 on the real binary: with no listener an answer waits in the
+/// store as pending; after the service is killed and `show` restarts it,
+/// the next wait delivers that answer and one stored through the new
+/// service, each once, and a later wait finds nothing.
+#[test]
+fn a_pending_answer_survives_a_service_restart_and_is_delivered_once() {
+    let fixture = setup_project();
+    let service = FormsService::open(&fixture);
+    let session_id = service.session_id.clone();
+    let run = |args: &[&str]| codeflow(&fixture.project, &fixture.home, args);
+    let first = service.answer(
+        1,
+        "store-choice",
+        1,
+        r#"{"home":"local","keep-days":30}"#,
+        None,
+    );
+    let pending = require_success(&run(&[
+        "present",
+        "responses",
+        "list",
+        &session_id,
+        "--status",
+        "pending",
+    ]));
+    assert_eq!(event_ids(&pending), std::slice::from_ref(&first));
+
+    let listed: serde_json::Value =
+        serde_json::from_str(&require_success(&run(&["present", "list"]))).unwrap();
+    let pid = i32::try_from(listed[0]["service_pid"].as_u64().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_ne!(unsafe { libc::kill(pid, 0) }, 0);
+    let recovered = require_success(&run(&["present", "show", &session_id, "--no-launch"]));
+    assert!(recovered.contains("recovered"), "{recovered}");
+    let (port, authority, cookie) = bootstrap_cookie(&recovered);
+    let restarted = FormsService {
+        session_id: session_id.clone(),
+        port,
+        authority,
+        cookie,
+    };
+    let second = restarted.answer(1, "d-scope", 2, r#"{"choice":"a"}"#, None);
+
+    let waited = run(&[
+        "present",
+        "feedback",
+        &session_id,
+        "--wait",
+        "--timeout",
+        "5",
+        "--format",
+        "v2",
+    ]);
+    assert_eq!(waited.status.code(), Some(0));
+    assert_eq!(
+        event_ids(&String::from_utf8(waited.stdout).unwrap()),
+        [first, second]
+    );
+    let again = run(&[
+        "present",
+        "feedback",
+        &session_id,
+        "--wait",
+        "--timeout",
+        "1",
+        "--format",
+        "v2",
+    ]);
+    assert_eq!(again.status.code(), Some(6));
+    assert!(again.stdout.is_empty());
     close_and_clear(&fixture, &session_id);
 }

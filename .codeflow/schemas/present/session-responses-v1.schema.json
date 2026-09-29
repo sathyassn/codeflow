@@ -6,26 +6,15 @@
   "additionalProperties": false,
   "required": [
     "event",
-    "sequence",
-    "answer_id",
-    "request_id",
-    "payload_digest",
-    "session_id",
-    "revision",
-    "form_id",
-    "form_digest",
-    "outcome",
-    "values",
-    "rationales",
-    "question",
-    "actor",
-    "created_at_unix"
+    "sequence"
   ],
   "properties": {
     "event": {
       "enum": [
         "answer",
-        "amendment"
+        "amendment",
+        "delivered",
+        "acknowledged"
       ]
     },
     "sequence": {
@@ -90,6 +79,14 @@
     "amends": {
       "$ref": "#/$defs/uuid",
       "$comment": "The answer_id of an earlier answer (never an amendment) to the same form."
+    },
+    "target": {
+      "$ref": "#/$defs/uuid",
+      "$comment": "A delivered or acknowledged line: the id of the event whose state it records."
+    },
+    "at_unix": {
+      "type": "integer",
+      "minimum": 0
     }
   },
   "allOf": [
@@ -122,9 +119,149 @@
           ]
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "enum": [
+              "answer",
+              "amendment"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "answer_id",
+          "request_id",
+          "payload_digest",
+          "session_id",
+          "revision",
+          "form_id",
+          "form_digest",
+          "outcome",
+          "values",
+          "rationales",
+          "question",
+          "actor",
+          "created_at_unix"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "target"
+              ]
+            },
+            {
+              "required": [
+                "at_unix"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "enum": [
+              "delivered",
+              "acknowledged"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "target",
+          "at_unix"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "answer_id"
+              ]
+            },
+            {
+              "required": [
+                "request_id"
+              ]
+            },
+            {
+              "required": [
+                "payload_digest"
+              ]
+            },
+            {
+              "required": [
+                "session_id"
+              ]
+            },
+            {
+              "required": [
+                "revision"
+              ]
+            },
+            {
+              "required": [
+                "form_id"
+              ]
+            },
+            {
+              "required": [
+                "form_digest"
+              ]
+            },
+            {
+              "required": [
+                "outcome"
+              ]
+            },
+            {
+              "required": [
+                "values"
+              ]
+            },
+            {
+              "required": [
+                "rationales"
+              ]
+            },
+            {
+              "required": [
+                "question"
+              ]
+            },
+            {
+              "required": [
+                "actor"
+              ]
+            },
+            {
+              "required": [
+                "created_at_unix"
+              ]
+            },
+            {
+              "required": [
+                "reason"
+              ]
+            },
+            {
+              "required": [
+                "amends"
+              ]
+            }
+          ]
+        }
+      }
     }
   ],
-  "$comment": "One line of responses.jsonl in the private local session store (SPC-014 I4): an answer to a form or v2 decision, or an amendment of one. Each line is written with its newline in one write and synced before the receipt is returned. The store also checks that sequences count from 1, that each answer_id and request_id is used once, and that an amendment names an earlier answer of its form. An amendment carries amends; an answer never does.",
+  "$comment": "One line of responses.jsonl in the private local session store (SPC-014 I4). An answer or amendment carries the answer fields; an amendment carries amends and an answer never does. A delivered or acknowledged line carries only event, sequence, target and at_unix: delivered names an answer or amendment of this ledger, once, after it was stored (a review's delivery stays in events.jsonl); acknowledged names a delivered answer, amendment or review, once. Each line is written with its newline in one write and synced, under the session lock. Sequences count from 1 across every line; the store also checks that each answer_id and request_id is used once and that an amendment names an earlier answer of its form.",
   "$defs": {
     "uuid": {
       "type": "string",
