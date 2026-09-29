@@ -1,0 +1,11 @@
+id = "TSK-185"
+uid = "9efe68b5-5a3e-4bc4-955d-dbdbf5d0328b"
+kind = "TSK"
+title = "Pre-push checks a landing against the line it lands on"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T05:28:51Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
