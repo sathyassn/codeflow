@@ -293,6 +293,8 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
         Ok(_) => {
             // On the task's own branch, a waiver may name a record-only
             // amendment commit in the pull request's own range (TSK-184).
+            // The binder withholds it from a range that reopens the task,
+            // as it does for CI.
             let own_range_base = repo
                 .head()
                 .ok()

@@ -2360,3 +2360,131 @@ fn an_own_range_waiver_is_the_target_amendment_once_the_task_lands() {
         "the landed waiver binds by the target route: {landed:?}"
     );
 }
+
+/// A task still `todo` on main, completed and then reopened on its own fix
+/// branch; returns the archived block.
+fn reopened_in_its_own_range() -> (tempfile::TempDir, String) {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let first = code_change(root, "task/TSK-001-fix", "pub fn initial() {}\n");
+    let old = fix_block(&first);
+    complete(root, "TSK-001", OWN_JOURNEY, &old);
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: regression\n",
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &archived),
+    );
+    commit(root, "docs: reopen in the task range");
+    (dir, archived)
+}
+
+/// A completion made and reopened inside its own pull request is a
+/// reopening range too (R-119): a clean merge of the target after the fix
+/// review is not stacked on that review, by the verb or by CI.
+#[test]
+fn a_completion_reopened_in_its_own_range_never_stacks_a_line_merge() {
+    for stacked in [false, true] {
+        let (dir, archived) = reopened_in_its_own_range();
+        let root = dir.path();
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        if stacked {
+            git(root, &["switch", "main"]);
+            write(root, "src/line.rs", "pub fn line() {}\n");
+            commit(root, "feat: advance the line");
+            git(root, &["switch", "task/TSK-001-fix"]);
+            git(
+                root,
+                &["merge", "--no-ff", "-m", "chore: merge line", "main"],
+            );
+        }
+        let closeout = format!("{archived}{}", fix_block(&reviewed));
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+        );
+        let verb = status_complete(root, "TSK-001");
+        complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+        let result = ci(root, "task/TSK-001-fix", "TSK-001");
+        if stacked {
+            let needle = "src/line.rs changed after the reviewed commit";
+            assert_ne!(verb.0, 0, "the verb stacked a line merge: {}", verb.1);
+            assert!(verb.1.contains(needle), "{}", verb.1);
+            assert_blocks(&result, "an in-range reopen stacks nothing", &[needle]);
+        } else {
+            assert_passes(&verb, "the verb on an in-range reopen and fix");
+            assert_passes(&result, "an in-range reopen and fix");
+        }
+    }
+}
+
+/// Amend AC-1 on the fix branch, restore it, review a fix and complete with
+/// AC-1 waived by that own-branch amendment; returns the verb and CI.
+fn waive_by_own_amendment(root: &Path, archived: &str) -> [(i32, String); 2] {
+    let revised = OWN_JOURNEY.replace("shall work.", "shall mostly work.");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &revised, archived),
+    );
+    let amendment = commit(root, "docs: amend the reopened criterion");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, archived),
+    );
+    commit(root, "docs: restore the anchored criterion");
+    write(root, "src/lib.rs", "pub fn fixed() {}\n");
+    let reviewed = commit(root, "fix: repair the regression");
+    let waiver = block(
+        &reviewed,
+        &[
+            &format!("AC-1: waived | {amendment}"),
+            "AC-2: verified | journey",
+        ],
+        "verified | journey",
+        "none: done",
+    );
+    let closeout = format!("{archived}{waiver}");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+    );
+    let verb = status_complete(root, "TSK-001");
+    complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+    [verb, ci(root, "task/TSK-001-fix", "TSK-001")]
+}
+
+/// A reopening range has no own-range waiver route (R-60): a one-PR fix of
+/// a task complete on its target is refused by the verb as by CI.
+#[test]
+fn a_one_pr_fix_has_no_own_range_waiver() {
+    let (dir, _, archived) = one_pr_fix();
+    for result in waive_by_own_amendment(dir.path(), &archived) {
+        assert_blocks(
+            &result,
+            "an own-range waiver in a reopening range",
+            &["AC-1 waiver", "which is not on the target"],
+        );
+    }
+}
+
+/// The same refusal when the range itself completed and reopened the task,
+/// which is still `todo` on its target.
+#[test]
+fn a_completion_reopened_in_its_own_range_has_no_own_range_waiver() {
+    let (dir, archived) = reopened_in_its_own_range();
+    for result in waive_by_own_amendment(dir.path(), &archived) {
+        assert_blocks(
+            &result,
+            "an own-range waiver after an in-range reopen",
+            &["AC-1 waiver", "which is not on the target"],
+        );
+    }
+}

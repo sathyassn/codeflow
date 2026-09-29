@@ -190,7 +190,8 @@ pub fn bind_completion(
 /// record in that range, after `own_range_base` and strictly before the
 /// reviewed commit. Once the pull request lands, that commit is on the
 /// target, so a line and the release judge accept the same waiver under
-/// the target rule. `None` keeps the target rule alone.
+/// the target rule. `None`, or a range that reopens the task, keeps the
+/// target rule alone.
 #[allow(clippy::too_many_arguments)] // bind_completion's inputs and the own-range base.
 pub(crate) fn bind_completion_with_amendment(
     repo: &Repository,
@@ -217,10 +218,13 @@ pub(crate) fn bind_completion_with_amendment(
             .head()
             .ok()
             .is_some_and(|head| head.shorthand().ok() == task.integration_target.as_deref());
-    // A reopen landed before this range, by its own pull request (R-119
-    // keeps that valid), is recovered from the history below. The fix then
-    // lands as any task does, so a task landing may carry its review.
-    let mut reopened_earlier = false;
+    // A completion reopened before this range is recovered from the history
+    // below. When that completion is on the target at the anchored base, a
+    // separate pull request reopened it (R-119 keeps that valid): the range
+    // does not reopen the task, and the fix lands as any task does, so a
+    // task landing may carry its review. Otherwise this range completed and
+    // reopened the task itself.
+    let mut recovered = false;
     let reopen = (!on_target)
         .then_some(anchor)
         .flatten()
@@ -251,9 +255,16 @@ pub(crate) fn bind_completion_with_amendment(
             }) {
                 old.criteria = anchored.criteria;
             }
-            reopened_earlier = true;
+            recovered = true;
             Some((at, old))
         });
+    let before_range = |at: Oid| anchor.is_some_and(|base| is_ancestor_or_same(repo, at, base));
+    // A reopening range reviews its own work: no task landing or clean line
+    // merge stacks on its review, and no own-range waiver (R-60).
+    let reopens_range = reopen
+        .as_ref()
+        .is_some_and(|(at, _)| !recovered || !before_range(*at));
+    let own_range_base = own_range_base.filter(|_| !reopens_range);
     let mut findings = Vec::new();
     if let Some((_, old)) = &reopen {
         findings.extend(
@@ -270,22 +281,18 @@ pub(crate) fn bind_completion_with_amendment(
         )),
         Some(reviewed) => {
             // The review lies after the reopened completion. One exception:
-            // a completion made and reopened inside this range (the range
-            // base holds no completion) stood last at `at`, and a review of
+            // a completion made and reopened inside this range (not on the
+            // target at the range base) stood last at `at`, and a review of
             // `at` covers every change the range made before the reopen;
             // the binding below still refuses any later change but this
             // record's status and Closeout (AC-2).
-            let completed_in_range = |at: Oid| {
-                reopened_earlier
-                    && anchor.is_some_and(|base| base != at && is_ancestor_or_same(repo, base, at))
-            };
+            let completed_in_range = |at: Oid| recovered && anchor.is_some() && !before_range(at);
             let problem = if reopen.as_ref().is_some_and(|(at, _)| {
                 (reviewed == *at && !completed_in_range(*at))
                     || !is_ancestor_or_same(repo, *at, reviewed)
             }) {
                 Some(format!("a reopened task's reviewed commit {reviewed} must lie inside the fix range, after its anchored base"))
-            } else if transport == Transport::TaskLanding && (reopen.is_none() || reopened_earlier)
-            {
+            } else if transport == Transport::TaskLanding && !reopens_range {
                 binding_problem(repo, task, landing, reviewed, transport)
             } else {
                 binding_problem(repo, task, landing, reviewed, Transport::Direct)
