@@ -474,6 +474,50 @@ fn a_criteria_change_landed_with_code_on_its_line_is_frozen() {
     );
 }
 
+/// AC-1 negative twin (resolution 43): a planning pull request on line A
+/// that reopens a completed task and changes its criteria is refused as
+/// frozen when the release imports it. The reopen rule is judged before
+/// the planning-only exemption, as the task pull request rule judges it
+/// before the class exemptions.
+#[test]
+fn a_reopened_task_brought_with_changed_criteria_is_frozen() {
+    let fx = Fx::new(false);
+    fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.git(&["switch", "-q", "-C", "plan/reopen-TSK-001", LINE_A]);
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "todo", LOOSER, "Reopened.\n"),
+    );
+    fx.commit("docs(records): reopen the task with a looser criterion");
+    let landing = fx.land(LINE_A, "plan/reopen-TSK-001");
+    fx.cut_release();
+    fx.import(LINE_A);
+    let result = agree(&fx, "reopened with changed criteria");
+    blocks(
+        &result,
+        "reopened with changed criteria",
+        &[
+            "work.criteria_frozen",
+            "TSK-001: a reopened task keeps its criteria",
+            &format!("landed on its line at {}", &landing[..9]),
+        ],
+    );
+
+    // Control: the same planning landing that changes the criteria of a
+    // task it does not reopen stays exempt.
+    let fx = Fx::new(false);
+    fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.amend_on_line(LINE_A, "TSK-003", STRONGER);
+    fx.cut_release();
+    fx.import(LINE_A);
+    passes(
+        &agree(&fx, "amended without a reopen"),
+        "a planning amendment of an open task",
+    );
+}
+
 /// A project config for the baseline fixtures to extend.
 const PROJECT: &str = "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n";
 

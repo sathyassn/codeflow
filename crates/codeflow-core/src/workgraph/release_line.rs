@@ -1094,7 +1094,9 @@ pub fn release_findings(
                     match source {
                         Some(source) => match landed_criteria(&repo, &now, path, source) {
                             Landed::Planning => {}
-                            Landed::Unreadable(found) => findings.push(found),
+                            Landed::Unreadable(found) | Landed::Frozen(found) => {
+                                findings.push(found);
+                            }
                             Landed::WithCode { landing, changed } => {
                                 // The cutoff is the one of the line the task
                                 // itself targets, never whichever advertised
@@ -1396,6 +1398,9 @@ enum Landed {
     WithCode { landing: Oid, changed: String },
     /// The landing cannot be read.
     Unreadable(Finding),
+    /// The landing reopened the task as it changed its criteria: frozen
+    /// before the planning-only exemption is considered.
+    Frozen(Finding),
 }
 
 /// A brought criteria change is judged again at the commit that landed it
@@ -1424,6 +1429,37 @@ fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid)
             _ => break commit,
         }
     };
+    // Resolution 43: a reopened task keeps its criteria. Judged first, as
+    // the task pull request rule judges it before the class exemptions.
+    if let Ok(parent) = landing.parent_id(0) {
+        let base = parent.to_string();
+        let head = landing.id().to_string();
+        let reopened = Graph::from_revision(repo, &head)
+            .and_then(|after| super::acceptance::reopened_ids(repo, &base, &head, &after));
+        match reopened {
+            Ok(ids) if ids.contains(&now.id) => {
+                return Landed::Frozen(finding(
+                    FROZEN_RULE,
+                    format!(
+                        "{}, landed on its line at {}",
+                        super::acceptance::reopened_message(&now.id),
+                        short(landing.id())
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                return Landed::Unreadable(finding(
+                    FROZEN_RULE,
+                    format!(
+                        "{}: the landing {} of its criteria change cannot be read: {error}",
+                        now.id,
+                        short(landing.id())
+                    ),
+                ));
+            }
+        }
+    }
     match super::acceptance::non_planning_change(repo, landing.parent_id(0).ok(), landing.id()) {
         Ok(None) => Landed::Planning,
         Ok(Some(changed)) => Landed::WithCode {

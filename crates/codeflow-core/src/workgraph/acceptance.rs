@@ -841,6 +841,29 @@ pub fn reopened_criteria(
     head: &str,
     after: &Graph,
 ) -> Result<Vec<Finding>, String> {
+    Ok(reopened_ids(repo, base, head, after)?
+        .into_iter()
+        .map(|id| finding(FROZEN_RULE, reopened_message(&id)))
+        .collect())
+}
+
+/// The frozen finding's message for a reopened task whose criteria changed.
+pub(super) fn reopened_message(id: &str) -> String {
+    format!("{id}: a reopened task keeps its criteria; change them in the epic's batched amendment")
+}
+
+/// The tasks complete at `base` whose criteria differ at `head` and which
+/// the range reopened: no longer complete, a block superseded, or a commit
+/// of the range moving them from complete.
+///
+/// # Errors
+/// Returns an error if the range cannot be read.
+pub(super) fn reopened_ids(
+    repo: &Repository,
+    base: &str,
+    head: &str,
+    after: &Graph,
+) -> Result<std::collections::BTreeSet<String>, String> {
     let target = Graph::from_revision(repo, base)?;
     let candidates: Vec<_> = after
         .records
@@ -853,7 +876,7 @@ pub fn reopened_criteria(
         })
         .collect();
     if candidates.is_empty() {
-        return Ok(Vec::new());
+        return Ok(std::collections::BTreeSet::new());
     }
     let oid = |rev: &str| {
         repo.revparse_single(rev)
@@ -901,7 +924,7 @@ pub fn reopened_criteria(
             }
         }
     }
-    Ok(reopened.into_iter().map(|id| finding(FROZEN_RULE, format!("{id}: a reopened task keeps its criteria; change them in the epic's batched amendment"))).collect())
+    Ok(reopened)
 }
 
 /// Where a range's completions are bound: at the head for a task pull
