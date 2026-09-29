@@ -344,6 +344,8 @@ pub struct GuardContext<'a> {
     /// How to resolve a subcommand that is not a git builtin to the alias it
     /// names (injected). `None` leaves every such subcommand unclassifiable.
     pub alias_lookup: AliasLookup<'a>,
+    /// Read-only local-work proof for the command's actual repository.
+    pub discard_lookup: DiscardLookup<'a>,
     /// The session's root checkout, when the command runs in one: a commit
     /// there off its root branch is judged by `git.root_checkout_commits`
     /// (TSK-165). `None` in a linked worktree.
@@ -391,7 +393,10 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
     // `$(…)`/backticks, newlines, and backgrounding `&` — so a git/gh
     // invocation is evaluated wherever it sits, not only as a segment's first
     // word (the review's wrapper evasions).
+    let mut earlier_mutation = command.contains("GIT_INDEX_FILE");
     for (idx, segment) in segments.iter().enumerate() {
+        branches.discard_state_changed = earlier_mutation;
+        earlier_mutation |= may_change_discard_state(segment);
         let top_level = match roles.as_ref().map(|r| r[idx]) {
             Some(Some(join)) => {
                 shell.begin(join);
@@ -1673,6 +1678,8 @@ struct BranchTracker {
     /// branch (which `includeIf "onbranch:…"` reads), so an alias read from
     /// disk now may not be what git runs.
     config_changed: bool,
+    /// Earlier shell steps may invalidate the disk snapshot for discard checks.
+    discard_state_changed: bool,
 }
 
 impl BranchTracker {
@@ -1686,6 +1693,7 @@ impl BranchTracker {
             now: start.clone(),
             list: start,
             config_changed: false,
+            discard_state_changed: false,
         }
     }
 
@@ -1840,6 +1848,7 @@ struct Moves<'r> {
     tokens: &'r [String],
 }
 
+#[allow(clippy::too_many_lines)] // Keep the ordered per-command policy checks together.
 fn check_git(
     args: &[String],
     branches: &mut BranchTracker,
@@ -1882,6 +1891,8 @@ fn check_git(
             Ok(expansions) => {
                 for expanded in expansions {
                     check_git(&expanded, branches, moved, ctx, out, notes, depth + 1);
+                    branches.discard_state_changed |= git_subcommand(&expanded)
+                        .is_none_or(|(sub, rest)| !discard_readonly_git(sub, rest));
                 }
             }
             Err(why) => {
@@ -1917,6 +1928,15 @@ fn check_git(
             out.extend(strictest);
         }
     }
+    check_discard(
+        args,
+        sub,
+        rest,
+        moved,
+        branches.discard_state_changed,
+        ctx,
+        out,
+    );
     track_branch_move(
         sub,
         rest,
@@ -1941,6 +1961,7 @@ fn check_git(
             pr_base_lookup: ctx.pr_base_lookup,
             dir_target_lookup: ctx.dir_target_lookup,
             alias_lookup: ctx.alias_lookup,
+            discard_lookup: ctx.discard_lookup,
             root_checkout: ctx.root_checkout,
         };
         let mut case = Vec::new();
@@ -2046,6 +2067,10 @@ const JUDGED_SUBCOMMANDS: &[&str] = &[
     "push",
     "checkout",
     "switch",
+    "restore",
+    "clean",
+    "stash",
+    "worktree",
 ];
 
 /// Subcommands that act on the branch checked out where they run. Their
@@ -2154,20 +2179,31 @@ fn exposed_rules(sub: Option<&str>, p: &GitPolicy) -> Vec<(&'static str, PolicyL
         ("git.hard_reset_protected", p.hard_reset_protected),
         ("git.local_ref_protection", p.local_ref_protection),
         ("git.hook_integrity", p.hook_integrity),
+        ("git.discard_uncommitted", p.discard_uncommitted),
     ];
     let names: &[&str] = match sub {
         None => return all.to_vec(),
         Some("commit") => &["git.commit_to_protected"],
         Some("merge" | "cherry-pick") => &["git.merge_to_protected"],
-        Some("rebase" | "reset") => &["git.hard_reset_protected"],
+        Some("rebase") => &["git.hard_reset_protected"],
+        Some("reset") => &["git.hard_reset_protected", "git.discard_uncommitted"],
         Some("push") => &[
             "git.push_to_protected",
             "git.force_push_protected",
             "git.delete_protected",
         ],
-        Some("branch") => &["git.delete_protected", "git.local_ref_protection"],
+        Some("branch") => &[
+            "git.delete_protected",
+            "git.local_ref_protection",
+            "git.discard_uncommitted",
+        ],
         Some("config") => &["git.hook_integrity"],
-        Some("checkout" | "switch") => &["git.local_ref_protection", "git.commit_to_protected"],
+        Some("checkout" | "switch") => &[
+            "git.local_ref_protection",
+            "git.commit_to_protected",
+            "git.discard_uncommitted",
+        ],
+        Some("restore" | "clean" | "stash" | "worktree") => &["git.discard_uncommitted"],
         Some(_) => &["git.local_ref_protection", "git.delete_protected"],
     };
     all.into_iter()
@@ -4311,6 +4347,7 @@ mod registry_guard_tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         };
         evaluate(command, &ctx)
@@ -4374,6 +4411,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
     }
@@ -4391,6 +4429,7 @@ mod tests {
             pr_base_lookup: Some(lookup),
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
     }
@@ -4408,6 +4447,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: Some(resolver),
             alias_lookup: Some(&fixture_alias),
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
     }
@@ -4564,6 +4604,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         };
         assert!(evaluate("git commit -m 'feat: x'", &c).is_empty());
@@ -4588,6 +4629,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         };
         assert!(evaluate("git merge feat/x", &c).is_empty());
@@ -7290,5 +7332,551 @@ mod tests {
         // Nothing there: unresolved.
         assert!(read("missing", false).is_none());
         assert!(read("$R", false).is_none());
+    }
+}
+
+/// State required for a destructive command, at its composed repository target.
+pub struct DiscardQuery<'a> {
+    pub target: Option<Retarget<'a>>,
+    pub intent: &'a super::git_discard::Intent,
+}
+/// An unreadable or absent state probe is uncertainty, never a clean result.
+pub type DiscardLookup<'a> =
+    Option<&'a dyn Fn(&DiscardQuery<'_>) -> Result<Option<String>, String>>;
+
+/// Normalize the destructive forms with the same option parser as other rules.
+#[allow(clippy::too_many_lines)] // One explicit arm per supported Git discard operation.
+fn discard_intent(
+    sub: &str,
+    rest: &[String],
+    moved: &Moves<'_>,
+) -> Result<Option<super::git_discard::Intent>, String> {
+    use super::git_discard::Intent;
+    if !matches!(
+        sub,
+        "reset" | "restore" | "checkout" | "switch" | "clean" | "stash" | "branch" | "worktree"
+    ) {
+        return Ok(None);
+    }
+    let no_vars = HashMap::new();
+    let vars = moved.vars.unwrap_or(&no_vars);
+    let rest: Vec<String> = rest
+        .iter()
+        .map(|s| {
+            if has_substitution(s) {
+                Err("a generated argument can change what would be discarded".into())
+            } else {
+                expand_word(s, vars)
+            }
+        })
+        .collect::<Result<_, String>>()?;
+    let spec = match sub {
+        "reset" => &GIT_RESET_OPTIONS,
+        "branch" => &GIT_BRANCH_OPTIONS,
+        "clean" => &DISCARD_CLEAN_OPTIONS,
+        "restore" | "checkout" | "switch" => &DISCARD_RESTORE_OPTIONS,
+        _ => &DISCARD_MISC_OPTIONS,
+    };
+    let parsed = parse_options(&rest, spec);
+    if parsed.has_short(&['h']) || parsed.has_long("--help") {
+        return Ok(None);
+    }
+    let paths = || parsed.operands.iter().map(|p| (*p).to_owned()).collect();
+    match sub {
+        "reset" => Ok(parsed.has_long("--hard").then_some(Intent::HardReset)),
+        "restore" | "checkout" | "switch" => {
+            if parsed.has_long("--pathspec-from-file")
+                || parsed.has_short(&['p'])
+                || parsed.has_long("--patch")
+            {
+                return Err("pathspec input or interactive restore requires an explicit preview and named paths".into());
+            }
+            if matches!(sub, "checkout" | "switch")
+                && (parsed.has_short(&['f'])
+                    || parsed.has_long("--force")
+                    || parsed.has_long("--discard-changes"))
+            {
+                return Ok(Some(Intent::HardReset));
+            }
+            if sub == "switch"
+                || parsed.has_short(&['b', 'B', 'c', 'C'])
+                || parsed.has_long("--orphan")
+            {
+                return Ok(None);
+            }
+            Ok(Some(
+                if sub == "checkout" && !rest.iter().any(|p| p == "--" || p == END_OF_OPTIONS) {
+                    Intent::CheckoutPaths(paths())
+                } else {
+                    Intent::RestorePaths(paths())
+                },
+            ))
+        }
+        "clean" => {
+            if parsed.has_short(&['n']) || parsed.has_long("--dry-run") {
+                return Ok(None);
+            }
+            // -X removes ignored output only, the accepted AC-2 control.
+            if parsed.has_short(&['X']) {
+                return Ok(None);
+            }
+            if parsed.has_short(&['i'])
+                || parsed.has_long("--interactive")
+                || parsed.has_short(&['e'])
+                || parsed.has_long("--exclude")
+            {
+                return Err("interactive clean or exclusions need a separate dry-run and explicit named paths".into());
+            }
+            Ok(Some(Intent::CleanNonIgnored {
+                paths: paths(),
+                directories: parsed.has_short(&['d']),
+            }))
+        }
+        "stash" => Ok(
+            matches!(parsed.operands.first().copied(), Some("drop" | "clear"))
+                .then_some(Intent::StashDiscard),
+        ),
+        "branch" => {
+            if parsed.has_short(&['r']) || parsed.has_long("--remotes") {
+                return Ok(None);
+            }
+            let force = parsed.has_short(&['D'])
+                || ((parsed.has_short(&['d']) || parsed.has_long("--delete"))
+                    && (parsed.has_short(&['f']) || parsed.has_long("--force")));
+            Ok(force.then(|| Intent::ForceDeleteBranches(paths())))
+        }
+        "worktree" => {
+            if parsed.operands.first() != Some(&"remove")
+                || !(parsed.has_short(&['f']) || parsed.has_long("--force"))
+            {
+                return Ok(None);
+            }
+            let path = parsed
+                .operands
+                .get(1)
+                .ok_or("force removal has no resolved worktree path")?;
+            Ok(Some(Intent::ForceRemoveWorktree((*path).into())))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn discard_violation(level: PolicyLevel, sub: &str, why: &str) -> Violation {
+    Violation::new(
+        "git.discard_uncommitted",
+        level,
+        format!("`git {sub}` cannot safely discard local work: {why}"),
+        crate::remedy::DISCARD_LOCAL_WORK.remedy(),
+    )
+}
+
+/// Evaluate every target, with that target's own policy. An unavailable lookup
+/// refuses destructive commands; it never manufactures an empty repository.
+fn check_discard(
+    args: &[String],
+    sub: &str,
+    rest: &[String],
+    moved: &Moves<'_>,
+    prior_mutation: bool,
+    ctx: &GuardContext<'_>,
+    out: &mut Vec<Violation>,
+) {
+    let intent = discard_intent(sub, rest, moved);
+    if matches!(intent, Ok(None)) {
+        return;
+    }
+    let specs = match compose_targets(args, moved) {
+        Ok(specs) => specs,
+        Err(why) => {
+            if ctx.policy.discard_uncommitted.is_active() {
+                out.push(discard_violation(ctx.policy.discard_uncommitted, sub, &why));
+            }
+            return;
+        }
+    };
+    for spec in &specs {
+        let target = spec.as_ref().map(|s| Retarget {
+            path: &s.path,
+            git_dir: s.git_dir,
+        });
+        let mut unresolved = None;
+        let rules = match target {
+            None => Cow::Borrowed(ctx.policy),
+            Some(target) => {
+                if let Some(repo) = lookup(&target, ctx) {
+                    repo.policy.map_or(Cow::Borrowed(ctx.policy), Cow::Owned)
+                } else {
+                    unresolved = Some("target repository or policy is unreadable".to_string());
+                    Cow::Borrowed(ctx.policy)
+                }
+            }
+        };
+        let level = rules.discard_uncommitted;
+        if !level.is_active() {
+            continue;
+        }
+        let result = if let Some(why) = unresolved {
+            Err(why)
+        } else if prior_mutation {
+            Err("an earlier command may change the tree, stash or refs; run the inspection after that command finishes".into())
+        } else if moved.config_unknown
+            || args
+                .iter()
+                .take(args.len().saturating_sub(rest.len() + 1))
+                .any(|a| {
+                    a == "--work-tree"
+                        || a.starts_with("--work-tree=")
+                        || a == "--bare"
+                        || a.contains("core.worktree=")
+                        || a.contains("core.bare=")
+                        || a.contains("include.path=")
+                        || a.contains("includeIf.")
+                })
+        {
+            Err("explicit work-tree or bare repository overrides need an unambiguous git -C invocation".into())
+        } else {
+            match &intent {
+                Err(why) => Err(why.clone()),
+                Ok(Some(intent)) => ctx
+                    .discard_lookup
+                    .ok_or_else(|| "repository-state lookup is unavailable".to_string())
+                    .and_then(|probe| probe(&DiscardQuery { target, intent })),
+                Ok(None) => Ok(None),
+            }
+        };
+        let why = match result {
+            Ok(None) => continue,
+            Ok(Some(why)) | Err(why) => why,
+        };
+        let violation = discard_violation(level, sub, &why);
+        if !out.iter().any(|v| {
+            v.rule == violation.rule && v.level == violation.level && v.message == violation.message
+        }) {
+            out.push(violation);
+        }
+    }
+}
+
+/// A pre-call snapshot cannot describe changes made by earlier commands in
+/// this same shell call. Only obvious read-only operations preserve the proof.
+fn may_change_discard_state(segment: &str) -> bool {
+    let mut words = command_argv(segment);
+    strip_reserved_words(&mut words);
+    let mut tokens = shell_tokens(segment);
+    strip_reserved_words(&mut tokens);
+    if words.len() != tokens.len() {
+        return true;
+    }
+    let Some((program, args)) = strip_launchers(&words) else {
+        return false;
+    };
+    let name = basename(program);
+    // expand_commands emits these bodies separately, in execution order.
+    if (is_shell(name) && shell_c_argument(args).is_some()) || name == "eval" {
+        return false;
+    }
+    if name == "git" {
+        return git_subcommand(args).is_none_or(|(sub, rest)| !discard_readonly_git(sub, rest));
+    }
+    !matches!(
+        name,
+        "cd" | "pushd"
+            | "popd"
+            | "pwd"
+            | "true"
+            | "false"
+            | ":"
+            | "echo"
+            | "printf"
+            | "cat"
+            | "grep"
+            | "rg"
+            | "ls"
+    )
+}
+fn discard_readonly_git(sub: &str, rest: &[String]) -> bool {
+    matches!(
+        sub,
+        "status"
+            | "diff"
+            | "log"
+            | "show"
+            | "rev-parse"
+            | "ls-files"
+            | "ls-tree"
+            | "merge-base"
+            | "for-each-ref"
+            | "show-ref"
+            | "cat-file"
+            | "check-ignore"
+            | "help"
+            | "version"
+    ) && !rest
+        .iter()
+        .any(|p| p == "--output" || p.starts_with("--output="))
+}
+
+const DISCARD_RESTORE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('s', Arity::Value),
+        ('b', Arity::Value),
+        ('B', Arity::Value),
+        ('c', Arity::Value),
+        ('C', Arity::Value),
+    ],
+    long: &[
+        ("--source", Arity::Value),
+        ("--pathspec-from-file", Arity::Value),
+        ("--pathspec-file-nul", Arity::Flag),
+        ("--orphan", Arity::Value),
+        ("--conflict", Arity::Value),
+        ("--track", Arity::AttachedValue),
+        ("--force", Arity::Flag),
+        ("--discard-changes", Arity::Flag),
+        ("--patch", Arity::Flag),
+        ("--staged", Arity::Flag),
+        ("--worktree", Arity::Flag),
+        ("--detach", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--help", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+const DISCARD_CLEAN_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('e', Arity::Value)],
+    long: &[
+        ("--exclude", Arity::Value),
+        ("--force", Arity::Flag),
+        ("--dry-run", Arity::Flag),
+        ("--interactive", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--help", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+const DISCARD_MISC_OPTIONS: OptionSpec = OptionSpec {
+    short: &[],
+    long: &[
+        ("--force", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--help", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+#[cfg(test)]
+mod discard_integration_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn context<'a>(policy: &'a GitPolicy, probe: DiscardLookup<'a>) -> GuardContext<'a> {
+        GuardContext {
+            policy,
+            current_branch: "task/local",
+            integrate_token: false,
+            pr_base_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            discard_lookup: probe,
+            root_checkout: None,
+        }
+    }
+    fn discard_only(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
+        evaluate(command, ctx)
+            .into_iter()
+            .filter(|v| v.rule == "git.discard_uncommitted")
+            .collect()
+    }
+    #[test]
+    fn parser_recognizes_the_destructive_forms_and_preserves_controls() {
+        let policy = GitPolicy::default();
+        let dirty = |_: &DiscardQuery<'_>| Ok(Some("fixture local work".into()));
+        let ctx = context(&policy, Some(&dirty));
+        for command in [
+            "git reset --hard",
+            "git reset --har",
+            "git checkout -- .",
+            "git restore .",
+            "git restore --source HEAD src",
+            "git checkout -f task/other",
+            "git switch --discard-changes task/other",
+            "git stash drop",
+            "git stash clear",
+            "git clean -fd",
+            "git clean -df",
+            "git branch -D task/old",
+            "git branch -df task/old",
+            "git branch --delete --force task/old",
+            "git worktree remove -f sibling",
+            "git worktree remove --forc sibling",
+            "bash -lc 'git reset --hard'",
+            "command git reset --hard",
+        ] {
+            assert!(!discard_only(command, &ctx).is_empty(), "{command}");
+        }
+        for command in [
+            "git reset --soft HEAD~1",
+            "git clean -nd",
+            "git clean --dry-run",
+            "git clean -fdX target/",
+            "git stash pop",
+            "git stash list",
+            "git worktree list",
+            "git branch -r -D origin/task/old",
+            "git restore --help",
+        ] {
+            assert!(discard_only(command, &ctx).is_empty(), "{command}");
+        }
+    }
+    #[test]
+    fn absent_or_unreadable_state_does_not_prove_safety() {
+        let policy = GitPolicy::default();
+        let ctx = context(&policy, None);
+        assert!(discard_only("git reset --hard", &ctx)[0]
+            .message
+            .contains("lookup is unavailable"));
+        let unreadable = |_: &DiscardQuery<'_>| Err("status failed".into());
+        let ctx = context(&policy, Some(&unreadable));
+        assert!(discard_only("git reset --hard", &ctx)[0]
+            .message
+            .contains("status failed"));
+    }
+    #[test]
+    fn an_earlier_mutation_invalidates_clean_snapshot_proof() {
+        let policy = GitPolicy::default();
+        let clean = |_: &DiscardQuery<'_>| Ok(None);
+        let ctx = context(&policy, Some(&clean));
+        for command in [
+            "printf changed > src/a && git reset --hard",
+            "touch notes; git clean -fd",
+            "git commit -m update && git branch -D task/old",
+            "git stash push && git stash clear",
+            "bash -lc 'touch notes; git clean -fd'",
+        ] {
+            let found = discard_only(command, &ctx);
+            assert!(
+                found.iter().any(|v| v.message.contains("earlier command")),
+                "{command}: {found:?}"
+            );
+        }
+        for command in [
+            "git status && git reset --hard",
+            "echo inspecting && git reset --hard",
+            "git clean -fdX target/",
+        ] {
+            assert!(discard_only(command, &ctx).is_empty(), "{command}");
+        }
+    }
+    #[test]
+    fn discard_uncertainty_is_protected_on_feature_branches() {
+        let policy = GitPolicy::default();
+        let clean = |_: &DiscardQuery<'_>| Ok(None);
+        let ctx = context(&policy, Some(&clean));
+        for command in [
+            "git reset \"$(printf -- --hard)\"",
+            "git restore \"$UNKNOWN\"",
+            "git clean --exclude=keep -fd",
+            "git restore --pathspec-from-file=paths",
+        ] {
+            assert!(!discard_only(command, &ctx).is_empty(), "{command}");
+        }
+    }
+    #[test]
+    fn configured_relief_keeps_warn_and_off_semantics() {
+        let mut policy = GitPolicy {
+            discard_uncommitted: PolicyLevel::Warn,
+            ..GitPolicy::default()
+        };
+        let ctx = context(&policy, None);
+        let found = discard_only("git reset --hard", &ctx);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].level, PolicyLevel::Warn);
+        policy.discard_uncommitted = PolicyLevel::Off;
+        assert!(discard_only("git reset --hard", &context(&policy, None)).is_empty());
+    }
+    // All mutations below are fixture setup in newly created temp repositories.
+    fn fixture() -> (tempfile::TempDir, git2::Repository) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        repo.set_head("refs/heads/task/local").unwrap();
+        std::fs::create_dir(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/a"), "tracked\n").unwrap();
+        std::fs::write(temp.path().join(".gitignore"), "target/\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "test: fixture",
+            &repo.find_tree(oid).unwrap(),
+            &[],
+        )
+        .unwrap();
+        (temp, repo)
+    }
+    fn actual(cwd: &Path, command: &str) -> Vec<Violation> {
+        let policy = GitPolicy::default();
+        let common = git2::Repository::discover(cwd)
+            .unwrap()
+            .commondir()
+            .to_path_buf();
+        let target = |s: &Retarget<'_>| read_target(cwd, Some(&common), s);
+        let probe =
+            |q: &DiscardQuery<'_>| super::super::git_discard::inspect(cwd, q.target, q.intent);
+        let alias = |q: &AliasQuery<'_>| read_alias(cwd, q);
+        let mut ctx = context(&policy, Some(&probe));
+        ctx.dir_target_lookup = Some(&target);
+        ctx.alias_lookup = Some(&alias);
+        discard_only(command, &ctx)
+    }
+    #[test]
+    fn real_dirty_clean_file_restore_and_alias_pairs() {
+        let (temp, repo) = fixture();
+        assert!(actual(temp.path(), "git reset --hard").is_empty());
+        std::fs::write(temp.path().join("src/a"), "dirty\n").unwrap();
+        for command in ["git reset --hard", "git checkout -- .", "git restore src"] {
+            assert!(!actual(temp.path(), command).is_empty(), "{command}");
+        }
+        assert!(actual(temp.path(), "git restore src/a").is_empty());
+        assert!(!actual(&temp.path().join("src"), "git restore .").is_empty());
+        repo.config()
+            .unwrap()
+            .set_str("alias.wipe", "reset --hard")
+            .unwrap();
+        assert!(!actual(temp.path(), "git wipe").is_empty());
+        std::fs::remove_dir_all(temp.path().join("src")).unwrap();
+        assert!(!actual(temp.path(), "git restore src").is_empty());
+    }
+    #[test]
+    fn retargets_use_actual_tree_and_foreign_policy() {
+        let (first, _repo) = fixture();
+        let (second, _other) = fixture();
+        std::fs::write(second.path().join("src/a"), "dirty\n").unwrap();
+        for command in [
+            format!("git -C '{}' reset --hard", second.path().display()),
+            format!("cd '{}' && git reset --hard", second.path().display()),
+        ] {
+            assert!(!actual(first.path(), &command).is_empty(), "{command}");
+        }
+        std::fs::create_dir(second.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            second.path().join(".codeflow/policy.json"),
+            r#"{"schema_version":1,"git":{"discard_uncommitted":"off"}}"#,
+        )
+        .unwrap();
+        assert!(actual(
+            first.path(),
+            &format!("git -C '{}' reset --hard", second.path().display())
+        )
+        .is_empty());
     }
 }

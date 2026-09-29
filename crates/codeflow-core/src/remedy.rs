@@ -170,6 +170,10 @@ macro_rules! catalog {
 }
 
 catalog! {
+    /// Local changes or commits whose recovery has not been proved.
+    DISCARD_LOCAL_WORK = Step::Git("git stash push"),
+        "inspect `git status` and save tracked changes with `git stash push` or a commit; preview untracked removal with `git clean -nd`, keep or export unique files, and retain a branch or worktree until another live ref preserves its commits; restore a named file only when that is intended";
+
     // Records.
 
     /// A task whose written status disagrees with its branches.
@@ -583,6 +587,10 @@ catalog! {
     /// The per-user project registry that could not be written.
     REGISTRY_UNWRITTEN = Step::Edit("{path}"),
         "repair or delete {path}, the per-user project registry; the next codeflow command writes it again";
+
+    /// An action reserved for the operator, including a secret-store read.
+    OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),
+        "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`";
 
     /// A privilege escalation proposed from a session.
     PRIVILEGE_ESCALATION = Step::Edit(".codeflow/policy.json"),

@@ -77,6 +77,8 @@ use Proof::{Confirms, Excluded, Runs};
 
 /// Every catalogue row and how it is covered.
 const ROWS: &[(&str, Proof)] = &[
+    ("DISCARD_LOCAL_WORK", Runs),
+    ("OUTWARD_ACTION", Excluded(HumanAuthority)),
     ("TASK_STATUS", Runs),
     ("EPIC_STATUS", Runs),
     ("SUPERSEDED_CITATION", Runs),

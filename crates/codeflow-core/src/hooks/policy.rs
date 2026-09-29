@@ -594,12 +594,8 @@ pub struct SecuritySection {
     /// A headless peer run (`claude -p`, `codex exec`, `grok -p`), TSK-136.
     /// Peer seats run interactively; a headless run has no verified native
     /// session or recheckable thread. Default `block` (D4, ADR-0075); a
-    /// project that needs one names its family in `headless_opt_in`.
+    /// project can set `headless_peer_runs` to warn or off.
     pub headless_peer_runs: PolicyLevel,
-    /// The families whose headless runs a project opts into, with its reason
-    /// (D4). Absent by default.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub headless_opt_in: Option<HeadlessOptIn>,
     /// Findings in a script file a command runs (TSK-172). Default `warn`.
     pub script_bypass: PolicyLevel,
     /// Outward actions the text rules cannot spell: publishing, releases,
@@ -627,20 +623,6 @@ pub struct SecuritySection {
     /// TSK-174.
     pub sandbox_retry_allow: Vec<serde_json::Value>,
 }
-
-/// `security.headless_opt_in`: the catalog families (`claude`, `codex`,
-/// `grok`) whose headless runs this project allows, and why (D4).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HeadlessOptIn {
-    /// Catalog family ids: `claude`, `codex` or `grok`.
-    pub families: Vec<String>,
-    /// Why this project needs headless runs.
-    pub reason: String,
-}
-
-/// The catalog family ids `security.headless_opt_in.families` accepts.
-pub const HEADLESS_FAMILIES: [&str; 3] = ["claude", "codex", "grok"];
 
 /// The shipped retry entry: the Codex plugin companion, argument-bound. The
 /// placeholders are replaced by the values TSK-174 records at qualification;
@@ -698,7 +680,6 @@ impl Default for SecuritySection {
             dangerous_commands: PolicyLevel::Block,
             privilege_escalation: PolicyLevel::Block,
             headless_peer_runs: PolicyLevel::Block,
-            headless_opt_in: None,
             script_bypass: PolicyLevel::Warn,
             outward_actions: PolicyLevel::Block,
             interpreter_scan: PolicyLevel::Block,
@@ -1056,7 +1037,6 @@ mod tests {
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
         assert_eq!(s.privilege_escalation, PolicyLevel::Block);
         assert_eq!(s.headless_peer_runs, PolicyLevel::Block);
-        assert!(s.headless_opt_in.is_none());
         assert_eq!(s.script_bypass, PolicyLevel::Warn);
         for level in [
             s.outward_actions,

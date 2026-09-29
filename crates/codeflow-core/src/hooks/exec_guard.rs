@@ -1,39 +1,10 @@
-//! `exec-guard` — the `PreToolUse` shell security hook (ADR-0008).
+//! Shell execution policy, backed by the shared action table (ADR-0075).
 //!
-//! A thin adapter over two existing security modules — [`DangerousModule`] and
-//! [`PrivilegeModule`] — that runs them against a Bash command, plus the
-//! headless peer run check (`claude -p`, `codex exec`, `grok -p`; TSK-136) at
-//! the level `security.headless_peer_runs` sets, `block` by default. Catastrophic
-//! commands are a non-relaxable block; privilege escalation maps to the level
-//! configured in `policy.json`'s `security` section. It sits alongside
-//! `git-guard` on the `PreToolUse` (Bash/PowerShell) event and
-//! shares its lenient payload contract, so the same binary serves both Claude
-//! and the Codex hooks engine (ADR-0008).
-//!
-//! ## Why these two modules, and why block vs warn
-//!
-//! The owner posture is autonomy by default: hard protections exist only for
-//! (a) credential/secret reads, (b) truly destructive commands, (c) protected
-//! refs. This guard owns (b), and only advises on privilege escalation:
-//!
-//! - **`dangerous_commands` = block.** `rm -rf` on `/`, `~`, or a system dir;
-//!   `dd` to a block device; `mkfs`; fork bombs; recursive chmod/chown on system
-//!   paths. None of these is ever a legitimate project operation, so there is no
-//!   sanctioned path to offer — a hard block is the whole point.
-//! - **`privilege_escalation` = block** (operator decision D5, ADR-0075,
-//!   amending ADR-0008's warn). sudo/su/doas/pkexec/runuser and the Windows
-//!   launchers, run directly, chained, piped to, or wrapped in a shell `-c`
-//!   string or `eval`; `LD_PRELOAD` and a `PATH` through `/tmp`. A shell
-//!   `-c` string that reaches no launcher, `source` and `LD_LIBRARY_PATH`
-//!   are ordinary work and are not reported. Agent sessions no longer prompt for these:
-//!   the presets deny the plain forms and this guard refuses the rest, and
-//!   the operator runs privileged commands personally. A project may set
-//!   `warn` in `policy.json`; `codeflow update` keeps a value that differs
-//!   from the shipped default. Authorization never relaxes the catastrophic
-//!   floor above.
-//!
-//! These two are the only scanner modules; the unwired v1 modules were
-//! removed (TSK-137). The live git protections are `hooks/git_guard.rs`.
+//! Catastrophic commands always block. Privilege, outward actions, secret
+//! reads and headless peer runs use their existing policy levels. The family
+//! classifier unwraps supported launchers; interpreter literals use the same
+//! rule as the action they name. Enforcement-path references use
+//! `git.hook_integrity`. Opaque child programs remain outside this parser.
 
 use crate::security::dangerous::DangerousModule;
 use crate::security::headless::{headless_peer_run, HeadlessRun};
@@ -51,6 +22,19 @@ use super::Violation;
 /// checking is a non-relaxable floor.
 #[must_use]
 pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+    evaluate_at(command, levels, PolicyLevel::Block, &cwd, &cwd)
+}
+
+/// Evaluate commands and interpreter literals at the shell's actual directory.
+#[must_use]
+pub fn evaluate_at(
+    command: &str,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+) -> Vec<Violation> {
     // The dangerous/privilege modules read only `command`; branch, sandbox
     // bypass, and the protected-path policy are irrelevant to them, so default
     // values suffice.
@@ -81,10 +65,35 @@ pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
         }
     }
 
+    for violation in crate::security::outward::evaluate_at(command, levels, Some(cwd)) {
+        let duplicate = violations.iter().any(|existing| {
+            existing.rule == violation.rule
+                && (existing.message == violation.message
+                    || violation.rule == "security.privilege_escalation")
+        });
+        if !duplicate {
+            violations.push(violation);
+        }
+    }
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from);
+    for finding in crate::security::interpreter::evaluate(
+        command,
+        levels,
+        integrity,
+        cwd,
+        root,
+        home.as_deref(),
+    ) {
+        if !violations.iter().any(|v| v.rule == finding.rule) {
+            violations.push(finding);
+        }
+    }
     violations
 }
 
-fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Violation {
+pub(crate) fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Violation {
     let enforcement = if level == PolicyLevel::Block {
         "configured policy refuses it"
     } else {

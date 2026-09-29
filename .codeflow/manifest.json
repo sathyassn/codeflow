@@ -1451,7 +1451,7 @@
     ".codex/hooks.json": {
       "src": "codex/hooks.json",
       "ownership": "managed",
-      "sha256": "9bc5c918c9e243ca888bf37366f6c434fb81b723a3dcc1f4db8d07c0a7a22595",
+      "sha256": "8c66f9893ec7aa5d6088e1b7cdfab0e80f12900e409ba9d3d0508fd268fa2c62",
       "exec": false
     },
     ".codex/rules/codeflow.rules": {
@@ -1493,7 +1493,7 @@
     ".grok/hooks/codeflow.json": {
       "src": "grok/hooks.json",
       "ownership": "managed",
-      "sha256": "fbdb4dfa10544748b64b28c7ac74a54801a94b20a77345e58b505ddaaee78f12",
+      "sha256": "513d858e62af1f02ac08613886a54bacc5271ddba2d4dd1d1d53910d3737d6c4",
       "exec": false
     },
     ".grok/sandbox.toml": {

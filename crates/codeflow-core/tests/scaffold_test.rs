@@ -1431,6 +1431,10 @@ fn update_removes_the_deprecated_human_authorization_key() {
     let mut policy: serde_json::Value =
         serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
     policy["human_authorization"] = "none".into();
+    policy["security"] = serde_json::json!({
+        "headless_opt_in": {"families": ["codex"], "reason": "CI"},
+        "headless_peer_runs": "warn"
+    });
     policy["git"]["commit_format"] = "warn".into();
     std::fs::write(
         root.join(".codeflow/policy.json"),
@@ -1444,6 +1448,12 @@ fn update_removes_the_deprecated_human_authorization_key() {
     let after: serde_json::Value =
         serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
     assert!(after.get("human_authorization").is_none(), "{after}");
+    assert!(
+        after["security"].get("headless_opt_in").is_none(),
+        "{after}"
+    );
+    assert_eq!(after["security"]["headless_peer_runs"], "warn");
+    assert!(codeflow_core::hooks::policy_schema::deprecation_warnings(&root).is_empty());
     assert_eq!(after["git"]["commit_format"], "warn", "other values kept");
     let notes = &report
         .files
@@ -1451,6 +1461,12 @@ fn update_removes_the_deprecated_human_authorization_key() {
         .find(|f| f.dest == ".codeflow/policy.json")
         .unwrap()
         .notes;
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "removed deprecated key security.headless_opt_in"),
+        "{notes:?}"
+    );
     assert!(
         notes
             .iter()

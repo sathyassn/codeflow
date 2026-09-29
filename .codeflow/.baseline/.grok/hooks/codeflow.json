@@ -7,6 +7,12 @@
           { "type": "command", "command": "codeflow hook git-guard", "timeout": 10 },
           { "type": "command", "command": "codeflow hook exec-guard", "timeout": 10 }
         ]
+      },
+      {
+        "matcher": "^(write|search_replace|Edit|Write)$",
+        "hooks": [
+          { "type": "command", "command": "codeflow hook edit-guard", "timeout": 10 }
+        ]
       }
     ]
   }
