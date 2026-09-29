@@ -42,9 +42,9 @@ counts as independent cross-lineage review.
 4. Synthesize once, in the canonical review: the verdict, the material
    differences between the second opinion and your own analysis, the
    verified findings and their dispositions; group the agreements. Support
-   each point with your own evidence (file:line, command output). Write the
-   synthesis plainly: simple, straightforward and clear, no mannered prose
-   (see `.codeflow/rules/writing.md`). Label each finding `axis: standards`
+   each point with your own evidence (file:line, command output).
+   Write the synthesis plainly: simple, straightforward and clear, no
+   mannered prose (see `.codeflow/rules/writing.md`). Label each finding `axis: standards`
    or `axis: spec`; when both apply, label both so one cannot mask the other.
    For task acceptance, ask `cf-reviewer`'s two questions per criterion and
    refuse a block copied from an older commit. Disposition

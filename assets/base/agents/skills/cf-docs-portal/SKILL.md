@@ -30,8 +30,8 @@ or a marketing layout fails this skill.
 Apply `cf-design` only when the **consuming product** needs experience
 direction, never to utility portal themes. Portal themes, Starlight
 components, and utility tokens are never product brand authority, and
-product DS stays out of the portal. Apply `cf-editorial-review` to
-substantive explanatory copy where its description triggers it.
+product DS stays out of the portal. Apply `cf-editorial-review` by its
+trigger.
 
 ## 1. Decide whether to adopt
 
@@ -133,17 +133,14 @@ graph; do not dump one navigation folder per package or duplicate shared prose.
 
 ## 4. Preserve evidence and safety
 
-Run the checks the change's impact needs, from the adopted portal root, as
-[operations](references/operations.md) sets out. A content change gets the
-locked check and build and evidence validation; a navigation, search, theme,
-runtime or accessibility change also gets the rendered journeys:
+Run what the change needs from the portal root: content gets the block
+below; navigation, search, theme, runtime or accessibility also section 5.
 
 ```sh
-npm run deps:install        # when dependencies are absent or changed
+npm run deps:install
 npm run check
 npm run build
 codeflow validate --portal <repository-relative-directory>
-npm run browser:verify      # navigation, search, theme, runtime, accessibility
 ```
 
 The managed installer verifies the lockfile's lifecycle-script inventory and

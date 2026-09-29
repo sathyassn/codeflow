@@ -121,8 +121,12 @@ with `herdr pane send-text`, then `herdr pane send-keys` Enter:
 D=.agents/skills/cf-herdr/scripts/deliver.py
 # Codex or Grok seat: confirms the turn started
 python3 "$D" --pane "$pane_id" --file "$P"
-# Tracked Claude, after `codeflow delegate arm`; then the lifecycle waits
+# Tracked Claude, after `codeflow delegate arm`: the lifecycle confirms
 python3 "$D" --pane "$pane_id" --file "$P" --lifecycle
+codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
+  --until accepted --turn-id "$TURN" --timeout-seconds 120
+codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
+  --until terminal --turn-id "$TURN" --timeout-seconds 3600
 ```
 
 It sends nothing when the seat's folder is gone (exit 3), the file is over
