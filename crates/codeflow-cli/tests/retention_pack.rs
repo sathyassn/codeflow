@@ -154,9 +154,8 @@ fn assert_scaffold_carries_map_and_hooks(case: &str, record: &Value, fixture: &P
         "{case}"
     );
     assert!(
-        agents.contains(
-            "| report status or hand off | the result first, each item by its outcome in words"
-        ),
+        agents
+            .contains("| report status or hand off | each item by its outcome in words, IDs after"),
         "{case}"
     );
     assert!(agents.contains("| show something complex |"), "{case}");
@@ -195,8 +194,9 @@ fn assert_local_window_and_reinjection(case: &str, plan: &Value, fixture: &Path,
         }),
     );
     assert!(block.contains(GUIDANCE_HEADING), "{case}: {block}");
+    // TSK-184: the duty is a moment row of the map, re-injected as such.
     assert!(
-        block.contains("Durations come from cf-estimate."),
+        block.contains("give a duration, date or effort: /cf-estimate"),
         "{block}"
     );
     assert!(block.contains("cf-present"), "{block}");
