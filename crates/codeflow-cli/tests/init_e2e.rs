@@ -2010,6 +2010,50 @@ fn a_fresh_project_installs_the_work_lifecycle_and_every_command_it_names_runs()
     }
 }
 
+#[test]
+fn installed_ship_reads_release_integration_only_when_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = codeflow(dir.path(), &["init", "--yes", "--full"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for tree in [".claude", ".agents"] {
+        let text =
+            std::fs::read_to_string(dir.path().join(format!("{tree}/skills/cf-ship/SKILL.md")))
+                .unwrap();
+        assert!(text.contains("references/pr-evidence.md#release-integration-after-landing"));
+        let reference = std::fs::read_to_string(
+            dir.path()
+                .join(format!("{tree}/skills/cf-ship/references/pr-evidence.md")),
+        )
+        .unwrap();
+        let text = format!("{text}\n{reference}");
+        for required in [
+            "only when",
+            "release pattern",
+            "R-120",
+            "after the landing",
+            "gh run view",
+            "no release-integration task to own it",
+        ] {
+            assert!(
+                text.contains(required),
+                "installed skill missing {required}"
+            );
+        }
+    }
+    assert!(!dir
+        .path()
+        .join(".github/workflows/codeflow-release.yml")
+        .exists());
+    assert!(!dir
+        .path()
+        .join(".github/workflows/codeflow-release-integration.yml")
+        .exists());
+}
+
 /// The step a finding names, as printed between the backticks after `run `.
 fn printed_step(output: &str, finding: &str) -> Vec<String> {
     let at = output
