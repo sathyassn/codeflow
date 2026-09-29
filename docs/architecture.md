@@ -115,7 +115,7 @@ Records follow the Markdown-truth design.
 | id registry enforcement | pre-push and git-guard refuse deletion, force and non-additive ranges on the registry; the enforcing CI job runs on `pull_request_target` (the `codeflow-registry` workflow from the default branch) and checks out the pull request's base commit; `remote protect` applies the branch's data profile; `doctor` reports damage, unplaced ids and host assurance. Claims stay advisory (ADR-0072) |
 | ledger compaction | syncs the directory after installing the merged base and again after deleting fragments, so crash ordering preserves the base |
 | documentation validation | checks the non-executable structural graph for well-formed IDs, filenames, references, duplicates, parent/standalone exclusivity, spec readiness, self-edges, and cycles |
-| `work start` preflight | read-only; it proves the task and its applicable graph at the merge-base with the declared target, and the CLI, pre-commit hook, and detached CI share that core check |
+| `work start` preflight | read-only; it proves the task and its applicable graph at the merge-base with the declared target, and the CLI and detached CI share that core check |
 | out of scope | scheduling and status mutation remain Plan and native-harness concerns (ADR-0040, ADR-0046) |
 
 Three areas outgrew this file and are graduated, with the pointer left behind:

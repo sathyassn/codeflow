@@ -141,7 +141,7 @@ npm run check:browser
 |---|---|
 | `npm run supply-chain` | Refreshes the committed audit, CycloneDX software bill of materials (SBOM), and license inventory |
 | `npm run check` | Proves two clean builds are byte-identical and enforces the raw, Brotli and export budgets and the integrity manifest |
-| `npm run check:browser` | Exercises the representative accessible renderer and mode and review behavior in a task-owned browser, including a dense bounded multi-diagram corpus and the long-task envelope |
+| `npm run check:browser` | Exercises the renderer's accessibility, display modes, saved appearance, static export and review behavior (selection, comments and submit) in a task-owned browser whose network stays on loopback |
 
 Review the generated diff. Never hand-edit the distribution or its evidence
 files. Release builds consume only the committed assets, and consumer machines
