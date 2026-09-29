@@ -3667,6 +3667,25 @@ fn a_brought_spec_approval_is_judged_where_it_landed() {
         ],
     );
 
+    // A brought approval that the release line then edits directly is
+    // judged over the whole range.
+    let fx = bring(&|fx| {
+        land_files(fx, LINE_A, "plan/approve", &[(SPEC, spec("approved"))]);
+    });
+    fx.write(
+        SPEC,
+        &spec("approved").replace("A contract.", "An edited contract."),
+    );
+    fx.commit("docs(records): edit the contract on the release line");
+    blocks(
+        &agree(&fx, "a brought approval edited directly"),
+        "a brought approval the release line also changes",
+        &[
+            "work.records",
+            "a spec becomes approved only in a planning-only change",
+        ],
+    );
+
     let fx = bring(&|_| {});
     fx.write(SPEC, &spec("approved"));
     fx.commit("docs(records): approve the contract on the release line");
