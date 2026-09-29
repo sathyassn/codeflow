@@ -161,8 +161,7 @@ fn criteria(
                     .all(|(_, path)| is_planning_path(path));
             planning_only
                 || (branch.starts_with("integration/")
-                    && check_epic_line(root, branch, range.base_ref, range.base, range.head)
-                        .is_ok())
+                    && check_epic_line(root, branch, range.target, range.base, range.head).is_ok())
         }
     };
     Ok(if amendable {

@@ -161,6 +161,10 @@ pub(super) struct Range<'a> {
     pub base_ref: &'a str,
     pub base: &'a str,
     pub head: &'a str,
+    /// The branch the range lands on: `--into`, the host's pull request
+    /// target, a named base, else the default work target; never the
+    /// commit that bounds the range (a SHA base names no branch).
+    pub target: &'a str,
 }
 
 /// Whether durable work tracking is on at the head or at the target, so a
@@ -247,7 +251,7 @@ pub(super) fn dispatch(
         branch_task: task_id_from_branch(root, branch),
         epic_line: branch
             .starts_with("integration/")
-            .then(|| check_epic_line(root, branch, range.base_ref, range.base, range.head)),
+            .then(|| check_epic_line(root, branch, range.target, range.base, range.head)),
     };
     let class = match classify(&input) {
         Ok(class) => class,

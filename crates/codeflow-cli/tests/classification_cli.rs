@@ -799,6 +799,16 @@ fn a_spec_approval_behind_a_private_merge_is_refused() {
     }
 
     // The approval landed on a verified epic line by a planning PR.
+    let line = line_with_planning_landing(root, &approved);
+    assert_passes(
+        &ci(root, line, &body("Task: EPC-001")),
+        "planning landing on a verified line",
+    );
+}
+
+/// A verified epic line: TSK-003 targets it, the spec approval lands by a
+/// planning PR, then a task PR lands product code. Returns the line's name.
+fn line_with_planning_landing(root: &Path, approved: &str) -> &'static str {
     let line = "integration/EPC-001-outcome";
     git(root, &["branch", line, "main"]);
     let record = task("TSK-003", "feat", "todo").replace(
@@ -819,7 +829,7 @@ fn a_spec_approval_behind_a_private_merge_is_refused() {
     git(root, &["switch", "-q", line]);
     merge(root, "plan/line");
     git(root, &["switch", "-q", "-c", "plan/approve"]);
-    std::fs::write(root.join("project-management/specs/SPC-001.md"), &approved).unwrap();
+    std::fs::write(root.join("project-management/specs/SPC-001.md"), approved).unwrap();
     git(
         root,
         &["commit", "-qam", "docs(specs): approve the contract"],
@@ -831,8 +841,98 @@ fn a_spec_approval_behind_a_private_merge_is_refused() {
     git(root, &["commit", "-qam", "feat: build on the line"]);
     git(root, &["switch", "-q", line]);
     merge(root, "task/TSK-003-work");
-    assert_passes(
-        &ci(root, line, &body("Task: EPC-001")),
-        "planning landing on a verified line",
+    line
+}
+
+/// `codeflow ci` as the shipped policy workflow calls it: a SHA base, the
+/// pull request's target in the host's variables, no `--into`; `extra`
+/// adds arguments and `env` the host variables.
+fn ci_hosted(
+    root: &Path,
+    base: &str,
+    branch: &str,
+    pr_body: &str,
+    extra: &[&str],
+    env: &[(&str, &str)],
+) -> (i32, String) {
+    let mut cmd = codeflow();
+    cmd.args([
+        "ci",
+        "--base",
+        base,
+        "--head",
+        "HEAD",
+        "--branch",
+        branch,
+        "--pr-body",
+        pr_body,
+    ])
+    .args(extra);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    let out = cmd.current_dir(root).output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// The shipped policy workflow passes the base as a SHA and names the pull
+/// request's target only in the host's variables (A184-R3-1). The line
+/// proof reads that target, `--into`, or the default work target, never
+/// the SHA, so a verified line is recognized by classification, acceptance
+/// and the record judge; a target the line does not land on still refuses.
+#[test]
+fn a_verified_line_is_recognized_from_a_sha_base() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("project-management/specs")).unwrap();
+    std::fs::write(root.join("project-management/specs/SPC-001.md"), SPEC).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "docs(specs): draft the contract"]);
+    let approved = SPEC.replace("status: draft", "status: approved");
+    let line = line_with_planning_landing(root, &approved);
+    let sha = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let epic = body("Task: EPC-001");
+    for (what, extra, env) in [
+        (
+            "GitHub pull request target",
+            &[][..],
+            &[
+                ("GITHUB_EVENT_NAME", "pull_request"),
+                ("GITHUB_BASE_REF", "main"),
+            ][..],
+        ),
+        ("--into", &["--into", "main"][..], &[][..]),
+        ("default work target", &[][..], &[][..]),
+    ] {
+        let result = ci_hosted(root, &sha, line, &epic, extra, env);
+        assert_passes(&result, what);
+        assert!(
+            result.1.contains("class: epic integration line of EPC-001"),
+            "{what}: {}",
+            result.1
+        );
+    }
+    git(root, &["branch", "release/next", "main"]);
+    assert_blocks(
+        &ci_hosted(root, &sha, line, &epic, &["--into", "release/next"], &[]),
+        "a target the line does not land on",
+        "lands on 'main', not 'release/next'",
     );
 }

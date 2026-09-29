@@ -306,13 +306,22 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut ran,
     );
 
+    // The branch a pull request merges into: `--into`, the host's target
+    // variable, else a named `--base`. A SHA base names no branch.
+    let into = args
+        .into
+        .clone()
+        .or_else(|| detect_target(|k| std::env::var(k).ok().filter(|v| !v.is_empty())))
+        .or_else(|| args.base.as_deref().and_then(named_branch));
+    let line_target = line_target(&root, into.as_deref());
+
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     record_checks(
         &root,
         &base_candidates,
         &head,
         args.baseline_from.as_deref(),
-        verified_epic_line(&root, &branch, &base_candidates, &head),
+        verified_epic_line(&root, &branch, &base_candidates, &head, &line_target),
         &mut tagged,
         &mut ran,
     );
@@ -336,11 +345,6 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
-    let into = args
-        .into
-        .clone()
-        .or_else(|| detect_target(|k| std::env::var(k).ok().filter(|v| !v.is_empty())))
-        .or_else(|| args.base.as_deref().and_then(named_branch));
     let destination = args.destination.clone().or_else(|| origin_url(&root));
     let advertisement = if args.advertisement_stdin {
         let mut listed = String::new();
@@ -366,6 +370,7 @@ pub fn run(args: &CiArgs) -> i32 {
         },
         &base_candidates,
         &head,
+        &line_target,
         &mut tagged,
         &mut ran,
     );
@@ -510,6 +515,7 @@ fn work_checks<'a>(
     names: &Names<'_>,
     base_candidates: &'a [String],
     head: &str,
+    line_target: &str,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
 ) -> bool {
@@ -520,6 +526,7 @@ fn work_checks<'a>(
         base_ref,
         base,
         head,
+        target: line_target,
     });
     let branch = names.branch;
     let class = pr_body.and_then(|body| {
@@ -552,17 +559,31 @@ fn record_checks(
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
 }
 
+/// The branch a range lands on, for the line proof: the pull request's
+/// target when one is named (`into`), else the repository's default work
+/// target. The commit that bounds the range is never a branch (a hosted
+/// run passes the base as a SHA), so it is not consulted.
+fn line_target(root: &Path, into: Option<&str>) -> String {
+    into.map(str::to_string)
+        .or_else(|| codeflow_core::workgraph::default_work_target(root))
+        .unwrap_or_else(|| "main".to_string())
+}
+
 /// Whether the range is a verified epic integration line (SPC-013 R-60): the
-/// same proof the acceptance step uses, so the record judge treats each
-/// landing on the line as its own change. Any other range is judged whole.
-fn verified_epic_line(root: &Path, branch: &str, base_candidates: &[String], head: &str) -> bool {
+/// same proof classification and the acceptance step use, so the record
+/// judge treats each landing on the line as its own change. Any other range
+/// is judged whole.
+fn verified_epic_line(
+    root: &Path,
+    branch: &str,
+    base_candidates: &[String],
+    head: &str,
+    target: &str,
+) -> bool {
     branch.starts_with("integration/")
-        && base_candidates
-            .iter()
-            .find_map(|name| rev_parse(root, name).map(|sha| (name, sha)))
-            .is_some_and(|(name, sha)| {
-                codeflow_core::workgraph::check_epic_line(root, branch, name, &sha, head).is_ok()
-            })
+        && resolve_base(root, base_candidates).is_some_and(|sha| {
+            codeflow_core::workgraph::check_epic_line(root, branch, target, &sha, head).is_ok()
+        })
 }
 
 /// Name every invalid policy key and, when a key is unknown to this binary,
