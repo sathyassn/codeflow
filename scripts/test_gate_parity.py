@@ -10,6 +10,9 @@ suite, so every way of running less must read as drift.
 import copy
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -123,6 +126,41 @@ class NodePinControls(unittest.TestCase):
     def test_the_committed_config_and_workflow_agree(self):
         self.assertEqual(self.problems(CONFIG), [])
 
+    def test_cmd_keeps_each_node_launcher_and_chain_together(self):
+        for name in (PORTAL, PRESENT):
+            with self.subTest(name=name):
+                command = full_command(CONFIG, name)
+                self.assertEqual(parity.cmd_segments(command), [command])
+                pin, inner = parity.with_node_parts(command)
+                self.assertIsNotNone(pin)
+                self.assertIn(" && ", inner)
+
+    def test_cmd_split_model_handles_quotes_operators_and_caret(self):
+        self.assertEqual(parity.cmd_segments('echo "a&&b|c" ^& d'),
+                         ['echo "a&&b|c" ^& d'])
+        self.assertEqual(parity.cmd_segments('echo a && echo b || echo c | more'),
+                         ['echo a', 'echo b', 'echo c', 'more'])
+
+    def test_single_quoted_node_chain_is_drift(self):
+        for name in (PORTAL, PRESENT):
+            def old_form(cfg, n=name):
+                command = full_command(cfg, n)
+                pin, inner = parity.with_node_parts(command)
+                self.assertIsNotNone(pin)
+                target(cfg, n)["modes"]["full"]["command"] = (
+                    f"python3 -B scripts/with-node.py {pin} '{inner}'")
+            with self.subTest(name=name):
+                problems = self.problems(mutated(old_form))
+                self.assert_problem(problems, name, "double quotes")
+
+    @unittest.skipUnless(os.name == "nt", "requires cmd.exe and the Windows CI Node install")
+    def test_docs_portal_target_runs_through_cmd_on_windows(self):
+        command = full_command(CONFIG, PORTAL)
+        run = subprocess.run(["cmd.exe", "/D", "/S", "/C", command], cwd=ROOT,
+                             capture_output=True, text=True, check=False)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("with-node: Node 24.18.0", run.stderr)
+
     def test_each_node_target_runs_through_its_version_file(self):
         for name, pin in ((PORTAL, "docs-portal/.node-version"),
                           (PRESENT, "crates/codeflow-present/web/.node-version")):
@@ -182,6 +220,16 @@ class GateBinaryControls(unittest.TestCase):
 
     def test_the_committed_config_passes_the_gate_binary(self):
         self.assertEqual(parity.gate_binary_problems(CONFIG), [])
+
+    def test_gate_binary_helper_follows_custom_target_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, CARGO_TARGET_DIR=tmp)
+            run = subprocess.run([sys.executable, "-B", "scripts/gate-binary.py"],
+                                 cwd=ROOT, env=env, capture_output=True, text=True,
+                                 check=False)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout.strip(),
+                             str((Path(tmp) / "debug" / "codeflow").resolve()))
 
     def test_a_real_browser_check_without_the_gate_binary_is_refused(self):
         for replacement in ("", "CF_PRESENT_CODEFLOW=target/debug/codeflow "):

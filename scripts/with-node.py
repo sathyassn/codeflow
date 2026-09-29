@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run a gate target's command on the Node version its version file pins.
 
-usage: python3 -B scripts/with-node.py <version-file> '<shell command>'
+usage: python3 -B scripts/with-node.py <version-file> "<shell command>"
 
 One `codeflow test --mode full` runs targets that pin different Node
 versions (TSK-142 AC-1): `docs-portal` reads `docs-portal/.node-version` and
@@ -90,6 +90,18 @@ def fail(message: str) -> None:
     sys.exit(1)
 
 
+def run_inner(command: str, env: dict[str, str], *, windows: bool) -> int:
+    """Run the chain with POSIX syntax even when the gate uses cmd.exe."""
+    if windows:
+        shell = shutil.which("bash")
+        if shell is None:
+            fail("bash is required to run the pinned Node target on Windows")
+        return subprocess.run([shell, "-c", command], env=env, check=False).returncode
+    shell = shutil.which("sh") or "/bin/sh"
+    os.execve(shell, [shell, "-c", command], env)
+    return 1  # unreachable: execve replaces this process or raises
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 3:
         fail("usage: with-node.py <version-file> '<shell command>'")
@@ -106,11 +118,7 @@ def main(argv: list[str]) -> int:
     env["PATH"] = f"{node.parent}{os.pathsep}{env.get('PATH', '')}"
     sys.stdout.flush()
     sys.stderr.flush()
-    if os.name == "nt":
-        return subprocess.run(command, shell=True, env=env, check=False).returncode
-    shell = shutil.which("sh") or "/bin/sh"
-    os.execve(shell, [shell, "-c", command], env)
-    return 1  # unreachable: execve replaces this process or raises
+    return run_inner(command, env, windows=os.name == "nt")
 
 
 if __name__ == "__main__":
