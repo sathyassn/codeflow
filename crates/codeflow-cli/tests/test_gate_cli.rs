@@ -89,6 +89,7 @@ fn start(name: &str, mode: &str) -> String {
     format!("[codeflow test] starting target '{name}' ({mode} mode)")
 }
 
+#[cfg(unix)]
 const TWO_SLEEPERS: &str = r#"{"schema_version": "1.0", "targets": [
   {"name": "first", "runner": "custom", "modes": {"full": {"command": "sleep 1"}}},
   {"name": "second", "runner": "custom", "modes": {"full": {"command": "sleep 1"}}}
@@ -195,6 +196,7 @@ fn skipped_and_disabled_targets_print_no_start_line() {
     assert_eq!(starts, vec![start("runs", "full")], "{err}");
 }
 
+#[cfg(unix)]
 const HOLDER: &str = r#"{"schema_version": "1.0", "targets": [
   {"name": "holder", "runner": "custom", "modes": {"full": {"command": "sleep 3"}}}
 ]}"#;

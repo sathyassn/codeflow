@@ -118,7 +118,7 @@ def ci_rust_job_commands(workflow: str) -> set[str]:
 
 
 # TSK-142 AC-1: a Node target names its version file to the launcher.
-WITH_NODE = re.compile(r"^python3 -B scripts/with-node\.py (\S+) '([^']+)'$")
+WITH_NODE = re.compile(r'^python3 -B scripts/with-node\.py (\S+) "([^"]+)"$')
 RUNS_NODE = re.compile(r"(^|[\s;&|(])(npm|npx|node)\s")
 EXACT_VERSION = re.compile(r"^v?(\d+\.\d+\.\d+)$")
 FULL_GATE = re.compile(r"^\s*run:\s*codeflow test --mode full\b", re.M)
@@ -133,6 +133,29 @@ def with_node_parts(cmd: str) -> tuple[str | None, str]:
 
 def node_pin(cmd: str) -> str | None:
     return with_node_parts(cmd)[0]
+
+
+def cmd_segments(command: str) -> list[str]:
+    """Split at cmd.exe operators outside double quotes; caret escapes one character."""
+    segments = []
+    quoted = False
+    start = 0
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char == "^":
+            index += 2
+            continue
+        if char == '"':
+            quoted = not quoted
+        elif char in "&|" and not quoted:
+            segments.append(command[start:index].strip())
+            if index + 1 < len(command) and command[index + 1] == char:
+                index += 1
+            start = index + 1
+        index += 1
+    segments.append(command[start:].strip())
+    return segments
 
 
 def workflow_jobs(workflow: str) -> dict[str, str]:
@@ -191,9 +214,13 @@ def node_pin_problems(cfg: dict, workflow: str, root: Path = ROOT) -> list[str]:
         if pin is None:
             if RUNS_NODE.search(cmd):
                 problems.append(
-                    f"target '{name}' runs Node without a Node pin; run it as "
-                    "python3 -B scripts/with-node.py <version file> '<command>'")
+                    f"target '{name}' runs Node without a Node pin or the required "
+                    "double quotes; run it as python3 -B scripts/with-node.py "
+                    '<version file> "<command>"')
             continue
+        if cmd_segments(cmd) != [cmd]:
+            problems.append(f"target '{name}' has an inner chain that cmd.exe splits; "
+                            "put the whole chain in double quotes")
         version, found = version_file_problems(root, pin)
         problems += [f"target '{name}': {p}" for p in found]
         if version is None:
@@ -231,8 +258,7 @@ def node_pin_problems(cfg: dict, workflow: str, root: Path = ROOT) -> list[str]:
 # directory is resolved from the repository root, where the gate runs cargo,
 # so a relative or absolute CARGO_TARGET_DIR both work.
 REAL_BROWSER = "npm run check:real-browser --prefix crates/codeflow-present/web"
-GATE_BINARY = ('CF_PRESENT_CODEFLOW="$(cd "${CARGO_TARGET_DIR:-target}" && pwd -P)'
-               '/debug/codeflow"')
+GATE_BINARY = 'CF_PRESENT_CODEFLOW=$(python3 -B scripts/gate-binary.py)'
 
 
 def gate_binary_problems(cfg: dict) -> list[str]:
