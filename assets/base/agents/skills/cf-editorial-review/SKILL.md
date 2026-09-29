@@ -75,7 +75,8 @@ style direction outranks this skill's defaults.
    answer needs no apparatus, and when relationships, hierarchy, state,
    timelines, mappings, or a decision are materially clearer drawn, use a
    diagram whose scope and detail fit the explanation, in the form the
-   surface renders as the lifecycle reply rule sets out. In a Markdown file
+   surface renders, as `.codeflow/rules/writing.md` "Figures by surface"
+   sets out. In a Markdown file
    (a README, doc, record or PR body) that form is fenced ASCII, and on a
    docs-portal page it is the portal's figure grammar. Prefer the least
    complicated form that remains complete, not the physically smallest;
