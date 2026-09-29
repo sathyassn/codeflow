@@ -299,13 +299,14 @@ fn init_writes(
 
     // Harness honesty (ADR-0008): the permission preset above configures
     // Claude Code only. Codex has its own guarded workspace profile, live
-    // search, public egress, and automatic approval review. Hook trust state is
-    // codex-internal and not inspectable here, so this is a pointer, not a
-    // claim that the one-time trust step has happened.
+    // search, public egress, and automatic approval review. Hook trust is a
+    // one-time step inside codex, so this is a pointer, not a claim that it
+    // has happened; `codeflow doctor --check codex` reads the trust Codex
+    // records (TSK-147).
     let codex_dir = root.join(".codex");
     if codex_dir.join("hooks.json").exists() || codex_dir.join("config.toml").exists() {
         report.notes.push(
-            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and high default effort — production launch also passes --sandbox danger-full-access; in-session guards activate after one-time `/hooks` trust inside interactive codex (git hooks + CI enforce regardless)"
+            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and high default effort — production launch also passes --sandbox danger-full-access; in-session guards activate after one-time `/hooks` trust inside interactive codex, which `codeflow doctor --check codex` confirms (git hooks + CI enforce regardless)"
                 .to_string(),
         );
     }
