@@ -30,8 +30,8 @@
     "facts": [
       {
         "claim": "four planes: git hooks, in-session guards, CI, remote branch protection",
-        "source": "AGENTS.md#git-rules",
-        "derive": "the four planes named in the first sentence of Git rules",
+        "source": ".codeflow/rules/git-rules.md#enforcement",
+        "derive": "the four planes named in the first sentence of Enforcement",
         "check": {
           "kind": "contains",
           "text": "Four planes provide defense in depth"

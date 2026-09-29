@@ -175,14 +175,28 @@ pub struct FormAnswerState {
 }
 
 /// The latest answer to a form, as the page shows it when it loads: the
-/// states after "stored" survive a reload (B6, B8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// states after "stored" survive a reload (B6, B8), and so does what was
+/// sent, which a correction starts from (TSK-176).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormAnswer {
     /// The latest answer or amendment to the form.
     pub latest: Uuid,
     /// The original answer a correction names (the latest when it is one).
     pub original: Uuid,
     pub status: DeliveryStatus,
+    /// What the latest answer or amendment sent.
+    pub sent: SentAnswer,
+}
+
+/// What an answer sent, as the page reads it back into its controls: the
+/// outcome, each field's value and reason, and a decline's reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SentAnswer {
+    pub outcome: Outcome,
+    pub values: Map<String, Value>,
+    pub rationales: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Each form's latest answer, keyed by form id and the form digest the
@@ -201,6 +215,12 @@ pub(crate) fn form_answers_of(ledger: &[ResponseEvent]) -> FormAnswers {
                 latest: record.answer_id,
                 original: record.amends.unwrap_or(record.answer_id),
                 status: states.status(record.answer_id),
+                sent: SentAnswer {
+                    outcome: record.outcome,
+                    values: record.values.clone(),
+                    rationales: record.rationales.clone(),
+                    reason: record.reason.clone(),
+                },
             },
         );
     }

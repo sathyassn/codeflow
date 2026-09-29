@@ -6,7 +6,7 @@
 // is never written to any browser storage. Annotating a form never changes a
 // value and never sends.
 
-import { parseServiceError, REQUEST_HEADER, type AnswerDelivery, type AnswerStateEntry, type ChromeConfig, type FormAnswerEntry } from "./contracts";
+import { parseServiceError, REQUEST_HEADER, type AnswerDelivery, type AnswerStateEntry, type ChromeConfig, type FormAnswerEntry, type SentAnswer } from "./contracts";
 import {
   MAX_ANSWER_REQUEST_BYTES,
   MAX_DECLINE_REASON_BYTES,
@@ -46,6 +46,7 @@ const ANSWERS_PATH = "/app/api/answers";
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const JSON_NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/u;
 const CONTROLS = "input, textarea, select, button";
+const AMEND_TEXT = "Correcting the stored answer. Sending adds a correction; the original stays readable.";
 const CLOSED_TEXT = "This session is closed. Your draft is kept here; nothing can be sent.";
 
 interface Receipt {
@@ -139,6 +140,9 @@ class FormController {
   private latest: string | null = null;
   private amending = false;
   private declining = false;
+  // The answer this form shows is a decline: its reason stays in sight,
+  // read only, and in reach when the reviewer corrects it.
+  private declined = false;
   private sent: Sent | null = null;
   private stale: StaleTarget | null = null;
   private gone = false;
@@ -171,13 +175,18 @@ class FormController {
     this.buttons.forEach((button, action) => button.addEventListener("click", () => this.act(action)));
     this.article.addEventListener("input", () => this.clearFieldError());
     // An answer stored before this page loaded: the service renders it with
-    // its state, so a reload keeps showing stored, delivered or acknowledged.
+    // its state, so a reload keeps showing stored, delivered or acknowledged,
+    // and with what it sent, which the controls show again and a correction
+    // starts from. It comes from the service, never from browser storage.
     const answered = article.dataset.cfAnswerState;
     const original = article.dataset.cfAnswerId;
     const latest = article.dataset.cfLatestAnswerId;
     if (original && latest && (answered === "stored" || answered === "delivered" || answered === "acknowledged")) {
       this.original = original;
       this.latest = latest;
+      const sent = readSent(article);
+      fillSent(article, sent);
+      this.declined = sent?.outcome === "decline";
       this.render(answered === "stored" ? STORED_TEXT : DELIVERY_TEXT[answered], answered);
     } else {
       this.render("");
@@ -213,6 +222,8 @@ class FormController {
     const entry = entries.find((candidate) => candidate.form_id === this.id && candidate.form_digest === this.digest);
     if (!entry) return;
     this.original = entry.answer_id;
+    // Another page's answer: what it sent is not known here.
+    if (entry.latest_answer_id !== this.latest) this.declined = false;
     this.latest = entry.latest_answer_id;
     this.article.dataset.cfAnswerId = entry.answer_id;
     this.answered = entry.state;
@@ -240,6 +251,13 @@ class FormController {
     if (this.closed || this.article.closest("[data-cf-commenting='true']")) return;
     switch (action) {
       case "submit":
+        // While declining, this is Answer instead: an explicit switch back to
+        // answering, which sends nothing and puts the reason out of reach.
+        if (this.declining) {
+          this.declining = false;
+          this.render(this.amending ? AMEND_TEXT : "", "editing");
+          return;
+        }
         void this.send("submit");
         return;
       case "decline":
@@ -261,9 +279,13 @@ class FormController {
         if (this.stale && this.sent) void this.send(this.sent.outcome, this.stale);
         return;
       case "amend":
+        // A correction keeps the stored answer's outcome: a decline is
+        // corrected as a decline, with its reason as the reviewer edits it.
         this.amending = true;
-        this.declining = false;
-        this.render("Correcting the stored answer. Sending adds a correction; the original stays readable.", "editing");
+        this.declining = this.declined;
+        this.render(this.declining
+          ? "Correcting the stored decline. Edit the reason and send the corrected decline, or choose Answer instead. The original stays readable."
+          : AMEND_TEXT, "editing");
         return;
     }
   }
@@ -327,13 +349,13 @@ class FormController {
       return;
     }
     if (status === 200) {
-      this.stored(text, sent.target);
+      this.stored(text, sent.target, sent.outcome);
       return;
     }
     this.refused(status, text, sent.target);
   }
 
-  private stored(text: string, target: StaleTarget | null): void {
+  private stored(text: string, target: StaleTarget | null, outcome: Outcome): void {
     if (this.closed && this.confirmed) {
       // The closure snapshot already holds this receipt's answer, as a
       // reload shows it: a late receipt changes nothing.
@@ -359,6 +381,7 @@ class FormController {
     if (!this.amending || !this.original) this.original = receipt.answer_id;
     this.article.dataset.cfAnswerId = this.original;
     this.latest = receipt.answer_id;
+    this.declined = outcome === "decline";
     this.sent = null;
     this.stale = null;
     this.amending = false;
@@ -416,6 +439,7 @@ class FormController {
         const answered: AnswerDelivery = details.state === "delivered" || details.state === "acknowledged" ? details.state : "pending";
         this.original = details.answer_id;
         this.latest = details.latest_answer_id;
+        this.declined = false;
         this.article.dataset.cfAnswerId = details.answer_id;
         this.amending = false;
         this.declining = false;
@@ -583,7 +607,7 @@ class FormController {
     this.article.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-cf-value], [data-cf-rationale-input], [data-cf-decline-reason]")
       .forEach((control) => { control.disabled = !editable; });
     const show: Record<Action, boolean> = {
-      submit: editable && !this.stale && !this.declining,
+      submit: editable && !this.stale,
       decline: editable && !this.stale,
       cancel: editable && !this.stale && !this.declining,
       resend: state === "failed" && this.sent !== null,
@@ -594,11 +618,20 @@ class FormController {
       button.hidden = !show[action];
       button.disabled = state === "submitting";
     });
+    // The action that sends is the main one: the decline while declining,
+    // with Answer instead beside it, and otherwise the answer. The reason is
+    // in reach only while declining; a stored decline shows it read only.
     const decline = this.buttons.get("decline");
-    if (decline) decline.textContent = this.declining ? "Send decline" : "Decline to answer";
+    if (decline) {
+      decline.textContent = this.declining ? (this.amending ? "Send corrected decline" : "Send decline") : "Decline to answer";
+      decline.classList.toggle("cf-form__submit", this.declining);
+    }
     const submit = this.buttons.get("submit");
-    if (submit) submit.textContent = this.amending ? "Send correction" : "Submit answer";
-    if (this.declineArea) this.declineArea.hidden = !(this.declining && editable);
+    if (submit) {
+      submit.textContent = this.declining ? "Answer instead" : this.amending ? "Send correction" : "Submit answer";
+      submit.classList.toggle("cf-form__submit", !this.declining);
+    }
+    if (this.declineArea) this.declineArea.hidden = !(this.declining || (this.declined && !editable));
   }
 }
 
@@ -642,6 +675,42 @@ function readRules(article: HTMLElement): FormRules {
   });
   const required = [...article.querySelectorAll<HTMLElement>("[data-cf-field][data-cf-required]")].map((field) => field.dataset.cfField ?? "");
   return { fields, required };
+}
+
+// The answer the service rendered on the form; none when it is missing or
+// not understood, and the controls then stay as they are.
+function readSent(article: HTMLElement): SentAnswer | null {
+  try {
+    const sent = JSON.parse(article.dataset.cfAnswerSent ?? "") as SentAnswer;
+    return sent && typeof sent.values === "object" && typeof sent.rationales === "object" ? sent : null;
+  } catch {
+    return null;
+  }
+}
+
+// Puts a sent answer back in the controls, as they were when it was sent: a
+// decline or cancel sent no values, and a decline's reason goes back in its box.
+function fillSent(article: HTMLElement, sent: SentAnswer | null): void {
+  if (!sent) return;
+  for (const field of article.querySelectorAll<HTMLElement>("[data-cf-field]")) {
+    const id = field.dataset.cfField ?? "";
+    const kind = field.dataset.cfFieldKind as FieldKind;
+    const value = Object.hasOwn(sent.values, id) ? sent.values[id] : undefined;
+    if (kind === "boolean" || kind === "choice" || kind === "choices") {
+      for (const input of field.querySelectorAll<HTMLInputElement>("input[data-cf-value]")) {
+        input.checked = kind === "choices"
+          ? Array.isArray(value) && value.includes(input.value)
+          : value !== undefined && String(value) === input.value;
+      }
+    } else {
+      const input = field.querySelector<HTMLInputElement | HTMLTextAreaElement>("[data-cf-value]");
+      if (input) input.value = value === undefined || value === null ? "" : String(value);
+    }
+    const rationale = field.querySelector<HTMLTextAreaElement>("[data-cf-rationale-input]");
+    if (rationale) rationale.value = Object.hasOwn(sent.rationales, id) ? sent.rationales[id] ?? "" : "";
+  }
+  const reason = article.querySelector<HTMLTextAreaElement>("[data-cf-decline-reason]");
+  if (reason) reason.value = sent.outcome === "decline" ? sent.reason ?? "" : "";
 }
 
 function readValue(field: HTMLElement, kind: FieldKind): unknown {

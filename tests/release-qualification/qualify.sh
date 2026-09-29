@@ -10,6 +10,11 @@
 # The candidate commit and the binary digest are parameters, never constants:
 # the same script re-runs against a later integration head unchanged.
 #
+# The build always uses its own Cargo target directory inside the work
+# directory. A debug binary reads its embedded assets from the checkout it was
+# built in, and that checkout is removed at teardown, so building into a
+# caller's target would leave the caller a binary that no longer runs.
+#
 #   sh tests/release-qualification/qualify.sh --commit <SHA> [options]
 #
 # Options:
@@ -19,7 +24,6 @@
 #   --out <FILE>        Matrix destination (default: the v3.0.0 sibling record).
 #   --evidence <FILE>   Release record whose qualification block is refreshed.
 #   --work-dir <DIR>    Disposable root (default: a mktemp under $TMPDIR).
-#   --target-dir <DIR>  Cargo target directory for the build.
 #   --node <DIR>        bin/ directory of the portal's pinned Node (24.18.0).
 #   --herdr-workspace   Herdr workspace id for the delegate canary (default: w2).
 #   --blocked-on        What a blocked verdict is blocked on, recorded verbatim.
@@ -27,9 +31,10 @@
 #   --no-session-owner  Who owns that gate; required with --no-session-reason.
 #   --skip-canary       Record the delegate canary unavailable without running it.
 #   --trust-wait-seconds <N>
-#                       How long the operator gets to answer the canary
-#                       session's workspace-trust prompt (default: 240; 0
-#                       waits not at all).
+#                       How long the operator gets to answer a canary
+#                       workspace-trust prompt that does not name this run's
+#                       own sample (default: 240; 0 waits not at all). The
+#                       harness answers a prompt for its own sample itself.
 #   --keep              Do not delete the work directory (teardown is still reported).
 
 set -eu
@@ -45,7 +50,6 @@ BINARY=""
 OUT=""
 EVIDENCE=""
 WORK_PARENT_OPT=""
-TARGET_DIR=""
 NODE_BIN=""
 HERDR_WORKSPACE="w2"
 BLOCKED_ON=""
@@ -63,7 +67,10 @@ while [ $# -gt 0 ]; do
     --out) OUT=$2; shift 2 ;;
     --evidence) EVIDENCE=$2; shift 2 ;;
     --work-dir) WORK_PARENT_OPT=$2; shift 2 ;;
-    --target-dir) TARGET_DIR=$2; shift 2 ;;
+    --target-dir)
+      printf -- '--target-dir is not accepted: the build uses its own target under the work directory\n' >&2
+      exit 64
+      ;;
     --node) NODE_BIN=$2; shift 2 ;;
     --herdr-workspace) HERDR_WORKSPACE=$2; shift 2 ;;
     --blocked-on) BLOCKED_ON=$2; shift 2 ;;
@@ -72,7 +79,7 @@ while [ $# -gt 0 ]; do
     --skip-canary) SKIP_CANARY=1; shift ;;
     --trust-wait-seconds) TRUST_WAIT_SECONDS=$2; shift 2 ;;
     --keep) KEEP=1; shift ;;
-    -h | --help) sed -n '2,34p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,37p' "$0"; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1" >&2; exit 64 ;;
   esac
 done
@@ -182,8 +189,13 @@ teardown() {
     fi
 
     # The Herdr tab this run created, and only that one.
-    if [ -n "$HERDR_AGENT" ]; then
-      herdr agent stop "$HERDR_AGENT" 2>&1 || true
+    if [ -n "$HERDR_AGENT" ] && [ -n "$HERDR_PANE" ]; then
+      if stop_pane_agent "$HERDR_PANE"; then
+        printf 'herdr agent %s exited: pane %s is back at its shell\n' "$HERDR_AGENT" "$HERDR_PANE"
+      else
+        printf 'herdr agent %s still running in pane %s; closing its tab ends it\n' \
+          "$HERDR_AGENT" "$HERDR_PANE"
+      fi
     fi
     if [ -n "$HERDR_TAB" ]; then
       if herdr tab close "$HERDR_TAB" 2>&1; then
@@ -289,11 +301,27 @@ trap 'exit 143' TERM
 
 WORK_PARENT=${WORK_PARENT_OPT:-${TMPDIR:-/tmp}}
 mkdir -p "$WORK_PARENT"
-WORK_PARENT=$(CDPATH= cd -- "$WORK_PARENT" && pwd)
+# The physical path, so a sample's folder is the same string the session's own
+# working directory resolves to (the trust prompt is matched on it exactly).
+WORK_PARENT=$(CDPATH= cd -P -- "$WORK_PARENT" && pwd -P)
 WORK="$WORK_PARENT/cfqual-$$-$(date -u '+%Y%m%dT%H%M%SZ')"
 mkdir "$WORK" || { printf 'could not create an owned work directory at %s\n' "$WORK" >&2; exit 1; }
 WORK_OWNED=1
 TEARDOWN_LOG="$WORK/teardown.log"
+
+# Every sample folder is named by the harness from lowercase letters, digits
+# and hyphens plus this run's random nonce, so a trust prompt can name only
+# this run's own sample by an exact path match (plain_sample_path in lib.sh).
+SAMPLE_NONCE=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+case $SAMPLE_NONCE in
+  ????????????*) ;;
+  *) printf 'could not read a sample nonce from /dev/urandom\n' >&2; exit 1 ;;
+esac
+
+# sample_dir <sample> <tier> - the folder of one sample in this run.
+sample_dir() {
+  printf '%s/%s-%s-%s\n' "$WORK" "$1" "$2" "$SAMPLE_NONCE"
+}
 
 RESULTS="$WORK/results.tsv"
 TRANSCRIPT="$WORK/transcript.log"
@@ -328,7 +356,7 @@ BUILD_TREE="$WORK/candidate"
 if [ -n "$BINARY" ]; then
   printf 'using the supplied binary; no build will run\n' >&2
 elif [ -z "$BINARY" ]; then
-  [ -n "$TARGET_DIR" ] || TARGET_DIR="$WORK/cargo-target"
+  TARGET_DIR="$WORK/cargo-target"
   mkdir -p "$TARGET_DIR"
   printf 'building %s (this takes a few minutes)\n' "$COMMIT" >&2
   git -C "$REPO" worktree add --detach --quiet "$BUILD_TREE" "$COMMIT"
@@ -692,7 +720,13 @@ qualify_read_only() {
   record "$SAMPLE" "$TIER" "ci" "range and branch check over the seeded history" \
     "$(status_for_match 0 'clean')" "exit 0, the resolved range clean" "$(observed_exit)"
 
-  printf '## Summary\n\nA qualification sample.\n\n## Changes\n\n- one change\n\n## Testing\n\n- the sample gate\n' \
+  # Every section the scaffolded policy requires, so a clean body is judged.
+  printf '%s\n' '## Summary' '' 'A qualification sample.' '' '## Changes' '' '- one change' '' \
+    '## Testing' '' '- the sample gate' '- Not tested: nothing beyond the sample gate' '' \
+    '## Reviews' '' '| Reviewer | Scope | Verdict |' '|---|---|---|' \
+    '| None: a qualification sample | this range | not reviewed |' '' \
+    '## Release impact' '' '- Impact: patch' '- Breaking: no' \
+    '- Rationale: one small change in a qualification sample' '- Migration: none' \
     >"$WORK/pr-body-ok.md"
   cf ci --base "$_base" --head HEAD --pr-body-file "$WORK/pr-body-ok.md"
   record "$SAMPLE" "$TIER" "ci --pr-body-file" "positive: a conforming PR body" \
@@ -1088,8 +1122,8 @@ qualify_portal_build() {
 }
 
 # The presentation surface, once. `open --no-launch` starts the service without
-# a browser; a real reviewer comment is the only source of a feedback envelope,
-# so the positive resolve path stays with its own owner.
+# a browser. A reviewer envelope is submitted through the service's own review
+# endpoint by present-review.py, so the positive resolve runs here too.
 qualify_present() {
   _doc="$DIR/.claude/skills/cf-present/resources/present-document.example.json"
   if [ ! -f "$_doc" ]; then
@@ -1121,6 +1155,11 @@ except Exception:
   }
 
   present_run open "$_doc" --no-launch
+  # open prints the owner-private bootstrap file a reviewer's browser would
+  # load; the review client below uses the same file.
+  _bootstrap=$(printf '%s' "$CF_OUT" |
+    sed -n 's/^.*open the owner-private bootstrap file \(.*\) in a qualified isolated browser profile$/\1/p' |
+    head -1)
   record "$SAMPLE" "$TIER" "present open" "start a validated review session" \
     "$(status_for_match 0 'ready')" \
     "exit 0 and a session ready on an owner-private bootstrap" "$(observed_exit)"
@@ -1188,16 +1227,45 @@ print(sessions[0]["id"] if sessions else "")' 2>/dev/null)
     "$(status_for_match 2 'does not belong to session')" \
     "non-zero exit refusing a cross-session transition" "$(observed_exit)"
 
-  # The only supported producer of a feedback envelope is the review surface,
-  # which posts to the session service from a browser. This harness drives the
-  # CLI and hosts no browser, so it cannot create one. The check is covered
-  # where the browser already runs: crates/codeflow-present/web/scripts/
-  # real-browser-check.mjs submits a real review and resolves the delivered
-  # event at its current version, under TSK-007's gate.
+  # A real reviewer envelope: present-review.py consumes the session's
+  # single-use bootstrap and posts one review to the service's review
+  # endpoint with the session cookie, Origin and request marker, as the
+  # review surface does. The browser journey itself stays covered by
+  # crates/codeflow-present/web/scripts/real-browser-check.mjs (TSK-007).
+  # The envelope must then be delivered by `present feedback` and resolved
+  # at the version the session history reports for it.
+  _event=""
+  if [ -n "$_bootstrap" ] && [ -f "$_bootstrap" ]; then
+    _event=$(python3 "$SCRIPT_DIR/present-review.py" "$_bootstrap" "$_sid" \
+      "$(present_revision "$_sid")" 2>>"$TRANSCRIPT") || _event=""
+  fi
+  printf '\npresent review submitted: event %s from bootstrap %s\n' \
+    "${_event:-none}" "${_bootstrap:-none}" >>"$TRANSCRIPT"
+  present_run feedback "$_sid"
+  _delivered=no
+  if [ -n "$_event" ] && printf '%s' "$CF_OUT" | grep -qF "\"event_id\":\"$_event\""; then
+    _delivered=yes
+  fi
+  present_run history "$_sid"
+  _version=$(printf '%s' "$CF_OUT" | python3 -c 'import json,sys
+try:
+    events = json.load(sys.stdin)["feedback_events"]
+    print(max(e["sequence"] for e in events
+              if sys.argv[1] in (e.get("event_id"), e.get("envelope", {}).get("event_id"))))
+except Exception:
+    print(0)' "${_event:-none}" 2>/dev/null)
+  present_run resolve "$_sid" "${_event:-00000000-0000-0000-0000-000000000000}" \
+    --event-version "${_version:-0}" --status addressed
+  _resolve_status=$CF_STATUS
+  _resolve_out=$CF_OUT
+  # The effect, not the acknowledgement: history is read again and must show
+  # the event addressed after the version it was resolved at.
+  present_run history "$_sid"
+  _s=$(grade_present_resolve "$_event" "$_delivered" "$_version" \
+    "$_resolve_status" "$_resolve_out" "$CF_OUT")
   record "$SAMPLE" "$TIER" "present resolve" "positive: resolve a real reviewer envelope" \
-    "$RESULT_UNAVAILABLE" "a delivered envelope marked addressed at its current version" \
-    "this harness drives the CLI and hosts no browser, and only the review surface produces an envelope; the same transition is exercised by real-browser-check.mjs, which resolves a delivered event at event-version 2" \
-    "TSK-007 presentation qualification, whose real-browser journey already covers it"
+    "$_s" "a submitted envelope delivered by feedback, then marked addressed at its current version, and history read afterwards shows it addressed" \
+    "event ${_event:-not submitted}; delivered $_delivered; version $_version; resolve exit $_resolve_status; history after resolve exit $CF_STATUS"
 
   present_run close "$_sid"
   _close_status=$CF_STATUS
@@ -1323,6 +1391,15 @@ print(json.load(open(sys.argv[1])).get("prompt_sha256", "no-prompt-digest"))' \
     return
   fi
 
+  # The canary's status line must be text deliver_turn can recognise, so the
+  # sample gets a local settings file that prints a fixed marker there.
+  if ! write_status_line_settings "$DIR"; then
+    canary_unavailable \
+      "could not write $DIR/.claude/settings.local.json with the fixed status line, or it already exists" \
+      "this harness"
+    return
+  fi
+
   _created=$(herdr tab create --workspace "$HERDR_WORKSPACE" \
     --label "cf/codeflow/tsk044/canary" --cwd "$DIR" --no-focus 2>&1) || {
     canary_unavailable \
@@ -1355,7 +1432,7 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
     printf '\n$ %s\n%s\n' "$_start_cmd" "$_start_out" >>"$TRANSCRIPT"
     # Say what actually blocked the session rather than that something failed.
     # A fresh scaffolded sample carries its own .claude/settings.json, and the
-    # harness asks a human to trust that workspace before it takes a prompt;
+    # session asks whether to trust that workspace before it takes a prompt;
     # the pane needs a moment to paint that prompt before it can be read.
     sleep 8
     # One-shot detection, so this read takes `recent`: the question may already
@@ -1365,26 +1442,42 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
     _pane_text=$(herdr pane read "$HERDR_PANE" --source recent --lines 120 2>/dev/null || true)
     printf 'pane after failed agent start:\n%s\n' "$_pane_text" >>"$TRANSCRIPT"
     HERDR_AGENT=""
-    if ! printf '%s' "$_pane_text" | grep -qF -- "$TRUST_PROMPT_MATCH"; then
+    if ! printf '%s' "$_pane_text" | asks_trust; then
       canary_unavailable \
         "$_start_cmd failed; reply: $(oneline "$_start_out"); pane text is in the transcript" \
         "operator environment"
       return
     fi
 
-    # The blocker is the trust prompt, and no agent may answer it. The reason
-    # is assembled in two pieces so the sentence about the wait stays inside
-    # the recorded cell, which `record` cuts at 400 characters.
-    _trust_why="the Claude Code workspace-trust prompt blocked startup in the tab this run created: the sample carries the scaffolded .claude/settings.json, and the session asks a human to trust the folder before it accepts any prompt"
+    # The blocker is the trust prompt. The harness answers it only for the
+    # sample this run created (cf-method/references/autonomy.md); any other
+    # folder is the operator's. The reason is assembled in two pieces so the
+    # sentence about the wait stays inside the recorded cell, which `record`
+    # cuts at 400 characters.
+    _trust_why="the Claude Code workspace-trust prompt blocked startup in the tab this run created: the sample carries the scaffolded .claude/settings.json, and the session asks whether to trust the folder before it accepts any prompt"
     _trust_detail="Command: $_start_cmd. Reply: $(oneline "$_start_out")"
 
-    # resolve_trust_prompt asks the operator, waits, and then proves a live
-    # session on this pane and tab. It returns non-zero for every outcome that
-    # is not a proven session, so the canary is recorded unavailable with the
-    # reason it actually hit and `delegate wait --until ready` never runs on a
-    # session nobody has seen.
+    # resolve_trust_prompt answers for this run's own sample or asks the
+    # operator, waits, and then proves a live session on this pane and tab.
+    # It returns non-zero for every outcome that is not a proven session, so
+    # the canary is recorded unavailable with the reason it actually hit and
+    # `delegate wait --until ready` never runs on a session nobody has seen.
     if ! resolve_trust_prompt "$HERDR_PANE" "$HERDR_TAB" "$DIR" \
       "$TRUST_WAIT_SECONDS" "$_agent_name" "$_state/settings.json"; then
+      if [ "$TRUST_OUTCOME" = stopped ]; then
+        # The harness said yes and could not confirm the effect. Nothing more
+        # is sent to that session: the live lane ends here, the answer is a
+        # failed row, every later live row names the stop, and the ordinary
+        # teardown closes the tab after the remaining static rows.
+        printf '\nSTOPPED: %s\n' "$TRUST_REASON"
+        record "$SAMPLE" "$TIER" "trust prompt answered by the harness" \
+          "the answer reached this run's own sample and nothing else" \
+          "$RESULT_FAILED" "the dialog gone and the session in $DIR after the answer" \
+          "$TRUST_REASON"
+        canary_unavailable "the run stopped after the harness answered the trust prompt: $TRUST_REASON" \
+          "$TRUST_OWNER"
+        return
+      fi
       canary_unavailable "$_trust_why; $TRUST_REASON. $_trust_detail" "$TRUST_OWNER"
       return
     fi
@@ -1460,7 +1553,7 @@ Run the pipeline workflow that this repository already has at
 .claude/workflows/pipeline.workflow.js, end to end, with the Workflow tool.
 Arguments: task "add a subtract function beside add, with a unit test", criteria
 ["subtract(4, 1) returns 3", "the existing add test still passes"], stages
-["build", "verify"]. Work on the branch feat/pipeline-canary; never commit to
+["build", "verify"]. Work on the branch $PIPELINE_BRANCH; never commit to
 main and never push. When the workflow returns, write the object it returned,
 verbatim, as a single line of JSON to $PIPELINE_RESULT in the repository root.
 That object is the workflow's own result and carries status, attempts and trail.
@@ -1478,13 +1571,37 @@ PROMPT
     return
   fi
 
+  _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, equal to Claude Code's own task output for the run, and on the pipeline branch this harness's own subtract(4, 1) test green and the sample gate green"
+  _pipeline_began=$(date +%s)
   deliver_turn "$HERDR_PANE" "$WORK/pipeline-prompt.txt" "$_run" "$_state" "$_turn2" || true
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until accepted \
-    --turn-id "$_turn2" --timeout-seconds 180
+    --turn-id "$_turn2" --timeout-seconds "$PIPELINE_ACCEPT_SECONDS"
+  # A turn the session never accepted cannot run the pipeline, and nothing
+  # later can change that, so the row fails now instead of waiting out the
+  # pipeline budget on a turn that does not exist.
+  if [ "$CF_STATUS" != 0 ]; then
+    record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
+      "$RESULT_FAILED" "$_pipeline_expected" \
+      "the pipeline turn was not accepted within $PIPELINE_ACCEPT_SECONDS s: $(observed_exit)"
+    return
+  fi
+
+  # The first Stop only ends the turn that launched the workflow; the budget
+  # covers it and the wait for the result file together.
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until terminal \
-    --turn-id "$_turn2" --timeout-seconds 3600
+    --turn-id "$_turn2" --timeout-seconds "$PIPELINE_TIMEOUT_SECONDS"
   _pipeline_terminal=$CF_STATUS
   _pipeline_out=$CF_OUT
+  _left=$((PIPELINE_TIMEOUT_SECONDS - ($(date +%s) - _pipeline_began)))
+  [ "$_left" -gt 0 ] || _left=0
+  wait_for_pipeline_result "$DIR/$PIPELINE_RESULT" "$_state/turns/$_turn2/result.json" "$_left" &&
+    _result_wait=0 || _result_wait=$?
+  case $_result_wait in
+    0) _result_wait="result file written after $(($(date +%s) - _pipeline_began)) s" ;;
+    3) _result_wait="the turn recorded a terminal failure and no result file" ;;
+    *) _result_wait="no result file within the $PIPELINE_TIMEOUT_SECONDS s row timeout" ;;
+  esac
+  printf '\npipeline result wait: %s\n' "$_result_wait" >>"$TRANSCRIPT"
 
   if [ -f "$DIR/$PIPELINE_RESULT" ]; then
     _state_line=$(head -1 "$DIR/$PIPELINE_RESULT")
@@ -1504,66 +1621,57 @@ PROMPT
   # stage record the driver builds; only a real run produces both. What the
   # workflow did is then checked against behaviour this harness verifies for
   # itself, never against a test the peer wrote.
-  _shape=$(printf '%s' "${_state_line:-}" | python3 -c 'import json,sys
-raw = sys.stdin.read().strip()
-if not raw:
-    print("absent"); raise SystemExit
-try:
-    doc = json.loads(raw)
-except Exception:
-    print("unparsable"); raise SystemExit
-if not isinstance(doc, dict):
-    print("not-an-object"); raise SystemExit
-status = doc.get("status")
-if status == "unavailable":
-    print("unavailable"); raise SystemExit
-trail = doc.get("trail")
-if status != "complete":
-    print("status-" + str(status)); raise SystemExit
-if not isinstance(trail, list) or not trail:
-    print("no-trail"); raise SystemExit
-if not isinstance(doc.get("attempts"), int) or doc["attempts"] < 1:
-    print("no-attempts"); raise SystemExit
-entries = [e for e in trail if isinstance(e, dict)]
-stages = [e.get("stage") for e in entries]
-if "build" not in stages or "verify" not in stages:
-    print("trail-missing-stages"); raise SystemExit
-verify = [e for e in entries if e.get("stage") == "verify"]
-if not verify or verify[-1].get("verdict") != "approved":
-    print("verify-not-approved"); raise SystemExit
-print("complete")' 2>/dev/null || printf 'unparsable')
+  _shape=$(printf '%s' "${_state_line:-}" | pipeline_result_shape)
 
-  # Behaviour, verified here: a test this harness writes, compiled and run by
-  # the sample's own toolchain. A subtract that returns the wrong value fails
-  # this even if the peer shipped a test that agrees with it.
+  # Behaviour, verified here, where the pipeline built it: its branch, in the
+  # worktree it used or a spare checkout of that branch, never the sample root
+  # on main. A test this harness writes is compiled and run by the sample's own
+  # toolchain there, so a subtract that returns the wrong value fails even if
+  # the peer shipped a test that agrees with it, and the sample gate runs there.
   _behaviour=not-checked
-  if [ -f "$DIR/Cargo.toml" ]; then
-    mkdir -p "$DIR/tests"
-    cat >"$DIR/tests/qualification_subtract.rs" <<'PROBE'
+  _gate=not-run
+  _spare="$WORK/pipeline-checkout"
+  if _checkout=$(pipeline_checkout "$DIR" "$PIPELINE_BRANCH" "$_spare"); then
+    _in=${_checkout#"$DIR"/}
+    [ "$_checkout" != "$_spare" ] || _in="a spare checkout"
+    _where="checked on $PIPELINE_BRANCH at $(git -C "$_checkout" rev-parse --short HEAD 2>/dev/null) in $_in"
+    if [ -f "$_checkout/Cargo.toml" ]; then
+      mkdir -p "$_checkout/tests"
+      cat >"$_checkout/tests/qualification_subtract.rs" <<'PROBE'
 //! Written by the release qualification, not by the session under test.
 #[test]
 fn subtract_four_minus_one_is_three() {
     assert_eq!(qualification_sample::subtract(4, 1), 3);
 }
 PROBE
-    # cargo's own status, captured before anything truncates its output. A
-    # pipe here would report the exit status of the last stage instead, and a
-    # test binary that exits 101 would read as success.
-    sh_run "cd '$DIR' && cargo test --test qualification_subtract >'$WORK/subtract-probe.log' 2>&1"
-    _sub_status=$CF_STATUS
-    if [ "$_sub_status" = 0 ]; then
-      _behaviour=passed
-    else
-      _behaviour="failed at exit $_sub_status: $(oneline "$(tail -5 "$WORK/subtract-probe.log" 2>/dev/null)")"
+      # cargo's own status, captured before anything truncates its output. A
+      # pipe here would report the exit status of the last stage instead, and
+      # a test binary that exits 101 would read as success.
+      sh_run "cd '$_checkout' && cargo test --test qualification_subtract >'$WORK/subtract-probe.log' 2>&1"
+      _sub_status=$CF_STATUS
+      if [ "$_sub_status" = 0 ]; then
+        _behaviour=passed
+      else
+        _behaviour="failed at exit $_sub_status: $(oneline "$(tail -5 "$WORK/subtract-probe.log" 2>/dev/null)")"
+      fi
+      rm -f "$_checkout/tests/qualification_subtract.rs"
     fi
-    rm -f "$DIR/tests/qualification_subtract.rs"
+    cd "$_checkout"
+    cf test --mode full --strict
+    _gate=$CF_STATUS
+    cd "$DIR"
+    [ "$_checkout" != "$_spare" ] || git -C "$DIR" worktree remove --force "$_spare" >/dev/null 2>&1 || true
+  else
+    _where="no branch $PIPELINE_BRANCH to check"
   fi
 
-  _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, this harness's own subtract(4, 1) test green, and the sample gate green"
-  cf test --mode full --strict
-  _gate=$CF_STATUS
+  workflow_task_evidence "$_state" "$DIR/$PIPELINE_RESULT" >"$WORK/task-evidence.txt" &&
+    _task_ok=0 || _task_ok=1
+  _task=$(cat "$WORK/task-evidence.txt")
   _invoked=$(workflow_invocation_evidence "$_state")
-  _observed="turn exit $_pipeline_terminal; native Workflow invocation $_invoked; workflow result $_shape; independent subtract(4, 1) test $_behaviour; sample gate exit $_gate"
+  _launch=$(workflow_launch_evidence "$_state")
+  _observed="turn exit $_pipeline_terminal; native Workflow invocation $_invoked; $_launch; $_result_wait; workflow result $_shape; $_task; subtract(4, 1) test $_behaviour; sample gate exit $_gate; $_where"
+  printf '\npipeline row observed: %s\n' "$_observed" >>"$TRANSCRIPT"
 
   # Whether the capability was exercised is decided by the transcript, not by
   # the result file. Once the Workflow tool has been invoked, every shortfall
@@ -1573,7 +1681,7 @@ PROBE
   # claiming success with no invocation behind it is a fabrication, so it
   # fails rather than passing.
   if [ "$_invoked" = yes ]; then
-    if [ "$_pipeline_terminal" = 0 ] && [ "$_shape" = complete ] &&
+    if [ "$_pipeline_terminal" = 0 ] && [ "$_shape" = complete ] && [ "$_task_ok" = 0 ] &&
       [ "$_behaviour" = passed ] && [ "$_gate" = 0 ]; then
       _pipeline_verdict=$RESULT_PASSED
     else
@@ -1611,40 +1719,12 @@ PROBE
 # ---------------------------------------------------------------------------
 
 PIPELINE_RESULT="qualification-pipeline-result.txt"
+PIPELINE_BRANCH="feat/pipeline-canary"
 
-# Did the session actually invoke the native Workflow tool on the scaffolded
-# pipeline? The turn's own result.json names the Claude Code session, and that
-# session's transcript records every tool call it made. The transcript is
-# written by the harness, not by the session under test, so it is the one piece
-# of evidence here that a peer cannot author. Prints yes, no, or unknown, where
-# unknown means no transcript could be located and is never read as no.
-workflow_invocation_evidence() {
-  _sid=$(python3 -c 'import glob,json,sys
-found = ""
-for path in sorted(glob.glob(sys.argv[1] + "/turns/*/result.json")):
-    try:
-        doc = json.load(open(path, encoding="utf-8"))
-    except Exception:
-        continue
-    if doc.get("session_id"):
-        found = doc["session_id"]
-print(found)' "$1" 2>/dev/null)
-  if [ -z "$_sid" ]; then
-    printf 'unknown'
-    return 0
-  fi
-  _tx=$(find "$HOME/.claude/projects" -maxdepth 2 -name "$_sid.jsonl" 2>/dev/null | head -1)
-  if [ -z "$_tx" ]; then
-    printf 'unknown'
-    return 0
-  fi
-  if grep -q '"name"[[:space:]]*:[[:space:]]*"Workflow"' "$_tx" 2>/dev/null &&
-    grep -q 'pipeline.workflow' "$_tx" 2>/dev/null; then
-    printf 'yes'
-  else
-    printf 'no'
-  fi
-}
+# How long the pipeline turn has to be accepted, and the row timeout covering
+# the launching turn and the backgrounded workflow behind it.
+PIPELINE_ACCEPT_SECONDS=180
+PIPELINE_TIMEOUT_SECONDS=3600
 
 pipeline_unavailable() {
   record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
@@ -1700,7 +1780,7 @@ qualify_boundary() {
 run_sample_tier() {
   SAMPLE=$1
   TIER=$2
-  DIR="$WORK/$SAMPLE-$TIER"
+  DIR=$(sample_dir "$SAMPLE" "$TIER")
   rm -rf "$DIR"
   mkdir -p "$DIR"
   printf '\n=== %s / %s ===\n' "$SAMPLE" "$TIER" >&2
@@ -1741,7 +1821,7 @@ done
 once_only_lane() {
   SAMPLE=$1
   TIER=$2
-  DIR="$WORK/$SAMPLE-$TIER"
+  DIR=$(sample_dir "$SAMPLE" "$TIER")
   if [ ! -d "$DIR" ]; then
     shift 2
     for _lane in "$@"; do

@@ -38,7 +38,7 @@
         "derive": "the init call",
         "check": {
           "kind": "contains",
-          "text": "let report = scaffold::init(&assets, &cwd, &options)?;"
+          "text": "let mut report = scaffold::init(&assets, &cwd, &options)?;"
         },
         "value": true
       },

@@ -1245,6 +1245,7 @@ fn spend_row_check_rejects_do_not_wait() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn autonomy_reference_keeps_its_owned_parts() {
     let path = repo_root()
         .join("assets/base/claude/skills/cf-method/references")
