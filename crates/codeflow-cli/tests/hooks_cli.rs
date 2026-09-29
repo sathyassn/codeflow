@@ -3688,6 +3688,140 @@ fn push_set_checks_only_the_own_commits_of_a_new_branch_off_a_line() {
     assert!(!err.contains("Legacy line subject."), "{err}");
 }
 
+/// A valid task record on the advertised line, before the task's own work.
+fn declared_line(bare: &Path, local: &Path) -> String {
+    integration_line(bare, local);
+    std::fs::create_dir_all(local.join("project-management/tasks")).unwrap();
+    let tip = commit_file(
+        local,
+        "project-management/tasks/TSK-001.md",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: integration/line\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
+        "docs: declare the task target",
+    );
+    receive(bare, local, "line:integration/line");
+    git(local, &["fetch", "-q", "dest"]);
+    git(local, &["branch", "-f", "integration/line", "line"]);
+    tip
+}
+
+fn declared_task_on_moved_line(bare: &Path, local: &Path, own: &[(&str, &str)]) -> String {
+    declared_line(bare, local);
+    git(
+        local,
+        &["checkout", "-q", "-b", "task/TSK-001-change", "line"],
+    );
+    for (file, message) in own {
+        commit_file(local, file, "t\n", message);
+    }
+    let old = rev(local, "HEAD");
+    receive(bare, local, "task/TSK-001-change:task/TSK-001-change");
+    git(local, &["checkout", "-q", "line"]);
+    commit_file(local, "line2.txt", "line2\n", "Legacy line subject two.");
+    receive(bare, local, "line:integration/line");
+    git(local, &["fetch", "-q", "dest"]);
+    git(local, &["branch", "-f", "integration/line", "line"]);
+    git(local, &["checkout", "-q", "task/TSK-001-change"]);
+    old
+}
+
+#[test]
+fn push_set_declared_target_rebase_checks_only_own_commits() {
+    // TSK-115: a task branch rebased onto its moved integration line and
+    // force-pushed. The line's new commit is on the destination through the
+    // line's own ref, so only the task's commit is checked.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let old = declared_task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
+    git(local.path(), &["rebase", "-q", "dest/integration/line"]);
+    let rebased = rev(local.path(), "HEAD");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &rebased, &old);
+    assert!(
+        err.contains("uses advertised target 'integration/line'"),
+        "{err}"
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("'task/TSK-001-change' rewrites the destination's")
+            && err.contains("checks 1 commit(s), leaving out history"),
+        "{err}"
+    );
+    assert!(!err.contains("Legacy line subject two."), "{err}");
+
+    // A bad own commit in the rebased branch still blocks.
+    let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &bad, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject two."), "{err}");
+}
+
+#[test]
+fn push_set_declared_target_rewrite_checks_the_added_bad_commit() {
+    // The rewrite drops the branch's second commit, adds a bad one and moves
+    // onto the line's new tip. The dropped commit's history does not hide
+    // the bad one, and the line's commit is not checked again.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let old = declared_task_on_moved_line(
+        bare.path(),
+        local.path(),
+        &[("a.txt", "feat: add a"), ("b.txt", "feat: add b")],
+    );
+    git(
+        local.path(),
+        &[
+            "rebase",
+            "-q",
+            "--onto",
+            "dest/integration/line",
+            "line~1",
+            "HEAD~1",
+        ],
+    );
+    let bad = commit_file(local.path(), "c.txt", "c\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &bad, &old);
+    assert!(
+        err.contains("uses advertised target 'integration/line'"),
+        "{err}"
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject two."), "{err}");
+    assert!(
+        err.contains("checks 2 commit(s), leaving out history"),
+        "{err}"
+    );
+}
+
+#[test]
+fn push_set_declared_target_new_branch_checks_only_own_commits() {
+    // The task record anchors the target on the line before the branch starts.
+    // The clean target selection reports its base without a failure remedy.
+    let (bare, local) = stable_destination("chore: legacy base");
+    declared_line(bare.path(), local.path());
+    git(
+        local.path(),
+        &["checkout", "-q", "-b", "task/TSK-001-change", "line"],
+    );
+    let good = commit_file(local.path(), "n.txt", "n\n", "feat: add new work");
+    let (code, err) = push_hook(local.path(), "dest", &[("task/TSK-001-change", &good)]);
+    assert!(
+        err.contains("uses advertised target 'integration/line'"),
+        "{err}"
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("fix the findings above"), "{err}");
+    assert!(
+        !err.contains("did not run for 'task/TSK-001-change'"),
+        "{err}"
+    );
+    assert!(!err.contains("ls-remote"), "{err}");
+
+    let bad = commit_file(local.path(), "m.txt", "m\n", "Not conventional.");
+    let (code, err) = push_hook(local.path(), "dest", &[("task/TSK-001-change", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject."), "{err}");
+}
+
 #[test]
 fn push_set_ignores_a_tracking_ref_the_destination_deleted() {
     // A sibling branch held a bad commit, then was deleted on the
@@ -4236,8 +4370,7 @@ fn release_of_both_lines(local: &Path, a: &str, b: &str) -> String {
 #[test]
 fn push_to_an_existing_branch_without_a_list_is_judged_by_its_own_list() {
     // The release branch exists on the destination at the list-less seed.
-    // The range is bounded by every destination tip, so its base is a line
-    // tip whose list lacks the other line's records; the branch's own old
+    // The range starts at the release branch's advertised old tip. That
     // tip has no list, so the push introduces the migration and the head's
     // list governs, every entry printed.
     let (bare, local, a, b) = two_lines_with_lists();
@@ -4258,9 +4391,9 @@ fn push_to_an_existing_branch_without_a_list_is_judged_by_its_own_list() {
 fn push_to_an_existing_branch_with_a_list_is_judged_by_that_list() {
     // The release branch already holds line a with list [a]. The push merges
     // line b, adds a record of its own and lists everything. The old tip's
-    // list governs: line a's record stays legacy although the range's base
-    // is line b's tip (whose list lacks it), and the push's own record is
-    // new, since a list edit takes effect only after it lands.
+    // list governs: line a's record stays legacy. Line b's record and the
+    // push's own record are both new to this target and must satisfy its
+    // rules, since a list edit takes effect only after it lands.
     let (bare, local, a, b) = two_lines_with_lists();
     git(local.path(), &["checkout", "-q", "-b", "release", "main"]);
     merge_line(local.path(), "a");
@@ -4281,7 +4414,10 @@ fn push_to_an_existing_branch_with_a_list_is_judged_by_that_list() {
         "{err}"
     );
     assert!(!err.contains("TSK-001.md"), "{err}");
-    assert!(!err.contains("TSK-002.md"), "{err}");
+    assert!(
+        err.contains("TSK-002.md: a complete record needs an acceptance block"),
+        "{err}"
+    );
     assert!(
         err.contains("edits work_records_baseline") && err.contains(&own),
         "{err}"
