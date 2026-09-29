@@ -18,6 +18,7 @@
       "scripts/test_journey_gate.py",
       "scripts/gate-parity.py",
       "scripts/test_gate_parity.py",
+      "scripts/gate-binary.py",
       "scripts/with-node.py",
       "scripts/test_with_node.py",
       "scripts/check-present-binary-delta.mjs",
