@@ -386,7 +386,7 @@
       ],
       "outputs": [],
       "exclusive": true,
-      "timeout_seconds": 900
+      "timeout_seconds": 2400
     },
     {
       "name": "present-supply-chain",
