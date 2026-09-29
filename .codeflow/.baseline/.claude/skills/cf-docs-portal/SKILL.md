@@ -96,8 +96,10 @@ purpose and mental model                         (concept)
       -> technical source references and evidence (technical)
 ```
 
-Keep navigation predictable and searchable. Prefer plain language, descriptive
-titles, concise prose, and bullets when they improve scanning. Match an
+Keep navigation predictable and searchable. Write the pages plainly: simple,
+straightforward and clear, no mannered prose (see
+`.codeflow/rules/writing.md`), with descriptive titles and short prose and
+bullets by default. Match an
 established project voice when it exists; otherwise use calm, direct,
 third-person documentation language. Avoid cryptic headings, invented
 personality, gratuitous emoji, and promotional language.
@@ -109,7 +111,8 @@ Normative detail:
 and [references/visual-craft.md](references/visual-craft.md). Page shape example:
 [resources/portal-page-shape.example.md](resources/portal-page-shape.example.md).
 
-- **Visuals** only when they clarify relationship, hierarchy, state, or flow.
+- **Visuals** only when they clarify relationship, hierarchy, state, or flow,
+  drawn in the portal's figure grammar (a `cf-stage` fence).
   Text inside decorated boxes is not a visual explanation.
 - **Architecture-layer sources** each author the altitude trio plus a stage —
   full-width labeled structure, not caption micro-boxes; verification fails a

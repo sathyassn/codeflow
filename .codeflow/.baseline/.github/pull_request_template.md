@@ -1,4 +1,6 @@
 <!-- Linted by `codeflow ci`: no AI attribution, no emoji, no em or en dash.
+     Write it plainly: simple, straightforward and clear, no mannered prose
+     (see `.codeflow/rules/writing.md`).
      The sections a PR needs follow what its range touches. A range with
      code, config, scripts, shipped templates or agent instructions needs
      all five sections below, in this order. A range of only Markdown under

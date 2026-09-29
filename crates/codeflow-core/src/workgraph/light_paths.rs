@@ -8,7 +8,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::workgraph::allocate::{create_task, create_task_with, Allocator, NewRecord};
 use crate::workgraph::store::StoreError;
@@ -168,7 +167,7 @@ pub struct IntegrationBranch {
 }
 
 fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::git::command()
         .arg("-C")
         .arg(repo_root)
         .args(args)

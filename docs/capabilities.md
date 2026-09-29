@@ -78,8 +78,10 @@ secret-bearing environment filter pinned on. Claude-hosted plugin turns pass
 the current ensemble's model and effort explicitly so they cannot inherit a
 different user default. Claude
 ships a fail-closed sandbox on macOS, Linux, and WSL2, public web/tool access,
-raw model/cloud credential removal for sandboxed Bash, and ask rules for
-destructive source-control operations. A sandbox failure may request an
+raw model/cloud credential removal for sandboxed Bash, and no ask rules:
+the actions the operator performs are denied by rules generated from one
+action table, which also generates the Codex command rules; Grok gets a
+sandbox profile (ADR-0075). A sandbox failure may request an
 auto-classified unsandboxed retry
 only for a trusted installed tool that needs host state; this enables the
 official Codex plugin without granting a general bypass. Project `acceptEdits`
@@ -103,7 +105,10 @@ adrs: [ADR-0011, ADR-0019]
 unmodified files are replaced, user-modified files get a 3-way merge from
 `.codeflow/.baseline/` (conflicts produce `.new` + report), managed regions
 (AGENTS.md markers, settings.json codeflow keys) are surgically updated, and
-user-owned schema-versioned files only gain new keys with defaults. It also
+user-owned schema-versioned files gain new keys with defaults; a policy scalar
+still equal to the prior shipped default moves to the new default and is
+reported, and a value that differs is kept. Where no baseline was recorded,
+the settings and policy are compared with the copies 2.1.0 shipped. It also
 installs any manifest entry that is in-tier but missing on disk — so a file that
 became in-tier since the last install (e.g. an old `--minimal` repo gaining the
 enforcement floor under ADR-0019) is reconciled into place and recorded, not just
@@ -232,6 +237,9 @@ ref, a dirty, sparse or submodule-incomplete checkout); the test suite belongs
 to the full gate. One full gate runs at a time on a machine (a second refuses,
 naming the holder), a gate that runs cargo warns about a `CARGO_TARGET_DIR`
 outside the worktree, and each target prints a start line on stderr as it begins.
+A killed gate never lets a second one run beside its target: on Unix the lock
+stays held until the target's process group exits, and on Windows the target's
+job object ends its process tree with the gate.
 File and aggregate coverage thresholds all contribute to the gate
 verdict; `changed_files` rules are rejected until an explicit comparison base is
 available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
@@ -1077,10 +1085,10 @@ adrs: [ADR-0048, ADR-0058]
 
 `codeflow portal setup --path <repository-relative-directory>` explicitly
 adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
-portal build requires Node 22.19.0 or newer. The aggregate CI gate runs on Node
-26.4.0, and its full strict target installs, checks, builds, and validates the
-dogfood portal; the portal-local `.node-version` and the Windows adapter-test
-lane pin Node 24.18.0.
+portal build requires Node 22.19.0 or newer. The full strict gate installs,
+checks, builds, and validates the dogfood portal on the Node 24.18.0 its
+`.node-version` pins, as the Windows adapter-test lane does, and runs the
+presentation renderer's target on the 26.4.0 its own `.node-version` pins.
 The starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
 replace-only updates without pristine runtime copies or source merges. Runtime
