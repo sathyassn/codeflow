@@ -233,9 +233,9 @@ impl Fixture {
         command
     }
 
-    /// Run `platform`'s shipped script for the change `target..head`, as that
-    /// platform presents it. `None` for the target leaves it unset.
-    fn run(&self, platform: Platform, target: Option<&str>, head: &str) -> Output {
+    /// `platform`'s shipped script, run from the fixture repository with a
+    /// clean environment and the local release.
+    fn script_command(&self, platform: Platform) -> Command {
         // Scratch space inside the fixture, so the scripts' temporary
         // directories go away with it.
         let scratch = self.dir.path().join("tmp");
@@ -255,25 +255,44 @@ impl Fixture {
                 "CODEFLOW_RELEASE_URL",
                 format!("file://{}", self.releases().display()),
             );
+        command.arg("-c").arg(script(platform));
+        if let Platform::Generic = platform {
+            command.arg("ci-generic.sh");
+        }
+        command
+    }
+
+    /// Run a prepared script command, logging the calls afresh.
+    fn output(&self, command: &mut Command) -> Output {
+        let _ = std::fs::remove_file(self.log());
+        command.output().expect("sh runs")
+    }
+
+    /// Run `platform`'s shipped script for the change `target..head`, as that
+    /// platform presents it. GitLab gets a merged results pipeline, which
+    /// names the target branch's commit. `None` for the target leaves it
+    /// unset.
+    fn run(&self, platform: Platform, target: Option<&str>, head: &str) -> Output {
+        let mut command = self.script_command(platform);
         match platform {
             Platform::Generic => {
-                command.arg("-c").arg(GENERIC).arg("ci-generic.sh");
                 if let Some(target) = target {
                     command.arg(target).arg(head);
                 }
             }
             Platform::GitLab => {
-                command.arg("-c").arg(script(platform));
                 command
                     .env("CI_PIPELINE_SOURCE", "merge_request_event")
                     .env("CI_COMMIT_SHA", head)
                     .env("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME", "feat/x");
                 if let Some(target) = target {
-                    command.env("CI_MERGE_REQUEST_DIFF_BASE_SHA", target);
+                    command
+                        .env("CI_MERGE_REQUEST_EVENT_TYPE", "merged_result")
+                        .env("CI_MERGE_REQUEST_TARGET_BRANCH_SHA", target)
+                        .env("CI_MERGE_REQUEST_DIFF_BASE_SHA", target);
                 }
             }
             Platform::Bitbucket => {
-                command.arg("-c").arg(script(platform));
                 command
                     .env("BITBUCKET_COMMIT", head)
                     .env("BITBUCKET_BRANCH", "feat/x");
@@ -282,8 +301,7 @@ impl Fixture {
                 }
             }
         }
-        let _ = std::fs::remove_file(self.log());
-        command.output().expect("sh runs")
+        self.output(&mut command)
     }
 
     /// The logged calls, one `<version> <args>` per line.
@@ -318,6 +336,161 @@ fn set_pin(repo: &Path, version: &str) {
         })
         .collect();
     std::fs::write(&path, pinned.join("\n") + "\n").unwrap();
+}
+
+fn set_commit_format(repo: &Path, level: &str) {
+    let path = repo.join(".codeflow/policy.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    value["git"]["commit_format"] = serde_json::json!(level);
+    std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+}
+
+/// A change branched from `base`, after which the target advanced to
+/// `target`: the source never saw the target's newer pin or policy.
+struct Diverged {
+    base: String,
+    target: String,
+    head: String,
+}
+
+/// `main` pins 1.2.3 with commit format off at the fork point, then raises
+/// the pin to 1.2.4 and blocks bad commit subjects; `feat/x` branches at the
+/// fork point and commits `message`. Both releases are this build.
+fn diverged(fx: &Fixture, message: &str) -> Diverged {
+    let repo = fx.repo();
+    fx.project("1.2.3");
+    git(&repo, &["checkout", "-q", "main"]);
+    set_commit_format(&repo, "off");
+    let base = fx.commit("chore: relax the commit format");
+    set_pin(&repo, "1.2.4");
+    set_commit_format(&repo, "block");
+    let target = fx.commit("chore: raise the pin and block bad subjects");
+    git(&repo, &["checkout", "-q", "-B", "feat/x", &base]);
+    std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+    let head = fx.commit(message);
+    fx.publish("1.2.3", &Binary::Real);
+    fx.publish("1.2.4", &Binary::Real);
+    Diverged { base, target, head }
+}
+
+/// A bare copy of the fixture repository at `path` whose `main` is `main`.
+fn bare_copy(fx: &Fixture, path: &Path, main: &str) {
+    git(
+        fx.dir.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            &fx.repo().display().to_string(),
+            &path.display().to_string(),
+        ],
+    );
+    git(path, &["update-ref", "refs/heads/main", main]);
+}
+
+/// The ways each platform presents a merge request whose target advanced
+/// after the source branched, with the diff base still at the fork point.
+fn diverged_runs(fx: &Fixture, d: &Diverged) -> Vec<(String, Output, Vec<String>)> {
+    let repo = fx.repo();
+    let gitlab = |extra: &[(&str, &str)]| {
+        let mut command = fx.script_command(Platform::GitLab);
+        command
+            .env("CI_PIPELINE_SOURCE", "merge_request_event")
+            .env("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME", "feat/x")
+            .env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "main")
+            .env("CI_MERGE_REQUEST_DIFF_BASE_SHA", &d.base)
+            .env("CI_PROJECT_ID", "7")
+            .env("CI_MERGE_REQUEST_PROJECT_ID", "7")
+            .env("CI_COMMIT_SHA", &d.head);
+        for (key, value) in extra {
+            command.env(key, value);
+        }
+        command
+    };
+    let mut runs = Vec::new();
+    let mut record = |label: &str, out: Output| runs.push((label.to_string(), out, fx.calls()));
+    record(
+        "generic",
+        fx.output(
+            fx.script_command(Platform::Generic)
+                .arg(&d.target)
+                .arg(&d.head),
+        ),
+    );
+    let mut bitbucket = fx.script_command(Platform::Bitbucket);
+    bitbucket
+        .env("BITBUCKET_COMMIT", &d.head)
+        .env("BITBUCKET_BRANCH", "feat/x")
+        .env("BITBUCKET_PR_DESTINATION_COMMIT", &d.target);
+    record("bitbucket", fx.output(&mut bitbucket));
+
+    // An ordinary (detached) merge request pipeline: GitLab names no target
+    // commit and fetches only the pipeline ref, so the job fetches the
+    // target branch from the project's own remote.
+    let origin = fx.dir.path().join("origin.git");
+    bare_copy(fx, &origin, &d.target);
+    git(
+        &repo,
+        &["remote", "add", "origin", &origin.display().to_string()],
+    );
+    record(
+        "gitlab detached",
+        fx.output(&mut gitlab(&[("CI_MERGE_REQUEST_EVENT_TYPE", "detached")])),
+    );
+
+    // A fork's pipeline: `origin` is the fork, whose `main` is stale; the
+    // target branch comes from the merge request's project.
+    let fork = fx.dir.path().join("fork.git");
+    bare_copy(fx, &fork, &d.base);
+    git(
+        &repo,
+        &["remote", "set-url", "origin", &fork.display().to_string()],
+    );
+    let parent = fx.dir.path().join("parent");
+    bare_copy(fx, &fx.dir.path().join("parent.git"), &d.target);
+    record(
+        "gitlab fork",
+        fx.output(&mut gitlab(&[
+            ("CI_MERGE_REQUEST_EVENT_TYPE", "detached"),
+            ("CI_PROJECT_ID", "8"),
+            (
+                "CI_MERGE_REQUEST_PROJECT_URL",
+                &parent.display().to_string(),
+            ),
+        ])),
+    );
+    git(
+        &repo,
+        &["remote", "set-url", "origin", &origin.display().to_string()],
+    );
+
+    // A merged results pipeline builds the merge of the source into the
+    // target and names the target commit it merged with.
+    git(&repo, &["checkout", "-q", "--detach", &d.target]);
+    git(
+        &repo,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge branch 'feat/x' into 'main'",
+            &d.head,
+        ],
+    );
+    let merged = git(&repo, &["rev-parse", "HEAD"]);
+    record(
+        "gitlab merged results",
+        fx.output(&mut gitlab(&[
+            ("CI_MERGE_REQUEST_EVENT_TYPE", "merged_result"),
+            ("CI_MERGE_REQUEST_TARGET_BRANCH_SHA", &d.target),
+            ("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", &d.head),
+            ("CI_COMMIT_SHA", &merged),
+        ])),
+    );
+    git(&repo, &["checkout", "-q", "feat/x"]);
+    runs
 }
 
 /// Whether a call by `version` ran `args`.
@@ -540,4 +713,61 @@ fn the_head_cannot_relax_the_policy_that_judges_it() {
             text(&out)
         );
     }
+}
+
+/// The target advanced after the source branched: its newer pin and policy
+/// judge the change on every platform, never the fork point's (review
+/// C095-1).
+#[test]
+fn the_current_target_judges_a_branch_that_predates_it() {
+    let fx = Fixture::new();
+    let d = diverged(&fx, "invalid message");
+    for (label, out, calls) in diverged_runs(&fx, &d) {
+        assert!(!out.status.success(), "{label}: {}", text(&out));
+        assert!(
+            text(&out).contains("git.commit_format"),
+            "{label}: {}",
+            text(&out)
+        );
+        assert!(
+            ran(&calls, "1.2.4", &format!("ci --base {}", d.target)),
+            "{label}: {calls:?}"
+        );
+        assert!(
+            calls.iter().all(|c| c.starts_with("1.2.4 ")),
+            "{label}: {calls:?}"
+        );
+    }
+}
+
+/// GitLab fails closed when the merge request's target branch cannot be
+/// fetched, and never falls back to the diff base.
+#[test]
+fn gitlab_refuses_a_target_it_cannot_fetch() {
+    let fx = Fixture::new();
+    let d = diverged(&fx, "invalid message");
+    let origin = fx.dir.path().join("origin.git");
+    bare_copy(&fx, &origin, &d.target);
+    git(
+        &fx.repo(),
+        &["remote", "add", "origin", &origin.display().to_string()],
+    );
+    let mut command = fx.script_command(Platform::GitLab);
+    command
+        .env("CI_PIPELINE_SOURCE", "merge_request_event")
+        .env("CI_MERGE_REQUEST_EVENT_TYPE", "detached")
+        .env("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME", "feat/x")
+        .env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "gone")
+        .env("CI_MERGE_REQUEST_DIFF_BASE_SHA", &d.base)
+        .env("CI_PROJECT_ID", "7")
+        .env("CI_MERGE_REQUEST_PROJECT_ID", "7")
+        .env("CI_COMMIT_SHA", &d.head);
+    let out = fx.output(&mut command);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("cannot fetch the merge request's target branch gone"),
+        "{}",
+        text(&out)
+    );
+    assert!(fx.calls().is_empty(), "{:?}", fx.calls());
 }

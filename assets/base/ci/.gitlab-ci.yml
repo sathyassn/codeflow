@@ -12,8 +12,11 @@
 # .codeflow/project.toml (`scaffold_version`), downloaded from its release and
 # verified against the release's published sha256.sum; a missing or wrong
 # checksum fails the job and nothing unverified is installed (SPC-013 R-113).
-# The target is CI_MERGE_REQUEST_DIFF_BASE_SHA, the merge request's base on
-# its target branch; a branch pipeline judges its own commit. An upgrade takes
+# The target is the target branch's current commit: the one a merged results
+# pipeline names (CI_MERGE_REQUEST_TARGET_BRANCH_SHA), otherwise the branch
+# CI_MERGE_REQUEST_TARGET_BRANCH_NAME fetched from the merge request's project;
+# the job fails when it cannot establish it. A branch pipeline judges its own
+# commit. An upgrade takes
 # two merge requests, in order: first raise only `scaffold_version` (the
 # target's binary judges it and the candidate is tested alongside), then run
 # `codeflow update`. The job file itself runs from the merge request, so
@@ -45,10 +48,26 @@ codeflow:
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates curl git xz-utils >/dev/null
   script:
     - |
-      # A merge request is judged by its target; a default-branch pipeline
-      # judges its own commit, which is already on the target.
+      # A merge request is judged by its target branch's current commit, never
+      # CI_MERGE_REQUEST_DIFF_BASE_SHA, the diff's base, which stays behind when
+      # the target advances. A merged results pipeline names the target commit
+      # it merged with. An ordinary merge request pipeline leaves that empty
+      # and fetches only the pipeline's own ref, so the job fetches
+      # the target branch from the merge request's project: `origin` when the
+      # pipeline runs there, the project's URL when it runs in a fork. A
+      # default-branch pipeline judges its own commit, already on the target.
       if [ "${CI_PIPELINE_SOURCE:-}" = merge_request_event ]; then
-        BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
+        BASE="${CI_MERGE_REQUEST_TARGET_BRANCH_SHA:-}"
+        if [ -z "$BASE" ] && [ -n "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-}" ]; then
+          remote=origin
+          [ "${CI_MERGE_REQUEST_PROJECT_ID:-}" = "${CI_PROJECT_ID:-}" ] ||
+            remote="${CI_MERGE_REQUEST_PROJECT_URL:-}.git"
+          git fetch -q --no-tags "$remote" "+refs/heads/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}:refs/codeflow/target" || {
+            echo "codeflow: error: cannot fetch the merge request's target branch ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}; the pinned install never judges by the diff base" >&2
+            exit 1
+          }
+          BASE=$(git rev-parse refs/codeflow/target)
+        fi
       else
         BASE="$CI_COMMIT_SHA"
       fi
