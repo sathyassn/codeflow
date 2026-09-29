@@ -7,10 +7,16 @@
 //! this module generates:
 //!
 //! - the Claude permission arrays of every shipped preset
-//!   ([`ActionTable::apply_to_claude_preset`]): the read denies, then their
-//!   `!` carve-outs (a carve-out narrows only the rules listed before it),
-//!   then the `Edit` denies of the enforcement paths, then each family's
-//!   command rules; no `ask` array while no family asks;
+//!   ([`ActionTable::apply_to_claude_preset`]): the read rules group by
+//!   group, each group's denies followed by its `!` carve-outs, then the
+//!   `Edit` denies of the enforcement paths, then each family's command
+//!   rules; no `ask` array while no family asks. A carve-out narrows every
+//!   rule listed before it, so the groups run from the broadest exception to
+//!   none: source-name denies and their exceptions, env files and theirs,
+//!   then the hard secret files, which no exception follows. This departs
+//!   from the design's single block of read denies followed by every
+//!   carve-out, which let `!**/*secret*.py` reopen `.env.secret.py` (review
+//!   of PR 749);
 //! - the task-scoped delegate settings fragment
 //!   ([`ActionTable::delegate_fragment`]);
 //! - the Codex rules file `.codex/rules/codeflow.rules`
@@ -122,6 +128,19 @@ pub struct DelegateDenies {
     pub claude: Vec<String>,
 }
 
+/// One ordered group of Claude read rules: its denies, then the `!`
+/// carve-outs that narrow them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadGroup {
+    /// Why the group sits where it does.
+    pub why: String,
+    /// `Read(...)` denies.
+    pub denies: Vec<String>,
+    /// `Read(!...)` carve-outs; they narrow this group and every earlier one.
+    pub carveouts: Vec<String>,
+}
+
 /// The whole action table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -131,16 +150,15 @@ pub struct ActionTable {
     pub about: String,
     /// The refused action families.
     pub families: Vec<Family>,
-    /// Claude `Read(...)` denies of secret files and Claude's private state.
-    pub claude_read_denies: Vec<String>,
+    /// Claude read rules of secret files and Claude's private state, in the
+    /// order they are emitted.
+    pub claude_read_groups: Vec<ReadGroup>,
     /// Claude `Edit(...)` denies of the enforcement paths.
     pub claude_edit_denies: Vec<String>,
     /// Credential variables the Claude sandbox removes from every command.
     pub sandbox_env_denies: Vec<String>,
     /// Secret stores the Claude sandbox denies to every subprocess.
     pub sandbox_read_denies: Vec<String>,
-    /// `Read(!...)` carve-outs that narrow the read denies before them.
-    pub claude_read_carveouts: Vec<String>,
     /// The delegate settings fragment.
     pub delegate_denies: DelegateDenies,
 }
@@ -192,13 +210,32 @@ impl ActionTable {
             .collect()
     }
 
-    /// The Claude `permissions.deny` array, in its required order: read
-    /// denies, their carve-outs, the `Edit` denies, then the families.
+    /// Every Claude `Read(...)` deny, in emitted order.
+    #[must_use]
+    pub fn claude_read_denies(&self) -> Vec<String> {
+        self.claude_read_groups
+            .iter()
+            .flat_map(|group| group.denies.iter().cloned())
+            .collect()
+    }
+
+    /// Every Claude `Read(!...)` carve-out, in emitted order.
+    #[must_use]
+    pub fn claude_read_carveouts(&self) -> Vec<String> {
+        self.claude_read_groups
+            .iter()
+            .flat_map(|group| group.carveouts.iter().cloned())
+            .collect()
+    }
+
+    /// The Claude `permissions.deny` array, in its required order: the read
+    /// groups (each group's denies, then its carve-outs), the `Edit` denies,
+    /// then the families.
     #[must_use]
     pub fn claude_deny(&self) -> Vec<String> {
-        self.claude_read_denies
+        self.claude_read_groups
             .iter()
-            .chain(&self.claude_read_carveouts)
+            .flat_map(|group| group.denies.iter().chain(&group.carveouts))
             .chain(&self.claude_edit_denies)
             .cloned()
             .chain(self.family_rules(Decision::Deny))
@@ -385,17 +422,24 @@ mod tests {
     }
 
     #[test]
-    fn deny_order_puts_carveouts_after_the_read_denies_they_narrow() {
+    fn every_carveout_follows_its_group_and_no_exception_follows_the_hard_denies() {
+        let groups = &table().claude_read_groups;
+        for group in groups {
+            assert!(!group.denies.is_empty(), "{}", group.why);
+            assert!(group.carveouts.iter().all(|r| r.starts_with("Read(!")));
+            assert!(group
+                .denies
+                .iter()
+                .all(|r| r.starts_with("Read(") && !r.starts_with("Read(!")));
+        }
+        let last = groups.last().unwrap();
+        assert!(last.carveouts.is_empty(), "the hard denies come last");
         let deny = table().claude_deny();
-        let last_read_deny = deny
-            .iter()
-            .rposition(|rule| rule.starts_with("Read(") && !rule.starts_with("Read(!"))
-            .unwrap();
-        let first_carveout = deny
-            .iter()
-            .position(|rule| rule.starts_with("Read(!"))
-            .unwrap();
-        assert!(last_read_deny < first_carveout);
+        let last_carveout = deny.iter().rposition(|r| r.starts_with("Read(!")).unwrap();
+        for rule in &last.denies {
+            let at = deny.iter().position(|r| r == rule).unwrap();
+            assert!(at > last_carveout, "{rule} precedes an exception");
+        }
         assert!(deny.iter().all(|rule| !rule.starts_with("Write(")));
     }
 

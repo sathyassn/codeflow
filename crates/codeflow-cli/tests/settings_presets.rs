@@ -948,23 +948,56 @@ fn codex_rules_are_generated_from_the_action_table() {
 }
 
 /// The generator reproduces the design's reference samples from the presets
-/// the design started from. Hook commands are excluded: their fail-closed
-/// form and `--contract` flag are TSK-173's.
+/// the design started from, with one stated departure: the read rules are
+/// ordered in groups (review of PR 749), so the deny array holds the same
+/// rules as the reference in a different order. Hook commands are excluded:
+/// their fail-closed form and `--contract` flag are TSK-173's.
 #[test]
 fn the_generator_reproduces_the_reference_samples() {
     let table = actions::table();
-    let reference_table = std::fs::read_to_string(evidence("actions.json")).unwrap();
-    assert_eq!(
-        &codeflow_core::security::actions::ActionTable::parse(&reference_table).unwrap(),
-        table,
-        "the embedded action table left the reference table"
-    );
+    let reference: serde_json::Value = read_json(&evidence("actions.json"));
+    let sorted = |value: &serde_json::Value| {
+        let mut items: Vec<String> = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        items.sort();
+        items
+    };
+    let mut denies = table.claude_read_denies();
+    denies.sort();
+    assert_eq!(denies, sorted(&reference["claude_read_denies"]));
+    let mut carveouts = table.claude_read_carveouts();
+    carveouts.sort();
+    assert_eq!(carveouts, sorted(&reference["claude_read_carveouts"]));
+    for key in [
+        "families",
+        "claude_edit_denies",
+        "sandbox_env_denies",
+        "sandbox_read_denies",
+        "delegate_denies",
+    ] {
+        let embedded: serde_json::Value = serde_json::from_str(include_str!(
+            "../../codeflow-core/src/security/actions.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            embedded[key], reference[key],
+            "{key} left the reference table"
+        );
+    }
     for name in PRESET_FILES {
         let mut generated = read_json(&evidence(&format!("current/{name}")));
         table.apply_to_claude_preset(&mut generated);
         let mut expected = read_json(&evidence(&format!("claude/{name}")));
-        generated.as_object_mut().unwrap().remove("hooks");
-        expected.as_object_mut().unwrap().remove("hooks");
+        for value in [&mut generated, &mut expected] {
+            let object = value.as_object_mut().unwrap();
+            object.remove("hooks");
+            let deny = object["permissions"]["deny"].clone();
+            object["permissions"]["deny"] = serde_json::json!(sorted(&deny));
+        }
         assert_eq!(generated, expected, "{name}");
     }
     assert_eq!(
@@ -1181,21 +1214,26 @@ fn edit_denies_cover_the_enforcement_paths_and_carveouts_follow_read_denies() {
                 "{name}: no Edit deny covers {path}"
             );
         }
-        let last_read = deny
-            .iter()
-            .rposition(|r| r.starts_with("Read(") && !r.starts_with("Read(!"))
-            .unwrap();
-        let carveouts: Vec<usize> = deny
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.starts_with("Read(!"))
-            .map(|(i, _)| i)
-            .collect();
-        assert!(!carveouts.is_empty(), "{name}: no carve-outs");
-        assert!(
-            carveouts.iter().all(|i| *i > last_read),
-            "{name}: a carve-out precedes a read deny it should narrow"
-        );
+        // Each group's carve-outs follow its own denies, and the hard denies
+        // follow every carve-out, so no exception can reopen them.
+        let at = |rule: &String| deny.iter().position(|r| r == rule).unwrap();
+        let groups = &actions::table().claude_read_groups;
+        for group in groups {
+            let last_deny = group.denies.iter().map(at).max().unwrap();
+            for carveout in &group.carveouts {
+                assert!(
+                    at(carveout) > last_deny,
+                    "{name}: {carveout} precedes its denies"
+                );
+            }
+        }
+        let last_carveout = deny.iter().rposition(|r| r.starts_with("Read(!")).unwrap();
+        for rule in &groups.last().unwrap().denies {
+            assert!(
+                at(rule) > last_carveout,
+                "{name}: {rule} precedes an exception"
+            );
+        }
         for key in ["allow", "deny"] {
             assert!(
                 !perm_array(&value, key)
@@ -1254,6 +1292,9 @@ fn read_denies_keep_memory_and_sources_readable_and_secrets_denied() {
             ".env",
             "config/.env",
             ".env.local",
+            ".env.secret.py",
+            ".env.credentials.ts",
+            "config/.env.secret.md",
             "certs/server.pem",
             "~/.ssh/id_ed25519",
             "~/.codex/auth.json",
@@ -1279,6 +1320,50 @@ fn read_denies_keep_memory_and_sources_readable_and_secrets_denied() {
             assert!(
                 deny_read.iter().any(|entry| entry == store.as_str()),
                 "{name}: sandbox denyRead misses {store}"
+            );
+        }
+    }
+}
+
+/// Review of PR 749: no `!` exception may reopen a file that a rule of
+/// another class denies. Every name here matches both a hard or env deny and
+/// a source-name or env exception.
+#[test]
+fn no_exception_reopens_a_file_another_rule_denies() {
+    let mut collisions = Vec::new();
+    for ext in [
+        "rs", "py", "ts", "tsx", "js", "mjs", "cjs", "go", "java", "kt", "rb", "swift", "md",
+    ] {
+        for word in ["secret", "credentials"] {
+            for name in [
+                format!(".env.{word}.{ext}"),
+                format!(".env.local-{word}.{ext}"),
+                format!("id_rsa_{word}.{ext}"),
+                format!("id_ed25519_{word}.{ext}"),
+                format!("~/.ssh/{word}.{ext}"),
+                format!("~/.aws/{word}.{ext}"),
+                format!("~/.gnupg/{word}.{ext}"),
+                format!("~/.kube/{word}.{ext}"),
+                format!("~/.cargo/credentials-{word}.{ext}"),
+                format!("~/.password-store/{word}.{ext}"),
+                format!("~/.claude/memory/{word}.{ext}"),
+                format!("~/.claude/tasks/{word}.{ext}"),
+            ] {
+                collisions.push(name);
+            }
+        }
+    }
+    for example in [".env.example", ".env.sample", ".env.template", ".env.dist"] {
+        collisions.push(format!("~/.ssh/{example}"));
+        collisions.push(format!("~/.aws/{example}"));
+        collisions.push(format!("~/.claude/memory/{example}"));
+    }
+    for name in preset_files() {
+        let deny = perm_array(&load(&name), "deny");
+        for path in &collisions {
+            assert!(
+                read_denied(&deny, path),
+                "{name}: an exception reopens {path}"
             );
         }
     }
