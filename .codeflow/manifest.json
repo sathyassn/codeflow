@@ -263,7 +263,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "545b9dde92f9cb2b194a343a666fa601ceca6533273633d83e6dc9c57d28d4ab",
+      "sha256": "f0efaa64432e1b574fd885766aef4b7bcc0bd1802ea40f0cf89278941aa8195a",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -335,7 +335,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "d8cb830dbc35089f82c6c51d8a055ca1d839d98a5e30fba35000455b89247e1e",
+      "sha256": "a40e3229e8b8dc471f3109d45888b12ce0a4ebb8cc866cb1de0c61232b22f036",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -947,7 +947,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "545b9dde92f9cb2b194a343a666fa601ceca6533273633d83e6dc9c57d28d4ab",
+      "sha256": "f0efaa64432e1b574fd885766aef4b7bcc0bd1802ea40f0cf89278941aa8195a",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1019,7 +1019,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "d8cb830dbc35089f82c6c51d8a055ca1d839d98a5e30fba35000455b89247e1e",
+      "sha256": "a40e3229e8b8dc471f3109d45888b12ce0a4ebb8cc866cb1de0c61232b22f036",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
@@ -1397,13 +1397,13 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "693885298fc5962ba8b4c25c4cf39c5bb4206a34e3668101771f50530edcdcc8",
+      "sha256": "870ee65edac7b4eaeaea3077e4f9f0175cec01cb8e5673cb0c1f393899065943",
       "exec": false
     },
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "3da24b6ab2215cac5ce70bb00f6d21bba8c8375bca5f144fb8eb61634ea5f1e1",
+      "sha256": "0f9b7fc2036b2c09e972f46b028d34051b8245135cb8bb88d7cef86f5788de70",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -1415,7 +1415,7 @@
     ".codeflow/rules/worktrees.md": {
       "src": "rules/worktrees.md",
       "ownership": "managed",
-      "sha256": "ec9893f7113780ac98d4e9e24bfac785a9635cf3e818edfb0760a5e6a291c921",
+      "sha256": "e80f3d6fffdaca48bb093110eab3013bf4c543437d35e6b5853b8beca2d27112",
       "exec": false
     },
     ".codeflow/rules/writing.md": {
@@ -1505,7 +1505,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "de8ee7f2df684cda57c365886bf1f7df015f99d8fc478f6679f985a17028c902",
+      "sha256": "792ee123f0809018e8b8c5eb89ed781eb6ab093f33b9944b3ba80f753860b6f6",
       "exec": false
     },
     "CLAUDE.md": {
@@ -1553,7 +1553,7 @@
     "project-management/templates/spec.md": {
       "src": "pm/spec.md.tmpl",
       "ownership": "managed",
-      "sha256": "db1cdaffe0589f4857db715fe06291e0072f61c192a67d9ec2a09fa5d5a509a3",
+      "sha256": "f9752b789d5f95855ac7f57c1fa8e8eaa924cb289b83a0b642a0c698fd7216a6",
       "exec": false
     },
     "project-management/templates/task.md": {

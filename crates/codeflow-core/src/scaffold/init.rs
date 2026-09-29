@@ -375,6 +375,10 @@ pub(crate) fn build_context(
     ctx.set("TIER", tier.as_str());
     ctx.set("SCAFFOLD_VERSION", version);
     ctx.set("DATE", today_utc());
+    ctx.set(
+        "WORKSPACE_ROOT_BRANCH",
+        crate::root_checkout::WORKSPACE_ROOT_BRANCH,
+    );
     ctx
 }
 

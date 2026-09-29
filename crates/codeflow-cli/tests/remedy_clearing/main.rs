@@ -113,6 +113,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("FORCE_PUSH", Runs),
     ("PR_MERGE_PROTECTED", Runs),
     ("BRANCH_NAME", Runs),
+    ("ROOT_CHECKOUT_COMMIT", Runs),
     ("HOOK_INTEGRITY", Runs),
     ("COMMIT_TYPE", Runs),
     ("COMMIT_LENGTH", Runs),
@@ -190,6 +191,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_CUSTOMIZATION", Runs),
     ("DOCTOR_INSTRUCTIONS", Runs),
     ("DOCTOR_READING", Runs),
+    ("DOCTOR_ROOT_CHECKOUT", Runs),
     ("DOCTOR_TEST_CONFIG", Runs),
     ("GUARD_UNCLASSIFIABLE", Runs),
     ("GUARD_UNRESOLVED", Runs),
@@ -2205,6 +2207,28 @@ fn clears_doctor_reading() {
         ".claude/skills/cf-stack/",
         || doctor(&root, "reading"),
         |_| write(&root, skill, &original),
+    );
+}
+
+#[test]
+fn clears_doctor_root_checkout() {
+    // The root checkout left on a feature branch (TSK-165): the finding
+    // names `git switch main`; after it, the check passes.
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    prove(
+        "DOCTOR_ROOT_CHECKOUT",
+        "the root checkout needs attention",
+        || doctor(root, "repo-integrity"),
+        |printed| {
+            assert!(
+                printed.contains("is on 'feat/x'") && printed.contains("Next: run git switch main"),
+                "{printed}"
+            );
+            git(root, &["switch", "-q", "main"]);
+            let step = printed_command(printed, "DOCTOR_ROOT_CHECKOUT", None);
+            run_printed(root, &step, &[], &[]);
+        },
     );
 }
 

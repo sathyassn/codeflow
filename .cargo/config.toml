@@ -5,3 +5,14 @@ cross-check-windows = "xwin clippy --workspace --all-targets --target x86_64-pc-
 cross-build-windows = "xwin build --release -p codeflow-cli --target x86_64-pc-windows-msvc"
 cross-check-linux = "zigbuild --workspace --all-targets --target x86_64-unknown-linux-gnu.2.17"
 cross-build-linux = "zigbuild --release -p codeflow-cli --target x86_64-unknown-linux-gnu.2.17"
+
+# Tests run the same in an agent session and in CI: the git hooks read these
+# harness markers to tell an agent from a human (ADR-0074), and a test that
+# commits through real hooks must not inherit the session that runs it. An
+# empty marker counts as unset; a test that needs one sets it itself.
+[env]
+CLAUDECODE = { value = "", force = true }
+CODEX_SESSION_ID = { value = "", force = true }
+CODEX_THREAD_ID = { value = "", force = true }
+CODEX_CI = { value = "", force = true }
+GROK_SESSION_ID = { value = "", force = true }

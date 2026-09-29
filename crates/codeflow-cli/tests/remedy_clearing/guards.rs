@@ -97,6 +97,26 @@ fn clears_protected_branch() {
 }
 
 #[test]
+fn clears_root_checkout_commit() {
+    // A commit at the root checkout on a feature branch (TSK-165): the
+    // printed `git switch <root>` puts the root back on its root branch,
+    // where the rule has no finding.
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    prove(
+        "ROOT_CHECKOUT_COMMIT",
+        "git.root_checkout_commits",
+        || guard(root, "git-guard", "git commit -m \"feat: add x\""),
+        |printed| {
+            assert!(printed.contains("on 'feat/x'"), "{printed}");
+            let step = printed_command(printed, "ROOT_CHECKOUT_COMMIT", None);
+            assert_eq!(step, "git switch main");
+            run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
 fn clears_protected_delete() {
     let dir = ci_repo(DEFAULTS);
     let root = dir.path();
@@ -131,13 +151,24 @@ fn clears_protected_rewrite() {
         "PROTECTED_REWRITE",
     );
     let step = printed_command(&printed, "PROTECTED_REWRITE", None);
-    // The revert goes on its own branch, which lands like any other work.
-    let undo = format!("git switch -c fix/undo && {step} --no-edit HEAD");
+    // The revert goes on its own branch in its own worktree, which lands
+    // like any other work; the root checkout stays on main (TSK-165).
+    git(
+        root,
+        &["worktree", "add", "-q", ".worktrees/undo", "-b", "fix/undo"],
+    );
+    let undo = format!(
+        "git -C .worktrees/undo {} --no-edit HEAD",
+        step.trim_start_matches("git ")
+    );
     assert_passes(root, "git-guard", &undo);
-    git(root, &["switch", "-q", "-c", "fix/undo"]);
-    run_printed(root, &step, &[], &["--no-edit", "HEAD"]);
+    let worktree = root.join(".worktrees/undo");
+    run_printed(&worktree, &step, &[], &["--no-edit", "HEAD"]);
     assert_eq!(head(root, "main"), mistake, "main keeps its history");
-    assert!(!root.join("mistake.txt").exists(), "the revert undid it");
+    assert!(
+        !worktree.join("mistake.txt").exists(),
+        "the revert undid it"
+    );
 }
 
 #[test]
@@ -173,7 +204,9 @@ fn clears_force_push() {
     write(
         root,
         ".codeflow/policy.json",
-        r#"{"git": {"force_push_unprotected": "block"}}"#,
+        // The fixture pulls at its root checkout on feat/x; the
+        // root-checkout rule (TSK-165) has its own proof, so it is off here.
+        r#"{"git": {"force_push_unprotected": "block", "root_checkout_commits": "off"}}"#,
     );
     git(
         root,

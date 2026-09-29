@@ -101,6 +101,12 @@ fn vocabulary(kind: RecordKind) -> (&'static str, &'static [&'static str], &'sta
     }
 }
 
+/// A status a verb never writes but still judges, so the refusal names the
+/// route the lifecycle rule gives: a spec moved back to `draft` (TSK-169).
+fn judged_only(kind: RecordKind, target: &str) -> bool {
+    kind == RecordKind::Spec && target == "draft"
+}
+
 /// Change one record's status through the shared judge.
 ///
 /// # Errors
@@ -115,12 +121,14 @@ pub fn set_status(
     change: &StatusChange,
 ) -> Result<VerbOutcome, VerbError> {
     let (verb, allowed, allowed_text) = vocabulary(kind);
-    if !allowed.contains(&change.target.as_str()) {
-        return Err(VerbError::Vocabulary {
-            verb,
-            target: change.target.clone(),
-            allowed: allowed_text,
-        });
+    let vocabulary_error = || VerbError::Vocabulary {
+        verb,
+        target: change.target.clone(),
+        allowed: allowed_text,
+    };
+    let written = allowed.contains(&change.target.as_str());
+    if !written && !judged_only(kind, &change.target) {
+        return Err(vocabulary_error());
     }
     let graph = Graph::from_worktree(repo_root);
     let record = graph
@@ -155,10 +163,14 @@ pub fn set_status(
             changed_paths: paths.as_deref(),
             reopened: None,
             brought: None,
+            shipped: None,
         },
     );
     if !verdict.is_clean() {
         return Err(VerbError::Refused(verdict.errors));
+    }
+    if !written {
+        return Err(vocabulary_error());
     }
     let mut warnings = verdict.warnings;
     if kind == RecordKind::Task && change.target == "complete" {

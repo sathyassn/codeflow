@@ -288,6 +288,9 @@ catalog! {
     /// A branch name outside the prefixes.
     BRANCH_NAME = Step::Git("git branch"),
         "rename it with `git branch -m <prefix>/<kebab-name>`, with a sanctioned prefix: {prefixes}";
+    /// A commit at the root checkout off its root branch (ADR-0074).
+    ROOT_CHECKOUT_COMMIT = Step::Git("git switch"),
+        "task work belongs in a linked worktree: put the root checkout back on its root branch with `git switch {root}`, then work and commit in a worktree (`git worktree add .worktrees/<slug> -b <branch>`, or `git worktree add .worktrees/<slug> <branch>` to continue an existing branch)";
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
         "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
@@ -543,6 +546,10 @@ catalog! {
     /// Reading sizes above their guidelines.
     DOCTOR_READING = Step::Edit("{path}"),
         "move detail in {path} behind a trigger (an index entry or a conditional read), never cutting a duty";
+    /// The root checkout, nested repositories and linked worktrees
+    /// (ADR-0074); each finding names its own next step.
+    DOCTOR_ROOT_CHECKOUT = Step::Codeflow("codeflow doctor"),
+        "take the next step each finding above names, then `codeflow doctor --check repo-integrity` confirms it";
     /// Test configuration health findings.
     DOCTOR_TEST_CONFIG = Step::Edit(".codeflow/test-config.json"),
         "fix the named checks in .codeflow/test-config.json; `codeflow doctor --check test-config` rechecks it";

@@ -302,8 +302,14 @@ in the [work lifecycle](#the-work-lifecycle) decides it.
 A spec pins behavior, interfaces, or formats that multiple implementation
 choices must obey. It is created during planning, reaches `approved` only with
 no unresolved open question, and is derived `implemented` once every consumer
-is complete. Later semantic change gets a new spec or an explicit superseding record;
-do not rewrite history. Create an ADR only for a durable architectural decision.
+is complete. While it is approved and not yet `implemented`, a change to it is
+Plan vN+1, amended in place through a reviewed planning change: each change of
+meaning gets a dated note naming its resolution (an editorial change needs
+none), and the superseded decision stays visible as history. That change names
+each consumer bound to a changed requirement and its disposition: unaffected,
+criteria amended in the same change, or reopened. An `implemented` spec is
+frozen, so a later change gets a new spec or an explicit superseding record; do
+not rewrite history. Create an ADR only for a durable architectural decision.
 Do not repeat the same prose at several altitudes.
 
 Maintained requirements and executable interface schemas remain current in

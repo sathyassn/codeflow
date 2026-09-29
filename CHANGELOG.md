@@ -56,15 +56,26 @@ publication date._
   push --mirror`, `gh secret` set and delete, `gh auth` login, switch,
   setup-git, token, refresh and logout, and `git credential`; keychain
   reads; and user-level persistence (`defaults write`, `launchctl`,
-  `crontab -e` and `-r`, `systemctl enable`, registry writes). Codex gets
-  `.codex/rules/codeflow.rules` and a `cf-builder` profile beside
-  `cf-guard`, which now runs the network proxy (tested on Codex 0.157.1;
-  earlier versions are unqualified). Grok gets `.grok/sandbox.toml`,
-  written only when absent. `security.privilege_escalation` and
-  `security.headless_peer_runs` default to `block`, and new policy keys
-  ship for the guard checks. exec-guard refuses a launcher run directly,
-  chained or wrapped in a shell `-c` string or `eval`; a shell string that
-  reaches no launcher, `source` and `LD_LIBRARY_PATH` are not refused.
+  `crontab -e` and `-r`, `systemctl enable`, registry writes). The deny
+  rules match these commands as written; another spelling, such as `cargo
+  +stable publish` or `git push origin v1.2.3`, is not refused in this
+  release. Codex gets `.codex/rules/codeflow.rules`, and its `cf-guard`
+  profile now runs the network proxy, with a `cf-builder` profile defined
+  beside it but not selected (tested on Codex 0.157.1; earlier versions
+  are unqualified). Grok gets `.grok/sandbox.toml`, written only when
+  absent. The Claude presets' sandbox now withholds model, cloud and
+  publishing credential variables and the common credential stores
+  (`~/.ssh`, `~/.aws`, `~/.netrc` and others) from every subprocess.
+  `security.privilege_escalation` and `security.headless_peer_runs` default
+  to `block`, so exec-guard refuses a headless peer run (`claude -p`,
+  `codex exec`, `grok -p`) and a privilege launcher run directly, chained
+  or wrapped in a shell `-c` string or `eval`; a shell string that reaches
+  no launcher, `source` and `LD_LIBRARY_PATH` are not refused. The policy
+  file also carries the keys planned for later guard checks
+  (`script_bypass`, `outward_actions`, `interpreter_scan`, `secret_reads`,
+  `enforcement_baseline`, `workflow_pushes`, `sandbox_retry` and
+  `sandbox_retry_allow`), and `headless_opt_in` is accepted; no check
+  reads any of them in 3.0.0.
   - Order: install the new `codeflow` on `PATH`, then run `codeflow
     update`. Update merges the permission arrays three ways against the
     last shipped copy: a rule the preset retired is removed, the 2.x ask
@@ -76,41 +87,29 @@ publication date._
     compares with the files 2.1.0 shipped, says so, and adds back every
     shipped deny.
   - Relief: to let agents run one of these actions in a project, remove its
-    deny entry from `.claude/settings.json`, or set its policy level in
-    `.codeflow/policy.json`; update keeps both. A local ask rule cannot
-    restore a denied action, because a deny rule wins.
-  - Credentials (D9): agents use their own fine-grained token in
-    `GH_TOKEN`, without workflow, administration or gist permission. This
-    route narrows credential exposure only on a host that carries the
-    agent token alone. The operator's login stays on this host for setup
-    and workflow pushes, so the token narrows what agents use by default
-    and does not stop a deliberate read of a stored login outside the
-    refused forms. A push that introduces a `.github/workflows/` change is
-    refused and queued for the operator.
-  - Integration: agent sessions replace `git pull` with `git fetch`, then a
-    checked `git merge --ff-only` or `git rebase`. A human terminal is
-    unaffected.
-  - Enforcement baseline: `codeflow update`, `codeflow init` or the first
-    `codeflow baseline approve` binds the repository root, with a
-    binding-only confirmation for an identity already approved on the
-    machine. An outer workspace takes one `codeflow baseline bind
-    --inventory` for its nested repositories. A local landing that changes
-    an enforcement path waits for the operator's `codeflow baseline approve
-    --merge <source> --into <target>`, bound to the source and target
-    commits and the method. An agent's `gh pr merge` passes only in an
-    immediate mode and only when no commit on the pull request changes an
-    enforcement path; auto-merge and merge queues are the operator's.
-  - Seats (D7): seats are briefed only through `herdr agent prompt`, folder
-    trust is granted at launch, `Escape` is the only key sent to a seat,
-    and `/compact`, `/clear` and `/new` are the only slash commands.
-  - Guard hooks (D8) fail closed at every tier, with no fail-open switch.
-    A session starts with a line naming the outdated side and its exact
-    command, and the options: update, continue other work, or roll back
-    the binary.
-  - Operator actions: every step that needs the operator is recorded on
-    `.codeflow/operator-actions.jsonl` in the main checkout and shown by
-    `codeflow status`, the orient digest and the orchestrator's status
-    report.
+    deny entry from `.claude/settings.json`; for privilege escalation,
+    which exec-guard also refuses, set `security.privilege_escalation` in
+    `.codeflow/policy.json` as well. To allow headless peer runs, set
+    `security.headless_peer_runs`. Update keeps these changes. A local ask
+    rule cannot restore a denied action, because a deny rule wins.
+
+<!-- codeflow:release-impact minor -->
+- **Workspace mode for umbrella repositories.** An umbrella that holds
+  several projects, each its own repository, keeps its root checkout on a
+  working branch, `integration/workspace` by convention.
+  `codeflow init --workspace` creates or reuses that branch, sets
+  `git.root_branch` and adds every nested repository to `.gitignore`,
+  leaving registered submodules alone; it refuses over uncommitted changes.
+  Plain `init` and `update` in such a folder switch nothing and name the
+  flag. `codeflow doctor` reports the root branch, nested repositories no
+  tracked `.gitignore` covers, and linked worktrees outside
+  `git.worktree_locations`, whose default covers `.worktrees/` and the
+  folders Claude, Codex and Grok manage; it reads the root checkout from a
+  linked worktree too. The guide and `.codeflow/rules/worktrees.md` say how
+  a change lands in an umbrella: small edits on the root branch, larger
+  work in a short-lived worktree merged back, `main` moved forward only by
+  the operator at a milestone, and each nested repository through its own
+  pull requests. See `docs/workspace-mode.md` and ADR-0074.
 
 <!-- codeflow:release-impact minor -->
 - **Unresolved conflict markers are refused.** The pre-commit hook and
@@ -602,6 +601,16 @@ publication date._
   tree. Subjects work in a separate subjects root, the fixture boundary covers
   both roots at every depth, a timed-out or errored session is kept and graded
   as a failure, and a pack result must keep every trial.
+
+<!-- codeflow:release-impact minor -->
+- **The root checkout keeps its root branch.** Task work happens in a
+  linked worktree. A commit at the root checkout on any branch other than
+  its root branch (`git.root_branch`, by default the default branch) is now
+  refused for agents by git-guard and by the git hooks when a harness marks
+  the session; a human at their own terminal is warned. This is a behaviour
+  change for adopters whose agents commit at the root on a feature branch:
+  move that work into a worktree, or set `git.root_checkout_commits` to
+  `warn` or `off`. See ADR-0074.
 
 <!-- codeflow:release-impact minor -->
 - **Present no longer draws Mermaid diagrams.** The `diagram` block leaves
@@ -1128,6 +1137,22 @@ publication date._
   reviews, changed criteria and damaged reopen history. Clean task landings
   and verified release imports retain their source review; the separate
   planning-reopen path remains valid.
+
+<!-- codeflow:release-impact patch -->
+- **An approved spec is amended until it ships, and frozen after.** The
+  lifecycle guidance, the spec template and the refusal of an approved spec
+  moved back to `draft` now agree with how specs change in practice. While
+  a spec is approved and not yet implemented, a change to it is amended in
+  place through a reviewed planning change, with a dated note for each
+  change of meaning and each bound consumer's disposition named; once
+  implemented it is frozen and a change is a new spec. They no longer say
+  that approval freezes the criteria. The documented freeze is now
+  checked: `validate --docs --since`, `codeflow ci` and the pre-push hook
+  refuse a change to the text of a spec that was ever implemented, also
+  after a later supersession or consumer reopen.
+  `codeflow spec status <id> draft` gives the refusal naming both routes
+  instead of an argument error. `codeflow update` brings the changed
+  guidance and template.
 
 <!-- codeflow:release-impact patch -->
 - **The secret scan reads the index a commit records (security).** `git
