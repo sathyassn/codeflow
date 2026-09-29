@@ -303,7 +303,7 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
         &codeflow(&root, &["validate", "--docs"]),
         "validate the plan",
     );
-    let (code, out) = pull_request(&root, "plan/backlog", LINE, "");
+    let (code, out) = pull_request(&root, "plan/backlog", LINE, "Task: EPC-001");
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("class: planning-only"), "{out}");
     land(&root, LINE, "plan/backlog");
@@ -488,10 +488,10 @@ fn the_three_contexts_judge_one_task_the_same_way() {
         "complete TSK-001",
     );
     commit(&root, "chore: complete the root");
-    let (code, out) = pull_request(&root, "task/TSK-001-root", LINE, "");
+    let (code, out) = pull_request(&root, "task/TSK-001-root", LINE, "Task: TSK-001");
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("class: tracked TSK-001 (from the branch)"),
+        out.contains("class: tracked TSK-001 (from the Task: line)"),
         "{out}"
     );
     git(&root, &["push", "-q", "origin", "task/TSK-001-root"]);
@@ -586,7 +586,12 @@ fn the_three_contexts_judge_one_task_the_same_way() {
             "cancel the alternative",
         );
         commit(&root, "chore: select option A");
-        let (code, out) = pull_request(&root, branch, LINE, "");
+        let task_line = if branch.starts_with("plan/") {
+            "Task: EPC-001"
+        } else {
+            "Task: TSK-002"
+        };
+        let (code, out) = pull_request(&root, branch, LINE, task_line);
         if branch.starts_with("plan/") {
             assert_eq!(code, 0, "{out}");
         } else {

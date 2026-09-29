@@ -1003,7 +1003,11 @@ pub fn check_work_start_on(
         .ok()
         .and_then(|r| r.shorthand().ok().map(str::to_string))
         .unwrap_or_default();
-    check_task_anchor(root, task_id, target, &branch, false, pins, None)
+    // The report names the branch whose identity was checked, as the plain
+    // start does, so the caller can tell it from other carriers.
+    let mut report = check_task_anchor(root, task_id, target, &branch, false, pins, None)?;
+    report.branch = branch;
+    Ok(report)
 }
 
 /// Validate that `task_id` is safe to begin on the current branch.
@@ -1127,9 +1131,14 @@ fn check_task_anchor(
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let head_id = head_commit(&repo, head)?;
     let (merge_base, mut records) = anchored_records(&repo, target, head_id)?;
+    let at_base = records.contains_key(task_id);
     standalone_at_head(&repo, &mut records, task_id, branch, admission, head_id)?;
     let anchored = validate_task_structure(&repo, &records, task_id, target, pins)?;
-    if !admission {
+    // The start gate judges the record as the merge base has it: a task
+    // already complete or cancelled there takes no further change. A
+    // standalone record arriving with its code (admission) has no base
+    // record; `standalone_at_head` judged it.
+    if !admission || at_base {
         start_gate(&records[task_id], task_id)?;
     }
 
