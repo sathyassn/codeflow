@@ -1,0 +1,11 @@
+id = "TSK-194"
+uid = "7c43ae3a-a521-4233-9f95-99f3898afc60"
+kind = "TSK"
+title = "designated seats qualified once on the suite"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T20:07:02Z"
+target = "integration/EPC-018-autonomy-roster"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
