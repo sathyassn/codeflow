@@ -87,7 +87,7 @@ Reconcile the authoritative commits or change entries that will land, not
 only the PR title; do not add a competing version calculator or release
 ledger.
 Write Summary and Changes from `git log --oneline <base>..<head>` and
-`git diff --stat <base>...<head>` on source-of-truth paths — every logical
+`git diff --stat <base>...<head>` on source-of-truth paths: every logical
 change on the branch, not the last conversation, last review, or last
 commit. Inspect the actual diff as well: filenames and commit subjects
 alone cannot establish behavior, risk, or completeness. For a code change,

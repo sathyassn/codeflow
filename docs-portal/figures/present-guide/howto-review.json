@@ -1,0 +1,529 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "present-guide-review",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state is my review in, and what tells me it was handled?",
+    "idea": "Your saved notes become a received review when you submit, delivered when the agent reads it, and addressed or dismissed when it resolves it.",
+    "title": "The states of your review",
+    "kicker": "How-to",
+    "caption": "Submit stays disabled until you save a note, and the rail tells you when the agent has addressed or dismissed your review.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "State of your review"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Moves it on"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Not possible"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "submit stays disabled until a note is saved",
+        "source": "docs/present-guide.md#technical",
+        "derive": "step 7",
+        "check": {
+          "kind": "contains",
+          "text": "It stays disabled until you have saved at least one"
+        },
+        "value": true
+      },
+      {
+        "claim": "a review moves from received to delivered, then addressed or dismissed",
+        "source": "docs/present-guide.md#architecture",
+        "derive": "the ledger bullet",
+        "check": {
+          "kind": "contains",
+          "text": "Each submitted review moves from received to"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 196,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "n"
+        },
+        {
+          "text": "notes saved",
+          "x": 76,
+          "y": 62,
+          "anchor": "middle",
+          "for": [
+            "n"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M138 58H198",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "Submit review",
+          "x": 168,
+          "y": 25,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 40,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "rc"
+        },
+        {
+          "text": "received",
+          "x": 260,
+          "y": 63,
+          "anchor": "middle",
+          "for": [
+            "rc"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M322 58H382",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "feedback",
+          "x": 352,
+          "y": 25,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 384,
+          "y": 40,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "dl"
+        },
+        {
+          "text": "delivered",
+          "x": 444,
+          "y": 63,
+          "anchor": "middle",
+          "for": [
+            "dl"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M506 50C540 50 548 26 568 26",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M506 66C540 66 548 102 568 102",
+          "head": "end",
+          "id": "t4"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 570,
+          "y": 8,
+          "w": 134,
+          "h": 36,
+          "rx": 8,
+          "id": "ad"
+        },
+        {
+          "text": "addressed",
+          "x": 637,
+          "y": 31,
+          "anchor": "middle",
+          "for": [
+            "ad"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 570,
+          "y": 84,
+          "w": 134,
+          "h": 36,
+          "rx": 8,
+          "id": "di"
+        },
+        {
+          "text": "dismissed",
+          "x": 637,
+          "y": 107,
+          "anchor": "middle",
+          "for": [
+            "di"
+          ]
+        },
+        {
+          "text": "resolve",
+          "x": 540,
+          "y": 69,
+          "anchor": "start",
+          "style": "mono",
+          "for": [
+            "t3",
+            "t4"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 150,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "em"
+        },
+        {
+          "text": "no notes yet",
+          "x": 76,
+          "y": 173,
+          "anchor": "middle",
+          "for": [
+            "em"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M76 148V78",
+          "head": "end",
+          "id": "t0"
+        },
+        {
+          "text": "save a note",
+          "x": 88,
+          "y": 118,
+          "style": "mute",
+          "for": [
+            "t0"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M138 168H260V78",
+          "cross": {
+            "cx": 200,
+            "cy": 168,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "submit with no saved note",
+          "x": 272,
+          "y": 173,
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 364,
+      "elongation_max": 1.8,
+      "reason": "The review's states stack one per row at phone width, with the two end states side by side.",
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "em"
+        },
+        {
+          "text": "no notes yet",
+          "x": 83,
+          "y": 32,
+          "anchor": "middle",
+          "for": [
+            "em"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 49V84",
+          "head": "end",
+          "id": "t0"
+        },
+        {
+          "text": "save a note",
+          "x": 96,
+          "y": 71,
+          "style": "mute",
+          "for": [
+            "t0"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 87,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "n"
+        },
+        {
+          "text": "notes saved",
+          "x": 83,
+          "y": 110,
+          "anchor": "middle",
+          "for": [
+            "n"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 126V161",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "Submit review",
+          "x": 96,
+          "y": 148,
+          "style": "strong",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 164,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "rc"
+        },
+        {
+          "text": "received",
+          "x": 83,
+          "y": 187,
+          "anchor": "middle",
+          "for": [
+            "rc"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 203V238",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "feedback",
+          "x": 96,
+          "y": 225,
+          "style": "mono",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 241,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "dl"
+        },
+        {
+          "text": "delivered",
+          "x": 83,
+          "y": 264,
+          "anchor": "middle",
+          "for": [
+            "dl"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M60 280V315",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M140 280V292H265V315",
+          "head": "end",
+          "id": "t4"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 318,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "ad"
+        },
+        {
+          "text": "addressed",
+          "x": 83,
+          "y": 341,
+          "anchor": "middle",
+          "for": [
+            "ad"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 190,
+          "y": 318,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "di"
+        },
+        {
+          "text": "dismissed",
+          "x": 265,
+          "y": 341,
+          "anchor": "middle",
+          "for": [
+            "di"
+          ]
+        },
+        {
+          "text": "resolve",
+          "x": 72,
+          "y": 302,
+          "style": "mono",
+          "for": [
+            "t3",
+            "t4"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M160 28H290V182H160",
+          "cross": {
+            "cx": 290,
+            "cy": 105,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "submit with",
+          "x": 280,
+          "y": 124,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "text": "no note",
+          "x": 280,
+          "y": 145,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "By"
+      ],
+      "rows": [
+        [
+          "no notes yet",
+          "notes saved",
+          "saving a note"
+        ],
+        [
+          "notes saved",
+          "received",
+          "**Submit review**"
+        ],
+        [
+          "received",
+          "delivered",
+          "the agent runs `codeflow present feedback`"
+        ],
+        [
+          "delivered",
+          "addressed or dismissed",
+          "the agent runs `codeflow present resolve`"
+        ],
+        [
+          "no notes yet",
+          "received",
+          "not possible: submit is disabled"
+        ]
+      ]
+    }
+  }
+}

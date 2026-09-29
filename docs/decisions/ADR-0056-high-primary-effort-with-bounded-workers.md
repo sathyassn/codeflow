@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — development primaries default to high; worker effort remains task-dependent
 ---
 
-# ADR-0056 — high primary effort with bounded workers
+# ADR-0056: high primary effort with bounded workers
 
 ## Context
 

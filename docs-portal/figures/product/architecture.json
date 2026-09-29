@@ -1,0 +1,778 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "product-architecture",
+    "family": "layering",
+    "binding": "authored",
+    "question": "Which layer holds which station of the traceability spine?",
+    "idea": "The spine runs from a capability through work and decisions to the ledger, four of the six layers hold its stations, and the pull request it crosses is held by none.",
+    "title": "The six knowledge layers along the traceability spine",
+    "kicker": "The knowledge model",
+    "description": "The axis is the five stations of the traceability spine: capability, epic and task, decision and spec, pull request, ledger. WHAT holds capability, WORK holds epic and task and also reaches decision and spec because specs live in project-management, HOW holds decision and spec, and TRACE holds the ledger. The spine enters each of those four layers at a disc and runs left to right in the source's order; it crosses the pull request station between HOW and TRACE, where no layer holds it. WHY and RULES hold no station and draw no bar. Each layer's pace is printed beside its name: WHY and RULES rarely, WHAT every ship, WORK daily, HOW per decision, TRACE automatically.",
+    "caption": "The spine runs through WHAT, WORK, HOW and TRACE in that order, and the pull request it crosses on the way to the ledger is held by no layer.",
+    "states": [
+      {
+        "name": "layer",
+        "mark": "layer",
+        "means": "Layer, drawn over the spine stations it holds"
+      },
+      {
+        "name": "act",
+        "mark": "act",
+        "means": "Where the spine enters the layer"
+      },
+      {
+        "name": "done",
+        "mark": "done",
+        "means": "Traceability spine, capability to ledger"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the product layer changes rarely",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the WHY row",
+        "check": {
+          "kind": "contains",
+          "text": "`docs/product.md` | rarely; human-owned"
+        },
+        "value": true
+      },
+      {
+        "claim": "the capability registry changes every ship",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the WHAT row",
+        "check": {
+          "kind": "contains",
+          "text": "(CAP-### registry) | every ship"
+        },
+        "value": true
+      },
+      {
+        "claim": "architecture and ADRs change per decision",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the HOW row",
+        "check": {
+          "kind": "contains",
+          "text": "(ADRs) | per decision"
+        },
+        "value": true
+      },
+      {
+        "claim": "planned work changes daily",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the WORK row",
+        "check": {
+          "kind": "contains",
+          "text": "allocated by the CLI) | daily"
+        },
+        "value": true
+      },
+      {
+        "claim": "the ledger changes automatically",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the TRACE row",
+        "check": {
+          "kind": "contains",
+          "text": "ledger + `codeflow recall` | automatic"
+        },
+        "value": true
+      },
+      {
+        "claim": "the spine runs from capability through work and decisions to the ledger",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the spine sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The traceability spine runs downward: capability"
+        },
+        "value": true
+      },
+      {
+        "claim": "the spine passes the pull request between the decision and the ledger",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the spine sentence",
+        "check": {
+          "kind": "contains",
+          "text": "ADR/spec → PR →"
+        },
+        "value": true
+      },
+      {
+        "claim": "specs live in the WORK layer",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the WORK row",
+        "check": {
+          "kind": "contains",
+          "text": "`project-management/` (epics, specs, tasks"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 352,
+      "draw": [
+        {
+          "text": "capability",
+          "x": 240,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "epic, task",
+          "x": 350,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "decision, spec",
+          "x": 460,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "pull request",
+          "x": 570,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "ledger",
+          "x": 680,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 205,
+          "y1": 36,
+          "x2": 712,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 240,
+          "y1": 30,
+          "x2": 240,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 350,
+          "y1": 30,
+          "x2": 350,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 460,
+          "y1": 30,
+          "x2": 460,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 570,
+          "y1": 30,
+          "x2": 570,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 680,
+          "y1": 30,
+          "x2": 680,
+          "y2": 36
+        },
+        {
+          "text": "WHY",
+          "x": 0,
+          "y": 64,
+          "style": "strong"
+        },
+        {
+          "text": "rarely",
+          "x": 58,
+          "y": 64,
+          "style": "mute"
+        },
+        {
+          "text": "docs/product.md",
+          "x": 0,
+          "y": 85,
+          "style": "mono"
+        },
+        {
+          "text": "RULES",
+          "x": 0,
+          "y": 112,
+          "style": "strong"
+        },
+        {
+          "text": "rarely",
+          "x": 58,
+          "y": 112,
+          "style": "mute"
+        },
+        {
+          "text": "AGENTS.md, skills",
+          "x": 0,
+          "y": 133,
+          "style": "mono"
+        },
+        {
+          "text": "WHAT",
+          "x": 0,
+          "y": 160,
+          "style": "strong",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "text": "every ship",
+          "x": 58,
+          "y": 160,
+          "style": "mute",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "text": "docs/capabilities.md",
+          "x": 0,
+          "y": 181,
+          "style": "mono",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 208,
+          "y": 151,
+          "w": 64,
+          "h": 22,
+          "rx": 6,
+          "id": "b2"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 240,
+          "cy": 162,
+          "r": 8,
+          "id": "a2"
+        },
+        {
+          "text": "WORK",
+          "x": 0,
+          "y": 208,
+          "style": "strong",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "daily",
+          "x": 58,
+          "y": 208,
+          "style": "mute",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "project-management/",
+          "x": 0,
+          "y": 229,
+          "style": "mono",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 318,
+          "y": 199,
+          "w": 174,
+          "h": 22,
+          "rx": 6,
+          "id": "b3"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 350,
+          "cy": 210,
+          "r": 8,
+          "id": "a3"
+        },
+        {
+          "text": "HOW",
+          "x": 0,
+          "y": 256,
+          "style": "strong",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "text": "per decision",
+          "x": 58,
+          "y": 256,
+          "style": "mute",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "text": "architecture, ADRs",
+          "x": 0,
+          "y": 277,
+          "style": "mono",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 428,
+          "y": 247,
+          "w": 64,
+          "h": 22,
+          "rx": 6,
+          "id": "b4"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 460,
+          "cy": 258,
+          "r": 8,
+          "id": "a4"
+        },
+        {
+          "text": "TRACE",
+          "x": 0,
+          "y": 304,
+          "style": "strong",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "automatic",
+          "x": 58,
+          "y": 304,
+          "style": "mute",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "ledger",
+          "x": 0,
+          "y": 325,
+          "style": "mono",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 648,
+          "y": 295,
+          "w": 64,
+          "h": 22,
+          "rx": 6,
+          "id": "b5"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 680,
+          "cy": 306,
+          "r": 8,
+          "id": "a5"
+        },
+        {
+          "state": "done",
+          "shape": "polyline",
+          "points": [
+            [
+              240,
+              162
+            ],
+            [
+              350,
+              210
+            ],
+            [
+              460,
+              258
+            ],
+            [
+              680,
+              306
+            ]
+          ],
+          "id": "s"
+        },
+        {
+          "text": "no layer holds the pull request",
+          "x": 560,
+          "y": 304,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "traceability spine",
+          "x": 712,
+          "y": 346,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 344,
+      "draw": [
+        {
+          "text": "capability",
+          "x": 188,
+          "y": 18,
+          "style": "mute"
+        },
+        {
+          "text": "ledger",
+          "x": 348,
+          "y": 18,
+          "anchor": "end",
+          "style": "mute"
+        },
+        {
+          "text": "WHY",
+          "x": 8,
+          "y": 43,
+          "style": "strong"
+        },
+        {
+          "text": "rarely",
+          "x": 72,
+          "y": 43,
+          "style": "mute"
+        },
+        {
+          "text": "docs/product.md",
+          "x": 8,
+          "y": 64,
+          "style": "mono"
+        },
+        {
+          "text": "RULES",
+          "x": 8,
+          "y": 93,
+          "style": "strong"
+        },
+        {
+          "text": "rarely",
+          "x": 72,
+          "y": 93,
+          "style": "mute"
+        },
+        {
+          "text": "AGENTS.md, skills",
+          "x": 8,
+          "y": 114,
+          "style": "mono"
+        },
+        {
+          "text": "WHAT",
+          "x": 8,
+          "y": 143,
+          "style": "strong",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "text": "every ship",
+          "x": 72,
+          "y": 143,
+          "style": "mute",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "text": "docs/capabilities.md",
+          "x": 8,
+          "y": 164,
+          "style": "mono",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 188,
+          "y": 138,
+          "w": 24,
+          "h": 20,
+          "rx": 6,
+          "id": "b2"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 200,
+          "cy": 148,
+          "r": 8,
+          "id": "a2"
+        },
+        {
+          "text": "WORK",
+          "x": 8,
+          "y": 193,
+          "style": "strong",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "daily",
+          "x": 72,
+          "y": 193,
+          "style": "mute",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "project-management/",
+          "x": 8,
+          "y": 214,
+          "style": "mono",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 222,
+          "y": 188,
+          "w": 58,
+          "h": 20,
+          "rx": 6,
+          "id": "b3"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 234,
+          "cy": 198,
+          "r": 8,
+          "id": "a3"
+        },
+        {
+          "text": "HOW",
+          "x": 8,
+          "y": 243,
+          "style": "strong",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "text": "per decision",
+          "x": 72,
+          "y": 243,
+          "style": "mute",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "text": "architecture, ADRs",
+          "x": 8,
+          "y": 264,
+          "style": "mono",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 256,
+          "y": 238,
+          "w": 24,
+          "h": 20,
+          "rx": 6,
+          "id": "b4"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 268,
+          "cy": 248,
+          "r": 8,
+          "id": "a4"
+        },
+        {
+          "text": "TRACE",
+          "x": 8,
+          "y": 293,
+          "style": "strong",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "automatic",
+          "x": 72,
+          "y": 293,
+          "style": "mute",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "ledger",
+          "x": 8,
+          "y": 314,
+          "style": "mono",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 324,
+          "y": 288,
+          "w": 24,
+          "h": 20,
+          "rx": 6,
+          "id": "b5"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 336,
+          "cy": 298,
+          "r": 8,
+          "id": "a5"
+        },
+        {
+          "state": "done",
+          "shape": "polyline",
+          "points": [
+            [
+              200,
+              148
+            ],
+            [
+              234,
+              198
+            ],
+            [
+              268,
+              248
+            ],
+            [
+              336,
+              298
+            ]
+          ],
+          "id": "s"
+        },
+        {
+          "text": "traceability spine",
+          "x": 352,
+          "y": 334,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Layer",
+        "Lives in",
+        "Changes",
+        "Spine station"
+      ],
+      "rows": [
+        [
+          "WHY",
+          "docs/product.md",
+          "rarely",
+          "none"
+        ],
+        [
+          "RULES",
+          "AGENTS.md, skills",
+          "rarely",
+          "none"
+        ],
+        [
+          "WHAT",
+          "docs/capabilities.md",
+          "every ship",
+          "capability"
+        ],
+        [
+          "WORK",
+          "project-management/",
+          "daily",
+          "epic and task; also holds the spec"
+        ],
+        [
+          "HOW",
+          "architecture, ADRs",
+          "per decision",
+          "decision and spec"
+        ],
+        [
+          "TRACE",
+          "ledger",
+          "automatic",
+          "ledger"
+        ]
+      ]
+    }
+  }
+}

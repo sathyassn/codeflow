@@ -635,6 +635,117 @@ publication date._
   web bundle, its licence list and SBOM no longer carry Mermaid.
 
 <!-- codeflow:release-impact minor -->
+- **Comments on one part of a figure, and framed figures (SPC-014).** A
+  `cf-present` reviewer can comment on one node, arrow, label or legend
+  entry: hover, click, touch and the keyboard resolve to the named part,
+  thin strokes take a 6 px hit margin, and "select enclosing" climbs to the
+  part around it and then the block. The service checks each part note
+  against the revision and stores its own label, a PNG crop, and
+  `crop_check: "unverified"` where it cannot measure the part. Earlier notes
+  re-anchor by part, then quote, then block, and say when they moved. A
+  `schema_version: 2` document frames every figure, stage and table as
+  "Figure N · title" or "Table N · title" with a caption, legend and one
+  Details disclosure, resolves `[fig:<id>]` references, and names stage parts
+  with `data-cf-target`, `data-cf-group`, `data-cf-label` and `data-cf-for`.
+  Version 1 documents render as before, except that an `html` title now
+  shows, and the v1 `feedback` stream is unchanged. Drawn figures in present
+  and the portal show their title line and one Details disclosure in place
+  of the kicker and "Table twin"; the portal gate fails a figure whose title
+  is not visible.
+
+<!-- codeflow:release-impact minor -->
+- **Form answers reach the agent (SPC-014).** `codeflow present feedback
+  --wait --format v2` blocks until an answer, a correction (an `amendment`
+  event) or a review arrives, `--timeout` bounds it with exit 6, and a closed session exits 7.
+  `present responses list` reads events without delivering them, and
+  `present ack` records that the agent handled one, so the page moves from
+  "Stored, waiting for agent" to "Delivered to agent" to "Acknowledged by
+  agent". A second copy of a page cannot send a second original answer; it
+  offers a correction instead. The cf-present skill runs the wait as a
+  background loop in Claude Code and Grok Build, so each answer wakes the
+  agent. Codex CLI has no such background task: with Codex, an answer, a
+  correction or a review is stored at once and delivered on the agent's
+  next turn, and an answer's page state stays "Stored, waiting for agent"
+  until then. The v1 `feedback` stream is
+  unchanged and names pending answers on stderr.
+
+### Changed
+
+<!-- codeflow:release-impact patch -->
+- **Managed skills follow the dash guideline.** Em and en dashes in the
+  shipped skills are rewritten as commas, colons, full stops, hyphens or
+  parentheses with no change of meaning; a dash stays only in a numeric
+  range, a literal record string or text a test pins. The managed contract
+  now states the dash rule as a prose guideline that `git.policy_characters`
+  checks at the level policy sets. `codeflow update` replaces an unmodified
+  swept file; an adopter who edited one gets a 3-way merge, or a `.new`
+  sidecar where the edit conflicts.
+
+<!-- codeflow:release-impact minor -->
+- **Shared portal and present chrome.** Graphite, Slate and Sage use the
+  approved design kit in both utilities and the installed portal starter.
+  Search, Display, panel controls and narrow layouts follow the shared shell.
+  Existing export values remain aliases: instrument and technical select
+  Graphite, editorial selects Slate, and ink selects Sage. Portal signal
+  selects Graphite and folio selects Sage. These values select a skin only;
+  Inter is now the independent typeface default, replacing the portal's
+  Archivo or Plex defaults for signal or folio. Present also starts in Inter;
+  exports previously used a system-first sans stack. The export default stays
+  editorial, resolving to Slate. Old saved Display skin and explicit font
+  choices normalize independently before first paint and in the controls.
+  No existing CLI or config value is removed.
+
+<!-- codeflow:release-impact patch -->
+- **Figure marks read without colour.** The stop mark is a square-capped bar
+  and the merge diamond an accent stroke, so every mark pair in a figure
+  differs on two channels besides hue. The boxed-text check judges each mark
+  before the figure, so empty shapes no longer hide a figure drawn as
+  labelled boxes, and coverage cells no longer count as boxed text. Narrow
+  coverage grids bind their column labels and share one set of columns.
+
+<!-- codeflow:release-impact patch -->
+- **A narrow figure may keep its marks when it says why.** The figure gate
+  accepts a narrow composition that draws the wide mark set again only when
+  its declaration sets `marks: "same"` and gives a `reason`; without one it
+  still fails as a reflow, and the height ceiling still applies. Narrow
+  coverage cells are drawn at the wide size again, and a partial cell is
+  shaded from its line, so it reads apart from an empty one in dark mode.
+
+<!-- codeflow:release-impact patch -->
+- **The present method and the minimal contract keep their full guidance.**
+  The present method again gives the five-second test with its examples, the
+  attention cost of each block and the bad and good page walk, and names a
+  flow figure where it named the retired `diagram` block. The minimal-tier
+  contract again says which harness each in-session guard wiring serves.
+
+<!-- codeflow:release-impact patch -->
+- **Narrow figure labels clear their marks in every engine.** A narrow extent
+  row sets its label a full text box above its value, so a short bar's value
+  no longer runs into its label in Firefox, and narrow coverage cells sit
+  clear of their row name. The figure rule checks now measure text in the
+  portal's own typefaces, not an engine's fallback.
+
+<!-- codeflow:release-impact patch -->
+- **Browser verification cleans up after a failed fetch.** A page fetch that
+  fails during the portal figure check fails the check instead of ending the
+  run. The verifier releases its workflow lock and stops its preview server
+  on every exit, including an unexpected error.
+
+<!-- codeflow:release-impact patch -->
+- **Browser verification keeps its results on a long run.** Each engine's
+  trace is kept only when that engine fails, and the results are written
+  before the evidence files are counted. A file over its size cap is recorded
+  as a failed artifact in the results instead of ending the run.
+
+<!-- codeflow:release-impact patch -->
+- **Portal altitude tabs, records table and home reading path.** The
+  Concept, Architecture and Technical tabs sit on one line; before, the
+  second and third tab sat lower. At phone width the records page stacks
+  each folder's row, so the purpose reads as a sentence instead of one word
+  per line. The home page shows every step of the reading path, one row per
+  step from top to bottom, under a tighter title block.
+
+<!-- codeflow:release-impact minor -->
 - **Reading is checked by structure; sizes are reported, not failed.** The
   shipped instruction files load progressively: a small kernel (the managed
   `AGENTS.md` block) at session start, and everything else through an index

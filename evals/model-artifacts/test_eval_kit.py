@@ -192,6 +192,445 @@ def passing_grade(case: dict, number: int, fixture_digest: str, run_id: str) -> 
     })
 
 
+# TSK-062 grading inventories: case -> (requirement, faulty controls,
+# positive control extras). Registration and these grader checks prove the
+# cases are well formed; only native trials show model behaviour.
+VISUAL_DOCTRINE_INVENTORY = {
+    "checks-page-figure-matches-its-question": ("CF-FIG-001", ("flow_family_for_set_against_set",), ()),
+    "release-handoffs-drawn-as-exchanges": ("CF-FIG-001", ("grid_family_for_ordered_exchanges",), ()),
+    "queue-concept-draws-the-relationship": (
+        "CF-FIG-002", ("labelled_boxes_kept_as_figure",), ("boxes_drawn_as_regions_with_crossing_connectors",)),
+    "retry-state-figure-survives-a-review-note": (
+        "CF-FIG-002", ("valid_state_figure_reworked_away",), ("declaration_left_unchanged",)),
+    "deploy-flow-states-read-without-hue": ("CF-FIG-003", ("state_pair_differs_on_one_rendered_channel",), ()),
+    "planes-figure-fits-a-small-screen": (
+        "CF-FIG-004", ("narrow_reflows_wide_mark_set",), ("narrow_elongation_above_default_with_stated_reason",)),
+    "token-exchange-labels-stay-clear": ("CF-FIG-005", ("label_overprints_label_or_mark",), ()),
+    "access-grid-marks-read-at-small-size": ("CF-FIG-006", ("inner_mark_under_floor_at_narrow",), ()),
+    "limits-figure-draws-todays-value": (
+        "CF-FIG-007", ("drawn_value_differs_from_source_today", "source_value_edited_to_match_drawing"), ()),
+    "planes-figure-claims-only-what-the-repository-holds": (
+        "CF-FIG-007", ("fact_asserts_what_source_does_not_hold",), ()),
+    "key-rotation-section-is-drawn": (
+        "CF-FIG-008", ("rotation_section_left_without_figure",), ("rotation_figure_inline_beside_its_section",)),
+    "edge-cache-opening-says-what-it-is-not": ("CF-FIG-008", ("opening_panel_drawn_as_request_sequence",), ()),
+}
+EXPLANATION_METHOD_INVENTORY = {
+    "guide-page-from-a-policy-source": ("CF-METH-001", ("source_reprinted_under_altitudes_with_box_stage",), ()),
+    "enforcement-planes-answered-in-chat": (
+        "CF-METH-002", ("commit_flow_figure_for_planes_question", "ci_plane_marked_active", "remote_plane_marked_unarmed"),
+        ("ci_plane_omitted_with_caption_note",)),
+    "display-panel-and-first-paint-take-different-carriers": (
+        "CF-METH-002", ("display_panel_drawn_as_ascii_art", "first_paint_shown_as_screenshot"), ()),
+    "readme-figure-uses-the-text-form": (
+        "CF-METH-002", ("svg_file_linked_from_readme", "mermaid_fence_in_readme"), ()),
+    "three-unrelated-rules-take-the-smallest-carrier": (
+        "CF-METH-003", ("figure_for_unrelated_facts",),
+        ("answer_is_three_bullets_only", "no_lead_sentence", "formatting_choice_not_explained")),
+    "migration-review-leads-with-the-picture": ("CF-METH-004", ("narrative_first_text_cards_ask_last",), ()),
+    # The existing present case, registered in the pack unchanged.
+    "complex-review-uses-declarative-presentation": (
+        "CF-PRES-004", ("visuals_as_decorative_text_cards", "same_chat_answer_repackaged_in_panels"), ()),
+    # TSK-073: the existing flow reply case, registered in the pack unchanged.
+    "flow-reply-carries-figure": (
+        "CF-OUT-003",
+        ("prose_only_flow_explanation", "unrendered_figure_on_plain_text_surface", "mermaid_figure_in_reply"), ()),
+}
+# TSK-073 grading inventory for the copy-guide pack, in the same shape. The
+# two EPC-017 cases are registered unchanged beside the guide's own cases.
+COPY_GUIDE_INVENTORY = {
+    "lead-and-caption-around-a-figure": (
+        "CF-COPY-001", ("lead_restates_caption", "caption_repeats_title", "legend_explained_in_prose",
+                        "key_written_as_clause", "carrier_form_described"), ()),
+    "search-dialog-microcopy": (
+        "CF-COPY-002", ("exclamation_mark", "title_case_label", "empty_state_without_action",
+                        "count_spelled_out", "jokey_tone"), ()),
+    "task-closeout-from-evidence": (
+        "CF-COPY-003", ("bullets_only_closeout", "paragraph_wall", "closeout_summary_buries_anchor",
+                        "not_tested_dropped", "fact_invented"), ()),
+    # The summary case's positive control, on its own yes-or-no prompt: the
+    # one-line answer with no lead passes.
+    "short-answer-stays-one-line": (
+        "CF-COPY-003", ("lead_before_short_answer", "heading_in_short_answer", "recap_after_answer",
+                        "summary_padding"), ()),
+    "first-section-of-a-new-skill": (
+        "CF-COPY-004", ("slogan_kept", "contrast_turn", "policy_character", "self_narration",
+                        "motivational_framing"), ()),
+    "adr-for-a-byte-pinned-sheet": (
+        "CF-COPY-005", ("context_is_history", "decision_spread_over_paragraphs", "decision_hedged",
+                        "consequences_without_cost", "alternatives_inside_decision"), ()),
+    "operator-reply-is-plain-prose-and-bullets": (
+        "CF-OUT-002", ("policy_character_in_reply", "summary_buries_anchor_in_detail"), ()),
+    "identifier-only-title-gets-words": ("CF-OUT-005", ("identifier_only_title_kept",), ()),
+}
+# Existing cases registered in the explanation-method pack that are exempt
+# from its committed answers, each with the reason: the tests named here
+# already grade their faulty and positive controls.
+EXISTING_CASES_WITH_OWN_CONTROLS = {
+    # The present case keeps the presentation-review controls.
+    "complex-review-uses-declarative-presentation",
+    # TSK-073: the EPC-017 flow reply case keeps the controls of
+    # test_operating_doctrine_cases_grade_faulty_and_positive_controls and
+    # test_flow_figure_status_computation_is_surface_neutral.
+    "flow-reply-carries-figure",
+}
+
+
+# TSK-073 (Codex review R1, finding 2): every objective signal a copy
+# control claims is read off the answer's own text, so a declared signal list
+# cannot vouch for an answer that lacks what it claims. A positive signal
+# claimed by a control must hold in its text; a must_not signal must hold in
+# the text exactly when the control claims it. The signals left to the
+# grader's judgment are named, and nothing else may be unbound.
+_DASH = re.compile("[\u2013\u2014]")
+_STOP = {"a", "an", "the", "to", "from", "of", "and", "or", "in", "on", "for", "with", "by", "how", "is"}
+
+
+def _sentences(text: str) -> list[str]:
+    return [s for s in re.split(r"(?<=[.!?])\s+", " ".join(text.split())) if s]
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _STOP and len(w) > 2}
+
+
+# ------------------------------------------------------------ figure case
+def _figure_parts(answer: dict, fixture: dict) -> dict:
+    page = answer["files"]["docs/release-flow.md"]
+    declared = json.loads(fixture["files"]["docs/figures/release-flow.json"])["figure"]
+    body = page.split("\n", 1)[1]
+    before_figure = body.split("<!-- cf-figure", 1)[0]
+    lead = " ".join(line for line in before_figure.splitlines()
+                    if line.strip() and not line.lstrip().startswith("<!--"))
+    return {"page": page, "lead": lead, "caption": answer["declaration"]["caption"],
+            "title": declared["title"], "keys": [state["means"] for state in answer["declaration"]["states"]]}
+
+
+def _lead_restates_caption(parts: dict) -> bool:
+    caption = _content_words(parts["caption"])
+    return bool(caption) and len(caption & _content_words(parts["lead"])) >= 0.8 * len(caption)
+
+
+def _caption_repeats_title(parts: dict) -> bool:
+    return _content_words(parts["title"]) <= _content_words(parts["caption"])
+
+
+def _carrier_form_described(parts: dict) -> bool:
+    return bool(re.search(r"\b(figure|diagram|chart|picture)\s+(below|above)\b", parts["page"], re.I))
+
+
+def _legend_explained(parts: dict) -> bool:
+    marks = ("solid line", "dashed line", "filled dot", "the ring", "the bar")
+    return bool(re.search(r"\blegend\b", parts["page"], re.I)) or sum(m in parts["page"] for m in marks) >= 2
+
+
+# Finding 2, legend keys. A key is a clause when it opens with a determiner
+# or pronoun (a sentence about the reader or the step), when its second word
+# is a finite verb or auxiliary (a subject followed by its verb: "CI runs
+# this step", "Maintainer publishes the package"), or when it opens with a
+# bare verb (an instruction: "Merge into the release branch"). A relative
+# clause after "that" stays a noun phrase ("Red check that stops the
+# release"), and a reduced relative keeps its verb in third position ("Step
+# CI runs").
+_KEY_OPENERS = {"this", "that", "these", "those", "the", "a", "an", "it", "you", "we", "they", "he", "she",
+                "here", "there"}
+_KEY_FINITE = {"runs", "takes", "decides", "stops", "has", "is", "are", "was", "were", "approves", "publishes",
+               "merges", "builds", "tests", "fails", "passes", "blocks", "waits", "holds", "marks", "means",
+               "needs", "ends", "starts", "does", "will", "can", "must", "may", "cannot", "happens", "goes",
+               "sits", "gets", "shows", "lands"}
+_KEY_BARE_VERBS = {"merge", "run", "build", "test", "publish", "approve", "stop", "check", "deploy", "tag",
+                   "wait", "hand", "record", "find", "verify", "use", "click", "open", "close", "read", "write",
+                   "press", "select", "go", "see"}
+
+
+def _key_is_clause(key: str) -> bool:
+    words = [w.strip(",.;:").lower() for w in key.split()]
+    return (words[0] in _KEY_OPENERS or words[0] in _KEY_BARE_VERBS
+            or (len(words) > 1 and words[1] in _KEY_FINITE))
+
+
+# ------------------------------------------------------------ search case
+def _search_strings(answer: dict) -> dict:
+    html = answer["files"]["app/search.html"]
+    slot = lambda name: re.search(r'data-copy="' + name + r'"[^>]*>([^<]*)<', html).group(1).strip()
+    return {"open": slot("open"), "close": slot("close"), "empty": slot("empty"), "count": slot("count"),
+            "no_results": slot("no-results"),
+            "placeholder": re.search(r'placeholder="([^"]*)"', html).group(1),
+            "aria": re.search(r'aria-label="([^"]*)"', html).group(1)}
+
+
+def _title_case(text: str) -> bool:
+    words = re.findall(r"[A-Za-z][A-Za-z.']*", text)[1:]
+    return any(w[0].isupper() and not (w.isupper() or w[:-1].isupper()) for w in words)
+
+
+_ACTIONS = {"search", "close", "open", "find", "clear", "cancel", "type", "enter", "try"}
+# Finding 2, empty state. Saying what to do next means a verb first and an
+# object the reader can type: one of the things the README says the dialog
+# finds. "Search." has the verb and no object.
+_SEARCHABLE = re.compile(r"\b(page|pages|title|titles|heading|headings|command|commands|ID|IDs|record|records|"
+                         r"name|names|word|words|term|terms|keyword|keywords)\b")
+
+
+def _empty_state_acts(s: dict) -> bool:
+    # The verb and its object sit in the first sentence: "Search. No pages
+    # are available." names pages only after the action has ended.
+    sentence = re.split(r"[.?!]", s["empty"], maxsplit=1)[0] if s["empty"] else ""
+    first = sentence.split()[0].lower().strip(",") if sentence.split() else ""
+    return first in _ACTIONS and "!" not in s["empty"] and bool(_SEARCHABLE.search(sentence))
+
+
+# ------------------------------------------------------------ closeout case
+def _closeout_parts(answer: dict) -> dict:
+    closeout = answer["files"]["project-management/tasks/TSK-231.md#Closeout"].split("## Closeout", 1)[1].strip()
+    paragraphs = [p for p in closeout.split("\n\n") if p.strip()]
+    summary = paragraphs[0] if paragraphs and not paragraphs[0].lstrip().startswith(("- ", "|", "```")) else ""
+    return {"closeout": closeout, "paragraphs": paragraphs, "summary": summary,
+            "lines": [line for line in closeout.splitlines() if line.strip()]}
+
+
+# Finding 2, closeout summary. A detail is a digit, a code span, a path, a
+# dot-name (EVIDENCE.md), a revision named as such, a spelled identifier
+# (three or more hyphen-joined letters or number words: four-f-two-c) or a
+# measurement in words (percent, "point two"). A count in words is allowed.
+_NUMBER_WORD = r"(?:zero|one|two|three|four|five|six|seven|eight|nine)"
+_SUMMARY_DETAIL = re.compile(
+    r"\d|`|/"
+    r"|\b[\w-]+\.(?:md|json|rs|py|txt|toml|ya?ml|html|css|js|mjs|lock)\b"
+    r"|\b(?:revision|commit|sha|hash)\b"
+    r"|\b(?:[a-z]|" + _NUMBER_WORD + r")(?:-(?:[a-z]|" + _NUMBER_WORD + r")){2,}\b"
+    r"|\bper ?cent\b|\b" + _NUMBER_WORD + r" point " + _NUMBER_WORD + r"\b", re.I)
+
+
+def _summary_carries_detail(c: dict) -> bool:
+    lead = " ".join(_sentences(c["summary"])[:3])
+    return bool(c["summary"]) and bool(_SUMMARY_DETAIL.search(lead))
+
+
+def _paragraph_wall(c: dict) -> bool:
+    return len(c["paragraphs"]) == 1 and bool(c["summary"]) and len(_sentences(c["summary"])) >= 5
+
+
+# ------------------------------------------------------------ short answer
+# Finding 3, one line. The line the guide means is the answer's paragraph:
+# a hard wrap inside it is not a second line, a blank line starts one. The
+# paragraph holds yes or no first and at most three sentences.
+def _reply_lines(answer: dict) -> list[str]:
+    return [line for line in answer["reply"].splitlines() if line.strip()]
+
+
+def _reply_paragraphs(answer: dict) -> list[str]:
+    return [" ".join(p.split()) for p in re.split(r"\n\s*\n", answer["reply"].strip()) if p.strip()]
+
+
+def _structured_line(line: str) -> bool:
+    return line.lstrip().startswith(("#", "- ", "* ", "|", "```", "1. "))
+
+
+def _one_paragraph_answer(answer: dict) -> bool:
+    paragraphs = _reply_paragraphs(answer)
+    return (len(paragraphs) == 1 and not any(map(_structured_line, _reply_lines(answer)))
+            and len(_sentences(paragraphs[0])) <= 3)
+
+
+# ------------------------------------------------------------ skill case
+def _skill_text(answer: dict) -> str:
+    return answer["files"][".agents/skills/cf-rollback/SKILL.md#opening"]
+
+
+# Finding 3, imperative steps. Structural, not a verb list: a numbered step
+# is imperative when it opens with a capitalised word that is not a subject
+# opener, not an -ing form, and is not followed by a finite verb or modal
+# (which would make the opener a subject: "Steps should be recorded").
+_NON_IMPERATIVE_OPENERS = {"the", "a", "an", "this", "that", "these", "those", "it", "you", "we", "i", "they",
+                           "there", "then", "first", "next", "after", "before", "when", "if", "once", "now",
+                           "please", "let", "let's", "also", "so", "rollback", "rollbacks"}
+_FINITE_SECOND = {"should", "must", "may", "might", "will", "can", "could", "would", "is", "are", "was", "were",
+                  "has", "have", "needs", "gets", "does", "did", "takes", "runs"}
+
+
+def _step_is_imperative(step: str) -> bool:
+    words = step.split()
+    first = words[0].strip(",.:;")
+    second = words[1].strip(",.:;").lower() if len(words) > 1 else ""
+    return (first[:1].isupper() and first.lower() not in _NON_IMPERATIVE_OPENERS
+            and not first.lower().endswith("ing") and second not in _FINITE_SECOND)
+
+
+# Finding 3, the named actor. The operator is the subject of a sentence (an
+# -s verb follows "the operator", with an optional aside between) and the
+# text names the production step that sentence is about.
+_OPERATOR_ACTS = re.compile(r"\bthe operator\b(?:,[^,.;]*,)? [a-z]+s\b", re.I)
+
+
+def _actor_named(text: str) -> bool:
+    folded = " ".join(text.split())  # a hard wrap between "the" and "operator" is not a boundary
+    return bool(_OPERATOR_ACTS.search(folded)) and "production" in folded.lower()
+
+
+# ------------------------------------------------------------ ADR case
+def _adr_sections(answer: dict) -> dict:
+    adr = answer["files"]["docs/decisions/ADR-0104.md"]
+    section = lambda name: adr.split(f"## {name}", 1)[1].split("\n## ", 1)[0].strip()
+    return {"context": section("Context"), "decision": section("Decision"), "consequences": section("Consequences")}
+
+
+# Finding 1, the constraint after the notes rewrite: the context names the
+# promise (one rendering wherever the kit is carried) and the review limit.
+def _names_constraint(answer: dict) -> bool:
+    context = " ".join(_adr_sections(answer)["context"].split())
+    return bool(re.search(r"\brender\w* the same\b", context, re.I)) and bool(re.search(r"\breview\w*\b", context, re.I))
+
+
+# Finding 2, history. The notes carry five dated events; a context that
+# retells three or more of them is history whatever else it names.
+_HISTORY_EVENTS = (r"\bfirst portal\b", r"\b(took that file|changed two selectors|copied)\b", r"\bMarch\b",
+                   r"\bJune\b", r"\b(tried twice|two attempts|twice)\b")
+
+
+def _history_events(answer: dict) -> int:
+    context = " ".join(_adr_sections(answer)["context"].split())
+    return sum(bool(re.search(p, context, re.I)) for p in _HISTORY_EVENTS)
+
+
+def _context_is_history(answer: dict) -> bool:
+    return "\n\n" in _adr_sections(answer)["context"] or not _names_constraint(answer) or _history_events(answer) >= 3
+
+
+# Finding 2, hedges: "should" and its relatives join the list. "may" stays
+# out: "products may add" is a permission, not a hedge.
+_HEDGES = r"\b(probably|perhaps|seems|likely|should|could|we think|we believe|we propose|we have decided|we intend|for now)\b"
+
+# Finding 2, costs. Each cost from the notes needs both of its anchors in one
+# sentence, so "kit release" alone ("The kit release notes get shorter")
+# names no cost.
+_COST_SENTENCES = (
+    re.compile(r"\b(cannot|can no longer|no longer|not)\b[^.]*\btune\b", re.I),
+    re.compile(r"\bkit release\b[^.]*\b(every|each|all) products?\b|\b(every|each|all) products?\b[^.]*\bkit release\b", re.I),
+    re.compile(r"\bcheck\b[^.]*\b(every|each|all) product'?s'? ci\b|\b(every|each|all) product'?s'? ci\b[^.]*\bcheck\b", re.I),
+)
+
+
+def _names_cost(answer: dict) -> bool:
+    text = " ".join(_adr_sections(answer)["consequences"].split())
+    return any(p.search(s) for s in _sentences(text) for p in _COST_SENTENCES)
+
+
+# signal -> predicate over (answer, fixture). Each is a necessary condition
+# of the signal read off the text; a must_not predicate is also sufficient.
+COPY_SIGNAL_CHECKS = {
+    # lead-and-caption-around-a-figure
+    "lead_says_what_the_reader_looks_at": lambda a, f: (lambda p: len(_sentences(p["lead"])) == 1
+        and not _carrier_form_described(p) and not _lead_restates_caption(p))(_figure_parts(a, f)),
+    "caption_is_one_sentence_takeaway": lambda a, f: (lambda p: len(_sentences(p["caption"])) == 1
+        and p["caption"].endswith(".") and not _caption_repeats_title(p))(_figure_parts(a, f)),
+    "caption_differs_from_title_and_lead": lambda a, f: (lambda p: not _caption_repeats_title(p)
+        and not _lead_restates_caption(p) and p["caption"] != p["lead"])(_figure_parts(a, f)),
+    "legend_keys_are_noun_phrases": lambda a, f: not any(map(_key_is_clause, _figure_parts(a, f)["keys"])),
+    "no_sentence_explains_the_legend": lambda a, f: not _legend_explained(_figure_parts(a, f)),
+    "lead_restates_caption": lambda a, f: _lead_restates_caption(_figure_parts(a, f)),
+    "caption_repeats_title": lambda a, f: _caption_repeats_title(_figure_parts(a, f)),
+    "legend_explained_in_prose": lambda a, f: _legend_explained(_figure_parts(a, f)),
+    "key_written_as_clause": lambda a, f: any(map(_key_is_clause, _figure_parts(a, f)["keys"])),
+    "carrier_form_described": lambda a, f: _carrier_form_described(_figure_parts(a, f)),
+    # search-dialog-microcopy
+    "labels_verb_first": lambda a, f: all(s.split()[0].lower() in _ACTIONS
+        for s in (_search_strings(a)["open"], _search_strings(a)["close"])),
+    "labels_in_sentence_case": lambda a, f: not any(_title_case(s) for key, s in _search_strings(a).items()
+        if key in ("open", "close", "placeholder", "aria")),
+    "empty_state_says_what_to_type": lambda a, f: _empty_state_acts(_search_strings(a)),
+    "no_results_message_names_next_step": lambda a, f: bool(re.search(
+        r"\b(Try|Search|Type|Enter)\b[^.?!]*\b(name|title|heading|ID|word|command)", _search_strings(a)["no_results"])),
+    "no_exclamation_mark": lambda a, f: not any("!" in s for s in _search_strings(a).values()),
+    "counts_as_digits": lambda a, f: bool(re.search(r"\d", _search_strings(a)["count"])),
+    "exclamation_mark": lambda a, f: any("!" in s for s in _search_strings(a).values()),
+    "title_case_label": lambda a, f: any(_title_case(s) for key, s in _search_strings(a).items()
+        if key in ("open", "close", "placeholder", "aria")),
+    "empty_state_without_action": lambda a, f: not _empty_state_acts(_search_strings(a)),
+    "count_spelled_out": lambda a, f: not re.search(r"\d", _search_strings(a)["count"]),
+    "jokey_tone": lambda a, f: bool(re.search(r"\b(oops|whoops|yay|woohoo|uh-oh)\b",
+        " ".join(_search_strings(a).values()), re.I)),
+    # task-closeout-from-evidence
+    "closeout_summary_anchors_reader": lambda a, f: bool(_closeout_parts(a)["summary"])
+        and not _paragraph_wall(_closeout_parts(a)) and not _summary_carries_detail(_closeout_parts(a)),
+    "evidence_in_fenced_block_or_table": lambda a, f: bool(re.search(r"```|\|---", _closeout_parts(a)["closeout"])),
+    "coverage_number_carried": lambda a, f: "84.2" in _closeout_parts(a)["closeout"],
+    "not_tested_named": lambda a, f: all(w in _closeout_parts(a)["closeout"] for w in ("Windows", "Redis")),
+    "bullets_only_closeout": lambda a, f: all(line.startswith("- ") for line in _closeout_parts(a)["lines"]),
+    "paragraph_wall": lambda a, f: _paragraph_wall(_closeout_parts(a)),
+    "closeout_summary_buries_anchor": lambda a, f: _summary_carries_detail(_closeout_parts(a)),
+    "not_tested_dropped": lambda a, f: not all(w in _closeout_parts(a)["closeout"] for w in ("Windows", "Redis")),
+    # short-answer-stays-one-line
+    "one_line_answer": lambda a, f: _one_paragraph_answer(a),
+    "answer_states_yes_or_no": lambda a, f: bool(re.match(r"(yes|no)\b", _reply_paragraphs(a)[0], re.I)),
+    "no_lead_before_answer": lambda a, f: bool(re.match(r"(yes|no)\b", _reply_paragraphs(a)[0], re.I)),
+    "lead_before_short_answer": lambda a, f: not re.match(r"(yes|no)\b", _reply_paragraphs(a)[0], re.I),
+    "heading_in_short_answer": lambda a, f: any(line.lstrip().startswith("#") for line in _reply_lines(a)),
+    "recap_after_answer": lambda a, f: any(re.match(r"(in short|in summary|to sum up)\b", p, re.I)
+        for p in _reply_paragraphs(a)[1:]),
+    "summary_padding": lambda a, f: any(line.lstrip().startswith(("- ", "* ")) for line in _reply_lines(a))
+        or len(_reply_paragraphs(a)) > 1,
+    # first-section-of-a-new-skill
+    "imperative_plain_sentences": lambda a, f: all(map(_step_is_imperative, re.findall(r"^\d+\. (.+)$", _skill_text(a), re.M)))
+        and not re.search(r"\b(let me|i will|i'll|we will)\b", _skill_text(a), re.I),
+    "actor_named_when_not_reader": lambda a, f: _actor_named(_skill_text(a)),
+    "no_slogan": lambda a, f: not re.search(r"with confidence|made easy|done right|peace of mind", _skill_text(a), re.I),
+    "no_contrast_turn": lambda a, f: not re.search(r"\bis not (a|an) [^,.;]+, it is\b", _skill_text(a), re.I),
+    "no_policy_character": lambda a, f: not _DASH.search(_skill_text(a)),
+    "slogan_kept": lambda a, f: bool(re.search(r"with confidence|made easy|done right|peace of mind", _skill_text(a), re.I)),
+    "contrast_turn": lambda a, f: bool(re.search(r"\bis not (a|an) [^,.;]+, it is\b", _skill_text(a), re.I)),
+    "policy_character": lambda a, f: bool(_DASH.search(_skill_text(a))),
+    "self_narration": lambda a, f: bool(re.search(r"\b(let me|i will|i'll|walk you through)\b", _skill_text(a), re.I)),
+    "motivational_framing": lambda a, f: bool(re.search(r"calmly|safely and completely|peace of mind", _skill_text(a), re.I)),
+    # adr-for-a-byte-pinned-sheet
+    "context_two_to_five_sentences": lambda a, f: (lambda c: "\n\n" not in c
+        and 2 <= len(_sentences(c)) <= 5)(_adr_sections(a)["context"]),
+    "context_names_constraint": lambda a, f: _names_constraint(a),
+    "one_decision_paragraph_as_fact": lambda a, f: (lambda d: "\n\n" not in d
+        and not re.search(_HEDGES, d, re.I))(_adr_sections(a)["decision"]),
+    "consequences_name_a_cost": lambda a, f: _names_cost(a),
+    "context_is_history": lambda a, f: _context_is_history(a),
+    "decision_spread_over_paragraphs": lambda a, f: "\n\n" in _adr_sections(a)["decision"],
+    "decision_hedged": lambda a, f: bool(re.search(_HEDGES, _adr_sections(a)["decision"], re.I)),
+    "consequences_without_cost": lambda a, f: not _names_cost(a),
+    "alternatives_inside_decision": lambda a, f: bool(re.search(r"reject|dropped|shared package|override block|instead of",
+        _adr_sections(a)["decision"], re.I)),
+}
+# Signals no text check can decide; the grader judges them against the
+# fixture and records them. None is claimed by a committed control.
+COPY_JUDGED_SIGNALS = {"fact_invented"}
+
+
+def copy_signal_problems(case: dict, claimed: list[str], answer: dict, fixture: dict) -> list[str]:
+    """What an answer's text contradicts in the signals a control claims."""
+    problems = []
+    for signal in claimed:
+        check = COPY_SIGNAL_CHECKS.get(signal)
+        if check is not None and not check(answer, fixture):
+            problems.append(f"claimed but absent from the text: {signal}")
+    for signal in case["expected"]["must_not"]:
+        check = COPY_SIGNAL_CHECKS.get(signal)
+        if check is not None and check(answer, fixture) != (signal in claimed):
+            problems.append(f"must_not {'unclaimed but shown' if check(answer, fixture) else 'claimed but absent'}: {signal}")
+    return problems
+
+
+def control_trial(case: dict, signals: list[str]) -> dict:
+    return {
+        "outcome": "completed",
+        "observed": {
+            "route": case["expected"]["routes"][0],
+            "signals": list(signals),
+            "references": list(case["expected"]["references"]),
+            "violations": [],
+        },
+        "evidence": [{"kind": "file", "ref": "rendered-declaration",
+                      "digest": "sha256:" + "d" * 64}],
+        "trace_ref": "visual-control-trace",
+        "validity_flags": [],
+    }
+
+
 def valid_result(suite: str = "canary", harness: str = "codex-app") -> dict:
     _, cases_doc, _ = eval_kit.suite_documents()
     lineage = eval_kit.harness_catalog()[harness]["lineage"]
@@ -1015,6 +1454,373 @@ class SuiteContractTests(unittest.TestCase):
                     bad = copy.deepcopy(trial)
                     bad["observed"]["signals"].append(faulty)
                     self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
+    def test_visual_doctrine_and_method_cases_grade_faulty_and_positive_controls(self) -> None:
+        # TSK-062 inventory: pack -> case -> (requirement, faulty controls,
+        # positive control extras). The extras are what a correct answer the
+        # grader might wrongly penalise also shows; it must still pass.
+        requirements_doc, cases_doc, _ = eval_kit.suite_documents()
+        requirements = {item["id"]: item for item in requirements_doc["requirements"]}
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        for pack, inventory in (("visual-doctrine", VISUAL_DOCTRINE_INVENTORY),
+                                ("explanation-method", EXPLANATION_METHOD_INVENTORY),
+                                ("copy-guide", COPY_GUIDE_INVENTORY)):
+            selected = eval_kit.resolve_pack(pack)
+            self.assertEqual(len(selected), len(set(selected)), pack)
+            self.assertEqual(set(inventory), set(selected), pack)
+            for case_id, (requirement_id, faulty, extras) in inventory.items():
+                case = cases[case_id]
+                with self.subTest(case=case_id):
+                    self.assertEqual("hard", requirements[requirement_id]["level"])
+                    self.assertIn(requirement_id, case["requirements"])
+                    self.assertTrue(faulty, "every case names a faulty control")
+                    trial = control_trial(case, case["expected"]["signals"])
+                    self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
+                    # Positive control: the correct answer with the traits a
+                    # careless grader might count against it still passes.
+                    self.assertEqual(set(), set(extras) & set(case["expected"]["must_not"]))
+                    positive = control_trial(case, [*case["expected"]["signals"], *extras])
+                    self.assertEqual("pass", eval_kit.computed_trial_status(positive, case))
+                    for signal in faulty:
+                        self.assertIn(signal, case["expected"]["must_not"])
+                        # Faulty control: fails even beside every good signal,
+                        # and on its own.
+                        bad = control_trial(case, [*case["expected"]["signals"], signal])
+                        self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
+                        alone = control_trial(case, [signal])
+                        self.assertEqual("fail", eval_kit.computed_trial_status(alone, case))
+                    for signal in case["expected"]["signals"]:
+                        missing = control_trial(case, [s for s in case["expected"]["signals"] if s != signal])
+                        self.assertEqual("fail", eval_kit.computed_trial_status(missing, case))
+        # At least two visual cases carry a positive control a short or
+        # conservative answer could otherwise lose.
+        self.assertGreaterEqual(sum(1 for _, _, extras in VISUAL_DOCTRINE_INVENTORY.values() if extras), 2)
+        self.assertGreaterEqual(len({requirement for requirement, _, _ in VISUAL_DOCTRINE_INVENTORY.values()}), 8)
+        self.assertGreaterEqual(len(VISUAL_DOCTRINE_INVENTORY), 12)
+        # The smallest carrier: a complete three-bullet answer with no lead
+        # passes, so no expected signal may ask for a lead or a formatting note.
+        smallest = cases["three-unrelated-rules-take-the-smallest-carrier"]["expected"]["signals"]
+        self.assertFalse([signal for signal in smallest if "lead" in signal or "explain" in signal])
+        # The two-sided screenshot case is graded on both sides.
+        display = cases["display-panel-and-first-paint-take-different-carriers"]["expected"]
+        self.assertTrue(any(s.startswith("display_panel_") for s in display["signals"]))
+        self.assertTrue(any(s.startswith("first_paint_") for s in display["signals"]))
+        self.assertTrue(any(s.startswith("display_panel_") for s in display["must_not"]))
+        self.assertTrue(any(s.startswith("first_paint_") for s in display["must_not"]))
+
+    def test_method_controls_grade_committed_answers(self) -> None:
+        # A committed passing and faulty answer for every new case of the
+        # method pack: the kit computes each recorded decision from the
+        # grader's signals, and every form signal agrees with the answer.
+        directory = ROOT / "evals/model-artifacts/method-controls"
+        controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
+        cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+        method = set(eval_kit.resolve_pack("explanation-method"))
+        # The existing present and flow reply cases keep their own controls;
+        # nothing else is exempt, and an exemption never counts as a control.
+        self.assertEqual(method - EXISTING_CASES_WITH_OWN_CONTROLS, set(controls["cases"]))
+        self.assertNotIn("not_practical", controls)
+        for case_id, entries in controls["cases"].items():
+            case = cases[case_id]
+            self.assertEqual({"passing", "faulty"}, {entry["role"] for entry in entries}, case_id)
+            for entry in entries:
+                with self.subTest(case=case_id, answer=entry["answer"]):
+                    trial = control_trial(case, entry["signals"])
+                    self.assertEqual(entry["decision"], eval_kit.computed_trial_status(trial, case))
+                    self.assertEqual(entry["role"] == "passing", entry["decision"] == "pass")
+                    self.assertTrue((directory / entry["answer"]).exists())
+
+    def test_copy_controls_grade_committed_answers(self) -> None:
+        # TSK-073: committed control answers for every new case of the
+        # copy-guide pack. The kit computes each recorded decision from the
+        # grader's signals; every faulty control fails and every passing
+        # control passes; the form signals agree with the answer.
+        directory = ROOT / "evals/model-artifacts/copy-controls"
+        controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
+        cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+        new_cases = set(eval_kit.resolve_pack("copy-guide")) - {
+            "operator-reply-is-plain-prose-and-bullets", "identifier-only-title-gets-words"}
+        self.assertEqual(new_cases, set(controls["cases"]))
+        texts = {}
+        for case_id, entries in controls["cases"].items():
+            case = cases[case_id]
+            # Every new case has a passing control and a faulty one.
+            self.assertEqual({"passing", "faulty"}, {entry["role"] for entry in entries}, case_id)
+            for entry in entries:
+                with self.subTest(case=case_id, answer=entry["answer"]):
+                    trial = control_trial(case, entry["signals"])
+                    self.assertEqual(entry["decision"], eval_kit.computed_trial_status(trial, case))
+                    self.assertEqual(entry["role"] == "passing", entry["decision"] == "pass")
+                    raw = (directory / entry["answer"]).read_text(encoding="utf-8")
+                    # No committed line carries a policy character; the
+                    # mannered controls hold theirs as JSON escapes.
+                    self.assertFalse(re.search("[\u2013\u2014]", raw), entry["answer"])
+                    answer = json.loads(raw)
+                    text = "\n".join([*answer.get("files", {}).values(), answer.get("reply", ""),
+                                      json.dumps(answer.get("declaration", {}), ensure_ascii=False)])
+                    texts[entry["answer"]] = (entry, text, answer)
+        # Every signal of every new case is either bound to the text or
+        # named as the grader's judgment.
+        fixtures = {item["id"]: item for item in eval_kit.suite_documents()[2]["fixtures"]}
+        for case_id in controls["cases"]:
+            expected = cases[case_id]["expected"]
+            unbound = set(expected["signals"]) | set(expected["must_not"])
+            unbound -= set(COPY_SIGNAL_CHECKS) | COPY_JUDGED_SIGNALS
+            self.assertEqual(set(), unbound, case_id)
+        for name, (entry, text, answer) in texts.items():
+            case_id = next(c for c, entries in controls["cases"].items() if entry in entries)
+            fixture = fixtures[cases[case_id]["fixture"]]
+            with self.subTest(answer=name):
+                self.assertEqual([], copy_signal_problems(cases[case_id], entry["signals"], answer, fixture))
+                if entry["role"] == "passing":
+                    self.assertFalse(_DASH.search(text), "a passing control carries no policy character")
+                # The single-defect ADR controls carry no dash on purpose.
+                if name == "adr-0104-history.json":
+                    self.assertTrue(_DASH.search(text), "the mannered ADR control keeps its dash")
+
+    def test_copy_signal_binding_rejects_an_answer_that_lacks_a_claimed_signal(self) -> None:
+        # Codex review R1, finding 2: the passing search control with its
+        # empty state reduced to "Nothing here." and its signal list kept
+        # must fail the text binding, though the kit would still pass it.
+        directory = ROOT / "evals/model-artifacts/copy-controls"
+        controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
+        _, cases_doc, fixtures_doc = eval_kit.suite_documents()
+        case = next(c for c in cases_doc["cases"] if c["id"] == "search-dialog-microcopy")
+        fixture = next(f for f in fixtures_doc["fixtures"] if f["id"] == case["fixture"])
+        entry = next(e for e in controls["cases"]["search-dialog-microcopy"] if e["role"] == "passing")
+        answer = json.loads((directory / entry["answer"]).read_text(encoding="utf-8"))
+        self.assertEqual([], copy_signal_problems(case, entry["signals"], answer, fixture))
+        probe = copy.deepcopy(answer)
+        html = probe["files"]["app/search.html"]
+        probe["files"]["app/search.html"] = re.sub(r'(data-copy="empty">)[^<]*', r"\1Nothing here.", html)
+        self.assertNotEqual(html, probe["files"]["app/search.html"])
+        self.assertEqual("pass", eval_kit.computed_trial_status(control_trial(case, entry["signals"]), case))
+        problems = copy_signal_problems(case, entry["signals"], probe, fixture)
+        self.assertIn("claimed but absent from the text: empty_state_says_what_to_type", problems)
+        self.assertIn("must_not unclaimed but shown: empty_state_without_action", problems)
+        # Codex confirm, finding 2: an action split from its object, the
+        # object named only in a later sentence, fails the same way.
+        split = copy.deepcopy(answer)
+        split["files"]["app/search.html"] = re.sub(r'(data-copy="empty">)[^<]*', r"\1Search. No pages are available.", html)
+        problems = copy_signal_problems(case, entry["signals"], split, fixture)
+        self.assertIn("claimed but absent from the text: empty_state_says_what_to_type", problems)
+        self.assertIn("must_not unclaimed but shown: empty_state_without_action", problems)
+
+    def test_method_text_answers_carry_the_form_their_signals_claim(self) -> None:
+        directory = ROOT / "evals/model-artifacts/method-controls"
+        controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
+        fence = re.compile(r"^```([^\n]*)\n(.*?)^```", re.M | re.S)
+        text_cases = ("enforcement-planes-answered-in-chat", "readme-figure-uses-the-text-form",
+                      "three-unrelated-rules-take-the-smallest-carrier")
+        for case_id in text_cases:
+            for entry in controls["cases"][case_id]:
+                text = (directory / entry["answer"]).read_text(encoding="utf-8")
+                signals = set(entry["signals"])
+                fences = fence.findall(text)
+                prose = fence.sub("", text)
+                text_figure = any(language.strip() in ("", "text") for language, _ in fences)
+                with self.subTest(case=case_id, answer=entry["answer"]):
+                    if case_id == "readme-figure-uses-the-text-form":
+                        self.assertEqual(text_figure, "fenced_text_figure_in_readme" in signals)
+                        self.assertEqual(any(language.strip() == "mermaid" for language, _ in fences),
+                                         "mermaid_fence_in_readme" in signals)
+                        self.assertEqual(bool(re.search(r"!\[[^\]]*\]\([^)]*\.svg\)", text)),
+                                         "svg_file_linked_from_readme" in signals)
+                    if case_id == "three-unrelated-rules-take-the-smallest-carrier":
+                        self.assertEqual(not fences, "no_figure" in signals)
+                        self.assertEqual(bool(fences), "figure_for_unrelated_facts" in signals)
+                        bullets = [line for line in prose.splitlines() if line.startswith("- ")]
+                        self.assertEqual(len(bullets) == 3 and not fences, "bullets_or_small_table" in signals)
+                    if case_id == "enforcement-planes-answered-in-chat":
+                        # A terminal surface calls for the fenced text form;
+                        # a Mermaid block fails on any surface.
+                        self.assertEqual("terminal", entry["surface"])
+                        self.assertEqual(any(language.strip() == "mermaid" for language, _ in fences),
+                                         "mermaid_figure_in_reply" in signals)
+                        if "layering_figure_in_the_form_the_surface_calls_for" not in signals:
+                            continue
+                        self.assertTrue(text_figure)
+                        # One row per plane: CI is a row unless it is omitted,
+                        # and then the prose says why.
+                        rows = [line.split()[0] for _, body in fences for line in body.splitlines() if line.strip()]
+                        self.assertEqual("CI" in rows, "ci_plane_omitted_with_caption_note" not in signals)
+                        if "ci_plane_omitted_with_caption_note" in signals:
+                            self.assertIn("CI", prose)
+
+    def test_method_structured_answers_carry_the_form_their_signals_claim(self) -> None:
+        # The guide page, display and migration answers: files laid over the
+        # fixture, or a present document. The adapter and class rules run in
+        # visual_controls.test.mjs; these are the form signals a file shows.
+        directory = ROOT / "evals/model-artifacts/method-controls"
+        controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
+        grammar = (ROOT / ".agents/skills/cf-docs-portal/resources/figure-grammar.md").read_text(encoding="utf-8")
+        contract = {"concept": {"structure", "flow", "extent"},
+                    "architecture": {"structure", "layering", "derivation", "graph"},
+                    "technical": {"sequence", "state", "coverage", "extent"}}
+        # The contract above is the altitude table of figure-grammar.md.
+        self.assertIn("| Architecture | how do the parts relate and where are the boundaries | structure, layering, "
+                      "derivation, graph |", grammar)
+        self.assertIn("| Technical | what exactly holds, in what order, and how far | sequence, state, coverage, "
+                      "extent |", grammar)
+
+        def sections(markdown: str) -> dict[str, str]:
+            parts = re.split(r"^## (.+)$", markdown, flags=re.M)
+            return {parts[i].strip(): parts[i + 1] for i in range(1, len(parts), 2)}
+
+        def declarations(root: Path, config: dict) -> dict[str, dict]:
+            return {binding["declaration"]: json.loads((root / binding["declaration"]).read_text(encoding="utf-8"))
+                    for binding in config["figures"]}
+
+        for entry in controls["cases"]["guide-page-from-a-policy-source"]:
+            root = directory / entry["answer"]
+            signals = set(entry["signals"])
+            page = (root / "docs/merge-policy.md").read_text(encoding="utf-8")
+            config = json.loads((root / "config.json").read_text(encoding="utf-8"))
+            bound = declarations(root, config)
+            with self.subTest(answer=entry["answer"]):
+                self.assertEqual({"Concept", "Architecture", "Technical"}, set(sections(page)))
+                families = {binding["panel"]: bound[binding["declaration"]]["figure"]["family"] for binding in config["figures"]}
+                self.assertEqual(
+                    bool(families) and all(family in contract[panel] for panel, family in families.items())
+                    and set(families) == set(contract),
+                    "panel_family_matches_its_relationship" in signals)
+                self.assertEqual(bool(bound) and all("twin" in item["figure"] for item in bound.values()),
+                                 "twin_present_for_each_figure" in signals)
+                technical = sections(page)["Technical"]
+                self.assertEqual(all(command in technical for command in ("`mp show`", "`mp check <pr>`", "`mp explain <rule>`"))
+                                 and "|---|---|" in technical, "command_table_kept_as_lookup" in signals)
+                self.assertEqual("```cf-stage" in page and not bound,
+                                 "source_reprinted_under_altitudes_with_box_stage" in signals)
+
+        image = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        for entry in controls["cases"]["display-panel-and-first-paint-take-different-carriers"]:
+            root = directory / entry["answer"]
+            signals = set(entry["signals"])
+            parts = sections((root / "docs/display.md").read_text(encoding="utf-8"))
+            config = json.loads((root / "config.json").read_text(encoding="utf-8"))
+            capture = json.loads((root / "capture.json").read_text(encoding="utf-8"))
+            png = (root / capture["image"]).read_bytes()
+            with self.subTest(answer=entry["answer"]):
+                # The committed image is the one the capture record describes.
+                self.assertEqual(b"\x89PNG\r\n\x1a\n", png[:8])
+                self.assertEqual(capture["sha256"], "sha256:" + hashlib.sha256(png).hexdigest())
+                panel_images = image.findall(parts["Display panel"])
+                paint_images = image.findall(parts["First paint"])
+                named = all(key in capture.get("observed", {}) for key in ("theme", "skin", "scale")) and all(
+                    word in parts["Display panel"] for word in ("skin", "mode", "scale"))
+                self.assertEqual(bool(panel_images) and named,
+                                 "display_panel_image_committed_with_skin_mode_and_scale_named" in signals)
+                self.assertEqual(any("Display panel" in alt and "light mode" in alt for alt, _ in panel_images),
+                                 "display_panel_alt_text_names_surface_and_state" in signals)
+                keyed = re.findall(r"^\d+\. ", parts["Display panel"], flags=re.M)
+                self.assertEqual(bool(panel_images) and len(keyed) == len(capture.get("markers", [])) > 0,
+                                 "display_panel_image_annotated_by_numbered_markers_only" in signals)
+                self.assertEqual("```" in parts["Display panel"], "display_panel_drawn_as_ascii_art" in signals)
+                self.assertEqual(bool(paint_images), "first_paint_shown_as_screenshot" in signals)
+                self.assertEqual(not paint_images, "first_paint_has_no_image" in signals)
+                paint = [json.loads((root / b["declaration"]).read_text(encoding="utf-8"))["figure"]["family"]
+                         for b in config["figures"] if b.get("anchor") == "first-paint"]
+                self.assertEqual(paint == ["sequence"], "first_paint_drawn_in_sequence_family" in signals)
+
+        for entry in controls["cases"]["migration-review-leads-with-the-picture"]:
+            document = json.loads((directory / entry["answer"]).read_text(encoding="utf-8"))
+            blocks = document["blocks"]
+            signals = set(entry["signals"])
+            asks = [block for block in blocks if block["type"] == "feedback_prompt"]
+            first = blocks[0]
+            with self.subTest(answer=entry["answer"]):
+                self.assertEqual(
+                    (first["type"] == "figure" and first["declaration"]["figure"]["family"] in ("extent", "coverage"))
+                    or first["type"] == "table", "governing_comparison_is_first_block" in signals)
+                self.assertEqual(len(asks) == 1 and blocks[-1] is asks[0], "one_ask" in signals)
+                self.assertEqual(len(asks) > 1, "more_than_one_ask" in signals)
+                self.assertEqual(first["type"] == "narrative", "narrative_first_text_cards_ask_last" in signals)
+                self.assertEqual("peak load" in json.dumps(blocks), "unverified_peak_load_stated" in signals)
+
+    def test_visual_doctrine_fixtures_ship_the_defect_their_case_grades(self) -> None:
+        # Each visual case is graded on the declaration the subject leaves and
+        # its render. These pins keep the shipped drafts carrying the defect
+        # (or, for the over-correction and context drafts, none of it), so a
+        # green trial cannot come from a fixture that was already correct.
+        _, cases_doc, fixtures_doc = eval_kit.suite_documents()
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        fixtures = {item["id"]: item for item in fixtures_doc["fixtures"]}
+
+        def fixture_of(case_id: str) -> dict:
+            return fixtures[cases[case_id]["fixture"]]
+
+        def figure(case_id: str, name: str) -> dict:
+            files = fixture_of(case_id)["files"]
+            declaration = json.loads(files[f"docs/figures/{name}.json"])
+            self.assertEqual(1, declaration["schema_version"])
+            return declaration["figure"]
+
+        for case_id in VISUAL_DOCTRINE_INVENTORY:
+            grading = fixture_of(case_id)["state"]["grading"]
+            with self.subTest(case=case_id):
+                self.assertIn("never the reply", grading)
+                self.assertIn("figureRuleFailures", grading)
+                self.assertIn("1280 and 390 px in light and dark", grading)
+
+        def drawn(composition: dict) -> list[dict]:
+            return [item for item in composition["draw"] if "state" in item]
+
+        # Text in boxes: every drawn mark is a box, nothing drawn between.
+        queue = figure("queue-concept-draws-the-relationship", "queue-concept")
+        self.assertTrue(all(item["shape"] == "rect" for item in drawn(queue["wide"]) + drawn(queue["narrow"])))
+        # Over-correction control: a real state figure with its transitions.
+        retry = figure("retry-state-figure-survives-a-review-note", "retry-states")
+        self.assertEqual("state", retry["family"])
+        self.assertEqual({"state", "trans", "return", "blocked"}, {item["state"] for item in drawn(retry["wide"])})
+        # Two channels: pending and held differ by hue alone.
+        deploy = figure("deploy-flow-states-read-without-hue", "deploy-flow")
+        self.assertEqual({"shipped": "done", "pending": "todo", "held": "warn"},
+                         {state["name"]: state["mark"] for state in deploy["states"]})
+        self.assertFalse([item for item in drawn(deploy["wide"]) if "head" in item or "cross" in item])
+        # Narrow: the wide marks stacked into a column past the ceiling.
+        planes = figure("planes-figure-fits-a-small-screen", "enforcement-planes")
+        self.assertEqual("same", planes["narrow"]["marks"])
+        self.assertNotIn("elongation_max", planes["narrow"])
+        self.assertGreater(planes["narrow"]["height"], 1.5 * planes["wide"]["height"])
+        self.assertEqual(sorted((i["state"], i.get("w"), i.get("r")) for i in drawn(planes["wide"])),
+                         sorted((i["state"], i.get("w"), i.get("r")) for i in drawn(planes["narrow"])))
+        # Overprint: two narrow labels share a line.
+        token = figure("token-exchange-labels-stay-clear", "token-exchange")
+        labels = {item["text"]: item for item in token["narrow"]["draw"] if "text" in item}
+        self.assertLessEqual(abs(labels["authorize request"]["y"] - labels["code via redirect"]["y"]), 8)
+        # Inner mark floor: the not-claimed cross inside a 10 unit cell is
+        # 8.8 units, under 9 px, while the cell itself clears it.
+        grid = figure("access-grid-marks-read-at-small-size", "access-grid")
+        crossed = [item for item in drawn(grid["narrow"]) if item["state"] == "nc"]
+        self.assertTrue(crossed)
+        for item in crossed:
+            self.assertGreaterEqual(min(item["w"], item["h"]), 9)
+            self.assertLess(min(item["w"], item["h"]) * 0.88, 9)
+        # Fidelity: the drawn body limit is last quarter's, not the config's.
+        limits = figure("limits-figure-draws-todays-value", "request-limits")
+        config = json.loads(fixture_of("limits-figure-draws-todays-value")["files"]["config/limits.json"])
+        body = next(fact for fact in limits["facts"] if fact["check"].get("select") == "http.max_body_mib")
+        self.assertNotEqual(config["http"]["max_body_mib"], body["value"])
+        self.assertIn(f"{body['value']} MiB", fixture_of("limits-figure-draws-todays-value")["files"]["docs/limits.md"])
+        # Fidelity: the remote plane is drawn as the armed boundary and its
+        # fact reads a sentence the contract does not hold.
+        remote = figure("planes-figure-claims-only-what-the-repository-holds", "planes-here")
+        contributing = fixture_of("planes-figure-claims-only-what-the-repository-holds")["files"]["CONTRIBUTING.md"]
+        self.assertIn("layer-remote", {state["mark"] for state in remote["states"]})
+        self.assertNotIn(remote["facts"][0]["check"]["text"], contributing)
+        self.assertIn("Remote branch protection is unavailable", contributing)
+        # Altitude: the rotation section has no figure bound to it.
+        signing = fixture_of("key-rotation-section-is-drawn")["files"]
+        bindings = json.loads(signing["docs-portal/portal.config.json"])["figures"]
+        self.assertEqual({"concept", "architecture", "technical"}, {binding["panel"] for binding in bindings})
+        self.assertIn("### Rotate the signing key", signing["docs/signing.md"])
+        # Altitude: the opening panel answers a Technical question and the
+        # page says what the cache is not only under Architecture.
+        opening = figure("edge-cache-opening-says-what-it-is-not", "edge-cache-opening")
+        self.assertEqual("sequence", opening["family"])
+        page = fixture_of("edge-cache-opening-says-what-it-is-not")["files"]["docs/edge-cache.md"]
+        concept = page.split("## Concept", 1)[1].split("## Architecture", 1)[0]
+        self.assertNotIn(" not ", concept)
+        self.assertIn("It is not a CDN", page.split("## Architecture", 1)[1])
 
     def test_bounded_watch_controls_grade_poll_cadence_from_replayed_polls(self) -> None:
         # Codex EPC-017 review, finding 6. The fixture's stand-in answer runs

@@ -32,18 +32,15 @@ use uuid::Uuid;
 
 use crate::{
     config::UtilityTokens,
-    document::Block,
+    delivery::{AnswerState, AnswerStates},
     error::{PresentError, Result},
     limits,
     platform::is_link_like,
-    render::{
-        render_document, render_retired, render_unsupported, sandbox_id, RenderIdentity,
-        RenderOptions,
-    },
+    render::{render_document, render_retired, render_unsupported, RenderIdentity, RenderOptions},
     state::{
-        create_private_dir_all, write_json_atomic, ElementSelector, FeedbackEnvelope,
-        FeedbackExcerpt, FeedbackKind, FeedbackNote, FeedbackVerdict, RegionSelector,
-        RevisionContent, SessionStatus, SessionStore, TextSelector,
+        create_private_dir_all, write_json_atomic, ElementSelector, EntitySelector,
+        FeedbackEnvelope, FeedbackExcerpt, FeedbackKind, FeedbackNote, FeedbackVerdict,
+        RegionSelector, RevisionContent, SessionStatus, SessionStore, TextSelector,
     },
 };
 
@@ -166,6 +163,13 @@ struct SessionEvent {
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    /// For `answer_state`: each answer whose state changed, with its state
+    /// now (stored and pending, delivered, acknowledged).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    answers: Vec<AnswerState>,
+    /// For `session_closed`: each form's answer as a reload shows it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    forms: Vec<crate::delivery::FormAnswerState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,6 +199,8 @@ struct ReviewNote {
     element_selector: Option<ElementSelector>,
     #[serde(default)]
     region_selector: Option<RegionSelector>,
+    #[serde(default)]
+    entity_selector: Option<EntitySelector>,
     #[serde(default)]
     excerpt: Option<FeedbackExcerpt>,
 }
@@ -286,8 +292,8 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         .route("/app/", get(application))
         .route("/app/assets/{*path}", get(asset))
         .route("/app/api/reviews", post(submit_review))
+        .route("/app/api/answers", post(submit_answer))
         .route("/app/api/events/poll", post(poll_events))
-        .route("/sandbox/{revision}/{id}", get(sandbox))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(limits::MAX_FEEDBACK_BYTES))
         .with_state(state);
@@ -493,6 +499,16 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
         Ok(sequence) => sequence,
         Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
+    let response_sequence = match state.store.latest_response_sequence(state.session_id) {
+        Ok(sequence) => sequence,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
+    // Read after the cursor: a state change between the two reads is then
+    // both shown and reported again by the poll, never missed.
+    let answers = match state.store.form_answers(state.session_id) {
+        Ok(answers) => answers,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
     let manifest = &state.assets.service;
     let style = manifest
         .entrypoints
@@ -523,6 +539,8 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
                 session_id: &state.session_id.to_string(),
                 revision: revision.revision,
                 event_sequence,
+                response_sequence,
+                answers: Some(&answers),
                 script_path: script,
                 style_path: style,
                 prepaint_source: prepaint.map(|asset| asset.source.as_str()),
@@ -644,6 +662,7 @@ async fn submit_review(
             selector: note.selector,
             element_selector: note.element_selector,
             region_selector: note.region_selector,
+            entity_selector: note.entity_selector,
             excerpt: note.excerpt,
         });
     }
@@ -685,9 +704,147 @@ async fn submit_review(
                 ],
             )
         }
-        Err(PresentError::SessionClosed(_)) => plain(StatusCode::GONE, "session is closed"),
+        Err(PresentError::SessionClosed(_)) => typed_error(
+            StatusCode::GONE,
+            "session_closed",
+            "session is closed",
+            &serde_json::Value::Null,
+        ),
+        Err(PresentError::Review {
+            code,
+            message,
+            details,
+        }) => typed_error(review_status(code), code, &message, &details),
+        // No room to acknowledge the review later: it is not stored, and
+        // sending it again with the same event id is safe.
+        Err(PresentError::ServiceUnavailable(reason)) => typed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            &format!("the review store is out of capacity: {reason}; the review was not stored, and sending it again is safe"),
+            &serde_json::json!({}),
+        ),
         Err(error) => plain(StatusCode::BAD_REQUEST, &error.to_string()),
     }
+}
+
+/// `POST /app/api/answers` (SPC-014 B6, I3, I4): the page's answer to a
+/// form or v2 decision. The body is read raw, so the 64 KiB bound answers
+/// with the typed `answer_too_large` before any field is looked at, and the
+/// payload digest is taken over the bytes as received.
+async fn submit_answer(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response<Body> {
+    if let Err(response) = require_application_request(&state, &headers, true) {
+        return response;
+    }
+    // Read one byte past the bound at most: the store refuses a body of
+    // that length with the same typed error, and a longer one stops here.
+    let Ok(bytes) = axum::body::to_bytes(body, limits::MAX_ANSWER_REQUEST_BYTES + 1).await else {
+        return answer_too_large();
+    };
+    match state.store.submit_answer(state.session_id, &bytes) {
+        Ok(receipt) => {
+            state.last_activity.store(now_unix(), Ordering::Release);
+            let body = serde_json::to_vec(&receipt).unwrap_or_else(|_| b"{}".to_vec());
+            response_with_headers(
+                StatusCode::OK,
+                Body::from(body),
+                &[
+                    (header::CONTENT_TYPE, "application/json"),
+                    (header::CACHE_CONTROL, "no-store"),
+                    (HeaderName::from_static("x-content-type-options"), "nosniff"),
+                ],
+            )
+        }
+        Err(PresentError::SessionClosed(_)) => typed_error(
+            StatusCode::GONE,
+            "session_closed",
+            "session is closed",
+            &serde_json::json!({}),
+        ),
+        Err(PresentError::Review {
+            code,
+            message,
+            details,
+        }) => typed_error(review_status(code), code, &message, &details),
+        // The store could not take the answer: no receipt was given. The
+        // page keeps the draft and offers the same request again, which
+        // appends the answer once or returns the receipt of a line that did
+        // reach the store.
+        Err(
+            error @ (PresentError::Io { .. }
+            | PresentError::ServiceUnavailable(_)
+            | PresentError::CorruptState(_)
+            | PresentError::UnsafePath(_)),
+        ) => typed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            &store_unavailable_message(&error),
+            &serde_json::json!({}),
+        ),
+        Err(error) => plain(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("the answer was not stored: {error}"),
+        ),
+    }
+}
+
+/// Why the store could not take an answer, then what the page may do.
+fn store_unavailable_message(error: &PresentError) -> String {
+    let cause = match error {
+        PresentError::ServiceUnavailable(reason) => {
+            format!("the answer store is out of capacity: {reason}")
+        }
+        PresentError::CorruptState(_) | PresentError::UnsafePath(_) => {
+            format!("the answer store could not be read: {error}")
+        }
+        _ => "the answer store could not be locked, read, written or synced".to_string(),
+    };
+    format!("{cause}; no receipt was given, and a resend with the same request_id is safe")
+}
+
+fn answer_too_large() -> Response<Body> {
+    typed_error(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "answer_too_large",
+        "the answer request exceeds 64 KiB",
+        &serde_json::json!({ "limit_bytes": limits::MAX_ANSWER_REQUEST_BYTES }),
+    )
+}
+
+/// The HTTP status of a typed refusal (SPC-014 I3).
+fn review_status(code: &str) -> StatusCode {
+    match code {
+        "stale_revision" | "request_id_conflict" | "answer_exists" => StatusCode::CONFLICT,
+        "session_closed" => StatusCode::GONE,
+        "answer_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
+        _ => StatusCode::UNPROCESSABLE_ENTITY,
+    }
+}
+
+fn typed_error(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    details: &serde_json::Value,
+) -> Response<Body> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "error": code,
+        "message": message,
+        "details": details,
+    }))
+    .unwrap_or_else(|_| b"{}".to_vec());
+    response_with_headers(
+        status,
+        Body::from(body),
+        &[
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+            (HeaderName::from_static("x-content-type-options"), "nosniff"),
+        ],
+    )
 }
 
 async fn poll_events(
@@ -706,8 +863,16 @@ async fn poll_events(
         Ok(sequence) => sequence,
         Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     };
-    let (after_revision, after_sequence) = match request.cursor.as_deref() {
-        None => (initial_session.current_revision, initial_sequence),
+    let initial_responses = match state.store.latest_response_sequence(state.session_id) {
+        Ok(sequence) => sequence,
+        Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    };
+    let (after_revision, after_sequence, after_responses) = match request.cursor.as_deref() {
+        None => (
+            initial_session.current_revision,
+            initial_sequence,
+            initial_responses,
+        ),
         Some(cursor) => match parse_event_cursor(cursor) {
             Some(cursor) => cursor,
             None => return plain(StatusCode::BAD_REQUEST, "event cursor is invalid"),
@@ -724,28 +889,27 @@ async fn poll_events(
             Ok(latest) => latest,
             Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
         };
-        let terminal = session.status == SessionStatus::Closed;
-        let revised = session.current_revision > after_revision;
-        if revised || latest > after_sequence || terminal || tokio::time::Instant::now() >= deadline
-        {
-            let response = SessionEvent {
-                cursor: format!("{}:{latest}", session.current_revision),
-                kind: if terminal {
-                    "session_closed"
-                } else if revised {
-                    "revision"
-                } else {
-                    "feedback_state"
-                },
-                message: if revised {
-                    Some(format!(
-                        "Revision {} is available.",
-                        session.current_revision
-                    ))
-                } else {
-                    (latest > after_sequence).then(|| "Review state changed.".to_string())
-                },
-            };
+        let answers = match if session.status == SessionStatus::Closed {
+            state
+                .store
+                .closing_states(state.session_id, limits::MAX_EVENTS_PER_RESPONSE)
+        } else {
+            state.store.answer_states_since(
+                state.session_id,
+                after_responses,
+                limits::MAX_EVENTS_PER_RESPONSE,
+            )
+        } {
+            Ok(answers) => answers,
+            Err(error) => return plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+        };
+        if let Some(response) = session_event(
+            &session,
+            latest,
+            (after_revision, after_sequence, after_responses),
+            answers,
+            tokio::time::Instant::now() >= deadline,
+        ) {
             let body = match serde_json::to_vec(&response) {
                 Ok(body) if body.len() <= limits::MAX_EVENT_RESPONSE_BYTES => body,
                 Ok(_) => {
@@ -769,42 +933,65 @@ async fn poll_events(
     }
 }
 
-fn parse_event_cursor(cursor: &str) -> Option<(u64, u64)> {
-    let (revision, sequence) = cursor.split_once(':')?;
-    Some((revision.parse().ok()?, sequence.parse().ok()?))
+/// What the poll answers, if anything changed after its cursor or it timed
+/// out: closure, then a revision, then answer states, then review state.
+fn session_event(
+    session: &crate::state::SessionRecord,
+    latest: u64,
+    (after_revision, after_sequence, after_responses): (u64, u64, u64),
+    answers: AnswerStates,
+    timed_out: bool,
+) -> Option<SessionEvent> {
+    let terminal = session.status == SessionStatus::Closed;
+    let revised = session.current_revision > after_revision;
+    // The answer ledger's cursor moves only with the answer states it
+    // reports, so a revision never hides a delivery from the forms. A
+    // closure ends the poll, so it carries each form's answer as a reload
+    // shows it (`SessionStore::closing_states`), which neither a backlog nor
+    // the answer a page followed can hide.
+    let answered = !terminal && !revised && answers.through > after_responses;
+    if !(revised || answered || latest > after_sequence || terminal || timed_out) {
+        return None;
+    }
+    let carried = answered || terminal;
+    let responses = if carried {
+        answers.through
+    } else {
+        after_responses
+    };
+    Some(SessionEvent {
+        cursor: format!("{}:{latest}:{responses}", session.current_revision),
+        kind: if terminal {
+            "session_closed"
+        } else if revised {
+            "revision"
+        } else if answered {
+            "answer_state"
+        } else {
+            "feedback_state"
+        },
+        message: if revised {
+            Some(format!(
+                "Revision {} is available.",
+                session.current_revision
+            ))
+        } else {
+            (!answered && latest > after_sequence).then(|| "Review state changed.".to_string())
+        },
+        forms: if terminal { answers.forms } else { Vec::new() },
+        answers: if answered { answers.states } else { Vec::new() },
+    })
 }
 
-async fn sandbox(
-    State(state): State<AppState>,
-    Path((revision, id)): Path<(u64, String)>,
-    headers: HeaderMap,
-) -> Response<Body> {
-    if let Err(response) = require_host(&state, &headers) {
-        return response;
-    }
-    let Ok(revision) = state.store.revision(state.session_id, revision) else {
-        return plain(StatusCode::NOT_FOUND, "sandbox revision not found");
-    };
-    let sandbox = sandbox_blocks(state.session_id, &revision.content);
-    let Some(html) = sandbox.get(&id) else {
-        return plain(StatusCode::NOT_FOUND, "sandbox block not found");
-    };
-    let csp = format!(
-        "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors http://{}",
-        state.authority
+/// The poll cursor `revision:event_sequence:response_sequence`.
+fn parse_event_cursor(cursor: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = cursor.split(':');
+    let cursor = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
     );
-    response_with_headers(
-        StatusCode::OK,
-        Body::from(html.clone()),
-        &[
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-store"),
-            (HeaderName::from_static("content-security-policy"), &csp),
-            (HeaderName::from_static("x-content-type-options"), "nosniff"),
-            (HeaderName::from_static("referrer-policy"), "no-referrer"),
-            (HeaderName::from_static("x-frame-options"), "SAMEORIGIN"),
-        ],
-    )
+    parts.next().is_none().then_some(cursor)
 }
 
 async fn not_found() -> Response<Body> {
@@ -1030,31 +1217,6 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
     Ok(())
 }
 
-fn sandbox_blocks(session_id: Uuid, content: &RevisionContent) -> HashMap<String, String> {
-    let mut output = HashMap::new();
-    if let RevisionContent::Supported { document } = content {
-        collect_sandbox(session_id, &document.blocks, &mut output);
-    }
-    output
-}
-
-fn collect_sandbox(session_id: Uuid, blocks: &[Block], output: &mut HashMap<String, String>) {
-    for block in blocks {
-        match block {
-            Block::Html { id, html, .. } => {
-                output.insert(sandbox_id(&session_id.to_string(), id), html.clone());
-            }
-            Block::Disclosure { blocks, .. } => collect_sandbox(session_id, blocks, output),
-            Block::Tabs { tabs, .. } => {
-                for tab in tabs {
-                    collect_sandbox(session_id, &tab.blocks, output);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
 fn render_bootstrap(authority: &str, capability: &str) -> String {
     let endpoint = format!("http://{authority}/bootstrap");
     format!(
@@ -1254,6 +1416,7 @@ mod tests {
 
     fn parsed_with(block: Block) -> ParsedDocument {
         ParsedDocument::Supported(PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Review".to_string(),
             language: None,
@@ -1263,20 +1426,23 @@ mod tests {
     }
 
     fn app_state() -> (tempfile::TempDir, AppState) {
+        app_state_with(ParsedDocument::Supported(PresentationDocument {
+            summary: None,
+            schema_version: 1,
+            title: "Review".to_string(),
+            language: None,
+            provenance: Provenance::default(),
+            blocks: vec![Block::Narrative {
+                id: "intro".to_string(),
+                markdown: "Hello".to_string(),
+            }],
+        }))
+    }
+
+    fn app_state_with(document: ParsedDocument) -> (tempfile::TempDir, AppState) {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::at_root(temp.path().join("project"), "key".to_string()).unwrap();
-        let session = store
-            .create(ParsedDocument::Supported(PresentationDocument {
-                schema_version: 1,
-                title: "Review".to_string(),
-                language: None,
-                provenance: Provenance::default(),
-                blocks: vec![Block::Narrative {
-                    id: "intro".to_string(),
-                    markdown: "Hello".to_string(),
-                }],
-            }))
-            .unwrap();
+        let session = store.create(document).unwrap();
         let runtime = store.runtime_dir(session.id).unwrap();
         let control = runtime.join("control");
         crate::state::create_private_dir_all(&control).unwrap();
@@ -1331,6 +1497,720 @@ mod tests {
             );
         }
         headers
+    }
+
+    /// The answer as the page sends it for `store-choice` of the forms
+    /// fixture, with a body change applied.
+    /// A new request for the form: its original answer while it has none,
+    /// then a correction of that original, as one form holds one original.
+    fn fresh_answer(state: &AppState) -> Vec<u8> {
+        let original = ledger_bytes(state).and_then(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .find(|line| line["event"] == "answer" && line["form_id"] == "store-choice")
+                .map(|line| line["answer_id"].clone())
+        });
+        answer_body(state, |body| {
+            if let Some(original) = original {
+                body["amends"] = original;
+            }
+        })
+    }
+
+    fn answer_body(state: &AppState, change: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+        let crate::state::RevisionContent::Supported { document } = state
+            .store
+            .current_revision(state.session_id)
+            .unwrap()
+            .content
+        else {
+            unreachable!()
+        };
+        let form = document
+            .walk()
+            .into_iter()
+            .find(|block| block.id() == "store-choice")
+            .unwrap();
+        let mut body = serde_json::json!({
+            "request_id": Uuid::new_v4(),
+            "session_id": state.session_id,
+            "revision": state.store.load(state.session_id).unwrap().current_revision,
+            "form_id": "store-choice",
+            "form_digest": crate::state::block_digest(form),
+            "outcome": "submit",
+            "values": { "home": "local", "keep-days": 30 },
+            "rationales": { "home": "Answers can hold private text." },
+        });
+        change(&mut body);
+        serde_json::to_vec(&body).unwrap()
+    }
+
+    async fn post_answer(
+        state: &AppState,
+        headers: HeaderMap,
+        body: Vec<u8>,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = submit_answer(State(state.clone()), headers, Body::from(body)).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into()));
+        (status, value)
+    }
+
+    fn ledger_bytes(state: &AppState) -> Option<Vec<u8>> {
+        std::fs::read(
+            state
+                .store
+                .session_dir(state.session_id)
+                .join(crate::responses::RESPONSES_FILE),
+        )
+        .ok()
+    }
+
+    /// AC-2, AC-3, AC-4 at the route: a stored answer gets a receipt, the
+    /// same request replays it after a lost response, and each refusal has
+    /// its I3 status and code and leaves the ledger unchanged.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn answers_route_stores_replays_and_refuses_with_typed_errors() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+
+        let body = answer_body(&state, |_| {});
+        let (status, receipt) = post_answer(&state, headers.clone(), body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        assert_eq!(receipt["state"], "stored");
+        assert_eq!(receipt["replayed"], false);
+        assert_eq!(receipt["sequence"], 1);
+        let stored = ledger_bytes(&state).unwrap();
+        let line: serde_json::Value =
+            serde_json::from_slice(stored.strip_suffix(b"\n").unwrap()).unwrap();
+        assert_eq!(line["actor"], "operator");
+        assert_eq!(line["created_at_unix"], receipt["stored_at_unix"]);
+        assert_eq!(line["payload_digest"], crate::form::sha256_hex(&body));
+
+        // The first response was lost; the page resends the same bytes.
+        let (status, replay) = post_answer(&state, headers.clone(), body.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(replay["answer_id"], receipt["answer_id"]);
+        assert_eq!(ledger_bytes(&state).unwrap(), stored);
+
+        let request_id = receipt["request_id"].clone();
+        let original = receipt["answer_id"].clone();
+        let reused = answer_body(&state, |body| {
+            body["request_id"] = request_id;
+            body["values"]["keep-days"] = 7.into();
+        });
+        let too_large = answer_body(&state, |body| {
+            body["values"]["notes"] = "x".repeat(70_000).into();
+        });
+        let mut one_over = answer_body(&state, |_| {});
+        one_over.resize(limits::MAX_ANSWER_REQUEST_BYTES + 1, b' ');
+        let cases: Vec<(&str, Vec<u8>, StatusCode, &str)> = vec![
+            (
+                "reused request id",
+                reused,
+                StatusCode::CONFLICT,
+                "request_id_conflict",
+            ),
+            (
+                "malformed JSON",
+                b"{\"request_id\":".to_vec(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "an actor from the page",
+                answer_body(&state, |body| body["actor"] = "agent".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "a time from the page",
+                answer_body(&state, |body| body["created_at_unix"] = 1.into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "a second original answer",
+                answer_body(&state, |_| {}),
+                StatusCode::CONFLICT,
+                "answer_exists",
+            ),
+            (
+                "a correction missing a required field",
+                answer_body(&state, |body| {
+                    body["amends"] = original.clone();
+                    body["values"].as_object_mut().unwrap().remove("keep-days");
+                }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "another session",
+                answer_body(&state, |body| {
+                    body["session_id"] = serde_json::json!(Uuid::new_v4());
+                }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_answer",
+            ),
+            (
+                "a wrong digest",
+                answer_body(&state, |body| body["form_digest"] = "0".repeat(64).into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "form_digest_mismatch",
+            ),
+            (
+                "an unknown form",
+                answer_body(&state, |body| body["form_id"] = "nope".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unknown_form",
+            ),
+            (
+                "an unknown amendment",
+                answer_body(&state, |body| {
+                    body["amends"] = serde_json::json!(Uuid::new_v4());
+                }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_amendment",
+            ),
+            (
+                "a body over 64 KiB",
+                too_large,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "answer_too_large",
+            ),
+        ];
+        for (name, body, expected_status, expected_code) in cases {
+            let (status, error) = post_answer(&state, headers.clone(), body).await;
+            assert_eq!(
+                (status, error["error"].as_str()),
+                (expected_status, Some(expected_code)),
+                "{name}: {error}"
+            );
+            assert!(error["message"].is_string(), "{name}");
+            assert!(error["details"].is_object(), "{name}");
+            assert_eq!(
+                ledger_bytes(&state).unwrap(),
+                stored,
+                "{name}: ledger changed"
+            );
+        }
+        // A second original answer names the stored one and its state, so
+        // the page can show it and offer a correction (answer_exists).
+        let (_, exists) = post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        assert_eq!(
+            exists["details"],
+            serde_json::json!({ "answer_id": original, "latest_answer_id": original, "state": "stored" })
+        );
+        // Exactly 64 KiB is inside the bound: trailing whitespace keeps the
+        // JSON valid and the correction stores.
+        let mut at_limit = answer_body(&state, |body| body["amends"] = original.clone());
+        at_limit.resize(limits::MAX_ANSWER_REQUEST_BYTES, b' ');
+        let (status, at_limit_receipt) = post_answer(&state, headers.clone(), at_limit).await;
+        assert_eq!(status, StatusCode::OK, "{at_limit_receipt}");
+        assert_eq!(at_limit_receipt["sequence"], 2);
+        let stored = ledger_bytes(&state).unwrap();
+        let (_, missing) = post_answer(
+            &state,
+            headers.clone(),
+            answer_body(&state, |body| {
+                body["amends"] = original.clone();
+                body["values"].as_object_mut().unwrap().remove("keep-days");
+            }),
+        )
+        .await;
+        assert_eq!(
+            missing["details"]["fields"],
+            serde_json::json!([{ "field": "keep-days", "code": "required" }])
+        );
+
+        // The v1 request checks hold: marker, origin, cookie, content type.
+        for (header_name, value) in [
+            (HeaderName::from_static("x-cf-present"), None),
+            (header::ORIGIN, Some("http://127.0.0.1:1")),
+            (header::COOKIE, None),
+            (header::CONTENT_TYPE, Some("text/plain")),
+        ] {
+            let mut changed = headers.clone();
+            match value {
+                Some(value) => {
+                    changed.insert(header_name.clone(), HeaderValue::from_static(value));
+                }
+                None => {
+                    changed.remove(&header_name);
+                }
+            }
+            let (status, _) = post_answer(&state, changed, answer_body(&state, |_| {})).await;
+            assert!(status.is_client_error(), "{header_name}: {status}");
+            assert_eq!(ledger_bytes(&state).unwrap(), stored, "{header_name}");
+        }
+
+        // A newer revision: the old one is stale, with what the page needs
+        // to confirm the answer against the current revision.
+        let older_revision = answer_body(&state, |_| {});
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(&forms).unwrap(),
+            )
+            .unwrap();
+        let (status, error) = post_answer(&state, headers.clone(), older_revision).await;
+        assert_eq!(
+            (status, error["error"].as_str()),
+            (StatusCode::CONFLICT, Some("stale_revision"))
+        );
+        assert_eq!(error["details"]["current_revision"], 2);
+        assert_eq!(error["details"]["form_present"], true);
+        assert!(error["details"]["current_form_digest"].is_string());
+        // The replay of the stored request still answers after the update.
+        let (status, replay) = post_answer(&state, headers.clone(), body).await;
+        assert_eq!(
+            (status, replay["replayed"].as_bool()),
+            (StatusCode::OK, Some(true))
+        );
+
+        state.store.close(state.session_id).unwrap();
+        let (status, error) = post_answer(&state, headers, answer_body(&state, |_| {})).await;
+        assert_eq!(
+            (status, error["error"].as_str()),
+            (StatusCode::GONE, Some("session_closed"))
+        );
+        assert_eq!(ledger_bytes(&state).unwrap(), stored);
+    }
+
+    /// I3 `store_unavailable`: when the store cannot be locked, opened,
+    /// written or synced, the route answers 503 with no receipt, and a
+    /// resend with the same request id is safe. A failure before the line
+    /// is whole leaves the store as it was and the resend appends it once;
+    /// a sync failure that leaves the whole line in the file makes the
+    /// resend return the original receipt.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn answers_route_answers_503_when_the_store_fails_and_a_resend_is_safe() {
+        use crate::responses::fault::{fail_syncs, inject, Fault};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let session_dir = state.store.session_dir(state.session_id);
+        let lines = |state: &AppState| {
+            ledger_bytes(state).map_or(0, |bytes| String::from_utf8_lossy(&bytes).lines().count())
+        };
+        let unavailable = |status: StatusCode, body: &serde_json::Value, case: &str| {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{case}: {body}");
+            assert_eq!(body["error"], "store_unavailable", "{case}");
+            assert!(body["message"].is_string(), "{case}");
+            assert_eq!(body["details"], serde_json::json!({}), "{case}");
+        };
+        let chmod = |path: &std::path::Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+
+        // A write that fails part way on the first answer: nothing stays,
+        // not even the file it created.
+        let first = answer_body(&state, |_| {});
+        inject(Fault::WriteFails { written: 40 });
+        let (status, body) = post_answer(&state, headers.clone(), first.clone()).await;
+        unavailable(status, &body, "write fails");
+        assert_eq!(ledger_bytes(&state), None, "write fails: the store changed");
+        let (status, receipt) = post_answer(&state, headers.clone(), first).await;
+        assert_eq!(
+            (
+                status,
+                receipt["replayed"].as_bool(),
+                receipt["sequence"].as_u64()
+            ),
+            (StatusCode::OK, Some(false), Some(1))
+        );
+        assert_eq!(lines(&state), 1);
+
+        // The ledger cannot be opened, then the session lock cannot be
+        // taken: both before any write.
+        for (case, path) in [
+            (
+                "open fails",
+                session_dir.join(crate::responses::RESPONSES_FILE),
+            ),
+            ("lock fails", session_dir.join(".lock")),
+        ] {
+            let before = ledger_bytes(&state);
+            let body = fresh_answer(&state);
+            chmod(&path, 0o400);
+            let (status, refused) = post_answer(&state, headers.clone(), body.clone()).await;
+            chmod(&path, 0o600);
+            unavailable(status, &refused, case);
+            assert_eq!(ledger_bytes(&state), before, "{case}: the store changed");
+            let (status, receipt) = post_answer(&state, headers.clone(), body).await;
+            assert_eq!(
+                (status, receipt["replayed"].as_bool()),
+                (StatusCode::OK, Some(false)),
+                "{case}: {receipt}"
+            );
+            assert_eq!(
+                lines(&state),
+                usize::try_from(receipt["sequence"].as_u64().unwrap()).unwrap(),
+                "{case}"
+            );
+        }
+
+        // A sync that fails after the whole line was written, and whose cut
+        // back fails too: the line stays, but gets no receipt until a sync
+        // succeeds (I4). While syncs keep failing, a resend is refused;
+        // once one succeeds, the resend is its receipt.
+        let count = lines(&state);
+        let late = fresh_answer(&state);
+        inject(Fault::SyncFailsLineStays);
+        let (status, body) = post_answer(&state, headers.clone(), late.clone()).await;
+        unavailable(status, &body, "sync fails");
+        assert_eq!(lines(&state), count + 1, "sync fails: the whole line stays");
+        fail_syncs(2);
+        for attempt in 1..=2 {
+            let (status, body) = post_answer(&state, headers.clone(), late.clone()).await;
+            unavailable(
+                status,
+                &body,
+                &format!("sync still fails, resend {attempt}"),
+            );
+            assert_eq!(
+                lines(&state),
+                count + 1,
+                "sync still fails: the ledger changed"
+            );
+        }
+        let (status, receipt) = post_answer(&state, headers, late).await;
+        assert_eq!(
+            (status, receipt["replayed"].as_bool()),
+            (StatusCode::OK, Some(true)),
+            "{receipt}"
+        );
+        assert_eq!(
+            receipt["sequence"].as_u64(),
+            Some(u64::try_from(count + 1).unwrap())
+        );
+        assert_eq!(
+            lines(&state),
+            count + 1,
+            "sync fails: the resend appended again"
+        );
+    }
+
+    /// R119-2: a project out of capacity and a ledger that cannot be read
+    /// are typed 503 refusals with no receipt; nothing is appended, and the
+    /// same request stores once the store can take it.
+    #[tokio::test]
+    async fn answers_route_answers_503_when_the_store_is_full_or_unreadable() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, mut state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let ledger = state
+            .store
+            .session_dir(state.session_id)
+            .join(crate::responses::RESPONSES_FILE);
+        let refused = |status: StatusCode, body: &serde_json::Value, cause: &str| {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert_eq!(body["error"], "store_unavailable");
+            assert_eq!(body["details"], serde_json::json!({}));
+            let message = body["message"].as_str().unwrap();
+            assert!(message.contains(cause), "{message}");
+            assert!(message.contains("no receipt was given"), "{message}");
+        };
+
+        // Room for the line and the control reserve, but not for them and
+        // what the project already holds.
+        let body = answer_body(&state, |_| {});
+        let held = crate::state::directory_size_bounded(state.store.root(), u64::MAX).unwrap();
+        state
+            .store
+            .set_max_project_bytes(limits::MAX_SESSION_STATE_BYTES + held);
+        let (status, answer) = post_answer(&state, headers.clone(), body.clone()).await;
+        refused(status, &answer, "out of capacity");
+        assert_eq!(ledger_bytes(&state), None, "capacity: the store changed");
+        state
+            .store
+            .set_max_project_bytes(limits::MAX_PROJECT_STATE_BYTES);
+        let (status, receipt) = post_answer(&state, headers.clone(), body).await;
+        assert_eq!(
+            (
+                status,
+                receipt["replayed"].as_bool(),
+                receipt["sequence"].as_u64()
+            ),
+            (StatusCode::OK, Some(false), Some(1)),
+            "{receipt}"
+        );
+
+        // A project bound that holds the project as it is, but is below one
+        // line and the control reserve (the shared check's other refusal).
+        let small = fresh_answer(&state);
+        let before = ledger_bytes(&state);
+        let held = crate::state::directory_size_bounded(state.store.root(), u64::MAX).unwrap();
+        assert!(
+            held < limits::MAX_SESSION_STATE_BYTES,
+            "the project already holds {held} bytes"
+        );
+        state.store.set_max_project_bytes(held);
+        let (status, answer) = post_answer(&state, headers.clone(), small).await;
+        refused(status, &answer, "out of capacity");
+        state
+            .store
+            .set_max_project_bytes(limits::MAX_PROJECT_STATE_BYTES);
+        assert_eq!(ledger_bytes(&state), before, "headroom: the store changed");
+
+        // A line before the last that is not a record: the ledger is
+        // corrupt, and is left as it is.
+        let stored = std::fs::read(&ledger).unwrap();
+        let corrupt = [b"not a record\n".as_slice(), &stored].concat();
+        std::fs::write(&ledger, &corrupt).unwrap();
+        let (status, answer) =
+            post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        refused(status, &answer, "could not be read");
+        assert_eq!(ledger_bytes(&state), Some(corrupt));
+    }
+
+    /// The ledger's line and byte bounds sit exactly where the constants
+    /// say, counting the delivered and acknowledged lines each stored
+    /// answer keeps room for (R120-1): the answer that reaches a bound is
+    /// stored, the next is a typed 503 naming the bound, and nothing past
+    /// it is stored. The bounds are
+    /// lowered on this thread only (`fault::lower_bounds`, test-only), so
+    /// the same checks as for 100,000 lines and 64 MiB run on a few lines.
+    #[tokio::test]
+    async fn answers_route_stops_at_the_ledger_line_and_byte_bounds() {
+        use crate::responses::fault::lower_bounds;
+
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let length = |state: &AppState| ledger_bytes(state).map_or(0, |bytes| bytes.len());
+        let lines = |state: &AppState| {
+            ledger_bytes(state).map_or(0, |bytes| String::from_utf8_lossy(&bytes).lines().count())
+        };
+        let stored = |status: StatusCode, receipt: &serde_json::Value, sequence: u64| {
+            assert_eq!(
+                (
+                    status,
+                    receipt["replayed"].as_bool(),
+                    receipt["sequence"].as_u64()
+                ),
+                (StatusCode::OK, Some(false), Some(sequence)),
+                "{receipt}"
+            );
+        };
+        let refused = |status: StatusCode, body: &serde_json::Value, cause: &str| {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert_eq!(body["error"], "store_unavailable");
+            assert!(body.get("answer_id").is_none(), "a receipt: {body}");
+            let message = body["message"].as_str().unwrap();
+            assert!(message.contains(cause), "{message}");
+            assert!(message.contains("no receipt was given"), "{message}");
+        };
+
+        // One form holds one original answer; the later requests are
+        // corrections of it, every one the same length.
+        let (status, receipt) = post_answer(&state, headers.clone(), fresh_answer(&state)).await;
+        stored(status, &receipt, 1);
+        let original = length(&state);
+
+        // The line bound, lowered to 6: the original, one correction and the
+        // four lines kept for them reach it; the next is refused and the
+        // ledger is unchanged.
+        lower_bounds(Some(6), None);
+        let (status, receipt) = post_answer(&state, headers.clone(), fresh_answer(&state)).await;
+        stored(status, &receipt, 2);
+        let full = ledger_bytes(&state);
+        let third = fresh_answer(&state);
+        let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
+        refused(
+            status,
+            &body,
+            "the answer ledger holds at most 6 lines, with room kept",
+        );
+        assert_eq!(ledger_bytes(&state), full, "line bound: the ledger changed");
+        assert_eq!(lines(&state), 2);
+
+        // The byte bound. Each answer keeps room for two state lines, so one
+        // byte short of the original, two corrections and their room refuses
+        // the second correction, exactly that stores it, and the next is
+        // refused.
+        let line = length(&state) - original;
+        let bound = |corrections: usize| {
+            u64::try_from(original + corrections * line).unwrap()
+                + u64::try_from(1 + corrections).unwrap() * 2 * crate::responses::STATE_LINE_BYTES
+        };
+        lower_bounds(None, Some(bound(2) - 1));
+        let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
+        refused(
+            status,
+            &body,
+            &format!("the answer ledger reached its {} byte bound", bound(2) - 1),
+        );
+        assert_eq!(
+            length(&state),
+            original + line,
+            "byte bound: the ledger changed"
+        );
+        lower_bounds(None, Some(bound(2)));
+        let (status, receipt) = post_answer(&state, headers.clone(), third).await;
+        stored(status, &receipt, 3);
+        assert_eq!(
+            length(&state),
+            original + 2 * line,
+            "the correction is not stored"
+        );
+        let at_bound = ledger_bytes(&state);
+        let (status, body) = post_answer(&state, headers.clone(), fresh_answer(&state)).await;
+        refused(
+            status,
+            &body,
+            &format!("the answer ledger reached its {} byte bound", bound(2)),
+        );
+        assert_eq!(
+            ledger_bytes(&state),
+            at_bound,
+            "byte bound: the ledger changed"
+        );
+        // A review keeps room for its acknowledgment too: at the bound it is
+        // refused as the store at its capacity, and nothing is stored.
+        let review = serde_json::from_value::<ReviewRequest>(serde_json::json!({
+            "event_id": Uuid::new_v4().to_string(),
+            "session_id": state.session_id.to_string(),
+            "revision": 1,
+            "verdict": "approve",
+            "notes": [],
+        }))
+        .unwrap();
+        let response = submit_review(State(state.clone()), headers.clone(), Json(review)).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["error"], "store_unavailable", "{body}");
+        assert!(state.store.events(state.session_id).unwrap().is_empty());
+        assert_eq!(lines(&state), 3);
+        lower_bounds(None, None);
+    }
+
+    /// R119-R2-1: the largest form the service accepts (32 choices fields of
+    /// 24 options, every label and value 200 four-byte characters, a
+    /// 512-byte title, 64-byte ids) can be answered with a 64 KiB request,
+    /// declined with the longest reason and dismissed: each is stored with a
+    /// receipt, though its question alone is over the old 1 MiB cap.
+    #[tokio::test]
+    async fn the_largest_form_is_answered_declined_and_dismissed() {
+        let wide = |chars: usize| "\u{1d538}".repeat(chars);
+        let id = |index: usize| format!("field-{index:02}-{}", "a".repeat(55));
+        let fields = (0..limits::MAX_FORM_FIELDS)
+            .map(|index| {
+                let options = (0..limits::MAX_FIELD_OPTIONS)
+                    .map(|option| {
+                        serde_json::json!({
+                            "value": format!("{}{option:02}", wide(limits::MAX_FORM_LABEL_CHARS - 2)),
+                            "label": wide(limits::MAX_FORM_LABEL_CHARS),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "id": id(index), "label": wide(limits::MAX_FORM_LABEL_CHARS),
+                    "kind": "choices", "rationale": "optional", "options": options,
+                })
+            })
+            .collect::<Vec<_>>();
+        let document = serde_json::json!({
+            "schema_version": 2, "title": "The largest form",
+            "blocks": [{ "type": "form", "id": "largest", "title": wide(limits::MAX_TITLE_BYTES / 4), "fields": fields }],
+        });
+        let document =
+            crate::document::parse_document(&serde_json::to_vec(&document).unwrap()).unwrap();
+        let (_temp, state) = app_state_with(document);
+        let headers = application_headers(&state, true);
+        let crate::state::RevisionContent::Supported { document } = state
+            .store
+            .current_revision(state.session_id)
+            .unwrap()
+            .content
+        else {
+            unreachable!()
+        };
+        let form = document
+            .walk()
+            .into_iter()
+            .find(|block| block.id() == "largest")
+            .unwrap();
+        let request = |outcome: &str| {
+            serde_json::json!({
+                "request_id": Uuid::new_v4(), "session_id": state.session_id, "revision": 1,
+                "form_id": "largest", "form_digest": crate::state::block_digest(form),
+                "outcome": outcome, "values": {}, "rationales": {},
+            })
+        };
+
+        // Submit: every field answered, and a rationale that fills the
+        // request to exactly 64 KiB.
+        let mut submit = request("submit");
+        for index in 0..limits::MAX_FORM_FIELDS {
+            submit["values"][id(index)] =
+                serde_json::json!([format!("{}00", wide(limits::MAX_FORM_LABEL_CHARS - 2))]);
+        }
+        submit["rationales"][id(0)] = serde_json::json!("x");
+        let short = limits::MAX_ANSWER_REQUEST_BYTES - serde_json::to_vec(&submit).unwrap().len();
+        submit["rationales"][id(0)] = serde_json::json!("x".repeat(short + 1));
+        let submit = serde_json::to_vec(&submit).unwrap();
+        assert_eq!(submit.len(), limits::MAX_ANSWER_REQUEST_BYTES);
+        // Then, as corrections of that answer (one form holds one original),
+        // decline with the longest reason and dismiss with nothing.
+        let (status, receipt) = post_answer(&state, headers.clone(), submit).await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        let mut decline = request("decline");
+        decline["reason"] = serde_json::json!(wide(limits::MAX_DECLINE_REASON_BYTES / 4));
+        decline["amends"] = receipt["answer_id"].clone();
+        let mut cancel = request("cancel");
+        cancel["amends"] = receipt["answer_id"].clone();
+
+        for (sequence, body) in [
+            serde_json::to_vec(&decline).unwrap(),
+            serde_json::to_vec(&cancel).unwrap(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let sequence = sequence + 1;
+            let (status, receipt) = post_answer(&state, headers.clone(), body).await;
+            assert_eq!(
+                (
+                    status,
+                    receipt["state"].as_str(),
+                    receipt["sequence"].as_u64()
+                ),
+                (StatusCode::OK, Some("stored"), Some(sequence as u64 + 1)),
+                "{receipt}"
+            );
+        }
+        let ledger = ledger_bytes(&state).unwrap();
+        let lines = ledger
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(lines.len(), 3);
+        for line in lines {
+            assert!(
+                line.len() > 1024 * 1024,
+                "a line of {} bytes is under the old cap",
+                line.len()
+            );
+            assert!(line.len() as u64 <= limits::MAX_RESPONSE_RECORD_BYTES);
+        }
     }
 
     #[test]
@@ -1543,7 +2423,7 @@ mod tests {
             State(state.clone()),
             application_headers(&state, true),
             Json(PollRequest {
-                cursor: Some("1:0".to_string()),
+                cursor: Some("1:0:0".to_string()),
             }),
         )
         .await;
@@ -1553,77 +2433,298 @@ mod tests {
             .unwrap();
         let event: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(event["kind"], "revision");
-        assert_eq!(event["cursor"], "2:0");
+        assert_eq!(event["cursor"], "2:0:0");
     }
 
+    /// TSK-120: the page's poll reports each answer's state after "stored"
+    /// as `answer_state`, with a cursor into the answer ledger, so a form
+    /// shows its delivery and acknowledgment; a revision does not move that
+    /// cursor, so no state is skipped.
     #[tokio::test]
-    async fn sandbox_urls_are_bound_to_the_requested_immutable_revision() {
-        let (_temp, state) = app_state();
-        let opaque = sandbox_id(&state.session_id.to_string(), "sample");
-        let revision_two = state
-            .store
-            .update_document(
-                state.session_id,
-                parsed_with(Block::Html {
-                    id: "sample".to_string(),
-                    html: "<p>revision two</p>".to_string(),
-                    title: Some("Sample".to_string()),
-                }),
-            )
-            .unwrap();
-        let revision_three = state
-            .store
-            .update_document(
-                state.session_id,
-                parsed_with(Block::Html {
-                    id: "sample".to_string(),
-                    html: "<p>revision three</p>".to_string(),
-                    title: Some("Sample".to_string()),
-                }),
-            )
-            .unwrap();
-        let revision_four = state
-            .store
-            .update_document(
-                state.session_id,
-                parsed_with(Block::Narrative {
-                    id: "replacement".to_string(),
-                    markdown: "No sandbox here.".to_string(),
-                }),
-            )
-            .unwrap();
-
-        for (revision, expected) in [
-            (revision_two, "revision two"),
-            (revision_three, "revision three"),
-        ] {
-            let response = sandbox(
-                State(state.clone()),
-                Path((revision, opaque.clone())),
-                application_headers(&state, false),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            assert!(response
-                .headers()
-                .get("content-security-policy")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .contains("script-src 'none'"));
-            let body = axum::body::to_bytes(response.into_body(), limits::MAX_HTML_BYTES)
-                .await
-                .unwrap();
-            assert!(std::str::from_utf8(&body).unwrap().contains(expected));
-        }
-
-        let missing = sandbox(
-            State(state.clone()),
-            Path((revision_four, opaque)),
-            application_headers(&state, false),
+    async fn the_poll_reports_answer_states_after_stored() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let poll = |cursor: &str| {
+            let state = state.clone();
+            let cursor = cursor.to_string();
+            async move {
+                let response = poll_events(
+                    State(state.clone()),
+                    application_headers(&state, true),
+                    Json(PollRequest {
+                        cursor: Some(cursor),
+                    }),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let body =
+                    axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+                        .await
+                        .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+            }
+        };
+        let (status, receipt) = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |_| {}),
         )
         .await;
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        let answer: Uuid = serde_json::from_value(receipt["answer_id"].clone()).unwrap();
+        let event = poll("1:0:0").await;
+        assert_eq!(event["kind"], "answer_state");
+        assert_eq!(event["cursor"], "1:0:1");
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": answer, "status": "pending" }])
+        );
+
+        state.store.deliver(state.session_id, &[answer]).unwrap();
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(&forms).unwrap(),
+            )
+            .unwrap();
+        let event = poll("1:0:1").await;
+        assert_eq!(event["kind"], "revision");
+        assert_eq!(
+            event["cursor"], "2:0:1",
+            "a revision keeps the answer cursor"
+        );
+        let event = poll("2:0:1").await;
+        assert_eq!(event["kind"], "answer_state");
+        assert_eq!(event["cursor"], "2:0:2");
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": answer, "status": "delivered" }])
+        );
+        state.store.acknowledge(state.session_id, answer).unwrap();
+        let event = poll("2:0:2").await;
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": answer, "status": "acknowledged" }])
+        );
+        for cursor in ["2:0", "2:0:2:1", "2:x:2"] {
+            let response = poll_events(
+                State(state.clone()),
+                application_headers(&state, true),
+                Json(PollRequest {
+                    cursor: Some(cursor.to_string()),
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{cursor}");
+        }
+    }
+
+    /// C120-R2-1: a closure ends the poll, so it carries each form's answer
+    /// as a reload shows it (form, digest, original, latest and its state),
+    /// every time it is polled, and no `answer_state` batch.
+    #[tokio::test]
+    async fn a_closure_carries_each_forms_answer_as_a_reload_shows_it() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let answer = post_answer(&state, headers.clone(), answer_body(&state, |_| {}))
+            .await
+            .1["answer_id"]
+            .clone();
+        let correction = post_answer(
+            &state,
+            headers.clone(),
+            answer_body(&state, |body| body["amends"] = answer.clone()),
+        )
+        .await
+        .1["answer_id"]
+            .clone();
+        let correction: Uuid = serde_json::from_value(correction).unwrap();
+        state
+            .store
+            .deliver(state.session_id, &[correction])
+            .unwrap();
+        let digest = state.store.responses(state.session_id).unwrap()[0]
+            .answer()
+            .unwrap()
+            .form_digest
+            .clone();
+        state.store.close(state.session_id).unwrap();
+        let poll = |cursor: &str| {
+            let request = Json(PollRequest {
+                cursor: Some(cursor.to_string()),
+            });
+            let (state, headers) = (state.clone(), headers.clone());
+            async move {
+                let response = poll_events(State(state), headers, request).await;
+                let body =
+                    axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+                        .await
+                        .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+            }
+        };
+        let event = poll("1:0:1").await;
+        assert_eq!(event["kind"], "session_closed");
+        assert_eq!(event["cursor"], "1:0:3");
+        assert!(event.get("answers").is_none(), "{event}");
+        assert_eq!(
+            event["forms"],
+            serde_json::json!([{
+                "form_id": "store-choice",
+                "form_digest": digest,
+                "answer_id": answer,
+                "latest_answer_id": correction,
+                "state": "delivered",
+            }])
+        );
+        let again = poll("1:0:3").await;
+        assert_eq!(again["kind"], "session_closed");
+        assert_eq!(again["forms"], event["forms"]);
+    }
+
+    /// Grok 2: a closure behind a backlog longer than one batch of ledger
+    /// lines still carries each form's latest state. 121 answer lines wait
+    /// unread; the batch after the page's cursor ends before the latest
+    /// correction, and the closure carries that correction as delivered.
+    #[tokio::test]
+    async fn a_closure_behind_a_long_backlog_carries_each_forms_latest_state() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let (_, original) = post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        let original = original["answer_id"].clone();
+        let mut latest = Uuid::nil();
+        for _ in 0..120 {
+            let (status, receipt) = post_answer(
+                &state,
+                headers.clone(),
+                answer_body(&state, |body| body["amends"] = original.clone()),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{receipt}");
+            latest = serde_json::from_value(receipt["answer_id"].clone()).unwrap();
+        }
+        state.store.deliver(state.session_id, &[latest]).unwrap();
+        let batch = state
+            .store
+            .answer_states_since(state.session_id, 0, limits::MAX_EVENTS_PER_RESPONSE)
+            .unwrap();
+        assert!(
+            batch.states.iter().all(|entry| entry.answer_id != latest),
+            "the backlog fits one batch"
+        );
+        state.store.close(state.session_id).unwrap();
+        let response = poll_events(
+            State(state.clone()),
+            headers,
+            Json(PollRequest {
+                cursor: Some("1:0:0".to_string()),
+            }),
+        )
+        .await;
+        let body = axum::body::to_bytes(response.into_body(), limits::MAX_EVENT_RESPONSE_BYTES)
+            .await
+            .unwrap();
+        let event: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(event["kind"], "session_closed");
+        assert_eq!(event["cursor"], "1:0:122");
+        let forms = event["forms"].as_array().unwrap();
+        assert_eq!(forms.len(), 1, "{event}");
+        assert_eq!(
+            (
+                &forms[0]["answer_id"],
+                &forms[0]["latest_answer_id"],
+                &forms[0]["state"]
+            ),
+            (
+                &original,
+                &serde_json::json!(latest),
+                &serde_json::json!("delivered")
+            )
+        );
+    }
+
+    /// TSK-120: the page shows each form's latest answer and its state as it
+    /// loads, so a reload keeps stored, delivered and acknowledged; a
+    /// correction names its original; an answer to a question that has since
+    /// changed is not shown on the new question.
+    #[tokio::test]
+    async fn the_page_renders_each_forms_latest_answer_state() {
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let page = || {
+            let state = state.clone();
+            async move {
+                let response =
+                    application(State(state.clone()), application_headers(&state, false)).await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let html = String::from_utf8(body.to_vec()).unwrap();
+                let at = html.find("data-cf-form=\"store-choice\"").unwrap();
+                let tag = &html[at..at + html[at..].find('>').unwrap()];
+                let attribute = |name: &str| {
+                    tag.split_once(&format!("{name}=\""))
+                        .map(|(_, rest)| rest.split('"').next().unwrap().to_string())
+                };
+                (
+                    attribute("data-cf-answer-id"),
+                    attribute("data-cf-latest-answer-id"),
+                    attribute("data-cf-answer-state"),
+                )
+            }
+        };
+        assert_eq!(page().await, (None, None, None), "an unanswered form");
+        let (_, receipt) = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |_| {}),
+        )
+        .await;
+        let answer = receipt["answer_id"].as_str().unwrap().to_string();
+        let shown = |original: &str, latest: &str, status: &str| {
+            (
+                Some(original.to_string()),
+                Some(latest.to_string()),
+                Some(status.to_string()),
+            )
+        };
+        assert_eq!(page().await, shown(&answer, &answer, "stored"));
+        let id: Uuid = answer.parse().unwrap();
+        state.store.deliver(state.session_id, &[id]).unwrap();
+        assert_eq!(page().await, shown(&answer, &answer, "delivered"));
+        state.store.acknowledge(state.session_id, id).unwrap();
+        assert_eq!(page().await, shown(&answer, &answer, "acknowledged"));
+        let (_, correction) = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |body| {
+                body["request_id"] = serde_json::json!(Uuid::new_v4());
+                body["amends"] = serde_json::json!(answer);
+            }),
+        )
+        .await;
+        let latest = correction["answer_id"].as_str().unwrap().to_string();
+        assert_eq!(page().await, shown(&answer, &latest, "stored"));
+
+        let mut changed: serde_json::Value = serde_json::from_slice(&forms).unwrap();
+        changed["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|block| block["id"] == "store-choice")
+            .unwrap()["title"] = serde_json::json!("A changed question");
+        state
+            .store
+            .update_document(
+                state.session_id,
+                crate::document::parse_document(&serde_json::to_vec(&changed).unwrap()).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(page().await, (None, None, None), "a changed question");
     }
 
     #[test]

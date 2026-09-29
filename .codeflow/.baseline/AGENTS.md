@@ -54,8 +54,8 @@ opt-in repository guide, and `/cf-herdr` hosts a peer terminal when
 **Mechanics:** `codeflow orient`, `status`, `work next`, `work claim <id>`,
 `work start <id>`, `task new`, `task status`, `epic new`, `spec new --for <id>`,
 `adr new`, `test`, `validate [--docs]`, `doctor`, `recall "<query>"`,
-`integrate <branch>`, `present`, `portal`, `remote`; `codeflow --help` lists
-the rest.
+`integrate <branch>`, `present`, `portal`, `remote`, `estimate`, `policy`,
+`ci`; `codeflow --help` lists the rest.
 
 ## Where things live
 

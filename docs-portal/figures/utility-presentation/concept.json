@@ -1,0 +1,429 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "utility-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What is the utility design system, and what does it not cover?",
+    "idea": "One doctrine and one token contract feed both rendered surfaces, and a consuming product's own brand stays outside it.",
+    "title": "One design system behind two surfaces",
+    "kicker": "Utility presentation",
+    "caption": "Review sessions and the portal share one doctrine and one set of tokens, so a figure reads the same on both.",
+    "states": [
+      {
+        "name": "shared",
+        "mark": "layer-remote",
+        "means": "Shared by both surfaces"
+      },
+      {
+        "name": "surface",
+        "mark": "layer",
+        "means": "A rendered surface"
+      },
+      {
+        "name": "feeds",
+        "mark": "trans",
+        "means": "Feeds"
+      },
+      {
+        "name": "outside",
+        "mark": "denied",
+        "means": "Outside the system"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "one design system carries every utility surface",
+        "source": "docs/architecture/utility-presentation.md#concept",
+        "derive": "the lead sentence",
+        "check": {
+          "kind": "contains",
+          "text": "One design system carries every utility surface CodeFlow renders."
+        },
+        "value": true
+      },
+      {
+        "claim": "the design system is not a product brand",
+        "source": "docs/architecture/utility-presentation.md#concept",
+        "derive": "the product sentence",
+        "check": {
+          "kind": "contains",
+          "text": "It is not the design system of a product that consumes CodeFlow."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 264,
+      "draw": [
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 16,
+          "y": 26,
+          "w": 688,
+          "h": 170
+        },
+        {
+          "text": "one utility design system",
+          "x": 32,
+          "y": 50,
+          "style": "head"
+        },
+        {
+          "state": "shared",
+          "shape": "rect",
+          "x": 32,
+          "y": 66,
+          "w": 250,
+          "h": 56,
+          "rx": 8,
+          "cap": "end",
+          "id": "d"
+        },
+        {
+          "text": "shared doctrine",
+          "x": 48,
+          "y": 90,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "composition, figure grammar",
+          "x": 48,
+          "y": 111,
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "shared",
+          "shape": "rect",
+          "x": 32,
+          "y": 132,
+          "w": 250,
+          "h": 56,
+          "rx": 8,
+          "cap": "end",
+          "id": "k"
+        },
+        {
+          "text": "one token contract",
+          "x": 48,
+          "y": 156,
+          "style": "strong",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "three skins, light and dark",
+          "x": 48,
+          "y": 177,
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "state": "feeds",
+          "shape": "path",
+          "d": "M284 94H424",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "feeds",
+          "shape": "path",
+          "d": "M284 160H424",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "feeds",
+          "shape": "path",
+          "d": "M354 94V160",
+          "id": "e3"
+        },
+        {
+          "state": "surface",
+          "shape": "rect",
+          "x": 426,
+          "y": 66,
+          "w": 262,
+          "h": 56,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "present review sessions",
+          "x": 442,
+          "y": 90,
+          "style": "strong",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "Rust document, Comment",
+          "x": 442,
+          "y": 111,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "surface",
+          "shape": "rect",
+          "x": 426,
+          "y": 132,
+          "w": 262,
+          "h": 56,
+          "rx": 8,
+          "id": "g"
+        },
+        {
+          "text": "documentation portal",
+          "x": 442,
+          "y": 156,
+          "style": "strong",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "the guide to this repository",
+          "x": 442,
+          "y": 177,
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "outside",
+          "shape": "rect",
+          "x": 426,
+          "y": 214,
+          "w": 262,
+          "h": 40,
+          "rx": 6,
+          "cross": {
+            "cx": 668,
+            "cy": 234,
+            "size": 12
+          },
+          "id": "n"
+        },
+        {
+          "text": "a product's own brand",
+          "x": 442,
+          "y": 239,
+          "for": [
+            "n"
+          ]
+        },
+        {
+          "text": "agents author the subject; the runtimes own the chrome",
+          "x": 16,
+          "y": 240,
+          "style": "mute"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 394,
+      "elongation_max": 1.7,
+      "reason": "Both surfaces stack under the two shared parts at phone width, so the column is taller than the wide two-by-two.",
+      "draw": [
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 318
+        },
+        {
+          "text": "one utility design system",
+          "x": 20,
+          "y": 32,
+          "style": "head"
+        },
+        {
+          "state": "shared",
+          "shape": "rect",
+          "x": 20,
+          "y": 48,
+          "w": 320,
+          "h": 54,
+          "rx": 8,
+          "cap": "end",
+          "id": "d"
+        },
+        {
+          "text": "shared doctrine",
+          "x": 34,
+          "y": 71,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "composition, figure grammar",
+          "x": 34,
+          "y": 92,
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "shared",
+          "shape": "rect",
+          "x": 20,
+          "y": 112,
+          "w": 320,
+          "h": 54,
+          "rx": 8,
+          "cap": "end",
+          "id": "k"
+        },
+        {
+          "text": "one token contract",
+          "x": 34,
+          "y": 135,
+          "style": "strong",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "three skins, light and dark",
+          "x": 34,
+          "y": 156,
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "state": "feeds",
+          "shape": "path",
+          "d": "M180 172V190",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "surface",
+          "shape": "rect",
+          "x": 20,
+          "y": 192,
+          "w": 320,
+          "h": 54,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "present review sessions",
+          "x": 34,
+          "y": 215,
+          "style": "strong",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "Rust document, Comment",
+          "x": 34,
+          "y": 236,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "surface",
+          "shape": "rect",
+          "x": 20,
+          "y": 256,
+          "w": 320,
+          "h": 54,
+          "rx": 8,
+          "id": "g"
+        },
+        {
+          "text": "documentation portal",
+          "x": 34,
+          "y": 279,
+          "style": "strong",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "the guide to this repository",
+          "x": 34,
+          "y": 300,
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "outside",
+          "shape": "rect",
+          "x": 8,
+          "y": 344,
+          "w": 344,
+          "h": 40,
+          "rx": 6,
+          "cross": {
+            "cx": 330,
+            "cy": 364,
+            "size": 12
+          },
+          "id": "n"
+        },
+        {
+          "text": "a product's own brand",
+          "x": 22,
+          "y": 369,
+          "for": [
+            "n"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Role"
+      ],
+      "rows": [
+        [
+          "shared doctrine",
+          "composition rule and figure grammar, byte-identical in both skills"
+        ],
+        [
+          "one token contract",
+          "three skins in light and dark, equal in both stylesheets"
+        ],
+        [
+          "present review sessions",
+          "a rendered surface for one bounded review"
+        ],
+        [
+          "documentation portal",
+          "a rendered surface for the durable guide"
+        ],
+        [
+          "a product's own brand",
+          "outside the system"
+        ]
+      ]
+    }
+  }
+}

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::validate::docs::lint_docs;
-use codeflow_core::validate::portal::validate_portal;
+use codeflow_core::validate::portal::{validate_portal_with, LookupInputs};
 use codeflow_core::validate::{
     validate_epic, validate_spec, validate_task, validate_workgraph, ValidateOptions,
 };
@@ -59,7 +59,12 @@ pub fn run(args: &ValidateArgs) -> i32 {
 }
 
 fn run_portal_validation(root: &Path, portal: &Path) -> bool {
-    let report = validate_portal(root, portal);
+    let stages = super::git_hook::stage_names();
+    let inputs = LookupInputs {
+        assets: &crate::embedded::EmbeddedAssets,
+        hook_stages: &stages,
+    };
+    let report = validate_portal_with(root, portal, Some(&inputs));
     for issue in &report.issues {
         eprintln!("validate --portal: error: {issue}");
     }
@@ -285,5 +290,79 @@ fn run_docs_lint(root: &Path) -> bool {
             report.issues.len()
         );
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use codeflow_core::validate::portal::lookups::{
+        self, page_with_title, verify_lookup_page, LookupInputs, POLICY_REFERENCE, SKILL_CATALOG,
+    };
+
+    use crate::embedded::EmbeddedAssets;
+
+    fn repository() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    /// The lookup pages this repository publishes equal what the binary
+    /// generates, and the policy reference names exactly the dispatcher's
+    /// hook stages. With `CODEFLOW_REGENERATE_LOOKUPS=1` the generated part of
+    /// each page is rewritten first; the authored stage table is kept.
+    #[test]
+    fn derived_lookup_pages_match_the_binary() {
+        let stages = crate::cmd::git_hook::stage_names();
+        let inputs = LookupInputs {
+            assets: &EmbeddedAssets,
+            hook_stages: &stages,
+        };
+        for (path, derive) in [
+            ("docs/skills.md", SKILL_CATALOG),
+            ("docs/policy-reference.md", POLICY_REFERENCE),
+        ] {
+            let file = repository().join(path);
+            if std::env::var_os("CODEFLOW_REGENERATE_LOOKUPS").is_some() {
+                let current = std::fs::read_to_string(&file).unwrap_or_default();
+                let end = format!("<!-- codeflow-derived {derive} end -->\n");
+                let authored = current
+                    .split_once(&end)
+                    .map_or(String::new(), |(_, rest)| rest.to_string());
+                let generated = if derive == SKILL_CATALOG {
+                    lookups::skill_catalog(&EmbeddedAssets).unwrap()
+                } else {
+                    lookups::policy_reference()
+                };
+                let title = lookups::title_of(derive).unwrap();
+                std::fs::write(
+                    &file,
+                    format!("{}{authored}", page_with_title(title, &generated)),
+                )
+                .unwrap();
+            }
+            let text = std::fs::read_to_string(&file)
+                .unwrap()
+                .replace("\r\n", "\n");
+            if let Err(why) = verify_lookup_page(derive, &text, &inputs) {
+                panic!("{path}: {why}; run CODEFLOW_REGENERATE_LOOKUPS=1 cargo test -p codeflow-cli derived_lookup");
+            }
+        }
+    }
+
+    #[test]
+    fn the_dispatcher_names_the_five_git_hook_stages() {
+        let mut stages = crate::cmd::git_hook::stage_names();
+        stages.sort();
+        assert_eq!(
+            stages,
+            [
+                "commit-msg",
+                "pre-commit",
+                "pre-merge-commit",
+                "pre-push",
+                "reference-transaction"
+            ]
+        );
     }
 }

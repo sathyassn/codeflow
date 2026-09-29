@@ -1,0 +1,444 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "checklist-evidence",
+    "family": "derivation",
+    "binding": "authored",
+    "question": "Where does each box's evidence come from?",
+    "idea": "Gate output, runbook results and native canaries become a ticked box only as a link or pasted output, and the finished record goes to a named human.",
+    "title": "Where a ticked box comes from",
+    "kicker": "Evidence",
+    "caption": "A box is ticked by its evidence, not by an intention, and the finished record is read by the person who decides.",
+    "states": [
+      {
+        "name": "source",
+        "mark": "layer-remote",
+        "means": "Evidence source"
+      },
+      {
+        "name": "step",
+        "mark": "merge",
+        "means": "Recorded as a link or pasted output"
+      },
+      {
+        "name": "output",
+        "mark": "state",
+        "means": "Record"
+      },
+      {
+        "name": "derives",
+        "mark": "trans",
+        "means": "Becomes"
+      },
+      {
+        "name": "compares",
+        "mark": "todo",
+        "means": "Read by"
+      },
+      {
+        "name": "check",
+        "mark": "human",
+        "means": "The release decision"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "each box records a link or pasted output",
+        "source": "docs/release-checklist.md#concept",
+        "derive": "the recording sentence",
+        "check": {
+          "kind": "contains",
+          "text": "record a link or pasted"
+        },
+        "value": true
+      },
+      {
+        "claim": "each section is bound to its runbook section",
+        "source": "docs/release-checklist.md#architecture",
+        "derive": "the binding sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Each section is bound to the runbook section that owns its procedure."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 200,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 30,
+          "w": 200,
+          "h": 40,
+          "rx": 4,
+          "cap": "end",
+          "id": "a"
+        },
+        {
+          "text": "gate and job output",
+          "x": 30,
+          "y": 55,
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 86,
+          "w": 200,
+          "h": 40,
+          "rx": 4,
+          "cap": "end",
+          "id": "b"
+        },
+        {
+          "text": "runbook step results",
+          "x": 30,
+          "y": 111,
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 142,
+          "w": 200,
+          "h": 40,
+          "rx": 4,
+          "cap": "end",
+          "id": "c"
+        },
+        {
+          "text": "native canaries",
+          "x": 30,
+          "y": 167,
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M218 50C260 50 264 100 300 104",
+          "head": "end",
+          "id": "d1"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M218 106H300",
+          "head": "end",
+          "id": "d2"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M218 162C260 162 264 112 300 108",
+          "head": "end",
+          "id": "d3"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 324,
+          "cy": 106,
+          "r": 22,
+          "id": "l"
+        },
+        {
+          "text": "link or paste",
+          "x": 324,
+          "y": 70,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "l"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M348 106H410",
+          "head": "end",
+          "id": "d4"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 412,
+          "y": 84,
+          "w": 130,
+          "h": 44,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "ticked box",
+          "x": 426,
+          "y": 111,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M544 106H576",
+          "head": "end",
+          "id": "d5"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 578,
+          "y": 84,
+          "w": 126,
+          "h": 44,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "the record",
+          "x": 592,
+          "y": 111,
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 641,
+          "cy": 176,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M641 130V162",
+          "square": "end",
+          "id": "cp"
+        },
+        {
+          "text": "a named human decides",
+          "x": 621,
+          "y": 181,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 300,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 220,
+          "h": 34,
+          "rx": 4,
+          "cap": "end",
+          "id": "a"
+        },
+        {
+          "text": "gate and job output",
+          "x": 20,
+          "y": 32,
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 52,
+          "w": 220,
+          "h": 34,
+          "rx": 4,
+          "cap": "end",
+          "id": "b"
+        },
+        {
+          "text": "runbook step results",
+          "x": 20,
+          "y": 74,
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 94,
+          "w": 220,
+          "h": 34,
+          "rx": 4,
+          "cap": "end",
+          "id": "c"
+        },
+        {
+          "text": "native canaries",
+          "x": 20,
+          "y": 116,
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M230 27H272V58",
+          "id": "d1"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M230 69H250",
+          "id": "d2"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M230 111H272V80",
+          "id": "d3"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 272,
+          "cy": 69,
+          "r": 11,
+          "id": "l"
+        },
+        {
+          "text": "link or paste",
+          "x": 306,
+          "y": 153,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "l"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M284 69H320V170H200",
+          "head": "end",
+          "id": "d4"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 8,
+          "y": 170,
+          "w": 190,
+          "h": 36,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "ticked box",
+          "x": 20,
+          "y": 193,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M100 208V226",
+          "head": "end",
+          "id": "d5"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 8,
+          "y": 228,
+          "w": 190,
+          "h": 36,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "the record",
+          "x": 20,
+          "y": 251,
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M200 246H224",
+          "square": "end",
+          "id": "cp"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 238,
+          "cy": 246,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "text": "a named human decides",
+          "x": 8,
+          "y": 290,
+          "style": "strong",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "Step",
+        "To",
+        "Read by"
+      ],
+      "rows": [
+        [
+          "gate and job output, runbook step results, native canaries",
+          "recorded as a link or pasted output",
+          "a ticked box",
+          "the reviewer"
+        ],
+        [
+          "the ticked boxes",
+          "all five sections complete",
+          "the approval record",
+          "the named human who decides"
+        ]
+      ]
+    }
+  }
+}

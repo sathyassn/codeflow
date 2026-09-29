@@ -8,11 +8,14 @@ import { chromium } from "playwright-core";
 import axe from "axe-core";
 import { validateWindowsQualificationConfinement } from "./windows-qualification-scope.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
+import { codeflowBinary } from "./codeflow-binary.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
-const codeflow = resolve(process.env.CF_PRESENT_CODEFLOW ?? join(repoRoot, "target/debug/codeflow"));
+const codeflow = codeflowBinary(repoRoot);
 await access(codeflow);
+// A figure block the grammar draws with no rule failure (the portal's state specimen).
+const figureDeclaration = JSON.parse(await readFile(join(repoRoot, "docs-portal/tests/fixtures/figures/05-state.json"), "utf8"));
 // A revision a pre-removal build stored with diagram blocks (TSK-087).
 const retiredRevision = JSON.parse(await readFile(join(repoRoot, "crates/codeflow-present/tests/fixtures/retired-diagram/revision.json"), "utf8"));
 
@@ -179,7 +182,8 @@ try {
       && getComputedStyle(authored).fontWeight === "700";
   });
   if (!isolated) throw new Error("Authored CSS hid or overlaid review chrome, or valid scoped styling failed");
-  await page.locator("[data-cf-block-id='flow'] figure[role='img']").scrollIntoViewIfNeeded();
+  await page.locator("[data-cf-figure-block]").scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector("[data-cf-figure-block]")?.getAttribute("data-cf-figure-block") === "ready");
   await page.locator("code[data-cf-language='rust']").scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready");
   if (injectCleanupFailure) {
@@ -226,7 +230,7 @@ try {
   await saveComposerNote("Keep the implementation example aligned with the verified contract.");
 
   await page.getByRole("button", { name: "Select area" }).click();
-  const regionTarget = page.locator("[data-cf-block-id='flow'] figure[role='img']");
+  const regionTarget = page.locator("[data-cf-block-id='flow'] [data-cf-figure-block]");
   await regionTarget.scrollIntoViewIfNeeded();
   const regionBox = await regionTarget.boundingBox();
   if (!regionBox) throw new Error("Real-browser region target is not visible");
@@ -305,11 +309,13 @@ try {
   await openAuthenticatedPresentation(revisedPage, secondBootstrapPath, port);
   await revisedPage.locator("#cf-present-document").getByText("Second revision").waitFor();
   const exportPath = join(output, "review.html");
-  run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "technical", "--mode", "dark"], project);
+  run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "graphite", "--mode", "dark"], project);
   const exportPage = await context.newPage();
   await exportPage.goto(pathToFileURL(exportPath).href);
   await exportPage.locator("#cf-present-document").getByText("Second revision").waitFor();
-  await exportPage.locator("iframe[title='Qualification flow']").waitFor();
+  await exportPage.waitForFunction(() => (
+    document.querySelector("[data-cf-figure-block]")?.getAttribute("data-cf-figure-block") === "ready"
+  ));
   await exportPage.waitForFunction(() => (
     document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready"
   ));
@@ -394,7 +400,7 @@ try {
       real_service_bootstrap: "pass",
       declarative_rendering: "pass",
       accessibility_light_dark: "pass",
-      syntax_and_html_stage: "pass",
+      syntax_and_figure: "pass",
       retired_diagram_revision_page_and_export: "pass",
       csp_violations: "none observed",
       element_region_and_document_feedback_delivery: "pass",
@@ -554,7 +560,7 @@ function documentFixture(revisionText) {
         { label: "Native Windows", state: "not_run", detail: "Never inferred from this macOS run" },
       ] },
       { type: "code", id: "code", language: "rust", code: "fn qualified() -> bool { true }", caption: "Qualification example" },
-      { type: "html", id: "flow", title: "Qualification flow", html: "<figure role='img' aria-label='Input moves through review to evidence' style='margin:0'><svg viewBox='0 0 600 60' style='width:100%;height:auto'><text x='8' y='36'>Input</text><text x='220' y='36'>Review</text><text x='440' y='36'>Evidence</text></svg></figure>" },
+      { type: "figure", id: "flow", declaration: figureDeclaration },
       { type: "feedback_prompt", id: "decision", prompt: "Approve or request a concrete change." },
       { type: "html", id: "css-isolation", title: "CSS isolation", html: "<style>body, #cf-present-chrome { display:none } .isolation-label { font-weight:700 } .isolation-overlay { position:fixed; inset:0; z-index:2147483647 }</style><p class='isolation-label'>Valid authored styling stays local.</p><div class='isolation-overlay' aria-hidden='true'></div>" },
     ],
@@ -651,7 +657,7 @@ async function assertRetiredPage(page, label) {
     notice: document.querySelector("aside.version-warning")?.textContent ?? "",
     kept: document.querySelector("main")?.textContent ?? "",
     sources: [...document.querySelectorAll("main pre code")].map((code) => code.textContent),
-    hooks: document.querySelectorAll("[data-cf-diagram], template").length,
+    hooks: document.querySelectorAll("[data-cf-diagram], [data-cf-figure-block], template").length,
     scripts: document.querySelectorAll("script").length,
   }));
   if (!evidence.notice.includes("This revision holds a diagram block, which was removed with Mermaid")) {

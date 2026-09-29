@@ -696,6 +696,23 @@ mod tests {
     }
 
     #[test]
+    fn attribution_keys_are_added_to_an_older_consumer_file() {
+        let current = r#"{"effortLevel":"high","env":{"KEEP":"1"},"hooks":{}}"#;
+        let incoming = r#"{"effortLevel":"high","includeCoAuthoredBy":false,"attribution":{"commit":"","pr":""},"hooks":{}}"#;
+        let mut report = vec![];
+        let merged = merge_settings(current, incoming, &mut report).unwrap();
+        let value: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["includeCoAuthoredBy"], false);
+        assert_eq!(value["attribution"]["commit"], "");
+        assert_eq!(value["attribution"]["pr"], "");
+        assert_eq!(value["env"]["KEEP"], "1");
+        assert!(report
+            .iter()
+            .any(|l| l.contains("added \"includeCoAuthoredBy\"")));
+        assert!(report.iter().any(|l| l.contains("added \"attribution\"")));
+    }
+
+    #[test]
     fn idempotent_on_remerge() {
         let mut report = vec![];
         let once = merge_settings("{}", PRESET, &mut report).unwrap();

@@ -5,8 +5,10 @@ The full text behind the git floor in `AGENTS.md`. Managed by
 
 ## Enforcement
 
-Four planes provide defense in depth: git hooks, in-session `git-guard` and
-`exec-guard`, scaffolded CI, and configured remote branch protection. Hooks
+Four planes provide defense in depth: git hooks; in-session guards
+(`git-guard` and `exec-guard` in `.claude/settings.json`, the `.codex/`
+starter and `.grok/hooks/`), one plane; scaffolded CI; and configured remote
+branch protection. Hooks
 and CI share `.codeflow/policy.json` and the `codeflow ci` checks; remote
 setup derives its supported rules from that policy (CodeFlow ADR-0017). Every
 tier, minimal included, ships the same armed policy and all five git-hook
@@ -17,9 +19,10 @@ naming, protected-branch push, force-push and delete), and
 **pre-merge-commit** and **reference-transaction** (the protected-branch
 merge and ref backstops). At the minimal tier the installed and load-bearing
 files are `AGENTS.md` and `CLAUDE.md`, `.codeflow/policy.json`, `.gitignore`,
-the five hook shims, the scaffolded CI workflow, and the in-session guards
-wired in `.claude/settings.json` (`git-guard`, `exec-guard`) and the
-`.codex/` starter (for interactive Codex).
+the five hook shims, the scaffolded CI workflow, and the in-session guards:
+`git-guard` and `exec-guard` wired in `.claude/settings.json`, the `.codex/`
+starter (for interactive Codex), and `.grok/hooks/` (for Grok Build). These
+three share the in-session guard plane within the four planes.
 
 Installed files alone do not prove active enforcement: verify hook
 execution, harness trust and event support, CI results, and actual remote
@@ -29,8 +32,9 @@ feedback but are editable, not an unbypassable security boundary. CI becomes
 a merge gate only where the remote requires its result; remote authority
 also depends on permissions and bypass settings. Report missing planes
 without relaxing task safety or review. Headless task execution remains
-prohibited (CodeFlow ADR-0018), independently of whether a particular
-harness can run hooks in that mode.
+prohibited (CodeFlow ADR-0018), whether or not a harness runs hooks in that
+mode; that prohibition is instruction-only, and CodeFlow cannot technically
+prevent it.
 
 The local planes are fast feedback that an agent on the host can edit or
 skip; required CI and remote rules are the server-side boundary, and only

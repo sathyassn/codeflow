@@ -191,6 +191,33 @@ pub struct ElementSelector {
     pub block_digest: String,
 }
 
+/// A note's anchor on a named entity inside its block (SPC-014 I2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EntitySelector {
+    pub entity_id: String,
+    /// The page sends the label it showed; the server refuses a label that
+    /// differs from its own resolution, so the stored label is the server's.
+    pub label: String,
+    pub block_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<crate::entity::Variant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_box: Option<crate::entity::Rect>,
+    /// Set only by the server, and only to `unverified`, when it could not
+    /// compute the entity's bounds; absent means the crop was checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_check: Option<CropCheck>,
+}
+
+impl Eq for EntitySelector {}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CropCheck {
+    Unverified,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RegionScope {
@@ -226,6 +253,10 @@ pub struct FeedbackNote {
     pub element_selector: Option<ElementSelector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_selector: Option<RegionSelector>,
+    /// Schema v2 entity anchor (SPC-014 I2). A note with it also carries the
+    /// entity element's `element_selector`, so its v1 view stays well formed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity_selector: Option<EntitySelector>,
     /// Visible quote, element contents, or text inside a region — plus an optional crop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<FeedbackExcerpt>,
@@ -297,6 +328,21 @@ pub enum FeedbackAnchor {
     Reanchored {
         start_utf16: u32,
         end_utf16: u32,
+        /// True when the note reached this text by the fuzzy step or from a
+        /// target that is gone (SPC-014 B1); the v1 exact rule leaves it false.
+        #[serde(default, skip_serializing_if = "is_false")]
+        changed: bool,
+    },
+    EntityAnchored {
+        entity_id: String,
+    },
+    EntityReanchored {
+        entity_id: String,
+        label_changed: bool,
+    },
+    BlockFallback {
+        block_id: String,
+        reason: String,
     },
     ElementAnchored {
         element_path: String,
@@ -342,6 +388,10 @@ pub struct FeedbackView {
     pub source_revision: u64,
     pub event_version: u64,
     pub lifecycle: FeedbackLifecycle,
+    /// Whether the agent acknowledged the review (`present ack`, SPC-014
+    /// B8): a state apart from delivery and resolution, shown beside them.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub acknowledged: bool,
     pub verdict: FeedbackVerdict,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instruction: Option<String>,
@@ -376,6 +426,46 @@ pub enum FeedbackEvent {
         event_id: Uuid,
         at_unix: u64,
     },
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if takes a reference"
+)]
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl FeedbackEnvelope {
+    /// The envelope as the v1 `feedback` stream prints it: byte-compatible
+    /// with 3.0.0, so no v2 entity field (SPC-014 C1).
+    #[must_use]
+    pub fn v1_view(&self) -> Self {
+        let mut view = self.clone();
+        for note in &mut view.notes {
+            note.entity_selector = None;
+            // v1 carries JPEG crops only; an entity crop is a PNG.
+            if let Some(excerpt) = &mut note.excerpt {
+                if excerpt
+                    .image
+                    .as_ref()
+                    .is_some_and(|image| image.media_type != "image/jpeg")
+                {
+                    excerpt.image = None;
+                }
+                if excerpt.text.is_none() && excerpt.image.is_none() {
+                    note.excerpt = None;
+                }
+            }
+        }
+        view
+    }
+
+    /// Whether any note carries a v2 entity anchor.
+    #[must_use]
+    pub fn has_entity_notes(&self) -> bool {
+        self.notes.iter().any(|note| note.entity_selector.is_some())
+    }
 }
 
 impl FeedbackEvent {
@@ -1062,12 +1152,30 @@ impl SessionStore {
     }
 
     pub fn update_document(&self, id: Uuid, parsed: ParsedDocument) -> Result<u64> {
+        self.update_document_expecting(id, parsed, None)
+    }
+
+    /// Writes the next revision. With `expected`, the update applies only
+    /// while that revision is current, checked under the session lock
+    /// (`present update --expected-revision`, SPC-014 I5).
+    pub fn update_document_expecting(
+        &self,
+        id: Uuid,
+        parsed: ParsedDocument,
+        expected: Option<u64>,
+    ) -> Result<u64> {
         let _project_lease = self.prepare_growth_mutation()?;
         let _lock = self.lock_session(id)?;
         self.reconcile_update_unlocked(id)?;
         let mut session = self.load(id)?;
         if session.status != SessionStatus::Active {
             return Err(PresentError::SessionClosed(id.to_string()));
+        }
+        if let Some(expected) = expected.filter(|expected| *expected != session.current_revision) {
+            return Err(PresentError::RevisionConflict {
+                expected,
+                current: session.current_revision,
+            });
         }
         let revision = session.current_revision.checked_add(1).ok_or_else(|| {
             PresentError::CorruptState("presentation revision overflow".to_string())
@@ -1232,8 +1340,15 @@ impl SessionStore {
             revisions.push(record);
         }
         let feedback_events = self.read_events_unlocked(id)?;
+        // A session holding v2 data prints against the v2 history schema; a
+        // v1 session prints exactly as before (SPC-014 I2, compatibility).
+        let holds_v2 = revisions.iter().any(|record| {
+            matches!(&record.content, RevisionContent::Supported { document } if document.schema_version >= 2)
+        }) || feedback_events.iter().any(|event| {
+            matches!(event, FeedbackEvent::Received { envelope, .. } if envelope.has_entity_notes())
+        });
         Ok(SessionHistory {
-            schema_version: STATE_SCHEMA_VERSION,
+            schema_version: if holds_v2 { 2 } else { STATE_SCHEMA_VERSION },
             session: HistorySession {
                 id: session.id,
                 title: session.title,
@@ -1326,6 +1441,29 @@ impl SessionStore {
         Ok(session)
     }
 
+    /// Waits, at most `timeout`, until the session's service has released its
+    /// lease, so a `close` returns only once the service has exited and an
+    /// immediate `clear` finds nothing running. `false` when it is still
+    /// running at the deadline.
+    pub fn wait_for_service_exit(&self, id: Uuid, timeout: std::time::Duration) -> Result<bool> {
+        // The lease, not the registration, proves the service gone: a service
+        // holds it before it registers and after its registration is cleared.
+        self.load(id)?;
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(lease) =
+                self.try_acquire_runtime_lease(id, ".service.lock", "running service")?
+            {
+                drop(lease);
+                return Ok(true);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
     pub fn enforce_retention(&self) -> Result<Vec<Uuid>> {
         let _project_lease = self.lock_project_mutation()?;
         Self::cleanup_staged_creates_unlocked(&self.root.join("sessions"))?;
@@ -1335,7 +1473,7 @@ impl SessionStore {
         self.enforce_retention_unlocked()
     }
 
-    fn enforce_retention_unlocked(&self) -> Result<Vec<Uuid>> {
+    pub(crate) fn enforce_retention_unlocked(&self) -> Result<Vec<Uuid>> {
         let now = now_unix()?;
         let mut closed: Vec<_> = self
             .list_unlocked()?
@@ -1391,6 +1529,11 @@ impl SessionStore {
         }) {
             let mut normalized_existing = existing.clone();
             normalized_existing.created_at_unix = 0;
+            for note in &mut normalized_existing.notes {
+                if let Some(selector) = &mut note.entity_selector {
+                    selector.crop_check = None;
+                }
+            }
             envelope.created_at_unix = 0;
             if normalized_existing == envelope {
                 return Ok(FeedbackAppend {
@@ -1408,7 +1551,12 @@ impl SessionStore {
         }
         let revision = self.revision(id, session.current_revision)?;
         validate_feedback(&envelope, &session, &revision.content)?;
+        mark_unverified_crops(&mut envelope, &revision.content)?;
         envelope.created_at_unix = now_unix()?;
+        // The review keeps room for its acknowledgment in the answer ledger
+        // (C120-2): it is stored only when that room is free.
+        crate::responses::Ledger::open(self.responses_path(id)?, id)?
+            .admit_review(&crate::responses::reviews_of(&events))?;
         let ledger = FeedbackLedger::replay(&events)?;
         let sequence = ledger.next_sequence;
         let event = FeedbackEvent::Received { sequence, envelope };
@@ -1456,6 +1604,12 @@ impl SessionStore {
     pub fn mark_delivered(&self, id: Uuid, event_ids: &[Uuid]) -> Result<()> {
         let _project_lease = self.prepare_control_mutation()?;
         let _lock = self.lock_session(id)?;
+        self.mark_delivered_unlocked(id, event_ids)
+    }
+
+    /// Appends the `delivered` event of each received review in `event_ids`;
+    /// the caller holds the project lease and the session lock.
+    pub(crate) fn mark_delivered_unlocked(&self, id: Uuid, event_ids: &[Uuid]) -> Result<()> {
         let events = self.read_events_unlocked(id)?;
         let ledger = FeedbackLedger::replay(&events)?;
         let mut sequence = ledger.next_sequence;
@@ -1505,13 +1659,13 @@ impl SessionStore {
         let events = self.read_events_unlocked(id)?;
         let ledger = FeedbackLedger::replay(&events)?;
         let Some(state) = ledger.state(event_id) else {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} does not belong to session {id}"
             )));
         };
         if let Some(existing_resolution) = state.resolution {
             if existing_resolution != resolution {
-                return Err(PresentError::InvalidDocument(format!(
+                return Err(PresentError::InvalidRequest(format!(
                     "feedback event {event_id} is already resolved as {existing_resolution:?}"
                 )));
             }
@@ -1520,19 +1674,19 @@ impl SessionStore {
             {
                 return Ok(state.version);
             }
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} is at version {}, not {expected_version}",
                 state.version
             )));
         }
         if state.version != expected_version {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} is at version {}, not {expected_version}",
                 state.version
             )));
         }
         if state.lifecycle != FeedbackLifecycle::Delivered {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} must be delivered before it can be resolved"
             )));
         }
@@ -1557,51 +1711,58 @@ impl SessionStore {
     }
 
     pub fn feedback_snapshot(&self, id: Uuid) -> Result<FeedbackSnapshot> {
-        let _lock = self.lock_session(id)?;
-        let session = self.load(id)?;
-        let revision = self.revision(id, session.current_revision)?;
-        let events = self.read_events_unlocked(id)?;
-        let retired = self.retired_diagram_ids(id, &events, &revision)?;
+        // Read under the lock; re-anchor after it, so a large revision never
+        // holds up the session's other operations (TSK-118 review T118-5).
+        let (session, revision, events, sources, acknowledged) = {
+            let _lock = self.lock_session(id)?;
+            let session = self.load(id)?;
+            let revision = self.revision(id, session.current_revision)?;
+            let events = self.read_events_unlocked(id)?;
+            let sources = self.source_revisions(id, &events, &revision)?;
+            let ledger = crate::responses::Ledger::open(self.responses_path(id)?, id)?;
+            let acknowledged = ledger
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    crate::responses::ResponseEvent::Acknowledged(state) => Some(state.target),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            (session, revision, events, sources, acknowledged)
+        };
         build_feedback_snapshot(
+            id,
             &events,
             &revision.content,
             session.current_revision,
-            &retired,
+            &sources,
+            &acknowledged,
         )
     }
 
-    /// The diagram ids of each revision that visible notes were written on,
-    /// when that revision is a retired one, so a note on a removed diagram
-    /// orphans with a reason that names it.
-    fn retired_diagram_ids(
+    /// The content of each earlier revision that notes were written on: a
+    /// note on a removed diagram orphans with a reason that names it, and a
+    /// diff quote is read in the review text of the revision it was taken in.
+    pub(crate) fn source_revisions(
         &self,
         id: Uuid,
         events: &[FeedbackEvent],
         current: &RevisionRecord,
-    ) -> Result<RetiredDiagramIds> {
-        let mut sources: Vec<u64> = events
-            .iter()
-            .filter_map(|event| match event {
-                FeedbackEvent::Received { envelope, .. } if !envelope.notes.is_empty() => {
-                    Some(envelope.revision)
+    ) -> Result<SourceRevisions> {
+        let mut sources = SourceRevisions::new();
+        for event in events {
+            if let FeedbackEvent::Received { envelope, .. } = event {
+                let revision = envelope.revision;
+                if envelope.notes.is_empty()
+                    || revision == current.revision
+                    || sources.contains_key(&revision)
+                {
+                    continue;
                 }
-                _ => None,
-            })
-            .collect();
-        sources.sort_unstable();
-        sources.dedup();
-        let mut retired = RetiredDiagramIds::new();
-        for revision in sources {
-            let content = if revision == current.revision {
-                current.content.clone()
-            } else {
-                self.revision(id, revision)?.content
-            };
-            if let RevisionContent::Retired { diagram_ids, .. } = content {
-                retired.insert(revision, diagram_ids);
+                sources.insert(revision, self.revision(id, revision)?.content);
             }
         }
-        Ok(retired)
+        Ok(sources)
     }
 
     pub fn clear(
@@ -1805,7 +1966,7 @@ impl SessionStore {
         Ok(())
     }
 
-    fn session_dir(&self, id: Uuid) -> PathBuf {
+    pub(crate) fn session_dir(&self, id: Uuid) -> PathBuf {
         self.root.join("sessions").join(id.to_string())
     }
 
@@ -1844,7 +2005,7 @@ impl SessionStore {
         Ok(lease)
     }
 
-    fn prepare_control_mutation(&self) -> Result<File> {
+    pub(crate) fn prepare_control_mutation(&self) -> Result<File> {
         let lease = self.lock_project_mutation()?;
         let sessions = self.root.join("sessions");
         Self::cleanup_staged_creates_unlocked(&sessions)?;
@@ -1854,7 +2015,12 @@ impl SessionStore {
         Ok(lease)
     }
 
-    fn ensure_project_capacity_unlocked(
+    #[cfg(test)]
+    pub(crate) fn set_max_project_bytes(&mut self, bytes: u64) {
+        self.retention.max_project_bytes = bytes;
+    }
+
+    pub(crate) fn ensure_project_capacity_unlocked(
         &self,
         additional_bytes: u64,
         preserve_control_reserve: bool,
@@ -1898,7 +2064,7 @@ impl SessionStore {
         write_json_atomic(&self.session_path(id), session)
     }
 
-    fn lock_session(&self, id: Uuid) -> Result<File> {
+    pub(crate) fn lock_session(&self, id: Uuid) -> Result<File> {
         let lock = self.open_lock_raw(id)?;
         lock.lock_exclusive()
             .map_err(|error| PresentError::io(self.session_dir(id).join(".lock"), error))?;
@@ -1925,7 +2091,7 @@ impl SessionStore {
         open_private_append(&dir.join(".lock"))
     }
 
-    fn ensure_session_layout(&self, id: Uuid) -> Result<()> {
+    pub(crate) fn ensure_session_layout(&self, id: Uuid) -> Result<()> {
         let sessions = self.root.join("sessions");
         ensure_safe_dir(&sessions)?;
         let session = self.session_dir(id);
@@ -1989,7 +2155,7 @@ impl SessionStore {
         })
     }
 
-    fn read_events_unlocked(&self, id: Uuid) -> Result<Vec<FeedbackEvent>> {
+    pub(crate) fn read_events_unlocked(&self, id: Uuid) -> Result<Vec<FeedbackEvent>> {
         let path = self.events_path(id);
         self.ensure_session_layout(id)?;
         let file = open_private_read(&path)?;
@@ -2175,9 +2341,19 @@ fn validate_feedback(
     session: &SessionRecord,
     content: &RevisionContent,
 ) -> Result<()> {
-    if envelope.session_id != session.id || envelope.revision != session.current_revision {
+    if envelope.session_id != session.id {
         return Err(PresentError::InvalidDocument(
             "feedback session or revision is stale".to_string(),
+        ));
+    }
+    if envelope.revision != session.current_revision {
+        return Err(PresentError::review(
+            "stale_revision",
+            format!(
+                "the review names revision {} but the current revision is {}",
+                envelope.revision, session.current_revision
+            ),
+            serde_json::json!({ "current_revision": session.current_revision }),
         ));
     }
     if envelope.actor.trim().is_empty() || envelope.actor.len() > 256 {
@@ -2274,14 +2450,29 @@ fn validate_feedback_note(note: &FeedbackNote, content: &RevisionContent) -> Res
             "a feedback note may target text, one element, or one region, not several".to_string(),
         ));
     }
+    if note.entity_selector.is_some() && note.element_selector.is_none() {
+        return Err(PresentError::InvalidDocument(
+            "an entity note also carries the element selector of its entity".to_string(),
+        ));
+    }
+    let framing = content_framing(content);
+    // The entity checks run first so a refused entity anchor reports its
+    // typed code (SPC-014 I3) rather than the element selector's message.
+    let entity_bytes = validate_entity_selector(note.entity_selector.as_ref(), block)?;
     Ok(note.body.len()
         + note.block_id.len()
         + note.block_label.len()
-        + validate_feedback_excerpt(note.excerpt.as_ref())?
-        + validate_feedback_target(note, block)?)
+        + validate_feedback_excerpt(note.excerpt.as_ref(), note.entity_selector.is_some())?
+        + validate_feedback_target(note, block, &framing)?
+        + entity_bytes)
 }
 
-fn validate_feedback_excerpt(excerpt: Option<&FeedbackExcerpt>) -> Result<usize> {
+/// A crop is a JPEG, or a PNG on an entity note (SPC-014 B4), so a v1
+/// history or feedback stream never holds a PNG.
+fn validate_feedback_excerpt(
+    excerpt: Option<&FeedbackExcerpt>,
+    entity_note: bool,
+) -> Result<usize> {
     let Some(excerpt) = excerpt else {
         return Ok(0);
     };
@@ -2301,9 +2492,11 @@ fn validate_feedback_excerpt(excerpt: Option<&FeedbackExcerpt>) -> Result<usize>
         bytes += trimmed.len();
     }
     if let Some(image) = &excerpt.image {
-        if image.media_type != "image/jpeg" {
+        let png_allowed = entity_note && image.media_type == "image/png";
+        if image.media_type != "image/jpeg" && !png_allowed {
             return Err(PresentError::InvalidDocument(
-                "feedback excerpt image must be image/jpeg".to_string(),
+                "feedback excerpt image must be image/jpeg, or image/png on an entity note"
+                    .to_string(),
             ));
         }
         if image.data_base64.len() > limits::MAX_EXCERPT_IMAGE_B64_BYTES {
@@ -2319,7 +2512,13 @@ fn validate_feedback_excerpt(excerpt: Option<&FeedbackExcerpt>) -> Result<usize>
                 "feedback excerpt image exceeds its decoded bound".to_string(),
             ));
         }
-        if decoded.len() < 3 || decoded[0] != 0xff || decoded[1] != 0xd8 {
+        if image.media_type == "image/png" {
+            if let Some(refusal) = crate::media::crop_png_refusal(&decoded) {
+                return Err(PresentError::InvalidDocument(format!(
+                    "feedback excerpt image {refusal}"
+                )));
+            }
+        } else if decoded.len() < 3 || decoded[0] != 0xff || decoded[1] != 0xd8 {
             return Err(PresentError::InvalidDocument(
                 "feedback excerpt image is not a JPEG".to_string(),
             ));
@@ -2329,7 +2528,125 @@ fn validate_feedback_excerpt(excerpt: Option<&FeedbackExcerpt>) -> Result<usize>
     Ok(bytes)
 }
 
-fn validate_feedback_target(note: &FeedbackNote, block: &crate::document::Block) -> Result<usize> {
+fn content_framing(content: &RevisionContent) -> crate::document::Framing {
+    match content {
+        RevisionContent::Supported { document } => crate::document::Framing::of(document),
+        RevisionContent::Unsupported { .. } | RevisionContent::Retired { .. } => {
+            crate::document::Framing::default()
+        }
+    }
+}
+
+/// The server's checks on an entity anchor (SPC-014 B4), with the typed
+/// error codes of I3.
+fn validate_entity_selector(
+    selector: Option<&EntitySelector>,
+    block: &crate::document::Block,
+) -> Result<usize> {
+    let Some(selector) = selector else {
+        return Ok(0);
+    };
+    if selector.crop_check.is_some() {
+        return Err(PresentError::InvalidDocument(
+            "crop_check is set by the service, never by the page".to_string(),
+        ));
+    }
+    if !crate::entity::is_entity_id(&selector.entity_id)
+        || selector.label.len() > limits::MAX_VISUAL_ANCHOR_BYTES
+    {
+        return Err(PresentError::review(
+            "unknown_entity",
+            format!("{:?} is not an entity id", selector.entity_id),
+            serde_json::json!({ "entity_id": selector.entity_id }),
+        ));
+    }
+    let entities = crate::entity::block_entities(block)?;
+    let Some(entity) = crate::entity::find_entity(&entities, &selector.entity_id, selector.variant)
+    else {
+        return Err(PresentError::review(
+            "unknown_entity",
+            format!(
+                "block {} has no entity {:?} at this revision",
+                block.id(),
+                selector.entity_id
+            ),
+            serde_json::json!({ "block_id": block.id(), "entity_id": selector.entity_id }),
+        ));
+    };
+    if !is_sha256(&selector.block_digest) || selector.block_digest != block_digest(block) {
+        return Err(PresentError::review(
+            "digest_mismatch",
+            format!(
+                "the block digest does not match block {} at this revision",
+                block.id()
+            ),
+            serde_json::json!({ "block_id": block.id() }),
+        ));
+    }
+    if selector.label != entity.label {
+        return Err(PresentError::review(
+            "label_mismatch",
+            format!(
+                "the page labelled entity {:?} {:?}, but it is {:?}",
+                selector.entity_id, selector.label, entity.label
+            ),
+            serde_json::json!({ "entity_id": selector.entity_id, "label": entity.label }),
+        ));
+    }
+    if let Some(crop) = &selector.crop_box {
+        let finite = [crop.x, crop.y, crop.width, crop.height]
+            .iter()
+            .all(|value| value.is_finite());
+        if !finite || crop.width <= 0.0 || crop.height <= 0.0 {
+            return Err(PresentError::InvalidDocument(
+                "the entity crop box is not a finite, non-empty rectangle".to_string(),
+            ));
+        }
+        if let Some(bounds) = &entity.bounds {
+            if !bounds.contains_within(crop, limits::ENTITY_CROP_TOLERANCE) {
+                return Err(PresentError::review(
+                    "crop_outside_entity",
+                    format!(
+                        "the crop lies outside entity {:?} widened by {} user units",
+                        selector.entity_id,
+                        limits::ENTITY_CROP_TOLERANCE
+                    ),
+                    serde_json::json!({ "entity_id": selector.entity_id }),
+                ));
+            }
+        }
+    }
+    Ok(selector.entity_id.len() + selector.label.len() + selector.block_digest.len())
+}
+
+/// Record `crop_check: unverified` on every entity note whose crop the
+/// server could not check (SPC-014 B4 and I2). Runs after validation.
+fn mark_unverified_crops(envelope: &mut FeedbackEnvelope, content: &RevisionContent) -> Result<()> {
+    for note in &mut envelope.notes {
+        let Some(selector) = &mut note.entity_selector else {
+            continue;
+        };
+        if selector.crop_box.is_none() {
+            continue;
+        }
+        let Some(block) = content_block(content, &note.block_id) else {
+            continue;
+        };
+        let entities = crate::entity::block_entities(block)?;
+        let checked = crate::entity::find_entity(&entities, &selector.entity_id, selector.variant)
+            .is_some_and(|entity| entity.bounds.is_some());
+        if !checked {
+            selector.crop_check = Some(CropCheck::Unverified);
+        }
+    }
+    Ok(())
+}
+
+fn validate_feedback_target(
+    note: &FeedbackNote,
+    block: &crate::document::Block,
+    framing: &crate::document::Framing,
+) -> Result<usize> {
     if let Some(selector) = &note.selector {
         let selected_units = selector.exact.encode_utf16().count();
         let range_units = selector.end_utf16.saturating_sub(selector.start_utf16) as usize;
@@ -2344,7 +2661,7 @@ fn validate_feedback_target(note: &FeedbackNote, block: &crate::document::Block)
                 "feedback selector range or exact quote is invalid".to_string(),
             ));
         }
-        validate_selector_anchor(selector, &block.canonical_review_text())?;
+        validate_selector_anchor(selector, &block.canonical_review_text(framing))?;
         return Ok(selector.exact.len() + selector.prefix.len() + selector.suffix.len());
     }
     if let Some(selector) = &note.element_selector {
@@ -2386,13 +2703,44 @@ fn find_block<'a>(
     })
 }
 
-type RetiredDiagramIds = std::collections::HashMap<u64, Vec<String>>;
+/// The content of each earlier revision that notes were written on.
+pub(crate) type SourceRevisions = std::collections::HashMap<u64, RevisionContent>;
+
+/// Re-anchored notes by session, feedback event, note and current revision.
+/// Each key names immutable inputs (a stored note and a stored revision), so
+/// an entry never goes stale; the map is cleared when it reaches its bound.
+type ReanchorKey = (Uuid, Uuid, Uuid, u64);
+static REANCHOR_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<ReanchorKey, FeedbackAnchor>>,
+> = std::sync::OnceLock::new();
+const REANCHOR_CACHE_ENTRIES: usize = 8_192;
+
+fn cached_reanchor(key: ReanchorKey, compute: impl FnOnce() -> FeedbackAnchor) -> FeedbackAnchor {
+    let cache = REANCHOR_CACHE.get_or_init(Default::default);
+    if let Some(anchor) = cache
+        .lock()
+        .ok()
+        .and_then(|entries| entries.get(&key).cloned())
+    {
+        return anchor;
+    }
+    let anchor = compute();
+    if let Ok(mut entries) = cache.lock() {
+        if entries.len() >= REANCHOR_CACHE_ENTRIES {
+            entries.clear();
+        }
+        entries.insert(key, anchor.clone());
+    }
+    anchor
+}
 
 fn build_feedback_snapshot(
+    session_id: Uuid,
     events: &[FeedbackEvent],
     current: &RevisionContent,
     current_revision: u64,
-    retired: &RetiredDiagramIds,
+    sources: &SourceRevisions,
+    acknowledged: &HashSet<Uuid>,
 ) -> Result<FeedbackSnapshot> {
     let mut lifecycle = std::collections::HashMap::new();
     let mut received = Vec::new();
@@ -2439,18 +2787,14 @@ fn build_feedback_snapshot(
                     .selector
                     .as_ref()
                     .map(|selector| selector.exact.clone()),
-                anchor: retired
-                    .get(&envelope.revision)
-                    .filter(|ids| ids.contains(&note.block_id))
-                    .map_or_else(
-                        || reanchor_note(note, envelope.revision, current, current_revision),
-                        |_| FeedbackAnchor::Orphaned {
-                            reason: format!(
-                                "the diagram block {} was removed with Mermaid; convert it to reanchor this note",
-                                note.block_id
-                            ),
-                        },
-                    ),
+                anchor: note_anchor(
+                    session_id,
+                    envelope,
+                    note,
+                    current,
+                    current_revision,
+                    sources,
+                ),
             })
             .collect();
         items.push(FeedbackView {
@@ -2458,6 +2802,7 @@ fn build_feedback_snapshot(
             source_revision: envelope.revision,
             event_version,
             lifecycle: state,
+            acknowledged: acknowledged.contains(&envelope.event_id),
             verdict: envelope.verdict.clone(),
             instruction: envelope.instruction.clone(),
             notes,
@@ -2469,9 +2814,68 @@ fn build_feedback_snapshot(
     })
 }
 
+/// A review note's anchor on the current revision (SPC-014 B1), the one the
+/// rail and the v2 review line both show. `sources` holds the content of the
+/// revision the note was written on when that is not the current one.
+pub(crate) fn note_anchor(
+    session_id: Uuid,
+    envelope: &FeedbackEnvelope,
+    note: &FeedbackNote,
+    current: &RevisionContent,
+    current_revision: u64,
+    sources: &SourceRevisions,
+) -> FeedbackAnchor {
+    let source = if envelope.revision == current_revision {
+        Some(current)
+    } else {
+        sources.get(&envelope.revision)
+    };
+    match source {
+        Some(RevisionContent::Retired { diagram_ids, .. }) if diagram_ids.contains(&note.block_id) => {
+            FeedbackAnchor::Orphaned {
+                reason: format!(
+                    "the diagram block {} was removed with Mermaid; convert it to reanchor this note",
+                    note.block_id
+                ),
+            }
+        }
+        _ => cached_reanchor(
+            (session_id, envelope.event_id, note.id, current_revision),
+            || {
+                reanchor_note(
+                    note,
+                    envelope.revision,
+                    source.and_then(source_document).as_deref(),
+                    current,
+                    current_revision,
+                )
+            },
+        ),
+    }
+}
+
+/// The document a note was written on. A retired revision reads with each
+/// diagram replaced by an empty narrative of its id, so its other blocks keep
+/// their text (review C071-R5-1).
+fn source_document(
+    content: &RevisionContent,
+) -> Option<std::borrow::Cow<'_, PresentationDocument>> {
+    match content {
+        RevisionContent::Supported { document } => Some(std::borrow::Cow::Borrowed(document)),
+        RevisionContent::Retired { document, .. } => {
+            let (substituted, _) = crate::retired::legacy_document(document)?;
+            serde_json::from_value(substituted)
+                .ok()
+                .map(std::borrow::Cow::Owned)
+        }
+        RevisionContent::Unsupported { .. } => None,
+    }
+}
+
 fn reanchor_note(
     note: &FeedbackNote,
     source_revision: u64,
+    source: Option<&PresentationDocument>,
     current: &RevisionContent,
     current_revision: u64,
 ) -> FeedbackAnchor {
@@ -2488,96 +2892,368 @@ fn reanchor_note(
             };
         }
     };
+    // A whole-document note names the document, not the block that carried
+    // its digest, so it holds while the document does (QA defect 8), even
+    // when that first block is gone.
+    if let Some(selector) = note.region_selector.as_ref().filter(|s| whole_document(s)) {
+        return region_anchor(selector, source_revision != current_revision);
+    }
     let Some(block) = find_block(&document.blocks, &note.block_id) else {
         return FeedbackAnchor::Orphaned {
             reason: "the referenced block is absent from the current revision".to_string(),
         };
     };
+    let framing = crate::document::Framing::of(document);
+    let same_revision = source_revision == current_revision;
+    let digest_unchanged = |digest: &str| digest == block_digest(block);
+    let excerpt_text = note
+        .excerpt
+        .as_ref()
+        .and_then(|excerpt| excerpt.text.as_deref());
+    // Step 1: the entity, when the block still has it.
+    if let Some(selector) = &note.entity_selector {
+        let entities = crate::entity::block_entities(block).unwrap_or_default();
+        if let Some(entity) =
+            crate::entity::find_entity(&entities, &selector.entity_id, selector.variant)
+        {
+            if same_revision || digest_unchanged(&selector.block_digest) {
+                return FeedbackAnchor::EntityAnchored {
+                    entity_id: selector.entity_id.clone(),
+                };
+            }
+            return FeedbackAnchor::EntityReanchored {
+                entity_id: selector.entity_id.clone(),
+                label_changed: entity.label != selector.label,
+            };
+        }
+        return reanchor_by_quote(
+            excerpt_text.unwrap_or(&selector.label),
+            block,
+            &framing,
+            "the entity is gone and its label was not found",
+        );
+    }
     if let Some(selector) = &note.element_selector {
-        return reanchor_element(selector, source_revision, current_revision, block);
+        if same_revision {
+            return FeedbackAnchor::ElementAnchored {
+                element_path: selector.element_path.clone(),
+            };
+        }
+        if digest_unchanged(&selector.block_digest) {
+            return FeedbackAnchor::ElementReanchored {
+                element_path: selector.element_path.clone(),
+            };
+        }
+        return reanchor_by_quote(
+            excerpt_text.unwrap_or(&selector.label),
+            block,
+            &framing,
+            "the element changed and its text was not found",
+        );
     }
     if let Some(selector) = &note.region_selector {
-        return reanchor_region(selector, source_revision, current_revision, block);
-    }
-    let Some(selector) = &note.selector else {
-        return FeedbackAnchor::Block {
-            block_id: note.block_id.clone(),
+        if let Some(anchor) = reanchor_region(selector, source_revision, current_revision, block) {
+            return anchor;
+        }
+        return match excerpt_text {
+            Some(text) => reanchor_by_quote(
+                text,
+                block,
+                &framing,
+                "the region's block changed and its text was not found",
+            ),
+            None => FeedbackAnchor::BlockFallback {
+                block_id: note.block_id.clone(),
+                reason: "the selected region's block changed in the current revision".to_string(),
+            },
         };
-    };
-    if source_revision == current_revision {
+    }
+    match &note.selector {
+        Some(selector) => {
+            let source_block =
+                source.and_then(|document| find_block(&document.blocks, &note.block_id));
+            reanchor_text(selector, same_revision, block, source_block, &framing)
+        }
+        None => FeedbackAnchor::Block {
+            block_id: note.block_id.clone(),
+        },
+    }
+}
+
+/// B1 for a text note: exact v1 rule, then the fuzzy quote, then the block.
+fn reanchor_text(
+    selector: &TextSelector,
+    same_revision: bool,
+    block: &crate::document::Block,
+    source: Option<&crate::document::Block>,
+    framing: &crate::document::Framing,
+) -> FeedbackAnchor {
+    let canonical = block.canonical_review_text(framing);
+    // The stored offsets hold only while they still select the quote: a
+    // record made before the review text changed its separators (TSK-071)
+    // continues at the exact, fuzzy and block steps.
+    if same_revision
+        && utf16_slice(&canonical, selector.start_utf16, selector.end_utf16).as_deref()
+            == Some(selector.exact.as_str())
+    {
         return FeedbackAnchor::Anchored {
             start_utf16: selector.start_utf16,
             end_utf16: selector.end_utf16,
         };
     }
-    reanchor_text(selector, block)
-}
-
-fn reanchor_element(
-    selector: &ElementSelector,
-    source_revision: u64,
-    current_revision: u64,
-    block: &crate::document::Block,
-) -> FeedbackAnchor {
-    if source_revision == current_revision {
-        return FeedbackAnchor::ElementAnchored {
-            element_path: selector.element_path.clone(),
+    if let Some((start_utf16, end_utf16)) = exact_text_match(selector, &canonical) {
+        return FeedbackAnchor::Reanchored {
+            start_utf16,
+            end_utf16,
+            changed: false,
         };
     }
-    if selector.block_digest == block_digest(block) {
-        FeedbackAnchor::ElementReanchored {
-            element_path: selector.element_path.clone(),
+    // A diff quote stored before its lines lost their label and marker from
+    // the review text (TSK-071) is found in the diff's text as it was then,
+    // and its range carried over to the text as it is now.
+    if let Some(anchor) = reanchor_legacy_diff(selector, same_revision, block, source) {
+        return anchor;
+    }
+    let quote = crate::fuzzy::Quote {
+        exact: &selector.exact,
+        prefix: &selector.prefix,
+        suffix: &selector.suffix,
+        start: Some(selector.start_utf16 as usize),
+    };
+    fuzzy_anchor(
+        &quote,
+        &canonical,
+        block,
+        "the quote was not found in its block",
+    )
+}
+
+/// B1 for a diff quote taken while its changed lines began with their
+/// screen-reader label and marker ("Added: +") in the review text, before
+/// TSK-071: the exact, then the fuzzy step run on the diff's text as it was
+/// then, and the range found is carried over to the text as it is now, so a
+/// line's own words are kept even when they read like a label. A quote is
+/// taken to be that old only when its source revision's block held it in
+/// that text and not in the text as it is now (review C071-R4-1). `None`
+/// otherwise, and for a block that is not a diff.
+fn reanchor_legacy_diff(
+    selector: &TextSelector,
+    same_revision: bool,
+    block: &crate::document::Block,
+    source: Option<&crate::document::Block>,
+) -> Option<FeedbackAnchor> {
+    let source = source?;
+    let (then, _) = source.legacy_diff_review_text()?;
+    // A diff's review text does not depend on the document's framing.
+    let now = source.canonical_review_text(&crate::document::Framing::default());
+    if validate_selector_anchor(selector, &now).is_ok()
+        || validate_selector_anchor(selector, &then).is_err()
+    {
+        return None;
+    }
+    let (legacy, offsets) = block.legacy_diff_review_text()?;
+    let carried = |start: u32, end: u32, changed: bool| {
+        let offset = |at: u32, starting: bool| {
+            usize::try_from(at)
+                .ok()
+                .and_then(|at| offsets.get(at))
+                .and_then(|&(start, end)| u32::try_from(if starting { start } else { end }).ok())
+        };
+        match (offset(start, true), offset(end, false)) {
+            (Some(start_utf16), Some(end_utf16)) if start_utf16 < end_utf16 => {
+                FeedbackAnchor::Reanchored {
+                    start_utf16,
+                    end_utf16,
+                    changed,
+                }
+            }
+            _ => FeedbackAnchor::BlockFallback {
+                block_id: block.id().to_string(),
+                reason: "the quote held only a diff line's label and marker".to_string(),
+            },
         }
+    };
+    if same_revision
+        && utf16_slice(&legacy, selector.start_utf16, selector.end_utf16).as_deref()
+            == Some(selector.exact.as_str())
+    {
+        return Some(carried(selector.start_utf16, selector.end_utf16, false));
+    }
+    if let Some((start, end)) = exact_text_match(selector, &legacy) {
+        return Some(carried(start, end, false));
+    }
+    let quote = crate::fuzzy::Quote {
+        exact: &selector.exact,
+        prefix: &selector.prefix,
+        suffix: &selector.suffix,
+        start: Some(selector.start_utf16 as usize),
+    };
+    Some(
+        match fuzzy_anchor(
+            &quote,
+            &legacy,
+            block,
+            "the quote was not found in its block",
+        ) {
+            FeedbackAnchor::Reanchored {
+                start_utf16,
+                end_utf16,
+                ..
+            } => carried(start_utf16, end_utf16, true),
+            other => other,
+        },
+    )
+}
+
+/// B1 step 2 for a note whose quote has no stored offset or context (an
+/// entity or element label, or excerpt text).
+fn reanchor_by_quote(
+    quote: &str,
+    block: &crate::document::Block,
+    framing: &crate::document::Framing,
+    reason: &str,
+) -> FeedbackAnchor {
+    let canonical = block.canonical_review_text(framing);
+    let quote = crate::fuzzy::Quote {
+        exact: quote,
+        prefix: "",
+        suffix: "",
+        start: None,
+    };
+    let units: Vec<u16> = canonical.encode_utf16().collect();
+    let exact: Vec<u16> = quote.exact.encode_utf16().collect();
+    let occurrences = if exact.is_empty() {
+        Vec::new()
     } else {
-        FeedbackAnchor::Orphaned {
-            reason: "the element's rendered block changed in the current revision".to_string(),
+        units
+            .windows(exact.len())
+            .enumerate()
+            .filter(|(_, window)| *window == exact.as_slice())
+            .map(|(index, _)| index)
+            .take(2)
+            .collect::<Vec<_>>()
+    };
+    if let [start] = occurrences.as_slice() {
+        if let (Ok(start_utf16), Ok(end_utf16)) =
+            (u32::try_from(*start), u32::try_from(start + exact.len()))
+        {
+            return FeedbackAnchor::Reanchored {
+                start_utf16,
+                end_utf16,
+                changed: true,
+            };
         }
+    }
+    fuzzy_anchor(&quote, &canonical, block, reason)
+}
+
+fn fuzzy_anchor(
+    quote: &crate::fuzzy::Quote<'_>,
+    canonical: &str,
+    block: &crate::document::Block,
+    reason: &str,
+) -> FeedbackAnchor {
+    match crate::fuzzy::search(quote, canonical) {
+        crate::fuzzy::Search::OverBudget => FeedbackAnchor::BlockFallback {
+            block_id: block.id().to_string(),
+            reason: "the block is too large to search for the quote in this revision".to_string(),
+        },
+        crate::fuzzy::Search::Match(found) => match (
+            u32::try_from(found.start_utf16),
+            u32::try_from(found.end_utf16),
+        ) {
+            (Ok(start_utf16), Ok(end_utf16)) => FeedbackAnchor::Reanchored {
+                start_utf16,
+                end_utf16,
+                changed: true,
+            },
+            _ => FeedbackAnchor::BlockFallback {
+                block_id: block.id().to_string(),
+                reason: "the re-anchored quote exceeds the offset bound".to_string(),
+            },
+        },
+        crate::fuzzy::Search::NoMatch => FeedbackAnchor::BlockFallback {
+            block_id: block.id().to_string(),
+            reason: reason.to_string(),
+        },
     }
 }
 
+/// The unchanged-digest fast path of a region note, or `None` when the
+/// note continues at the quote step.
 fn reanchor_region(
     selector: &RegionSelector,
     source_revision: u64,
     current_revision: u64,
     block: &crate::document::Block,
-) -> FeedbackAnchor {
-    let anchored = |reanchored: bool| {
-        if reanchored {
-            FeedbackAnchor::RegionReanchored {
-                scope: selector.scope.clone(),
-                anchor_id: selector.anchor_id.clone(),
-                x_ppm: selector.x_ppm,
-                y_ppm: selector.y_ppm,
-                width_ppm: selector.width_ppm,
-                height_ppm: selector.height_ppm,
-            }
-        } else {
-            FeedbackAnchor::RegionAnchored {
-                scope: selector.scope.clone(),
-                anchor_id: selector.anchor_id.clone(),
-                x_ppm: selector.x_ppm,
-                y_ppm: selector.y_ppm,
-                width_ppm: selector.width_ppm,
-                height_ppm: selector.height_ppm,
-            }
-        }
-    };
+) -> Option<FeedbackAnchor> {
     if source_revision == current_revision {
-        return anchored(false);
+        return Some(region_anchor(selector, false));
     }
     match selector.scope {
-        RegionScope::Block if selector.block_digest == block_digest(block) => anchored(true),
-        RegionScope::Block => FeedbackAnchor::Orphaned {
-            reason: "the selected region's block changed in the current revision".to_string(),
-        },
-        RegionScope::Document => FeedbackAnchor::Orphaned {
+        RegionScope::Block if selector.block_digest == block_digest(block) => {
+            Some(region_anchor(selector, true))
+        }
+        RegionScope::Block => None,
+        // A part of the document stays pinned to its revision; the whole
+        // document is held before the block lookup (`whole_document`).
+        RegionScope::Document => Some(FeedbackAnchor::Orphaned {
             reason: "a document-wide visual region is pinned to its source revision".to_string(),
-        },
+        }),
     }
 }
 
-fn reanchor_text(selector: &TextSelector, block: &crate::document::Block) -> FeedbackAnchor {
-    let canonical = block.canonical_review_text();
+/// A validated selector over the whole document: it names no layout, so
+/// every revision holds it.
+fn whole_document(selector: &RegionSelector) -> bool {
+    matches!(selector.scope, RegionScope::Document)
+        && selector.anchor_id == "document"
+        && selector.x_ppm == 0
+        && selector.y_ppm == 0
+        && selector.width_ppm == limits::REGION_COORDINATE_SCALE
+        && selector.height_ppm == limits::REGION_COORDINATE_SCALE
+}
+
+fn region_anchor(selector: &RegionSelector, reanchored: bool) -> FeedbackAnchor {
+    let scope = selector.scope.clone();
+    let anchor_id = selector.anchor_id.clone();
+    let (x_ppm, y_ppm, width_ppm, height_ppm) = (
+        selector.x_ppm,
+        selector.y_ppm,
+        selector.width_ppm,
+        selector.height_ppm,
+    );
+    if reanchored {
+        FeedbackAnchor::RegionReanchored {
+            scope,
+            anchor_id,
+            x_ppm,
+            y_ppm,
+            width_ppm,
+            height_ppm,
+        }
+    } else {
+        FeedbackAnchor::RegionAnchored {
+            scope,
+            anchor_id,
+            x_ppm,
+            y_ppm,
+            width_ppm,
+            height_ppm,
+        }
+    }
+}
+
+/// The UTF-16 range `start..end` of `text`, when it is one.
+fn utf16_slice(text: &str, start: u32, end: u32) -> Option<String> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let range = usize::try_from(start).ok()?..usize::try_from(end).ok()?;
+    String::from_utf16(units.get(range)?).ok()
+}
+
+/// The v1 exact rule (unchanged): the quote with its stored prefix before it
+/// and suffix after it occurs exactly once.
+fn exact_text_match(selector: &TextSelector, canonical: &str) -> Option<(u32, u32)> {
     let matches = canonical
         .match_indices(&selector.exact)
         .filter(|(start, exact)| {
@@ -2592,28 +3268,8 @@ fn reanchor_text(selector: &TextSelector, block: &crate::document::Block) -> Fee
         .take(2)
         .collect::<Vec<_>>();
     match matches.as_slice() {
-        [(start, end)] => {
-            let Ok(start_utf16) = u32::try_from(*start) else {
-                return FeedbackAnchor::Orphaned {
-                    reason: "re-anchored selection exceeds the offset bound".to_string(),
-                };
-            };
-            let Ok(end_utf16) = u32::try_from(*end) else {
-                return FeedbackAnchor::Orphaned {
-                    reason: "re-anchored selection exceeds the offset bound".to_string(),
-                };
-            };
-            FeedbackAnchor::Reanchored {
-                start_utf16,
-                end_utf16,
-            }
-        }
-        [] => FeedbackAnchor::Orphaned {
-            reason: "the exact quote and context no longer match".to_string(),
-        },
-        _ => FeedbackAnchor::Orphaned {
-            reason: "the exact quote and context match more than once".to_string(),
-        },
+        [(start, end)] => Some((u32::try_from(*start).ok()?, u32::try_from(*end).ok()?)),
+        _ => None,
     }
 }
 
@@ -2817,7 +3473,7 @@ fn validated_home(home: Option<std::ffi::OsString>) -> Result<PathBuf> {
     Ok(home)
 }
 
-fn now_unix() -> Result<u64> {
+pub(crate) fn now_unix() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -3033,7 +3689,7 @@ fn add_no_follow(options: &mut OpenOptions) {
 #[cfg(not(any(unix, windows)))]
 fn add_no_follow(_options: &mut OpenOptions) {}
 
-fn open_private_append(path: &Path) -> Result<File> {
+pub(crate) fn open_private_append(path: &Path) -> Result<File> {
     #[cfg(windows)]
     {
         let file = match crate::platform::open_private_create_new(path) {
@@ -3096,9 +3752,23 @@ fn open_private_append(path: &Path) -> Result<File> {
     }
 }
 
-fn open_private_read(path: &Path) -> Result<File> {
+pub(crate) fn open_private_read(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
+    add_no_follow(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|error| PresentError::io(path, error))?;
+    #[cfg(any(unix, windows))]
+    validate_private_file(path, &file)?;
+    Ok(file)
+}
+
+/// Opens an existing owner-private file to read and to cut back, never
+/// following a link.
+pub(crate) fn open_private_rw(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
     add_no_follow(&mut options);
     let file = options
         .open(path)
@@ -3491,7 +4161,7 @@ fn cleanup_atomic_temps_in(directory: &Path, revisions: bool) -> Result<()> {
     sync_directory(directory)
 }
 
-fn directory_size_bounded(root: &Path, byte_limit: u64) -> Result<u64> {
+pub(crate) fn directory_size_bounded(root: &Path, byte_limit: u64) -> Result<u64> {
     if !root.exists() {
         return Ok(0);
     }
@@ -3565,6 +4235,7 @@ pub(crate) mod retired_fixture {
     pub fn install(store: &SessionStore, revision: &str) -> Uuid {
         let session = store
             .create(ParsedDocument::Supported(PresentationDocument {
+                summary: None,
                 schema_version: 1,
                 title: "Qualification review".to_string(),
                 language: None,
@@ -3615,6 +4286,7 @@ mod tests {
 
     fn parsed() -> ParsedDocument {
         ParsedDocument::Supported(PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Review".to_string(),
             language: None,
@@ -3641,6 +4313,7 @@ mod tests {
 
     fn parsed_code(bytes: usize) -> ParsedDocument {
         ParsedDocument::Supported(PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Large review".to_string(),
             language: None,
@@ -3650,6 +4323,7 @@ mod tests {
                 language: "text".to_string(),
                 code: "x".repeat(bytes),
                 caption: None,
+                source: None,
             }],
         })
     }
@@ -4097,7 +4771,7 @@ mod tests {
     }
 
     #[test]
-    fn feedback_resolution_requires_current_version_and_reanchoring_never_guesses() {
+    fn feedback_resolution_requires_current_version_and_fuzzy_reanchoring_is_marked_changed() {
         let (_temp, store) = store();
         let session = store.create(parsed()).unwrap();
         let event_id = Uuid::new_v4();
@@ -4118,6 +4792,7 @@ mod tests {
             element_selector: None,
             excerpt: None,
             region_selector: None,
+            entity_selector: None,
         });
         assert_eq!(store.append_feedback(envelope).unwrap().sequence, 1);
         store.mark_delivered(session.id, &[event_id]).unwrap();
@@ -4146,7 +4821,8 @@ mod tests {
             snapshot.items[0].notes[0].anchor,
             FeedbackAnchor::Reanchored {
                 start_utf16: 7,
-                end_utf16: 12
+                end_utf16: 12,
+                changed: false
             }
         ));
 
@@ -4161,7 +4837,11 @@ mod tests {
         store.update_document(session.id, ambiguous).unwrap();
         assert!(matches!(
             store.feedback_snapshot(session.id).unwrap().items[0].notes[0].anchor,
-            FeedbackAnchor::Orphaned { .. }
+            FeedbackAnchor::Reanchored {
+                start_utf16: 0,
+                end_utf16: 5,
+                changed: true
+            }
         ));
     }
 
@@ -4508,6 +5188,7 @@ mod tests {
             element_selector: None,
             excerpt: None,
             region_selector: None,
+            entity_selector: None,
         });
         assert!(store.append_feedback(envelope.clone()).is_ok());
 
@@ -4520,7 +5201,7 @@ mod tests {
     }
 
     #[test]
-    fn feedback_excerpt_accepts_quoted_text_and_rejects_empty_or_non_jpeg() {
+    fn feedback_excerpt_accepts_quoted_text_and_jpeg_and_rejects_the_rest() {
         let (_temp, store) = store();
         let session = store.create(parsed()).unwrap();
         let mut envelope = feedback(session.id, Uuid::new_v4());
@@ -4533,6 +5214,7 @@ mod tests {
             selector: None,
             element_selector: None,
             region_selector: None,
+            entity_selector: None,
             excerpt: Some(FeedbackExcerpt {
                 text: Some("Hello".to_string()),
                 image: None,
@@ -4564,6 +5246,34 @@ mod tests {
             image: Some(FeedbackImage {
                 media_type: "image/png".to_string(),
                 data_base64: "aaaa".to_string(),
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: Some(FeedbackImage {
+                media_type: "image/gif".to_string(),
+                data_base64: STANDARD.encode(b"GIF89a"),
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: Some(FeedbackImage {
+                media_type: "image/png".to_string(),
+                data_base64: STANDARD.encode([0xff, 0xd8, 0xff]),
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        // A real PNG is still refused on a note without an entity anchor.
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: Some(FeedbackImage {
+                media_type: "image/png".to_string(),
+                data_base64: STANDARD.encode(crate::media::test_png(4, 3)),
             }),
         });
         assert!(store.append_feedback(envelope.clone()).is_err());
@@ -4622,6 +5332,7 @@ mod tests {
             }),
             excerpt: None,
             region_selector: None,
+            entity_selector: None,
         });
         assert!(store.append_feedback(envelope.clone()).is_ok());
 
@@ -4664,6 +5375,7 @@ mod tests {
             body: "This visual area needs more separation.".to_string(),
             selector: None,
             element_selector: None,
+            entity_selector: None,
             excerpt: None,
             region_selector: Some(RegionSelector {
                 scope: RegionScope::Block,
@@ -4695,7 +5407,7 @@ mod tests {
         store.update_document(session.id, changed).unwrap();
         assert!(matches!(
             store.feedback_snapshot(session.id).unwrap().items[0].notes[0].anchor,
-            FeedbackAnchor::Orphaned { .. }
+            FeedbackAnchor::BlockFallback { .. }
         ));
     }
 
@@ -4964,6 +5676,7 @@ mod tests {
             selector: None,
             element_selector: None,
             region_selector: None,
+            entity_selector: None,
             excerpt: None,
         }];
         let refused = store
@@ -4995,11 +5708,12 @@ mod tests {
         );
 
         // A converted update succeeds and the old note orphans on the removed block,
-        // even though the converted html block reuses its id.
+        // even though the converted figure reuses its id.
         let converted = crate::document::parse_document(
             br#"{"schema_version":1,"title":"Qualification review","blocks":[
-              {"type":"html","id":"flow","title":"Qualification flow",
-               "html":"<figure role='img' aria-label='Input moves through review to evidence'><svg viewBox='0 0 300 40'><text x='0' y='24'>Input, Review, Evidence</text></svg></figure>"}
+              {"type":"figure","id":"flow","declaration":{"schema_version":1,"figure":{
+                "id":"flow","family":"flow","binding":"authored",
+                "title":"Qualification flow","caption":"Input moves through review to evidence."}}}
             ]}"#,
         )
         .unwrap();
@@ -5097,6 +5811,37 @@ mod tests {
             );
             assert!(store.history(id).is_err(), "{name}");
             assert!(store.feedback_snapshot(id).is_err(), "{name}");
+        }
+    }
+
+    /// `close` waits on the service lease itself (TSK-071 C071-4): a service
+    /// holds it before it registers and after its registration is cleared,
+    /// so an absent registration never proves the service gone.
+    #[test]
+    fn the_close_wait_holds_while_the_service_lease_is_held() {
+        use std::time::Duration;
+        for registration_cleared in [false, true] {
+            let (_temp, store) = store();
+            let id = store.create(parsed()).unwrap().id;
+            let lease = store.acquire_service_lease(id).unwrap();
+            if registration_cleared {
+                let instance = Uuid::new_v4();
+                store
+                    .set_service(id, 4321, std::process::id(), instance)
+                    .unwrap();
+                assert!(store.clear_service(id, instance).unwrap());
+            }
+            store.close(id).unwrap();
+            assert!(store.load(id).unwrap().service_instance.is_none());
+            assert!(
+                !store.wait_for_service_exit(id, Duration::ZERO).unwrap(),
+                "registration cleared: {registration_cleared}"
+            );
+            drop(lease);
+            assert!(
+                store.wait_for_service_exit(id, Duration::ZERO).unwrap(),
+                "registration cleared: {registration_cleared}"
+            );
         }
     }
 

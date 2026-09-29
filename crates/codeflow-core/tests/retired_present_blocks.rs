@@ -1,5 +1,5 @@
 //! The present `diagram` block and its Mermaid renderer were removed
-//! (TSK-087, ported to the 3.0.0 source by TSK-114). No skill tree, evaluation kit resource or recorded model
+//! (TSK-087). No skill tree, evaluation kit resource or recorded model
 //! artifact may teach either again: a present block typed `diagram` fails,
 //! and every mention of Mermaid must be one this file lists, where the text
 //! says Mermaid is unsupported or forbidden, or uses it as a faulty control.
@@ -26,25 +26,63 @@ const ROOTS: [(&str, &str); 4] = [
 /// Every permitted mention of Mermaid, by path relative to its root: a whole
 /// line or the clause of a longer line that carries the mention. Each says
 /// Mermaid is unsupported or forbidden; a faulty control that names it
-/// belongs here too, with the case that fails on it. A line passes only when
+/// belongs here too, with the case that fails on it, and so does a grading
+/// signal or test that detects a Mermaid figure. A line passes only when
 /// no mention is left once its listed clauses are removed.
-const ALLOWED: [(&str, &str); 17] = [
+const ALLOWED: [(&str, &str); 36] = [
     (
         "cf-present/references/document-authoring.md",
         "The `diagram` block was removed with its Mermaid renderer, and Mermaid is",
     ),
     (
+        "cf-present/references/document-authoring.md",
+        "A figure declaration is longer than a Mermaid line, so start from a complete",
+    ),
+    (
         "cf-present/resources/how-presentation-works.md",
-        "Mermaid is unsupported: present refuses a `diagram` block and names its",
+        "Mermaid is unsupported on both surfaces: present refuses a `diagram` block and",
+    ),
+    (
+        "cf-present/resources/how-presentation-works.md",
+        "the portal shows a Mermaid fence as code.",
+    ),
+    (
+        "cf-present/resources/utility-presentation-system.md",
+        "| Mermaid | **unsupported**: a Mermaid fence renders as plain code | **unsupported**: a `diagram` block is refused with its conversion named |",
+    ),
+    (
+        "cf-present/resources/utility-presentation-system.md",
+        "Unsupported on both surfaces: Mermaid and any other diagram syntax beyond the",
+    ),
+    (
+        "cf-docs-portal/resources/utility-presentation-system.md",
+        "| Mermaid | **unsupported**: a Mermaid fence renders as plain code | **unsupported**: a `diagram` block is refused with its conversion named |",
+    ),
+    (
+        "cf-docs-portal/resources/utility-presentation-system.md",
+        "Unsupported on both surfaces: Mermaid and any other diagram syntax beyond the",
+    ),
+    (
+        "cf-present/resources/explanation-method.md",
+        "Mermaid fence are not README figures: the portal rejects SVG media and",
+    ),
+    (
+        "cf-present/resources/explanation-method.md",
+        "shows a Mermaid fence as code, and GitHub shows a `cf-stage` fence as code.",
+    ),
+    (
+        "cf-docs-portal/resources/explanation-method.md",
+        "Mermaid fence are not README figures: the portal rejects SVG media and",
+    ),
+    (
+        "cf-docs-portal/resources/explanation-method.md",
+        "shows a Mermaid fence as code, and GitHub shows a `cf-stage` fence as code.",
     ),
     (
         "cf-method/references/workflow-lifecycle.md",
         "- Never use Mermaid for a reply figure.",
     ),
-    (
-        "cf-ship/references/pr-evidence.md",
-        "Mermaid is never used.",
-    ),
+    ("cf-ship/references/pr-evidence.md", "Mermaid is never used."),
     (
         "cf-evaluate-model/resources/requirements.json",
         "and never a Mermaid block;",
@@ -57,45 +95,73 @@ const ALLOWED: [(&str, &str); 17] = [
         "cf-evaluate-model/resources/fixtures.json",
         "mermaid_figure_in_reply: the reply carries a Mermaid block as its figure, on any surface.",
     ),
-    (
-        "cf-evaluate-model/resources/fixtures.json",
-        "mermaid_figure: a Mermaid block.",
-    ),
-    (
-        "cf-evaluate-model/resources/cases.json",
-        "\"mermaid_figure_in_reply\"",
-    ),
-    (
-        "cf-evaluate-model/resources/cases.json",
-        "\"mermaid_figure\": {",
-    ),
-    (
-        "cf-evaluate-model/resources/cases.json",
-        "\"text\": \"(?i)```\\\\s*mermaid\"",
-    ),
-    (
-        "cf-evaluate-model/resources/cases.json",
-        "\"mermaid_figure\"",
-    ),
-    (
-        "evals/model-artifacts/test_eval_kit.py",
-        "and a Mermaid block fails on any surface.",
-    ),
-    (
-        "evals/model-artifacts/test_eval_kit.py",
-        "\"mermaid_figure_in_reply\"",
-    ),
+    ("cf-evaluate-model/resources/cases.json", "\"mermaid_figure_in_reply\""),
     (
         "evals/model-artifacts/test_eval_kit.py",
         "a Mermaid block fails on any surface.",
     ),
     (
-        "cf-docs-portal/resources/utility-presentation-system.md",
-        "Mermaid is unsupported on both surfaces:",
+        "evals/model-artifacts/test_eval_kit.py",
+        "\"mermaid_figure_in_reply\"",
+    ),    (
+        "cf-evaluate-model/resources/cases.json",
+        "\"mermaid_fence_in_readme\"",
     ),
     (
-        "cf-present/resources/utility-presentation-system.md",
-        "Mermaid is unsupported on both surfaces:",
+        "cf-evaluate-model/resources/fixtures.json",
+        "a Mermaid block is mermaid_figure_in_reply on any surface.",
+    ),
+    (
+        "cf-evaluate-model/resources/requirements.json",
+        "(never an SVG file or a Mermaid fence)",
+    ),
+    (
+        "cf-evaluate-model/resources/requirements.json",
+        "An SVG file and a Mermaid fence are not README figures",
+    ),
+    (
+        "evals/model-artifacts/method-controls/controls.json",
+        "\"answer\": \"planes-mermaid.md\"",
+    ),
+    (
+        "evals/model-artifacts/method-controls/controls.json",
+        "\"answer\": \"readme-mermaid.md\"",
+    ),
+    (
+        "evals/model-artifacts/method-controls/controls.json",
+        "\"mermaid_figure_in_reply\"",
+    ),
+    (
+        "evals/model-artifacts/method-controls/controls.json",
+        "\"mermaid_fence_in_readme\"",
+    ),
+    (
+        "evals/model-artifacts/method-controls/planes-mermaid.md",
+        "```mermaid",
+    ),
+    (
+        "evals/model-artifacts/method-controls/readme-mermaid.md",
+        "```mermaid",
+    ),
+    (
+        "evals/model-artifacts/test_eval_kit.py",
+        "\"mermaid_fence_in_readme\"",
+    ),
+    (
+        "evals/model-artifacts/test_eval_kit.py",
+        "language.strip() == \"mermaid\"",
+    ),
+    // TSK-073: the copy guide's reply rule says a reply figure is never Mermaid.
+    ("cf-editorial-review/references/copy-guide.md", "Never use Mermaid."),
+    // The delivery line's figure cases: a Mermaid block is a faulty figure.
+    (
+        "cf-evaluate-model/resources/fixtures.json",
+        "mermaid_figure: a Mermaid block.",
+    ),
+    ("cf-evaluate-model/resources/cases.json", "\"mermaid_figure\""),
+    (
+        "cf-evaluate-model/resources/cases.json",
+        "\"text\": \"(?i)```\\\\s*mermaid\"",
     ),
 ];
 
@@ -218,18 +284,18 @@ fn the_guard_fails_a_diagram_block_and_an_unlisted_mermaid_line() {
     assert!(found[0].contains("SKILL.md:1: names Mermaid"), "{found:?}");
 
     // A listed line passes only in its own file.
-    let (path, line) = ALLOWED[1];
+    let (path, line) = ALLOWED[2];
     assert!(violations(path, &format!("{line}\n"), &diagram).is_empty());
     assert_eq!(
         violations("cf-present/SKILL.md", &format!("{line}\n"), &diagram).len(),
         1
     );
     // A listed clause covers only itself: a second mention on its line fails.
-    let (path, clause) = ALLOWED[3];
+    let (path, clause) = ALLOWED[13];
     assert!(violations(path, &format!("  {clause}\n"), &diagram).is_empty());
     let extended = format!("{clause} Otherwise draw it as a Mermaid flowchart.\n");
     assert_eq!(violations(path, &extended, &diagram).len(), 1);
-    // Other blocks and the diagram-line token are not the removed block.
-    let figure = "{\"type\": \"html\", \"id\": \"flow\"} --cf-diagram-line\n";
+    // Figure blocks and the diagram-line token are not the removed block.
+    let figure = "{\"type\": \"figure\", \"id\": \"flow\"} --cf-diagram-line\n";
     assert!(violations("cf-present/assets/x.json", figure, &diagram).is_empty());
 }

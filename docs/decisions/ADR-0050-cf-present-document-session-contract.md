@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: add versioned presentation documents, immutable revisions, anchor selectors, and feedback delivery semantics
 ---
 
-# ADR-0050 — versioned cf-present document and session contract
+# ADR-0050: versioned cf-present document and session contract
 
 ## Context
 

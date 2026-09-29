@@ -3,7 +3,7 @@ name: cf-delegate
 description: Delegate to the other vendor's native coding harness under its own subscription auth, with qualified transport, lifecycle evidence and scoped edit access. Use for a specialty pass or genuinely parallel edit handoff. Use cf-consult for a read-only second opinion.
 ---
 
-# cf-delegate — cross-vendor consult and delegate
+# cf-delegate: cross-vendor consult and delegate
 
 Compose native harnesses at the process boundary, each under its own subscription
 auth. CodeFlow's gates judge the output, not the author. You own and verify
@@ -11,7 +11,7 @@ every returned result.
 
 The delegate is a vendor you are **not**: from Claude Code that is codex; from
 codex that is claude. Consulting or delegating to your own vendor is
-self-review with extra steps — never label it independent.
+self-review with extra steps; never label it independent.
 
 ## Consult, delegate, or neither
 
@@ -29,7 +29,7 @@ choose the authority this assignment needs:
 When uncertain about edit authority, consult first; never turn a read-only
 assignment into an implicit write grant.
 
-## Transport — preferred lanes, qualified native fallback
+## Transport: preferred lanes, qualified native fallback
 
 ```text
 Claude Code ──official plugin (preferred) or qualified native client──▶ codex
@@ -37,7 +37,7 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
 ```
 
 - **Claude Code → codex: prefer the official `codex-plugin-cc` plugin.** It
-  wraps the codex app-server — the same interactive engine as the TUI — so a
+  wraps the codex app-server (the same interactive engine as the TUI), so a
   delegated task gets codex's full MCP toolset (Playwright verified with 24
   browser tools on codex-cli 0.144.1, 2026-07-11), a resumable thread, and
   in-band approvals. When unavailable or incompatible, use a qualified official
@@ -48,14 +48,14 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
   follows its host and canary rules in
   [the lifecycle lane](resources/lane-lifecycle.md).
 
-**Prohibited at all times** — no exceptions, including batch/pipeline stages:
+**Prohibited at all times**, no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /
 `--print`), and driving the codex app-server through hand-rolled JSON-RPC.
 CodeFlow requires verified native sessions with the task's tools and guards;
 it does not infer those capabilities from a process label or terminal host.
 Use vendor-supported clients instead of maintaining a competing broker.
-Status commands are not work sessions
-— `codex login status`, `codex --version`, `codex mcp list`, and the plugin
+Status commands are not work sessions:
+`codex login status`, `codex --version`, `codex mcp list`, and the plugin
 install/setup steps stay fine.
 
 For an incompatible or unavailable preferred lane, read
@@ -63,7 +63,7 @@ For an incompatible or unavailable preferred lane, read
 another client. It preserves all five evidence obligations and the effective
 safety boundary; it is not permission to route around a security denial.
 
-## Preflight — is the delegate even available
+## Preflight: is the delegate even available
 
 Check the preferred lane, then any qualified native fallback.
 
@@ -77,7 +77,7 @@ If no qualified native route remains, record the unavailable seat and reduced
 assurance; never silently substitute your own vendor or claim duo completion.
 A missing CLI alone does not rule out a qualified App route. If a route is present
 but unauthenticated (or 401s mid-run), stop and tell the user to run
-`codex login` (or log in to `claude`) — **never automate the auth**. One
+`codex login` (or log in to `claude`); **never automate the auth**. One
 vendor account per side, the user's own.
 
 ## Lanes: load the one in use
@@ -108,7 +108,7 @@ a delegate edits only inside a worktree on a feature branch, never on the root
 checkout or a protected branch, and its commits pass CodeFlow's gates
 unchanged.
 
-## agy — retired as a delegate tier (no interactive lane)
+## agy: retired as a delegate tier (no interactive lane)
 
 `agy` has no verified interactive lane, only headless one-shot CLI use, which
 CodeFlow ADR-0023 prohibits, so it is **not** a delegate tier; if the user
@@ -121,7 +121,7 @@ guard binding when `agy` is someone's harness, read
 
 - **Every delegate prompt narrows authority and data.** Name purpose, permitted
   actions/files/resources/data/processors/destinations/effects and step budget;
-  ambiguity blocks—never guess. Send only necessary minimized data to an
+  ambiguity blocks; never guess. Send only necessary minimized data to an
   approved processor; route qualification is not data authority. An
   already-authorized scoped handoff needs no new approval; the lead verifies
   effects and claims.

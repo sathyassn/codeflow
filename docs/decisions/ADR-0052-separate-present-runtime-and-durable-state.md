@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — separate the derived browser runtime from durable session authority and tighten identity-scoped recovery
 ---
 
-# ADR-0052 — separate cf-present runtime from durable state
+# ADR-0052: separate cf-present runtime from durable state
 
 ## Context
 

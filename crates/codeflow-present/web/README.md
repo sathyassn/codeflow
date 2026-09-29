@@ -11,15 +11,15 @@ need Node or npm.
   schema validation, state, authentication, and service policy.
 - Preact mounts only in the sibling `#cf-present-chrome`. Chrome updates must
   not replace or rerender the document root.
-- Syntax highlighting is direct, bounded DOM enhancement. It loads only when
-  a code block approaches the viewport. The app entry's dynamic imports are
-  exactly the syntax and fonts chunks; there is no diagram renderer.
+- Syntax highlighting and figure drawing are direct, bounded DOM enhancement.
+  Each loads only when a corresponding block approaches the viewport. The app
+  entry's dynamic imports are exactly the syntax, figure and fonts chunks.
 - Service requests are same-origin paths below `/app`, carry the static
   `X-CF-Present: 1` header, and rely on the HttpOnly session cookie. No bearer
   value belongs in this bundle or its configuration payload.
 
 The exact HTML attributes and configuration fields are defined in
-`src/contracts.ts`, `src/selection.ts`, and `src/syntax.ts`.
+`src/contracts.ts`, `src/selection.ts`, `src/syntax.ts`, and `src/figure.ts`.
 Changing them requires a matching Rust change and contract test.
 
 ## Maintainer workflow
@@ -40,11 +40,24 @@ npm run build
 npm run supply-chain
 npm run check
 npm run check:browser
+npm run check:figures
 ```
 
 `check:browser` uses a fresh headless browser profile and never attaches to the
 operator's active browser. Set `CF_PRESENT_BROWSER` when the qualified browser
 is not in one of the explicit platform locations in the script.
+
+The checks that drive the real binary (`check:entities`, `check:figures`,
+`check:forms`, `check:matrix` and `check:real-browser`) use
+`CF_PRESENT_CODEFLOW` when it is set, else the debug build in
+`CARGO_TARGET_DIR`, else `target/debug/codeflow` in the repository.
+
+`check:figures` needs that built binary. It opens a document of
+the figure specimens through the real binary, exports it in light and dark, and
+reads each drawn figure with the portal's figure probe at 1280 and 390 px. The
+rule outcomes must equal the portal's specimen table. `src/figure-grammar.mjs`
+and `src/figure.css` are byte copies of the portal's grammar module and the
+design kit's figure sheet; edit the originals and copy them here.
 
 Commit the exact lockfile together with all generated changes under
 `../assets/`. Never hand-edit generated payloads, the integrity manifest, audit,
@@ -66,9 +79,8 @@ request path and private stored path are distinct manifest fields. The export
 renderer is one deterministic gzip payload; it is not a service fallback.
 Raising a build budget requires new measured ADR evidence.
 
-The browser check covers prose-only lazy loading, code highlighting, an html
-stage with no diagram hook, zero CSP violations, zero non-loopback requests,
-Rust-document node identity, UTF-16 selection, both themes in light and dark
-modes, WCAG-tagged axe checks, and 320 CSS-pixel reflow. The broader platform,
-assistive-technology, browser-launch, print, and render matrix remains the
-task-level native verification boundary.
+The browser check covers prose-only lazy loading, code highlighting and figure
+drawing, zero CSP violations, zero non-loopback requests, Rust-document node
+identity, UTF-16 selection, both themes in light and dark modes, WCAG-tagged
+axe checks, and 320 CSS-pixel reflow. The broader platform, assistive-technology, browser-launch, print, and
+render matrix remains the task-level native verification boundary.

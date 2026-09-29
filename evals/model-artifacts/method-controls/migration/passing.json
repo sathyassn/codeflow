@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "title": "Choose how to migrate the orders table",
+  "language": "en",
+  "blocks": [
+    {
+      "type": "figure",
+      "id": "downtime",
+      "declaration": {
+        "schema_version": 1,
+        "figure": {
+          "id": "migration-reach",
+          "family": "extent",
+          "binding": "authored",
+          "question": "How much downtime does each option take against the 30 minute window?",
+          "idea": "Dual write takes no window; the snapshot cutover takes 20 minutes, inside the 30 minute policy.",
+          "title": "Downtime against the maintenance window",
+          "caption": "Both options fit the 30 minute policy; only the snapshot cutover takes a window at all.",
+          "states": [
+            {
+              "name": "used",
+              "mark": "used",
+              "means": "Minutes of downtime or rehearsal"
+            },
+            {
+              "name": "limit",
+              "mark": "limit",
+              "means": "The 30 minute policy"
+            }
+          ],
+          "facts": [
+            {
+              "claim": "dual write has no downtime",
+              "source": "OPTIONS.md#dual-write-then-backfill",
+              "derive": "the dual write option",
+              "check": {
+                "kind": "contains",
+                "text": "No downtime."
+              },
+              "value": true
+            },
+            {
+              "claim": "the cutover window is 20 minutes",
+              "source": "OPTIONS.md#snapshot-then-cutover",
+              "derive": "the snapshot option",
+              "check": {
+                "kind": "contains",
+                "text": "one 20 minute maintenance window"
+              },
+              "value": true
+            },
+            {
+              "claim": "the rehearsal took 17 minutes",
+              "source": "EVIDENCE.md",
+              "derive": "the evidence list",
+              "check": {
+                "kind": "contains",
+                "text": "took 17 minutes"
+              },
+              "value": true
+            },
+            {
+              "claim": "the policy allows at most 30 minutes",
+              "source": "EVIDENCE.md",
+              "derive": "the evidence list",
+              "check": {
+                "kind": "contains",
+                "text": "at most 30 minutes"
+              },
+              "value": true
+            }
+          ],
+          "wide": {
+            "width": 720,
+            "height": 210,
+            "draw": [
+              {
+                "deco": "axis",
+                "shape": "line",
+                "x1": 170,
+                "y1": 170,
+                "x2": 690,
+                "y2": 170
+              },
+              {
+                "text": "Dual write",
+                "x": 0,
+                "y": 54
+              },
+              {
+                "text": "no window",
+                "x": 170,
+                "y": 54,
+                "style": "mute"
+              },
+              {
+                "text": "Cutover window",
+                "x": 0,
+                "y": 104
+              },
+              {
+                "state": "used",
+                "shape": "rect",
+                "x": 170,
+                "y": 90,
+                "w": 260.0,
+                "h": 18,
+                "id": "u0"
+              },
+              {
+                "text": "20 min",
+                "x": 440.0,
+                "y": 104,
+                "style": "mute",
+                "for": [
+                  "u0"
+                ]
+              },
+              {
+                "text": "Rehearsal",
+                "x": 0,
+                "y": 144
+              },
+              {
+                "state": "used",
+                "shape": "rect",
+                "x": 170,
+                "y": 130,
+                "w": 221.0,
+                "h": 18,
+                "id": "u1"
+              },
+              {
+                "text": "17 min",
+                "x": 401.0,
+                "y": 144,
+                "style": "mute",
+                "for": [
+                  "u1"
+                ]
+              },
+              {
+                "state": "limit",
+                "shape": "line",
+                "x1": 560,
+                "y1": 30,
+                "x2": 560,
+                "y2": 160,
+                "id": "l0"
+              },
+              {
+                "text": "policy 30 min",
+                "x": 560,
+                "y": 192,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "l0"
+                ]
+              }
+            ]
+          },
+          "narrow": {
+            "recompose": "stack",
+            "drops": [],
+            "marks": "same",
+            "width": 360,
+            "height": 250,
+            "draw": [
+              {
+                "text": "Dual write",
+                "x": 20,
+                "y": 34
+              },
+              {
+                "text": "no window",
+                "x": 20,
+                "y": 56,
+                "style": "mute"
+              },
+              {
+                "text": "Cutover window",
+                "x": 20,
+                "y": 94
+              },
+              {
+                "state": "used",
+                "shape": "rect",
+                "x": 20,
+                "y": 108,
+                "w": 160.0,
+                "h": 16,
+                "id": "v0"
+              },
+              {
+                "text": "20 min",
+                "x": 188.0,
+                "y": 121,
+                "style": "mute",
+                "for": [
+                  "v0"
+                ]
+              },
+              {
+                "text": "Rehearsal",
+                "x": 20,
+                "y": 154
+              },
+              {
+                "state": "used",
+                "shape": "rect",
+                "x": 20,
+                "y": 168,
+                "w": 136.0,
+                "h": 16,
+                "id": "v1"
+              },
+              {
+                "text": "17 min",
+                "x": 164.0,
+                "y": 181,
+                "style": "mute",
+                "for": [
+                  "v1"
+                ]
+              },
+              {
+                "state": "limit",
+                "shape": "line",
+                "x1": 260.0,
+                "y1": 80,
+                "x2": 260.0,
+                "y2": 200,
+                "id": "k0"
+              },
+              {
+                "text": "policy 30 min",
+                "x": 260.0,
+                "y": 226,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "k0"
+                ]
+              }
+            ]
+          },
+          "twin": "facts"
+        }
+      }
+    },
+    {
+      "type": "comparison",
+      "id": "options",
+      "columns": [
+        {
+          "title": "Dual write, then backfill",
+          "markdown": "- Downtime: none.\n- Cost: two weeks of double writes and a reconciliation job.\n- Evidence: 0 divergent rows over 3 days on staging."
+        },
+        {
+          "title": "Snapshot, then cutover",
+          "markdown": "- Downtime: one 20 minute window, inside the 30 minute policy.\n- Cost: the window, announced 7 days ahead.\n- Evidence: restore and replay took 17 minutes on a production-sized copy."
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "id": "not-run",
+      "tone": "warning",
+      "title": "Not verified",
+      "markdown": "Dual write has not been run under peak load."
+    },
+    {
+      "type": "feedback_prompt",
+      "id": "ask",
+      "prompt": "Which option should we schedule: dual write with backfill, or the snapshot cutover in one 20 minute window?"
+    }
+  ]
+}

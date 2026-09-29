@@ -3,7 +3,7 @@ name: cf-estimate
 description: Provides an optional agentic operating and estimation method for software delivery using evidence-anchored Easy/Medium/Hard/Very Hard grades, populated scenario estimates and feasible resource allocations. Use for agentic development, delivery forecasts, capacity, deadlines, or revising estimates from outcomes. Offers a project-specific preview before confirmed adoption. Do not use for personal-task scoring, model-effort selection, automatic scheduling, or implementation.
 ---
 
-# cf-estimate — estimate agent-delivered outcomes
+# cf-estimate: estimate agent-delivered outcomes
 
 Produce a useful, evidence-labelled forecast, not a human staffing estimate with
 an AI speed multiplier. This method is a starting point a project may adopt,
@@ -44,8 +44,8 @@ capacity option, revise a forecast, or assess actual outcomes.
 
 An estimate request authorizes an answer, not execution, adoption, installation,
 tracker replacement, risky probes, commitments to outsiders or relaxed gates.
-The operator supplies genuinely owner-held facts—priorities, budget, authority,
-availability—not all estimates. Resolve discoverable facts yourself.
+The operator supplies genuinely owner-held facts (priorities, budget, authority,
+availability), not all estimates. Resolve discoverable facts yourself.
 
 ## Apply the method
 

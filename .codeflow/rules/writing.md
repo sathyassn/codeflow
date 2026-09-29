@@ -72,8 +72,8 @@ Match the form to the surface:
   one coherent surface and anchored feedback goes through `cf-present` where
   the harness can show it (standard and full tiers); say why you opened it.
 - Where the harness renders one, use an inline HTML figure.
-- On docs-portal pages, use the portal's figure grammar, a `cf-stage` fence
-  (standard and full tiers).
+- On docs-portal pages, use the portal's figure grammar, a declared figure
+  block (standard and full tiers).
 - Use fenced ASCII in other Markdown files (READMEs, docs, records, PR
   bodies), in terminal output and on any other plain-text surface, or when
   unsure what the surface renders.
@@ -206,7 +206,7 @@ marks.
 
 Example, from CodeFlow's `crates/codeflow-present/web/src/chrome.tsx`:
 
-> Select words, click a figure, or drag a box on the stage or empty canvas.
+> Select words, click any part, or drag a box; hold Shift to start a box on words.
 
 ### Replies
 

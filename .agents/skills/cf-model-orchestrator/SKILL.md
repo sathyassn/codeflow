@@ -3,7 +3,7 @@ name: cf-model-orchestrator
 description: Coordinate the default Claude+Codex pair for routed work from Claude Code, Codex, or Grok Build. Both families independently research, analyze, and plan; Claude owns design and integrated judgment; the host assigns capable production and author-relative cross-lineage review and reconciles versioned approval with native evidence. Use for routed work (a change to an adopter-facing path, research or analysis that will drive one, or plan, design, security or irreversible work); when unsure, route. Requires native interactive sessions and degrades legibly when a seat is unavailable; never uses headless model execution.
 ---
 
-# cf-model-orchestrator — host-neutral development duo
+# cf-model-orchestrator: host-neutral development duo
 
 Use the duo for routed work, decided by touched paths as AGENTS.md states;
 when unsure, route. Harness choice changes transport/coordinator, not duties
@@ -73,7 +73,7 @@ asks for just that.
   fixtures; scoped-qualified routes run evidenced tuples without direction/
   fidelity authority. Use recorded same-Claude fallback after preflight.
   Another family designs only with an explicit task-specific operator override
-  recorded in Plan vN—Claude absence is not one. Codex challenges
+  recorded in Plan vN; Claude absence is not one. Codex challenges
   feasibility, operability, security, proportionality, and implementation.
 - **Host routes execution.** Once both approve the same versioned plan, the host
   records responsible primary, actual execution mode/route, and cross-lineage
@@ -207,7 +207,7 @@ exhaust qualified routes before recorded solo fallback.
    lint, test, coverage, dependency, and security tools; Playwright/browser for
    web UI; Computer Use or a surface driver for native/mobile/desktop UI; and
    any design, issue-tracker, database, cloud, or private-doc MCP the task needs.
-   Authenticated tools use their broker/OAuth/keychain/credential-mask path—raw
+   Authenticated tools use their broker/OAuth/keychain/credential-mask path; raw
    tokens never enter prompts, logs, repository files, or arbitrary commands.
 6. Record models, effort/escalation, permissions, tools, live canaries, and
    actual versions. Usage evidence carries source/time, harness/account/bucket
@@ -275,7 +275,7 @@ Multi-task plans use `resources/task-graph.md` as the plan contract sets out;
 durable task records materialize the same direct dependencies.
 The test plan applies `resources/verification-selection.md` and names the
 trigger evidence for any property/generative, mutation, or architecture
-fitness check—or records `none selected`.
+fitness check, or records `none selected`.
 
 Claude reviews design fidelity and Codex executability; both approve tasks and
 assignments. For independent parallel tasks, add the execution graph in
@@ -358,8 +358,8 @@ lifecycle reply rule sets out. Then the host reports:
 - exact test, coverage, security, and UI results;
 - any explicit N/A with reason;
 - residual risks or unresolved assumptions;
-- the deferral batch outcome—fix now, one durable home plus event trigger, drop,
-  or `none`—and both primary-seat dispositions or the recorded degradation;
+- the deferral batch outcome (fix now, one durable home plus event trigger, drop,
+  or `none`) and both primary-seat dispositions or the recorded degradation;
 - the interactive transport used and session/canary evidence.
 
 Only an implementation or repository-editing documentation run hands off to

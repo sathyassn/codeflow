@@ -13,8 +13,10 @@ const committedAssets = join(crateRoot, "assets");
 
 run("npx", ["tsc", "--noEmit"]);
 checkBinaryAttributes();
-run("node", ["--test", "scripts/toolchain.test.mjs"]);
+run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/likeness.test.mjs", "scripts/codeflow-binary.test.mjs"]);
 await checkSelectorOffsets();
+await checkEntityLabelParity();
+await checkAnswerRuleParity();
 
 const scratch = await mkdtemp(join(tmpdir(), "cf-present-check-"));
 try {
@@ -37,6 +39,57 @@ try {
   process.stdout.write(`cf-present web checks passed; reproducible tree ${firstDigest}\n`);
 } finally {
   await rm(scratch, { recursive: true, force: true });
+}
+
+// The grammar draws the ids and labels the service's entity table resolves
+// (SPC-014 B2): both sides are pinned to one golden file, which a Rust test
+// in codeflow-present also asserts.
+async function checkEntityLabelParity() {
+  const { renderFigure } = await import("../src/figure-grammar.mjs");
+  const fixtures = join(crateRoot, "tests/fixtures/contract-v2");
+  const framed = JSON.parse(await readFile(join(fixtures, "documents/v2-framed.json"), "utf8"));
+  const golden = JSON.parse(await readFile(join(fixtures, "entities/landing.json"), "utf8"));
+  const declaration = framed.blocks.find((block) => block.id === "landing").declaration;
+  const html = renderFigure(declaration, { idPrefix: "parity", number: 1 });
+  const unescape = (value) => value.replaceAll("&quot;", '"').replaceAll("&#39;", "'").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+  const entities = (text) => [...text.matchAll(/data-cf-entity="([^"]+)" data-cf-entity-label="([^"]*)"/gu)].map((match) => ({ id: match[1], label: unescape(match[2]) }));
+  const rows = [];
+  for (const variant of ["wide", "narrow"]) {
+    const drawing = html.match(new RegExp(`<svg class="cf-fig-svg cf-fig-svg--${variant}"[\\s\\S]*?</svg>`, "u"))?.[0] ?? "";
+    rows.push(...entities(drawing).map((entity) => ({ id: entity.id, variant, label: entity.label })));
+  }
+  const legend = html.match(/<ul class="cf-legend"[\s\S]*?<\/ul>/u)?.[0] ?? "";
+  rows.push(...entities(legend).map((entity) => ({ id: entity.id, variant: null, label: entity.label })));
+  rows.sort((left, right) => {
+    const key = (row) => `${JSON.stringify(row.variant)}|${row.id}`;
+    return key(left) < key(right) ? -1 : key(left) > key(right) ? 1 : 0;
+  });
+  if (JSON.stringify(rows) !== JSON.stringify(golden)) {
+    throw new Error(`the grammar's entity table differs from entities/landing.json:\n${JSON.stringify(rows, null, 2)}`);
+  }
+}
+
+// The page refuses an answer exactly as the server would (SPC-014 B6): both
+// run the vectors in form-rules/parity.json, and a Rust test in
+// codeflow-present asserts the same errors in the same order.
+async function checkAnswerRuleParity() {
+  const rules = await import("../src/form-rules.ts");
+  const parity = JSON.parse(await readFile(join(crateRoot, "tests/fixtures/form-rules/parity.json"), "utf8"));
+  const formats = { email: rules.isEmail, uri: rules.isUri, date: rules.isFullDate, "date-time": rules.isDateTime };
+  for (const vector of parity.formats) {
+    if (formats[vector.format](vector.value) !== vector.valid) {
+      throw new Error(`form-rules ${vector.format} disagrees with the server on ${JSON.stringify(vector.value)}`);
+    }
+  }
+  const forms = new Map(parity.document.blocks.map((block) => [block.id, rules.rulesFromBlock(block)]));
+  for (const answer of parity.answers) {
+    const draft = { outcome: answer.outcome, values: answer.values, rationales: answer.rationales, ...(answer.reason !== undefined ? { reason: answer.reason } : {}) };
+    const errors = rules.validateAnswer(forms.get(answer.form), draft).map((error) => [error.field, error.code]);
+    if (JSON.stringify(errors) !== JSON.stringify(answer.errors)) {
+      throw new Error(`form-rules disagrees with the server on "${answer.name}": ${JSON.stringify(errors)}`);
+    }
+  }
+  if (parity.answers.length < 30) throw new Error("form-rules parity lost its cases");
 }
 
 async function checkSelectorOffsets() {
@@ -66,15 +119,18 @@ function checkManifest(manifest) {
   const app = assets.find((asset) => asset.request_path === appPath);
   if (!app) throw new Error("Canonical app entrypoint is missing");
   assertLazyEntryPaths(app);
-  // Negative control: one extra dynamic import must fail the pin.
-  const widened = { ...app, imports: [...app.imports, { request_path: "/app/assets/chunk-extra-AAAAAAAA.js", kind: "dynamic-import" }] };
-  let widenedRefused = false;
-  try {
-    assertLazyEntryPaths(widened);
-  } catch {
-    widenedRefused = true;
+  // Negative controls: an extra dynamic import must fail the pin, whether its
+  // prefix is new or repeats an allowed one.
+  for (const extra of ["/app/assets/chunk-extra-AAAAAAAA.js", "/app/assets/chunk-syntax-ZZZZZZZZ.js"]) {
+    const widened = { ...app, imports: [...app.imports, { request_path: extra, kind: "dynamic-import" }] };
+    let widenedRefused = false;
+    try {
+      assertLazyEntryPaths(widened);
+    } catch {
+      widenedRefused = true;
+    }
+    if (!widenedRefused) throw new Error(`The lazy entry pin accepted an extra dynamic import ${extra}`);
   }
-  if (!widenedRefused) throw new Error("The lazy entry pin accepted an extra dynamic import");
   const grammarChunks = assets.filter((asset) => /bash|diff|javascript|json|python|rust|toml|typescript|yaml/iu.test(asset.request_path));
   if (grammarChunks.length < 9) throw new Error("The nine curated grammar paths were not emitted separately");
   const exportAsset = manifest.export["present.export"];
@@ -86,15 +142,18 @@ function checkManifest(manifest) {
   }
 }
 
-// The app entry loads exactly two chunks lazily: syntax highlighting and the
-// bundled fonts. Anything else, a diagram renderer included, is a new lazy
-// path to review, not a silent addition.
+// The app entry loads exactly three chunks lazily: syntax highlighting, the
+// figure grammar and the bundled fonts. Anything else is a new lazy path to
+// review, not a silent addition.
 function assertLazyEntryPaths(app) {
-  const lazy = [...new Set(app.imports
+  const paths = [...new Set(app.imports
     .filter((item) => item.kind === "dynamic-import")
-    .map((item) => item.request_path.match(/^\/app\/assets\/chunk-([a-z]+)-[A-Z0-9]+\.js$/u)?.[1] ?? item.request_path))].sort();
-  if (lazy.join(",") !== "fonts,syntax") {
-    throw new Error(`The app entry's dynamic imports must be exactly the syntax and fonts chunks; found ${lazy.join(", ")}`);
+    .map((item) => item.request_path))].sort();
+  const lazy = paths
+    .map((path) => path.match(/^\/app\/assets\/chunk-([a-z]+)-[A-Z0-9]+\.js$/u)?.[1] ?? path)
+    .sort();
+  if (lazy.join(",") !== "figure,fonts,syntax") {
+    throw new Error(`The app entry's dynamic imports must be exactly one syntax, one figure and one fonts chunk; found ${paths.join(", ")}`);
   }
 }
 

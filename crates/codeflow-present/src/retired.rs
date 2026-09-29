@@ -1,5 +1,4 @@
-//! The `diagram` block, retired with its renderer (TSK-087; on the 3.0.0
-//! source, TSK-114).
+//! The `diagram` block, retired with its renderer (TSK-087).
 //!
 //! New `open` and `update` input that carries one is refused before typed
 //! parsing, with the replacement for its `kind`. A revision that a
@@ -17,32 +16,27 @@ use crate::limits;
 pub const CONVERSION_GUIDE: &str =
     "the \"Converting a diagram block\" section of cf-present/references/document-authoring.md";
 
-/// Each former `kind` with the block that replaces it. Every block named is
-/// one this source accepts: an html block holding an inline SVG, a table or
-/// a tree block.
+/// Each former `kind` with the block that replaces it.
 pub const CONVERSIONS: [(&str, &str); 7] = [
-    ("flowchart", "an html block holding an inline SVG"),
-    (
-        "sequence",
-        "an html block holding an inline SVG, or a table of the messages in order",
-    ),
-    (
-        "state",
-        "an html block holding an inline SVG, or a table of the transitions",
-    ),
+    ("flowchart", "a flow figure"),
+    ("sequence", "a sequence figure"),
+    ("state", "a state figure"),
     (
         "class",
-        "a table, or an html block holding an inline SVG where a relationship must be seen",
+        "a structure figure, or a table where no relationship must be seen",
     ),
     (
         "entity_relationship",
-        "a table, or an html block holding an inline SVG where a relationship must be seen",
+        "a structure figure, or a table where no relationship must be seen",
     ),
     ("mindmap", "a tree block"),
-    ("timeline", "a table"),
+    (
+        "timeline",
+        "a table, or a sequence figure when participants exchange messages",
+    ),
 ];
 
-const GENERIC_REPLACEMENT: &str = "an html block holding an inline SVG, a table or a tree block";
+const GENERIC_REPLACEMENT: &str = "a figure block, a table or a tree block";
 
 /// The fields a diagram block carried before its removal.
 const DIAGRAM_FIELDS: [&str; 6] = [
@@ -322,7 +316,7 @@ mod tests {
             assert!(message.contains(&format!("block {id:?}")), "{message}");
             assert!(message.contains("removed with Mermaid"), "{message}");
             assert!(
-                message.contains("convert its flowchart to an html block holding an inline SVG"),
+                message.contains("convert its flowchart to a flow figure"),
                 "{message}"
             );
             assert!(message.contains(CONVERSION_GUIDE), "{message}");
@@ -342,9 +336,7 @@ mod tests {
         for kind in ["gantt", ""] {
             let message = refusal(&document(vec![diagram(Some("d"), kind)]));
             assert!(
-                message.contains(
-                    "convert it to an html block holding an inline SVG, a table or a tree block"
-                ),
+                message.contains("convert it to a figure block, a table or a tree block"),
                 "{message}"
             );
         }
@@ -366,9 +358,7 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains(
-                "convert its sequence to an html block holding an inline SVG, or a table of the messages in order"
-            ),
+            message.contains("convert its sequence to a sequence figure"),
             "{message}"
         );
         assert!(

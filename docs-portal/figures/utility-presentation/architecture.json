@@ -1,0 +1,575 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "utility-parity",
+    "family": "derivation",
+    "binding": "authored",
+    "question": "Which copies must stay identical, and what checks them?",
+    "idea": "The doctrine and the grammar are copied into both skills and the token values into both stylesheets, and two tests fail on any drift.",
+    "title": "The copies that must stay identical",
+    "kicker": "Parity",
+    "caption": "The system is duplicated by parity rather than by reference, so a test, not a reviewer, catches a copy that drifts.",
+    "states": [
+      {
+        "name": "source",
+        "mark": "layer-remote",
+        "means": "Normative source"
+      },
+      {
+        "name": "step",
+        "mark": "merge",
+        "means": "Copy step"
+      },
+      {
+        "name": "copy",
+        "mark": "state",
+        "means": "Copy that must match"
+      },
+      {
+        "name": "copies",
+        "mark": "trans",
+        "means": "Copied to"
+      },
+      {
+        "name": "check",
+        "mark": "human",
+        "means": "Test that fails on drift"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the shared doctrine is checked by scaffold parity tests",
+        "source": "docs/architecture/utility-presentation.md#technical",
+        "derive": "the shared doctrine row",
+        "check": {
+          "kind": "contains",
+          "text": "| Shared doctrine text | `assets/base/agents/skills/{cf-present,cf-docs-portal}/resources/utility-presentation-system.md` | scaffold parity tests;"
+        },
+        "value": true
+      },
+      {
+        "claim": "token equality is checked by the manifest consistency test",
+        "source": "docs/architecture/utility-presentation.md#technical",
+        "derive": "the token equality row",
+        "check": {
+          "kind": "contains",
+          "text": "`portal_utility_tokens_match_present_skins`"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 350,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 210,
+          "h": 40,
+          "rx": 4,
+          "cap": "end",
+          "id": "s1"
+        },
+        {
+          "text": "presentation doctrine",
+          "x": 30,
+          "y": 65,
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 96,
+          "w": 210,
+          "h": 40,
+          "rx": 4,
+          "cap": "end",
+          "id": "s2"
+        },
+        {
+          "text": "figure grammar",
+          "x": 30,
+          "y": 121,
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 180,
+          "w": 210,
+          "h": 40,
+          "rx": 4,
+          "cap": "end",
+          "id": "s3"
+        },
+        {
+          "text": "token values",
+          "x": 30,
+          "y": 205,
+          "for": [
+            "s3"
+          ]
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M228 60C262 60 262 88 296 88",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M228 116C262 116 262 96 296 96",
+          "head": "end",
+          "id": "c2"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 320,
+          "cy": 92,
+          "r": 22,
+          "id": "x1"
+        },
+        {
+          "text": "copied",
+          "x": 320,
+          "y": 58,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "x1"
+          ]
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M344 84C380 84 380 64 452 64",
+          "head": "end",
+          "id": "c3"
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M344 100C380 100 380 120 452 120",
+          "head": "end",
+          "id": "c4"
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 454,
+          "y": 44,
+          "w": 250,
+          "h": 40,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "cf-present resources",
+          "x": 468,
+          "y": 69,
+          "style": "mono",
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 454,
+          "y": 100,
+          "w": 250,
+          "h": 40,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "cf-docs-portal resources",
+          "x": 468,
+          "y": 125,
+          "style": "mono",
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M228 200H452",
+          "head": "end",
+          "id": "c5"
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M340 200V254H452",
+          "head": "end",
+          "id": "c6"
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 454,
+          "y": 180,
+          "w": 250,
+          "h": 40,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "utility-tokens.css",
+          "x": 468,
+          "y": 205,
+          "style": "mono",
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 454,
+          "y": 234,
+          "w": 250,
+          "h": 40,
+          "rx": 4,
+          "id": "o4"
+        },
+        {
+          "text": "styles.css",
+          "x": 468,
+          "y": 259,
+          "style": "mono",
+          "for": [
+            "o4"
+          ]
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 30,
+          "cy": 310,
+          "r": 12,
+          "tick": true,
+          "id": "k1"
+        },
+        {
+          "text": "scaffold parity tests",
+          "x": 52,
+          "y": 315,
+          "style": "strong",
+          "for": [
+            "k1"
+          ]
+        },
+        {
+          "text": "both skill copies byte-identical",
+          "x": 52,
+          "y": 337,
+          "style": "mute",
+          "for": [
+            "k1"
+          ]
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 380,
+          "cy": 310,
+          "r": 12,
+          "tick": true,
+          "id": "k2"
+        },
+        {
+          "text": "token equality test",
+          "x": 402,
+          "y": 315,
+          "style": "strong",
+          "for": [
+            "k2"
+          ]
+        },
+        {
+          "text": "every role equal in both sheets",
+          "x": 402,
+          "y": 337,
+          "style": "mute",
+          "for": [
+            "k2"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 370,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 200,
+          "h": 38,
+          "rx": 4,
+          "cap": "end",
+          "id": "s1"
+        },
+        {
+          "text": "presentation doctrine",
+          "x": 20,
+          "y": 34,
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 56,
+          "w": 200,
+          "h": 38,
+          "rx": 4,
+          "cap": "end",
+          "id": "s2"
+        },
+        {
+          "text": "figure grammar",
+          "x": 20,
+          "y": 80,
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M210 29H240V75H210",
+          "id": "c1"
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M240 52H262",
+          "id": "c2"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 284,
+          "cy": 52,
+          "r": 20,
+          "id": "x1"
+        },
+        {
+          "text": "copied",
+          "x": 284,
+          "y": 20,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "x1"
+          ]
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M284 74V104H140V118",
+          "head": "end",
+          "id": "c3"
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M284 104V118",
+          "head": "end",
+          "id": "c4"
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 8,
+          "y": 120,
+          "w": 164,
+          "h": 38,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "cf-present",
+          "x": 20,
+          "y": 144,
+          "style": "mono",
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 188,
+          "y": 120,
+          "w": 164,
+          "h": 38,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "cf-docs-portal",
+          "x": 200,
+          "y": 144,
+          "style": "mono",
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 20,
+          "cy": 186,
+          "r": 11,
+          "tick": true,
+          "id": "k1"
+        },
+        {
+          "text": "parity tests: copies identical",
+          "x": 40,
+          "y": 191,
+          "style": "mute",
+          "for": [
+            "k1"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 222,
+          "w": 200,
+          "h": 38,
+          "rx": 4,
+          "cap": "end",
+          "id": "s3"
+        },
+        {
+          "text": "token values",
+          "x": 20,
+          "y": 246,
+          "for": [
+            "s3"
+          ]
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M100 262V284",
+          "head": "end",
+          "id": "c5"
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M180 262C180 274 270 272 270 284",
+          "head": "end",
+          "id": "c6"
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 8,
+          "y": 286,
+          "w": 186,
+          "h": 38,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "utility-tokens.css",
+          "x": 20,
+          "y": 310,
+          "style": "mono",
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 208,
+          "y": 286,
+          "w": 144,
+          "h": 38,
+          "rx": 4,
+          "id": "o4"
+        },
+        {
+          "text": "styles.css",
+          "x": 220,
+          "y": 310,
+          "style": "mono",
+          "for": [
+            "o4"
+          ]
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 20,
+          "cy": 352,
+          "r": 11,
+          "tick": true,
+          "id": "k2"
+        },
+        {
+          "text": "token test: every role equal",
+          "x": 40,
+          "y": 357,
+          "style": "mute",
+          "for": [
+            "k2"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Source",
+        "Copies",
+        "Checked by"
+      ],
+      "rows": [
+        [
+          "presentation doctrine",
+          "cf-present and cf-docs-portal resources",
+          "scaffold parity tests"
+        ],
+        [
+          "figure grammar and specimens",
+          "cf-present and cf-docs-portal resources",
+          "scaffold parity tests"
+        ],
+        [
+          "token values",
+          "`utility-tokens.css` and present `styles.css`",
+          "`portal_utility_tokens_match_present_skins`"
+        ]
+      ]
+    }
+  }
+}

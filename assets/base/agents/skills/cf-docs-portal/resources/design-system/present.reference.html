@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en" data-cf-skin="graphite" data-cf-theme="light" data-cf-typeface="inter" data-cf-scale="default">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Landing paths figure, revision 3</title>
+<meta name="description" content="CodeFlow design system reference: a present review document with Comment mode.">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="chrome.css">
+<link rel="stylesheet" href="figure.css">
+<script src="chrome.js"></script>
+</head>
+<body>
+<div class="cf-present-app" data-cf-view="present" data-cf-subject="landing-paths" data-cf-revision="3">
+  <header class="cf-topbar" data-cf-chrome>
+    <span class="cf-brand-mark" aria-hidden="true"></span>
+    <div class="cf-topbar-titles">
+      <span class="cf-kicker">Review document</span>
+      <div class="cf-topbar-line"><span class="cf-topbar-title">Landing paths figure</span><span class="cf-topbar-rev">Revision 3</span></div>
+    </div>
+    <div class="cf-topbar-actions">
+      <span class="cf-note-meta" data-cf-note-meta hidden>0 notes</span>
+      <button class="cf-icon-btn" type="button" data-cf-open="display" aria-haspopup="dialog" aria-expanded="false" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>
+      <button class="cf-comment-toggle" type="button" aria-pressed="false" aria-keyshortcuts="C" title="Comment mode (C)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z"/></svg><span class="cf-comment-word">Comment</span><span class="cf-badge" data-cf-badge aria-label="0 notes">0</span></button>
+    </div>
+  </header>
+  <div class="cf-strip" data-cf-chrome role="status"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z"/></svg><span data-cf-strip-text>Comment: select words, click a figure part, or drag a box. Esc leaves.</span></div>
+
+  <div class="cf-present-body">
+    <nav class="cf-route" aria-label="Sections" data-cf-chrome>
+      <span class="cf-kicker cf-toc-kicker">Sections</span>
+      <ul class="cf-route-list">
+        <li><a class="cf-toc-link is-active" href="#blk-figure" data-target="blk-figure">Figure</a></li>
+        <li><a class="cf-toc-link" href="#blk-frame" data-target="blk-frame">Frame</a></li>
+        <li><a class="cf-toc-link" href="#blk-evidence" data-target="blk-evidence">Evidence</a></li>
+        <li><a class="cf-toc-link" href="#blk-ask" data-target="blk-ask">Ask</a></li>
+      </ul>
+    </nav>
+
+    <div class="cf-doc-wrap">
+      <article id="cf-present-document" class="cf-doc cf-prose" data-cf-document>
+        <h1 class="cf-doc-title">Landing paths figure, revision 3</h1>
+        <p class="cf-doc-meta">Subject for the guide page How a change lands</p>
+        <section class="cf-block" id="blk-figure" data-cf-block-kind="figure">
+<figure class="cf-fig" data-cf-block-id="fig-landing" data-cf-figure="flow">
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 1</span> · <span class="cf-fig-name">Two landing paths from a task branch to main</span></p>
+  <div class="cf-fig-stage">
+    <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 252" role="img" aria-labelledby="f1w-t f1w-d">
+      <title id="f1w-t">Two landing paths from a task branch to main</title>
+      <desc id="f1w-d">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, where agents merge, to the integration branch, then along a path not yet travelled to the same human merge. A gate that stops travel sits in the gate column on both paths.</desc>
+      <text class="cf-t cf-t--head" x="90" y="22" text-anchor="middle">Branch</text>
+      <text class="cf-t cf-t--head" x="270" y="22" text-anchor="middle">Review</text>
+      <text class="cf-t cf-t--head" x="450" y="22" text-anchor="middle">Gate</text>
+      <text class="cf-t cf-t--head" x="630" y="22" text-anchor="middle">Land</text>
+      <line class="cf-f-rule" x1="24" y1="40" x2="696" y2="40"/>
+      <g data-cf-anchor="edge-a-review" data-cf-anchor-label="path A, task branch to pull request"><path class="cf-f-hit" d="M99 112H261"/><path class="cf-m-done" data-state="done" d="M99 112H261"/></g>
+      <g data-cf-anchor="edge-a-gate" data-cf-anchor-label="path A, pull request to required checks"><path class="cf-f-hit" d="M279 112H441"/><path class="cf-m-done" data-state="done" d="M279 112H441"/></g>
+      <g data-cf-anchor="edge-a-land" data-cf-anchor-label="path A, required checks to human merge"><path class="cf-f-hit" d="M459 112H620"/><path class="cf-m-done" data-state="done" d="M459 112H620"/></g>
+      <g data-cf-anchor="edge-b-review" data-cf-anchor-label="path B, task to codeflow integrate"><path class="cf-f-hit" d="M99 224H258"/><path class="cf-m-done" data-state="done" d="M99 224H258"/></g>
+      <g data-cf-anchor="edge-b-gate" data-cf-anchor-label="path B, codeflow integrate to integration branch"><path class="cf-f-hit" d="M282 224H441"/><path class="cf-m-done" data-state="done" d="M282 224H441"/></g>
+      <g data-cf-anchor="edge-b-land" data-cf-anchor-label="path B, integration branch to human merge"><path class="cf-f-hit" d="M459 224H540C590 224 630 190 630 123"/><path class="cf-m-todo" data-state="todo" d="M459 224H540C590 224 630 190 630 123"/></g>
+      <g data-cf-anchor="stop-a" data-cf-anchor-label="gate that stops path A"><path class="cf-f-hit" d="M516 101V123"/><line class="cf-m-stop" data-state="stop" x1="516" y1="101" x2="516" y2="123"/></g>
+      <g data-cf-anchor="stop-b" data-cf-anchor-label="gate that stops path B"><path class="cf-f-hit" d="M516 213V235"/><line class="cf-m-stop" data-state="stop" x1="516" y1="213" x2="516" y2="235"/></g>
+      <g data-cf-anchor="node-a-branch" data-cf-anchor-label="task branch"><circle class="cf-m-agent" data-state="agent" cx="90" cy="112" r="8"/><text class="cf-t" x="90" y="88" text-anchor="middle">Task branch</text></g>
+      <g data-cf-anchor="node-a-pr" data-cf-anchor-label="pull request"><circle class="cf-m-agent" data-state="agent" cx="270" cy="112" r="8"/><text class="cf-t" x="270" y="88" text-anchor="middle">Pull request</text></g>
+      <g data-cf-anchor="node-a-checks" data-cf-anchor-label="required checks"><circle class="cf-m-agent" data-state="agent" cx="450" cy="112" r="8"/><text class="cf-t" x="450" y="88" text-anchor="middle">Required checks</text></g>
+      <g data-cf-anchor="node-merge" data-cf-anchor-label="human merge"><circle class="cf-m-human" data-state="human" cx="630" cy="112" r="9"/><text class="cf-t cf-t--strong" x="630" y="88" text-anchor="middle">Human merge</text></g>
+      <g data-cf-anchor="node-b-branch" data-cf-anchor-label="task in an epic"><circle class="cf-m-agent" data-state="agent" cx="90" cy="224" r="8"/><text class="cf-t" x="90" y="200" text-anchor="middle">Task in an epic</text></g>
+      <g data-cf-anchor="node-b-integrate" data-cf-anchor-label="codeflow integrate"><path class="cf-m-merge" data-state="merge" d="M270 213L281 224L270 235L259 224Z"/><text class="cf-t cf-t--mono" x="270" y="200" text-anchor="middle">codeflow integrate</text></g>
+      <g data-cf-anchor="node-b-integration" data-cf-anchor-label="integration branch"><circle class="cf-m-agent" data-state="agent" cx="450" cy="224" r="8"/><text class="cf-t" x="450" y="200" text-anchor="middle">Integration branch</text></g>
+    </svg>
+    <svg class="cf-fig-svg cf-fig-svg--narrow" viewBox="0 0 343 344" role="img" aria-labelledby="f1n-t f1n-d">
+      <title id="f1n-t">Two landing paths from a task branch to main</title>
+      <desc id="f1n-d">Rows: branch, review, gate, land. Path A runs down from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs down from a task in an epic to codeflow integrate, where agents merge, to the integration branch, then along a path not yet travelled to the same human merge. A gate that stops travel sits on each path in the gate row.</desc>
+      <text class="cf-t cf-t--head" x="0" y="45">Branch</text>
+      <text class="cf-t cf-t--head" x="0" y="129">Review</text>
+      <text class="cf-t cf-t--head" x="0" y="213">Gate</text>
+      <text class="cf-t cf-t--head" x="0" y="305">Land</text>
+      <g data-cf-anchor="edge-a-review" data-cf-anchor-label="path A, task branch to pull request"><path class="cf-f-hit" d="M112 50V114"/><path class="cf-m-done" data-state="done" d="M112 50V114"/></g>
+      <g data-cf-anchor="edge-a-gate" data-cf-anchor-label="path A, pull request to required checks"><path class="cf-f-hit" d="M112 134V198"/><path class="cf-m-done" data-state="done" d="M112 134V198"/></g>
+      <g data-cf-anchor="edge-a-land" data-cf-anchor-label="path A, required checks to human merge"><path class="cf-f-hit" d="M112 218V250C112 280 140 300 163 300"/><path class="cf-m-done" data-state="done" d="M112 218V250C112 280 140 300 163 300"/></g>
+      <g data-cf-anchor="edge-b-review" data-cf-anchor-label="path B, task to codeflow integrate"><path class="cf-f-hit" d="M236 50V112"/><path class="cf-m-done" data-state="done" d="M236 50V112"/></g>
+      <g data-cf-anchor="edge-b-gate" data-cf-anchor-label="path B, codeflow integrate to integration branch"><path class="cf-f-hit" d="M236 136V198"/><path class="cf-m-done" data-state="done" d="M236 136V198"/></g>
+      <g data-cf-anchor="edge-b-land" data-cf-anchor-label="path B, integration branch to human merge"><path class="cf-f-hit" d="M236 218V250C236 280 208 300 185 300"/><path class="cf-m-todo" data-state="todo" d="M236 218V250C236 280 208 300 185 300"/></g>
+      <g data-cf-anchor="stop-a" data-cf-anchor-label="gate that stops path A"><path class="cf-f-hit" d="M101 240H123"/><line class="cf-m-stop" data-state="stop" x1="101" y1="240" x2="123" y2="240"/></g>
+      <g data-cf-anchor="stop-b" data-cf-anchor-label="gate that stops path B"><path class="cf-f-hit" d="M225 240H247"/><line class="cf-m-stop" data-state="stop" x1="225" y1="240" x2="247" y2="240"/></g>
+      <g data-cf-anchor="node-a-branch" data-cf-anchor-label="task branch"><circle class="cf-m-agent" data-state="agent" cx="112" cy="40" r="8"/><text class="cf-t" x="131" y="45">Task branch</text></g>
+      <g data-cf-anchor="node-a-pr" data-cf-anchor-label="pull request"><circle class="cf-m-agent" data-state="agent" cx="112" cy="124" r="8"/><text class="cf-t" x="131" y="129">Pull request</text></g>
+      <g data-cf-anchor="node-a-checks" data-cf-anchor-label="required checks"><circle class="cf-m-agent" data-state="agent" cx="112" cy="208" r="8"/><text class="cf-t" x="131" y="203"><tspan x="131">Required</tspan><tspan x="131" dy="18">checks</tspan></text></g>
+      <g data-cf-anchor="node-merge" data-cf-anchor-label="human merge"><circle class="cf-m-human" data-state="human" cx="174" cy="300" r="9"/><text class="cf-t cf-t--strong" x="174" y="333" text-anchor="middle">Human merge</text></g>
+      <g data-cf-anchor="node-b-branch" data-cf-anchor-label="task in an epic"><circle class="cf-m-agent" data-state="agent" cx="236" cy="40" r="8"/><text class="cf-t" x="255" y="35"><tspan x="255">Task in</tspan><tspan x="255" dy="18">an epic</tspan></text></g>
+      <g data-cf-anchor="node-b-integrate" data-cf-anchor-label="codeflow integrate"><path class="cf-m-merge" data-state="merge" d="M236 113L247 124L236 135L225 124Z"/><text class="cf-t cf-t--mono" x="257" y="119"><tspan x="257">codeflow</tspan><tspan x="257" dy="18">integrate</tspan></text></g>
+      <g data-cf-anchor="node-b-integration" data-cf-anchor-label="integration branch"><circle class="cf-m-agent" data-state="agent" cx="236" cy="208" r="8"/><text class="cf-t" x="255" y="203"><tspan x="255">Integration</tspan><tspan x="255" dy="18">branch</tspan></text></g>
+    </svg>
+  </div>
+  <ul class="cf-legend" aria-label="Legend">
+    <li data-state="done" data-cf-anchor="legend-done" data-cf-anchor-label="legend, travel completed"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-done" d="M3 8H25"/></svg>Travel completed</li>
+    <li data-state="todo" data-cf-anchor="legend-todo" data-cf-anchor-label="legend, travel not yet made"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-todo" d="M2 8H26"/></svg>Travel not yet made</li>
+    <li data-state="agent" data-cf-anchor="legend-agent" data-cf-anchor-label="legend, agent step"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle class="cf-m-agent" cx="14" cy="8" r="6.5"/></svg>Agent step</li>
+    <li data-state="merge" data-cf-anchor="legend-merge" data-cf-anchor-label="legend, agent merge point"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-merge" d="M14 1.5L20.5 8L14 14.5L7.5 8Z"/></svg>Agent merge point</li>
+    <li data-state="human" data-cf-anchor="legend-human" data-cf-anchor-label="legend, human decision"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle class="cf-m-human" cx="14" cy="8" r="6"/></svg>Human decision</li>
+    <li data-state="stop" data-cf-anchor="legend-stop" data-cf-anchor-label="legend, gate that stops travel"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line class="cf-m-stop" x1="14" y1="1" x2="14" y2="15"/></svg>Gate that stops travel</li>
+  </ul>
+  <figcaption class="cf-fig-caption">One task lands as a pull request; a body of work lands task by task on an integration branch, and both end at a human merge behind green checks.</figcaption>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, where agents merge, to the integration branch, then along a path not yet travelled to the same human merge. A gate that stops travel sits in the gate column on both paths.</p>
+    <div class="cf-twin-scroll"><table>
+      <thead><tr><th scope="col">Path</th><th scope="col">Who opens</th><th scope="col">Who merges</th><th scope="col">What stops it</th></tr></thead>
+      <tbody>
+        <tr><td>A: one task</td><td>An agent opens the pull request</td><td>A person, on green checks</td><td>A red required check</td></tr>
+        <tr><td>B: body of work</td><td>Agents land each task with <code>codeflow integrate</code></td><td>A person merges the finished body</td><td>A red required check on the integration pull request</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+</figure>
+
+        </section>
+        <section class="cf-block" id="blk-frame" data-cf-block-id="frame" data-cf-block-kind="frame">
+          <h2 class="cf-h2">What changed</h2>
+          <p>Revision 3 ends the integrate path at the same human merge node as the pull request path. The stop bars moved into the gate column, one on each path.</p>
+        </section>
+        <section class="cf-block" id="blk-evidence" data-cf-block-id="status" data-cf-block-kind="status">
+          <h2 class="cf-h2">Checks</h2>
+          <ul class="cf-status-list">
+            <li class="cf-status-row"><span class="cf-shape cf-shape--dot cf-tone-positive" aria-hidden="true"></span><span class="cf-status-name">Figure gate</span><span class="cf-status-word">Pass</span></li>
+            <li class="cf-status-row"><span class="cf-shape cf-shape--dot cf-tone-positive" aria-hidden="true"></span><span class="cf-status-name">Two-channel check</span><span class="cf-status-word">Pass</span></li>
+            <li class="cf-status-row"><span class="cf-shape cf-shape--dot cf-tone-positive" aria-hidden="true"></span><span class="cf-status-name">Narrow variant</span><span class="cf-status-word">Pass</span></li>
+            <li class="cf-status-row"><span class="cf-shape cf-shape--hatch" aria-hidden="true"></span><span class="cf-status-name">Overprint check</span><span class="cf-status-word cf-tone-muted">Not run</span></li>
+          </ul>
+        </section>
+        <section class="cf-block" id="blk-ask" data-cf-block-id="ask" data-cf-block-kind="prompt">
+          <h2 class="cf-h2">Your review</h2>
+          <p class="cf-ask">Approve the figure for the guide, or mark what should change.</p>
+        </section>
+      </article>
+      <div class="cf-marker-layer" data-cf-chrome data-cf-markers></div>
+    </div>
+
+    <aside class="cf-rail" aria-label="Notes" data-cf-chrome>
+      <div class="cf-rail-inner">
+        <div class="cf-rail-head"><h2 class="cf-rail-title">Notes <span class="cf-badge" data-cf-rail-count>0</span></h2><button class="cf-btn cf-btn--quiet" type="button" data-cf-act="close">Close</button></div>
+        <div class="cf-rail-list" role="list" aria-label="Notes in this review" data-cf-notes></div>
+        <div class="cf-rail-empty" data-cf-empty><p><strong>Nothing noted yet</strong></p><p>Select words, click a figure part, or drag a box.</p></div>
+        <details class="cf-disclosure" data-cf-earlier>
+          <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>Earlier feedback</summary>
+          <div class="cf-disclosure-body" data-cf-earlier-body></div>
+        </details>
+        <details class="cf-disclosure">
+          <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>Tools</summary>
+          <div class="cf-disclosure-body cf-tools">
+            <button class="cf-btn" type="button" data-cf-tool="text">Add selected text</button>
+            <button class="cf-btn" type="button" data-cf-tool="element" aria-pressed="false">Pick element</button>
+            <button class="cf-btn" type="button" data-cf-tool="area" aria-pressed="false">Select area</button>
+          </div>
+        </details>
+        <div class="cf-rail-foot">
+          <label class="cf-field"><span class="cf-field-label">Verdict</span>
+            <select class="cf-select" data-cf-verdict>
+              <option value="approve" selected>Approve</option>
+              <option value="approve-with-notes">Approve with notes</option>
+              <option value="request-changes">Request changes</option>
+            </select>
+          </label>
+          <label class="cf-field"><span class="cf-field-label" data-cf-summary-label>Review summary (optional)</span>
+            <textarea class="cf-textarea" rows="3" data-cf-summary></textarea>
+          </label>
+          <p class="cf-composer-error" data-cf-summary-error hidden>Write the required change before you submit.</p>
+          <button class="cf-btn cf-btn--primary" type="button" data-cf-act="submit">Submit review (0)</button>
+          <div data-cf-envelope-slot></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+<!-- Demo data read by chrome.js: the earlier review shown in the notes rail -->
+<script type="application/json" id="cf-data">
+{
+ "earlier": [
+  {
+   "revision": 2,
+   "verdict": "request-changes",
+   "date": "2026-09-21",
+   "notes": [
+    {
+     "kind": "element",
+     "target": "gate that stops path A",
+     "body": "Move the stop bar into the gate column so it reads as the gate.",
+     "state": "reanchored"
+    },
+    {
+     "kind": "text",
+     "target": "“agents merge here only”",
+     "body": "Say who merges on path B.",
+     "state": "orphaned",
+     "reason": "quote not found"
+    }
+   ]
+  }
+ ]
+}
+</script>
+</body>
+</html>

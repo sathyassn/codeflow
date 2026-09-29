@@ -521,6 +521,67 @@ fn every_manifest_catalog_artifact_matches_live_and_baseline_copies() {
     );
 }
 
+/// The repository's own installed record must stay loadable and honest: a
+/// merge that leaves conflict markers, or a stale hash for a changed managed
+/// source, breaks `codeflow update` here without failing any shipped-asset
+/// check. Managed hashes are the pristine shipped copy, so each must equal
+/// both its source asset and its baseline copy.
+#[test]
+fn installed_manifest_loads_and_matches_managed_sources_and_baselines() {
+    use codeflow_core::scaffold::sha256_hex;
+    use codeflow_core::scaffold::state::InstalledManifest;
+
+    let root = repo_root();
+    assert!(
+        InstalledManifest::path(&root).is_file(),
+        "the repository keeps an installed manifest"
+    );
+    let installed = InstalledManifest::load_or_default(&root, "unused")
+        .expect("installed .codeflow/manifest.json parses");
+    let base = root.join("assets/base");
+    // A templated source renders with project values, so only its baseline
+    // (the rendered pristine copy) can match the recorded hash.
+    let shipped = ScaffoldManifest::load(&DirSource::new(&root.join("assets")))
+        .expect("shipped manifest loads");
+    let templated: std::collections::BTreeSet<&str> = shipped
+        .entries
+        .iter()
+        .filter(|entry| entry.template)
+        .map(|entry| entry.src.as_str())
+        .collect();
+    let mut compared = 0usize;
+    let mut problems = Vec::new();
+    for (dest, file) in &installed.files {
+        if file.ownership != Ownership::Managed {
+            continue;
+        }
+        compared += 1;
+        let baseline = root.join(".codeflow/.baseline").join(dest);
+        let copies = if templated.contains(file.src.as_str()) {
+            vec![baseline]
+        } else {
+            vec![base.join(&file.src), baseline]
+        };
+        for copy in copies {
+            match std::fs::read(&copy) {
+                Ok(bytes) if sha256_hex(&bytes) == file.sha256 => {}
+                Ok(_) => problems.push(format!("{dest}: {} differs", rel(&root, &copy))),
+                Err(error) => problems.push(format!("{dest}: {}: {error}", rel(&root, &copy))),
+            }
+        }
+    }
+    assert!(
+        compared > 0,
+        "expected managed entries in the installed manifest"
+    );
+    problems.sort();
+    assert!(
+        problems.is_empty(),
+        "installed manifest hashes drifted from source or baseline:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
 #[test]
 fn ci_downloads_verify_pinned_checksums() {
     let workflow = std::fs::read_to_string(repo_root().join("assets/base/ci/codeflow-ci.yml"))
@@ -542,6 +603,117 @@ fn ci_downloads_verify_pinned_checksums() {
         2,
         "both downloaded security tools must be verified before execution"
     );
+}
+
+/// The ADR-0018 instruction-only clause (TSK-041 defect 8). ADR-0018 is an
+/// accepted, append-only record ("never edited afterwards except to set
+/// `superseded_by`"), so the clarifying clause cannot land there. Its one
+/// home is the git rules reference, which `codeflow update` installs.
+const INSTRUCTION_ONLY_CLAUSE: &str =
+    "that prohibition is instruction-only, and CodeFlow cannot technically prevent it";
+
+/// Authored instruction files that could plausibly host the clause. Exactly
+/// one, the git rules reference the kernel points at, carries it; the
+/// installed copy and its baseline are rendered from that one source.
+const CONTRACT_TEMPLATES: [&str; 5] = [
+    "assets/base/AGENTS.md.tmpl",
+    "assets/base/AGENTS.minimal.md.tmpl",
+    "assets/base/CLAUDE.md.tmpl",
+    "assets/base/CLAUDE.minimal.md.tmpl",
+    "assets/base/rules/git-rules.md",
+];
+
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn instruction_only_clause_has_exactly_one_home() {
+    let root = repo_root();
+    let clause = unwrapped(INSTRUCTION_ONLY_CLAUSE);
+
+    let homes: Vec<&str> = CONTRACT_TEMPLATES
+        .into_iter()
+        .filter(|template| {
+            let text = std::fs::read_to_string(root.join(template))
+                .unwrap_or_else(|error| panic!("read {template}: {error}"));
+            unwrapped(&text).contains(&clause)
+        })
+        .collect();
+    assert_eq!(
+        homes,
+        vec!["assets/base/rules/git-rules.md"],
+        "the ADR-0018 instruction-only clause must be stated once, in the \
+         git rules reference; found in: {homes:?}"
+    );
+
+    for mirror in [
+        ".codeflow/rules/git-rules.md",
+        ".codeflow/.baseline/.codeflow/rules/git-rules.md",
+    ] {
+        let text = std::fs::read_to_string(root.join(mirror))
+            .unwrap_or_else(|error| panic!("read {mirror}: {error}"));
+        assert!(
+            unwrapped(&text).contains(&clause),
+            "{mirror}: installed copy is out of step with the git rules reference"
+        );
+    }
+}
+
+#[test]
+fn adr_0018_is_not_amended_to_carry_the_clause() {
+    let path =
+        repo_root().join("docs/decisions/ADR-0018-interactive-only-cross-model-transport.md");
+    let text = std::fs::read_to_string(&path).expect("ADR-0018 is readable");
+    let flat = unwrapped(&text);
+
+    assert!(
+        flat.contains("ADRs are append-only"),
+        "ADR-0018 lost its append-only banner"
+    );
+    assert!(
+        !flat.contains(&unwrapped(INSTRUCTION_ONLY_CLAUSE)),
+        "the clause was written into append-only ADR-0018; its home is the \
+         git rules reference"
+    );
+    for appended in ["Clarifying note", "clarifying note", "## Note"] {
+        assert!(
+            !text.contains(appended),
+            "ADR-0018 gained an appended note ({appended}); the record is \
+             append-only and superseded, never amended"
+        );
+    }
+}
+
+/// The four scaffolded CI templates that put the `codeflow` binary on PATH.
+const CI_PERIMETER_TEMPLATES: [&str; 4] = [
+    "assets/base/ci/codeflow-ci.yml",
+    "assets/base/ci/.gitlab-ci.yml",
+    "assets/base/ci/bitbucket-pipelines.yml",
+    "assets/base/ci/ci-generic.sh",
+];
+
+/// CI-PERIMETER CANARY (TSK-041 defect 1, as the 3.0.0 pinned install
+/// changed it): the templates install the pinned, checksum-verified release
+/// binary themselves, so none reaches a cargo bin directory, where a
+/// hardcoded `$HOME/.cargo/bin` once missed the binary whenever `CARGO_HOME`
+/// pointed elsewhere.
+#[test]
+fn ci_templates_never_resolve_codeflow_through_a_cargo_bin() {
+    let root = repo_root();
+    for template in CI_PERIMETER_TEMPLATES {
+        let text = std::fs::read_to_string(root.join(template))
+            .unwrap_or_else(|error| panic!("read {template}: {error}"));
+        assert!(
+            !text.contains(".cargo/bin"),
+            "{template}: reaches a cargo bin directory; the pinned install \
+             puts the verified binary on PATH itself"
+        );
+        assert!(
+            text.contains("sha256.sum"),
+            "{template}: installs codeflow without verifying sha256.sum"
+        );
+    }
 }
 
 /// Codex EPC-017 review, finding 5: the PR-body check (structure and the
@@ -806,48 +978,225 @@ fn portal_bundle_is_single_complete_and_bounded() {
 /// The repository guide is the first consumer of the shipped starter. Keep
 /// project-owned configuration independent, but require every reusable starter
 /// file to exist and remain byte-identical so a dogfood-only fix cannot pass
-/// while consumers receive stale runtime or tests.
+/// while consumers receive stale runtime or tests. The check runs here and not
+/// in the starter's own tests, because a consumer has no second copy to
+/// compare against.
 #[test]
 fn portal_dogfood_runtime_matches_the_shipped_starter() {
     let root = repo_root();
-    let starter = root.join("assets/docs-portal/starter");
-    let dogfood = root.join("docs-portal");
-    let mut problems = Vec::new();
-    // Match the exact dependency-tree exclusion in EmbeddedAssets without
-    // excluding any authored starter file or weakening the parity inventory.
-    let sources: Vec<PathBuf> = std::fs::read_dir(&starter)
-        .expect("starter directory is readable")
-        .map(|entry| entry.expect("starter entry is readable").path())
-        .filter(|path| path.file_name().is_none_or(|name| name != "node_modules"))
-        .flat_map(|path| {
-            if path.is_dir() {
-                walk_files(&path)
-            } else {
-                vec![path]
-            }
-        })
+    let starter_files = git_inventory(&root, "assets/docs-portal/starter");
+    // The figure declarations the portal configuration binds are the
+    // project's own content, like the configuration itself; the starter
+    // ships none.
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("docs-portal/portal.config.json"))
+            .expect("the dogfood portal config is readable"),
+    )
+    .expect("the dogfood portal config is valid JSON");
+    let declarations: BTreeSet<String> = config["figures"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|binding| binding["declaration"].as_str())
+        .filter_map(|path| path.strip_prefix("docs-portal/"))
+        .map(str::to_owned)
         .collect();
-    for source in sources {
-        let relative = rel(&starter, &source);
-        if relative == "portal.config.json" {
-            continue;
-        }
-        let deployed = dogfood.join(&relative);
-        if !deployed.is_file() {
-            problems.push(format!("missing dogfood file {relative}"));
-            continue;
-        }
-        if std::fs::read(&source).expect("read starter portal file")
-            != std::fs::read(&deployed).expect("read dogfood portal file")
-        {
-            problems.push(format!("byte drift at {relative}"));
-        }
-    }
+    let dogfood_files: Vec<String> = git_inventory(&root, "docs-portal")
+        .into_iter()
+        .filter(|relative| !declarations.contains(relative))
+        .collect();
+    assert!(!starter_files.is_empty(), "the starter lists no files");
+    assert!(!dogfood_files.is_empty(), "docs-portal lists no files");
+    let problems = portal_mirror_drift(
+        &root.join("assets/docs-portal/starter"),
+        &starter_files,
+        &root.join("docs-portal"),
+        &dogfood_files,
+    );
     assert!(
         problems.is_empty(),
         "docs-portal diverged from the shipped reusable starter:\n  {}",
         problems.join("\n  ")
     );
+}
+
+#[test]
+fn portal_mirror_drift_names_each_perturbed_copy() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    let repo = root.path();
+    // No template, so the fixture never copies sample hooks.
+    let init = std::process::Command::new("git")
+        .args(["init", "-q", "--template="])
+        .arg(repo)
+        .output()
+        .expect("git is available for the parity fixture");
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let starter = repo.join("starter");
+    let dogfood = repo.join("dogfood");
+    for side in [&starter, &dogfood] {
+        std::fs::create_dir_all(side.join("scripts")).expect("create scripts");
+        std::fs::write(side.join(".gitignore"), "node_modules/\ndist/\n").expect("write");
+        std::fs::write(side.join("scripts/gate.mjs"), "export const gate = 1;\n").expect("write");
+        std::fs::write(side.join("portal.config.json"), "{}\n").expect("write");
+    }
+    std::fs::write(dogfood.join("portal.config.json"), "{\"title\":\"own\"}\n").expect("write");
+    // Ignored dependency and build output on the starter side only.
+    std::fs::create_dir_all(starter.join("node_modules/pkg")).expect("create node_modules");
+    std::fs::write(starter.join("node_modules/pkg/index.js"), "1\n").expect("write");
+    std::fs::create_dir_all(starter.join("dist")).expect("create dist");
+    std::fs::write(starter.join("dist/index.html"), "<html></html>\n").expect("write");
+    let drift = || {
+        portal_mirror_drift(
+            &starter,
+            &git_inventory(repo, "starter"),
+            &dogfood,
+            &git_inventory(repo, "dogfood"),
+        )
+    };
+    // Project-owned configuration and ignored output are out of scope.
+    assert_eq!(drift(), Vec::<String>::new());
+    std::fs::write(dogfood.join("scripts/gate.mjs"), "export const gate = 2;\n").expect("write");
+    assert_eq!(drift(), vec!["byte drift at scripts/gate.mjs".to_owned()]);
+    std::fs::remove_file(dogfood.join("scripts/gate.mjs")).expect("remove");
+    assert_eq!(
+        drift(),
+        vec!["missing dogfood file scripts/gate.mjs".to_owned()]
+    );
+    // A case-only rename resolves through either spelling on a
+    // case-insensitive filesystem, so only the exact names reveal it.
+    std::fs::write(dogfood.join("scripts/GATE.mjs"), "export const gate = 1;\n").expect("write");
+    assert_eq!(
+        drift(),
+        vec![
+            "missing dogfood file scripts/gate.mjs".to_owned(),
+            "scripts/GATE.mjs is in docs-portal but not in the shipped starter".to_owned(),
+        ]
+    );
+    std::fs::remove_file(dogfood.join("scripts/GATE.mjs")).expect("remove");
+    std::fs::write(dogfood.join("scripts/gate.mjs"), "export const gate = 1;\n").expect("write");
+    assert_eq!(drift(), Vec::<String>::new());
+    std::fs::write(
+        dogfood.join("scripts/extra.mjs"),
+        "export const extra = 1;\n",
+    )
+    .expect("write");
+    assert_eq!(
+        drift(),
+        vec!["scripts/extra.mjs is in docs-portal but not in the shipped starter".to_owned()]
+    );
+}
+
+/// Files under `dir` (relative to the repository at `root`) that Git tracks or
+/// would track: untracked files count before they are staged, and ignored
+/// dependency or build output never does. Paths are relative to `dir`.
+fn git_inventory(root: &Path, dir: &str) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            dir,
+        ])
+        .output()
+        .expect("git is available for portal parity verification");
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let prefix = format!("{dir}/");
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).replace('\\', "/"))
+        .map(|path| {
+            path.strip_prefix(&prefix)
+                .unwrap_or_else(|| panic!("{path} is not under {dir}"))
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Differences between the shipped starter and the dogfood portal. The exact
+/// relative names are compared as strings in both directions, so a case-only
+/// rename is reported even where the filesystem resolves either spelling;
+/// bytes are compared only for names present on both sides.
+/// `portal.config.json` is project-owned, so only its presence is compared.
+fn portal_mirror_drift(
+    starter: &Path,
+    starter_files: &[String],
+    dogfood: &Path,
+    dogfood_files: &[String],
+) -> Vec<String> {
+    let starter_names: BTreeSet<&str> = starter_files.iter().map(String::as_str).collect();
+    let dogfood_names: BTreeSet<&str> = dogfood_files.iter().map(String::as_str).collect();
+    let mut problems: Vec<String> =
+        starter_names
+            .difference(&dogfood_names)
+            .map(|relative| format!("missing dogfood file {relative}"))
+            .chain(dogfood_names.difference(&starter_names).map(|relative| {
+                format!("{relative} is in docs-portal but not in the shipped starter")
+            }))
+            .collect();
+    for relative in starter_names.intersection(&dogfood_names) {
+        if *relative == "portal.config.json" {
+            continue;
+        }
+        if std::fs::read(starter.join(relative)).expect("read starter portal file")
+            != std::fs::read(dogfood.join(relative)).expect("read dogfood portal file")
+        {
+            problems.push(format!("byte drift at {relative}"));
+        }
+    }
+    problems.sort();
+    problems
+}
+
+#[test]
+fn starter_portal_config_points_at_decisions_instead_of_publishing_them() {
+    // ADR-0064: the guide has no per-record pages. The starter default keeps
+    // the records switch off and names the decisions folder as a pointer, so
+    // a freshly scaffolded portal never renders an ADR as a page.
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(repo_root().join("assets/docs-portal/starter/portal.config.json"))
+            .expect("starter portal config is readable"),
+    )
+    .expect("starter portal config is valid JSON");
+    assert_eq!(config["records"]["enabled"], serde_json::Value::Bool(false));
+    assert_eq!(config["records"]["layer"], "system");
+    let folders: Vec<&str> = config["records"]["pointers"]
+        .as_array()
+        .expect("records pointers is an array")
+        .iter()
+        .map(|pointer| {
+            pointer["folder"]
+                .as_str()
+                .expect("pointer folder is a string")
+        })
+        .collect();
+    assert_eq!(folders, ["docs/decisions"]);
+    for layer in config["layers"].as_array().expect("layers is an array") {
+        for key in ["paths", "prefixes"] {
+            for entry in layer[key].as_array().into_iter().flatten() {
+                let entry = entry.as_str().expect("layer entry is a string");
+                assert!(
+                    !entry.starts_with("docs/decisions"),
+                    "starter layer {} publishes the decisions folder through {entry}",
+                    layer["id"]
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -1069,6 +1418,923 @@ fn docs_portal_source_live_and_baseline_copies_are_byte_identical() {
     assert_skill_source_live_and_baseline_copies("cf-docs-portal");
 }
 
+/// Collapse whitespace so a needle survives Markdown reflow.
+fn normalized_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Read one shared presentation resource (the explanation method, the figure
+/// grammar or its specimens), assert its cf-present and cf-docs-portal copies
+/// are byte-identical, and return its whitespace-normalized text.
+fn shared_presentation_resource(file: &str) -> String {
+    let skills = repo_root().join("assets/base/agents/skills");
+    let present = std::fs::read(skills.join("cf-present/resources").join(file))
+        .unwrap_or_else(|_| panic!("present {file} is readable"));
+    let portal = std::fs::read(skills.join("cf-docs-portal/resources").join(file))
+        .unwrap_or_else(|_| panic!("portal {file} is readable"));
+    assert_eq!(
+        present, portal,
+        "{file} drifted between cf-present and cf-docs-portal"
+    );
+    normalized_whitespace(&String::from_utf8(present).expect("shared resource is UTF-8"))
+}
+
+const FIGURE_FAMILIES: [&str; 9] = [
+    "flow",
+    "structure",
+    "layering",
+    "sequence",
+    "state",
+    "coverage",
+    "extent",
+    "derivation",
+    "graph",
+];
+
+/// The figure grammar (ADR-0068) is one doctrine in two skills, with its
+/// specimens in a companion file: each file's copies are byte-identical, the
+/// doctrine names the companion, and neither file draws with a literal colour.
+#[test]
+fn figure_grammar_is_shared_names_its_specimens_and_draws_with_tokens_only() {
+    let grammar = shared_presentation_resource("figure-grammar.md");
+    let specimens = shared_presentation_resource("figure-grammar-specimens.md");
+    assert!(
+        grammar.contains(&normalized_whitespace(
+            "`figure-grammar-specimens.md` beside this file, also byte-identical in both skills. Load it when authoring a figure"
+        )),
+        "figure grammar must name its specimens file and when to load it"
+    );
+    // A literal colour is `#` followed by exactly three or six hex digits and
+    // then a non-alphanumeric boundary; anchors such as `SKILL.md#4` and ids
+    // such as `#fg-cov-h` are not colours.
+    for (file, text) in [
+        ("figure-grammar.md", &grammar),
+        ("figure-grammar-specimens.md", &specimens),
+    ] {
+        let bytes = text.as_bytes();
+        let literal_colour = bytes.iter().enumerate().any(|(index, byte)| {
+            if *byte != b'#' {
+                return false;
+            }
+            let run = bytes[index + 1..]
+                .iter()
+                .take_while(|b| b.is_ascii_hexdigit())
+                .count();
+            let boundary = bytes
+                .get(index + 1 + run)
+                .is_none_or(|b| !b.is_ascii_alphanumeric());
+            (run == 3 || run == 6) && boundary
+        });
+        assert!(
+            !literal_colour && !text.contains("rgb("),
+            "{file} must draw with --cf-fig-* tokens only, never a literal colour"
+        );
+    }
+}
+
+/// The doctrine keeps the nine families in one table, the twelve rules, the
+/// altitude contract, the evidence board with its baselines as controls, and
+/// the named anti-patterns. A smaller file that drops a family or a rule must
+/// fail here.
+#[test]
+fn figure_grammar_keeps_its_families_rules_altitude_and_evidence() {
+    let grammar = shared_presentation_resource("figure-grammar.md");
+    let families_header =
+        "| Family | Relationship it encodes | Geometry | Non-colour channels that carry state | Reader question it answers |";
+    assert!(
+        grammar.contains(families_header),
+        "figure grammar lost the nine-families table header"
+    );
+    for family in FIGURE_FAMILIES {
+        assert!(
+            grammar.contains(&format!("| {family} |")),
+            "figure grammar lost the {family} family row"
+        );
+    }
+    for rule in 1..=12 {
+        assert!(
+            grammar.contains(&format!("| {rule} | ")),
+            "figure grammar lost rule {rule}"
+        );
+    }
+    for (duty, needle) in [
+        ("masked-title test", "Masked-title test: with kicker, title, caption and legend masked"),
+        ("inner mark floor", "Every drawn state mark 9 px or larger on its information-bearing dimension"),
+        ("two-channel measurement", "Every pair of drawn states differs on at least two of"),
+        ("overprint rule", "at a depth of 1 px or more fails; text keeps 8 px clear"),
+        ("narrow variant rule", "Under a 646 px container the narrow composition shows"),
+        ("fidelity rule", "the verifier re-derives the value and compares it exactly"),
+        ("altitude contract", "| Altitude | Reader question | Families that answer it | Prose role |"),
+        ("concept ownership", "Concept owns what the subject is, who it is for and what it is not"),
+        ("how-to rule", "| How-to section | what do I do, in what order, and what tells me it worked | sequence, state or extent |"),
+        ("prose rule", "no em or en dash"),
+        ("evidence board", "`docs/verification/tsk-014-w5/` is the evidence board"),
+        ("negative controls", "are the negative controls a figure must beat"),
+        ("confusable pair", "| Confusable pair |"),
+        ("inner mark anti-pattern", "| Inner mark floor miss |"),
+        ("overprint anti-pattern", "| Overprint |"),
+        ("elongation anti-pattern", "| Elongation by reflow |"),
+        ("declaration schema", "ADR-0068 records the schema"),
+        ("chat rule", "In chat the family choice is the same; the medium changes the marks"),
+    ] {
+        assert!(
+            grammar.contains(&normalized_whitespace(needle)),
+            "figure grammar lost duty: {duty}"
+        );
+    }
+}
+
+/// The specimens companion keeps one numbered specimen per family, each with
+/// its declared figure.
+#[test]
+fn figure_grammar_specimens_keep_one_specimen_per_family() {
+    let specimens = shared_presentation_resource("figure-grammar-specimens.md");
+    for (index, family) in FIGURE_FAMILIES.iter().enumerate() {
+        assert!(
+            specimens.contains(&format!("## {}. {family}", index + 1)),
+            "figure grammar specimens lost the {family} specimen heading"
+        );
+        assert!(
+            specimens.contains(&format!("data-cf-figure=\"{family}\"")),
+            "figure grammar specimens lost the {family} specimen figure"
+        );
+    }
+}
+
+/// Both presentation skills name the figure grammar in their load list; the
+/// shared doctrine names the evidence board and states once, in section 0,
+/// that it is never cloned; the grammar names the board and points at that
+/// rule; no reference names a bare design-exploration board (TSK-072).
+#[test]
+fn presentation_skills_point_at_the_figure_grammar_and_evidence_board() {
+    let skills = repo_root().join("assets/base/agents/skills");
+    let grammar = shared_presentation_resource("figure-grammar.md");
+    assert!(
+        grammar.contains("`docs/verification/tsk-014-w5/` is the evidence board")
+            && grammar.contains("How the board may be used is the shared doctrine's section 0"),
+        "figure grammar must name the evidence board and point at the doctrine's rule"
+    );
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let skill_text = std::fs::read_to_string(skills.join(skill).join("SKILL.md"))
+            .expect("skill is readable");
+        assert!(
+            skill_text.contains("resources/figure-grammar.md"),
+            "{skill}/SKILL.md must name the figure grammar in its load order"
+        );
+        let doctrine = normalized_whitespace(
+            &std::fs::read_to_string(
+                skills
+                    .join(skill)
+                    .join("resources/utility-presentation-system.md"),
+            )
+            .expect("shared doctrine is readable"),
+        );
+        assert!(
+            doctrine.contains("`figure-grammar.md`")
+                && doctrine.contains("### Figure grammar")
+                && !doctrine.contains("### Stage and diagram grammar"),
+            "{skill} shared doctrine must point at the figure grammar as the default form"
+        );
+        let section_zero = doctrine
+            .split("## 1. Separation of planes")
+            .next()
+            .expect("doctrine has a section 0");
+        assert!(
+            section_zero.contains("docs/verification/tsk-014-w5/")
+                && section_zero.contains("It is **evidence only**. Do not clone it"),
+            "{skill} shared doctrine section 0 must name the evidence board and its rule"
+        );
+    }
+    for (path, text) in presentation_skill_markdown("cf-present")
+        .into_iter()
+        .map(|(path, text)| (format!("cf-present/{path}"), text))
+        .chain(
+            presentation_skill_markdown("cf-docs-portal")
+                .into_iter()
+                .map(|(path, text)| (format!("cf-docs-portal/{path}"), text)),
+        )
+    {
+        assert!(
+            !text.contains("design-exploration board"),
+            "{path} must not name a bare design-exploration board"
+        );
+    }
+}
+
+/// Every Markdown file of one presentation skill in the canonical source,
+/// keyed by its path relative to the skill.
+fn presentation_skill_markdown(skill: &str) -> BTreeMap<String, String> {
+    let dir = repo_root().join("assets/base/agents/skills").join(skill);
+    walk_files(&dir)
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .map(|path| {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{} is readable: {error}", path.display()));
+            (rel(&dir, &path), text)
+        })
+        .collect()
+}
+
+/// The number of paragraphs in `text` that state the evidence board rule: a
+/// paragraph that names the board and carries a prohibition verb. A
+/// paraphrase that avoids both the board's names and these verbs is not
+/// detected; review owns that case.
+fn board_rule_paragraphs(text: &str) -> usize {
+    text.split("\n\n")
+        .map(|paragraph| normalized_whitespace(paragraph).to_lowercase())
+        .filter(|paragraph| {
+            ["evidence board", "tsk-014-w5", "the board"]
+                .iter()
+                .any(|name| paragraph.contains(name))
+                && ["clone", "re-render", "reproduce"]
+                    .iter()
+                    .any(|verb| paragraph.contains(verb))
+        })
+        .count()
+}
+
+/// The board-rule predicate ignores an unrelated clone command and counts a
+/// second statement of the rule, however it is worded among its verbs.
+#[test]
+fn board_rule_predicate_ignores_clone_commands_and_counts_duplicates() {
+    assert_eq!(
+        board_rule_paragraphs("Run `git clone <url>` to fetch the repository."),
+        0
+    );
+    assert_eq!(
+        board_rule_paragraphs("How the board may be used is the shared doctrine's section 0."),
+        0
+    );
+    let doctrine = std::fs::read_to_string(
+        repo_root()
+            .join("assets/base/agents/skills/cf-present/resources/utility-presentation-system.md"),
+    )
+    .expect("shared doctrine is readable");
+    assert_eq!(board_rule_paragraphs(&doctrine), 1);
+    let duplicated =
+        format!("{doctrine}\n\nThe evidence board is evidence only; never reproduce its cases.\n");
+    assert_eq!(board_rule_paragraphs(&duplicated), 2);
+}
+
+/// TSK-072 dedupe: in each presentation skill the altitude contract table
+/// header is stated once, in the figure grammar; the evidence board path
+/// appears only in the doctrine and the grammar; and exactly one paragraph,
+/// in the doctrine, states the rule not to clone the board. The rule count
+/// uses `board_rule_paragraphs`, so it proves no second statement names the
+/// board with a prohibition verb; it does not prove the absence of every
+/// paraphrase.
+#[test]
+fn presentation_skills_state_the_altitude_table_and_board_rule_once() {
+    let mut problems = Vec::new();
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let files = presentation_skill_markdown(skill);
+        let count_where = |predicate: &dyn Fn(&str) -> usize| -> BTreeMap<String, usize> {
+            files
+                .iter()
+                .map(|(path, text)| (path.clone(), predicate(text)))
+                .filter(|(_, count)| *count > 0)
+                .collect()
+        };
+        let altitude_headers = count_where(&|text| {
+            text.lines()
+                .filter(|line| line.trim_start().starts_with("| Altitude |"))
+                .count()
+        });
+        let expected_altitude = BTreeMap::from([("resources/figure-grammar.md".to_string(), 1)]);
+        if altitude_headers != expected_altitude {
+            problems.push(format!(
+                "{skill}: altitude table headers {altitude_headers:?}, want {expected_altitude:?}"
+            ));
+        }
+        let board: BTreeSet<String> =
+            count_where(&|text| text.matches("docs/verification/tsk-014-w5/").count())
+                .into_keys()
+                .collect();
+        let expected_board = BTreeSet::from([
+            "resources/figure-grammar.md".to_string(),
+            "resources/utility-presentation-system.md".to_string(),
+        ]);
+        if board != expected_board {
+            problems.push(format!(
+                "{skill}: evidence board path in {board:?}, want {expected_board:?}"
+            ));
+        }
+        let board_rule = count_where(&board_rule_paragraphs);
+        let expected_rule =
+            BTreeMap::from([("resources/utility-presentation-system.md".to_string(), 1)]);
+        if board_rule != expected_rule {
+            problems.push(format!(
+                "{skill}: the evidence board rule is stated in {board_rule:?}, want {expected_rule:?}"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "presentation doctrine is restated:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// The explanation method (TSK-072) is one shared resource in both
+/// presentation skills. It keeps its five stages, a reader and question per
+/// altitude, a carrier row per family plus screenshot, table and the
+/// no-family boundary, the README and smallest-carrier rules, three worked
+/// decisions and the sentence on sources it leaves alone.
+#[test]
+fn explanation_method_is_shared_and_carries_its_stages_readers_and_carriers() {
+    let method = shared_presentation_resource("explanation-method.md");
+    let mut missing = Vec::new();
+    for stage in [
+        "## 1. Reader and question",
+        "## 2. Altitude",
+        "## 3. Carrier",
+        "## 4. Draft",
+        "## 5. Check",
+    ] {
+        if !method.contains(stage) {
+            missing.push(stage.to_string());
+        }
+    }
+    for reader in [
+        "| Concept | someone deciding whether the subject is for them |",
+        "| Architecture | an engineer who will change or integrate it |",
+        "| Technical | an operator or a reviewer |",
+        "| How-to section | someone doing the task now |",
+        "| Reply | the operator who asked |",
+        "A pull request body takes the reply row's reader, an ADR takes the Architecture row's, and a README takes the Concept row's",
+    ] {
+        if !method.contains(reader) {
+            missing.push(reader.to_string());
+        }
+    }
+    for family in FIGURE_FAMILIES {
+        let row = format!("| {family} | ");
+        if !method.contains(&row) {
+            missing.push(row);
+        }
+    }
+    for marker in [
+        "| a surface as it is | screenshot |",
+        "| facts to look up, with no relationship | table |",
+        "| a distribution, or a series over time | no family draws it today |",
+        "In a chat reply, the surface rule in `cf-method/references/workflow-lifecycle.md` picks the form; the fenced ASCII chat form is its plain-text form.",
+        "In a README, a figure is the fenced ASCII chat form",
+        "An SVG file and a Mermaid fence are not README figures",
+        "GitHub shows a `cf-stage` fence as code",
+        "The smallest carrier that keeps the depth wins",
+        "Facts with no relationship between them take bullets or a table and no figure",
+        "nothing asks a page or a document to record the stages",
+        "The method never rewrites a source it must leave alone",
+        "declared `illustrated` with a companion figure bound in configuration or `pass-through`",
+        "`governance` for governance text, and `no-relationship`, with the design primary's note",
+        "lists for the altitude; when it is not, the relationship belongs at another altitude, so go back to stage 2",
+        "with Architecture only when a second structural view is needed",
+        "The second draws the supported architecture of a consuming repository whose remote protection has been verified active",
+        "**Substitute:** draw your own repository's verified enforcement state",
+        "Derivation is the rival and loses here",
+        "rules 1 and 7 partial on the gate surfaces and covered in the review column",
+        "A figure also passes the grammar's self-check, `figure-grammar.md` section 8",
+    ] {
+        if !method.contains(&normalized_whitespace(marker)) {
+            missing.push(marker.to_string());
+        }
+    }
+    if method.contains("marked not claimed") {
+        missing.push("rules decided by review are not marked not claimed".to_string());
+    }
+    let decisions: Vec<&str> = method.split("### ").skip(1).collect();
+    if decisions.len() != 3 {
+        missing.push(format!("three worked decisions, found {}", decisions.len()));
+    }
+    for (decision, (altitude, family)) in decisions.iter().zip([
+        ("Concept", "structure"),
+        ("Architecture", "layering"),
+        ("Technical", "coverage"),
+    ]) {
+        for field in [
+            format!("**Altitude:** {altitude}."),
+            "**Reader:**".to_string(),
+            "**Question:**".to_string(),
+            format!("**Family:** {family}"),
+        ] {
+            if !decision.contains(&field) {
+                missing.push(format!("worked decision {altitude}: {field}"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "explanation method lost:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
+/// The rows of the first Markdown table under `heading` in `text`, each a
+/// list of trimmed cells, header and rule rows dropped.
+fn table_rows_under(text: &str, heading: &str) -> Vec<Vec<String>> {
+    let section = text
+        .split(heading)
+        .nth(1)
+        .unwrap_or_else(|| panic!("no section {heading}"));
+    let section = section.split("\n## ").next().unwrap_or(section);
+    section
+        .lines()
+        .skip_while(|line| !line.starts_with('|'))
+        .take_while(|line| line.starts_with('|'))
+        .skip(2)
+        .map(|line| {
+            line.trim_matches('|')
+                .split(" | ")
+                .map(|cell| cell.trim().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+/// Codex R1 controls: stages 4 and 5 apply by carrier, so an answer with no
+/// figure and a table lookup draft only the universal parts and pass on the
+/// universal checks, while every figure check still holds for a figure.
+#[test]
+fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
+    let method = std::fs::read_to_string(
+        repo_root().join("assets/base/agents/skills/cf-present/resources/explanation-method.md"),
+    )
+    .expect("explanation method is readable");
+    let parts = table_rows_under(&method, "## 4. Draft");
+    let checks = table_rows_under(&method, "## 5. Check");
+    let named = |rows: &[Vec<String>], scope: &str| -> BTreeSet<String> {
+        rows.iter()
+            .filter(|row| row.get(1).map(String::as_str) == Some(scope))
+            .map(|row| row[0].clone())
+            .collect()
+    };
+    let universal_parts = named(&parts, "every answer");
+    let universal_checks = named(&checks, "every answer");
+    // An answer with no figure and a table lookup take only the universal rows.
+    // TSK-073: the lead is drafted only for an answer with a carrier, so a
+    // short answer, its own summary under the copy guide, takes no lead.
+    assert!(
+        parts.iter().any(|row| row[0] == "Lead"
+            && row[1] == "an answer with a carrier"
+            && row[2] == "one sentence saying what the reader is looking at, above the carrier"),
+        "the lead is drafted only for an answer with a carrier"
+    );
+    for carrier in ["an answer with no figure", "a table lookup"] {
+        assert_eq!(
+            universal_parts,
+            BTreeSet::from(["Acting text".to_string()]),
+            "{carrier} takes only the acting text as a universal part"
+        );
+        assert_eq!(
+            universal_checks,
+            BTreeSet::from([
+                "Sources".to_string(),
+                "Copy".to_string(),
+                "Policy characters".to_string()
+            ]),
+            "{carrier} must pass on the universal checks alone"
+        );
+    }
+    assert_eq!(
+        named(&checks, "a figure"),
+        BTreeSet::from([
+            "Masked title".to_string(),
+            "Removal".to_string(),
+            "State channels".to_string()
+        ]),
+        "every figure check still holds for a figure"
+    );
+    for part in ["Declaration", "Twin"] {
+        assert!(
+            parts
+                .iter()
+                .any(|row| row[0] == part && row[1] == "a figure on the portal or in present"),
+            "{part} is drafted only for a figure on the portal or in present"
+        );
+    }
+    let normalized = normalized_whitespace(&method);
+    for marker in [
+        "An answer with no figure, a table lookup included, passes on the universal checks alone",
+        "An answer with no carrier drafts its summary, when it leads into a list, and the acting text; a short answer drafts only the answer.",
+        "a chat form: every pair of marks differs in glyph and each is keyed in the legend line",
+        "A chat form has no declaration file or twin",
+    ] {
+        assert!(
+            normalized.contains(marker),
+            "explanation method lost: {marker}"
+        );
+    }
+}
+
+/// The paragraphs of `text` that tie a chat figure to the ASCII form without
+/// deferring to the lifecycle's surface rule: the paragraph names ASCII and a
+/// chat medium, and neither scopes it to a plain-text surface nor points at
+/// `workflow-lifecycle.md`. A paraphrase that avoids these words is not
+/// detected; review owns that case.
+fn unconditional_ascii_chat_paragraphs(text: &str) -> Vec<String> {
+    text.split("\n\n")
+        .map(normalized_whitespace)
+        .filter(|paragraph| {
+            let lower = paragraph.to_lowercase();
+            lower.contains("ascii")
+                && ["in chat", "for chat", "chat reply"]
+                    .iter()
+                    .any(|medium| lower.contains(medium))
+                && !lower.contains("plain-text")
+                && !lower.contains("workflow-lifecycle.md")
+        })
+        .collect()
+}
+
+/// The lifecycle owns the reply surface rule: an inline HTML figure where
+/// the harness renders one, a `cf-present` page for a full page, and fenced
+/// ASCII only on a plain-text or unknown surface. While it does, no Markdown
+/// file of either presentation skill (the explanation method, the figure
+/// grammar and the portal content contract included) may state that a chat
+/// figure is ASCII without deferring to that rule.
+#[test]
+fn presentation_chat_figures_defer_to_the_lifecycle_surface_rule() {
+    let lifecycle = normalized_whitespace(
+        &std::fs::read_to_string(
+            repo_root()
+                .join("assets/base/claude/skills/cf-method/references/workflow-lifecycle.md"),
+        )
+        .expect("workflow lifecycle is readable"),
+    );
+    for rule in [
+        "Where the harness renders one, use an inline HTML figure, or a `cf-present` page when the figure needs a full page or anchored review.",
+        "Use fenced ASCII on a terminal or other plain-text surface, in a Markdown file (a README, doc, record or PR body), or when unsure what the surface renders.",
+    ] {
+        assert!(
+            lifecycle.contains(rule),
+            "workflow lifecycle lost the reply surface rule: {rule}"
+        );
+    }
+    assert_eq!(
+        unconditional_ascii_chat_paragraphs(
+            "In chat and in a README, a figure is the fenced ASCII chat form."
+        )
+        .len(),
+        1,
+        "the predicate must flag an unconditional ASCII chat rule"
+    );
+    let mut problems = Vec::new();
+    for skill in ["cf-present", "cf-docs-portal"] {
+        for (path, text) in presentation_skill_markdown(skill) {
+            for paragraph in unconditional_ascii_chat_paragraphs(&text) {
+                problems.push(format!("{skill}/{path}: {paragraph}"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "chat figure rules must defer to the lifecycle surface rule:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// Each presentation skill carries its only load list in `SKILL.md`; the
+/// references that used to restate it carry one pointer line instead.
+#[test]
+fn presentation_references_point_at_the_one_load_list() {
+    const POINTER: &str = "**Load order:** the one list in [SKILL.md](../SKILL.md).";
+    let mut problems = Vec::new();
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let files = presentation_skill_markdown(skill);
+        let lists: Vec<&String> = files
+            .iter()
+            .filter(|(_, text)| text.contains("load in order"))
+            .map(|(path, _)| path)
+            .collect();
+        if lists != ["SKILL.md"] {
+            problems.push(format!(
+                "{skill}: load lists in {lists:?}, want SKILL.md only"
+            ));
+        }
+        for (path, text) in &files {
+            for retired in ["Required load order", "Required first", "Thinking first"] {
+                if text.contains(retired) {
+                    problems.push(format!("{skill}/{path}: still says {retired}"));
+                }
+            }
+        }
+    }
+    for path in [
+        "cf-present/references/visual-craft.md",
+        "cf-present/references/document-authoring.md",
+        "cf-present/resources/how-presentation-works.md",
+        "cf-docs-portal/references/visual-craft.md",
+    ] {
+        let text =
+            std::fs::read_to_string(repo_root().join("assets/base/agents/skills").join(path))
+                .expect("reference is readable");
+        let pointers = text.lines().filter(|line| *line == POINTER).count();
+        let head: Vec<&str> = text
+            .lines()
+            .filter(|line| !line.is_empty())
+            .take(2)
+            .collect();
+        if pointers != 1 || head.get(1) != Some(&POINTER) {
+            problems.push(format!(
+                "{path}: the load-order preamble must be the one pointer line under the title"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "load order is restated:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// `how-presentation-works.md` keeps only present content: what the human
+/// sees, block order as attention order, the mental models and the worked
+/// contrast. The general steps and the self-check belong to the method.
+#[test]
+fn how_presentation_works_keeps_only_present_content() {
+    let text = std::fs::read_to_string(
+        repo_root()
+            .join("assets/base/agents/skills/cf-present/resources/how-presentation-works.md"),
+    )
+    .expect("how-presentation-works is readable");
+    for step in ["A", "B", "C", "D", "E", "F"] {
+        assert!(
+            !text.contains(&format!("### Step {step}")),
+            "how-presentation-works still carries Step {step}"
+        );
+    }
+    assert!(
+        !text.contains("Self-check"),
+        "how-presentation-works still carries the self-check the method owns"
+    );
+    for kept in [
+        "## 1. What the human actually encounters",
+        "**order of `blocks[]` = order of attention.**",
+        "## 2. Why structure is the presentation",
+        "## 4. Mental models for present blocks",
+        "## 5. Worked contrast (same facts, different thinking)",
+        "Work through `explanation-method.md` first",
+    ] {
+        assert!(
+            text.contains(kept),
+            "how-presentation-works lost present content: {kept}"
+        );
+    }
+}
+
+/// Both presentation skills load the explanation method as item 1, before
+/// the shared doctrine, and `cf-design` routes utility surfaces to them.
+#[test]
+fn presentation_skills_load_the_explanation_method_first() {
+    let skills = repo_root().join("assets/base/agents/skills");
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let text = std::fs::read_to_string(skills.join(skill).join("SKILL.md"))
+            .expect("skill is readable");
+        let list = text
+            .split("load in order:**")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{skill}/SKILL.md has no load list"));
+        let first = list
+            .lines()
+            .find(|line| line.starts_with("1. "))
+            .unwrap_or_else(|| panic!("{skill}/SKILL.md load list has no item 1"));
+        assert!(
+            first.contains("(resources/explanation-method.md)"),
+            "{skill}/SKILL.md must load resources/explanation-method.md as item 1, found {first}"
+        );
+        let method = list.find("resources/explanation-method.md");
+        let doctrine = list.find("resources/utility-presentation-system.md");
+        assert!(
+            method.is_some() && doctrine.is_some() && method < doctrine,
+            "{skill}/SKILL.md must load the method before the shared doctrine"
+        );
+    }
+    let design = normalized_whitespace(
+        &std::fs::read_to_string(skills.join("cf-design/SKILL.md")).expect("cf-design is readable"),
+    );
+    let section_one = design
+        .split("## 1. Select the process weight")
+        .nth(1)
+        .and_then(|rest| rest.split("## 2.").next())
+        .expect("cf-design has section 1");
+    assert!(
+        section_one.contains(
+            "Utility surfaces (portal, present) load `cf-docs-portal` or `cf-present` instead."
+        ),
+        "cf-design section 1 must route utility surfaces to their skills"
+    );
+}
+
+/// One measured count per family, read off the SVG specimen's facts: stop
+/// bars, copies, act markers, calls, states, covered cells, compares and
+/// critical edges.
+fn chat_form_measures(family: &str) -> &'static [(&'static str, usize)] {
+    match family {
+        "flow" => &[("|", 2), ("(H)", 1)],
+        "structure" => &[("[ .", 4)],
+        "layering" => &[("*", 4)],
+        "sequence" => &[("->|", 3), ("<==", 2)],
+        "state" => &[("[", 7)],
+        "coverage" => &[("#", 12), ("X", 1)],
+        "derivation" => &[("<~>", 2)],
+        "graph" => &[("==>", 5), ("<-", 11)],
+        _ => &[],
+    }
+}
+
+/// Measured counts in one chat form against its specimen's facts.
+fn chat_form_measure_problems(family: &str, lines: &[&str]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let drawing: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| !line.starts_with("Legend: ") && !line.starts_with("Caption: "))
+        .collect();
+    let measured = |needle: &str| {
+        drawing
+            .iter()
+            .map(|line| line.matches(needle).count())
+            .sum::<usize>()
+    };
+    for (needle, want) in chat_form_measures(family) {
+        let got = measured(needle);
+        if got != *want {
+            problems.push(format!(
+                "{family}: {got} of {needle:?} drawn, the specimen has {want}"
+            ));
+        }
+    }
+    if family == "extent" {
+        // Two characters a column, odd lengths rounded up: the used runs of
+        // the subject, the subject line and the three bullets.
+        let runs: Vec<usize> = drawing
+            .iter()
+            .filter_map(|line| {
+                let start = line.find('#')?;
+                Some(line[start..].chars().take_while(|c| *c == '#').count())
+            })
+            .collect();
+        let want: Vec<usize> = [31, 31, 46, 60, 38]
+            .iter()
+            .map(|n: &usize| n.div_ceil(2))
+            .collect();
+        if runs != want {
+            problems.push(format!("extent: used runs {runs:?}, want {want:?}"));
+        }
+    }
+    problems
+}
+
+/// Every specimen family carries a chat form (TSK-072): a fenced text block
+/// with one legend line and one caption line, every line printable ASCII and
+/// under 78 columns, so it renders unwrapped in an 80-column terminal.
+#[test]
+fn figure_grammar_specimens_carry_a_chat_form_per_family() {
+    let skills = repo_root().join("assets/base/agents/skills");
+    let specimens =
+        std::fs::read_to_string(skills.join("cf-present/resources/figure-grammar-specimens.md"))
+            .expect("specimens are readable");
+    let sections: Vec<&str> = specimens.split("\n## ").skip(1).collect();
+    assert_eq!(
+        sections.len(),
+        FIGURE_FAMILIES.len(),
+        "one section per family"
+    );
+    let mut problems = Vec::new();
+    for (section, family) in sections.iter().zip(FIGURE_FAMILIES) {
+        let Some(chat) = section.split("\n### Chat form\n").nth(1) else {
+            problems.push(format!("{family}: no Chat form section"));
+            continue;
+        };
+        if section.matches("\n### Chat form\n").count() != 1 {
+            problems.push(format!("{family}: more than one Chat form section"));
+        }
+        let Some(block) = chat
+            .split("```text\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n```").next())
+        else {
+            problems.push(format!(
+                "{family}: the chat form is not a fenced text block"
+            ));
+            continue;
+        };
+        let lines: Vec<&str> = block.lines().collect();
+        let legends = lines
+            .iter()
+            .filter(|line| line.starts_with("Legend: "))
+            .count();
+        let captions = lines
+            .iter()
+            .filter(|line| line.starts_with("Caption: "))
+            .count();
+        if legends != 1 || captions != 1 {
+            problems.push(format!(
+                "{family}: {legends} legend lines and {captions} caption lines, want one each"
+            ));
+        }
+        if lines
+            .last()
+            .is_none_or(|line| !line.starts_with("Caption: "))
+        {
+            problems.push(format!("{family}: the caption is not the last line"));
+        }
+        for line in &lines {
+            if line.chars().count() >= 78 {
+                problems.push(format!(
+                    "{family}: {} columns: {line}",
+                    line.chars().count()
+                ));
+            }
+            if !line.chars().all(|c| (' '..='~').contains(&c)) {
+                problems.push(format!("{family}: not printable ASCII: {line}"));
+            }
+            if line.contains('\u{2013}') || line.contains('\u{2014}') {
+                problems.push(format!("{family}: en or em dash: {line}"));
+            }
+        }
+        problems.extend(chat_form_measure_problems(family, &lines));
+    }
+    assert!(
+        problems.is_empty(),
+        "chat forms are incomplete:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// The shared doctrine states the screenshot and raster image rules beside
+/// its media carrier, the portal content contract tells authors what a figure
+/// is in each medium, and the portal visual craft walks one page through the
+/// method with a reader, a question and a family per panel.
+#[test]
+fn presentation_doctrine_carries_screenshot_rules_figure_media_and_the_page_walk() {
+    let skills = repo_root().join("assets/base/agents/skills");
+    let read = |path: &str| {
+        normalized_whitespace(
+            &std::fs::read_to_string(skills.join(path))
+                .unwrap_or_else(|error| panic!("{path} is readable: {error}")),
+        )
+    };
+    let mut missing = Vec::new();
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let doctrine = read(&format!("{skill}/resources/utility-presentation-system.md"));
+        for rule in [
+            "### Screenshots and raster images",
+            "| Media (a screenshot or photograph) |",
+            "A screenshot shows a surface as it is and never a relationship",
+            "Capture CodeFlow utility chrome (a portal or present screen) in the Graphite skin in light at 2x, unless the subject is a skin or a mode",
+            "A screenshot of a consuming project's own product keeps that product's default appearance",
+            "Crop to the surface plus a margin of 16 CSS px on every side (32 image pixels at 2x)",
+            "Annotate only with numbered markers keyed in the caption; never draw arrows",
+            "Write alt text that names the surface and its state",
+            "Save chrome as PNG and photographs as WebP, inside the adapter's media limits",
+            "8 MiB per file (`MAX_MEDIA_BYTES`), 64 MiB in all (`MAX_TOTAL_MEDIA_BYTES`)",
+            "Commit it beside its source, in a folder named for the page",
+            "Refresh it when the surface changes",
+            "An imported raster diagram is never a carrier: redraw it in a family",
+        ] {
+            if !doctrine.contains(&normalized_whitespace(rule)) {
+                missing.push(format!("{skill} doctrine: {rule}"));
+            }
+        }
+    }
+    let contract = read("cf-docs-portal/references/content-contract.md");
+    for marker in [
+        "SVG/PDF copies, traversal, unsupported schemes, and broken targets fail closed",
+        "For authors: on the portal and in present a figure is inline SVG through the figure block, in a README it is the ASCII chat form, and in a chat reply the surface rule in `cf-method/references/workflow-lifecycle.md` picks the form.",
+    ] {
+        if !contract.contains(marker) {
+            missing.push(format!("content contract: {marker}"));
+        }
+    }
+    let craft = read("cf-docs-portal/references/visual-craft.md");
+    for marker in [
+        "## 1. How a portal page thinks",
+        "| Panel | Reader | Question | Family and what it draws |",
+        "| Concept | someone deciding",
+        "| Architecture | an engineer",
+        "| Technical | a reviewer",
+        "| How-to: land a change | someone landing a change now",
+        "the human merge as the one decision no plane makes",
+        "the git discipline page of a consuming repository whose remote protection has been verified active",
+        "Substitute your repository's verified enforcement state before drawing these panels",
+        "| structure:",
+        "| layering:",
+        "| coverage:",
+        "| sequence:",
+    ] {
+        if !craft.contains(marker) {
+            missing.push(format!("portal visual craft: {marker}"));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "presentation doctrine lost:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
 /// Presentation JSON contracts are public consumer inputs and exported state.
 /// Pin the authored copies to the deployed and three-way-merge baseline files,
 /// and reject an accidentally open or malformed root contract.
@@ -1133,11 +2399,9 @@ fn present_schema_source_live_and_baseline_copies_are_identical_and_closed() {
     );
 }
 
-/// The portal's utility token layer must stay value-identical to the settled
-/// present skins (ADR-0053 shared craft): portal `signal` mirrors the present
-/// `instrument` skin and portal `folio` mirrors `ink`, in both modes, plus the
-/// instrument/plex typeface stacks and the shared mono stack. Present's
-/// `styles.css` is canonical; a divergence here is design-system drift.
+/// Both products use the design kit's 27 colour roles in all six skin/mode
+/// pairs, with independent font preferences. The starter and live portal
+/// remain byte-identical; the kit JSON is the shared value authority.
 #[test]
 fn portal_utility_tokens_match_present_skins() {
     fn block_after(css: &str, marker: &str) -> std::collections::BTreeMap<String, String> {
@@ -1158,119 +2422,230 @@ fn portal_utility_tokens_match_present_skins() {
             })
             .collect()
     }
-    const ROLES: [&str; 16] = [
-        "canvas",
-        "surface",
-        "surface-raised",
-        "surface-subtle",
-        "text",
-        "text-muted",
-        "border",
-        "border-strong",
-        "accent",
-        "accent-strong",
-        "accent-soft",
-        "focus",
-        "positive",
-        "warning",
-        "danger",
-        "diagram-line",
-    ];
     let root = repo_root();
     let present = std::fs::read_to_string(root.join("crates/codeflow-present/web/src/styles.css"))
-        .expect("present styles are readable");
+        .expect("present styles");
     let portal = std::fs::read_to_string(
         root.join("assets/docs-portal/starter/src/styles/utility-tokens.css"),
     )
-    .expect("portal utility tokens are readable");
-    let pairs = [
-        (
-            "portal instrument light vs present instrument light",
-            ":root {",
-            "[data-cf-theme=\"instrument\"][data-cf-mode-resolved=\"light\"]",
-        ),
-        (
-            "portal instrument dark vs present instrument dark",
-            ":root[data-theme=\"dark\"] {",
-            "[data-cf-theme=\"instrument\"][data-cf-mode-resolved=\"dark\"]",
-        ),
-        (
-            "portal editorial light vs present editorial light",
-            ":root[data-cfp-skin=\"editorial\"] {",
-            "[data-cf-theme=\"editorial\"][data-cf-mode-resolved=\"light\"]",
-        ),
-        (
-            "portal editorial dark vs present editorial dark",
-            ":root[data-theme=\"dark\"][data-cfp-skin=\"editorial\"] {",
-            "[data-cf-theme=\"editorial\"][data-cf-mode-resolved=\"dark\"]",
-        ),
-        (
-            "portal ink light vs present ink light",
-            ":root[data-cfp-skin=\"ink\"] {",
-            "[data-cf-theme=\"ink\"][data-cf-mode-resolved=\"light\"]",
-        ),
-        (
-            "portal ink dark vs present ink dark",
-            ":root[data-theme=\"dark\"][data-cfp-skin=\"ink\"] {",
-            "[data-cf-theme=\"ink\"][data-cf-mode-resolved=\"dark\"]",
-        ),
-    ];
-    let mut drift = Vec::new();
-    for (label, portal_marker, present_marker) in pairs {
-        let ours = block_after(&portal, portal_marker);
-        let theirs = block_after(&present, present_marker);
-        for role in ROLES {
-            match (ours.get(role), theirs.get(role)) {
-                (Some(a), Some(b)) if a == b => {}
-                (a, b) => drift.push(format!(
-                    "{label}: --cf-{role}: portal {a:?} != present {b:?}"
-                )),
+    .expect("starter tokens");
+    let live = std::fs::read_to_string(root.join("docs-portal/src/styles/utility-tokens.css"))
+        .expect("live tokens");
+    assert_eq!(
+        portal, live,
+        "live portal and starter must remain identical"
+    );
+    let kit: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            root.join("assets/base/agents/skills/cf-present/resources/design-system/tokens.json"),
+        )
+        .expect("kit tokens"),
+    )
+    .expect("kit JSON");
+    for skin in ["graphite", "slate", "sage"] {
+        for mode in ["light", "dark"] {
+            let pair = format!("{skin}-{mode}");
+            let roles = kit[&pair].as_object().expect("kit pair");
+            assert_eq!(roles.len(), 27, "complete kit role set");
+            for (sheet, css, marker) in [
+                (
+                    "portal",
+                    &portal,
+                    format!("[data-cfp-skin=\"{skin}\"][data-theme=\"{mode}\"]"),
+                ),
+                (
+                    "present",
+                    &present,
+                    format!("[data-cf-theme=\"{skin}\"][data-cf-mode-resolved=\"{mode}\"]"),
+                ),
+            ] {
+                let actual = block_after(css, &marker);
+                for (role, value) in roles {
+                    assert_eq!(
+                        actual.get(role).map(String::as_str),
+                        value.as_str(),
+                        "{sheet} {pair} {role}"
+                    );
+                }
             }
         }
     }
+    let default = block_after(&present, ":root {");
+    for (role, value) in kit["graphite-light"].as_object().expect("default pair") {
+        assert_eq!(
+            default.get(role).map(String::as_str),
+            value.as_str(),
+            "present prepaint default {role}"
+        );
+    }
+    for face in ["archivo", "inter", "plex"] {
+        let portal = block_after(&portal, &format!("[data-cfp-typeface=\"{face}\"]"));
+        let present = block_after(&present, &format!("[data-cf-typeface=\"{face}\"]"));
+        assert_eq!(
+            portal.get("font-sans"),
+            present.get("font-sans"),
+            "font {face}"
+        );
+        assert!(portal.contains_key("font-sans"));
+    }
+    let portal_default = block_after(&portal, ":root {");
+    for role in ["font-mono", "font-sans"] {
+        assert_eq!(
+            portal_default.get(role),
+            default.get(role),
+            "default {role}"
+        );
+        assert!(default.contains_key(role));
+    }
+}
 
-    let typefaces = [
-        (
-            "portal instrument sans vs present instrument typeface",
-            ":root[data-cfp-typeface=\"instrument\"]",
-            "[data-cf-typeface=\"instrument\"]",
-            "font-sans",
-        ),
-        (
-            "portal editorial sans vs present editorial typeface",
-            ":root[data-cfp-typeface=\"editorial\"]",
-            "[data-cf-typeface=\"editorial\"]",
-            "font-sans",
-        ),
-        (
-            "portal plex sans vs present plex typeface",
-            ":root[data-cfp-typeface=\"plex\"]",
-            "[data-cf-typeface=\"plex\"]",
-            "font-sans",
-        ),
-    ];
-    for (label, portal_marker, present_marker, role) in typefaces {
-        let ours = block_after(&portal, portal_marker);
-        let theirs = block_after(&present, present_marker);
-        match (ours.get(role), theirs.get(role)) {
-            (Some(a), Some(b)) if a == b => {}
-            (a, b) => drift.push(format!(
-                "{label}: --cf-{role}: portal {a:?} != present {b:?}"
-            )),
+/// The copy guide (TSK-073): one section per string type, the home of the
+/// writing rules that other skill files point at.
+const COPY_GUIDE: &str = "assets/base/agents/skills/cf-editorial-review/references/copy-guide.md";
+
+/// The thirteen sections of the copy guide, in order (TSK-073 AC-2).
+const COPY_GUIDE_SECTIONS: [&str; 13] = [
+    "Voice",
+    "Sentences",
+    "Words",
+    "Titles and headings",
+    "Leads",
+    "Captions",
+    "Legend keys and descriptions",
+    "Summaries",
+    "Bullets and tables",
+    "Microcopy",
+    "Replies",
+    "Skill prose",
+    "ADR and PR shapes",
+];
+
+fn repo_text(relative: &str) -> String {
+    std::fs::read_to_string(repo_root().join(relative))
+        .unwrap_or_else(|error| panic!("{relative} is readable: {error}"))
+}
+
+/// The `## ` sections of a Markdown file, each as (heading, body).
+fn level_two_sections(text: &str) -> Vec<(String, String)> {
+    let mut sections: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            sections.push((heading.trim().to_string(), String::new()));
+        } else if let Some((_, body)) = sections.last_mut() {
+            body.push_str(line);
+            body.push('\n');
         }
     }
-    let portal_mono = block_after(&portal, ":root {");
-    let present_mono = block_after(&present, ":root {");
-    match (portal_mono.get("font-mono"), present_mono.get("font-mono")) {
-        (Some(a), Some(b)) if a == b => {}
-        (a, b) => drift.push(format!("shared mono stack: portal {a:?} != present {b:?}")),
-    }
+    sections
+}
 
-    assert!(
-        drift.is_empty(),
-        "portal utility tokens drifted from the canonical present skins \
-         (crates/codeflow-present/web/src/styles.css):\n  {}",
-        drift.join("\n  ")
+/// The examples in one guide section. Each is a line
+/// ``Example, <label> (source: `<path>`):`` (the label is optional) followed
+/// by one or more `> ` lines that hold the exact string. Returns the
+/// (source path, whitespace-folded example text) pairs and the problems: a
+/// line that starts with "Example" but does not parse, a heading with no
+/// quotation, and a quotation with no parsed heading above it.
+fn copy_guide_examples(body: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let heading = regex::Regex::new(r"^Example(?:, .+?)? \(source: `([^`]+)`\):$")
+        .expect("valid example heading pattern");
+    let mut examples = Vec::new();
+    let mut problems = Vec::new();
+    let mut lines = body.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('>') {
+            problems.push(format!("quotation with no example heading: {trimmed}"));
+            continue;
+        }
+        if !trimmed.starts_with("Example") {
+            continue;
+        }
+        let Some(source) = heading.captures(trimmed).map(|found| found[1].to_string()) else {
+            problems.push(format!("example heading that does not parse: {trimmed}"));
+            continue;
+        };
+        while lines.peek().is_some_and(|next| next.trim().is_empty()) {
+            lines.next();
+        }
+        let mut quoted = Vec::new();
+        while let Some(next) = lines.peek() {
+            let Some(text) = next.trim_start().strip_prefix('>') else {
+                break;
+            };
+            quoted.push(text.trim().to_string());
+            lines.next();
+        }
+        if quoted.is_empty() {
+            problems.push(format!("example heading with no quotation: {trimmed}"));
+        }
+        examples.push((source, normalized_whitespace(&quoted.join(" "))));
+    }
+    (examples, problems)
+}
+
+/// Where a named example source lives: a path starting with `cf-` is inside
+/// the shipped skill trees, anything else is relative to the repository root.
+fn copy_guide_source(path: &str) -> PathBuf {
+    if path.starts_with("cf-") {
+        for tree in ["assets/base/agents/skills", "assets/base/claude/skills"] {
+            let candidate = repo_root().join(tree).join(path);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    repo_root().join(path)
+}
+
+/// The visible text of an HTML source: tags dropped, the common entities
+/// unescaped, whitespace normalized.
+fn html_visible_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for character in html.chars() {
+        match character {
+            '<' => {
+                in_tag = true;
+                text.push(' ');
+            }
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => text.push(character),
+            _ => {}
+        }
+    }
+    let text = text
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&rsquo;", "\u{2019}")
+        .replace("&amp;", "&");
+    normalized_whitespace(&text)
+}
+
+/// Whether `example` appears verbatim in the source at `path`.
+fn example_resolves(path: &str, example: &str) -> Result<bool, String> {
+    let file = copy_guide_source(path);
+    let source = std::fs::read_to_string(&file)
+        .map_err(|error| format!("{path}: source is not readable: {error}"))?;
+    let is_html = file
+        .extension()
+        .is_some_and(|extension| extension == "html");
+    Ok(normalized_whitespace(&source).contains(example)
+        || (is_html && html_visible_text(&source).contains(example)))
+}
+
+/// TSK-073 AC-2. The guide carries its thirteen sections in order.
+#[test]
+fn copy_guide_carries_its_thirteen_sections_in_order() {
+    let headings: Vec<String> = level_two_sections(&repo_text(COPY_GUIDE))
+        .into_iter()
+        .map(|(heading, _)| heading)
+        .collect();
+    assert_eq!(
+        headings, COPY_GUIDE_SECTIONS,
+        "copy guide sections drifted from the thirteen in TSK-073"
     );
 }
 
@@ -1295,4 +2670,460 @@ fn shipped_record_and_pr_templates_carry_no_dash() {
         }
     }
     assert!(found.is_empty(), "dashes in shipped templates: {found:?}");
+}
+
+/// TSK-073 AC-3. Every section carries at least one example, and every
+/// example is found verbatim in the source it names. A string that is not
+/// in its source fails the check.
+#[test]
+fn copy_guide_examples_resolve_verbatim_in_their_named_sources() {
+    let mut problems = Vec::new();
+    let mut first = None;
+    for (heading, body) in level_two_sections(&repo_text(COPY_GUIDE)) {
+        let (examples, malformed) = copy_guide_examples(&body);
+        problems.extend(
+            malformed
+                .into_iter()
+                .map(|problem| format!("{heading}: {problem}")),
+        );
+        if examples.is_empty() {
+            problems.push(format!("{heading}: no example"));
+        }
+        for (source, example) in examples {
+            if example.is_empty() {
+                problems.push(format!("{heading}: empty example from {source}"));
+                continue;
+            }
+            match example_resolves(&source, &example) {
+                Ok(true) => {
+                    first.get_or_insert((source, example));
+                }
+                Ok(false) => problems.push(format!("{heading}: not in {source}: {example}")),
+                Err(error) => problems.push(format!("{heading}: {error}")),
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "copy guide examples must resolve verbatim:\n  {}",
+        problems.join("\n  ")
+    );
+    // The check fails on a string its source does not hold.
+    let (source, example) = first.expect("the guide carries at least one example");
+    assert_eq!(
+        example_resolves(&source, &format!("{example} TSK-073 absent")),
+        Ok(false),
+        "the resolution check must fail on a missing string"
+    );
+    // Negative controls (Codex review R1, finding 3): an example heading the
+    // parser cannot read and a quotation with no heading both fail, even
+    // beside a well-formed example; a labelled heading parses.
+    let (parsed, malformed) = copy_guide_examples(
+        "Example, a label (source: `cf-present/SKILL.md`):\n> text\n\n\
+         Example from `cf-present/SKILL.md`:\n> stale text\n\n> orphan quotation\n",
+    );
+    assert_eq!(
+        parsed,
+        vec![("cf-present/SKILL.md".to_string(), "text".to_string())]
+    );
+    assert_eq!(
+        malformed,
+        vec![
+            "example heading that does not parse: Example from `cf-present/SKILL.md`:".to_string(),
+            "quotation with no example heading: > stale text".to_string(),
+            "quotation with no example heading: > orphan quotation".to_string(),
+        ]
+    );
+}
+
+/// The words of the lifecycle reply rule that make a short answer its own
+/// summary: no lead, no heading, no recap.
+const SHORT_ANSWER_EXCEPTION: [&str; 2] = [
+    "A simple answer stays simple",
+    "a one-line answer stays one line",
+];
+
+/// TSK-073 AC-4. The Summaries and Replies sections carry the short-answer
+/// exception in the words of the lifecycle reply rule.
+#[test]
+fn copy_guide_keeps_the_short_answer_exception_in_summaries_and_replies() {
+    let lifecycle = normalized_whitespace(&repo_text(
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+    ));
+    let sections: BTreeMap<String, String> = level_two_sections(&repo_text(COPY_GUIDE))
+        .into_iter()
+        .map(|(heading, body)| (heading, normalized_whitespace(&body)))
+        .collect();
+    for marker in SHORT_ANSWER_EXCEPTION {
+        assert!(
+            lifecycle.contains(marker),
+            "the lifecycle reply rule lost: {marker}"
+        );
+        for section in ["Summaries", "Replies"] {
+            let body = sections
+                .get(section)
+                .unwrap_or_else(|| panic!("copy guide lost its {section} section"));
+            assert!(
+                body.contains(marker),
+                "copy guide {section} lost the short-answer exception: {marker}"
+            );
+        }
+    }
+}
+
+/// The writing bullets of the design-system kit README, whitespace
+/// normalized, from its `## Writing rules` section.
+fn kit_readme_writing_bullets(readme: &str) -> Vec<String> {
+    let section = readme
+        .split("## Writing rules")
+        .nth(1)
+        .expect("kit README keeps its Writing rules section");
+    let section = section.split("\n## ").next().unwrap_or(section);
+    let mut bullets: Vec<String> = Vec::new();
+    for line in section.lines() {
+        if let Some(bullet) = line.strip_prefix("- ") {
+            bullets.push(bullet.to_string());
+        } else if line.starts_with("  ") && !line.trim().is_empty() {
+            if let Some(last) = bullets.last_mut() {
+                last.push(' ');
+                last.push_str(line.trim());
+            }
+        }
+    }
+    bullets
+        .iter()
+        .map(|bullet| normalized_whitespace(bullet))
+        .collect()
+}
+
+/// TSK-073 AC-5. The kit README keeps its six writing bullets and names the
+/// guide, and the guide carries the six bullets verbatim; the README copies
+/// stay byte-identical across the two skills.
+#[test]
+fn kit_readme_writing_bullets_are_carried_verbatim_by_the_copy_guide() {
+    let present =
+        repo_text("assets/base/agents/skills/cf-present/resources/design-system/README.md");
+    let portal =
+        repo_text("assets/base/agents/skills/cf-docs-portal/resources/design-system/README.md");
+    assert_eq!(present, portal, "kit README drifted between the skills");
+    let bullets = kit_readme_writing_bullets(&present);
+    assert_eq!(bullets.len(), 6, "kit README keeps six writing bullets");
+    assert!(
+        normalized_whitespace(&present).contains("`cf-editorial-review/references/copy-guide.md`"),
+        "kit README must name the copy guide"
+    );
+    let guide = normalized_whitespace(&repo_text(COPY_GUIDE));
+    for bullet in &bullets {
+        assert!(
+            guide.contains(bullet.as_str()),
+            "copy guide lost the kit README bullet: {bullet}"
+        );
+    }
+}
+
+/// Sentences that restated the writing rules outside their homes before
+/// TSK-073, and the six kit README bullets. A paraphrase that avoids these
+/// words is not detected; review owns that case.
+const WRITING_RULE_RESTATEMENTS: [&str; 16] = [
+    "short plain sentences, bullets or a table where they carry facts better than a sentence",
+    "The lead sentence says what the reader is looking at; it does not restate the caption",
+    "one sentence saying what the reader takes from it; it never repeats the title",
+    "the prose around the carrier is short and plain",
+    "Keep language plain, direct, calm",
+    "Prefer plain language, descriptive titles",
+    "otherwise use calm, direct, third-person documentation language",
+    "Avoid cryptic headings, invented personality",
+    "Keep titles literal and findable",
+    "Utility language remains neutral when no project voice is established",
+    "Visuals first: a lead sentence above each figure, the acting sentences below.",
+    "Short plain sentences; bullets or a table where they carry facts better than prose.",
+    "No em or en dash; use a comma, colon, full stop or hyphen.",
+    "Titles name the subject in words, never a bare identifier.",
+    "Sentence case, except the uppercase mono kicker.",
+    "No slogans, no \"not X but Y\" turns, no rhetorical triplets.",
+];
+
+/// The three homes that state the writing rules in full.
+fn is_writing_rule_home(path: &str) -> bool {
+    path.ends_with("cf-editorial-review/references/copy-guide.md")
+        || path.ends_with("cf-editorial-review/references/editorial-smells.md")
+        || path.ends_with("resources/design-system/README.md")
+}
+
+/// The skill files TSK-073 turns into pointers, relative to the shipped
+/// skill trees under `assets/base`.
+const COPY_GUIDE_POINTER_FILES: [&str; 12] = [
+    "agents/skills/cf-present/resources/explanation-method.md",
+    "agents/skills/cf-docs-portal/resources/explanation-method.md",
+    "agents/skills/cf-present/resources/utility-presentation-system.md",
+    "agents/skills/cf-docs-portal/resources/utility-presentation-system.md",
+    "agents/skills/cf-present/resources/figure-grammar.md",
+    "agents/skills/cf-docs-portal/resources/figure-grammar.md",
+    "agents/skills/cf-present/SKILL.md",
+    "agents/skills/cf-docs-portal/SKILL.md",
+    "agents/skills/cf-present/references/document-authoring.md",
+    "agents/skills/cf-editorial-review/SKILL.md",
+    "claude/skills/cf-method/references/workflow-lifecycle.md",
+    "agents/skills/cf-ship/SKILL.md",
+];
+
+/// TSK-073 AC-6. The writing rules are stated in full only in the copy
+/// guide, the editorial smells and the kit README; every other skill file
+/// named in the task points at the guide instead.
+#[test]
+fn writing_rules_are_stated_in_full_only_in_their_three_homes() {
+    let base = repo_root().join("assets/base");
+    let mut restated = Vec::new();
+    for tree in ["agents/skills", "claude/skills"] {
+        for path in walk_files(&base.join(tree)) {
+            if path.extension().is_none_or(|extension| extension != "md") {
+                continue;
+            }
+            let relative = rel(&base, &path);
+            if is_writing_rule_home(&relative) {
+                continue;
+            }
+            let text = normalized_whitespace(
+                &std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("{relative} is readable: {error}")),
+            );
+            for rule in WRITING_RULE_RESTATEMENTS {
+                if text.contains(&normalized_whitespace(rule)) {
+                    restated.push(format!("{relative}: {rule}"));
+                }
+            }
+        }
+    }
+    assert!(
+        restated.is_empty(),
+        "writing rules restated outside their homes; point at the copy guide instead:\n  {}",
+        restated.join("\n  ")
+    );
+    let mut unpointed = Vec::new();
+    for file in COPY_GUIDE_POINTER_FILES {
+        let text = normalized_whitespace(&repo_text(&format!("assets/base/{file}")));
+        if !text.contains("copy-guide.md") && !text.contains("copy guide") {
+            unpointed.push(file);
+        }
+    }
+    assert!(
+        unpointed.is_empty(),
+        "skill files must point at the copy guide: {unpointed:?}"
+    );
+}
+
+/// TSK-073 AC-7. The lifecycle "Shape deliverables" text keeps the nine
+/// families, the reply rule, the link rule and the pointer to the method and
+/// the guide; the editorial skill names the guide and points its figure line
+/// at the nine families; cf-ship step 5 and the ADR and epic templates name
+/// the guide.
+#[test]
+fn copy_guide_pointers_and_shape_deliverables_markers_stay_pinned() {
+    let lifecycle = normalized_whitespace(&repo_text(
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+    ));
+    let start = lifecycle
+        .find("Shape deliverables for their audience and medium")
+        .expect("lifecycle keeps Shape deliverables");
+    let end = lifecycle[start..]
+        .find("state an unknown link as unknown.")
+        .map(|offset| start + offset)
+        .expect("Shape deliverables keeps the link rule");
+    let shape = &lifecycle[start..end];
+    let mut missing = Vec::new();
+    for marker in [
+        "(flow, structure, layering, sequence, state, coverage, extent, derivation, graph)",
+        "When a relationship carries the point, the reply carries a figure. Match the form to the surface.",
+        "Never use Mermaid for a reply figure.",
+        "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.",
+        "give the exact link the tool printed or one you verified",
+        "To explain, follow the explanation method (`cf-present/resources/explanation-method.md`); to write each string, follow the copy guide (`cf-editorial-review/references/copy-guide.md`).",
+    ] {
+        if !shape.contains(marker) {
+            missing.push(format!("workflow-lifecycle.md: {marker}"));
+        }
+    }
+    for (file, markers) in [
+        (
+            "assets/base/agents/skills/cf-editorial-review/SKILL.md",
+            &[
+                "This skill, its copy guide and its contextual-smells reference are the canonical CodeFlow home",
+                "Load [references/copy-guide.md](references/copy-guide.md) when writing and [references/editorial-smells.md](references/editorial-smells.md) when reviewing.",
+                "in one of the nine families of the explanation method (`cf-present/resources/explanation-method.md`)",
+            ][..],
+        ),
+        (
+            "assets/base/agents/skills/cf-ship/SKILL.md",
+            &["5. Apply `cf-editorial-review` and its copy guide to substantial changed docs"][..],
+        ),
+        (
+            "assets/base/docs/decisions/template.md",
+            &["The copy guide (`cf-editorial-review/references/copy-guide.md`) has the ADR shape."][..],
+        ),
+        (
+            "docs/decisions/template.md",
+            &["The copy guide (`cf-editorial-review/references/copy-guide.md`) has the ADR shape."][..],
+        ),
+        (
+            "assets/base/pm/epic.md.tmpl",
+            &["Write it by the copy guide (`cf-editorial-review/references/copy-guide.md`)."][..],
+        ),
+        (
+            "assets/base/agents/skills/cf-present/resources/figure-grammar.md",
+            &["Prose around a figure follows the written content policy (ADR-0067); the copy guide (`cf-editorial-review/references/copy-guide.md`)"][..],
+        ),
+    ] {
+        let text = normalized_whitespace(&repo_text(file));
+        for marker in markers {
+            if !text.contains(marker) {
+                missing.push(format!("{file}: {marker}"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "copy guide pointers lost:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
+/// The Summary section of a pull request template: from `## Summary` up to
+/// the next `## ` heading.
+fn pr_summary_block(text: &str) -> String {
+    let start = text
+        .find("## Summary\n")
+        .expect("template keeps ## Summary");
+    let rest = &text[start..];
+    let end = rest[1..]
+        .find("\n## ")
+        .map_or(rest.len(), |offset| offset + 1);
+    rest[..end].to_string()
+}
+
+/// TSK-073 AC-8. The Summary comment is the same block in the shipped
+/// template, this repository's live template and its baseline; the live
+/// template keeps its changelog impact lines and every Release impact field
+/// and instruction inside that section, and the shipped template and the
+/// baseline stay equal.
+#[test]
+fn pr_template_summary_block_is_identical_across_its_three_copies() {
+    let shipped = repo_text("assets/base/ci/pull_request_template.md");
+    let live = repo_text(".github/pull_request_template.md");
+    let baseline = repo_text(".codeflow/.baseline/.github/pull_request_template.md");
+    let summary = pr_summary_block(&shipped);
+    assert!(
+        summary.contains("copy guide"),
+        "the Summary comment names the copy guide"
+    );
+    assert_eq!(
+        summary,
+        pr_summary_block(&live),
+        "live Summary block drifted"
+    );
+    assert_eq!(
+        summary,
+        pr_summary_block(&baseline),
+        "baseline Summary block drifted"
+    );
+    assert_eq!(shipped, baseline, "shipped template and baseline differ");
+    let problems = release_impact_problems(&live);
+    assert!(
+        problems.is_empty(),
+        "live template lost its Release impact contract:\n  {}",
+        problems.join("\n  ")
+    );
+    // Negative control (Codex review R1, finding 1): a section gutted to its
+    // heading, the Unit line and a comment that still names the release
+    // script and the changelog marker fails.
+    let start = live
+        .find("## Release impact\n")
+        .expect("live template keeps ## Release impact");
+    let end = live[start..]
+        .find("<!-- Conditional sections")
+        .map_or(live.len(), |offset| start + offset);
+    let gutted = format!(
+        "{}## Release impact\n\n- Unit: `codeflow`\n\n<!-- Read by `scripts/release.py`. Put a \
+         codeflow:release-impact patch|minor|major HTML marker before each entry. -->\n\n{}",
+        &live[..start],
+        &live[end..]
+    );
+    let gutted_problems = release_impact_problems(&gutted);
+    for lost in [
+        "- Impact:",
+        "- Breaking:",
+        "- Migration:",
+        "add a Withdrawal field",
+    ] {
+        assert!(
+            gutted_problems.iter().any(|problem| problem.contains(lost)),
+            "a gutted Release impact section must fail on {lost}: {gutted_problems:?}"
+        );
+    }
+    // Negative control (Codex confirm, finding 1): a sibling heading right
+    // under the Release impact heading moves every field out of the section
+    // the release script reads, so the fields count as missing.
+    let split = live.replacen("## Release impact\n", "## Release impact\n\n## Other\n", 1);
+    let split_problems = release_impact_problems(&split);
+    assert!(
+        split_problems
+            .iter()
+            .any(|problem| problem.contains("- Impact:")),
+        "a heading inside Release impact must hide its fields: {split_problems:?}"
+    );
+}
+
+/// The Release impact contract of this repository's live PR template:
+/// every field line `scripts/release.py` reads and the instructions around
+/// them, each inside the Release impact section (from its heading to the
+/// next level-two heading or the conditional-sections comment, whichever
+/// comes first), not anywhere in the file.
+fn release_impact_problems(template: &str) -> Vec<String> {
+    let Some(start) = template.find("## Release impact\n") else {
+        return vec!["no ## Release impact section".to_string()];
+    };
+    let rest = &template[start..];
+    // The section ends at whichever comes first, as `scripts/release.py`
+    // stops at the next level-two heading.
+    let end = [
+        rest.find("<!-- Conditional sections"),
+        rest[1..].find("\n## ").map(|offset| offset + 1),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(rest.len());
+    let section = &rest[..end];
+    let lines: BTreeSet<&str> = section.lines().map(str::trim_end).collect();
+    let prose = normalized_whitespace(section);
+    let mut problems = Vec::new();
+    for field in [
+        "- Impact: `none | patch | minor | major`",
+        "- Breaking: `yes | no`",
+        "- Rationale:",
+        "- Migration: `none`, steps, or \"see Breaking change\"",
+        "- Unit: `codeflow`",
+        "- Evidence:",
+    ] {
+        if !lines.contains(field) {
+            problems.push(format!("field line missing from the section: {field}"));
+        }
+    }
+    for instruction in [
+        "Impact is the change level a consumer sees",
+        "Breaking states compatibility",
+        "Choose each value; never leave the alternatives",
+        "Migration is normally `none` for nonbreaking work",
+        "Read by `scripts/release.py` with the fields above",
+        "Breaking is yes if and only if Impact is major",
+        "put a codeflow:release-impact patch|minor|major HTML marker directly before each pending changelog entry",
+        "Impact must equal the highest one this PR adds or edits",
+        "Declared impact cannot be below conventional commit markers",
+        "add a Withdrawal field that says what was removed and why the remaining net contract permits it",
+        "do not add Withdrawal to ordinary PRs",
+    ] {
+        if !prose.contains(instruction) {
+            problems.push(format!("instruction missing from the section: {instruction}"));
+        }
+    }
+    problems
 }

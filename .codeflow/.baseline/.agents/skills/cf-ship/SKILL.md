@@ -1,9 +1,9 @@
 ---
 name: cf-ship
-description: Land finished work — docs and capability updates, then a PR through the gates. Use when a change is reviewed and green and ready to merge.
+description: Land finished work (docs and capability updates, then a PR through the gates). Use when a change is reviewed and green and ready to merge.
 ---
 
-# cf-ship — land finished work
+# cf-ship: land finished work
 
 1. Preconditions: the applicable independent review verdict is `approved` and
    every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
@@ -24,15 +24,15 @@ description: Land finished work — docs and capability updates, then a PR throu
    gaps. Never restart the whole lifecycle or force every failure through
    development.
 2. Same-PR doc mutations (this is how docs stay true):
-   - a capability entry created or updated — status, `verified_by` test tags,
+   - a capability entry created or updated: status, `verified_by` test tags,
      epic and ADR links (required at full tier; keep `verified_by` non-empty so
-     `validate --docs` stays clean — it does not gate epic close);
+     `validate --docs` stays clean; it does not gate epic close);
    - an ADR finalized if a Tier-3 decision was made; `docs/architecture.md`
      updated when the ADR declares architecture impact;
    - no spec status is written at ship: `implemented` is derived once every
      consumer is complete, and already-frozen specs remain historical; epic
      and task statuses change only as the work lifecycle states.
-3. Re-run `codeflow validate --docs` after the doc updates — it must pass.
+3. Re-run `codeflow validate --docs` after the doc updates; it must pass.
    If `.codeflow/docs-portal.json` exists and this change materially affects
    authoritative docs, relationships, version context, portal configuration,
    or starter behavior, also run the adopted portal's locked check/build and
@@ -47,9 +47,9 @@ description: Land finished work — docs and capability updates, then a PR throu
    version updates now, reconciled with the current target and published
    baseline.
    A reviewed merge is not permission to publish or deploy.
-5. Apply `cf-editorial-review` to substantial changed docs, release notes, and
-   the PR narrative. It refines the writing but cannot weaken the template,
-   evidence, policy, or no-emoji requirements below.
+5. Apply `cf-editorial-review` and its copy guide to substantial changed docs,
+   release notes, and the PR narrative. They refine the writing but cannot
+   weaken the template, evidence, policy, or no-emoji requirements below.
 6. Prepare the whole-branch PR using
    [references/pr-evidence.md](references/pr-evidence.md). Write the body and
    release notes plainly: simple, straightforward and clear, no mannered

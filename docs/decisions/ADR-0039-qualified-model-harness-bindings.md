@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — model qualification gains a universal harness capability catalog, one current ensemble record, composable diagnostic packs, promoted local binding records, and doctor drift checks without becoming a runtime router
 ---
 
-# ADR-0039 — qualified model and harness bindings
+# ADR-0039: qualified model and harness bindings
 
 ## Context
 

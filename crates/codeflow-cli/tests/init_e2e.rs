@@ -13,17 +13,33 @@ use std::process::{Command, Output};
 const PRESENT_SKILL_FILES: &[&str] = &[
     "SKILL.md",
     "references/document-authoring.md",
+    "references/feedback-loop.md",
     "references/visual-craft.md",
+    "resources/explanation-method.md",
     "resources/how-presentation-works.md",
     "resources/utility-presentation-system.md",
+    "resources/figure-grammar.md",
+    "resources/figure-grammar-specimens.md",
     "resources/present-document.example.json",
+    "resources/design-system/README.md",
+    "resources/design-system/tokens.json",
+    "resources/design-system/tokens.css",
+    "resources/design-system/chrome.css",
+    "resources/design-system/figure.css",
+    "resources/design-system/chrome.js",
+    "resources/design-system/portal.reference.html",
+    "resources/design-system/present.reference.html",
+    "assets/review-document.example.json",
     "assets/config.example.toml",
     "assets/primitive-tokens.example.json",
     "agents/openai.yaml",
 ];
 const PRESENT_SCHEMAS: &[&str] = &[
     "document-v1.schema.json",
+    "document-v2.schema.json",
     "session-history-v1.schema.json",
+    "session-history-v2.schema.json",
+    "session-responses-v1.schema.json",
     "utility-tokens-v1.schema.json",
 ];
 
@@ -190,6 +206,42 @@ fn assert_present_artifact_parity(root: &Path) {
             );
         }
     }
+    assert_design_kit_matches_in_docs_portal(root);
+}
+
+/// The design system kit ships byte-identical in both presentation skills, so
+/// the docs-portal copies must equal the cf-present source too.
+fn assert_design_kit_matches_in_docs_portal(root: &Path) {
+    let repository = repo_root();
+    let kit_files = PRESENT_SKILL_FILES
+        .iter()
+        .filter(|relative| relative.starts_with("resources/design-system/"));
+    let mut checked = 0;
+    for relative in kit_files {
+        let canonical = std::fs::read(
+            repository
+                .join("assets/base/agents/skills/cf-present")
+                .join(relative),
+        )
+        .unwrap_or_else(|error| panic!("read kit source {relative}: {error}"));
+        for installed in [
+            ".agents/skills/cf-docs-portal",
+            ".claude/skills/cf-docs-portal",
+            ".codeflow/.baseline/.agents/skills/cf-docs-portal",
+            ".codeflow/.baseline/.claude/skills/cf-docs-portal",
+        ] {
+            let path = root.join(installed).join(relative);
+            assert_eq!(
+                std::fs::read(&path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
+                canonical,
+                "design kit drifted at {}",
+                path.display()
+            );
+        }
+        checked += 1;
+    }
+    assert_eq!(checked, 8, "the design kit is eight files");
 }
 
 /// Placeholders: everything the engine substitutes must be gone. Scoped to

@@ -18,5 +18,7 @@ export async function recordPolicyViolations(target) {
 export async function assertNoPolicyViolations(page, label) {
   const violations = await page.evaluate(() => globalThis.__cfPolicyViolations);
   if (!Array.isArray(violations)) throw new Error(`${label} did not record CSP violations`);
-  if (violations.length) throw new Error(`${label} recorded CSP violations: ${JSON.stringify(violations)}`);
+  // Firefox fetches /favicon.ico for its tab itself; the page never does.
+  const pageViolations = violations.filter((violation) => !(violation.directive === "img-src" && new URL(violation.blocked, "http://x").pathname === "/favicon.ico"));
+  if (pageViolations.length) throw new Error(`${label} recorded CSP violations: ${JSON.stringify(pageViolations)}`);
 }

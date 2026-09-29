@@ -14,54 +14,62 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-GT4JHAAF.js",
-      "present.style": "/app/assets/app-DGECXQDT.css"
+      "present.app": "/app/assets/app-CYBSKVQ4.js",
+      "present.style": "/app/assets/app-HLPORNRZ.css"
     },
     "inline": {
       "present.prepaint": {
-        "source": "\"use strict\";(()=>{(()=>{let n=new Set([\"instrument\",\"editorial\",\"ink\",\"technical\"]),o=new Set([\"system\",\"light\",\"dark\"]),r=new Set([\"instrument\",\"editorial\",\"plex\"]),d=new Set([\"compact\",\"default\",\"large\"]),t=null,s=null,a=null,l=null;try{t=localStorage.getItem(\"cf-present-theme\"),s=localStorage.getItem(\"cf-present-mode\"),a=localStorage.getItem(\"cf-present-typeface\"),l=localStorage.getItem(\"cf-present-scale\")}catch{}let m=t&&n.has(t)?t:\"instrument\",c=s&&o.has(s)?s:\"system\",f=a&&r.has(a)?a:\"instrument\",i=l&&d.has(l)?l:\"default\",h=c===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":c,e=document.documentElement;e.dataset.cfTheme=m,e.dataset.cfMode=c,e.dataset.cfModeResolved=h,e.dataset.cfTypeface=f,e.dataset.cfScale=i})();})();",
-        "sha256": "0677d5a199a7393b80c1edf97bb456db932787455079d21381b9a1c0dccee527",
-        "csp_sha256": "sha256-BnfVoZmnOTuAwe35e7RW25Mnh0VQedITgbmhwNzO5Sc="
+        "source": "\"use strict\";(()=>{function c(e){switch(e){case\"instrument\":case\"technical\":return\"graphite\";case\"editorial\":return\"slate\";case\"ink\":return\"sage\";default:return e}}function o(e){switch(e){case\"instrument\":return\"archivo\";case\"editorial\":return\"inter\";default:return e}}(()=>{let e=new Set([\"graphite\",\"slate\",\"sage\"]),i=new Set([\"system\",\"light\",\"dark\"]),m=new Set([\"archivo\",\"inter\",\"plex\"]),d=new Set([\"compact\",\"default\",\"large\"]),a=null,n=null,s=null,r=null;try{a=c(localStorage.getItem(\"cf-present-theme\")),n=localStorage.getItem(\"cf-present-mode\"),s=o(localStorage.getItem(\"cf-present-typeface\")),r=localStorage.getItem(\"cf-present-scale\")}catch{}let u=a&&e.has(a)?a:\"graphite\",l=n&&i.has(n)?n:\"system\",f=s&&m.has(s)?s:\"inter\",g=r&&d.has(r)?r:\"default\",h=l===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":l,t=document.documentElement;t.dataset.cfTheme=u,t.dataset.cfMode=l,t.dataset.cfModeResolved=h,t.dataset.cfTypeface=f,t.dataset.cfScale=g})();})();",
+        "sha256": "f50958fb63ba9c4dae14106c89be5fb5cf6e6b6e4635ab0e68f2df1052ec0425",
+        "csp_sha256": "sha256-9QlY+2O6nE2uFBBsib5ftc9ua25GNasOaPLfEFLsBCU="
       }
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-DGECXQDT.css",
-        "stored_path": "service/app-DGECXQDT.css.br",
-        "media_type": "text/css; charset=utf-8",
-        "content_encoding": "br",
-        "raw_bytes": 34654,
-        "encoded_bytes": 6609,
-        "sha256": "08d4e0dd665d5e05c658a57f1a909c3e51c48537430af62f2e73c643721d70f3",
-        "etag": "\"sha256-CNTg3WZdXgXGWKV/GpCcPlHEhTdDCvYvLnPGQ3IdcPM=\"",
-        "imports": [
-          {
-            "request_path": "/app/assets/svg%3E",
-            "kind": "url-token"
-          }
-        ]
-      },
-      {
-        "request_path": "/app/assets/app-GT4JHAAF.js",
-        "stored_path": "service/app-GT4JHAAF.js.br",
+        "request_path": "/app/assets/app-CYBSKVQ4.js",
+        "stored_path": "service/app-CYBSKVQ4.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 69934,
-        "encoded_bytes": 21592,
-        "sha256": "cb8f0b7260f3d28a4a10a28df576d20d47875b83cc733f3fef940e7f7cb6283f",
-        "etag": "\"sha256-y48LcmDz0opKEKKN9XbSDUeHW4PMcz8/75QOf3y2KD8=\"",
+        "raw_bytes": 110757,
+        "encoded_bytes": 33000,
+        "sha256": "0ec92e3a373a3d6ca3cc44103c25eb9338cb942245584782f0025600d2d5a7fb",
+        "etag": "\"sha256-DskuOjc6PWyjzEQQPCXrkzjLlCJFWEeC8AJWANLVp/s=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
             "kind": "import-statement"
           },
           {
+            "request_path": "/app/assets/chunk-figure-TPQ7LWHH.js",
+            "kind": "dynamic-import"
+          },
+          {
+            "request_path": "/app/assets/chunk-figure-TPQ7LWHH.js",
+            "kind": "dynamic-import"
+          },
+          {
             "request_path": "/app/assets/chunk-fonts-4A3J6ZMY.js",
             "kind": "dynamic-import"
           },
           {
-            "request_path": "/app/assets/chunk-syntax-O56XPGPB.js",
+            "request_path": "/app/assets/chunk-syntax-64CEMTPY.js",
             "kind": "dynamic-import"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/app-HLPORNRZ.css",
+        "stored_path": "service/app-HLPORNRZ.css.br",
+        "media_type": "text/css; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 57596,
+        "encoded_bytes": 10042,
+        "sha256": "9a660e7d3f260f494187de1bf0c275c8c9f512b92540f0a5d68be72e4a6cc5f4",
+        "etag": "\"sha256-mmYOfT8mD0lBh94b8MJ1yMn1ErklQPCl1ovnLkpsxfQ=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/svg%3E",
+            "kind": "url-token"
           }
         ]
       },
@@ -101,6 +109,22 @@
         "encoded_bytes": 622,
         "sha256": "da4218de79c50cb718eeb582d9d1b92a9043f09b0e6e37518159ba7d279e7c88",
         "etag": "\"sha256-2kIY3nnFDLcY7rWC2dG5KpBD8JsObjdRgVm6fSeefIg=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
+            "kind": "import-statement"
+          }
+        ]
+      },
+      {
+        "request_path": "/app/assets/chunk-figure-TPQ7LWHH.js",
+        "stored_path": "service/chunk-figure-TPQ7LWHH.js.br",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 35208,
+        "encoded_bytes": 11592,
+        "sha256": "36d1a5161a92933773f409aea820fd251797b3dfa0339b9d62945ae37354a9f5",
+        "etag": "\"sha256-NtGlFhqSkzdz9AmuqCD9JReXs9+gM5udYpRa43NUqfU=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -189,14 +213,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/chunk-syntax-O56XPGPB.js",
-        "stored_path": "service/chunk-syntax-O56XPGPB.js.br",
+        "request_path": "/app/assets/chunk-syntax-64CEMTPY.js",
+        "stored_path": "service/chunk-syntax-64CEMTPY.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 165773,
-        "encoded_bytes": 48711,
-        "sha256": "ab2083795958b4a7ef676b4f05017cb4addeb85d06b49c071e97ec3883880bd5",
-        "etag": "\"sha256-qyCDeVlYtKfvZ2tPBQF8tK3euF0GtJwHHpfsOIOIC9U=\"",
+        "raw_bytes": 165955,
+        "encoded_bytes": 48840,
+        "sha256": "a73edc4069814ed7f3343a2885e9c127e370dfbb1b2e47ec431a0ff4091aa0b8",
+        "etag": "\"sha256-pz7cQGmBTtfzNDoohenBJ+Nw37sbLkfsQxoP9AkaoLg=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-bash-EPX2PC56.js",
@@ -290,29 +314,29 @@
       }
     ],
     "metrics": {
-      "asset_count": 14,
-      "raw_corpus_bytes": 961762,
-      "brotli_corpus_bytes": 251598,
+      "asset_count": 15,
+      "raw_corpus_bytes": 1060917,
+      "brotli_corpus_bytes": 278160,
       "largest_raw_chunk_bytes": 186275,
       "largest_brotli_chunk_bytes": 131206
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-be07fd87858648f7.js.gz",
+      "stored_path": "export/renderer-d1dc3a8fc7dd2d7b.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 902848,
-      "encoded_bytes": 251370,
-      "sha256": "be07fd87858648f775536102547e11c8c6658a4bf46b7f1f0f0c61627b327233"
+      "raw_bytes": 967084,
+      "encoded_bytes": 270001,
+      "sha256": "d1dc3a8fc7dd2d7bc334a216d0f5af353b22093762c8289a7b839ef99d540d93"
     }
   },
   "budgets": {
-    "raw_corpus_bytes": 1060000,
+    "raw_corpus_bytes": 1105000,
     "largest_raw_chunk_bytes": 205000,
-    "brotli_corpus_bytes": 280000,
+    "brotli_corpus_bytes": 295000,
     "largest_brotli_chunk_bytes": 145000,
-    "export_gzip_bytes": 280000
+    "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "26845e76a974b7856f35ee431bbca99af48f11ed643d97a860c7a1a4bebc7e1e"
+  "corpus_sha256": "8c853a27a928a273d440461d9b897786aa6a939dfeee43a5fa188c6ce6a495d7"
 }

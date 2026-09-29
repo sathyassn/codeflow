@@ -27,14 +27,32 @@ const HOOK_NAMES: [&str; 4] = [
 /// Hardcoded union of top-level keys actually used across the three presets.
 /// A typo'd or stray key in any preset fails here; a deliberate new key means
 /// updating this list in the same change.
-const TOP_LEVEL_KEYS: [&str; 6] = [
+const TOP_LEVEL_KEYS: [&str; 8] = [
     "$schema",
+    "attribution",
     "effortLevel",
     "hooks",
+    "includeCoAuthoredBy",
     "permissions",
     "sandbox",
     "statusLine",
 ];
+
+/// Project policy forbids AI attribution in commits and PR bodies. Every
+/// preset turns the host injection off at the source with both the older
+/// boolean and the newer object, so no agent learns the rule only by being
+/// blocked.
+#[test]
+fn presets_disable_host_attribution() {
+    for name in preset_files() {
+        let bytes = std::fs::read(settings_dir().join(&name)).unwrap();
+        let preset: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(preset["includeCoAuthoredBy"], false, "{name}");
+        assert_eq!(preset["attribution"]["commit"], "", "{name}");
+        assert_eq!(preset["attribution"]["pr"], "", "{name}");
+        assert_eq!(preset["attribution"]["sessionUrl"], false, "{name}");
+    }
+}
 
 #[test]
 fn primary_effort_settings_default_to_high() {

@@ -1,0 +1,343 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "present-guide-concept",
+    "family": "flow",
+    "binding": "authored",
+    "question": "What is a present session, and what happens to my comments?",
+    "idea": "An agent writes a review document, you comment on it, and your submitted review goes back to the agent, which marks it handled.",
+    "title": "What happens in a review session",
+    "kicker": "Reviewing with present",
+    "caption": "Your notes reach the agent only when you submit the review, and the agent tells you when it has handled them.",
+    "states": [
+      {
+        "name": "agent",
+        "mark": "agent",
+        "means": "The agent"
+      },
+      {
+        "name": "you",
+        "mark": "human",
+        "means": "You, the reviewer"
+      },
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "What is exchanged"
+      },
+      {
+        "name": "flows",
+        "mark": "trans",
+        "means": "Leads to"
+      },
+      {
+        "name": "back",
+        "mark": "return",
+        "means": "Goes back to the agent"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a session closes itself after four idle hours",
+        "source": "docs/present-guide.md#concept",
+        "derive": "the lifetime sentence",
+        "check": {
+          "kind": "contains",
+          "text": "closes itself after four idle hours."
+        },
+        "value": true
+      },
+      {
+        "claim": "it is not durable documentation, a product UI or a standing server",
+        "source": "docs/present-guide.md#concept",
+        "derive": "the non-goals sentence",
+        "check": {
+          "kind": "contains",
+          "text": "It is not durable"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 176,
+      "draw": [
+        {
+          "state": "agent",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 80,
+          "r": 11,
+          "id": "a"
+        },
+        {
+          "text": "agent writes",
+          "x": 40,
+          "y": 52,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M54 80H158",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 160,
+          "y": 62,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "review document",
+          "x": 245,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M332 80H436",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "state": "you",
+          "shape": "circle",
+          "cx": 450,
+          "cy": 80,
+          "r": 11,
+          "id": "y"
+        },
+        {
+          "text": "you comment",
+          "x": 450,
+          "y": 52,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "y"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M464 80H568",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 570,
+          "y": 62,
+          "w": 134,
+          "h": 36,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "your review",
+          "x": 637,
+          "y": 84,
+          "anchor": "middle",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "back",
+          "shape": "path",
+          "d": "M637 100V140H40V94",
+          "open": "end",
+          "id": "b"
+        },
+        {
+          "text": "the agent reads it and marks it handled",
+          "x": 338,
+          "y": 164,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 252,
+      "draw": [
+        {
+          "state": "agent",
+          "shape": "circle",
+          "cx": 24,
+          "cy": 40,
+          "r": 10,
+          "id": "a"
+        },
+        {
+          "text": "agent writes",
+          "x": 44,
+          "y": 45,
+          "style": "strong",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M24 52V86",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 88,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "review document",
+          "x": 103,
+          "y": 111,
+          "anchor": "middle",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M24 126V152",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "state": "you",
+          "shape": "circle",
+          "cx": 24,
+          "cy": 166,
+          "r": 10,
+          "id": "y"
+        },
+        {
+          "text": "you comment",
+          "x": 44,
+          "y": 171,
+          "style": "strong",
+          "for": [
+            "y"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M24 178V204",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 206,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "your review",
+          "x": 103,
+          "y": 229,
+          "anchor": "middle",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "back",
+          "shape": "path",
+          "d": "M200 224H300V14H24V28",
+          "open": "end",
+          "id": "b"
+        },
+        {
+          "text": "agent reads it",
+          "x": 290,
+          "y": 149,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "and marks it",
+          "x": 290,
+          "y": 170,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "handled",
+          "x": 290,
+          "y": 191,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "Who",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "the agent",
+          "writes the review document and opens it"
+        ],
+        [
+          "2",
+          "you",
+          "comment and submit your review"
+        ],
+        [
+          "3",
+          "the agent",
+          "reads the review and marks it addressed or dismissed"
+        ]
+      ]
+    }
+  }
+}

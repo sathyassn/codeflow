@@ -248,6 +248,76 @@ const LIFECYCLE_MOMENT: &str = "work item is planned, started, blocked, complete
 
 /// Reads outside the per-task chain, each with its trigger and reason.
 pub const CONDITIONAL_READS: &[ConditionalRead] = &[
+    // The autonomy reference (EPC-018): read when a step may need the
+    // operator, never on every task.
+    conditional(
+        ORCH_SKILL,
+        "cf-method/references/autonomy.md",
+        "Before deciding whether to ask the operator, escalate or stop",
+        "only when deciding whether to ask, escalate or stop",
+    ),
+    conditional(
+        ORCH_SKILL,
+        "cf-method/references/autonomy.md",
+        "ask the operator only what",
+        "only when a question may belong to the operator",
+    ),
+    conditional(
+        "cf-plan/SKILL.md",
+        "cf-method/references/autonomy.md",
+        "Ask the operator only what",
+        "only when a question may belong to the operator",
+    ),
+    conditional(
+        "cf-method/references/workflow-lifecycle.md",
+        "cf-method/references/autonomy.md",
+        "A request for a change selects implementation",
+        "only when settling or escalating a step of a change",
+    ),
+    conditional(
+        "cf-method/references/workflow-lifecycle.md",
+        "cf-method/references/autonomy.md",
+        "or record settled dissent per",
+        "only when a seat dissents on the plan",
+    ),
+    conditional(
+        "cf-method/references/workflow-lifecycle.md",
+        "cf-method/references/autonomy.md",
+        "Follow the PR to its readiness report",
+        "only when deciding who merges",
+    ),
+    conditional(
+        "cf-model-orchestrator/resources/quality/plan.md",
+        "cf-method/references/autonomy.md",
+        "settles a disagreement on a reversible choice",
+        "only after two reconciliation rounds disagree",
+    ),
+    conditional(
+        "cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "cf-method/references/autonomy.md",
+        "reserves to the operator goes to them as one question",
+        "only when a blocker may be the operator choice",
+    ),
+    conditional(
+        "cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "cf-method/references/autonomy.md",
+        "Ask the operator only what",
+        "only when a blocker may be the operator choice",
+    ),
+    // The visual guide's method and copy references (EPC-016): read when
+    // explaining or writing strings, never on every task.
+    conditional(
+        "cf-method/references/workflow-lifecycle.md",
+        "cf-present/resources/explanation-method.md",
+        "To explain, follow the explanation method",
+        "only when a deliverable explains something",
+    ),
+    conditional(
+        "cf-method/references/workflow-lifecycle.md",
+        "cf-editorial-review/references/copy-guide.md",
+        "to write each string, follow the copy guide",
+        "only when writing interface or document strings",
+    ),
     conditional(
         ORCH_SKILL,
         OVERRIDES,
@@ -658,6 +728,22 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "pins.json",
     "stand-in-host.json",
     "gh-stand-in.json",
+    // The visual guide's portal and figure files (EPC-016): the portal
+    // runtime's script list, figure fixtures and declarations, the
+    // utility-presentation architecture page, and the pages the copy guide
+    // cites as this repository's worked examples.
+    "scripts/runtime-scripts.json",
+    "tests/fixtures/figures/*.json",
+    "docs/figures/present-boundary.json",
+    "docs/figures/present-revisions.json",
+    "docs/figures/present-limits.json",
+    "docs/architecture/utility-presentation.md",
+    "docs/decisions/README.md",
+    ".github/pull_request_template.md",
+    "docs/decisions/ADR-0058-explicit-portal-runtime-ownership.md",
+    "docs/decisions/ADR-0064-portal-as-a-guide-to-the-project-as-it-stands.md",
+    "docs/decisions/ADR-0067-written-content-policy.md",
+    ".codeflow/schemas/present/document-v2.schema.json",
 ];
 
 /// The inventory the chain walk checks against. The shipped one is
@@ -1035,7 +1121,8 @@ fn join_path(dir: &str, target: &str) -> String {
 /// The shipped file `target` names from `source`, as an installed project
 /// resolves it: relative to the file, to its skill, to the skill trees
 /// (with or without an installed `.claude/skills/` or `.agents/skills/`
-/// prefix), then a unique path suffix. An ambiguous suffix is an error.
+/// prefix), then a unique path suffix, preferring the one match in the
+/// source's own skill. An ambiguous suffix is an error.
 fn resolve_reference(
     files: &SkillFiles,
     source: &str,
@@ -1054,7 +1141,17 @@ fn resolve_reference(
         return Ok(Some(found));
     }
     let suffix = format!("/{target}");
-    let matches: Vec<&String> = files.keys().filter(|k| k.ends_with(&suffix)).collect();
+    let mut matches: Vec<&String> = files.keys().filter(|k| k.ends_with(&suffix)).collect();
+    // A skill reads its own copy first: when several skills ship a file of
+    // this name and exactly one match is in the source's skill, that is it.
+    let own: Vec<&String> = matches
+        .iter()
+        .copied()
+        .filter(|k| k.starts_with(&format!("{skill}/")))
+        .collect();
+    if matches.len() > 1 && own.len() == 1 {
+        matches = own;
+    }
     match matches.as_slice() {
         [] => Ok(None),
         [one] => Ok(Some((*one).clone())),

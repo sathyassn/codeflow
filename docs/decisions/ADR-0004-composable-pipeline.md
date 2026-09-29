@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: none
 ---
 
-# ADR-0004 — Composable pipeline workflow, shipped user-owned
+# ADR-0004: Composable pipeline workflow, shipped user-owned
 
 ## Context
 

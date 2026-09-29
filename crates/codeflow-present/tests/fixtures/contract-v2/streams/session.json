@@ -1,0 +1,18 @@
+{
+  "document": "documents/v2-framed.json",
+  "reviews": [
+    "anchors/entity-valid-figure.json"
+  ],
+  "answers_document": "documents/v2-forms.json",
+  "answers": [
+    "answers/submit-valid.json"
+  ],
+  "expect_v1_stdout": "one line: the review envelope with the entity note's element_selector and no entity_selector field; byte-equal to FeedbackEnvelope serialization",
+  "expect_v1_stderr": "one line naming 1 pending answer event and --format v2",
+  "expect_v2_stdout": "two lines in sequence order: kind review (with entity_selector and untrusted true) then kind answer (with question and untrusted true)",
+  "expect_exit": {
+    "feedback": 0,
+    "feedback --wait --timeout 1 on an empty session": 6,
+    "feedback --wait after close with nothing pending": 7
+  }
+}

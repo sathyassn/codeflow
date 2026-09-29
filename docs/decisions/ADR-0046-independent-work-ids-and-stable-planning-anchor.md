@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — durable work gains independent IDs, explicit relationships, and a shared merge-base start preflight
 ---
 
-# ADR-0046 — independent work IDs and stable planning anchor
+# ADR-0046: independent work IDs and stable planning anchor
 
 ## Context
 

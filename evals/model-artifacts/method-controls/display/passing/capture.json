@@ -1,0 +1,38 @@
+{
+  "image": "docs/images/display-panel.png",
+  "sha256": "sha256:7bab700b92e71474bc75bee63b0297c0ecb3ad8721d79968b55beedd94c8fc05",
+  "source": "app/index.html",
+  "element": "aside.display",
+  "browser": "Chromium through Playwright",
+  "viewport": {
+    "width": 800,
+    "height": 600
+  },
+  "device_scale_factor": 1,
+  "color_scheme": "light",
+  "stored_choice": "none, so boot.js applies the system mode",
+  "observed": {
+    "theme": "light",
+    "skin": "graphite",
+    "scale": "1"
+  },
+  "markers": [
+    {
+      "number": 1,
+      "control": "select[name=font]"
+    },
+    {
+      "number": 2,
+      "control": "input[name=size]"
+    },
+    {
+      "number": 3,
+      "control": "select[name=skin]"
+    },
+    {
+      "number": 4,
+      "control": "fieldset"
+    }
+  ],
+  "note": "Numbered badges are overlaid in the capture; no arrow is drawn on the image."
+}

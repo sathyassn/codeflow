@@ -1,0 +1,509 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "commit-lengths",
+    "family": "extent",
+    "binding": "authored",
+    "question": "How long may a commit subject and body be, and where is the limit?",
+    "idea": "Subject to 50 with a 72 line, three bullets to 72, no fourth, one optional footer.",
+    "title": "Commit message limits drawn to length",
+    "kicker": "Commit message lengths",
+    "description": "The subject feat(portal): add display panel uses 31 of 72 characters, with limit bars at 50 for the description and 72 for the whole line. The body holds three bullets, each at most 72 characters, drawn to their length with the room left dashed; a fourth bullet is not allowed and is drawn as a denied bar with a cross. An optional BREAKING CHANGE footer follows, drawn as a dashed outline.",
+    "caption": "A subject fits inside 50 with the whole line inside 72, three bullets each fit inside 72, a fourth is refused, and the footer is the one optional part.",
+    "states": [
+      {
+        "name": "used",
+        "mark": "used",
+        "means": "Used"
+      },
+      {
+        "name": "warn",
+        "mark": "warn",
+        "means": "Room left"
+      },
+      {
+        "name": "limit",
+        "mark": "limit",
+        "means": "Limit"
+      },
+      {
+        "name": "denied",
+        "mark": "denied",
+        "means": "Not allowed"
+      },
+      {
+        "name": "optional",
+        "mark": "optional",
+        "means": "Optional"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "description at most 50 characters",
+        "source": ".codeflow/policy.json",
+        "derive": "git.commit_desc_max_len",
+        "check": {
+          "kind": "json",
+          "select": "git.commit_desc_max_len"
+        },
+        "value": 50
+      },
+      {
+        "claim": "subject line at most 72 characters",
+        "source": ".codeflow/policy.json",
+        "derive": "git.commit_subject_max_len",
+        "check": {
+          "kind": "json",
+          "select": "git.commit_subject_max_len"
+        },
+        "value": 72
+      },
+      {
+        "claim": "at most three body bullets",
+        "source": ".codeflow/policy.json",
+        "derive": "git.commit_body_max_bullets",
+        "check": {
+          "kind": "json",
+          "select": "git.commit_body_max_bullets"
+        },
+        "value": 3
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 328,
+      "draw": [
+        {
+          "text": "Subject",
+          "x": 0,
+          "y": 85,
+          "style": "strong"
+        },
+        {
+          "text": "feat(portal): add display panel",
+          "x": 100,
+          "y": 58,
+          "style": "mono"
+        },
+        {
+          "state": "used",
+          "shape": "rect",
+          "x": 100,
+          "y": 74,
+          "w": 261,
+          "h": 12,
+          "rx": 3,
+          "id": "m1"
+        },
+        {
+          "state": "warn",
+          "shape": "path",
+          "d": "M365 80H703",
+          "id": "m2"
+        },
+        {
+          "state": "warn",
+          "shape": "path",
+          "d": "M492 164H703",
+          "id": "m3"
+        },
+        {
+          "state": "warn",
+          "shape": "path",
+          "d": "M610 188H703",
+          "id": "m4"
+        },
+        {
+          "state": "warn",
+          "shape": "path",
+          "d": "M424 212H703",
+          "id": "m5"
+        },
+        {
+          "state": "limit",
+          "shape": "line",
+          "x1": 521,
+          "y1": 66,
+          "x2": 521,
+          "y2": 94,
+          "id": "m6"
+        },
+        {
+          "state": "limit",
+          "shape": "line",
+          "x1": 707,
+          "y1": 66,
+          "x2": 707,
+          "y2": 94,
+          "id": "m7"
+        },
+        {
+          "state": "limit",
+          "shape": "line",
+          "x1": 707,
+          "y1": 146,
+          "x2": 707,
+          "y2": 248,
+          "id": "m8"
+        },
+        {
+          "text": "50 description",
+          "x": 521,
+          "y": 118,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m6"
+          ]
+        },
+        {
+          "text": "72 line",
+          "x": 712,
+          "y": 118,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "m7"
+          ]
+        },
+        {
+          "text": "Bullet 1",
+          "x": 0,
+          "y": 169
+        },
+        {
+          "text": "Bullet 2",
+          "x": 0,
+          "y": 193
+        },
+        {
+          "text": "Bullet 3",
+          "x": 0,
+          "y": 217
+        },
+        {
+          "text": "Bullet 4",
+          "x": 0,
+          "y": 241,
+          "style": "mute"
+        },
+        {
+          "state": "used",
+          "shape": "rect",
+          "x": 100,
+          "y": 159,
+          "w": 388,
+          "h": 10,
+          "rx": 3,
+          "id": "m9"
+        },
+        {
+          "state": "used",
+          "shape": "rect",
+          "x": 100,
+          "y": 183,
+          "w": 506,
+          "h": 10,
+          "rx": 3,
+          "id": "m10"
+        },
+        {
+          "state": "used",
+          "shape": "rect",
+          "x": 100,
+          "y": 207,
+          "w": 320,
+          "h": 10,
+          "rx": 3,
+          "id": "m11"
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 100.75,
+          "y": 230.75,
+          "w": 606,
+          "h": 10.5,
+          "rx": 3,
+          "cross": true,
+          "id": "m12"
+        },
+        {
+          "text": "Footer",
+          "x": 0,
+          "y": 313,
+          "style": "strong"
+        },
+        {
+          "text": "BREAKING CHANGE:",
+          "x": 100,
+          "y": 288,
+          "style": "mono",
+          "for": [
+            "m13"
+          ]
+        },
+        {
+          "state": "optional",
+          "shape": "rect",
+          "x": 100.75,
+          "y": 302.75,
+          "w": 134,
+          "h": 10.5,
+          "rx": 3,
+          "id": "m13"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 340,
+      "height": 322,
+      "draw": [
+        {
+          "text": "Subject",
+          "x": 0,
+          "y": 15,
+          "style": "strong",
+          "for": [
+            "u0"
+          ]
+        },
+        {
+          "text": "feat(portal): add display panel",
+          "x": 76,
+          "y": 15,
+          "style": "mono",
+          "for": [
+            "u0"
+          ]
+        },
+        {
+          "state": "used",
+          "id": "u0",
+          "shape": "rect",
+          "x": 0,
+          "y": 32,
+          "w": 142.08,
+          "h": 12,
+          "rx": 3
+        },
+        {
+          "state": "warn",
+          "id": "w0",
+          "shape": "path",
+          "d": "M146.08 38H326"
+        },
+        {
+          "state": "limit",
+          "id": "l1",
+          "shape": "line",
+          "x1": 229.17,
+          "y1": 30,
+          "x2": 229.17,
+          "y2": 50
+        },
+        {
+          "state": "limit",
+          "id": "l2",
+          "shape": "line",
+          "x1": 330,
+          "y1": 30,
+          "x2": 330,
+          "y2": 50
+        },
+        {
+          "text": "50 description",
+          "x": 229.17,
+          "y": 74,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "l1"
+          ]
+        },
+        {
+          "text": "72 line",
+          "x": 330,
+          "y": 74,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "l2"
+          ]
+        },
+        {
+          "text": "Bullet 1",
+          "x": 0,
+          "y": 110,
+          "for": [
+            "u1"
+          ]
+        },
+        {
+          "state": "used",
+          "id": "u1",
+          "shape": "rect",
+          "x": 0,
+          "y": 117,
+          "w": 210.83,
+          "h": 10,
+          "rx": 3
+        },
+        {
+          "state": "warn",
+          "id": "w1",
+          "shape": "path",
+          "d": "M214.83 122H326"
+        },
+        {
+          "text": "Bullet 2",
+          "x": 0,
+          "y": 154,
+          "for": [
+            "u2"
+          ]
+        },
+        {
+          "state": "used",
+          "id": "u2",
+          "shape": "rect",
+          "x": 0,
+          "y": 161,
+          "w": 275,
+          "h": 10,
+          "rx": 3
+        },
+        {
+          "state": "warn",
+          "id": "w2",
+          "shape": "path",
+          "d": "M279 166H326"
+        },
+        {
+          "text": "Bullet 3",
+          "x": 0,
+          "y": 198,
+          "for": [
+            "u3"
+          ]
+        },
+        {
+          "state": "used",
+          "id": "u3",
+          "shape": "rect",
+          "x": 0,
+          "y": 205,
+          "w": 174.17,
+          "h": 10,
+          "rx": 3
+        },
+        {
+          "state": "warn",
+          "id": "w3",
+          "shape": "path",
+          "d": "M178.17 210H326"
+        },
+        {
+          "text": "Bullet 4",
+          "x": 0,
+          "y": 242,
+          "style": "mute",
+          "for": [
+            "d4"
+          ]
+        },
+        {
+          "state": "denied",
+          "id": "d4",
+          "shape": "rect",
+          "x": 0.75,
+          "y": 249.75,
+          "w": 328,
+          "h": 10.5,
+          "rx": 3,
+          "cross": true
+        },
+        {
+          "state": "limit",
+          "id": "l3",
+          "shape": "line",
+          "x1": 330,
+          "y1": 112,
+          "x2": 330,
+          "y2": 264
+        },
+        {
+          "text": "Footer",
+          "x": 0,
+          "y": 296,
+          "style": "strong",
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "text": "BREAKING CHANGE:",
+          "x": 64,
+          "y": 296,
+          "style": "mono",
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "optional",
+          "id": "o1",
+          "shape": "rect",
+          "x": 0.75,
+          "y": 303.75,
+          "w": 73.33,
+          "h": 10.5,
+          "rx": 3
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Limit",
+        "Example length",
+        "Rule"
+      ],
+      "rows": [
+        [
+          "subject description",
+          "50",
+          "31",
+          "required"
+        ],
+        [
+          "subject line",
+          "72",
+          "31",
+          "required"
+        ],
+        [
+          "bullet 1 to 3",
+          "72 each",
+          "46, 60, 38",
+          "at most three"
+        ],
+        [
+          "bullet 4",
+          "none",
+          "0",
+          "not allowed"
+        ],
+        [
+          "BREAKING CHANGE footer",
+          "none",
+          "16",
+          "optional"
+        ]
+      ]
+    }
+  }
+}

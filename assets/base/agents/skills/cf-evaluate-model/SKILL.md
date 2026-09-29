@@ -3,7 +3,7 @@ name: cf-evaluate-model
 description: Qualify a model, harness release, permission profile, or material CodeFlow instruction change against CodeFlow's regression and capability contracts. Use for model readiness, periodic suite maintenance, or reproducing an observed behavior regression. Runs repeated native-interactive Codex or Claude trials in disposable fixture repositories, preserves traces and environment metadata, compares a candidate with a pinned baseline, and cleans only its marked fixture roots. Never use for ordinary repository work, as a headless model runner, or as a generic cleanup tool.
 ---
 
-# cf-evaluate-model — qualify a model/harness binding
+# cf-evaluate-model: qualify a model/harness binding
 
 Evaluate the complete system the user will run: model, reasoning effort,
 harness, CodeFlow revision, settings, tools, and permission boundary. A score
@@ -69,7 +69,7 @@ limits of catalog support in consuming scaffolds.
    acceptance, absent observed route/trace, invalid
    control/fixture, or unresolved validity threat leaves it candidate.
    Comparisons inform claims but do not gate the qualifying tuple. It covers
-   evidenced tuples—not primary binding, universal reliability, or economy.
+   evidenced tuples, not primary binding, universal reliability, or economy.
 4. **Materialize each trial.** Use an explicit temporary run root and the exact
    CodeFlow binary under test:
 
@@ -118,7 +118,7 @@ limits of catalog support in consuming scaffolds.
    ```
 
    Add only roles the evidence qualifies. The record retains requested and
-   observed model/effort, content digests, harness metadata, and approval—not
+   observed model/effort, content digests, harness metadata, and approval, not
    prompts, settings contents, credentials, or arbitrary trace text. Stable
    primary roles additionally require their role-tagged behavioral cases to
    pass. A project adopts an approved binding only by referencing its ID from

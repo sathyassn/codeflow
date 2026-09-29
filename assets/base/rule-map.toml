@@ -80,8 +80,8 @@ tiers = ["standard"]
 text = """
 **Mechanics:** `codeflow orient`, `status`, `test`, `validate [--docs]`,
 `doctor`, `recall "<query>"`, `integrate <branch>`, `present`, `portal`,
-`remote`; `codeflow --help` lists the rest. Durable work records need the full
-tier.
+`remote`, `estimate`, `policy`, `ci`; `codeflow --help` lists the rest.
+Durable work records need the full tier.
 """
 
 [[agents]]
@@ -90,8 +90,8 @@ text = """
 **Mechanics:** `codeflow orient`, `status`, `work next`, `work claim <id>`,
 `work start <id>`, `task new`, `task status`, `epic new`, `spec new --for <id>`,
 `adr new`, `test`, `validate [--docs]`, `doctor`, `recall "<query>"`,
-`integrate <branch>`, `present`, `portal`, `remote`; `codeflow --help` lists
-the rest.
+`integrate <branch>`, `present`, `portal`, `remote`, `estimate`, `policy`,
+`ci`; `codeflow --help` lists the rest.
 """
 
 [[agents]]
@@ -460,6 +460,11 @@ unsure, route.
   classifier policy, so select auto in the active host (or user settings) and
   supply `autoMode.classifyAllShell` at user/CLI scope. `/cf-customize`
   canaries the effective mode; never claim the repo file enabled it.
+- `.claude/settings.json` also sets `includeCoAuthoredBy` to false and an
+  empty `attribution` for commit and PR with the session link off, so the
+  host never injects the AI attribution that project policy forbids; the
+  commit-msg hook and git-guard remain the floor if a host ignores the
+  setting.
 - The git rules are **hook-enforced** here: the commit-msg hook and
   `git-guard` (wired in `.claude/settings.json`) block violations before they
   land, so fix the cause, never route around them. Full rules:
@@ -538,7 +543,9 @@ text = """
   requiring host state. This is not a general bypass; destructive,
   privileged and secret boundaries remain. Codex uses the separate guarded
   profile in `.codex/config.toml`; one harness's settings do not configure
-  the other.
+  the other. Grok Build uses `.grok/hooks/` in the same in-session guard
+  plane. The four planes remain git hooks, in-session guards, scaffolded CI,
+  and configured remote branch protection.
 - The git rules are **hook-enforced** here: the commit-msg, pre-push,
   pre-merge-commit, and reference-transaction hooks plus `git-guard` block
   violations before they land, so fix the cause, never route around them.

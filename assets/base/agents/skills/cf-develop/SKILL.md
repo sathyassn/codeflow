@@ -3,7 +3,7 @@ name: cf-develop
 description: Implements a planned feature or change through a build → review → verify loop. Use when acceptance criteria are settled and implementation is authorized, either inside cf-model-orchestrator or as its recorded solo fallback after a required interactive seat is unavailable. Do not use as an alternate entry point for routed work.
 ---
 
-# cf-develop — build, review, verify
+# cf-develop: build, review, verify
 
 Drive the planned implementation stage to done. For routed work this skill
 supports `cf-model-orchestrator`; it runs alone only after orchestrator preflight
@@ -21,7 +21,7 @@ records the required interactive seat unavailable and the reduced assurance.
    product, UX, interaction, or visual-design change, require the plan's
    settled `DESIGN_INTENT`; if it is absent, apply `cf-design` before
    implementation. A valid `N/A` or `conform` record does not add ceremony.
-3. Work on a correctly prefixed branch in a worktree — never on the root
+3. Work on a correctly prefixed branch in a worktree, never on the root
    protected-branch checkout.
 4. Follow the approved assignment from `cf-model-orchestrator`'s canonical
    capability-routing resource. The responsible primary may use a permitted
@@ -50,7 +50,7 @@ records the required interactive seat unavailable and the reduced assurance.
       mutation; do not replan ordinary work inside the approved node. Persist
       that in-node classification and its supporting evidence in the execution
       ledger before continuing.
-   b. **Review**: get an *independent* review against the criteria — in Claude
+   b. **Review**: get an *independent* review against the criteria. In Claude
       Code, spawn the `cf-reviewer` subagent; in another harness, run a separate
       read-only review pass (self-review is not review). Claude Code unattended/
       batch runs use `.claude/workflows/pipeline.workflow.js` for the same

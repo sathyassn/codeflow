@@ -1,7 +1,7 @@
 ---
 id: ADR-0018
 uid: 20050cfd-8599-4daf-8a12-45df8beceafb
-title: interactive-only cross-model transport — one lane per direction
+title: "interactive only cross model transport: one lane per direction"
 date: 2026-07-11
 status: accepted
 superseded_by: ADR-0023
@@ -11,7 +11,7 @@ architecture_impact: none — the rule rebinds existing skill doctrine (cf-consu
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0018 — interactive-only cross-model transport
+# ADR-0018: interactive-only cross-model transport
 
 ## Context
 

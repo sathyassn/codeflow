@@ -3,7 +3,7 @@ name: cf-plan
 description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground both seats already settled; still ask live operator-owned questions. Routed work (decided by touched paths; when unsure, route) goes through cf-model-orchestrator first.
 ---
 
-# cf-plan — plan work, do not build it
+# cf-plan: plan work, do not build it
 
 You are clarifying and materializing planned work, not building it.
 
@@ -23,7 +23,7 @@ You are clarifying and materializing planned work, not building it.
    For agentic operating, estimation, capacity or deadline decisions, use
    `cf-estimate` to offer a context-specific preview, reuse compatible adoption
    or honor decline. An estimate answer does not authorize adoption or work.
-3. Clarity gate — before drafting durable records, be able to state the problem
+3. Clarity gate: before drafting durable records, be able to state the problem
    and who it serves; intended outcome and public behavior; scope and non-goals;
    material authority/security/recovery constraints; testable acceptance; and
    affected areas/capabilities. Resolve discoverable facts from the repository,
@@ -33,7 +33,7 @@ You are clarifying and materializing planned work, not building it.
    consequential question (smallest is *scope*, not count) and include
    evidence, viable options, consequences, and a recommendation; do not ask
    them to perform repository discovery for you.
-   After both seats have settled Plan vN, **synthesize that settled ground** —
+   After both seats have settled Plan vN, **synthesize that settled ground**;
    do not open a second interview on boundaries, landing shape, or reversible
    implementation choices already approved. Still ask every *live*
    operator-owned question not already answered by the brief or Plan vN
@@ -86,7 +86,7 @@ You are clarifying and materializing planned work, not building it.
    IDs. Do not mirror status or copy its tree. Active full/historical tracking
    nevertheless requires distinct anchored repository-execution tasks; an
    external artifact cannot satisfy or waive those gates.
-7. Record the execution contract — `/cf-model-orchestrator` is the default for
+7. Record the execution contract: `/cf-model-orchestrator` is the default for
    routed work (decided by touched paths): both seats plan independently, Claude leads
    design, and each implementation task uses the canonical assignment record in
    `cf-model-orchestrator/resources/capability-routing.md` to separate its

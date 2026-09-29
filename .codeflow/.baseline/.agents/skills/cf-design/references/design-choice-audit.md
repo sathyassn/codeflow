@@ -9,7 +9,7 @@ this product, audience, content, context, and platform.
 **Substitution is the defect, not familiarity.** A card, panel, table, pill,
 badge, tab, step marker, gradient, or generated diagram is well chosen when it
 carries a real grouping, state, action, boundary, or product semantic. The same
-element fails when it stands in for a subject nobody modelled — when it exists
+element fails when it stands in for a subject nobody modelled: when it exists
 to make text look designed, to fill a template, or because it is the expected
 completion for this kind of page. Ask what the element encodes; if the answer
 is only "structure" or "it looks finished", the subject work has not been done.
@@ -139,7 +139,7 @@ settled before authoring rather than at review time.
 surface's actual job, that each candidate's encoding can answer it, and that the
 answers differ between candidates. A question aimed at a different job than the
 surface serves, or one an ordinary sentence or list already answers optimally,
-decides the comparison by its own shape before any candidate is drawn — the
+decides the comparison by its own shape before any candidate is drawn; the
 result then looks like a finding and is an artefact. Requalify and re-observe
 instead of reinterpreting the result.
 
@@ -147,7 +147,7 @@ instead of reinterpreting the result.
 a candidate against its source, the derived answer, digest, or provenance is
 published to a machine channel the reader does not see. A candidate that also
 states its registered answer in visible prose has tested the sentence, not the
-encoding — the observer reads it, and the plain baseline contains the same
+encoding: the observer reads it, and the plain baseline contains the same
 sentence. A governing-idea, mechanics, or baseline-differential result taken from
 such a candidate is **void, not weak**, and cannot be repaired by discounting it.
 
@@ -164,13 +164,13 @@ such a candidate is **void, not weak**, and cannot be repaired by discounting it
   sequence must read as ordered, a comparison as comparable, a loop as
   returning, a hierarchy as ranked.
 - **Primary-form inventory.** List every information-bearing composition on the
-  surface — lead, collection, comparison, walkthrough, evidence block — and run
+  surface (lead, collection, comparison, walkthrough, evidence block) and run
   the form-match check on each. A strong lead never excuses an unshaped
   composition beneath it.
 - **Progressive depth.** Each layer holds only what belongs at its altitude,
   and the content inventory shows nothing material was dropped or demoted to
-  achieve it. Reconcile that inventory against a canonical baseline — the
-  surface's last accepted rendered state plus the sources the brief names —
+  achieve it. Reconcile that inventory against a canonical baseline (the
+  surface's last accepted rendered state plus the sources the brief names),
   because an inventory built from the new surface alone cannot show what the new
   surface lost.
 - **No-box**, where a figure or diagram is the primary explanatory form. A
@@ -188,7 +188,7 @@ such a candidate is **void, not weak**, and cannot be repaired by discounting it
   rather than discovering the overlap after both were built.
 - **Adaptation**, where the surface adapts across viewports, input modes, or
   platforms. The observer compares each applicable context against the primary
-  one and states whether the *governing idea* still arrives — which is a
+  one and states whether the *governing idea* still arrives, which is a
   stricter question than whether the information is still present. A context
   that keeps every fact while losing the encoding that carried the point fails,
   and fails as a form problem, not a styling one. Where the intent declares a
@@ -196,14 +196,14 @@ such a candidate is **void, not weak**, and cannot be repaired by discounting it
   observes.
 
 Record for each applied gate what was tested, at which viewport, mode, platform,
-and state, the result that would count as a pass — registered before the renders
-were viewed — who observed it, and the evidence. A gate missing any applicable
+and state, the result that would count as a pass (registered before the renders
+were viewed), who observed it, and the evidence. A gate missing any applicable
 field is untested, not passed; an untested gate is untested, not a pass; and a
 gate whose preconditions above were not met is void, which is also not a pass.
 
 A measurement is evidence only in the units it claims. Take it off the rendered
 surface, in what the reader loses, and check the measure itself against a case
-where the answer is already known — a probe that reports a defect the page does
+where the answer is already known: a probe that reports a defect the page does
 not have will also miss one it does. Everything outside these protocols is contextual judgment, graded by
 materiality, with the operator as final authority on an operator-owned
 direction.

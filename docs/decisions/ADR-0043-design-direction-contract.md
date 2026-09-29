@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — standard/full scaffolds gain a progressive-disclosure design skill, a versioned DESIGN_INTENT plan field, anchored fidelity review, and behavioral design evals
 ---
 
-# ADR-0043 — design direction contract
+# ADR-0043: design direction contract
 
 ## Context
 

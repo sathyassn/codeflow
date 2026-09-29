@@ -859,13 +859,24 @@ fn ci_scaffold_range(dir: &Path) -> (Option<i32>, String) {
     (out.status.code(), all)
 }
 
+/// A managed file that still ships an em dash: the evaluation fixtures quote
+/// dashed text on purpose, while the skill prose itself carries none.
+const DASHED_MANAGED: &str = ".agents/skills/cf-evaluate-model/resources/fixtures.json";
+
+/// The 1-based line of the first em dash in `text`.
+fn first_dash_line(text: &str) -> usize {
+    text.lines()
+        .position(|line| line.contains('\u{2014}'))
+        .expect("fixture carries an em dash")
+        + 1
+}
+
 #[test]
 fn ci_scaffold_range_skips_unmodified_managed_files() {
     let dir = tempfile::tempdir().unwrap();
     scaffolded_standard(dir.path());
     // The fixture must really carry a dash, or the skip proves nothing.
-    let skill =
-        std::fs::read_to_string(dir.path().join(".agents/skills/cf-consult/SKILL.md")).unwrap();
+    let skill = std::fs::read_to_string(dir.path().join(DASHED_MANAGED)).unwrap();
     assert!(skill.contains('\u{2014}'), "fixture lost its em dash");
     // The managed skills are exactly what this binary ships for those paths,
     // and the user-owned starter docs carry no policy character, so the
@@ -880,23 +891,27 @@ fn ci_scaffold_range_skips_unmodified_managed_files() {
 fn ci_adopter_edited_managed_file_is_scanned() {
     let dir = tempfile::tempdir().unwrap();
     scaffolded_standard(dir.path());
-    let path = dir.path().join(".agents/skills/cf-consult/SKILL.md");
+    let path = dir.path().join(DASHED_MANAGED);
     let mut skill = std::fs::read_to_string(&path).unwrap();
+    let line = first_dash_line(&skill);
     skill.push_str("\nA local note, added by the adopter.\n");
     std::fs::write(&path, skill).unwrap();
     git_with_binary(dir.path(), &["add", "."]);
     git_with_binary(
         dir.path(),
-        &["commit", "-m", "docs: note the consult skill"],
+        &["commit", "-m", "docs: note the evaluation fixtures"],
     );
     let (code, all) = ci_scaffold_range(dir.path());
     assert_eq!(code, Some(1), "{all}");
     assert!(
-        all.contains(".agents/skills/cf-consult/SKILL.md:6 adds an em dash (U+2014)"),
+        all.contains(&format!("{DASHED_MANAGED}:{line} adds an em dash (U+2014)")),
         "{all}"
     );
     // The untouched mirror is still CodeFlow's bytes.
-    assert!(!all.contains(".claude/skills/cf-consult/SKILL.md"), "{all}");
+    assert!(
+        !all.contains(".claude/skills/cf-evaluate-model/resources/fixtures.json"),
+        "{all}"
+    );
 }
 
 #[test]
@@ -967,34 +982,39 @@ fn ci_forged_manifest_record_does_not_hide_an_authored_dash() {
 fn ci_shipped_skill_bytes_are_exempt_only_at_their_shipped_path() {
     let shipped = std::fs::read(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/base/agents/skills/cf-consult/SKILL.md"),
+            .join("../../assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json"),
     )
     .unwrap();
-    assert!(
-        String::from_utf8_lossy(&shipped).contains('\u{2014}'),
-        "fixture lost its em dash"
-    );
+    let line = first_dash_line(&String::from_utf8_lossy(&shipped));
     let dir = tempfile::tempdir().unwrap();
     repo_with_grandfathered_dash(dir.path());
-    let skill = dir.path().join(".agents/skills/cf-consult");
+    let skill = dir
+        .path()
+        .join(".agents/skills/cf-evaluate-model/resources");
     std::fs::create_dir_all(&skill).unwrap();
-    std::fs::write(skill.join("SKILL.md"), &shipped).unwrap();
+    std::fs::write(skill.join("fixtures.json"), &shipped).unwrap();
     git(dir.path(), &["add", "."]);
-    git(dir.path(), &["commit", "-m", "docs: add the consult skill"]);
+    git(
+        dir.path(),
+        &["commit", "-m", "docs: add the evaluation fixtures"],
+    );
     let (code, all) = ci_range_output(dir.path());
     assert_eq!(code, Some(0), "{all}");
     assert!(!all.contains("git.policy_characters"), "{all}");
 
-    std::fs::write(dir.path().join("docs/consult.md"), &shipped).unwrap();
+    std::fs::write(dir.path().join("docs/fixtures.json"), &shipped).unwrap();
     git(dir.path(), &["add", "."]);
     git(
         dir.path(),
-        &["commit", "-m", "docs: copy the consult skill"],
+        &["commit", "-m", "docs: copy the evaluation fixtures"],
     );
     let (code, all) = ci_range_output(dir.path());
     assert_eq!(code, Some(1), "{all}");
-    assert!(all.contains("docs/consult.md:6 adds an em dash"), "{all}");
-    assert!(!all.contains(".agents/skills/cf-consult"), "{all}");
+    assert!(
+        all.contains(&format!("docs/fixtures.json:{line} adds an em dash")),
+        "{all}"
+    );
+    assert!(!all.contains(".agents/skills/cf-evaluate-model"), "{all}");
 }
 
 /// A task record under `project-management/tasks/`, valid on its own, with

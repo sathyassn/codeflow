@@ -694,7 +694,7 @@ fn delegate_prompts_narrow_authority_and_data_without_reasking_safe_handoffs() {
         &[
             "Every delegate prompt narrows authority and data",
             "actions/files/resources/data/processors/destinations/effects",
-            "ambiguity blocks—never guess",
+            "ambiguity blocks; never guess",
             "Send only necessary minimized data to an approved processor",
             "route qualification is not data authority",
             "already-authorized scoped handoff needs no new approval",

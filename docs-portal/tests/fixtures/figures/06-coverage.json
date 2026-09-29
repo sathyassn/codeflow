@@ -1,0 +1,785 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "rules-by-plane",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Which plane enforces which rule, and is any rule unclaimed?",
+    "idea": "Every rule has at least one plane; the ticket rule is not claimed remotely.",
+    "title": "Which plane enforces which rule",
+    "kicker": "Rules by plane",
+    "description": "A grid of five rules against four planes. Secret scan: hooks covered, guard covered, CI covered, remote covered. Protected branch push: hooks covered, guard covered, CI not applicable, remote covered. No AI attribution: hooks covered, guard covered, CI covered, remote not applicable. Breaking change footer: hooks partial, guard not run, CI covered, remote not applicable. Ticket reference: hooks covered, guard not applicable, CI partial, remote not claimed.",
+    "caption": "Every rule is enforced by at least one plane, and the one crossed cell is a claim no plane makes.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Covered"
+      },
+      {
+        "name": "part",
+        "mark": "part",
+        "means": "Partial"
+      },
+      {
+        "name": "notrun",
+        "mark": "notrun",
+        "means": "Not run"
+      },
+      {
+        "name": "na",
+        "mark": "na",
+        "means": "Not applicable"
+      },
+      {
+        "name": "nc",
+        "mark": "nc",
+        "means": "Not claimed"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "five rules against four planes",
+        "source": "AGENTS.md#git-rules",
+        "derive": "the rules named in Git rules and the four planes",
+        "check": {
+          "kind": "contains",
+          "text": "Four planes provide defense in depth"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 232,
+      "draw": [
+        {
+          "text": "Hooks",
+          "x": 380,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Guard",
+          "x": 460,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "CI",
+          "x": 540,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Remote",
+          "x": 620,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 0,
+          "y1": 44,
+          "x2": 720,
+          "y2": 44
+        },
+        {
+          "text": "Secret scan",
+          "x": 0,
+          "y": 77
+        },
+        {
+          "text": "Protected branch push",
+          "x": 0,
+          "y": 113
+        },
+        {
+          "text": "No AI attribution",
+          "x": 0,
+          "y": 149
+        },
+        {
+          "text": "Breaking change footer",
+          "x": 0,
+          "y": 185
+        },
+        {
+          "text": "Ticket reference",
+          "x": 0,
+          "y": 221
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 371,
+          "y": 63,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m1"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 451,
+          "y": 63,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m2"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 531,
+          "y": 63,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m3"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 611,
+          "y": 63,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m4"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 371,
+          "y": 99,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m5"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 451,
+          "y": 99,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m6"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 611,
+          "y": 99,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m7"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 371,
+          "y": 135,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m8"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 451,
+          "y": 135,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m9"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 531,
+          "y": 135,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m10"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 531,
+          "y": 171,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m11"
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 371,
+          "y": 207,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m12"
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 371,
+          "y": 171,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m13"
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 531,
+          "y": 207,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m14"
+        },
+        {
+          "state": "notrun",
+          "shape": "rect",
+          "x": 451,
+          "y": 171,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m15"
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 531,
+          "y": 99,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m16"
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 611,
+          "y": 135,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m17"
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 611,
+          "y": 171,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m18"
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 451,
+          "y": 207,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m19"
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 611,
+          "y": 207,
+          "w": 18,
+          "h": 18,
+          "rx": 2,
+          "id": "m20"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 340,
+      "height": 286,
+      "draw": [
+        {
+          "text": "Secret scan",
+          "x": 0,
+          "y": 18,
+          "style": "strong"
+        },
+        {
+          "state": "cov",
+          "id": "c0-0",
+          "shape": "rect",
+          "x": 0,
+          "y": 30,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Hooks",
+          "x": 22,
+          "y": 43,
+          "style": "mute",
+          "for": [
+            "c0-0"
+          ]
+        },
+        {
+          "state": "cov",
+          "id": "c0-1",
+          "shape": "rect",
+          "x": 88,
+          "y": 30,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Guard",
+          "x": 110,
+          "y": 43,
+          "style": "mute",
+          "for": [
+            "c0-1"
+          ]
+        },
+        {
+          "state": "cov",
+          "id": "c0-2",
+          "shape": "rect",
+          "x": 176,
+          "y": 30,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "CI",
+          "x": 198,
+          "y": 43,
+          "style": "mute",
+          "for": [
+            "c0-2"
+          ]
+        },
+        {
+          "state": "cov",
+          "id": "c0-3",
+          "shape": "rect",
+          "x": 264,
+          "y": 30,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Remote",
+          "x": 286,
+          "y": 43,
+          "style": "mute",
+          "for": [
+            "c0-3"
+          ]
+        },
+        {
+          "text": "Protected branch push",
+          "x": 0,
+          "y": 76,
+          "style": "strong"
+        },
+        {
+          "state": "cov",
+          "id": "c1-0",
+          "shape": "rect",
+          "x": 0,
+          "y": 88,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Hooks",
+          "x": 22,
+          "y": 101,
+          "style": "mute",
+          "for": [
+            "c1-0"
+          ]
+        },
+        {
+          "state": "cov",
+          "id": "c1-1",
+          "shape": "rect",
+          "x": 88,
+          "y": 88,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Guard",
+          "x": 110,
+          "y": 101,
+          "style": "mute",
+          "for": [
+            "c1-1"
+          ]
+        },
+        {
+          "state": "na",
+          "id": "c1-2",
+          "shape": "rect",
+          "x": 176,
+          "y": 88,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "CI",
+          "x": 198,
+          "y": 101,
+          "style": "mute",
+          "for": [
+            "c1-2"
+          ]
+        },
+        {
+          "state": "cov",
+          "id": "c1-3",
+          "shape": "rect",
+          "x": 264,
+          "y": 88,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Remote",
+          "x": 286,
+          "y": 101,
+          "style": "mute",
+          "for": [
+            "c1-3"
+          ]
+        },
+        {
+          "text": "No AI attribution",
+          "x": 0,
+          "y": 134,
+          "style": "strong"
+        },
+        {
+          "state": "cov",
+          "id": "c2-0",
+          "shape": "rect",
+          "x": 0,
+          "y": 146,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Hooks",
+          "x": 22,
+          "y": 159,
+          "style": "mute",
+          "for": [
+            "c2-0"
+          ]
+        },
+        {
+          "state": "cov",
+          "id": "c2-1",
+          "shape": "rect",
+          "x": 88,
+          "y": 146,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Guard",
+          "x": 110,
+          "y": 159,
+          "style": "mute",
+          "for": [
+            "c2-1"
+          ]
+        },
+        {
+          "state": "cov",
+          "id": "c2-2",
+          "shape": "rect",
+          "x": 176,
+          "y": 146,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "CI",
+          "x": 198,
+          "y": 159,
+          "style": "mute",
+          "for": [
+            "c2-2"
+          ]
+        },
+        {
+          "state": "na",
+          "id": "c2-3",
+          "shape": "rect",
+          "x": 264,
+          "y": 146,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Remote",
+          "x": 286,
+          "y": 159,
+          "style": "mute",
+          "for": [
+            "c2-3"
+          ]
+        },
+        {
+          "text": "Breaking change footer",
+          "x": 0,
+          "y": 192,
+          "style": "strong"
+        },
+        {
+          "state": "part",
+          "id": "c3-0",
+          "shape": "rect",
+          "x": 0,
+          "y": 204,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Hooks",
+          "x": 22,
+          "y": 217,
+          "style": "mute",
+          "for": [
+            "c3-0"
+          ]
+        },
+        {
+          "state": "notrun",
+          "id": "c3-1",
+          "shape": "rect",
+          "x": 88,
+          "y": 204,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Guard",
+          "x": 110,
+          "y": 217,
+          "style": "mute",
+          "for": [
+            "c3-1"
+          ]
+        },
+        {
+          "state": "cov",
+          "id": "c3-2",
+          "shape": "rect",
+          "x": 176,
+          "y": 204,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "CI",
+          "x": 198,
+          "y": 217,
+          "style": "mute",
+          "for": [
+            "c3-2"
+          ]
+        },
+        {
+          "state": "na",
+          "id": "c3-3",
+          "shape": "rect",
+          "x": 264,
+          "y": 204,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Remote",
+          "x": 286,
+          "y": 217,
+          "style": "mute",
+          "for": [
+            "c3-3"
+          ]
+        },
+        {
+          "text": "Ticket reference",
+          "x": 0,
+          "y": 250,
+          "style": "strong"
+        },
+        {
+          "state": "cov",
+          "id": "c4-0",
+          "shape": "rect",
+          "x": 0,
+          "y": 262,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Hooks",
+          "x": 22,
+          "y": 275,
+          "style": "mute",
+          "for": [
+            "c4-0"
+          ]
+        },
+        {
+          "state": "na",
+          "id": "c4-1",
+          "shape": "rect",
+          "x": 88,
+          "y": 262,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Guard",
+          "x": 110,
+          "y": 275,
+          "style": "mute",
+          "for": [
+            "c4-1"
+          ]
+        },
+        {
+          "state": "part",
+          "id": "c4-2",
+          "shape": "rect",
+          "x": 176,
+          "y": 262,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "CI",
+          "x": 198,
+          "y": 275,
+          "style": "mute",
+          "for": [
+            "c4-2"
+          ]
+        },
+        {
+          "state": "nc",
+          "id": "c4-3",
+          "shape": "rect",
+          "x": 264,
+          "y": 262,
+          "w": 16,
+          "h": 16,
+          "rx": 2
+        },
+        {
+          "text": "Remote",
+          "x": 286,
+          "y": 275,
+          "style": "mute",
+          "for": [
+            "c4-3"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Rule",
+        "Hooks",
+        "Guard",
+        "CI",
+        "Remote"
+      ],
+      "rows": [
+        [
+          "Secret scan",
+          "covered",
+          "covered",
+          "covered",
+          "covered"
+        ],
+        [
+          "Protected branch push",
+          "covered",
+          "covered",
+          "not applicable",
+          "covered"
+        ],
+        [
+          "No AI attribution",
+          "covered",
+          "covered",
+          "covered",
+          "not applicable"
+        ],
+        [
+          "Breaking change footer",
+          "partial",
+          "not run",
+          "covered",
+          "not applicable"
+        ],
+        [
+          "Ticket reference",
+          "covered",
+          "not applicable",
+          "partial",
+          "not claimed"
+        ]
+      ]
+    }
+  }
+}

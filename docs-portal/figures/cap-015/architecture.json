@@ -1,0 +1,566 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "portal-derivation",
+    "family": "derivation",
+    "binding": "authored",
+    "question": "How is a site made, and what proves it?",
+    "idea": "The adapter derives every output from one committed snapshot, refuses working-tree bytes, and two independent checks prove the result.",
+    "title": "How the guide is made and checked",
+    "kicker": "Derivation",
+    "caption": "Neither check trusts the adapter: the validator re-derives the bytes and the browser gate measures what a reader sees.",
+    "states": [
+      {
+        "name": "source",
+        "mark": "layer-remote",
+        "means": "Authoritative input"
+      },
+      {
+        "name": "refused",
+        "mark": "denied",
+        "means": "Refused input"
+      },
+      {
+        "name": "step",
+        "mark": "merge",
+        "means": "The adapter"
+      },
+      {
+        "name": "output",
+        "mark": "state",
+        "means": "Generated output"
+      },
+      {
+        "name": "derives",
+        "mark": "trans",
+        "means": "Derives"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Refused"
+      },
+      {
+        "name": "compares",
+        "mark": "todo",
+        "means": "Checked against"
+      },
+      {
+        "name": "check",
+        "mark": "human",
+        "means": "Independent check"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the adapter derives the outputs from one committed snapshot",
+        "source": "docs/capabilities/CAP-015-opt-in-documentation-portal.md#architecture",
+        "derive": "the adapter sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The adapter turns one committed snapshot into pages, Markdown twins,"
+        },
+        "value": true
+      },
+      {
+        "claim": "the adapter refuses working-tree bytes that differ from HEAD",
+        "source": "docs/capabilities/CAP-015-opt-in-documentation-portal.md#technical",
+        "derive": "the committed-bytes sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The adapter reads only committed bytes"
+        },
+        "value": true
+      },
+      {
+        "claim": "validate --portal executes no project code and writes nothing",
+        "source": "docs/capabilities/CAP-015-opt-in-documentation-portal.md#technical",
+        "derive": "the validator sentence",
+        "check": {
+          "kind": "contains",
+          "text": "`codeflow validate --portal <directory>` executes no project code and writes"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 280,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 70,
+          "w": 192,
+          "h": 44,
+          "rx": 4,
+          "cap": "end",
+          "id": "s"
+        },
+        {
+          "text": "committed snapshot",
+          "x": 30,
+          "y": 97,
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "refused",
+          "shape": "rect",
+          "x": 16,
+          "y": 150,
+          "w": 192,
+          "h": 44,
+          "rx": 4,
+          "id": "w"
+        },
+        {
+          "text": "working-tree bytes",
+          "x": 30,
+          "y": 177,
+          "for": [
+            "w"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M210 92C250 92 262 110 292 114",
+          "head": "end",
+          "id": "d1"
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M210 172C250 172 262 128 294 122",
+          "cross": {
+            "cx": 255,
+            "cy": 149,
+            "size": 12
+          },
+          "id": "b1"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 318,
+          "cy": 116,
+          "r": 24,
+          "id": "a"
+        },
+        {
+          "text": "adapter",
+          "x": 318,
+          "y": 80,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M344 110C380 110 380 60 398 60",
+          "head": "end",
+          "id": "d2"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M344 116H398",
+          "head": "end",
+          "id": "d3"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M344 122C380 122 380 172 398 172",
+          "head": "end",
+          "id": "d4"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 400,
+          "y": 40,
+          "w": 180,
+          "h": 40,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "pages and twins",
+          "x": 414,
+          "y": 65,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 400,
+          "y": 96,
+          "w": 180,
+          "h": 40,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "search, llms.txt",
+          "x": 414,
+          "y": 121,
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 400,
+          "y": 152,
+          "w": 180,
+          "h": 40,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "evidence manifest",
+          "x": 414,
+          "y": 177,
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M440 194V226",
+          "square": "end",
+          "id": "c1"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 440,
+          "cy": 240,
+          "r": 12,
+          "tick": true,
+          "id": "k1"
+        },
+        {
+          "text": "validate --portal",
+          "x": 422,
+          "y": 245,
+          "anchor": "end",
+          "style": "mono",
+          "for": [
+            "k1"
+          ]
+        },
+        {
+          "text": "re-derives byte claims",
+          "x": 422,
+          "y": 267,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "k1"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M582 60H640V226",
+          "square": "end",
+          "id": "c2"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 640,
+          "cy": 240,
+          "r": 12,
+          "tick": true,
+          "id": "k2"
+        },
+        {
+          "text": "browser gate",
+          "x": 622,
+          "y": 245,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "k2"
+          ]
+        },
+        {
+          "text": "measures the pages",
+          "x": 622,
+          "y": 267,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "k2"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 368,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 200,
+          "h": 40,
+          "rx": 4,
+          "cap": "end",
+          "id": "s"
+        },
+        {
+          "text": "committed snapshot",
+          "x": 20,
+          "y": 35,
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "refused",
+          "shape": "rect",
+          "x": 8,
+          "y": 62,
+          "w": 200,
+          "h": 40,
+          "rx": 4,
+          "id": "w"
+        },
+        {
+          "text": "working-tree bytes",
+          "x": 20,
+          "y": 87,
+          "for": [
+            "w"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M210 30C244 30 250 44 268 50",
+          "head": "end",
+          "id": "d1"
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M210 82C240 82 252 68 270 62",
+          "cross": {
+            "cx": 244,
+            "cy": 74,
+            "size": 10
+          },
+          "id": "b1"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 292,
+          "cy": 56,
+          "r": 22,
+          "id": "a"
+        },
+        {
+          "text": "adapter",
+          "x": 292,
+          "y": 20,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M292 80V216",
+          "id": "d2"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M292 128H272",
+          "head": "end",
+          "id": "d3"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M292 172H272",
+          "head": "end",
+          "id": "d4"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M292 216H272",
+          "head": "end",
+          "id": "d5"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 30,
+          "y": 110,
+          "w": 240,
+          "h": 36,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "pages and twins",
+          "x": 44,
+          "y": 133,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 30,
+          "y": 154,
+          "w": 240,
+          "h": 36,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "search, llms.txt",
+          "x": 44,
+          "y": 177,
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 30,
+          "y": 198,
+          "w": 240,
+          "h": 36,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "evidence manifest",
+          "x": 44,
+          "y": 220,
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M60 236V250",
+          "square": "end",
+          "id": "c1"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 264,
+          "r": 12,
+          "tick": true,
+          "id": "k1"
+        },
+        {
+          "text": "validate --portal",
+          "x": 82,
+          "y": 269,
+          "style": "mono",
+          "for": [
+            "k1"
+          ]
+        },
+        {
+          "text": "re-derives byte claims",
+          "x": 82,
+          "y": 291,
+          "style": "mute",
+          "for": [
+            "k1"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M28 128H14V330H46",
+          "square": "end",
+          "id": "c2"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 330,
+          "r": 12,
+          "tick": true,
+          "id": "k2"
+        },
+        {
+          "text": "browser gate",
+          "x": 82,
+          "y": 335,
+          "style": "strong",
+          "for": [
+            "k2"
+          ]
+        },
+        {
+          "text": "measures the pages",
+          "x": 82,
+          "y": 357,
+          "style": "mute",
+          "for": [
+            "k2"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "Step",
+        "To",
+        "Checked by"
+      ],
+      "rows": [
+        [
+          "one committed snapshot",
+          "the adapter",
+          "pages, Markdown twins, search, `llms.txt`, evidence manifest",
+          "`codeflow validate --portal` and the browser gate"
+        ],
+        [
+          "working-tree bytes that differ from `HEAD`",
+          "refused",
+          "nothing",
+          "the adapter's snapshot check"
+        ]
+      ]
+    }
+  }
+}

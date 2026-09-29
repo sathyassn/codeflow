@@ -1,7 +1,7 @@
 ---
 id: ADR-0015
 uid: 68dd51d4-99cd-4a11-86b7-944a48e056d8
-title: duo-model orchestration — the Claude+codex develop flow (cf-model-orchestrator)
+title: "duo-model orchestration: the Claude and Codex develop flow (cf-model-orchestrator)"
 date: 2026-07-10
 status: accepted
 superseded_by: ADR-0023
@@ -11,7 +11,7 @@ architecture_impact: none — the duo flow ships as the `cf-model-orchestrator` 
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0015 — duo-model orchestration for the develop flow
+# ADR-0015: duo-model orchestration for the develop flow
 
 ## Context
 

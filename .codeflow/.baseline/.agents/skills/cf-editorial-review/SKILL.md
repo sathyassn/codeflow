@@ -3,7 +3,7 @@ name: cf-editorial-review
 description: Review or revise substantial repository and user-facing prose without semantic drift. Use for documentation, ADRs, proposals, release notes, PR narratives, operator communications, and other consequential copy whose structure, voice, credibility, or audience fit materially affects the outcome. Do not invoke for every short conversational response, mechanical text substitution, exact quoted text, or generated machine-readable content.
 ---
 
-# cf-editorial-review — preserve meaning, improve delivery
+# cf-editorial-review: preserve meaning, improve delivery
 
 **Write plainly.** Everything an agent writes, replies and status updates
 included, is simple, straightforward and clear, with the detail the reader
@@ -20,8 +20,11 @@ Review the artifact in its real project, audience, medium, and task context.
 Improve clarity and credibility without flattening a legitimate voice or
 inventing one.
 
-This skill and its contextual-smells reference are the canonical CodeFlow home
-for shared language guidance. Other skills should route here instead of copying
+This skill, its copy guide and its contextual-smells reference are the
+canonical CodeFlow home for shared language guidance. Load
+[references/copy-guide.md](references/copy-guide.md) when writing and
+[references/editorial-smells.md](references/editorial-smells.md) when
+reviewing. Other skills route here instead of copying
 title, emoji, personality, or authority rules into parallel checklists.
 
 ## Authority order
@@ -46,8 +49,7 @@ misrepresent the author or project.
    manufacture personality, experience, feelings, familiarity, or slang.
 2. **Read coherent context.** Review the whole artifact or a complete section,
    plus the surrounding project material needed to understand it. For a batch,
-   cluster items by shared purpose and audience rather than applying one global
-   rewrite.
+   cluster items by shared purpose and audience, not one global rewrite.
 3. **Protect meaning first.** Freeze identifiers, commands, numbers, citations,
    qualifications, decisions, requirements, and security or compatibility
    claims. Verify material assertions or mark them unverified. Never trade
@@ -71,9 +73,10 @@ misrepresent the author or project.
    understandable in context.
    Utility copy does not become product voice, and CodeFlow does not supply a
    personality for either. Keep formatting proportionate: a simple
-   answer needs no apparatus, and when relationships, hierarchy, state,
-   timelines, mappings, or a decision are materially clearer drawn, use a
-   diagram whose scope and detail fit the explanation, in the form the
+   answer needs no apparatus, and when a relationship is materially clearer
+   drawn, use a diagram whose scope and detail fit the explanation, in one
+   of the nine families of the explanation method
+   (`cf-present/resources/explanation-method.md`) and in the form the
    surface renders as the lifecycle reply rule sets out. In a Markdown file
    (a README, doc, record or PR body) that form is fenced ASCII, and on a
    docs-portal page it is the portal's figure grammar. Prefer the least

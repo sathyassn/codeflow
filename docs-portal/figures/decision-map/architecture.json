@@ -1,0 +1,721 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "decision-supersession",
+    "family": "graph",
+    "binding": "authored",
+    "question": "Which decisions replaced which?",
+    "idea": "Six chains end at the decision that binds today, one of them narrows its earlier record rather than replacing it, and the release chain is the longest at four records.",
+    "title": "Which decisions replaced which",
+    "kicker": "Supersession",
+    "caption": "Follow a chain to its filled end to find the decision that binds, and the diamond marks the one earlier record that still binds for what its successor did not narrow.",
+    "states": [
+      {
+        "name": "old",
+        "mark": "node",
+        "means": "Replaced by a later decision"
+      },
+      {
+        "name": "narrowed",
+        "mark": "merge",
+        "means": "Narrowed by a later decision, still binds for the rest"
+      },
+      {
+        "name": "binds",
+        "mark": "agent",
+        "means": "Binds today"
+      },
+      {
+        "name": "replaces",
+        "mark": "trans",
+        "means": "Superseded by"
+      },
+      {
+        "name": "longest",
+        "mark": "done",
+        "means": "The longest chain, left to right"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the release chain runs ADR-0010, ADR-0012, ADR-0061, ADR-0062",
+        "source": "docs/decision-map.md#architecture",
+        "derive": "the release chain line",
+        "check": {
+          "kind": "contains",
+          "text": "- ADR-0010, then ADR-0012, then ADR-0061, then ADR-0062"
+        },
+        "value": true
+      },
+      {
+        "claim": "ADR-0015 and ADR-0018 are both superseded by ADR-0023",
+        "source": "docs/decision-map.md#architecture",
+        "derive": "the duo chain lines",
+        "check": {
+          "kind": "contains",
+          "text": "- ADR-0015, then ADR-0023\n- ADR-0018, then ADR-0023"
+        },
+        "value": true
+      },
+      {
+        "claim": "six chains are listed",
+        "source": "docs/decision-map.md#architecture",
+        "derive": "the chain list",
+        "check": {
+          "kind": "count-items"
+        },
+        "value": 6
+      },
+      {
+        "claim": "ADR-0058 supersedes only part of ADR-0048",
+        "source": "docs/decisions/ADR-0058-explicit-portal-runtime-ownership.md#decision",
+        "derive": "the first sentence of the Decision",
+        "check": {
+          "kind": "contains",
+          "text": "This supersedes only ADR-0048's portal reconciliation and pristine-copy"
+        },
+        "value": true
+      },
+      {
+        "claim": "a later record may narrow an earlier one without rewriting it",
+        "source": "docs/decision-map.md#architecture",
+        "derive": "the sentence after the chain list",
+        "check": {
+          "kind": "contains",
+          "text": "a later one narrows it"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 306,
+      "draw": [
+        {
+          "state": "longest",
+          "shape": "path",
+          "d": "M73.0 60.0L237.0 60.0",
+          "id": "e0"
+        },
+        {
+          "state": "longest",
+          "shape": "path",
+          "d": "M263.0 60.0L427.0 60.0",
+          "id": "e1"
+        },
+        {
+          "state": "longest",
+          "shape": "path",
+          "d": "M453.0 60.0L617.0 60.0",
+          "id": "e2"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M72.4 153.9L237.6 206.1",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M72.4 266.1L237.6 213.9",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M453.0 150.0L617.0 150.0",
+          "head": "end",
+          "id": "e5"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M453.0 210.0L617.0 210.0",
+          "head": "end",
+          "id": "e6"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M453.0 270.0L617.0 270.0",
+          "head": "end",
+          "id": "e7"
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 60,
+          "r": 9,
+          "id": "n0010"
+        },
+        {
+          "text": "0010",
+          "x": 60,
+          "y": 43,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0010"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 250,
+          "cy": 60,
+          "r": 9,
+          "id": "n0012"
+        },
+        {
+          "text": "0012",
+          "x": 250,
+          "y": 43,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0012"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 440,
+          "cy": 60,
+          "r": 9,
+          "id": "n0061"
+        },
+        {
+          "text": "0061",
+          "x": 440,
+          "y": 43,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0061"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 630,
+          "cy": 60,
+          "r": 9,
+          "id": "n0062"
+        },
+        {
+          "text": "0062",
+          "x": 630,
+          "y": 43,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0062"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 150,
+          "r": 9,
+          "id": "n0015"
+        },
+        {
+          "text": "0015",
+          "x": 60,
+          "y": 133,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0015"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 270,
+          "r": 9,
+          "id": "n0018"
+        },
+        {
+          "text": "0018",
+          "x": 60,
+          "y": 299,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0018"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 250,
+          "cy": 210,
+          "r": 9,
+          "id": "n0023"
+        },
+        {
+          "text": "0023",
+          "x": 266,
+          "y": 215,
+          "style": "mono",
+          "for": [
+            "n0023"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 440,
+          "cy": 150,
+          "r": 9,
+          "id": "n0002"
+        },
+        {
+          "text": "0002",
+          "x": 440,
+          "y": 133,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0002"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 630,
+          "cy": 150,
+          "r": 9,
+          "id": "n0006"
+        },
+        {
+          "text": "0006",
+          "x": 630,
+          "y": 130,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0006"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 440,
+          "cy": 210,
+          "r": 9,
+          "id": "n0045"
+        },
+        {
+          "text": "0045",
+          "x": 440,
+          "y": 193,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0045"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 630,
+          "cy": 210,
+          "r": 9,
+          "id": "n0046"
+        },
+        {
+          "text": "0046",
+          "x": 630,
+          "y": 190,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0046"
+          ]
+        },
+        {
+          "state": "narrowed",
+          "shape": "diamond",
+          "cx": 440,
+          "cy": 270,
+          "r": 9,
+          "id": "n0048"
+        },
+        {
+          "text": "0048",
+          "x": 440,
+          "y": 250,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0048"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 630,
+          "cy": 270,
+          "r": 9,
+          "id": "n0058"
+        },
+        {
+          "text": "0058",
+          "x": 630,
+          "y": 250,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0058"
+          ]
+        },
+        {
+          "text": "release chain",
+          "x": 16,
+          "y": 20,
+          "style": "mute",
+          "for": [
+            "e0",
+            "e1",
+            "e2"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 282,
+      "draw": [
+        {
+          "state": "longest",
+          "shape": "path",
+          "d": "M43.0 48.0L107.0 48.0",
+          "id": "e0"
+        },
+        {
+          "state": "longest",
+          "shape": "path",
+          "d": "M133.0 48.0L197.0 48.0",
+          "id": "e1"
+        },
+        {
+          "state": "longest",
+          "shape": "path",
+          "d": "M223.0 48.0L287.0 48.0",
+          "id": "e2"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M40.8 135.2L109.2 180.8",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M40.8 240.8L109.2 195.2",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M223.0 128.0L287.0 128.0",
+          "head": "end",
+          "id": "e5"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M223.0 188.0L287.0 188.0",
+          "head": "end",
+          "id": "e6"
+        },
+        {
+          "state": "replaces",
+          "shape": "path",
+          "d": "M223.0 248.0L287.0 248.0",
+          "head": "end",
+          "id": "e7"
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 30,
+          "cy": 48,
+          "r": 9,
+          "id": "n0010"
+        },
+        {
+          "text": "0010",
+          "x": 30,
+          "y": 31,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0010"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 120,
+          "cy": 48,
+          "r": 9,
+          "id": "n0012"
+        },
+        {
+          "text": "0012",
+          "x": 120,
+          "y": 31,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0012"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 210,
+          "cy": 48,
+          "r": 9,
+          "id": "n0061"
+        },
+        {
+          "text": "0061",
+          "x": 210,
+          "y": 31,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0061"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 300,
+          "cy": 48,
+          "r": 9,
+          "id": "n0062"
+        },
+        {
+          "text": "0062",
+          "x": 300,
+          "y": 31,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0062"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 30,
+          "cy": 128,
+          "r": 9,
+          "id": "n0015"
+        },
+        {
+          "text": "0015",
+          "x": 30,
+          "y": 111,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0015"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 30,
+          "cy": 248,
+          "r": 9,
+          "id": "n0018"
+        },
+        {
+          "text": "0018",
+          "x": 30,
+          "y": 277,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0018"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 120,
+          "cy": 188,
+          "r": 9,
+          "id": "n0023"
+        },
+        {
+          "text": "0023",
+          "x": 136,
+          "y": 193,
+          "style": "mono",
+          "for": [
+            "n0023"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 210,
+          "cy": 128,
+          "r": 9,
+          "id": "n0002"
+        },
+        {
+          "text": "0002",
+          "x": 210,
+          "y": 111,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0002"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 300,
+          "cy": 128,
+          "r": 9,
+          "id": "n0006"
+        },
+        {
+          "text": "0006",
+          "x": 300,
+          "y": 108,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0006"
+          ]
+        },
+        {
+          "state": "old",
+          "shape": "circle",
+          "cx": 210,
+          "cy": 188,
+          "r": 9,
+          "id": "n0045"
+        },
+        {
+          "text": "0045",
+          "x": 210,
+          "y": 171,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0045"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 300,
+          "cy": 188,
+          "r": 9,
+          "id": "n0046"
+        },
+        {
+          "text": "0046",
+          "x": 300,
+          "y": 168,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0046"
+          ]
+        },
+        {
+          "state": "narrowed",
+          "shape": "diamond",
+          "cx": 210,
+          "cy": 248,
+          "r": 9,
+          "id": "n0048"
+        },
+        {
+          "text": "0048",
+          "x": 210,
+          "y": 228,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0048"
+          ]
+        },
+        {
+          "state": "binds",
+          "shape": "circle",
+          "cx": 300,
+          "cy": 248,
+          "r": 9,
+          "id": "n0058"
+        },
+        {
+          "text": "0058",
+          "x": 300,
+          "y": 228,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "n0058"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Chain",
+        "Binds today"
+      ],
+      "rows": [
+        [
+          "ADR-0010, ADR-0012, ADR-0061, ADR-0062",
+          "ADR-0062"
+        ],
+        [
+          "ADR-0015, ADR-0023",
+          "ADR-0023"
+        ],
+        [
+          "ADR-0018, ADR-0023",
+          "ADR-0023"
+        ],
+        [
+          "ADR-0002, ADR-0006",
+          "ADR-0006"
+        ],
+        [
+          "ADR-0045, ADR-0046",
+          "ADR-0046"
+        ],
+        [
+          "ADR-0048, ADR-0058",
+          "ADR-0058, and ADR-0048 for everything ADR-0058 did not narrow"
+        ]
+      ]
+    }
+  }
+}

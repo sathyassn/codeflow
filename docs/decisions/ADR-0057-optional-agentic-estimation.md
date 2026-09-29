@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — optional linked forecasts and read-only allocation checking
 ---
 
-# ADR-0057 — optional agentic operating and estimation method
+# ADR-0057: optional agentic operating and estimation method
 
 ## Context
 

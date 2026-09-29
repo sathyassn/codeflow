@@ -1,0 +1,519 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "delegation-once",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "What are the steps of one consult or delegate, and what tells me it worked?",
+    "idea": "You ask, your agent sends the scoped request, the peer returns a verdict with a thread id or commits on a branch, and your agent reports agreement and disagreement.",
+    "title": "One consult or delegate",
+    "kicker": "How-to",
+    "caption": "It worked when the verdict carries a native thread id and the diff is unchanged, or when the peer's commits pass the same gates.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Sends"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Returns"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a consult ends in a VERDICT line",
+        "source": "docs/delegation.md#technical",
+        "derive": "the success sentence",
+        "check": {
+          "kind": "contains",
+          "text": "A consult worked when the reply ends in `VERDICT: approved` or"
+        },
+        "value": true
+      },
+      {
+        "claim": "a delegate starts from a worktree on a feature branch",
+        "source": "docs/delegation.md#technical",
+        "derive": "step 6",
+        "check": {
+          "kind": "contains",
+          "text": "6. For work, start a worktree on a feature branch first, then run"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 374,
+      "draw": [
+        {
+          "text": "you",
+          "x": 70,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "your agent",
+          "x": 360,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "peer",
+          "x": 650,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 70,
+          "y1": 34,
+          "x2": 70,
+          "y2": 366
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 360,
+          "y1": 34,
+          "x2": 360,
+          "y2": 366
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 650,
+          "y1": 34,
+          "x2": 650,
+          "y2": 366
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 62H352",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "/cf-consult",
+          "x": 215,
+          "y": 52,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M368 108H642",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "text": "question, read-only",
+          "x": 505,
+          "y": 98,
+          "anchor": "middle",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M642 154H368",
+          "open": "end",
+          "id": "m3"
+        },
+        {
+          "text": "VERDICT line, thread id",
+          "x": 505,
+          "y": 144,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M352 200H78",
+          "open": "end",
+          "id": "m4"
+        },
+        {
+          "text": "agree and disagree",
+          "x": 215,
+          "y": 190,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 246H352",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "text": "/cf-delegate",
+          "x": 215,
+          "y": 236,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M368 292H642",
+          "head": "end",
+          "id": "m6"
+        },
+        {
+          "text": "scoped task, worktree",
+          "x": 505,
+          "y": 282,
+          "anchor": "middle",
+          "for": [
+            "m6"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M642 338H368",
+          "open": "end",
+          "id": "m7"
+        },
+        {
+          "text": "commits on the branch",
+          "x": 505,
+          "y": 328,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m7"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 432,
+      "draw": [
+        {
+          "text": "you",
+          "x": 8,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 24H260",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "text": "your agent",
+          "x": 352,
+          "y": 29,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "/cf-consult",
+          "x": 8,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "your agent",
+          "x": 8,
+          "y": 89,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M100 84H309",
+          "head": "end",
+          "id": "c2"
+        },
+        {
+          "text": "peer",
+          "x": 352,
+          "y": 89,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "question, read-only",
+          "x": 8,
+          "y": 112,
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "peer",
+          "x": 8,
+          "y": 149,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M51 144H260",
+          "open": "end",
+          "id": "c3"
+        },
+        {
+          "text": "your agent",
+          "x": 352,
+          "y": 149,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "VERDICT line, thread id",
+          "x": 8,
+          "y": 172,
+          "style": "mute",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "your agent",
+          "x": 8,
+          "y": 209,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M100 204H317",
+          "open": "end",
+          "id": "c4"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 209,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "agree and disagree",
+          "x": 8,
+          "y": 232,
+          "style": "mute",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 269,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 264H260",
+          "head": "end",
+          "id": "c5"
+        },
+        {
+          "text": "your agent",
+          "x": 352,
+          "y": 269,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "/cf-delegate",
+          "x": 8,
+          "y": 292,
+          "style": "mono",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "your agent",
+          "x": 8,
+          "y": 329,
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M100 324H309",
+          "head": "end",
+          "id": "c6"
+        },
+        {
+          "text": "peer",
+          "x": 352,
+          "y": 329,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "scoped task, worktree",
+          "x": 8,
+          "y": 352,
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "peer",
+          "x": 8,
+          "y": 389,
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M51 384H260",
+          "open": "end",
+          "id": "c7"
+        },
+        {
+          "text": "your agent",
+          "x": 352,
+          "y": 389,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "commits on the branch",
+          "x": 8,
+          "y": 412,
+          "style": "mute",
+          "for": [
+            "c7"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "you",
+          "your agent",
+          "`/cf-consult` with paths and criteria"
+        ],
+        [
+          "2",
+          "your agent",
+          "peer",
+          "the question, read-only"
+        ],
+        [
+          "3",
+          "peer",
+          "your agent",
+          "a `VERDICT` line with a native thread id"
+        ],
+        [
+          "4",
+          "your agent",
+          "you",
+          "where it agrees and disagrees, with evidence"
+        ],
+        [
+          "5",
+          "you",
+          "your agent",
+          "`/cf-delegate`, scoped to a worktree"
+        ],
+        [
+          "6",
+          "your agent",
+          "peer",
+          "the scoped task"
+        ],
+        [
+          "7",
+          "peer",
+          "your agent",
+          "commits on the feature branch"
+        ]
+      ]
+    }
+  }
+}

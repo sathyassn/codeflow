@@ -290,6 +290,55 @@
       ]
     },
     {
+      "id": "visual-doctrine",
+      "description": "Blind diagnostics for the figure grammar (ADR-0068): family choice, text in boxes, two rendered channels, narrow recomposition, overprint, the inner mark floor, fidelity and the altitude contract, each graded on the declaration the subject leaves and its render. Each case carries a faulty control that must fail. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "checks-page-figure-matches-its-question",
+        "release-handoffs-drawn-as-exchanges",
+        "queue-concept-draws-the-relationship",
+        "retry-state-figure-survives-a-review-note",
+        "deploy-flow-states-read-without-hue",
+        "planes-figure-fits-a-small-screen",
+        "token-exchange-labels-stay-clear",
+        "access-grid-marks-read-at-small-size",
+        "limits-figure-draws-todays-value",
+        "planes-figure-claims-only-what-the-repository-holds",
+        "key-rotation-section-is-drawn",
+        "edge-cache-opening-says-what-it-is-not"
+      ]
+    },
+    {
+      "id": "explanation-method",
+      "description": "Blind diagnostics for the explanation method shared by cf-docs-portal and cf-present: a portal page from a source, a family chosen by subject in chat, a screenshot or a figure, the README medium, the smallest carrier and the method on a present review. Each case carries a faulty control that must fail. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "guide-page-from-a-policy-source",
+        "enforcement-planes-answered-in-chat",
+        "display-panel-and-first-paint-take-different-carriers",
+        "readme-figure-uses-the-text-form",
+        "three-unrelated-rules-take-the-smallest-carrier",
+        "migration-review-leads-with-the-picture",
+        "complex-review-uses-declarative-presentation",
+        "flow-reply-carries-figure"
+      ]
+    },
+    {
+      "id": "copy-guide",
+      "description": "Blind diagnostics for the copy guide in cf-editorial-review: how each string is written, from a lead and caption around a figure to microcopy, a summary before a table, skill prose and an ADR, beside the reply and title cases of the written content policy. Each new case carries a faulty control that must fail, and the summary case a short-answer positive control that must pass. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "lead-and-caption-around-a-figure",
+        "search-dialog-microcopy",
+        "task-closeout-from-evidence",
+        "short-answer-stays-one-line",
+        "first-section-of-a-new-skill",
+        "adr-for-a-byte-pinned-sheet",
+        "operator-reply-is-plain-prose-and-bullets",
+        "identifier-only-title-gets-words"
+      ]
+    },
+    {
       "id": "autonomy-with-judgment",
       "description": "Blind diagnostics for the autonomy reference (ADR-0070, cf-method references/autonomy.md) in both directions: nine cases where the agent must act instead of asking and eight where it must ask or refuse instead of acting. Each case carries a faulty control that must fail, and every case with a valid alternative carries a positive control that must pass. Registration proves nothing about live behaviour; only native trials do.",
       "includes": [],

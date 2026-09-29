@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — the shell enforcement plane and harness sandbox boundary now distinguish macOS, Linux/WSL2, and native Windows
 ---
 
-# ADR-0033 — cross-platform catastrophic-action boundary
+# ADR-0033: cross-platform catastrophic-action boundary
 
 ## Context
 

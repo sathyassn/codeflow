@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — duo seats default to medium and escalate on complexity; Codex primary is Astra via app-server then CLI; worktrees live under .worktrees/; Herdr/tmux cwd is the project being worked
 ---
 
-# ADR-0055 — medium-default effort, Astra Codex primary, contained worktrees
+# ADR-0055: medium-default effort, Astra Codex primary, contained worktrees
 
 ## Context
 

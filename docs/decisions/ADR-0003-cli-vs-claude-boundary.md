@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: none
 ---
 
-# ADR-0003 — CLI vs Claude command boundary
+# ADR-0003: CLI vs Claude command boundary
 
 ## Context
 

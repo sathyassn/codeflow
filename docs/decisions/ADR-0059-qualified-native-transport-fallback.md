@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: none
 ---
 
-# ADR-0059 — qualified native transport fallback
+# ADR-0059: qualified native transport fallback
 
 ## Context
 

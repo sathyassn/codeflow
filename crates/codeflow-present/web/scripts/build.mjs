@@ -15,15 +15,15 @@ const expectedNpm = "11.17.0";
 // Node version while changing gzip bytes; the full tree check remains the proof.
 const expectedCompression = Object.freeze({ zlib: "1.3.2.1-motley-3246f1b", brotli: "1.2.0" });
 
-// Each budget is the measurement taken when TSK-114 removed the diagram
-// renderer from the 3.0.0 source, plus 10% and rounded up to the next
-// 5,000 B, so the room it freed cannot return without a reviewed budget change.
+// Each budget is the measurement taken when TSK-087 removed the diagram
+// renderer, plus 10% and rounded up to the next 5,000 B, so the room it freed
+// cannot return without a reviewed budget change.
 export const budgets = Object.freeze({
-  raw_corpus_bytes: 1_060_000, // measured 961,762 B
+  raw_corpus_bytes: 1_105_000, // measured 1,001,817 B
   largest_raw_chunk_bytes: 205_000, // measured 186,275 B
-  brotli_corpus_bytes: 280_000, // measured 251,598 B
+  brotli_corpus_bytes: 295_000, // measured 263,687 B
   largest_brotli_chunk_bytes: 145_000, // measured 131,206 B
-  export_gzip_bytes: 280_000, // measured 251,370 B
+  export_gzip_bytes: 295_000, // measured 265,653 B
 });
 
 export async function buildAssets(assetsRoot = defaultAssetsRoot) {

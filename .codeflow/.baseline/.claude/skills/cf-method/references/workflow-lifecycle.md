@@ -83,7 +83,7 @@ consequences forward across affected domains until the load-bearing constraint
 is clear. Compare viable sequential, parallel, short-term, and long-term
 options rather than accepting the first plausible proposal or an operator/model
 assertion without examination. Prefer the durable route; when expedience wins,
-record the tradeoff. This depth is proportional—do not manufacture analysis for
+record the tradeoff. This depth is proportional; do not manufacture analysis for
 an obvious local choice.
 
 An ADR may be drafted and revised while its decision is unresolved and
@@ -173,13 +173,20 @@ cost, or saving. Transport or background completion is not the peer result.
 Shape deliverables for their audience and medium. Layer concept before detail;
 never cut key information merely to condense. Presentation is contextual and
 proportionate: a simple answer stays simple. Use prose or bullets according to
-the content, and draw a diagram when relationships, hierarchy, state,
-timelines, mappings, or a decision become materially clearer. Its form follows
-the surface, and a reply whose point is such a relationship must carry one
-(see the reply rule below). Use a diagram whose scope and detail fit the
+the content. To explain, follow the explanation method
+(`cf-present/resources/explanation-method.md`); to write each string, follow
+the copy guide (`cf-editorial-review/references/copy-guide.md`).
+The figure families are the same nine the presentation skills
+use (flow, structure, layering, sequence, state, coverage, extent, derivation,
+graph); the medium changes the marks, not the choice. Draw a figure only when
+a relationship carries the point, then draw the family that relationship names,
+with one idea, every mark explained and one caption line. Its form follows the
+surface, and a reply whose point is such a relationship must carry one (see
+the reply rule below). Use a diagram whose scope and detail fit the
 explanation: prefer the least complicated form that remains complete, not the
 physically smallest; complex subjects may need a larger, layered, or
-multi-view diagram, with a brief caption or legend when it aids orientation. Never add decorative or forced diagrams, headings, tables,
+multi-view diagram, with a brief caption or legend when it aids orientation.
+Never add decorative or forced diagrams, headings, tables,
 or recaps. For material product or interaction work use `cf-design` and settle
 `DESIGN_INTENT` before implementation; unchanged direction may use its explicit
 `conform` or `N/A` path. Web artifacts stay componentized rather than
@@ -191,9 +198,8 @@ slang.
 
 Operator-facing replies follow the written content policy (ADR-0067) and
 are written plainly: simple, straightforward and clear, no mannered prose
-(see `.codeflow/rules/writing.md`). When the point is a flow, dependency,
-structure, state change, or comparison that
-is clearer drawn, the reply carries a figure. Match the form to the surface.
+(see `.codeflow/rules/writing.md`). When a relationship carries the point,
+the reply carries a figure. Match the form to the surface.
 
 - Where the harness renders one, use an inline HTML figure, or a
   `cf-present` page when the figure needs a full page or anchored review.

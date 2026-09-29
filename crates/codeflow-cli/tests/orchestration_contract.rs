@@ -763,14 +763,17 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
         architecture.contains("19 checks: hooks, claude, codex, grok, config"),
         "architecture must list the grok doctor check"
     );
+    let cap_010 = normalize_whitespace(&read(
+        "docs/capabilities/CAP-010-duo-model-orchestration.md",
+    ));
     assert!(
-        normalize_whitespace(&capabilities).contains(
+        cap_010.contains(
             "use proportionate worker effort when useful, and obtain same-family xhigh reasoning on trigger mid-session rather than restarting the host"
         ),
         "CAP-010 must preserve proportionate workers and mid-session escalation without host restart"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("named when a routing-policy trigger fires"),
+        cap_010.contains("named when a routing-policy trigger fires"),
         "CAP-010 must pin extra-family invoke-when-available"
     );
     assert!(
@@ -1277,6 +1280,13 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
         "documented voice/examples",
         "Preserve technical meaning",
         "never fabricate personality",
+        // The chat rule of the figure grammar (ADR-0068): same nine families,
+        // the medium changes the marks, a figure only when a relationship
+        // carries the point, in the form its surface takes.
+        "the same nine the presentation skills use (flow, structure, layering, sequence, state, coverage, extent, derivation, graph)",
+        "the medium changes the marks, not the choice",
+        "Draw a figure only when a relationship carries the point",
+        "Its form follows the surface",
     ] {
         assert!(
             lifecycle.contains(required),
@@ -1993,6 +2003,164 @@ fn pipeline_example_names_the_resolved_selector_not_a_model() {
         assert!(
             !text.contains("sonnet"),
             "{path}: the stale 'sonnet' example is back"
+        );
+    }
+}
+
+/// Every backticked `codeflow`-subcommand token in the kernel's Mechanics
+/// line, reduced to its leading subcommand word. The line names the
+/// everyday subcommands and points at `codeflow --help` for the rest.
+fn mechanics_row_subcommands(agents: &str) -> BTreeSet<String> {
+    let start = agents
+        .find("**Mechanics:**")
+        .expect("AGENTS template has a Mechanics line");
+    let rest = &agents[start..];
+    let end = rest.find("lists the rest").unwrap_or(rest.len());
+    let mut found = BTreeSet::new();
+    let mut rest = &rest[..end];
+    while let Some(open) = rest.find('`') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('`') else { break };
+        let token = &after[..close];
+        if let Some(word) = token.split_whitespace().next() {
+            if word != "codeflow" {
+                found.insert(word.to_string());
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    found
+}
+
+/// DEFECT 7: the mechanics line is checked against the binary's registered
+/// subcommands; `estimate`, `policy` and `ci` were missing from it. Positive:
+/// those three are named at the standard and full tiers. Negative: nothing
+/// in the line is unregistered, and the line points at `--help` for the rest.
+#[test]
+fn mechanics_row_matches_the_registered_subcommands() {
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .arg("--help")
+        .output()
+        .expect("codeflow --help runs");
+    assert!(help.status.success(), "codeflow --help failed");
+    let help = String::from_utf8(help.stdout).expect("utf-8 help");
+    let commands = help
+        .split("Commands:")
+        .nth(1)
+        .expect("help lists commands")
+        .split("Options:")
+        .next()
+        .expect("commands section ends");
+    let registered: BTreeSet<String> = commands
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            (line.starts_with("  ") && !trimmed.is_empty())
+                .then(|| trimmed.split_whitespace().next())
+                .flatten()
+                .map(str::to_string)
+        })
+        .collect();
+    assert!(
+        registered.contains("estimate") && registered.contains("policy"),
+        "help parse produced no subcommands: {registered:?}"
+    );
+
+    for template in [
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+        "AGENTS.md",
+    ] {
+        let text = read(template);
+        let row = mechanics_row_subcommands(&text);
+        let unregistered: Vec<&String> = row.difference(&registered).collect();
+        assert!(
+            unregistered.is_empty(),
+            "{template}: mechanics line names unregistered subcommands {unregistered:?}"
+        );
+        for needed in ["estimate", "policy", "ci"] {
+            assert!(
+                row.contains(needed),
+                "{template}: mechanics line omits `{needed}`"
+            );
+        }
+        assert!(
+            normalize_whitespace(&text).contains("`codeflow --help` lists the rest"),
+            "{template}: mechanics line no longer points at --help"
+        );
+    }
+}
+
+/// The four defense-in-depth planes, named in the AGENTS contract. Grok's
+/// hooks are wiring for the existing in-session plane, not a fifth plane.
+const GUARD_PLANES: [&str; 4] = [
+    "git hooks",
+    "in-session guards",
+    "scaffolded CI",
+    "configured remote branch protection",
+];
+
+/// The contract surfaces that inventory the guard planes: the git rules
+/// reference every tier installs (the kernel points at it), the minimal
+/// CLAUDE contract and the manifest.
+const PLANE_INVENTORY_FILES: [&str; 3] = [
+    "assets/base/rules/git-rules.md",
+    "assets/base/CLAUDE.minimal.md.tmpl",
+    "assets/base/scaffold-manifest.toml",
+];
+
+/// DEFECT 3 (positive): `.grok/hooks/` is inventoried inside the in-session
+/// guard plane, alongside `.claude/settings.json` and the `.codex/` starter.
+#[test]
+fn grok_hooks_join_the_in_session_plane_rather_than_adding_one() {
+    for path in PLANE_INVENTORY_FILES {
+        let text = normalize_whitespace(&read(path));
+        assert!(
+            text.contains(".grok/hooks/"),
+            "{path}: in-session guard inventory omits .grok/hooks/"
+        );
+        // The in-session plane's three wirings are named together, so a reader
+        // cannot mistake Grok for a plane of its own.
+        for sibling in [".claude/settings.json", ".codex/"] {
+            assert!(
+                text.contains(sibling),
+                "{path}: in-session guard inventory omits {sibling}"
+            );
+        }
+    }
+}
+
+/// DEFECT 3 (negative): the plane count stays four. A fifth plane, or a
+/// renamed plane, fails here.
+#[test]
+fn guard_plane_count_stays_four() {
+    let agents = normalize_whitespace(&read("assets/base/rules/git-rules.md"));
+    assert!(
+        agents.contains("Four planes provide defense in depth"),
+        "the git rules reference no longer states four planes"
+    );
+    assert!(
+        !agents.contains("Five planes") && !agents.contains("five planes"),
+        "a fifth guard plane appeared in the git rules reference"
+    );
+    for plane in GUARD_PLANES {
+        assert!(
+            agents.contains(plane),
+            "the git rules reference lost guard plane: {plane}"
+        );
+    }
+    for minimal in [
+        "assets/base/rules/git-rules.md",
+        "assets/base/CLAUDE.minimal.md.tmpl",
+    ] {
+        let text = normalize_whitespace(&read(minimal));
+        assert!(
+            text.contains("four planes"),
+            "{minimal}: minimal-tier inventory no longer names four planes"
+        );
+        assert!(
+            !text.contains("five planes"),
+            "{minimal}: a fifth guard plane appeared"
         );
     }
 }

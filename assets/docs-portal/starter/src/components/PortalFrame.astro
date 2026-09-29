@@ -1,0 +1,25 @@
+---
+import PortalHeader from "./PortalHeader.astro";
+import PortalNav from "./PortalNav.astro";
+const { sidebar } = Astro.locals.starlightRoute;
+---
+<div class="cf-portal" data-cf-view="portal" data-cf-route={Astro.url.pathname} data-base={import.meta.env.BASE_URL}>
+  <PortalHeader />
+  <div class="cf-shell">
+    <aside class="cf-panel cf-panel--nav" id="cf-nav" aria-label="Guide">
+      <div class="cf-panel-inner"><nav aria-label="Guide pages"><PortalNav items={sidebar} /></nav></div>
+      <div class="cf-grip" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="cf-nav" aria-label="Resize navigation" aria-valuemin="220" aria-valuemax="360" aria-valuenow="264"></div>
+    </aside>
+    <slot />
+  </div>
+  <div class="cf-peek-strip cf-peek-strip--left" data-cf-peek="nav" aria-hidden="true"></div>
+  <div class="cf-peek-strip cf-peek-strip--right" data-cf-peek="toc" aria-hidden="true"></div>
+  <div class="cf-sheet cf-sheet--left" role="dialog" aria-label="Guide navigation" data-cf-sheet="nav">
+    <div class="cf-sheet-head"><span class="cf-kicker">Guide</span><button class="cf-icon-btn" type="button" data-cf-pin="nav" aria-label="Keep navigation open" title="Keep navigation open"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></svg></button><button class="cf-icon-btn" type="button" data-cf-close-sheet aria-label="Close navigation" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="cf-sheet-body" data-cf-sheet-body></div>
+  </div>
+  <div class="cf-sheet cf-sheet--right" role="dialog" aria-label="On this page" data-cf-sheet="toc">
+    <div class="cf-sheet-head"><span class="cf-kicker">On this page</span><button class="cf-icon-btn" type="button" data-cf-pin="toc" aria-label="Keep the outline open" title="Keep the outline open"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M14.5 4.5v15"/></svg></button><button class="cf-icon-btn" type="button" data-cf-close-sheet aria-label="Close outline" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="cf-sheet-body"><ul class="cf-toc-list" data-cf-toc></ul></div>
+  </div>
+</div>

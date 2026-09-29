@@ -1,0 +1,15 @@
+{
+  "repository": {
+    "committed": {},
+    "working": {}
+  },
+  "block": {
+    "type": "code",
+    "id": "x",
+    "language": "text",
+    "code": "x",
+    "source": {
+      "path": "../outside.txt"
+    }
+  }
+}

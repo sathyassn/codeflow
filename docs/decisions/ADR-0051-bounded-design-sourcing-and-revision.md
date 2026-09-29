@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — cf-design gains a delta-only progressive-disclosure sourcing contract and the existing versioned plan retains reviewed-design provenance
 ---
 
-# ADR-0051 — bounded design sourcing and revision
+# ADR-0051: bounded design sourcing and revision
 
 ## Context
 

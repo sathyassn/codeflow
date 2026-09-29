@@ -1,0 +1,5 @@
+{
+  "files": {
+    "project-management/tasks/TSK-231.md#Closeout": "## Closeout\n\nThe task gives each tenant its own retry budget so that one tenant's\nfailing webhooks cannot exhaust the shared queue, and the work is complete\non revision 4f2c9a1. The essential gate was run with `codeflow test --mode\nessential --strict` and passed with 412 tests, none failed and none\nskipped, in 41.2 seconds. The retry_budget suite contributed 38 passing\ntests, the tenant_clock suite 12 and the queue_isolation suite 9. Coverage\ncame out at 84.2 percent of statements over crates/queue and\ncrates/tenant, which is above the floor of 80 percent that AC-3 sets. A\ntenant over budget is delayed rather than dropped, which meets AC-1. The\nbudget resets on the tenant's own clock, which meets AC-2. The Windows\npath was not tested because no Windows runner is attached to this\nrepository. The queue isolation test ran against the in-memory queue and\nnot against Redis. All three acceptance criteria are therefore met and the\ntask can close.\n"
+  }
+}

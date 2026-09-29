@@ -1,14 +1,14 @@
 ---
 id: ADR-0001
 uid: adbd005d-27cd-4494-8916-5b45bd66efe5
-title: stack choice — rust
+title: "stack choice: Rust"
 date: 2026-06-12
 status: accepted
 superseded_by: null
 architecture_impact: establishes the initial stack described in architecture.md
 ---
 
-# ADR-0001 — stack choice: rust
+# ADR-0001: stack choice: rust
 
 ## Context
 

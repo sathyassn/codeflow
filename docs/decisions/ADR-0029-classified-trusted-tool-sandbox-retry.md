@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: the Claude runtime boundary now permits a classifier-reviewed host retry for trusted installed tools whose state cannot be used from the OS sandbox, while preserving the sandbox as the default execution boundary
 ---
 
-# ADR-0029 — classified trusted-tool sandbox retry
+# ADR-0029: classified trusted-tool sandbox retry
 
 ## Context
 

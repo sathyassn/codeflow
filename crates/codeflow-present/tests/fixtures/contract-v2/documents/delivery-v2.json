@@ -1,0 +1,1103 @@
+{
+  "schema_version": 2,
+  "title": "Decide the CodeFlow delivery system before 3.0.0",
+  "summary": "Six stage figures and six decisions on the CodeFlow delivery system before 3.0.0.",
+  "blocks": [
+    {
+      "type": "html",
+      "id": "stage-guards",
+      "title": "Every stage of work gets a guard",
+      "html": "<figure role='img' aria-label='Each stage of work, the failure the audit found there today, and the guard that closes it: registry, ready rule, status commands, acceptance checks, release checks, fixed notes, and adopter profiles' style='margin:0'><svg viewBox='0 0 1230 350' style='width:100%;height:auto;display:block' fill='none'><defs><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-diagram-line)'></path></marker></defs><text x='20' y='120' fill='var(--cf-text-muted)' font-size='12' text-anchor='start' style='font-family:var(--cf-font-mono)' letter-spacing='0.12em'>TODAY</text><text x='20' y='236' fill='var(--cf-text-muted)' font-size='12' text-anchor='start' style='font-family:var(--cf-font-mono)' letter-spacing='0.12em'>PROPOSED</text><rect x='130' y='16' width='160' height='56' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='210.0' y='40' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Plan</text><text x='210.0' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>spec, epic, tasks</text><line x1='290' y1='44' x2='306' y2='44' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><line x1='210.0' y1='72' x2='210.0' y2='98' stroke='var(--cf-danger)' stroke-width='1.5'></line><circle cx='210.0' cy='108' r='5' fill='var(--cf-danger)'></circle><text x='210.0' y='134' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>two branches pick</text><text x='210.0' y='151' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>the same number</text><line x1='210.0' y1='162' x2='210.0' y2='196' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><rect x='130' y='200' width='160' height='58' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='210.0' y='224' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>registry issues</text><text x='210.0' y='242' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>each number once</text><rect x='308' y='16' width='160' height='56' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='388.0' y='40' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Pick work</text><text x='388.0' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>what is next</text><line x1='468' y1='44' x2='484' y2='44' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><line x1='388.0' y1='72' x2='388.0' y2='98' stroke='var(--cf-danger)' stroke-width='1.5'></line><circle cx='388.0' cy='108' r='5' fill='var(--cf-danger)'></circle><text x='388.0' y='134' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>list ignores what</text><text x='388.0' y='151' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>a task waits on</text><line x1='388.0' y1='162' x2='388.0' y2='196' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><rect x='308' y='200' width='160' height='58' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='388.0' y='224' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>one ready rule for</text><text x='388.0' y='242' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>next, start, status, CI</text><rect x='486' y='16' width='160' height='56' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='566.0' y='40' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Build</text><text x='566.0' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>task branch</text><line x1='646' y1='44' x2='662' y2='44' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><line x1='566.0' y1='72' x2='566.0' y2='98' stroke='var(--cf-danger)' stroke-width='1.5'></line><circle cx='566.0' cy='108' r='5' fill='var(--cf-danger)'></circle><text x='566.0' y='134' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>status is never</text><text x='566.0' y='151' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>updated</text><line x1='566.0' y1='162' x2='566.0' y2='196' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><rect x='486' y='200' width='160' height='58' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='566.0' y='224' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>status commands;</text><text x='566.0' y='242' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>progress computed</text><rect x='664' y='16' width='160' height='56' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='744.0' y='40' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Review</text><text x='744.0' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>other models</text><line x1='824' y1='44' x2='840' y2='44' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><line x1='744.0' y1='72' x2='744.0' y2='98' stroke='var(--cf-danger)' stroke-width='1.5'></line><circle cx='744.0' cy='108' r='5' fill='var(--cf-danger)'></circle><text x='744.0' y='134' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>tests green,</text><text x='744.0' y='151' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>real result missed</text><line x1='744.0' y1='162' x2='744.0' y2='196' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><rect x='664' y='200' width='160' height='58' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='744.0' y='224' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>frozen criteria, journey</text><text x='744.0' y='242' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>check, acceptance block</text><rect x='842' y='16' width='160' height='56' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='922.0' y='40' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Land</text><text x='922.0' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>merge to a line</text><line x1='1002' y1='44' x2='1018' y2='44' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><line x1='922.0' y1='72' x2='922.0' y2='98' stroke='var(--cf-danger)' stroke-width='1.5'></line><circle cx='922.0' cy='108' r='5' fill='var(--cf-danger)'></circle><text x='922.0' y='134' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>no release check</text><text x='922.0' y='151' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>before merge</text><line x1='922.0' y1='162' x2='922.0' y2='196' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><rect x='842' y='200' width='160' height='58' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='922.0' y='224' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>checked before push</text><text x='922.0' y='242' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>and on every line</text><rect x='1020' y='16' width='160' height='56' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='1100.0' y='40' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Release</text><text x='1100.0' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>notes, version, tag</text><line x1='1100.0' y1='72' x2='1100.0' y2='98' stroke='var(--cf-danger)' stroke-width='1.5'></line><circle cx='1100.0' cy='108' r='5' fill='var(--cf-danger)'></circle><text x='1100.0' y='134' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>notes leak</text><text x='1100.0' y='151' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>draft text</text><line x1='1100.0' y1='162' x2='1100.0' y2='196' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><rect x='1020' y='200' width='160' height='58' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='1100.0' y='224' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>notes fixed, read</text><text x='1100.0' y='242' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' font-weight='600'>before your tag</text><rect x='130' y='284' width='1050' height='52' rx='10' fill='var(--cf-surface)' stroke='var(--cf-danger)' stroke-width='1.2' stroke-dasharray='5 4'></rect><text x='148' y='305' fill='var(--cf-danger)' font-size='12.5' text-anchor='start' font-weight='600'>Adopting projects today:</text><text x='310' y='305' fill='var(--cf-danger)' font-size='12.5' text-anchor='start'>Dependabot and release-tool PRs, and a project's own PR template, fail CI on day one</text><text x='148' y='325' fill='var(--cf-accent)' font-size='12.5' text-anchor='start' font-weight='600'>Proposed:</text><text x='310' y='325' fill='var(--cf-text)' font-size='12.5' text-anchor='start'>bots confirmed by CI skip format checks; own template mapped with a warning period; own release tool respected</text></svg></figure>",
+      "caption": "Each stage of work, the failure the audit found there today, and the guard that closes it: registry, ready rule, status commands, acceptance checks, release checks, fixed notes, and adopter profiles."
+    },
+    {
+      "type": "narrative",
+      "id": "frame",
+      "markdown": "CodeFlow 3.0.0 is held until project management, changelog and version management hold up when agents work in parallel. The figure is the proposal in one view: each stage of work gets a guard for the failure the audit found there. Fable, Astra and Grok 4.7 designed it independently; I merged the three designs, and all three reviewed the merge twice and now agree. Nothing is built yet. Six decisions below are yours. Use **Comment** on any figure, row or decision you disagree with."
+    },
+    {
+      "type": "callout",
+      "id": "registry-definition",
+      "tone": "info",
+      "markdown": "**What \"registry\" means here.** It is not a GitHub feature or a separate service. It is an ordinary git branch, `codeflow/registry`, in the same repository as the code, that never merges into `main`. \"Registry\" is the job the branch does: it holds one tiny file per number ever issued, saying which record owns it. It is safe because GitHub protects the branch itself from deletion and history rewrites, and CodeFlow's own checks guard the files inside it (details below)."
+    },
+    {
+      "type": "html",
+      "id": "stage-registry",
+      "title": "How a task number is issued",
+      "html": "<figure role='img' aria-label='Two agents ask for a number at once. Both see 99. A pushes 100 and is accepted. B pushes 100, is rejected, looks again and takes 101. Neither writes its task file until its number is accepted.' style='margin:0'><svg viewBox='0 0 1000 430' style='width:100%;height:auto;display:block' fill='none'><defs><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-diagram-line)'></path></marker><marker id='ag' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-accent)'></path></marker><marker id='ad' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-danger)'></path></marker></defs><g data-cf-group='agent-a'><rect x='60' y='16' width='220' height='54' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='170' y='40' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Agent A</text><text x='170' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>one laptop</text></g><g data-cf-group='registry'><rect x='390' y='16' width='220' height='54' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='500' y='40' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>codeflow/registry</text><text x='500' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>branch on GitHub</text></g><g data-cf-group='agent-b'><rect x='720' y='16' width='220' height='54' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='830' y='40' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Agent B</text><text x='830' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>another machine</text></g><g data-cf-target='none'><line x1='170' y1='70' x2='170' y2='420' stroke='var(--cf-border)' stroke-width='1' stroke-dasharray='4 5'></line></g><g data-cf-target='none'><line x1='500' y1='70' x2='500' y2='420' stroke='var(--cf-border)' stroke-width='1' stroke-dasharray='4 5'></line></g><g data-cf-target='none'><line x1='830' y1='70' x2='830' y2='420' stroke='var(--cf-border)' stroke-width='1' stroke-dasharray='4 5'></line></g><line data-cf-target='read-a' x1='490' y1='104' x2='180' y2='104' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><text data-cf-for='read-a' x='335' y='96' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>highest number ever issued: 99</text><line data-cf-target='read-b' x1='510' y1='104' x2='820' y2='104' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><text data-cf-for='read-b' x='665' y='96' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>highest number ever issued: 99</text><line data-cf-target='push-a' x1='180' y1='154' x2='490' y2='154' stroke='var(--cf-accent)' stroke-width='2' marker-end='url(#ag)'></line><text data-cf-for='push-a' x='335' y='146' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' style='font-family:var(--cf-font-mono)'>add ids/TSK/100, push</text><text x='512' y='158' fill='var(--cf-positive)' font-size='12.5' text-anchor='start' font-weight='600'>accepted: 100 is A's</text><line data-cf-target='push-b' x1='820' y1='206' x2='510' y2='206' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><text data-cf-for='push-b' x='665' y='198' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' style='font-family:var(--cf-font-mono)'>add ids/TSK/100, push</text><line data-cf-target='reject-b' x1='510' y1='234' x2='820' y2='234' stroke='var(--cf-danger)' stroke-width='1.5' marker-end='url(#ad)'></line><text data-cf-for='reject-b' x='665' y='254' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>rejected: someone pushed since you looked</text><line data-cf-target='reread-b' x1='510' y1='292' x2='820' y2='292' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><text data-cf-for='reread-b' x='665' y='284' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>look again: highest is now 100</text><line data-cf-target='push-b-again' x1='820' y1='338' x2='510' y2='338' stroke='var(--cf-accent)' stroke-width='2' marker-end='url(#ag)'></line><text data-cf-for='push-b-again' x='665' y='330' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' style='font-family:var(--cf-font-mono)'>add ids/TSK/101, push</text><text x='488' y='342' fill='var(--cf-positive)' font-size='12.5' text-anchor='end' font-weight='600'>accepted: 101 is B's</text><rect data-cf-target='file-a' x='95' y='374' width='150' height='34' rx='10' fill='var(--cf-surface-raised)' stroke='var(--cf-border)' stroke-width='1'></rect><text data-cf-for='file-a' x='170' y='396' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' style='font-family:var(--cf-font-mono)'>writes TSK-100.md</text><rect data-cf-target='file-b' x='755' y='374' width='150' height='34' rx='10' fill='var(--cf-surface-raised)' stroke='var(--cf-border)' stroke-width='1'></rect><text data-cf-for='file-b' x='830' y='396' fill='var(--cf-text)' font-size='12.5' text-anchor='middle' style='font-family:var(--cf-font-mono)'>writes TSK-101.md</text></svg></figure>",
+      "caption": "Two agents ask for a number at once."
+    },
+    {
+      "type": "narrative",
+      "id": "registry-frame",
+      "markdown": "Numbers stay readable (`TSK-100`). The registry is a branch, `codeflow/registry`, holding one small file per number ever issued. Git accepts a push only if nobody pushed since you looked, so two agents cannot both win. Each new record also carries a hidden random `uid`, and CI refuses to merge a record whose number is not registered to its own `uid`. It is the same for every project that adopts CodeFlow: each repository that tracks work gets its own registry branch with the same protections. Numbers are scoped to their repository, as today, so `TSK-100` in an adopting project and `TSK-100` in CodeFlow are unrelated."
+    },
+    {
+      "type": "disclosure",
+      "id": "registry-guards",
+      "summary": "What keeps the registry from getting messed up",
+      "blocks": [
+        {
+          "type": "bullets",
+          "id": "registry-guard-list",
+          "ordered": false,
+          "items": [
+            "GitHub protects the branch from deletion and history rewrites. It does not protect the files inside it: an ordinary commit can delete a number's file (Fable and Astra both reproduced this).",
+            "So the next number is one more than the highest ever issued in the branch history. Deleting a file cannot bring a number back.",
+            "CodeFlow's pre-push hook and git-guard refuse registry pushes that remove or edit a file. A CI job re-checks every registry push, and no new number is issued while damage is unrepaired.",
+            "Offline: the reservation is written locally as pending and published by the next online command. If the number was taken meanwhile, the unmerged record is renumbered before it lands.",
+            "Forks and hand-written records: a maintainer registers them with `codeflow ids admit`; the PR stays red until then.",
+            "Hosts without branch protection: damage is detected afterwards, not prevented, and `codeflow doctor` says so.",
+            "Not yet proven on a real GitHub repository. TSK-100 does that first; if it fails, the work stops and decision 1 returns to you."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "disclosure",
+      "id": "registry-prior-art",
+      "summary": "Has this been done before? Prior art and research",
+      "blocks": [
+        {
+          "type": "bullets",
+          "id": "prior-art-list",
+          "ordered": false,
+          "items": [
+            "Research covered beads, git-bug, git-appraise, Spec Kit, Kiro, BMAD, task-master, Changesets and towncrier (research-delivery-systems.md, with sources).",
+            "Closest precedent: beads, an issue tracker for coding agents, moved its data to a dedicated sync branch and later deleted that code (about 11,000 lines) for a database. Its failures came from keeping mutable issue state apart from the code and merging it: silent data loss, resurrected state, issues closed while their PR was open.",
+            "This design differs on exactly those points: the branch holds only append-only number reservations, never status or content, and is never merged. Records and their status stay with the code, in the same PR.",
+            "The research report rated a shared registry as right for many parallel issuers with an owner for the infrastructure. The building blocks are proven; this exact combination has no precedent we found. That is why TSK-100 proves it first and option 1b is the fallback.",
+            "Branch protection covers public repositories on every GitHub plan, and private ones only on Pro, Team or Enterprise. A repository admin can switch it off, so agents run without admin rights."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "html",
+      "id": "stage-lifecycle",
+      "title": "What a task stores, and what is computed",
+      "html": "<figure role='img' aria-label='Task states. Todo, blocked, complete and cancelled are stored. Active is computed from a pushed task branch. Blocking needs a reason, owner and revisit event; completing needs the acceptance block; cancelling and reopening need a reason.' style='margin:0'><svg viewBox='0 0 1000 372' style='width:100%;height:auto;display:block' fill='none'><defs><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-diagram-line)'></path></marker><marker id='ag' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-accent)'></path></marker></defs><rect x='40' y='150' width='170' height='58' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='125' y='185' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>todo</text><rect x='420' y='150' width='170' height='58' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5' stroke-dasharray='5 4'></rect><text x='505' y='178' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>active</text><text x='505' y='197' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>computed: branch pushed</text><rect x='420' y='24' width='170' height='58' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='505' y='59' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>blocked</text><rect x='800' y='150' width='170' height='58' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='885' y='185' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>complete</text><rect x='420' y='278' width='170' height='58' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='505' y='313' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>cancelled</text><text x='125' y='230' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>shown as ready or waiting,</text><text x='125' y='246' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>computed from dependencies</text><line x1='210' y1='179' x2='418' y2='179' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><text x='314' y='170' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>claim: push task branch</text><line x1='590' y1='179' x2='798' y2='179' stroke='var(--cf-accent)' stroke-width='2' marker-end='url(#ag)'></line><text x='694' y='162' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>complete: needs the</text><text x='694' y='200' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>acceptance block</text><line x1='505' y1='150' x2='505' y2='84' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><text x='516' y='120' fill='var(--cf-text)' font-size='12.5' text-anchor='start'>block: reason, owner, revisit</text><path d='M420,53 L125,53 L125,148' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path><text x='272' y='45' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>unblock</text><path d='M125,208 L125,258 L125,307 L418,307' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path><text x='272' y='299' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>cancel: reason, where scope went</text><path d='M885,208 L885,356 L60,356 L60,210' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path><text x='470' y='350' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>reopen: with a reason; the old acceptance is marked superseded</text></svg></figure>",
+      "caption": "Task states."
+    },
+    {
+      "type": "narrative",
+      "id": "lifecycle-frame",
+      "markdown": "Records store only decisions: blocked, complete or cancelled, and why. What git already knows is computed on demand: whether work has started, whether a task is ready or waiting, and how far an epic has got. The validator refuses a transition that lacks its item, whoever edits the file. `work next`, `work start`, `status` and CI use one ready rule, and `work claim` pushes a task branch so other agents can see the task is taken."
+    },
+    {
+      "type": "html",
+      "id": "stage-acceptance",
+      "title": "How done is proven",
+      "html": "<figure role='img' aria-label='Criteria are frozen in the planning PR. The task branch cannot change them. A reviewer checks a named commit and writes the acceptance block; CI refuses the merge if a criterion has no result, the code changed after review, or an adopter-facing change lacks a journey check.' style='margin:0'><svg viewBox='0 0 1060 262' style='width:100%;height:auto;display:block' fill='none'><defs><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-diagram-line)'></path></marker></defs><rect x='20' y='74' width='180' height='74' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='110' y='100' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Planning PR</text><text x='110' y='119' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>criteria AC-1..n,</text><text x='110' y='135' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>frozen on approval</text><rect x='230' y='74' width='180' height='74' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='320' y='100' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Task branch</text><text x='320' y='119' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>the work itself,</text><text x='320' y='135' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>criteria read-only</text><rect x='440' y='74' width='180' height='74' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='530' y='100' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Review</text><text x='530' y='119' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>of commit 4f2c9a1,</text><text x='530' y='135' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>by another model</text><rect x='650' y='74' width='180' height='74' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='740' y='100' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>Acceptance block</text><text x='740' y='119' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>a result for every AC,</text><text x='740' y='135' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>in the task record</text><rect x='860' y='74' width='180' height='74' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='950' y='100' fill='var(--cf-text)' font-size='15' text-anchor='middle' font-weight='600'>CI check</text><text x='950' y='119' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>then merge</text><line x1='200' y1='111' x2='228' y2='111' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><line x1='410' y1='111' x2='438' y2='111' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><line x1='620' y1='111' x2='648' y2='111' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><line x1='830' y1='111' x2='858' y2='111' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><path d='M320,74 L320,36 L110,36 L110,72' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path><text x='215' y='28' fill='var(--cf-text)' font-size='12.5' text-anchor='middle'>change a criterion? a separate planning PR</text><line x1='950' y1='148' x2='950' y2='178' stroke='var(--cf-danger)' stroke-width='1.5'></line><text x='950' y='196' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>refused if: an AC has no result,</text><text x='950' y='212' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>the code changed after the review,</text><text x='950' y='228' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>or an adopter-facing change has</text><text x='950' y='244' fill='var(--cf-danger)' font-size='12.5' text-anchor='middle'>no journey check</text></svg></figure>",
+      "caption": "Criteria are frozen in the planning PR."
+    },
+    {
+      "type": "code",
+      "id": "acceptance-example",
+      "language": "yaml",
+      "code": "acceptance:\n  reviewed: 4f2c9a1        review: PR review link, or session id plus transcript digest\n  criteria:\n    AC-1: verified | codeflow ci on a fresh standard project: exit 0\n    AC-2: verified | tests/journey_update.rs passes\n    AC-3: failed   | update keeps the old template heading\n  journey: verified | fresh init and update of sample-standard\n  not_verified: Windows installer\n  follow_ups: TSK-118\n  verdict: changes_requested"
+    },
+    {
+      "type": "narrative",
+      "id": "acceptance-frame",
+      "markdown": "The journey check closes the TSK-066 case: it passed every check in CodeFlow's own repository while a freshly created project had 773 findings. Any change to something an adopting project runs must test that real path. The checker proves structure and binding, not honesty; that stays with the reviewer and your merge."
+    },
+    {
+      "type": "table",
+      "id": "gates",
+      "columns": [
+        "Check",
+        "Before push, on the laptop",
+        "PR in CI",
+        "Push to an integration line",
+        "Before your tag"
+      ],
+      "rows": [
+        [
+          "Number registered to this record",
+          "",
+          "blocks",
+          "",
+          ""
+        ],
+        [
+          "Registry only grows",
+          "blocks",
+          "",
+          "checks every registry push",
+          ""
+        ],
+        [
+          "Blocked, complete and cancelled have their reasons",
+          "",
+          "blocks",
+          "",
+          ""
+        ],
+        [
+          "Criteria unchanged from the approved plan",
+          "",
+          "blocks",
+          "",
+          ""
+        ],
+        [
+          "Acceptance block covers every criterion, bound to the reviewed commit",
+          "",
+          "blocks",
+          "",
+          ""
+        ],
+        [
+          "Journey check for adopter-facing changes",
+          "",
+          "blocks",
+          "",
+          ""
+        ],
+        [
+          "Behaviour change has a changelog entry",
+          "warns",
+          "blocks",
+          "",
+          ""
+        ],
+        [
+          "Release state valid",
+          "checks locally",
+          "blocks",
+          "checks",
+          "checks"
+        ],
+        [
+          "Release notes read as a new and an upgrading user",
+          "",
+          "",
+          "",
+          "reviewed"
+        ]
+      ],
+      "title": "Where each check runs"
+    },
+    {
+      "type": "comparison",
+      "id": "adopters",
+      "columns": [
+        {
+          "title": "Fixed once a project tracks work",
+          "markdown": "- Unique numbers; the registry only grows\n- Blocked needs a reason; done needs evidence\n- Criteria cannot change inside the task's own PR\n- Every PR names its task, or says why it needs none\n- Secret scan, protected branches, no AI attribution: never exempt"
+        },
+        {
+          "title": "Adjustable by the project",
+          "markdown": "- Acceptance and journey checks: block or warn, never off\n- Own record templates\n- Own PR template, mapped to CodeFlow's sections with a warning period\n- Own release tool (Changesets, release-please and others), or none\n- Bots confirmed by CI skip format checks"
+        }
+      ]
+    },
+    {
+      "type": "disclosure",
+      "id": "cleanup",
+      "summary": "Existing records: one cleanup, no renumbering",
+      "blocks": [
+        {
+          "type": "table",
+          "id": "cleanup-table",
+          "columns": [
+            "Found",
+            "Fix"
+          ],
+          "rows": [
+            [
+              "No number is used by two landed records (scan of 644 refs); the one clash, TSK-079, was renamed before it landed",
+              "Nothing to renumber"
+            ],
+            [
+              "Existing records have no hidden uid, unlike new ones",
+              "The registry seed gives every existing record a uid, legacy forms included; a backfill writes it into each record on every line. Old and new records pass the same check, with no exemption"
+            ],
+            [
+              "Eleven old tasks use the legacy TSK-002-001 form",
+              "Keep the ids; bring their layout to the current format. Renumbering would break commits, PR titles and links"
+            ],
+            [
+              "TSK-007 and TSK-009 blocked though their work landed; TSK-013 in progress since August",
+              "Set from evidence, one reviewed PR per line; TSK-010, TSK-013 and EPC-005 settled together as a plan change"
+            ],
+            [
+              "Complete tasks with no Closeout; TSK-065's Closeout says Pending review",
+              "Filled from PR evidence; where evidence is gone, say so and name the merge"
+            ],
+            [
+              "Epics stuck at planning with most tasks done",
+              "Progress becomes computed, so it cannot recur"
+            ],
+            [
+              "Record templates contain em dashes",
+              "Fix the templates; old records are not rewritten for a dash"
+            ]
+          ],
+          "title": "What the cleanup found and fixes"
+        }
+      ]
+    },
+    {
+      "type": "figure",
+      "id": "stage-flow",
+      "declaration": {
+        "schema_version": 1,
+        "figure": {
+          "id": "question-to-release",
+          "family": "flow",
+          "binding": "authored",
+          "question": "How does work move from a question to a release?",
+          "idea": "Work moves from a question through records to a release, and two links are missing or optional.",
+          "title": "From a question to a release",
+          "caption": "Discover has no record today, an epic holds the tasks, and a standalone task skips the epic only with a stated reason.",
+          "states": [
+            {
+              "name": "record",
+              "mark": "state",
+              "means": "A stage with a record"
+            },
+            {
+              "name": "unrecorded",
+              "mark": "part",
+              "means": "A stage with no record today"
+            },
+            {
+              "name": "link",
+              "mark": "trans",
+              "means": "A link the validator allows"
+            },
+            {
+              "name": "missing",
+              "mark": "optional",
+              "means": "A link that does not exist today"
+            }
+          ],
+          "facts": [
+            {
+              "claim": "a standalone task states why it has no epic",
+              "source": "project-management/tasks/TSK-118.md",
+              "derive": "the standalone_reason field of a task record",
+              "check": {
+                "kind": "contains",
+                "text": "standalone_reason"
+              },
+              "value": true
+            }
+          ],
+          "wide": {
+            "width": 720,
+            "height": 240,
+            "draw": [
+              {
+                "state": "unrecorded",
+                "shape": "rect",
+                "x": 4,
+                "y": 40,
+                "w": 100,
+                "h": 44,
+                "rx": 8,
+                "id": "s1"
+              },
+              {
+                "text": "Discover",
+                "x": 54,
+                "y": 67,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s1"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 126,
+                "y": 40,
+                "w": 100,
+                "h": 44,
+                "rx": 8,
+                "id": "s2"
+              },
+              {
+                "text": "Knowledge",
+                "x": 176,
+                "y": 67,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s2"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 248,
+                "y": 40,
+                "w": 100,
+                "h": 44,
+                "rx": 8,
+                "id": "s3"
+              },
+              {
+                "text": "Spec",
+                "x": 298,
+                "y": 67,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s3"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 370,
+                "y": 40,
+                "w": 100,
+                "h": 44,
+                "rx": 8,
+                "id": "s4"
+              },
+              {
+                "text": "Epic",
+                "x": 420,
+                "y": 67,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s4"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 492,
+                "y": 40,
+                "w": 100,
+                "h": 44,
+                "rx": 8,
+                "id": "s5"
+              },
+              {
+                "text": "Task",
+                "x": 542,
+                "y": 67,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s5"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 614,
+                "y": 40,
+                "w": 100,
+                "h": 44,
+                "rx": 8,
+                "id": "s6"
+              },
+              {
+                "text": "Land",
+                "x": 664,
+                "y": 67,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s6"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 105,
+                "y1": 62,
+                "x2": 124,
+                "y2": 62,
+                "head": "end",
+                "id": "e1"
+              },
+              {
+                "text": "cited by",
+                "x": 115,
+                "y": 112,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "e1"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 227,
+                "y1": 62,
+                "x2": 246,
+                "y2": 62,
+                "head": "end",
+                "id": "e2"
+              },
+              {
+                "text": "informs",
+                "x": 237,
+                "y": 112,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "e2"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 349,
+                "y1": 62,
+                "x2": 368,
+                "y2": 62,
+                "head": "end",
+                "id": "e3"
+              },
+              {
+                "text": "n : n",
+                "x": 359,
+                "y": 112,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "e3"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 471,
+                "y1": 62,
+                "x2": 490,
+                "y2": 62,
+                "head": "end",
+                "id": "e4"
+              },
+              {
+                "text": "1 : n",
+                "x": 481,
+                "y": 112,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "e4"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 593,
+                "y1": 62,
+                "x2": 612,
+                "y2": 62,
+                "head": "end",
+                "id": "e5"
+              },
+              {
+                "text": "lands",
+                "x": 603,
+                "y": 112,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "e5"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "path",
+                "d": "M298 86V150H542V88",
+                "head": "end",
+                "id": "standalone"
+              },
+              {
+                "text": "standalone task: no epic, a stated reason",
+                "x": 420.0,
+                "y": 170,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "standalone"
+                ]
+              },
+              {
+                "state": "missing",
+                "shape": "path",
+                "d": "M176 86V200H562V88",
+                "id": "capability-link"
+              },
+              {
+                "text": "capability to standalone task: no link today",
+                "x": 359.0,
+                "y": 220,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "capability-link"
+                ]
+              }
+            ]
+          },
+          "narrow": {
+            "recompose": "stack",
+            "drops": [],
+            "marks": "same",
+            "width": 360,
+            "height": 400,
+            "draw": [
+              {
+                "state": "unrecorded",
+                "shape": "rect",
+                "x": 90,
+                "y": 16,
+                "w": 150,
+                "h": 40,
+                "rx": 8,
+                "id": "s1"
+              },
+              {
+                "text": "Discover",
+                "x": 165,
+                "y": 41,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s1"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 90,
+                "y": 88,
+                "w": 150,
+                "h": 40,
+                "rx": 8,
+                "id": "s2"
+              },
+              {
+                "text": "Knowledge",
+                "x": 165,
+                "y": 113,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s2"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 90,
+                "y": 160,
+                "w": 150,
+                "h": 40,
+                "rx": 8,
+                "id": "s3"
+              },
+              {
+                "text": "Spec",
+                "x": 165,
+                "y": 185,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s3"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 90,
+                "y": 232,
+                "w": 150,
+                "h": 40,
+                "rx": 8,
+                "id": "s4"
+              },
+              {
+                "text": "Epic",
+                "x": 165,
+                "y": 257,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s4"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 90,
+                "y": 304,
+                "w": 150,
+                "h": 40,
+                "rx": 8,
+                "id": "s5"
+              },
+              {
+                "text": "Task",
+                "x": 165,
+                "y": 329,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s5"
+                ]
+              },
+              {
+                "state": "record",
+                "shape": "rect",
+                "x": 90,
+                "y": 376,
+                "w": 150,
+                "h": 40,
+                "rx": 8,
+                "id": "s6"
+              },
+              {
+                "text": "Land",
+                "x": 165,
+                "y": 401,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "s6"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 165,
+                "y1": 57,
+                "x2": 165,
+                "y2": 86,
+                "head": "end",
+                "id": "e1"
+              },
+              {
+                "text": "cited by",
+                "x": 175,
+                "y": 76,
+                "style": "mute",
+                "for": [
+                  "e1"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 165,
+                "y1": 129,
+                "x2": 165,
+                "y2": 158,
+                "head": "end",
+                "id": "e2"
+              },
+              {
+                "text": "informs",
+                "x": 175,
+                "y": 148,
+                "style": "mute",
+                "for": [
+                  "e2"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 165,
+                "y1": 201,
+                "x2": 165,
+                "y2": 230,
+                "head": "end",
+                "id": "e3"
+              },
+              {
+                "text": "n : n",
+                "x": 175,
+                "y": 220,
+                "style": "mute",
+                "for": [
+                  "e3"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 165,
+                "y1": 273,
+                "x2": 165,
+                "y2": 302,
+                "head": "end",
+                "id": "e4"
+              },
+              {
+                "text": "1 : n",
+                "x": 175,
+                "y": 292,
+                "style": "mute",
+                "for": [
+                  "e4"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "line",
+                "x1": 165,
+                "y1": 345,
+                "x2": 165,
+                "y2": 374,
+                "head": "end",
+                "id": "e5"
+              },
+              {
+                "text": "lands",
+                "x": 175,
+                "y": 364,
+                "style": "mute",
+                "for": [
+                  "e5"
+                ]
+              },
+              {
+                "state": "link",
+                "shape": "path",
+                "d": "M89 180H40V324H86",
+                "head": "end",
+                "id": "standalone"
+              },
+              {
+                "state": "missing",
+                "shape": "path",
+                "d": "M241 108H330V332H244",
+                "id": "capability-link"
+              }
+            ],
+            "elongation_max": 1.7,
+            "reason": "six stages stack in one column, so the reader follows the order top to bottom"
+          },
+          "twin": {
+            "columns": [
+              "From",
+              "To",
+              "Link"
+            ],
+            "rows": [
+              [
+                "Discover",
+                "Knowledge",
+                "cited by"
+              ],
+              [
+                "Knowledge",
+                "Spec",
+                "informs"
+              ],
+              [
+                "Spec",
+                "Epic",
+                "n : n"
+              ],
+              [
+                "Epic",
+                "Task",
+                "1 : n"
+              ],
+              [
+                "Task",
+                "Land",
+                "lands"
+              ],
+              [
+                "Spec",
+                "Task",
+                "standalone task, with a stated reason"
+              ],
+              [
+                "Knowledge",
+                "Task",
+                "no link today"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "narrative",
+      "id": "flow-rules-head",
+      "markdown": "**How work flows: the five gaps and the proposed rules.** Numbers match the dots in the figure."
+    },
+    {
+      "type": "table",
+      "id": "flow-rules",
+      "columns": [
+        "#",
+        "Where",
+        "Today (CodeFlow main, 2c9c77f5c)",
+        "Proposed rule"
+      ],
+      "rows": [
+        [
+          "1",
+          "Discovery",
+          "No record. Research is a route mode that stops without product edits; findings land ad hoc in docs/verification or docs/plan. A spike is a branch prefix and a work_type, but work start only runs on task/ branches.",
+          "Findings go in docs/research/, one file per question with its sources. A spec, ADR or epic cites them in an inputs list. A spike is a task with work_type spike on a spike/ branch; it lands its findings, never its code."
+        ],
+        [
+          "2",
+          "Spec and epic",
+          "An epic lists specs and a task adds its own. Nothing says whether one spec may serve several epics; spec new --for links only one. In practice every spec has one consumer.",
+          "Many to many, stated. A spec is the behaviour contract; an epic delivers part or all of it, so one spec can span a 3.0 slice and a 3.1 epic, and one epic can draw on several specs. An epic with no spec is fine for cleanup or operations work; its own criteria carry the acceptance."
+        ],
+        [
+          "3",
+          "Spec state",
+          "The contract says a spec freezes as implemented when its consumers ship. Nothing checks it: SPC-002 is still draft though EPC-002 is complete, and SPC-009 is approved though EPC-008 is complete. Freezing is undefined when a spec has several consumers.",
+          "Criteria freeze at approval and change only by a reviewed plan change. Implemented is computed when every consumer is complete, never set by hand, so it cannot go stale."
+        ],
+        [
+          "4",
+          "Standalone task and capability",
+          "A task without an epic needs a standalone_reason. Capabilities list epics only, so a standalone task can never reach one. Two sources give different tests for when a task may stand alone.",
+          "One test in one place: a task may stand alone when its outcome is one reviewable PR. It may list capabilities and specs directly."
+        ],
+        [
+          "5",
+          "Task and review",
+          "Enforced today: exactly one epic or a stated reason; dependencies resolve and have no cycles; specs must be approved before work starts.",
+          "Kept as is, plus the readiness and acceptance rules already in this design."
+        ]
+      ],
+      "title": "The flow rules, today and proposed"
+    },
+    {
+      "type": "narrative",
+      "id": "flow-frame",
+      "markdown": "The proposed rules go into SPC-013 for both review seats and your approval. Where each is built: computed spec state in TSK-102, the spec and epic links and the standalone test in TSK-103, the spike path in TSK-104, the research folder and guidance in TSK-108."
+    },
+    {
+      "type": "html",
+      "id": "stage-plan",
+      "title": "The plan: one epic, thirteen tasks",
+      "html": "<figure role='img' aria-label='Task dependency graph. The spec comes first. The longest chain runs through the host proof, the registry and the ready rule to guidance, cleanup and journey tests, then live agent trials. Status commands, release fixes and adopter work run in parallel. TSK-112, TSK-113 and TSK-114 stand alone.' style='margin:0'><svg viewBox='0 0 1190 400' style='width:100%;height:auto;display:block' fill='none'><defs><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-diagram-line)'></path></marker><marker id='ag' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-accent)'></path></marker></defs><rect x='20' y='180' width='160' height='50' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='100' y='201' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>SPC-013</text><text x='100' y='219' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>spec and ADR</text><rect x='210' y='110' width='160' height='50' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='290' y='131' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-100</text><text x='290' y='149' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>host proof, a gate</text><rect x='400' y='110' width='160' height='50' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='480' y='131' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-101</text><text x='480' y='149' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>registry</text><rect x='210' y='250' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='290' y='271' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-102</text><text x='290' y='289' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>status commands</text><rect x='210' y='320' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='290' y='341' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-106</text><text x='290' y='359' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>release fixes</text><rect x='400' y='320' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='480' y='341' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-107</text><text x='480' y='359' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>adopters</text><rect x='590' y='110' width='160' height='50' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='670' y='131' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-103</text><text x='670' y='149' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>ready and next</text><rect x='590' y='180' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='670' y='201' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-104</text><text x='670' y='219' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>PR classes, light paths</text><rect x='400' y='250' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='480' y='271' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-105</text><text x='480' y='289' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>acceptance</text><line x1='785' y1='104' x2='785' y2='352' stroke='var(--cf-border-strong)' stroke-width='3' stroke-linecap='round'></line><text x='785' y='92' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>all of 103 to 107</text><rect x='810' y='110' width='160' height='50' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='890' y='131' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-108</text><text x='890' y='149' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>skills and guidance</text><rect x='810' y='180' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='890' y='201' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-109</text><text x='890' y='219' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>records cleanup</text><rect x='810' y='250' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='890' y='271' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-110</text><text x='890' y='289' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>journey tests</text><rect x='1010' y='180' width='160' height='50' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='1090' y='201' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-111</text><text x='1090' y='219' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>live agent trials</text><rect x='210' y='20' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5' stroke-dasharray='5 4'></rect><text x='290' y='41' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-114</text><text x='290' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>retire diagram input</text><rect x='400' y='20' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5' stroke-dasharray='5 4'></rect><text x='480' y='41' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-112</text><text x='480' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>git-guard paths</text><rect x='590' y='20' width='160' height='50' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5' stroke-dasharray='5 4'></rect><text x='670' y='41' fill='var(--cf-text)' font-size='13' text-anchor='middle' font-weight='600' style='font-family:var(--cf-font-mono)'>TSK-113</text><text x='670' y='59' fill='var(--cf-text-muted)' font-size='12' text-anchor='middle'>same-harness rule</text><path d='M180,195 L195,195 L195,135 L208,135' stroke='var(--cf-accent)' stroke-width='2' fill='none' marker-end='url(#ag)'></path><path d='M180,215 L195,215 L195,275 L208,275' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path><path d='M195,275 L195,345 L208,345' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path><path d='M195,345 L195,388 L480,388 L480,372' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path><line x1='370' y1='135' x2='398' y2='135' stroke='var(--cf-accent)' stroke-width='2' marker-end='url(#ag)'></line><line x1='560' y1='135' x2='588' y2='135' stroke='var(--cf-accent)' stroke-width='2' marker-end='url(#ag)'></line><path d='M560,145 L575,145 L575,205 L588,205' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path><path d='M370,270 L398,270' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path><path d='M370,262 L575,262 L575,215' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none'></path><line x1='750' y1='135' x2='783' y2='135' stroke='var(--cf-accent)' stroke-width='2'></line><line x1='750' y1='205' x2='783' y2='205' stroke='var(--cf-diagram-line)' stroke-width='1.5'></line><line x1='560' y1='275' x2='783' y2='275' stroke='var(--cf-diagram-line)' stroke-width='1.5'></line><line x1='560' y1='345' x2='783' y2='345' stroke='var(--cf-diagram-line)' stroke-width='1.5'></line><line x1='787' y1='135' x2='808' y2='135' stroke='var(--cf-accent)' stroke-width='2' marker-end='url(#ag)'></line><line x1='787' y1='205' x2='808' y2='205' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><line x1='787' y1='275' x2='808' y2='275' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><path d='M970,135 L990,135 L990,197 L1008,197' stroke='var(--cf-accent)' stroke-width='2' fill='none' marker-end='url(#ag)'></path><line x1='970' y1='205' x2='1008' y2='205' stroke='var(--cf-diagram-line)' stroke-width='1.5' marker-end='url(#ar)'></line><path d='M970,275 L990,275 L990,213 L1008,213' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#ar)'></path></svg></figure>",
+      "caption": "Task dependency graph."
+    },
+    {
+      "type": "status",
+      "id": "state",
+      "items": [
+        {
+          "label": "Three independent designs",
+          "state": "pass",
+          "detail": "Fable 5.1, GPT-6 Astra, Grok 4.7"
+        },
+        {
+          "label": "Cross-review of the merged design",
+          "state": "pass",
+          "detail": "Two rounds by all three; they agree; last findings applied in v4"
+        },
+        {
+          "label": "Registry proof on a real GitHub repository",
+          "state": "not_run",
+          "detail": "TSK-100; needs a throwaway repository from you"
+        },
+        {
+          "label": "Implementation, journey tests, live agent trials",
+          "state": "not_run",
+          "detail": "Start after your decisions and the spec review"
+        },
+        {
+          "label": "3.0.0 release qualification",
+          "state": "pending",
+          "detail": "Harness fix for the status line on the test screen is with Codex; live run repeats after"
+        }
+      ]
+    },
+    {
+      "type": "decision",
+      "id": "d1",
+      "title": "1. How should numbers stay unique?",
+      "markdown": "- **(a) The registry branch** (recommended). Readable numbers, unique the moment they are issued when the agent is online. Two tasks on the longest chain; depends on the host proof.\n- **(b) Scan all branches, catch clashes in CI.** Smallest; two machines can still pick one number, and one record is renumbered before merge. This is the fallback if the proof fails.\n- **(c) Random ids for everything.** No coordination; long ids, and every branch name, link and habit changes.",
+      "options": [
+        {
+          "value": "a",
+          "label": "The registry branch",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "Scan all branches, catch clashes in CI"
+        },
+        {
+          "value": "c",
+          "label": "Random ids for everything"
+        }
+      ]
+    },
+    {
+      "type": "decision",
+      "id": "d2",
+      "title": "2. Should claiming a task lock it?",
+      "markdown": "- **(a) No lock in 3.0.0; visible claims** (recommended). The orchestrator assigns parallel work, as today; a pushed task branch shows the task is taken; conflicts are reported. One small command.\n- **(b) Exclusive locks now.** Needs renewal, hand-over and a way to stop a stalled agent that wakes up: a large task and a new way to fail, with no case yet that needs it.",
+      "options": [
+        {
+          "value": "a",
+          "label": "No lock in 3.0.0; visible claims",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "Exclusive locks now"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": "release-content",
+      "columns": [
+        "Option",
+        "3.0.0",
+        "3.0.1",
+        "3.1",
+        "4.0.0"
+      ],
+      "rows": [
+        [
+          "(a) keep the split",
+          "main, readiness PR, this epic, diagram input retired (TSK-114)",
+          "EPC-019",
+          "EPC-014, EPC-016",
+          "EPC-018"
+        ],
+        [
+          "(b) fold in the docs line",
+          "main, readiness PR, this epic, EPC-014 and EPC-016",
+          "EPC-019",
+          "nothing extra",
+          "EPC-018"
+        ],
+        [
+          "(c) split, keep diagram",
+          "main, readiness PR, this epic, diagram block published",
+          "EPC-019",
+          "EPC-016 removes diagram: breaking",
+          "EPC-018"
+        ]
+      ],
+      "title": "What each release carries"
+    },
+    {
+      "type": "decision",
+      "id": "d3",
+      "title": "3. What goes into 3.0.0?",
+      "markdown": "On 25 September you kept the docs line (EPC-016) and the autonomy line (EPC-018) in 3.0.0; on 26 September you moved them out to ship quickly. This gate removes that reason. The release candidate still accepts the presentation `diagram` block, which EPC-016 removes; publishing it makes the later removal a breaking change.\n\n- **(a) Keep the split, retire the diagram input first** (recommended). Smallest release that never publishes something it plans to remove; one medium task.\n- **(b) Fold the docs line into 3.0.0.** Waits for its open tasks (TSK-061 to TSK-063) and their reviews.\n- **(c) Keep the split and publish the diagram block.** No work now; a breaking change in 3.1.",
+      "options": [
+        {
+          "value": "a",
+          "label": "Keep the split, retire the diagram input first",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "Fold the docs line into 3.0.0"
+        },
+        {
+          "value": "c",
+          "label": "Keep the split and publish the diagram block"
+        }
+      ]
+    },
+    {
+      "type": "decision",
+      "id": "d4",
+      "title": "4. When should the changelog move to one file per change?",
+      "markdown": "- **(a) In 3.1, through a new ADR** (recommended). 3.0.0 keeps the hardened single changelog; parallel lines keep conflicting on it until then.\n- **(b) Now.** Ends the conflicts sooner, but reworks the release script while the release waits.\n- **(c) Never.** The merge conflicts stay.",
+      "options": [
+        {
+          "value": "a",
+          "label": "In 3.1, through a new ADR",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "Now"
+        },
+        {
+          "value": "c",
+          "label": "Never"
+        }
+      ]
+    },
+    {
+      "type": "decision",
+      "id": "d5",
+      "title": "5. How much live agent testing before release?",
+      "markdown": "- **(a) Six situations, three runs each, Claude and Codex: 36 sessions** (recommended). The strongest focused evidence of steady behaviour; failures are fixed and rerun. The most time; runs after the skills are rewritten.\n- **(b) One run each: 12 sessions.** Quicker, but cannot tell steady behaviour from a lucky run; the release notes claim less.",
+      "options": [
+        {
+          "value": "a",
+          "label": "Six situations, three runs each, Claude and Codex: 36 sessions",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "One run each: 12 sessions"
+        }
+      ]
+    },
+    {
+      "type": "decision",
+      "id": "d6",
+      "title": "6. What happens to the EPC-015 line?",
+      "markdown": "The engineering-bar line (EPC-015, SPC-011, SPC-012) is merged nowhere, and no record says what happens to it.\n\n- **Decide after the overlap list** (recommended): I bring what EPC-015 still holds and what this epic already covers, with the planning PR.\n- Fold the overlap into EPC-020 and archive the rest.\n- Land it separately after 3.0.0.\n- Archive it.",
+      "options": [
+        {
+          "value": "decide-later",
+          "label": "Decide after the overlap list",
+          "recommended": true
+        },
+        {
+          "value": "fold",
+          "label": "Fold the overlap into EPC-020 and archive the rest"
+        },
+        {
+          "value": "land",
+          "label": "Land it separately after 3.0.0"
+        },
+        {
+          "value": "archive",
+          "label": "Archive it"
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "id": "settled",
+      "tone": "note",
+      "title": "Settled from evidence, unless you disagree",
+      "markdown": "- Every existing number is kept, including the legacy ones; only their format is fixed.\n- Once a project tracks work, acceptance and journey checks can be set to block or warn, never off. This follows strict but adjustable, and it does remove an off switch.\n- Small fixes can land without a task if the PR says why, except changes to contracts, policy, hooks or dependencies.\n- The old `in_progress` status still reads but is no longer written."
+    },
+    {
+      "type": "callout",
+      "id": "needs",
+      "tone": "warning",
+      "title": "Also needed from you",
+      "markdown": "- **A throwaway GitHub repository with branch protection** (a free public one works), for the registry proof and the `remote protect --apply` test you approved earlier. Agents never create or delete repositories.\n- **Renew the Codex sign-in on this machine.** It expired, so the live Codex hook payload in release qualification is untested."
+    },
+    {
+      "type": "feedback_prompt",
+      "id": "ask",
+      "prompt": "For each of the six decisions, comment on its block with your choice (a, b or c) or a change. Mark anything in the figures or the checks table that is wrong. Then submit the review as approve, or request changes."
+    }
+  ]
+}

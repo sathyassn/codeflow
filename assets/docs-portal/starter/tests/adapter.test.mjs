@@ -5,19 +5,18 @@ import { chmod, cp, link, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, 
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recordFilesFor, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validateRecordsSwitch, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
-import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnostics } from "../scripts/browser-verify.mjs";
+import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnostics, writeBrowserEvidence } from "../scripts/browser-verify.mjs";
 import { assertReviewedInstallScripts, REVIEWED_IGNORED_LIFECYCLE_SCRIPTS } from "../scripts/install-dependencies.mjs";
 import { stopChild } from "../scripts/child-lifecycle.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { GENERATOR, assertGeneratorIdentity } from "../scripts/generator.mjs";
+import { lockDigestFailure, REGENERATE } from "../scripts/runtime-scripts.mjs";
+import { adapterPath, buildFixture, commitFixture, configureFixture, git, initializedFixture, portalFixture, runAdapter, runLocalAdapter, selfContainedPortalFixture, starterRoot } from "./portal-fixture.mjs";
 
-const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
-const starterRoot = fileURLToPath(new URL("..", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
 // Windows can hold a fixture briefly after a child exits; retry busy removals.
 const treeRemoval = { recursive: true, force: true, maxRetries: 10, retryDelay: 100 };
@@ -237,8 +236,6 @@ test("browser surface discovery scans beyond the first 64 pages", async () => {
     assert.deepEqual(await discoverSurfaceRoutes(pages, root), {
       deepLink: "reference/page-68",
       strictPreview: "reference/page-69",
-      altitudeTabs: ["reference/page-66", "reference/page-67"],
-      layerSamples: { reference: ["reference/page-0", "reference/page-69"] },
     });
     pages[69].output_markdown_sha256 = "0".repeat(64);
     await assert.rejects(discoverSurfaceRoutes(pages, root), /hash mismatch/);
@@ -276,8 +273,7 @@ test("Astro preserves the explicit canonical route in output and links", { skip:
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
     commitFixture(root, "add exact route source");
     runLocalAdapter(root);
-    const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
+    buildFixture(root);
     const route = "reference/Mixed Case + café";
     assert.equal((await readFile(path.join(root, `src/content/docs/${route}.md`), "utf8")).split("\n").includes(`slug: ${JSON.stringify(route)}`), true);
     assert.match(await readFile(path.join(root, "public/llms.txt"), "utf8"), /\.\/markdown\/reference\/Mixed%20Case%20%2B%20caf%C3%A9\.md/);
@@ -289,6 +285,32 @@ test("Astro preserves the explicit canonical route in output and links", { skip:
     assert.match(routeHtml, /data-codeflow-search-root="reference\/Mixed Case \+ café"/);
     assert.match(routeHtml, /id="deep-target"/);
     assert.match(routeHtml, /href="#deep-target"/);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("the rendered sidebar keeps the landing order when pages nest", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const configPath = path.join(root, "portal.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.layers[0] = { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md", "docs/topics.md", "docs/adoption.md"], prefixes: ["docs/topics"] };
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    await mkdir(path.join(root, "docs/topics"));
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nFirst.\n");
+    await writeFile(path.join(root, "docs/topics.md"), "# Topics\n\nA parent page.\n");
+    await writeFile(path.join(root, "docs/topics/one.md"), "# One\n\nNested beneath Topics.\n");
+    await writeFile(path.join(root, "docs/adoption.md"), "# Adoption\n\nConfigured after the parent.\n");
+    commitFixture(root, "add a parent page with a nested page between configured pages");
+    runLocalAdapter(root);
+    buildFixture(root);
+    const landing = await readFile(path.join(root, "src/content/docs/orient/index.md"), "utf8");
+    assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Product", "Topics", "One", "Adoption"]);
+    const html = await readFile(path.join(root, "dist/orient/index.html"), "utf8");
+    const start = html.indexOf('<nav aria-label="Guide pages"');
+    assert.notEqual(start, -1);
+    const sidebar = html.slice(start, html.indexOf("</nav>", start));
+    const routes = [...new Set([...sidebar.matchAll(/href="(\/orient\/[^"]*)"/g)].map((match) => match[1]))];
+    assert.deepEqual(routes, ["/orient/", "/orient/product/", "/orient/topics/", "/orient/topics/one/", "/orient/adoption/"]);
   } finally { await rm(root, treeRemoval); }
 });
 
@@ -337,7 +359,7 @@ test("Astro independently rejects remote and encoded base paths", { timeout: 120
       const config = JSON.parse(await readFile(configPath, "utf8"));
       config.base = base;
       await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-      const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
+      const result = buildFixture(root, false);
       assert.notEqual(result.status, 0, base);
       assert.match(`${result.stderr}\n${result.stdout}`, /base:/, base);
     } finally { await rm(root, treeRemoval); }
@@ -525,7 +547,7 @@ test("the AST rewrite escapes raw HTML while preserving code and GFM", () => {
   assert.match(rendered, /&lt;script&gt;/);
   assert.match(rendered, /`<tag>&`/);
   assert.match(rendered, /<div>example<\/div>/);
-  assert.match(rendered, /\n\n## <span class="portal-id-preview">/);
+  assert.match(rendered, /\n\n## <a href="\/system\/decision\/">ADR-0048<\/a> outcome/);
   assert.match(rendered, /```\n\nAfter the fence\./);
 });
 
@@ -714,7 +736,7 @@ test("work-record aliases and base paths produce canonical relationships and lin
   ]) assert.throws(() => validateBase(invalid), invalid);
 });
 
-test("portal configuration is closed, bounded, and deeply typed", () => {
+test("portal configuration is closed, bounded, and deeply typed", async () => {
   const valid = { schema_version: 1, title: "Guide", description: "Repository guide", theme: "signal", repository_url: null, repository_root: "..", release_version: null, primitive_tokens: null, source_roots: ["docs"], exclude: [], layers: [
     { id: "orient", label: "Orient", description: "Start", paths: ["docs/product.md"] },
     { id: "system", label: "System", description: "Architecture", prefixes: ["docs/decisions"] },
@@ -730,6 +752,16 @@ test("portal configuration is closed, bounded, and deeply typed", () => {
   assert.throws(() => validatePortalConfig({ ...valid, source_roots: "docs" }), /source_roots/);
   assert.throws(() => validatePortalConfig({ ...valid, repository_url: "https://user:secret@example.com/repo" }), /credentials/);
   assert.throws(() => validatePortalConfig({ ...valid, layers: valid.layers.map((layer) => ({ ...layer, fallback: true })) }), /exactly one/);
+  // A case-insensitive file system makes two sources that differ only by case
+  // the same page, so the shared contract the Rust verifier also reads keeps
+  // both refusals identical.
+  const carriers = JSON.parse(await readFile(new URL("./fixtures/carrier-contract.json", import.meta.url), "utf8"));
+  for (const page_carriers of carriers.page_carriers.accepted) {
+    assert.doesNotThrow(() => validatePortalConfig({ ...valid, page_carriers }), JSON.stringify(page_carriers));
+  }
+  for (const { name, carriers: page_carriers } of carriers.page_carriers.rejected) {
+    assert.throws(() => validatePortalConfig({ ...valid, page_carriers }), /duplicate page_carriers entry/, name);
+  }
 });
 
 test("primitive-token influence is narrow, closed, and contrast checked", () => {
@@ -739,8 +771,9 @@ test("primitive-token influence is narrow, closed, and contrast checked", () => 
   assert.throws(() => validatePrimitiveTokens({ schema_version: 1, colors: { light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } } }, "signal"), /exactly schema_version, light, and dark/);
   assert.doesNotThrow(() => validatePrimitiveTokens({ schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } }, "folio"));
   // These passed the old approximate theme surfaces, but not the actual
-  // reader-selectable surface/selected-background combinations.
-  for (const [mode, accent] of [["light", "#737373"], ["dark", "#858585"], ["light", "#636363"]]) {
+  // reader-selectable surface/selected-background combinations. The values
+  // hold the approved near-white surfaces in every selectable skin.
+  for (const [mode, accent] of [["light", "#737373"], ["dark", "#858585"], ["light", "#7a7a7a"]]) {
     const tokens = { schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" }, [mode]: { accent } };
     assert.throws(() => validatePrimitiveTokens(tokens, "signal"), /contrast/);
   }
@@ -1520,6 +1553,34 @@ test("tool output traversal uses one global total-entry budget", async () => {
   } finally { await rm(root, treeRemoval); }
 });
 
+// A trace over its cap is a failed artifact recorded beside intact results,
+// not a throw that loses a long run's results; a file that would take the
+// evidence past its aggregate cap, and files past the count, fail the same way.
+test("browser evidence keeps its results and records an oversized artifact as failed", async () => {
+  const output = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-browser-evidence-"));
+  try {
+    await writeFile(path.join(output, "chromium-mobile.png"), "p".repeat(100));
+    await writeFile(path.join(output, "firefox-trace.zip"), "t".repeat(2048));
+    await writeFile(path.join(output, "webkit-mobile.png"), "w".repeat(950));
+    await writeFile(path.join(output, "zz-extra.png"), "z");
+    const results = [{ engine: "chromium", status: "passed", checks: ["figure-gate"] }, { engine: "firefox", status: "failed", error: "rule 8" }];
+    const evidence = { schema_version: 1, run_id: "local", results, artifacts: null, teardown_verified: true };
+    const artifacts = await writeBrowserEvidence(output, evidence, { artifactBytes: 1024, totalBytes: 4096 + 1000, resultsBytes: 4096, count: 4 });
+    const written = JSON.parse(await readFile(path.join(output, "results.json"), "utf8"));
+    assert.deepEqual(written.results, results);
+    assert.deepEqual(written.artifacts, artifacts);
+    assert.deepEqual(artifacts.map(({ file, status }) => [file, status ?? "recorded"]), [
+      ["chromium-mobile.png", "recorded"], ["firefox-trace.zip", "failed"], ["webkit-mobile.png", "failed"], [null, "failed"],
+    ]);
+    assert.equal(artifacts[0].bytes, 100);
+    assert.match(artifacts[0].sha256, /^[0-9a-f]{64}$/);
+    assert.match(artifacts[1].error, /2048 bytes is over the 1024 byte artifact cap/);
+    assert.match(artifacts[2].error, /950 bytes would take the evidence past its 1000 byte cap/);
+    assert.match(artifacts[3].error, /1 more files past the 3 artifact limit/);
+    assert.deepEqual((await readdir(output)).sort(), ["chromium-mobile.png", "firefox-trace.zip", "results.json", "webkit-mobile.png", "zz-extra.png"]);
+  } finally { await rm(output, treeRemoval); }
+});
+
 test("streamed browser artifact hashes reject growth and path replacement races", { skip: process.platform === "win32" }, async () => {
   const { symlink } = await import("node:fs/promises");
   for (const race of ["growth", "swap"]) {
@@ -1710,7 +1771,7 @@ test("the adapter emits one bounded non-searchable current-source stub without a
     assert.equal("last_good_source_sha256" in stale, false);
     assert.deepEqual(target.backlinks, []);
     const targetOutput = await readFile(path.join(root, "src/content/docs/reference/target.md"), "utf8");
-    assert.match(targetOutput, /TSK-101 — stale/);
+    assert.match(targetOutput, /TSK-101 \(stale\)/);
     assert.doesNotMatch(targetOutput, /### Inverse links/);
     const landing = await readFile(path.join(root, "src/content/docs/reference/index.md"), "utf8");
     assert.doesNotMatch(landing, /Guide/);
@@ -1784,6 +1845,64 @@ test("the adapter refuses dirty snapshot states and dangerous source links", asy
     commitFixture(unsafe, "unsafe link");
     assert.match(runAdapter(unsafe, false).stderr, /unsafe Markdown URL scheme/);
   } finally { await rm(unsafe, treeRemoval); }
+});
+
+test("HEAD cleanliness exempts ignored untracked litter and nothing else", async () => {
+  const tracked = await portalFixture();
+  try {
+    await writeFile(path.join(tracked, ".gitignore"), "*.log\n");
+    await writeFile(path.join(tracked, "docs/guide.md"), "# Guide\n");
+    await writeFile(path.join(tracked, "docs/audit.log"), "committed\n");
+    git(tracked, ["add", "-f", "docs/audit.log"]);
+    commitFixture(tracked, "commit a file an ignore pattern also matches");
+    await writeFile(path.join(tracked, "docs/audit.log"), "edited after HEAD\n");
+    assert.match(runAdapter(tracked, false).stderr, /must match HEAD exactly: docs\/audit\.log/);
+  } finally { await rm(tracked, treeRemoval); }
+
+  const litter = await portalFixture();
+  try {
+    await writeFile(path.join(litter, ".gitignore"), "__pycache__/\n**/.claude/.cc-writes/\n");
+    await writeFile(path.join(litter, "docs/guide.md"), "# Guide\n");
+    commitFixture(litter, "commit a source root beside ignore patterns");
+    await mkdir(path.join(litter, "docs/__pycache__"), { recursive: true });
+    await mkdir(path.join(litter, "docs/.claude/.cc-writes"), { recursive: true });
+    await writeFile(path.join(litter, "docs/__pycache__/tool.cpython-313.pyc"), "harness litter\n");
+    await writeFile(path.join(litter, "docs/.claude/.cc-writes/journal.jsonl"), "{}\n");
+    runAdapter(litter);
+    const evidence = JSON.parse(await readFile(path.join(litter, ".portal/generated/evidence.json"), "utf8"));
+    assert.deepEqual(evidence.pages.map((page) => page.source_path), ["docs/guide.md"]);
+  } finally { await rm(litter, treeRemoval); }
+
+  const untracked = await portalFixture();
+  try {
+    await writeFile(path.join(untracked, ".gitignore"), "__pycache__/\n");
+    await writeFile(path.join(untracked, "docs/guide.md"), "# Guide\n");
+    commitFixture(untracked, "commit a source root before adding a new source");
+    await writeFile(path.join(untracked, "docs/draft.md"), "# Draft\n");
+    assert.match(runAdapter(untracked, false).stderr, /must match HEAD exactly: docs\/draft\.md/);
+  } finally { await rm(untracked, treeRemoval); }
+
+  const repositoryExcluded = await portalFixture();
+  try {
+    await writeFile(path.join(repositoryExcluded, "docs/guide.md"), "# Guide\n");
+    commitFixture(repositoryExcluded, "commit a source root before a repository exclude file matches a new source");
+    await writeFile(path.join(repositoryExcluded, ".git/info/exclude"), "docs/draft.md\n");
+    await writeFile(path.join(repositoryExcluded, "docs/draft.md"), "# Draft\n");
+    assert.match(git(repositoryExcluded, ["status", "--porcelain=v1", "--ignored=matching", "--", "docs"]), /^!! docs\/draft\.md$/m);
+    assert.match(runAdapter(repositoryExcluded, false).stderr, /must match HEAD exactly: docs\/draft\.md/);
+  } finally { await rm(repositoryExcluded, treeRemoval); }
+
+  const userIgnored = await portalFixture();
+  try {
+    await writeFile(path.join(userIgnored, "docs/guide.md"), "# Guide\n");
+    commitFixture(userIgnored, "commit a source root before a per-user ignore file matches a new source");
+    const excludes = path.join(userIgnored, "user-ignore");
+    await writeFile(excludes, "docs/draft.md\n");
+    git(userIgnored, ["config", "core.excludesFile", excludes]);
+    await writeFile(path.join(userIgnored, "docs/draft.md"), "# Draft\n");
+    assert.match(git(userIgnored, ["status", "--porcelain=v1", "--ignored=matching", "--", "docs"]), /^!! docs\/draft\.md$/m);
+    assert.match(runAdapter(userIgnored, false).stderr, /must match HEAD exactly: docs\/draft\.md/);
+  } finally { await rm(userIgnored, treeRemoval); }
 });
 
 test("masked source, token, and media edits block publication", async () => {
@@ -2118,107 +2237,309 @@ test("the AST adapter fails broken documents and repository traversal", async ()
   }
 });
 
-async function portalFixture() {
-  return initializedFixture(path.join(os.tmpdir(), "codeflow-portal-adapter-"), async (root) => {
-    await mkdir(path.join(root, ".codeflow"));
-    await mkdir(path.join(root, "docs"));
-    await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
-    await writeFile(path.join(root, "portal.config.json"), `${JSON.stringify({
-      schema_version: 1,
-      title: "Fixture",
-      description: "Adapter fixture",
-      theme: "signal",
-      repository_url: null,
-      repository_root: ".",
-      release_version: null,
-      primitive_tokens: null,
-      source_roots: ["docs"],
-      exclude: [],
-      layers: [
-        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
-        { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
-        { id: "reference", label: "Reference", description: "Reference", fallback: true },
-      ],
-      base: "/",
-    }, null, 2)}\n`);
-    git(root, ["init", "-q"]);
-    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
-    git(root, ["config", "user.name", "CodeFlow portal tests"]);
-    commitFixture(root, "initialize fixture");
-  });
-}
-
-async function selfContainedPortalFixture() {
-  return initializedFixture(path.join(starterRoot, ".portal-test-runtime-"), async (root) => {
-    for (const item of [".gitignore", ".node-version", "astro.config.mjs", "package.json", "package-lock.json", "portal.config.json", "scripts", "src", "public", "tsconfig.json"]) {
-      await cp(path.join(starterRoot, item), path.join(root, item), { recursive: true });
-    }
-    await mkdir(path.join(root, ".codeflow"));
-    await mkdir(path.join(root, "docs"));
-    await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
-    const configPath = path.join(root, "portal.config.json");
-    const config = JSON.parse(await readFile(configPath, "utf8"));
-    Object.assign(config, {
-      repository_root: ".",
-      source_roots: ["docs"],
-      exclude: [],
-      primitive_tokens: null,
-      repository_url: null,
-      release_version: null,
-      layers: [
-        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
-        { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
-        { id: "reference", label: "Reference", description: "Reference", fallback: true },
-      ],
-      base: "/",
-    });
-    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    await writeFile(path.join(root, "docs/seed.md"), "# Seed\n");
-    git(root, ["init", "-q"]);
-    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
-    git(root, ["config", "user.name", "CodeFlow portal tests"]);
-    commitFixture(root, "initialize self-contained fixture");
-  });
-}
-
-async function initializedFixture(prefix, initialize) {
-  const root = await mkdtemp(prefix);
+test("the home page renders the configured layers as one reading path figure", async () => {
+  const root = await portalFixture();
   try {
-    await initialize(root);
-    return root;
-  } catch (error) {
-    try { await rm(root, treeRemoval); }
-    catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], "Fixture initialization and owned-root cleanup failed");
-    }
-    throw error;
+    await configureFixture(root, {
+      layers: [
+        { id: "orient", label: "Orient", description: "Purpose and capabilities.", paths: ["docs/product.md"] },
+        { id: "system", label: "System", description: "Architecture in effect.", prefixes: ["docs/architecture"] },
+        { id: "operate", label: "Operate", description: "Running the system.", prefixes: ["docs/operate"] },
+        { id: "reference", label: "Reference", description: "Lookups and evidence.", fallback: true },
+      ],
+    });
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nWhat it is.\n");
+    commitFixture(root, "configure four layers");
+    runAdapter(root);
+    const index = await readFile(path.join(root, "src/content/docs/index.md"), "utf8");
+    assert.deepEqual([...index.matchAll(/<span class="k">([^<]+)<\/span>/g)].map((match) => match[1]), ["Orient", "System", "Operate", "Reference"]);
+    assert.deepEqual([...index.matchAll(/<span class="s">([^<]+)<\/span>/g)].map((match) => match[1]), ["Purpose and capabilities.", "Architecture in effect.", "Running the system.", "Lookups and evidence."]);
+    assert.match(index, /This guide reads in 4 steps, from Orient to Reference/);
+    assert.match(index, /Start with \[Orient\]\(\/orient\/\)/);
+    // The landing has no sidebar, so its reading path is its navigation
+    // landmark and carries the name a screen reader announces.
+    assert.match(index, /<nav class="portal-reading-path-nav" aria-label="Reading path"><figure class="portal-stage portal-reading-path">/);
+    assert.equal(index.includes("portal-journey"), false);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a layer landing lists its pages in configured reading order", async () => {
+  const root = await portalFixture();
+  try {
+    await configureFixture(root, {
+      layers: [
+        { id: "orient", label: "Orient", description: "Purpose first.", paths: ["docs/zulu.md", "docs/alpha.md"], prefixes: ["docs/notes", "docs/zulu"] },
+        { id: "system", label: "System", description: "System", prefixes: ["docs/architecture"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+    });
+    await writeFile(path.join(root, "docs/zulu.md"), "# Zulu\n\nConfigured first.\n");
+    await writeFile(path.join(root, "docs/alpha.md"), "# Alpha\n\nConfigured second.\n");
+    await mkdir(path.join(root, "docs/notes"));
+    await mkdir(path.join(root, "docs/zulu"));
+    await writeFile(path.join(root, "docs/notes/swept.md"), "# Swept\n\nMatched by prefix.\n");
+    await writeFile(path.join(root, "docs/zulu/deep.md"), "# Deep\n\nNested beneath Zulu.\n");
+    commitFixture(root, "add configured, nested and swept sources");
+    runAdapter(root);
+    const landing = await readFile(path.join(root, "src/content/docs/orient/index.md"), "utf8");
+    assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Zulu", "Deep", "Alpha", "Swept"]);
+    assert.match(landing, /Purpose first\./);
+    assert.match(landing, /Start with \[Zulu\]\(\/orient\/zulu\/\); the sidebar follows the same order/);
+    assert.equal(/^- \[/m.test(landing), false);
+    const order = async (file) => Number((await readFile(path.join(root, "src/content/docs", file), "utf8")).match(/^sidebar:\n  order: (\d+)$/m)[1]);
+    assert.deepEqual(await Promise.all(["orient/index.md", "orient/zulu.md", "orient/zulu/deep.md", "orient/alpha.md", "orient/notes/swept.md"].map(order)), [0, 1, 2, 3, 4]);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("capability fences render as generated tables and never as raw YAML", async () => {
+  const root = await portalFixture();
+  try {
+    await writeFile(path.join(root, "docs/capabilities.md"), [
+      "# Capabilities",
+      "",
+      "| Capability | Name | Area | Status | Epics | Purpose |",
+      "|---|---|---|---|---|---|",
+      "| CAP-001 | first | engine | shipped | none | hand written |",
+      "",
+      "## CAP-001: first",
+      "",
+      "```yaml",
+      "id: CAP-001",
+      "name: first",
+      "area: engine",
+      "status: shipped",
+      "verified_by: [\"cargo test one\"]",
+      "```",
+      "",
+      "The first capability.",
+      "",
+      "## CAP-002: second",
+      "",
+      "```yaml",
+      "id: CAP-002",
+      "name: second",
+      "area: scaffold",
+      "status: building",
+      "```",
+      "",
+      "The second capability.",
+      "",
+    ].join("\n"));
+    commitFixture(root, "add a capability registry");
+    runAdapter(root);
+    const page = (await readFile(path.join(root, "src/content/docs/reference/capabilities.md"), "utf8")).replace(/[ \t]+/g, " ").replace(/-+ \|/g, "--- |");
+    assert.match(page, /\| Capability \| Name \| Area \| Status \|/);
+    assert.match(page, /\| CAP-001 \| first \| engine \| shipped \|/);
+    assert.match(page, /\| CAP-002 \| second \| scaffold \| building \|/);
+    assert.equal(page.includes("hand written"), false);
+    assert.equal(page.includes("```yaml"), false);
+    assert.equal(page.match(/portal-definition/g).length, 2);
+    assert.match(page, /\| verified\\_by \| cargo test one \|/);
+    assert.match(page, /^## CAP-001: first$/m);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("the records switch drops record sources and points at their folders", async () => {
+  const root = await portalFixture();
+  try {
+    await configureFixture(root, {
+      repository_url: "https://github.com/example/repo",
+      layers: [
+        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+        { id: "system", label: "System", description: "System", prefixes: ["docs/architecture"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+      records: {
+        enabled: false,
+        layer: "system",
+        pointers: [
+          { folder: "docs/decisions", id_prefix: "ADR", purpose: "Accepted decisions." },
+          { folder: "project-management/epics", id_prefix: "EPC", purpose: "Bodies of work." },
+          { folder: "project-management/tasks", id_prefix: "TSK", purpose: "Units of work." },
+          { folder: "project-management/specs", id_prefix: "SPC", purpose: "Planning inputs." },
+        ],
+      },
+    });
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    await mkdir(path.join(root, "project-management/epics"), { recursive: true });
+    await mkdir(path.join(root, "project-management/tasks"), { recursive: true });
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nCites ADR-0001 in prose.\n");
+    await writeFile(path.join(root, "docs/decisions/ADR-0001-first-choice.md"), "---\nid: ADR-0001\n---\n\n# First choice\n\nBody.\n");
+    await writeFile(path.join(root, "docs/decisions/README.md"), "# Decisions\n\nIndex.\n");
+    await writeFile(path.join(root, "project-management/epics/EPC-001.md"), "---\nid: EPC-001\n---\n\n# Epic\n");
+    await writeFile(path.join(root, "project-management/tasks/TSK-001.md"), "---\nid: TSK-001\n---\n\n# Task\n");
+    commitFixture(root, "add record folders beside the guide");
+    runAdapter(root);
+    const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    assert.equal(evidence.pages.some((page) => page.source_path.startsWith("docs/decisions/")), false);
+    assert.equal(evidence.pages.some((page) => page.route.startsWith("records/")), false);
+    const llms = await readFile(path.join(root, "public/llms.txt"), "utf8");
+    assert.equal(llms.includes("ADR-0001"), false);
+    const pointer = await readFile(path.join(root, "src/content/docs/system/records.md"), "utf8");
+    assert.match(pointer, /title: "Where decisions and work records live"/);
+    assert.equal(pointer.match(/^\| `/gm).length, 4);
+    assert.match(pointer, /<div class="portal-record-folders">\n\n\| Folder \| Purpose \| Count \| Repository \|\n[\s\S]*\|\n\n<\/div>\n/);
+    assert.match(pointer, new RegExp("\\| `docs/decisions` \\| Accepted decisions\\\\\\. \\| 1 \\| \\[docs/decisions\\]\\(https://github\\.com/example/repo/tree/[0-9a-f]{40}/docs/decisions\\) \\|"));
+    assert.match(pointer, /\| `project-management\/specs` \| Planning inputs\\\. \| none yet \| `project-management\/specs` \|/);
+    assert.match(pointer, /3 of them sit in 4 repository folders/);
+    assert.match(pointer, /ADR, EPC, TSK, SPC/);
+    const landing = await readFile(path.join(root, "src/content/docs/system/index.md"), "utf8");
+    assert.match(landing, /<span class="t">Where decisions and work records live<\/span><\/a><\/li><\/ol>/);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("the starter default points at decisions instead of publishing them", async () => {
+  // The same shape as assets/docs-portal/starter/portal.config.json, which the
+  // manifest consistency test pins; this proves what that shape publishes.
+  const root = await portalFixture();
+  try {
+    await configureFixture(root, {
+      layers: [
+        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/overview.md"] },
+        { id: "system", label: "System", description: "System", paths: ["docs/architecture.md"], prefixes: ["docs/architecture"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+      records: { enabled: false, layer: "system", pointers: [{ folder: "docs/decisions", id_prefix: "ADR", purpose: "Accepted architecture decisions, appended and superseded, never rewritten." }] },
+    });
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nThe shape follows ADR-0001.\n");
+    await writeFile(path.join(root, "docs/architecture.md"), "# Architecture\n\nBody.\n");
+    await writeFile(path.join(root, "docs/decisions/ADR-0001-example.md"), "---\nid: ADR-0001\n---\n\n# Example decision\n");
+    commitFixture(root, "scaffold a project with one decision");
+    runAdapter(root);
+    const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    assert.deepEqual(evidence.pages.map((page) => page.route).sort(), ["orient/product", "system/architecture"]);
+    assert.equal((await readFile(path.join(root, "public/llms.txt"), "utf8")).includes("ADR-0001"), false);
+    const pointer = await readFile(path.join(root, "src/content/docs/system/records.md"), "utf8");
+    assert.match(pointer, /\| `docs\/decisions` \| Accepted architecture decisions, appended and superseded, never rewritten\\\. \| 1 \| `docs\/decisions` \|/);
+    assert.match(pointer, /^sidebar:\n  order: 2$/m);
+    assert.match(await readFile(path.join(root, "src/content/docs/orient/product.md"), "utf8"), /<a class="portal-record-link" href="\/system\/records\/"/);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("an id whose record is not a portal source resolves without dangling", async () => {
+  for (const repositoryUrl of ["https://github.com/example/repo", null]) {
+    const root = await portalFixture();
+    try {
+      await configureFixture(root, {
+        repository_url: repositoryUrl,
+        layers: [
+          { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+          { id: "system", label: "System", description: "System", prefixes: ["docs/architecture"] },
+          { id: "reference", label: "Reference", description: "Reference", fallback: true },
+        ],
+        records: {
+          enabled: false,
+          layer: "system",
+          pointers: [{ folder: "docs/decisions", id_prefix: "ADR", purpose: "Accepted decisions." }],
+        },
+      });
+      await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+      await writeFile(path.join(root, "docs/decisions/ADR-0001-first-choice.md"), "---\nid: ADR-0001\n---\n\n# First choice\n");
+      await writeFile(path.join(root, "docs/guide.md"), "---\nadrs: [ADR-0001]\n---\n\n# Guide\n\nThe boundary comes from ADR-0001 and ADR-0404.\n\n## What ADR-0001 settles\n\nDetail.\n");
+      commitFixture(root, "cite a record the guide does not publish");
+      runAdapter(root);
+      const page = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
+      const target = repositoryUrl === null ? "/system/records/" : "https://github.com/example/repo/blob/";
+      assert.match(page, new RegExp(`<a class="portal-record-link" href="${target}[^"]*" title="docs/decisions/ADR-0001-first-choice.md at [0-9a-f]{40}">ADR-0001</a>`));
+      assert.match(page, new RegExp(`\\*\\*decision\\*\\* → \\[ADR-0001\\]\\(${target === "/system/records/" ? "/system/records/" : "https://"}`));
+      assert.equal(page.includes(">ADR-0404</a>"), false);
+      assert.match(page, /ADR-0404/);
+      const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+      const guide = evidence.pages.find((item) => item.source_path === "docs/guide.md");
+      assert.deepEqual(guide.relationships, [{ type: "decision", target: "ADR-0001", source_id: null }]);
+    } finally { await rm(root, treeRemoval); }
   }
-}
+});
 
-function commitFixture(root, message, allowEmpty = false) {
-  git(root, ["add", "-A"]);
-  git(root, ["commit", "-q", ...(allowEmpty ? ["--allow-empty"] : []), "-m", message]);
-}
+test("a heading keeps its id free of the record preview provenance", async () => {
+  const root = await portalFixture();
+  try {
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    await writeFile(path.join(root, "docs/decisions/ADR-0001-first-choice.md"), "---\nid: ADR-0001\n---\n\n# First choice\n");
+    await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\n## What ADR-0001 settles\n\nThe body cites ADR-0001 too.\n");
+    commitFixture(root, "cite a published record in a heading");
+    runAdapter(root);
+    const page = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
+    const heading = page.split("\n").find((line) => line.startsWith("## "));
+    assert.match(heading, /^## What <a href="\/system\/decisions\/ADR-0001-first-choice\/">ADR-0001<\/a> settles$/);
+    assert.equal(heading.includes("role=\"tooltip\""), false);
+    assert.match(page, /portal-id-preview/);
+  } finally { await rm(root, treeRemoval); }
+});
 
-function git(root, args) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr);
-  return result.stdout;
-}
+test("the provenance line stays one row and proves the full commit", async () => {
+  const linked = await portalFixture();
+  try {
+    await configureFixture(linked, { repository_url: "https://github.com/example/repo" });
+    await writeFile(path.join(linked, "docs/guide.md"), "# Guide\n\nBody.\n");
+    commitFixture(linked, "add a guide with a provider link");
+    runAdapter(linked);
+    const commit = git(linked, ["rev-parse", "HEAD"]).trim();
+    const page = await readFile(path.join(linked, "src/content/docs/reference/guide.md"), "utf8");
+    assert.match(page, new RegExp(`<a href="https://github.com/example/repo/blob/${commit}/docs/guide.md" title="docs/guide.md at ${commit}">`));
+    assert.match(page, new RegExp(`<code>${commit.slice(0, 12)}</code>`));
+    assert.equal(page.includes(`built from <code>${commit}</code>`), false);
+  } finally { await rm(linked, treeRemoval); }
 
-function runAdapter(root, expectSuccess = true) {
-  const result = spawnSync(process.execPath, [adapterPath], { cwd: root, encoding: "utf8" });
-  if (expectSuccess) assert.equal(result.status, 0, result.stderr);
-  else assert.notEqual(result.status, 0, result.stdout);
-  return result;
-}
+  const unlinked = await portalFixture();
+  try {
+    await writeFile(path.join(unlinked, "docs/guide.md"), "# Guide\n\nBody.\n");
+    commitFixture(unlinked, "add a guide without a provider link");
+    runAdapter(unlinked);
+    const commit = git(unlinked, ["rev-parse", "HEAD"]).trim();
+    const page = await readFile(path.join(unlinked, "src/content/docs/reference/guide.md"), "utf8");
+    assert.match(page, new RegExp(`built from <code>${commit}</code>`));
+  } finally { await rm(unlinked, treeRemoval); }
 
-function runLocalAdapter(root, expectSuccess = true) {
-  const result = spawnSync(process.execPath, [path.join(root, "scripts/adapter.mjs")], { cwd: root, encoding: "utf8" });
-  if (expectSuccess) assert.equal(result.status, 0, result.stderr);
-  else assert.notEqual(result.status, 0, result.stdout);
-  return result;
-}
+  const unsupported = await portalFixture();
+  try {
+    await configureFixture(unsupported, { repository_url: "https://code.example.com/team/repo" });
+    await writeFile(path.join(unsupported, "docs/guide.md"), "# Guide\n\nBody.\n");
+    commitFixture(unsupported, "add a guide on a host without a blob layout");
+    runAdapter(unsupported);
+    const commit = git(unsupported, ["rev-parse", "HEAD"]).trim();
+    const page = await readFile(path.join(unsupported, "src/content/docs/reference/guide.md"), "utf8");
+    const provenance = page.match(/<div class="portal-provenance">.*<\/div>/)[0];
+    assert.equal(provenance.includes("<a "), false);
+    assert.match(provenance, new RegExp(`built from <code>${commit}</code>`));
+  } finally { await rm(unsupported, treeRemoval); }
+});
+
+test("stage nodes hold a minimum width, wrap on words, and stack at phone width", async () => {
+  const css = await readFile(path.join(starterRoot, "src/styles/portal.css"), "utf8");
+  assert.match(css, /\.portal-stage-flow \{[^}]*flex-wrap: wrap;/);
+  assert.match(css, /\.portal-stage-group \{[^}]*flex: 1 1 8rem;[^}]*min-inline-size: 8rem;/s);
+  assert.match(css, /\.portal-stage-node \.k \{[^}]*overflow-wrap: break-word;\s*word-break: normal;/s);
+  assert.match(css, /@media \(max-width: 50rem\) \{\s*\.portal-stage-flow \{ flex-direction: column;/);
+  assert.equal(css.includes("overflow-wrap: anywhere"), false);
+});
+
+test("the records switch is closed, bounded and consistent with the layers", () => {
+  const layers = [
+    { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+    { id: "system", label: "System", description: "System", prefixes: ["docs/architecture"] },
+    { id: "records", label: "Records", description: "Records", prefixes: ["project-management"] },
+    { id: "reference", label: "Reference", description: "Reference", fallback: true },
+  ];
+  const pointer = { folder: "project-management", id_prefix: "TSK", purpose: "Units of work." };
+  assert.deepEqual(validateRecordsSwitch(undefined, layers), { enabled: false, layer: null, pointers: [] });
+  assert.deepEqual(validateRecordsSwitch({ enabled: false, layer: "system", pointers: [pointer] }, layers.slice(0, 2).concat(layers[3])), {
+    enabled: false, layer: "system", pointers: [pointer],
+  });
+  for (const [records, message] of [
+    [{ enabled: "no" }, /records\.enabled must be boolean/],
+    [{ enabled: false, why: true }, /unknown records key why/],
+    [{ enabled: false, layer: "absent", pointers: [pointer] }, /records\.layer must name a configured layer/],
+    [{ enabled: true, layer: "system", pointers: [pointer] }, /records\.enabled false/],
+    [{ enabled: false, pointers: [pointer] }, /records\.layer to place their pointer page/],
+    [{ enabled: false, layer: "system", pointers: [{ ...pointer, id_prefix: "XYZ" }] }, /id_prefix must be one of/],
+    [{ enabled: false, layer: "system", pointers: [pointer, pointer] }, /duplicate records pointer folder/],
+    [{ enabled: false, layer: "system", pointers: [pointer] }, /layer records publishes only record folders/],
+  ]) {
+    assert.throws(() => validateRecordsSwitch(records, layers), message);
+  }
+});
 
 async function waitUntil(predicate, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
@@ -2238,3 +2559,22 @@ function pngHeader(width, height) {
   bytes.writeUInt32BE(height, 20);
   return bytes;
 }
+
+// The committed list of the runtime's inline scripts names the lockfile it
+// was built from. This checkout's list matches its lockfile, and the check
+// workflow fails before running anything when a lockfile-only bump leaves the
+// list stale, naming the regeneration to run.
+test("the check workflow fails on a runtime script list built from another lockfile", { timeout: 120_000 }, async () => {
+  assert.equal(await lockDigestFailure(starterRoot), null);
+  const root = await selfContainedPortalFixture();
+  try {
+    assert.equal(await lockDigestFailure(root), null);
+    await writeFile(path.join(root, "package-lock.json"), `${await readFile(path.join(root, "package-lock.json"), "utf8")}\n`);
+    const stale = await lockDigestFailure(root);
+    assert.match(stale, /^scripts\/runtime-scripts\.json was built from another package-lock\.json \(recorded [0-9a-f]{12}, current [0-9a-f]{12}\); regenerate it: /);
+    assert.ok(stale.endsWith(REGENERATE));
+    const result = spawnSync(process.execPath, ["scripts/workflow.mjs", "check"], { cwd: root, encoding: "utf8", env: hardenedChildEnvironment() });
+    assert.notEqual(result.status, 0);
+    assert.ok(result.stderr.includes(stale), result.stderr);
+  } finally { await rm(root, treeRemoval); }
+});

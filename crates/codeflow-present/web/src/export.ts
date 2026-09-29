@@ -1,6 +1,7 @@
 import { DOCUMENT_ROOT_ID } from "./contracts";
 import { enhanceDocument } from "./enhance";
 import styles from "./styles.css";
+import figureStyles from "./figure.css";
 import { installFonts } from "./fonts";
 
 installFonts();
@@ -14,7 +15,7 @@ document.documentElement.dataset.cfExport = "true";
 if (!document.querySelector("style[data-cf-present-export-style]")) {
   const style = document.createElement("style");
   style.dataset.cfPresentExportStyle = "true";
-  style.textContent = styles;
+  style.textContent = `${styles}\n${figureStyles}`;
   document.head.append(style);
 }
 const requestedMode = document.documentElement.dataset.cfMode ?? "system";

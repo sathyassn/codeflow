@@ -1,0 +1,454 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "product-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What is CodeFlow, who is it for, and what is it not?",
+    "idea": "CodeFlow owns the rails in your repository; the vendor harness develops inside them and is never replaced.",
+    "title": "What CodeFlow owns and what the harness does",
+    "kicker": "What CodeFlow is",
+    "caption": "CodeFlow installs and owns the rails, and the harness you already use does the developing inside them.",
+    "states": [
+      {
+        "name": "owned",
+        "mark": "layer",
+        "means": "Installed and owned by CodeFlow"
+      },
+      {
+        "name": "vendor",
+        "mark": "optional",
+        "means": "Supplied by the vendor, never reimplemented"
+      },
+      {
+        "name": "passes",
+        "mark": "trans",
+        "means": "Passes through the rails"
+      },
+      {
+        "name": "denied",
+        "mark": "denied",
+        "means": "Not something CodeFlow is"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "CodeFlow is not a runtime harness, agent framework or model router",
+        "source": "docs/product.md#concept",
+        "derive": "the first non-goal row",
+        "check": {
+          "kind": "contains",
+          "text": "Not a runtime harness, agent framework, or model router"
+        },
+        "value": true
+      },
+      {
+        "claim": "CodeFlow is not a process-enforcement engine",
+        "source": "docs/product.md#concept",
+        "derive": "the second non-goal row",
+        "check": {
+          "kind": "contains",
+          "text": "Not a process-enforcement engine"
+        },
+        "value": true
+      },
+      {
+        "claim": "the harness develops while CodeFlow scaffolds, enforces, verifies and remembers",
+        "source": "AGENTS.md",
+        "derive": "the opening paragraph",
+        "check": {
+          "kind": "contains",
+          "text": "while Claude Code (or any harness) does the developing"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 282,
+      "draw": [
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 16,
+          "y": 34,
+          "w": 688,
+          "h": 186
+        },
+        {
+          "text": "your repository",
+          "x": 32,
+          "y": 57,
+          "style": "head"
+        },
+        {
+          "state": "owned",
+          "shape": "rect",
+          "x": 32,
+          "y": 72,
+          "w": 268,
+          "h": 134,
+          "rx": 8,
+          "id": "c"
+        },
+        {
+          "text": "CodeFlow, one binary",
+          "x": 48,
+          "y": 96,
+          "style": "strong",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "text": "scaffold: init, update",
+          "x": 48,
+          "y": 122,
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "text": "enforce: hooks, guards, CI",
+          "x": 48,
+          "y": 144,
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "text": "verify and remember",
+          "x": 48,
+          "y": 166,
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "text": "test, validate, recall",
+          "x": 48,
+          "y": 190,
+          "style": "mute",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "vendor",
+          "shape": "rect",
+          "x": 460,
+          "y": 72,
+          "w": 228,
+          "h": 134,
+          "rx": 8,
+          "id": "h"
+        },
+        {
+          "text": "the harness session",
+          "x": 476,
+          "y": 96,
+          "style": "strong",
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "text": "Claude Code, Codex,",
+          "x": 476,
+          "y": 122,
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "text": "Grok Build",
+          "x": 476,
+          "y": 144,
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "text": "does the developing",
+          "x": 476,
+          "y": 186,
+          "style": "mute",
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "state": "passes",
+          "shape": "path",
+          "d": "M458 150H302",
+          "head": "end",
+          "id": "e"
+        },
+        {
+          "text": "every commit",
+          "x": 380,
+          "y": 113,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "text": "and push passes",
+          "x": 380,
+          "y": 134,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 16,
+          "y": 236,
+          "w": 212,
+          "h": 34,
+          "rx": 6,
+          "cross": {
+            "cx": 210,
+            "cy": 253,
+            "size": 12
+          },
+          "id": "n1"
+        },
+        {
+          "text": "not a runtime harness",
+          "x": 110,
+          "y": 258,
+          "anchor": "middle",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 254,
+          "y": 236,
+          "w": 212,
+          "h": 34,
+          "rx": 6,
+          "cross": {
+            "cx": 448,
+            "cy": 253,
+            "size": 12
+          },
+          "id": "n2"
+        },
+        {
+          "text": "not a model router",
+          "x": 348,
+          "y": 258,
+          "anchor": "middle",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 492,
+          "y": 236,
+          "w": 212,
+          "h": 34,
+          "rx": 6,
+          "cross": {
+            "cx": 686,
+            "cy": 253,
+            "size": 12
+          },
+          "id": "n3"
+        },
+        {
+          "text": "not a process engine",
+          "x": 586,
+          "y": 258,
+          "anchor": "middle",
+          "for": [
+            "n3"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 404,
+      "draw": [
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 8,
+          "y": 30,
+          "w": 344,
+          "h": 258
+        },
+        {
+          "text": "your repository",
+          "x": 20,
+          "y": 52,
+          "style": "head"
+        },
+        {
+          "state": "owned",
+          "shape": "rect",
+          "x": 20,
+          "y": 68,
+          "w": 320,
+          "h": 100,
+          "rx": 8,
+          "id": "c"
+        },
+        {
+          "text": "CodeFlow, one binary",
+          "x": 34,
+          "y": 91,
+          "style": "strong",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "text": "scaffold: init, update",
+          "x": 34,
+          "y": 112,
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "text": "enforce: hooks, guards, CI",
+          "x": 34,
+          "y": 133,
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "text": "verify and remember",
+          "x": 34,
+          "y": 154,
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "passes",
+          "shape": "path",
+          "d": "M52 212V172",
+          "head": "end",
+          "id": "e"
+        },
+        {
+          "text": "every commit and push passes",
+          "x": 70,
+          "y": 197,
+          "style": "mute",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "state": "vendor",
+          "shape": "rect",
+          "x": 20,
+          "y": 214,
+          "w": 320,
+          "h": 62,
+          "rx": 8,
+          "id": "h"
+        },
+        {
+          "text": "the harness session",
+          "x": 34,
+          "y": 238,
+          "style": "strong",
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "text": "Claude Code, Codex, Grok Build",
+          "x": 34,
+          "y": 262,
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 8,
+          "y": 304,
+          "w": 344,
+          "h": 88,
+          "rx": 6,
+          "cross": {
+            "cx": 326,
+            "cy": 348,
+            "size": 12
+          },
+          "id": "n1"
+        },
+        {
+          "text": "not a runtime harness",
+          "x": 24,
+          "y": 328,
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "text": "not a model router",
+          "x": 24,
+          "y": 352,
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "text": "not a process engine",
+          "x": 24,
+          "y": 376,
+          "for": [
+            "n1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Owner",
+        "What it does"
+      ],
+      "rows": [
+        [
+          "scaffold, enforce, verify, remember",
+          "CodeFlow",
+          "installs and holds the rails in the repository"
+        ],
+        [
+          "Claude Code, Codex, Grok Build session",
+          "the vendor",
+          "does the developing inside the rails"
+        ],
+        [
+          "runtime harness, model router, process engine",
+          "nobody here",
+          "not something CodeFlow is"
+        ]
+      ]
+    }
+  }
+}

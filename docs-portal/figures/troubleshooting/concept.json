@@ -1,0 +1,409 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "troubleshooting-concept",
+    "family": "flow",
+    "binding": "authored",
+    "question": "What does doctor tell me, and what does it not do?",
+    "idea": "You run doctor, it prints one line per check naming the fix, you apply the fix and run the check again; doctor itself never changes a file.",
+    "title": "The doctor loop",
+    "kicker": "Troubleshooting",
+    "caption": "Doctor diagnoses and names the fix, and you stay the one who changes anything.",
+    "states": [
+      {
+        "name": "you",
+        "mark": "human",
+        "means": "You act"
+      },
+      {
+        "name": "step",
+        "mark": "state",
+        "means": "Doctor's part"
+      },
+      {
+        "name": "flows",
+        "mark": "trans",
+        "means": "Then"
+      },
+      {
+        "name": "again",
+        "mark": "return",
+        "means": "Run it again"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Never happens"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "doctor runs nineteen health checks",
+        "source": "docs/troubleshooting.md#concept",
+        "derive": "the lead sentence",
+        "check": {
+          "kind": "contains",
+          "text": "`codeflow doctor` runs nineteen health checks"
+        },
+        "value": true
+      },
+      {
+        "claim": "doctor changes no file in the repository and fixes nothing",
+        "source": "docs/troubleshooting.md#concept",
+        "derive": "the read-only sentence",
+        "check": {
+          "kind": "contains",
+          "text": "changes no file in the repository and fixes nothing"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 184,
+      "draw": [
+        {
+          "state": "you",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 90,
+          "r": 11,
+          "id": "y"
+        },
+        {
+          "text": "you",
+          "x": 40,
+          "y": 64,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "y"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M54 90H148",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "text": "run",
+          "x": 100,
+          "y": 80,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 150,
+          "y": 70,
+          "w": 170,
+          "h": 40,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "codeflow doctor",
+          "x": 164,
+          "y": 95,
+          "style": "mono",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M322 90H414",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "text": "prints",
+          "x": 368,
+          "y": 80,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f2"
+          ]
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 416,
+          "y": 70,
+          "w": 150,
+          "h": 40,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "one line a check",
+          "x": 430,
+          "y": 95,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M568 90H612",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "state": "you",
+          "shape": "circle",
+          "cx": 626,
+          "cy": 90,
+          "r": 11,
+          "id": "fx"
+        },
+        {
+          "text": "you apply the fix",
+          "x": 704,
+          "y": 64,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "fx"
+          ]
+        },
+        {
+          "state": "again",
+          "shape": "path",
+          "d": "M626 104V150H40V104",
+          "open": "end",
+          "id": "a"
+        },
+        {
+          "text": "run the same check again",
+          "x": 333,
+          "y": 174,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M235 68V30H420",
+          "cross": {
+            "cx": 330,
+            "cy": 30,
+            "size": 12
+          },
+          "id": "x"
+        },
+        {
+          "text": "doctor changes a file",
+          "x": 432,
+          "y": 35,
+          "style": "mute",
+          "for": [
+            "x"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 276,
+      "draw": [
+        {
+          "state": "you",
+          "shape": "circle",
+          "cx": 24,
+          "cy": 22,
+          "r": 10,
+          "id": "y"
+        },
+        {
+          "text": "you",
+          "x": 44,
+          "y": 27,
+          "style": "strong",
+          "for": [
+            "y"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M24 34V72",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "text": "run",
+          "x": 36,
+          "y": 58,
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 30,
+          "y": 74,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "codeflow doctor",
+          "x": 42,
+          "y": 96,
+          "style": "mono",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M80 113V149",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "text": "prints",
+          "x": 92,
+          "y": 136,
+          "style": "mute",
+          "for": [
+            "f2"
+          ]
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 30,
+          "y": 152,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "one line a check",
+          "x": 42,
+          "y": 175,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M80 191V210",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "state": "you",
+          "shape": "circle",
+          "cx": 80,
+          "cy": 224,
+          "r": 10,
+          "id": "fx"
+        },
+        {
+          "text": "you apply the fix",
+          "x": 100,
+          "y": 229,
+          "style": "strong",
+          "for": [
+            "fx"
+          ]
+        },
+        {
+          "state": "again",
+          "shape": "path",
+          "d": "M68 224H12V30",
+          "open": "end",
+          "id": "a"
+        },
+        {
+          "text": "run again",
+          "x": 8,
+          "y": 266,
+          "style": "mute",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M222 92H300V168",
+          "cross": {
+            "cx": 300,
+            "cy": 130,
+            "size": 11
+          },
+          "id": "x"
+        },
+        {
+          "text": "doctor changes a file",
+          "x": 352,
+          "y": 58,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "x"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "Who",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "you",
+          "run `codeflow doctor`"
+        ],
+        [
+          "2",
+          "doctor",
+          "prints one line per check, naming the fix"
+        ],
+        [
+          "3",
+          "you",
+          "apply the fix"
+        ],
+        [
+          "4",
+          "you",
+          "run the same check again"
+        ],
+        [
+          "never",
+          "doctor",
+          "changes a file in the repository"
+        ]
+      ]
+    }
+  }
+}

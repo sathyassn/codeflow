@@ -3,7 +3,7 @@ name: cf-herdr
 description: Host CodeFlow consults and delegates in Herdr tabs without hijacking existing panes. Use when HERDR_ENV=1 and starting, resuming, or closing Claude, Codex, or another coding agent for a dual-lineage review, consult, or delegate TTY. Use for Herdr workspaces, tabs, panes, agent names, follow-up on the same tab, and cleanup of self-created tabs. Do not use from outside Herdr; do not treat Herdr idle/done as turn completion; do not split the caller pane by default.
 ---
 
-# cf-herdr — Herdr-primary TTY for CodeFlow seats
+# cf-herdr: Herdr-primary TTY for CodeFlow seats
 
 Herdr is the **visible terminal host** when this agent runs inside it. Official
 Herdr CLI syntax is the authority (`herdr --help`; group help without a
@@ -17,17 +17,16 @@ completion.
 
 ## When this skill applies
 
-1. Require `test "${HERDR_ENV:-}" = 1`. If that fails, **stop driving Herdr**.
-   Say you are outside a Herdr pane. Use the tmux lifecycle in `cf-delegate`
-   and label that path **degraded**. Do not inspect or control Herdr from
-   outside.
+1. Require `test "${HERDR_ENV:-}" = 1`. If that fails, **stop driving Herdr**:
+   say you are outside a Herdr pane, use `cf-delegate`'s tmux lifecycle,
+   label that path **degraded**, and never read or drive Herdr from outside.
 2. If Herdr is absent, same degraded tmux path.
 3. Never `herdr server stop`. Never close a workspace, tab, or pane this run
    did not create. Never send keys to `$HERDR_PANE_ID` (the caller).
 
-Load the official Herdr skill if present for CLI details. Where it defaults to
-a sibling **split** in the current tab, CodeFlow overrides: prefer a **new
-tab** (or resume one this work already owns).
+Load the official Herdr skill, if present, for CLI details; where it defaults
+to a **split** in the current tab, prefer a **new tab** (or resume one this
+work owns).
 
 ## Discover before touching anything
 
@@ -68,12 +67,11 @@ cf-<repo>-<work>-<k><nn>
 | kind / k | `claude`/`cl`, `codex`/`cx`, `grok`/`gk` |
 | nn | next free `01`–`99` among **live** agents with the same `cf-<repo>-<work>-<k>` prefix |
 
-Examples: `cf-codeflow-skills-rev-cl01`, a parallel Claude on the same work
-`cf-codeflow-skills-rev-cl02`, and Codex on the same work
-`cf-codeflow-skills-rev-cx01`.
+Examples: `cf-codeflow-skills-rev-cl01`; a parallel Claude on that work
+`cf-codeflow-skills-rev-cl02`; Codex on it `cf-codeflow-skills-rev-cx01`.
 
-Repo slug truncation collides across worktrees of the same project. The
-**intended worktree `cwd`** is the disambiguator, not the label. Put full cwd,
+Repo slugs collide across worktrees of one project; the **intended worktree
+`cwd`** disambiguates, not the label. Put full cwd,
 repo basename, and work identity in the optional cache.
 
 List live agents first; increment `nn` until free. Never reuse a live name.

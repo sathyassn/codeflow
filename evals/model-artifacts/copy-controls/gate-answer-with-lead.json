@@ -1,0 +1,3 @@
+{
+  "reply": "Here is a summary of the gate result for TSK-231, based on EVIDENCE.md.\n\n- The essential gate ran on revision 4f2c9a1.\n- 412 tests passed, 0 failed, 0 were skipped.\n- Coverage was 84.2 percent.\n\nIn short: yes, the gate passed.\n"
+}

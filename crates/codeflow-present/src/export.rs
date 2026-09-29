@@ -16,8 +16,13 @@ const EXPORT_BOOTSTRAP: &str = "(async()=>{const e=document.getElementById('cf-p
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportTheme {
+    Graphite,
+    Slate,
+    Sage,
+    /// Compatibility name for Slate.
     Editorial,
-    Technical,
+    /// Compatibility name for Graphite.
+    Instrument,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +49,8 @@ pub fn export_session(
                     session_id: "export",
                     revision: revision.revision,
                     event_sequence: 0,
+                    response_sequence: 0,
+                    answers: None,
                     script_path: None,
                     style_path: None,
                     prepaint_source: None,
@@ -128,8 +135,9 @@ fn enhance_export(
     );
     let marker = "</head>";
     let theme = match theme {
-        ExportTheme::Editorial => "editorial",
-        ExportTheme::Technical => "technical",
+        ExportTheme::Slate | ExportTheme::Editorial => "slate",
+        ExportTheme::Graphite | ExportTheme::Instrument => "graphite",
+        ExportTheme::Sage => "sage",
     };
     let (mode, resolved) = match mode {
         ExportMode::System => ("system", "light"),
@@ -144,9 +152,11 @@ fn enhance_export(
         1,
     );
     let styles = include_str!("../web/src/styles.css");
+    // The figure block's sheet: the kit's figure.css, byte for byte.
+    let figure_styles = include_str!("../web/src/figure.css");
     let system_fallback = include_str!("../web/src/export-fallback.css");
     let head = format!(
-        "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\"><meta name=\"referrer\" content=\"no-referrer\"><style data-cf-present-export-style=\"true\">{styles}\n{system_fallback}\n{utility_style}</style>"
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\"><meta name=\"referrer\" content=\"no-referrer\"><style data-cf-present-export-style=\"true\">{styles}\n{figure_styles}\n{system_fallback}\n{utility_style}</style>"
     );
     html = html.replacen(marker, &format!("{head}{marker}"), 1);
     let payload = format!(

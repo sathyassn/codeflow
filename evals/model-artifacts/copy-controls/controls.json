@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "about": "Committed control answers for the new cases of the copy-guide pack (TSK-073), written by the design primary. Each answer is a JSON file: files maps a path (with #section for a part of a file) to the text the subject would leave, declaration carries the declaration strings a figure answer writes, and reply is a chat answer. Policy characters in the two mannered controls are stored as JSON escapes so no committed line carries one; the grader reads the decoded text. Each entry records the signals a grader reads off the answer and the decision the kit must compute from them; test_eval_kit.py checks the decision and ties the form signals to the decoded text. Every new case carries at least one passing control and at least one faulty one; a single-defect faulty control differs from a passing one in the one thing its signal names, so each text check is shown to catch its own defect. Controls prove the cases are well formed, not how a model behaves.",
+  "cases": {
+    "lead-and-caption-around-a-figure": [
+      {
+        "role": "passing",
+        "answer": "release-flow-plain.json",
+        "surface": "file",
+        "signals": [
+          "lead_says_what_the_reader_looks_at",
+          "caption_is_one_sentence_takeaway",
+          "caption_differs_from_title_and_lead",
+          "legend_keys_are_noun_phrases",
+          "no_sentence_explains_the_legend"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "release-flow-restated.json",
+        "surface": "file",
+        "signals": [
+          "lead_restates_caption",
+          "caption_repeats_title",
+          "legend_explained_in_prose",
+          "key_written_as_clause",
+          "carrier_form_described"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "release-flow-clause-keys.json",
+        "surface": "file",
+        "signals": [
+          "key_written_as_clause"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "search-dialog-microcopy": [
+      {
+        "role": "passing",
+        "answer": "search-strings-plain.json",
+        "surface": "file",
+        "signals": [
+          "labels_verb_first",
+          "labels_in_sentence_case",
+          "empty_state_says_what_to_type",
+          "no_results_message_names_next_step",
+          "no_exclamation_mark",
+          "counts_as_digits"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "search-strings-cheerful.json",
+        "surface": "file",
+        "signals": [
+          "exclamation_mark",
+          "title_case_label",
+          "empty_state_without_action",
+          "count_spelled_out",
+          "jokey_tone"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "search-strings-bare-empty.json",
+        "surface": "file",
+        "signals": [
+          "empty_state_without_action"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "task-closeout-from-evidence": [
+      {
+        "role": "passing",
+        "answer": "closeout-shaped.json",
+        "surface": "file",
+        "signals": [
+          "closeout_summary_anchors_reader",
+          "evidence_in_fenced_block_or_table",
+          "coverage_number_carried",
+          "not_tested_named"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "closeout-bullets-only.json",
+        "surface": "file",
+        "signals": [
+          "bullets_only_closeout"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "closeout-nine-sentences.json",
+        "surface": "file",
+        "signals": [
+          "paragraph_wall",
+          "closeout_summary_buries_anchor"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "closeout-spelled-summary.json",
+        "surface": "file",
+        "signals": [
+          "closeout_summary_buries_anchor"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "short-answer-stays-one-line": [
+      {
+        "role": "passing",
+        "answer": "gate-answer-one-line.json",
+        "surface": "terminal",
+        "signals": [
+          "one_line_answer",
+          "answer_states_yes_or_no",
+          "no_lead_before_answer"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "passing",
+        "answer": "gate-answer-with-caveat.json",
+        "surface": "terminal",
+        "signals": [
+          "one_line_answer",
+          "answer_states_yes_or_no",
+          "no_lead_before_answer"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "gate-answer-with-lead.json",
+        "surface": "terminal",
+        "signals": [
+          "lead_before_short_answer",
+          "recap_after_answer",
+          "summary_padding"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "first-section-of-a-new-skill": [
+      {
+        "role": "passing",
+        "answer": "rollback-opening-plain.json",
+        "surface": "file",
+        "signals": [
+          "imperative_plain_sentences",
+          "actor_named_when_not_reader",
+          "no_slogan",
+          "no_contrast_turn",
+          "no_policy_character"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "passing",
+        "answer": "rollback-opening-read-first.json",
+        "surface": "file",
+        "signals": [
+          "imperative_plain_sentences",
+          "actor_named_when_not_reader",
+          "no_slogan",
+          "no_contrast_turn",
+          "no_policy_character"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "rollback-opening-mannered.json",
+        "surface": "file",
+        "signals": [
+          "slogan_kept",
+          "contrast_turn",
+          "policy_character",
+          "self_narration",
+          "motivational_framing"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "adr-for-a-byte-pinned-sheet": [
+      {
+        "role": "passing",
+        "answer": "adr-0104-shaped.json",
+        "surface": "file",
+        "signals": [
+          "context_two_to_five_sentences",
+          "context_names_constraint",
+          "one_decision_paragraph_as_fact",
+          "consequences_name_a_cost"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "adr-0104-history.json",
+        "surface": "file",
+        "signals": [
+          "context_is_history",
+          "decision_spread_over_paragraphs",
+          "decision_hedged",
+          "consequences_without_cost"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "adr-0104-padded-history.json",
+        "surface": "file",
+        "signals": [
+          "context_is_history"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "adr-0104-should.json",
+        "surface": "file",
+        "signals": [
+          "decision_hedged"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "adr-0104-no-cost.json",
+        "surface": "file",
+        "signals": [
+          "consequences_without_cost"
+        ],
+        "decision": "fail"
+      }
+    ]
+  }
+}

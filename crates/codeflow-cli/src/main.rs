@@ -58,7 +58,7 @@ enum Command {
     Hook(cmd::hook::HookArgs),
     /// Transport-neutral lifecycle for interactive delegate turns.
     Delegate(cmd::delegate::DelegateArgs),
-    /// Git client hook target — the .git/hooks shims exec this.
+    #[command(about = git_hook_help())]
     GitHook(cmd::git_hook::GitHookArgs),
     /// Print the session-start digest (pointers, not content).
     Orient,
@@ -75,9 +75,7 @@ enum Command {
     Status(cmd::status::StatusArgs),
     /// Land a branch into a target: flock(rebase -> test -> ff-merge).
     Integrate(cmd::integrate::IntegrateArgs),
-    /// Health checks: hooks, Claude, Codex, config, permissions, network,
-    /// delegates, repo integrity, CI perimeter, managed drift, customization,
-    /// instruction size, and test config; `doctor --list` names them all.
+    #[command(about = doctor_help())]
     Doctor(cmd::doctor::DoctorArgs),
     /// Resolve catalog duties without launching models.
     Models(cmd::models::ModelsArgs),
@@ -177,6 +175,31 @@ fn report_workspace(
         None => print_workspace_hint(root),
     }
     Ok(())
+}
+
+/// Render the `doctor` about-line from a list of check names. Split out from
+/// [`doctor_help`] so the derivation itself is testable against a fixture
+/// list: a hand-maintained help string drifts from the registry, this cannot.
+fn doctor_help_for(names: &[&str]) -> String {
+    format!("Health checks: {}. See `doctor --list`", names.join(", "))
+}
+
+/// `doctor`'s about-line, derived from the check registry — never hand-listed.
+fn doctor_help() -> &'static str {
+    static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HELP.get_or_init(|| doctor_help_for(&codeflow_core::doctor::check_names()))
+}
+
+/// `git-hook`'s about-line, derived from the same path constant the install
+/// code writes to, so the help can never name a path nothing installs at.
+fn git_hook_help() -> &'static str {
+    static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HELP.get_or_init(|| {
+        format!(
+            "Git client hook target — the {}/ shims exec this",
+            scaffold::detect::CODEFLOW_HOOKS_PATH
+        )
+    })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -296,4 +319,47 @@ fn main() -> anyhow::Result<()> {
         Command::Report(args) => std::process::exit(cmd::report::run(&args)),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DEFECT 5: the `doctor` about-line is derived, not hand-maintained —
+    /// a different registry produces different help, with every name present.
+    #[test]
+    fn doctor_help_is_derived_from_the_check_names_it_is_given() {
+        let fixture = doctor_help_for(&["alpha", "beta"]);
+        assert_eq!(fixture, "Health checks: alpha, beta. See `doctor --list`");
+
+        // Adding a fixture check changes the help.
+        let extended = doctor_help_for(&["alpha", "beta", "gamma"]);
+        assert_ne!(fixture, extended);
+        assert!(extended.contains("gamma"));
+
+        // The shipped help names exactly the registry's checks.
+        let registered = codeflow_core::doctor::check_names();
+        assert_eq!(doctor_help(), doctor_help_for(&registered));
+        for name in registered {
+            assert!(
+                doctor_help().contains(name),
+                "doctor help omits registered check {name}"
+            );
+        }
+    }
+
+    /// DEFECT 9: the `git-hook` about-line names the path the install code
+    /// actually writes the shims to.
+    #[test]
+    fn git_hook_help_names_the_installed_shim_path() {
+        let installed = scaffold::detect::CODEFLOW_HOOKS_PATH;
+        assert!(
+            git_hook_help().contains(installed),
+            "git-hook help does not name {installed}"
+        );
+        assert!(
+            !git_hook_help().contains(".git/hooks"),
+            "git-hook help still names the path codeflow does not install to"
+        );
+    }
 }

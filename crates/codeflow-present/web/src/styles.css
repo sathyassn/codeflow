@@ -7,198 +7,316 @@
   position: relative !important;
 }
 
+/* CodeFlow design system tokens. Custom properties only.
+   Generated from tokens.json; edit the JSON, not the colour blocks.
+   Root attributes: data-cf-theme (graphite, slate, sage), data-cf-mode-resolved (light, dark),
+   data-cf-typeface (archivo, inter, plex), data-cf-scale (compact, default, large). */
 :root {
-  color-scheme: light dark;
-  /* Utility presentation system — Instrument default (ADR-0053 / DESIGN_INTENT 2026-08-07) */
-  --cf-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
-  --cf-font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --cf-reading-measure: 68ch;
+  --cf-canvas: #f6f6f6;
+  --cf-surface: #ffffff;
+  --cf-surface-raised: #ffffff;
+  --cf-surface-subtle: #ececec;
+  --cf-text: #1b1b1b;
+  --cf-text-muted: #5e5e5e;
+  --cf-border: #e3e3e3;
+  --cf-border-strong: #c6c6c6;
+  --cf-accent: #12766e;
+  --cf-accent-strong: #0d5d57;
+  --cf-accent-soft: #dcefec;
+  --cf-focus: #12766e;
+  --cf-positive: #2b7f4f;
+  --cf-warning: #8f5f00;
+  --cf-danger: #b93636;
+  --cf-diagram-line: #343434;
+  --cf-on-accent: #ffffff;
+  --cf-fig-line: #343434;
+  --cf-fig-line-mid: #5e5e5e;
+  --cf-fig-line-soft: #9a9a9a;
+  --cf-fig-fill: #ececec;
+  --cf-fig-hatch: #c6c6c6;
+  --cf-fig-accent: #12766e;
+  --cf-fig-accent-soft: #dcefec;
+  --cf-fig-warn: #8f5f00;
+  --cf-fig-warn-soft: #f3e6cc;
+  --cf-fig-stop: #b93636;
+
+  --cf-font-sans: "Inter", "Archivo", "IBM Plex Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  --cf-font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --cf-font-features: normal;
+  --cf-ui-scale: 1;
+  --cf-fs-display: calc(30px * var(--cf-ui-scale));
+  --cf-fs-lede: calc(20px * var(--cf-ui-scale));
+  --cf-fs-h2: calc(22px * var(--cf-ui-scale));
+  --cf-fs-h3: calc(16.5px * var(--cf-ui-scale));
+  --cf-fs-body: max(15px, calc(15px * var(--cf-ui-scale)));
+  --cf-fs-title: max(14px, calc(14px * var(--cf-ui-scale)));
+  --cf-fs-ui: max(13.5px, calc(13.5px * var(--cf-ui-scale)));
+  --cf-fs-caption: max(13px, calc(13px * var(--cf-ui-scale)));
+  --cf-fs-micro: max(12.5px, calc(12.5px * var(--cf-ui-scale)));
+  --cf-measure: 68ch;
+  --cf-column-max: 960px;
+  --cf-radius-chip: 5px;
+  --cf-radius-ctl: 8px;
+  --cf-radius-pop: 10px;
+  --cf-radius-card: 12px;
+  --cf-radius-panel: 14px;
+  --cf-radius-pill: 999px;
+  --cf-header-h: 52px;
+  --cf-topbar-h: 56px;
+  --cf-strip-h: 40px;
+  --cf-nav-w: 264px;
+  --cf-toc-w: 232px;
+  --cf-rail-w: 320px;
+  --cf-route-w: 200px;
+  --cf-ease: cubic-bezier(.2, .7, .2, 1);
+  --cf-dur-hover: 120ms;
+  --cf-dur-select: 220ms;
+  --cf-dur-panel: 240ms;
+  --cf-dur-panel-fade: 160ms;
+  --cf-dur-sheet-in: 280ms;
+  --cf-dur-sheet-out: 200ms;
+  --cf-dur-pop-in: 200ms;
+  --cf-dur-pop-out: 140ms;
+  --cf-dur-pane: 180ms;
+  --cf-dur-theme: 200ms;
+  --cf-dur-mark: 160ms;
+  --cf-dur-toast-in: 200ms;
+  --cf-dur-toast-out: 160ms;
+  --cf-shift-sheet: 24px;
+  --cf-shift-pop: 6px;
+  --cf-shift-rail: 24px;
+  --cf-shift-nudge: 2px;
+  --cf-hairline: var(--cf-border);
+  --cf-header-bg: color-mix(in srgb, var(--cf-canvas) 72%, transparent);
+  --cf-backdrop: color-mix(in srgb, var(--cf-canvas) 55%, transparent);
+  --cf-mark: var(--cf-accent-soft);
+  --cf-fig-ground: var(--cf-surface);
+  --cf-fig-rule: var(--cf-border);
+  --cf-fig-font: var(--cf-font-sans);
+  --cf-fig-mono: var(--cf-font-mono);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --cf-dur-hover: 0ms; --cf-dur-select: 0ms; --cf-dur-panel: 0ms; --cf-dur-panel-fade: 0ms;
+    --cf-dur-sheet-in: 0ms; --cf-dur-sheet-out: 0ms; --cf-dur-pop-in: 0ms; --cf-dur-pop-out: 0ms;
+    --cf-dur-pane: 0ms; --cf-dur-theme: 0ms; --cf-dur-mark: 0ms; --cf-dur-toast-in: 0ms; --cf-dur-toast-out: 0ms;
+    --cf-shift-sheet: 0px; --cf-shift-pop: 0px; --cf-shift-rail: 0px; --cf-shift-nudge: 0px;
+  }
+}
+[data-cf-typeface="archivo"] { --cf-font-sans: "Archivo", "Helvetica Neue", Arial, ui-sans-serif, sans-serif; --cf-font-features: normal; }
+[data-cf-typeface="inter"] { --cf-font-sans: "Inter", ui-sans-serif, -apple-system, "Segoe UI", sans-serif; --cf-font-features: "cv11", "ss01", "calt"; }
+[data-cf-typeface="plex"] { --cf-font-sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", ui-sans-serif, sans-serif; --cf-font-features: normal; }
+[data-cf-scale="compact"] { --cf-ui-scale: 0.94; }
+[data-cf-scale="default"] { --cf-ui-scale: 1; }
+[data-cf-scale="large"] { --cf-ui-scale: 1.12; }
+
+[data-cf-theme="graphite"][data-cf-mode-resolved="light"] {
+  --cf-canvas: #f6f6f6;
+  --cf-surface: #ffffff;
+  --cf-surface-raised: #ffffff;
+  --cf-surface-subtle: #ececec;
+  --cf-text: #1b1b1b;
+  --cf-text-muted: #5e5e5e;
+  --cf-border: #e3e3e3;
+  --cf-border-strong: #c6c6c6;
+  --cf-accent: #12766e;
+  --cf-accent-strong: #0d5d57;
+  --cf-accent-soft: #dcefec;
+  --cf-focus: #12766e;
+  --cf-positive: #2b7f4f;
+  --cf-warning: #8f5f00;
+  --cf-danger: #b93636;
+  --cf-diagram-line: #343434;
+  --cf-on-accent: #ffffff;
+  --cf-fig-line: #343434;
+  --cf-fig-line-mid: #5e5e5e;
+  --cf-fig-line-soft: #9a9a9a;
+  --cf-fig-fill: #ececec;
+  --cf-fig-hatch: #c6c6c6;
+  --cf-fig-accent: #12766e;
+  --cf-fig-accent-soft: #dcefec;
+  --cf-fig-warn: #8f5f00;
+  --cf-fig-warn-soft: #f3e6cc;
+  --cf-fig-stop: #b93636;
+  --cf-shadow: 0 12px 32px -16px rgb(0 0 0 / .28), 0 0 0 1px var(--cf-border);
+  --cf-fig-na-alpha: 0.5;
+}
+
+[data-cf-theme="graphite"][data-cf-mode-resolved="dark"] {
+  --cf-canvas: #1b1b1b;
+  --cf-surface: #232323;
+  --cf-surface-raised: #2b2b2b;
+  --cf-surface-subtle: #303030;
+  --cf-text: #ebebeb;
+  --cf-text-muted: #a5a5a5;
+  --cf-border: #343434;
+  --cf-border-strong: #4b4b4b;
+  --cf-accent: #63cbbf;
+  --cf-accent-strong: #8adcd2;
+  --cf-accent-soft: #1e3c39;
+  --cf-focus: #63cbbf;
+  --cf-positive: #66c48a;
+  --cf-warning: #d9a94e;
+  --cf-danger: #f28b83;
+  --cf-diagram-line: #d4d4d4;
+  --cf-on-accent: #1b1b1b;
+  --cf-fig-line: #d4d4d4;
+  --cf-fig-line-mid: #a5a5a5;
+  --cf-fig-line-soft: #6e6e6e;
+  --cf-fig-fill: #303030;
+  --cf-fig-hatch: #4b4b4b;
+  --cf-fig-accent: #63cbbf;
+  --cf-fig-accent-soft: #1e3c39;
+  --cf-fig-warn: #d9a94e;
+  --cf-fig-warn-soft: #3d3320;
+  --cf-fig-stop: #f28b83;
+  --cf-shadow: 0 16px 40px -16px rgb(0 0 0 / .7), 0 0 0 1px var(--cf-border);
+  --cf-fig-na-alpha: 0.65;
+}
+
+[data-cf-theme="slate"][data-cf-mode-resolved="light"] {
+  --cf-canvas: #eaeef3;
+  --cf-surface: #f8fafc;
+  --cf-surface-raised: #ffffff;
+  --cf-surface-subtle: #e2e7ed;
+  --cf-text: #172029;
+  --cf-text-muted: #54606e;
+  --cf-border: #d8dee6;
+  --cf-border-strong: #b7c0cb;
+  --cf-accent: #b0522a;
+  --cf-accent-strong: #8f411f;
+  --cf-accent-soft: #f5e3d9;
+  --cf-focus: #b0522a;
+  --cf-positive: #2b7f4f;
+  --cf-warning: #856200;
+  --cf-danger: #bd2741;
+  --cf-diagram-line: #333d4a;
+  --cf-on-accent: #ffffff;
+  --cf-fig-line: #333d4a;
+  --cf-fig-line-mid: #54606e;
+  --cf-fig-line-soft: #94a0ad;
+  --cf-fig-fill: #e2e7ed;
+  --cf-fig-hatch: #b7c0cb;
+  --cf-fig-accent: #b0522a;
+  --cf-fig-accent-soft: #f5e3d9;
+  --cf-fig-warn: #856200;
+  --cf-fig-warn-soft: #f2e6c8;
+  --cf-fig-stop: #bd2741;
+  --cf-shadow: 0 12px 32px -16px rgb(0 0 0 / .28), 0 0 0 1px var(--cf-border);
+  --cf-fig-na-alpha: 0.5;
+}
+
+[data-cf-theme="slate"][data-cf-mode-resolved="dark"] {
+  --cf-canvas: #12171d;
+  --cf-surface: #1a2028;
+  --cf-surface-raised: #222a34;
+  --cf-surface-subtle: #262e39;
+  --cf-text: #e5ebf2;
+  --cf-text-muted: #9ca8b6;
+  --cf-border: #2a323d;
+  --cf-border-strong: #3f4956;
+  --cf-accent: #eba47f;
+  --cf-accent-strong: #f3bfa3;
+  --cf-accent-soft: #3e2b20;
+  --cf-focus: #eba47f;
+  --cf-positive: #66c48a;
+  --cf-warning: #dcb64f;
+  --cf-danger: #ff8592;
+  --cf-diagram-line: #cdd5de;
+  --cf-on-accent: #12171d;
+  --cf-fig-line: #cdd5de;
+  --cf-fig-line-mid: #9ca8b6;
+  --cf-fig-line-soft: #66717f;
+  --cf-fig-fill: #262e39;
+  --cf-fig-hatch: #3f4956;
+  --cf-fig-accent: #eba47f;
+  --cf-fig-accent-soft: #3e2b20;
+  --cf-fig-warn: #dcb64f;
+  --cf-fig-warn-soft: #3e3520;
+  --cf-fig-stop: #ff8592;
+  --cf-shadow: 0 16px 40px -16px rgb(0 0 0 / .7), 0 0 0 1px var(--cf-border);
+  --cf-fig-na-alpha: 0.65;
+}
+
+[data-cf-theme="sage"][data-cf-mode-resolved="light"] {
+  --cf-canvas: #f3f5ef;
+  --cf-surface: #fafbf8;
+  --cf-surface-raised: #ffffff;
+  --cf-surface-subtle: #e8ece6;
+  --cf-text: #1c211d;
+  --cf-text-muted: #59635b;
+  --cf-border: #dee3db;
+  --cf-border-strong: #bcc4ba;
+  --cf-accent: #1e6f5c;
+  --cf-accent-strong: #175747;
+  --cf-accent-soft: #dcece5;
+  --cf-focus: #1e6f5c;
+  --cf-positive: #2f7d3c;
+  --cf-warning: #8f5f00;
+  --cf-danger: #b93636;
+  --cf-diagram-line: #363e38;
+  --cf-on-accent: #ffffff;
+  --cf-fig-line: #363e38;
+  --cf-fig-line-mid: #59635b;
+  --cf-fig-line-soft: #97a19a;
+  --cf-fig-fill: #e8ece6;
+  --cf-fig-hatch: #bcc4ba;
+  --cf-fig-accent: #1e6f5c;
+  --cf-fig-accent-soft: #dcece5;
+  --cf-fig-warn: #8f5f00;
+  --cf-fig-warn-soft: #f1e5cb;
+  --cf-fig-stop: #b93636;
+  --cf-shadow: 0 12px 32px -16px rgb(0 0 0 / .28), 0 0 0 1px var(--cf-border);
+  --cf-fig-na-alpha: 0.5;
+}
+
+[data-cf-theme="sage"][data-cf-mode-resolved="dark"] {
+  --cf-canvas: #161b18;
+  --cf-surface: #1d2320;
+  --cf-surface-raised: #252c28;
+  --cf-surface-subtle: #29312c;
+  --cf-text: #e6ebe7;
+  --cf-text-muted: #9faba3;
+  --cf-border: #2c342f;
+  --cf-border-strong: #434d47;
+  --cf-accent: #7bcdb0;
+  --cf-accent-strong: #9fdcc6;
+  --cf-accent-soft: #213b32;
+  --cf-focus: #7bcdb0;
+  --cf-positive: #8ccf7a;
+  --cf-warning: #d9a94e;
+  --cf-danger: #f28b83;
+  --cf-diagram-line: #d3dad5;
+  --cf-on-accent: #161b18;
+  --cf-fig-line: #d3dad5;
+  --cf-fig-line-mid: #9faba3;
+  --cf-fig-line-soft: #6c776f;
+  --cf-fig-fill: #29312c;
+  --cf-fig-hatch: #434d47;
+  --cf-fig-accent: #7bcdb0;
+  --cf-fig-accent-soft: #213b32;
+  --cf-fig-warn: #d9a94e;
+  --cf-fig-warn-soft: #3a3322;
+  --cf-fig-stop: #f28b83;
+  --cf-shadow: 0 16px 40px -16px rgb(0 0 0 / .7), 0 0 0 1px var(--cf-border);
+  --cf-fig-na-alpha: 0.65;
+}
+
+:root {
+  color-scheme: light;
+  --cf-reading-measure: var(--cf-measure);
   --cf-doc-max: 96rem;
   --cf-page-pad-inline: clamp(1.75rem, 5vw, 4rem);
-  --cf-space-1: 0.25rem;
-  --cf-space-2: 0.5rem;
-  --cf-space-3: 0.75rem;
-  --cf-space-4: 1rem;
-  --cf-space-5: 1.5rem;
-  --cf-space-6: 2rem;
-  --cf-space-7: 3rem;
-  --cf-radius: 0.5rem;
-  --cf-line: 1px;
-  --cf-canvas: #eef2ef;
-  --cf-surface: #ffffff;
-  --cf-surface-raised: #f5f8f5;
-  --cf-surface-subtle: #e8eee9;
-  --cf-text: #16211d;
-  --cf-text-muted: #46534c;
-  --cf-border: #d5ddd6;
-  --cf-border-strong: #6e7c74;
-  --cf-accent: #1f6fb2;
-  --cf-accent-strong: #185c95;
-  --cf-accent-soft: #eaf2f9;
-  --cf-focus: #1f6fb2;
-  --cf-positive: #2e7d57;
-  --cf-warning: #b26e12;
-  --cf-danger: #9b1c1c;
-  --cf-diagram-line: #46534c;
-  --cf-grad-a: color-mix(in srgb, var(--cf-accent) 16%, transparent);
-  --cf-grad-b: color-mix(in srgb, var(--cf-positive) 10%, transparent);
-  --cf-ui-scale: 1;
-  --cf-chrome-h: 4.5rem;
-  /* Left rail geometry: the TOC occupies page-pad..page-pad+toc-w, so the
-     document column and the Comment mode strip both start past it. One var —
-     the strip can never overlap the TOC again by drifting independently. */
-  --cf-toc-w: 12rem;
-  /* Gap holds the Comment marker gutter (34px chip + 8px offset) clear of the TOC. */
-  --cf-toc-gap: 3rem;
+  --cf-space-1: 0.25rem; --cf-space-2: 0.5rem; --cf-space-3: 0.75rem;
+  --cf-space-4: 1rem; --cf-space-5: 1.5rem; --cf-space-6: 2rem; --cf-space-7: 3rem;
+  --cf-radius: var(--cf-radius-ctl); --cf-line: 1px;
+  --cf-chrome-h: var(--cf-topbar-h); --cf-toc-w: var(--cf-route-w); --cf-toc-gap: 3rem;
   --cf-left-rail: calc(var(--cf-page-pad-inline) + var(--cf-toc-w) + var(--cf-toc-gap));
-  font-family: var(--cf-font-sans);
-  font-size: calc(16px * var(--cf-ui-scale));
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
+  --cf-grad-a: transparent; --cf-grad-b: transparent;
+  font-family: var(--cf-font-sans); font-size: 16px;
+  font-synthesis: none; text-rendering: optimizeLegibility;
 }
-
-:root[data-cf-scale="compact"] { --cf-ui-scale: 0.94; }
-:root[data-cf-scale="default"] { --cf-ui-scale: 1; }
-:root[data-cf-scale="large"] { --cf-ui-scale: 1.12; }
-
-:root[data-cf-typeface="instrument"] {
-  --cf-font-sans: Archivo, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-:root[data-cf-typeface="editorial"] {
-  --cf-font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-:root[data-cf-typeface="plex"] {
-  --cf-font-sans: "IBM Plex Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-:root[data-cf-mode-resolved="light"] { color-scheme: light; }
 :root[data-cf-mode-resolved="dark"] { color-scheme: dark; }
-
-/* Editorial — cooler paper; canvas values stay locked to export-fallback quals */
-:root[data-cf-theme="editorial"][data-cf-mode-resolved="light"] {
-  --cf-canvas: #f6f3ee;
-  --cf-surface: #fafaf8;
-  --cf-surface-raised: #f1f1ee;
-  --cf-surface-subtle: #e4e4df;
-  --cf-text: #1b1b19;
-  --cf-text-muted: #555550;
-  --cf-border: #d8d7d1;
-  --cf-border-strong: #7f7e78;
-  --cf-accent: #3d5a6c;
-  --cf-accent-strong: #2f4a5a;
-  --cf-accent-soft: #e8eef1;
-  --cf-focus: #3d5a6c;
-  /* Dark enough for 4.5:1 on surface-raised (syntax strings, success text) */
-  --cf-positive: #246b4a;
-  --cf-warning: #9a6b1a;
-  --cf-danger: #a33a32;
-  --cf-diagram-line: #555550;
-  --cf-grad-a: color-mix(in srgb, var(--cf-accent) 12%, transparent);
-  --cf-grad-b: color-mix(in srgb, #646e78 8%, transparent);
-}
-
-:root[data-cf-theme="editorial"][data-cf-mode-resolved="dark"] {
-  --cf-canvas: #171513;
-  --cf-surface: #1f1c1a;
-  --cf-surface-raised: #282422;
-  --cf-surface-subtle: #322e2b;
-  --cf-text: #efeee9;
-  --cf-text-muted: #b0afa8;
-  --cf-border: #3a3532;
-  --cf-border-strong: #7c7b74;
-  --cf-accent: #8aadb8;
-  --cf-accent-strong: #a4c2cb;
-  --cf-accent-soft: #1e2a30;
-  --cf-focus: #8aadb8;
-  --cf-positive: #4fb183;
-  --cf-warning: #d9a85a;
-  --cf-danger: #ff8a80;
-  --cf-diagram-line: #b0afa8;
-  --cf-grad-a: color-mix(in srgb, var(--cf-accent) 14%, transparent);
-  --cf-grad-b: color-mix(in srgb, #808a94 8%, transparent);
-}
-
-/* Instrument (pass10 default) and Technical (export alias) */
-:root[data-cf-theme="instrument"][data-cf-mode-resolved="light"],
-:root[data-cf-theme="technical"][data-cf-mode-resolved="light"] {
-  --cf-canvas: #eef2ef;
-  --cf-surface: #ffffff;
-  --cf-surface-raised: #f5f8f5;
-  --cf-surface-subtle: #e8eee9;
-  --cf-text: #16211d;
-  --cf-text-muted: #46534c;
-  --cf-border: #d5ddd6;
-  --cf-border-strong: #6e7c74;
-  --cf-accent: #1f6fb2;
-  --cf-accent-strong: #185c95;
-  --cf-accent-soft: #eaf2f9;
-  --cf-focus: #1f6fb2;
-  --cf-positive: #2e7d57;
-  --cf-warning: #b26e12;
-  --cf-danger: #9b1c1c;
-  --cf-diagram-line: #46534c;
-}
-
-:root[data-cf-theme="instrument"][data-cf-mode-resolved="dark"],
-:root[data-cf-theme="technical"][data-cf-mode-resolved="dark"] {
-  --cf-canvas: #0a1210;
-  --cf-surface: #121c18;
-  --cf-surface-raised: #182420;
-  --cf-surface-subtle: #1e2c26;
-  --cf-text: #e8efe9;
-  --cf-text-muted: #aebab3;
-  --cf-border: #2a3831;
-  --cf-border-strong: #7e8d85;
-  --cf-accent: #5aa6e6;
-  --cf-accent-strong: #7fbcf0;
-  --cf-accent-soft: #153040;
-  --cf-focus: #5aa6e6;
-  --cf-positive: #4fb183;
-  --cf-warning: #d99a45;
-  --cf-danger: #ff7b6e;
-  --cf-diagram-line: #aebab3;
-  --cf-grad-a: color-mix(in srgb, var(--cf-accent) 16%, transparent);
-  --cf-grad-b: color-mix(in srgb, var(--cf-positive) 10%, transparent);
-}
-
-:root[data-cf-theme="ink"][data-cf-mode-resolved="light"] {
-  --cf-canvas: #f6efe3;
-  --cf-surface: #fbf6ec;
-  --cf-surface-raised: #f3eadc;
-  --cf-surface-subtle: #e8dccb;
-  --cf-text: #2a2116;
-  --cf-text-muted: #5c5144;
-  --cf-border: #d9cbb8;
-  --cf-border-strong: #8a7a66;
-  --cf-accent: #8a4b24;
-  --cf-accent-strong: #6e3b1b;
-  --cf-accent-soft: #f3e6d6;
-  --cf-focus: #8a4b24;
-  --cf-positive: #3d6b3a;
-  --cf-warning: #a46a16;
-  --cf-danger: #9b1c1c;
-  --cf-diagram-line: #5c5144;
-}
-
-:root[data-cf-theme="ink"][data-cf-mode-resolved="dark"] {
-  --cf-canvas: #1a1510;
-  --cf-surface: #241e17;
-  --cf-surface-raised: #2e261e;
-  --cf-surface-subtle: #3a3127;
-  --cf-text: #f3eadc;
-  --cf-text-muted: #c2b4a2;
-  --cf-border: #3f352b;
-  --cf-border-strong: #8a7a66;
-  --cf-accent: #d4a06a;
-  --cf-accent-strong: #e0b588;
-  --cf-accent-soft: #3a2a1c;
-  --cf-focus: #d4a06a;
-  --cf-positive: #7cbc74;
-  --cf-warning: #d9a85a;
-  --cf-danger: #ff8a80;
-  --cf-diagram-line: #c2b4a2;
-}
-
 * { box-sizing: border-box; }
 
 html {
@@ -355,6 +473,22 @@ a:hover { text-decoration-thickness: 0.13em; }
   color: var(--cf-text);
   cursor: pointer;
 }
+.cf-settings-panel .pills button .sw {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-inline-end: 6px;
+  vertical-align: -1px;
+}
+.cf-settings-panel .pills button .sw i {
+  display: block;
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--cf-border-strong);
+}
+.cf-settings-panel .pills button .sw-canvas { background: var(--pill-canvas, var(--cf-canvas)); }
+.cf-settings-panel .pills button .sw-accent { background: var(--pill-accent, var(--cf-accent)); }
 .cf-settings-panel .pills button[aria-pressed="true"] {
   background: var(--cf-text);
   color: var(--cf-surface);
@@ -438,6 +572,9 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 #cf-present-document .comparison,
 #cf-present-document table,
 #cf-present-document pre { margin-inline: 0; max-inline-size: 100%; }
+/* One code or diff line is one element target (QA defect 6): it spans the
+   full width, so a click or drag on its blank end still names the line. */
+#cf-present-document pre .cf-line { display: inline-block; min-inline-size: 100%; }
 #cf-present-document iframe,
 #cf-present-document img,
 #cf-present-document video { max-inline-size: 100%; }
@@ -505,6 +642,36 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .decision { padding-block: var(--cf-space-4); border-block: var(--cf-line) solid var(--cf-border); }
 .decision > header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--cf-space-4); }
 .decision__status { color: var(--cf-accent-strong); font-size: 0.75rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+/* Forms and v2 decisions (SPC-014 B6): the runtime renders the controls. */
+.cf-form { display: grid; gap: var(--cf-space-4); padding-block: var(--cf-space-4); border-block: var(--cf-line) solid var(--cf-border); }
+.cf-form__title { margin: 0; font-size: 1.15rem; }
+.cf-form__fields { display: grid; gap: var(--cf-space-5); }
+.cf-field { display: grid; gap: var(--cf-space-2); min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+.cf-field__label { padding: 0; font-weight: 650; }
+.cf-field__flag, .cf-field__hint, .cf-field__description { color: var(--cf-text-muted); font-size: var(--cf-fs-caption); font-weight: 400; }
+.cf-field__hint, .cf-field__description { margin: 0; }
+.cf-field .cf-input { inline-size: 100%; max-inline-size: 36rem; min-block-size: 2.25rem; padding: var(--cf-space-2); border: var(--cf-line) solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); background: var(--cf-surface); color: var(--cf-text); }
+.cf-field .cf-input:focus-visible, .cf-option input:focus-visible { outline: 2px solid var(--cf-focus); outline-offset: 1px; }
+.cf-field .cf-input:disabled, .cf-option input:disabled { cursor: not-allowed; opacity: 0.7; }
+.cf-option { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cf-space-2); min-block-size: 2rem; }
+.cf-option input { inline-size: 1.05rem; block-size: 1.05rem; margin: 0; accent-color: var(--cf-accent); }
+.cf-recommended { padding: 0.05rem var(--cf-space-2); border-radius: var(--cf-radius-pill); background: var(--cf-accent-soft); color: var(--cf-accent-strong); font-size: var(--cf-fs-micro); font-weight: 650; }
+.cf-field__rationale { display: grid; gap: var(--cf-space-1); max-inline-size: 36rem; color: var(--cf-text-muted); font-size: var(--cf-fs-caption); }
+.cf-field__error { margin: 0; color: var(--cf-danger); font-size: var(--cf-fs-caption); font-weight: 600; }
+.cf-field .cf-input[aria-invalid="true"] { border-color: var(--cf-danger); }
+.cf-form__decline { display: grid; gap: var(--cf-space-1); max-inline-size: 36rem; }
+/* A display rule above would beat the user agent's [hidden]; hidden wins here. */
+.cf-form [hidden] { display: none; }
+.cf-form__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cf-space-2); }
+.cf-form__actions button { padding-inline: var(--cf-space-3); border: var(--cf-line) solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); background: var(--cf-surface); color: var(--cf-text); }
+.cf-form__actions .cf-form__submit, .cf-form__actions [data-cf-form-action="confirm"], .cf-form__actions [data-cf-form-action="resend"] { border-color: var(--cf-accent); background: var(--cf-accent); color: var(--cf-on-accent); }
+.cf-form__state { flex-basis: 100%; margin: 0; color: var(--cf-text-muted); font-size: var(--cf-fs-caption); }
+.cf-form__state:empty { display: none; }
+.cf-form__state[data-cf-form-state="stored"], .cf-form__state[data-cf-form-state="delivered"], .cf-form__state[data-cf-form-state="acknowledged"], .cf-form__state-stored { color: var(--cf-positive); font-weight: 650; }
+.cf-form__state[data-cf-form-state="failed"], .cf-form__state[data-cf-form-state="closed"] { color: var(--cf-danger); }
+.cf-form__state[data-cf-form-state="stale"], .cf-form__state[data-cf-form-state="changed"] { color: var(--cf-warning); }
+.cf-form__kept { display: grid; gap: var(--cf-space-1); max-inline-size: 36rem; margin: 0; padding-inline-start: var(--cf-space-5); font-size: var(--cf-fs-caption); overflow-wrap: anywhere; }
+[data-cf-commenting="true"] .cf-form input, [data-cf-commenting="true"] .cf-form textarea, [data-cf-commenting="true"] .cf-form button { cursor: inherit; }
 table { inline-size: 100%; border-collapse: collapse; }
 th, td { padding: var(--cf-space-3); border-block-end: var(--cf-line) solid var(--cf-border); text-align: start; vertical-align: top; }
 th { color: var(--cf-text-muted); font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; }
@@ -525,7 +692,10 @@ th { color: var(--cf-text-muted); font-size: 0.78rem; letter-spacing: 0.04em; te
 .tabs summary, .block--disclosure summary { cursor: pointer; font-weight: 700; }
 .feedback-prompt { padding-block-start: var(--cf-space-4); border-block-start: 0.2rem solid var(--cf-accent); font-size: 1.08rem; font-weight: 650; }
 
-/* Visually hidden but available to AT (status text). */
+/* Visually hidden but available to AT (figure status). */
+/* A diff line's marker is seen, never selected or quoted. */
+[data-cf-review-skip] { user-select: none; -webkit-user-select: none; }
+[data-cf-label-read] [data-cf-review-skip] { display: none !important; }
 .sr-only {
   position: absolute;
   inline-size: 1px;
@@ -568,6 +738,84 @@ code { font-family: var(--cf-font-mono); }
 .syntax-property { color: var(--cf-diagram-line); }
 .syntax-invalid { color: var(--cf-danger); text-decoration: underline; }
 
+/* Figure block: figure.css (the kit's sheet, byte for byte) draws with
+   --cf-fig-* tokens, bridged here to the review roles so figures follow the
+   active theme and mode. */
+:root {
+  --cf-fig-font: var(--cf-font-sans);
+  --cf-fig-mono: var(--cf-font-mono);
+  --cf-fig-ground: var(--cf-surface);
+  --cf-fig-rule: var(--cf-border);
+  --cf-fig-line: var(--cf-diagram-line);
+  --cf-fig-line-mid: var(--cf-text-muted);
+  --cf-fig-line-soft: color-mix(in srgb, var(--cf-text-muted) 55%, var(--cf-surface));
+  --cf-fig-fill: var(--cf-surface-subtle);
+  --cf-fig-hatch: var(--cf-border-strong);
+  --cf-fig-accent: var(--cf-accent);
+  --cf-fig-warn: var(--cf-warning);
+  --cf-fig-stop: var(--cf-danger);
+  --cf-fig-na-alpha: 0.5;
+}
+:root[data-cf-mode-resolved="dark"] { --cf-fig-na-alpha: 0.65; }
+/* Framing (SPC-014 B5): "Figure N · title" above every figure, the caption
+   under it, and one Details disclosure. The service writes these .cf-frame-*
+   parts around a stage or table; a drawn figure's .cf-fig-* parts are
+   styled by the shared figure sheet. */
+.cf-frame { margin: 0; max-inline-size: 100%; }
+.cf-frame-title {
+  margin: 0 0 0.75rem;
+  max-inline-size: var(--cf-reading-measure);
+  color: var(--cf-text);
+  font-size: max(15px, 1rem);
+  font-weight: 600;
+  line-height: 1.35;
+}
+.cf-frame-number {
+  color: var(--cf-text-muted);
+  font-family: var(--cf-font-mono);
+  font-size: 0.86em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.cf-frame-caption {
+  margin: 0.75rem 0 0;
+  max-inline-size: var(--cf-reading-measure);
+  color: var(--cf-text-muted);
+  font-size: max(13px, 0.9rem);
+  line-height: 1.45;
+}
+.cf-frame .cf-legend { margin-block-start: 0.9rem; }
+.cf-frame-details { margin: 10px 0 0; border-top: 1px solid var(--cf-border); }
+.cf-frame-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 2px 4px 2px 0;
+  border-radius: 4px;
+  color: var(--cf-text-muted);
+  font-size: max(13.5px, 0.9rem);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+.cf-frame-details > summary::-webkit-details-marker { display: none; }
+.cf-frame-details > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin: 0 4px 0 2px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+.cf-frame-details[open] > summary::before { transform: rotate(45deg); }
+.cf-frame-details > summary:hover { color: var(--cf-text); }
+.cf-frame-description { margin: 8px 0 0; max-inline-size: var(--cf-reading-measure); color: var(--cf-text); }
+.figure-block__title { margin: 0; font-weight: 600; }
+.figure-block__caption { margin: var(--cf-space-2) 0 0; color: var(--cf-text-muted); }
+[data-cf-figure-status] { color: var(--cf-danger); font-size: 0.86rem; }
+
 /* ═══ Utility presentation system — Comment chrome ═══ */
 
 /* Comment control — unmistakable armed state */
@@ -590,16 +838,6 @@ code { font-family: var(--cf-font-mono); }
 }
 .cf-comment-btn > span {
   color: inherit !important;
-}
-/* Editorial light: keep idle Comment control above WCAG AA against solid white. */
-:root[data-cf-theme="editorial"][data-cf-mode-resolved="light"] .cf-comment-btn:not([aria-pressed="true"]) {
-  color: #0a0a09 !important;
-  background: #ffffff !important;
-  background-color: #ffffff !important;
-  border-color: #5c5b56 !important;
-}
-:root[data-cf-theme="editorial"][data-cf-mode-resolved="light"] .cf-comment-btn:not([aria-pressed="true"]) > span {
-  color: #0a0a09 !important;
 }
 .cf-comment-btn .cf-dot {
   width: 16px; height: 16px;
@@ -652,41 +890,15 @@ code { font-family: var(--cf-font-mono); }
   flex-wrap: wrap;
 }
 .cf-hint.on { display: flex; }
-.cf-hint .mode {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 11px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  font: 500 0.82rem/1.2 var(--cf-font-sans);
-  color: color-mix(in srgb, var(--cf-surface) 72%, transparent);
+/* A saved area while Comment is on: a faint outline under the markers. */
+.cf-region-saved {
+  position: absolute;
+  z-index: 33;
+  pointer-events: none;
+  border-radius: 4px;
+  border: 1px dashed color-mix(in srgb, var(--cf-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--cf-accent) 5%, transparent);
 }
-.cf-hint .mode b {
-  font-family: var(--cf-font-mono);
-  font-size: 0.85em;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--cf-surface) 70%, transparent);
-}
-.cf-hint .mode[data-active="true"] {
-  background: color-mix(in srgb, var(--cf-surface) 16%, transparent);
-  color: var(--cf-surface);
-  border-color: color-mix(in srgb, var(--cf-accent) 55%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cf-accent) 40%, transparent);
-}
-.cf-hint .mode[data-active="true"] b { color: var(--cf-surface); }
-.cf-hint .esc-note {
-  font-family: var(--cf-font-mono);
-  font-size: 0.72rem;
-  color: color-mix(in srgb, var(--cf-surface) 66%, transparent);
-  padding: 0 10px 0 8px;
-  letter-spacing: 0.04em;
-  border-left: 1px solid color-mix(in srgb, var(--cf-surface) 18%, transparent);
-  margin-left: 4px;
-}
-
 /* Region marquee — document coordinates inside the marker layer, so the
    persistent rectangle scrolls with the content it covers */
 .cf-region-draft {
@@ -713,8 +925,11 @@ code { font-family: var(--cf-font-mono); }
   font-family: var(--cf-font-sans);
   font-size: 0.82rem;
   overflow: hidden;
+  max-width: calc(100vw - 16px);
 }
 .cf-float.on { display: flex; }
+.cf-float .main { min-width: 0; }
+.cf-float .esc { flex: none; }
 .cf-float .main {
   display: flex;
   align-items: center;
@@ -738,6 +953,7 @@ code { font-family: var(--cf-font-mono); }
 .cf-float .ico svg { width: 16px; height: 16px; }
 .cf-float .lab { font-weight: 600; color: var(--cf-text); }
 .cf-float .q {
+  min-width: 0;
   max-width: 12rem;
   font-family: var(--cf-font-mono);
   font-size: 0.9em;
@@ -818,10 +1034,11 @@ code { font-family: var(--cf-font-mono); }
   color: var(--cf-text-muted);
 }
 .cf-composer .row .pri {
-  background: var(--cf-text);
-  color: var(--cf-surface);
-  border-color: var(--cf-text);
+  background: var(--cf-accent);
+  color: var(--cf-on-accent);
+  border-color: var(--cf-accent);
   font-weight: 600;
+  font-family: var(--cf-font-sans);
 }
 .cf-composer .row .danger {
   color: var(--cf-danger);
@@ -1028,19 +1245,19 @@ code { font-family: var(--cf-font-mono); }
   padding: 8px 10px;
 }
 .cf-dock .ft button.pri {
-  font-family: var(--cf-font-mono);
+  font-family: var(--cf-font-sans);
   font-size: 0.82rem;
   padding: 11px 12px;
   border-radius: 10px;
-  border: 1px solid var(--cf-text);
-  background: var(--cf-text);
-  color: var(--cf-surface);
+  border: 1px solid var(--cf-accent);
+  background: var(--cf-accent);
+  color: var(--cf-on-accent);
   cursor: pointer;
   width: 100%;
   font-weight: 600;
 }
 .cf-dock .ft button.pri:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--cf-text) 88%, var(--cf-accent));
+  background: var(--cf-accent-strong);
 }
 .cf-dock .ft button.pri:disabled,
 .cf-dock .ft button.pri.is-empty {
@@ -1076,6 +1293,13 @@ code { font-family: var(--cf-font-mono); }
   font: 0.9rem/1.4 var(--cf-font-sans);
 }
 .cf-toast.on { display: block; }
+/* A notice is text only; it never takes a click meant for the control under
+   it, and it moves off the open notes rail so Submit stays in view. */
+.cf-toast { pointer-events: none; }
+#cf-feedback-panel[data-open="true"] ~ .cf-toast { right: auto; left: 22px; }
+@media (max-width: 879.98px) {
+  #cf-feedback-panel[data-open="true"] ~ .cf-toast { left: 12px; right: 12px; bottom: calc(min(46vh, 440px) + 12px); }
+}
 
 /* Tools (secondary — not the primary Comment path) */
 .cf-tools {
@@ -1134,14 +1358,14 @@ code { font-family: var(--cf-font-mono); }
 .cf-feedback-history > summary span { font-weight: 500; }
 .cf-feedback-history[open] { max-height: 28vh; overflow: auto; }
 .cf-feedback-history[open] > ol { padding: 0 14px 10px; }
-.cf-history-heading, .cf-history-meta {
+.cf-history-heading, .cf-history-meta, .cf-note-heading {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
 }
 .cf-history-heading h3 { margin: 0; font-size: 0.9rem; }
-.cf-history-heading span, .cf-history-meta span, .cf-anchor-note, .cf-anchor-warning {
+.cf-history-heading span, .cf-history-meta span, .cf-note-heading span, .cf-anchor-note, .cf-anchor-warning {
   color: var(--cf-text-muted);
   font-size: 0.72rem;
 }
@@ -1170,10 +1394,29 @@ code { font-family: var(--cf-font-mono); }
   border-radius: 4px;
   transition: outline-color 100ms ease;
 }
+/* The tint is an image layered over the target's own background colour, so
+   a crop taken while it is pinned reads that colour, not the tint. */
 .cf-hot-sel {
   outline: 2px solid var(--cf-accent);
   outline-offset: 3px;
-  background: color-mix(in srgb, var(--cf-accent) 14%, transparent);
+  background-image: linear-gradient(color-mix(in srgb, var(--cf-accent) 14%, transparent), color-mix(in srgb, var(--cf-accent) 14%, transparent));
+}
+
+/* SVG parts draw no outline: the highlight is a glow that follows the
+   shape, thin strokes included, and leaves its fill and dashes alone. */
+svg .cf-hot,
+svg.cf-hot {
+  outline: none;
+  filter: drop-shadow(0 0 1.5px color-mix(in srgb, var(--cf-accent) 85%, transparent)) drop-shadow(0 0 3px color-mix(in srgb, var(--cf-accent) 55%, transparent));
+}
+svg .cf-hot-sel,
+svg.cf-hot-sel {
+  outline: none;
+  background-image: none;
+  filter: drop-shadow(0 0 1px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent));
+}
+#cf-present-document[data-cf-capture-mode="element"] svg :is(g, path, line, polyline, polygon, rect, circle, ellipse, text):focus {
+  filter: drop-shadow(0 0 1px var(--cf-focus)) drop-shadow(0 0 2.5px var(--cf-focus)) drop-shadow(0 0 2.5px var(--cf-focus));
 }
 
 /* Document: no permanent +; only while Comment armed */
@@ -1183,7 +1426,7 @@ code { font-family: var(--cf-font-mono); }
   background: color-mix(in srgb, var(--cf-accent) 22%, transparent);
 }
 #cf-present-document[data-cf-capture-mode="element"] { cursor: crosshair; }
-#cf-present-document[data-cf-capture-mode="element"] :is(h1,h2,h3,p,li,blockquote,pre,code,table,th,td,figure,img,video,audio,svg,details,summary,article,aside):is(:hover, :focus-visible) {
+#cf-present-document[data-cf-capture-mode="element"] :is(h1,h2,h3,p,li,blockquote,pre,code,.cf-line,table,th,td,figure,img,video,audio,svg,details,summary,article,aside):is(:hover, :focus-visible) {
   outline: 2px solid var(--cf-focus);
   outline-offset: 3px;
 }
@@ -1292,3 +1535,86 @@ html:has(.cf-chrome-frame[data-rail="open"]) .cf-hint {
   .cf-local-scroll, pre { overflow: visible; white-space: pre-wrap; }
   a { color: inherit; text-decoration: underline; }
 }
+
+/* TSK-070 chrome geometry, applied to the existing review state machine. */
+html { background-image: none; }
+body { font-size: var(--cf-fs-body); font-feature-settings: var(--cf-font-features); }
+.cf-topbar { min-block-size: var(--cf-topbar-h); height: var(--cf-topbar-h); padding: 0 12px 0 16px; gap: 12px; background: var(--cf-header-bg); border-color: var(--cf-hairline); }
+.cf-title-group { flex-direction: column; align-items: flex-start; gap: 0; line-height: 1.25; }
+.cf-title-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.cf-title-line strong { font-size: max(15px, calc(15px * var(--cf-ui-scale))); font-weight: 600; }
+.cf-title-group .cf-kicker { color: var(--cf-text-muted); font-size: var(--cf-fs-micro); }
+.cf-revision, .cf-note-count-meta { font-size: var(--cf-fs-caption); color: var(--cf-text-muted); white-space: nowrap; }
+.cf-appearance { gap: 8px; margin-left: auto; }
+.cf-settings-btn { font-size: var(--cf-fs-ui); padding: 0 12px; height: 32px; min-height: 32px; border: 1px solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); background: var(--cf-surface-raised); }
+.cf-comment-btn { height: 32px !important; min-height: 32px; border-radius: var(--cf-radius-pill) !important; font-family: var(--cf-font-sans) !important; font-size: var(--cf-fs-ui) !important; padding: 0 10px !important; background: var(--cf-surface-raised) !important; border: 1px solid var(--cf-border-strong) !important; box-shadow: none; }
+.cf-comment-btn[aria-pressed="true"] { color: var(--cf-accent-strong) !important; border-color: var(--cf-accent) !important; background: var(--cf-accent-soft) !important; box-shadow: none; }
+.cf-comment-btn[aria-pressed="true"] .cf-count.on { color: var(--cf-accent-strong); background: var(--cf-surface-raised); }
+.cf-settings-panel { top: calc(var(--cf-topbar-h) + 8px); border: 1px solid var(--cf-border); border-radius: var(--cf-radius-panel); background: var(--cf-surface-raised); box-shadow: var(--cf-shadow); }
+.cf-settings-panel .lbl { font-family: var(--cf-font-sans); text-transform: none; letter-spacing: normal; font-size: var(--cf-fs-ui); }
+.cf-settings-panel .pills button { font-family: var(--cf-font-sans); font-size: var(--cf-fs-ui); border-radius: var(--cf-radius-pill); min-height: 32px; }
+.cf-settings-panel .pills button[aria-pressed="true"] { color: var(--cf-accent-strong); background: var(--cf-accent-soft); border-color: var(--cf-accent); }
+.cf-settings-panel .preview .body { font-size: var(--cf-fs-body); }
+.cf-settings-panel .preview .mono, .cf-settings-panel .hint, .cf-settings-panel .lbl .d { font-size: var(--cf-fs-caption); }
+.cf-section-route li { border: 0; padding: 0; }
+.cf-section-route a { display: block; padding: 6px 10px; font-family: var(--cf-font-sans); font-size: var(--cf-fs-ui); border-radius: var(--cf-radius-ctl); }
+.cf-section-route [aria-current="location"] { background: var(--cf-surface-subtle); font-weight: 600; }
+.cf-hint { top: var(--cf-topbar-h); border-radius: 0; height: var(--cf-strip-h); max-inline-size: none; left: 0; right: 0; width: auto; box-shadow: none; background: var(--cf-surface); color: var(--cf-text); border: 0; border-bottom: 1px solid var(--cf-hairline); }
+.cf-composer { background: var(--cf-surface-raised); border-radius: var(--cf-radius-panel); box-shadow: var(--cf-shadow); }
+@media (max-width: 599.98px) {
+  .cf-topbar { padding-inline: 8px; gap: 6px; }
+  .cf-title-group .cf-kicker, .cf-revision, .cf-note-count-meta { display: none; }
+  .cf-title-line strong { white-space: normal; font-size: 14px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .cf-appearance { gap: 4px; flex-shrink: 0; }
+  .cf-comment-btn > span:nth-child(2) { display: none; }
+  .cf-settings-panel { position: fixed; top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 76px); overflow-y: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; }
+}
+
+/* Match the shared Display and rail geometry without changing capture logic. */
+.cf-topbar { display: flex; align-items: center; backdrop-filter: none; }
+.cf-brand-mark { flex: 0 0 20px; width: 20px; height: 20px; border: 1.2px solid currentColor; border-radius: 5px; display: grid; place-items: center; }
+.cf-brand-mark::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--cf-accent); }
+.cf-title-group { flex: 1; }
+.cf-title-group .cf-kicker { font-family: var(--cf-font-mono); font-weight: 400; letter-spacing: .07em; }
+.cf-appearance { flex-wrap: nowrap; }
+.cf-settings-btn { display: grid; place-items: center; flex: 0 0 32px; width: 32px; padding: 0; border: 0; background: transparent; color: var(--cf-text-muted); }
+.cf-settings-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.cf-settings-btn:hover, .cf-settings-btn[aria-expanded="true"] { background: var(--cf-surface-subtle); color: var(--cf-text); }
+.cf-settings-panel { position: fixed; top: calc(var(--cf-topbar-h) + 8px); right: 12px; padding: 12px; width: 322px; max-width: calc(100vw - 24px); gap: 12px; }
+.cf-settings-panel .lbl { justify-content: flex-start; gap: 8px; margin-bottom: 8px; font-weight: 600; }
+.cf-settings-panel .lbl .d { margin-left: 0; font-weight: 400; }
+.cf-settings-panel .pills { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; padding: 3px; border-radius: var(--cf-radius-ctl); background: var(--cf-surface-subtle); }
+.cf-settings-panel .pills button { min-width: 0; padding: 4px 5px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--cf-text-muted); white-space: nowrap; }
+.cf-settings-panel .pills button[aria-pressed="true"] { color: var(--cf-text); background: var(--cf-surface-raised); border-color: var(--cf-border); font-weight: 600; }
+.cf-settings-panel .preview { gap: 0; padding: 14px 12px; background: var(--cf-canvas); }
+.cf-settings-panel .preview .body { margin-left: 12px; font-weight: 600; }
+.cf-settings-panel .preview .mono { margin-left: auto; }
+.cf-settings-panel .preview .swatch { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--cf-border-strong); margin-right: -3px; }
+.cf-settings-panel .preview .swatch-canvas { background: var(--cf-canvas); }
+.cf-settings-panel .preview .swatch-surface { background: var(--cf-surface); }
+.cf-settings-panel .preview .swatch-accent { background: var(--cf-accent); }
+.cf-section-route > .cf-kicker { display: block; margin: 0 10px 12px; color: var(--cf-text-muted); font: 400 var(--cf-fs-micro) var(--cf-font-mono); }
+html:has(.cf-chrome-frame[data-rail="open"]) .cf-hint { max-inline-size: none; }
+@media (max-width: 879.98px) {
+  .cf-dock { inset: auto 0 0; width: auto; height: min(46vh, 440px); z-index: 55; border: 0; border-top: 1px solid var(--cf-hairline); border-radius: var(--cf-radius-panel) var(--cf-radius-panel) 0 0; overflow-y: auto; }
+  .cf-dock .list { flex: 0 0 auto; min-height: 100px; }
+  .cf-dock > * { flex-shrink: 0; }
+}
+@media (max-width: 599.98px) {
+  .cf-settings-panel { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; }
+  .cf-title-group { display: flex; }
+  .cf-title-line { max-width: 100%; }
+  .cf-title-line strong { white-space: normal; overflow: hidden; }
+  .cf-hint { margin: 0; gap: 0; padding-inline: 6px; }
+}
+
+/* The kit's single instruction strip stays readable when it wraps on phones. */
+.cf-hint { height: auto; min-height: var(--cf-strip-h); padding: 6px 16px; gap: 10px; flex-wrap: nowrap; font-size: var(--cf-fs-ui); }
+.cf-hint svg { flex: none; width: 16px; height: 16px; fill: none; stroke: var(--cf-accent); stroke-width: 1.6; stroke-linejoin: round; }
+.cf-hint > span { flex: 1 1 auto; min-width: 0; }
+.cf-hint-leave { flex: none; margin-inline-start: auto; padding: 4px 12px; border: 1px solid var(--cf-border-strong); border-radius: 999px; background: var(--cf-surface-raised); color: var(--cf-text); font: 600 var(--cf-fs-ui)/1.2 var(--cf-font-sans); cursor: pointer; }
+.cf-hint-leave:hover { background: var(--cf-surface-subtle); }
+.cf-hint-leave:focus-visible { outline: 2px solid var(--cf-accent); outline-offset: 2px; }

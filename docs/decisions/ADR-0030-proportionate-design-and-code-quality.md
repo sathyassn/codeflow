@@ -8,7 +8,7 @@ superseded_by: null
 architecture_impact: the shared duo contract and evaluator now block speculative or unjustified design and implementation complexity, with Codex first verification and Fable final review
 ---
 
-# ADR-0030 — proportionate design and code quality
+# ADR-0030: proportionate design and code quality
 
 ## Context
 

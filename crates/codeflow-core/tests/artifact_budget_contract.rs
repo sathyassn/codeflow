@@ -2662,7 +2662,7 @@ const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
             "`.agents/skills/cf-editorial-review/references/editorial-smells.md` lists each pattern under \"Mannered prose\" with a plain rewrite.",
             "**Prose length.** Default to short prose and bullets. Write long prose only when the reader asks for it or the artifact is prose by nature",
             "Bullets for the enumerable, short prose for the rest",
-            "On docs-portal pages, use the portal's figure grammar, a `cf-stage` fence",
+            "On docs-portal pages, use the portal's figure grammar, a declared figure block",
         ],
         &[
             "Write plainly: no slogans",
@@ -2709,7 +2709,7 @@ const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
         &[
             "Write the pages plainly:",
             "with descriptive titles and short prose and bullets by default.",
-            "drawn in the portal's figure grammar (a `cf-stage` fence).",
+            "drawn by the figure block in the portal's figure grammar;",
         ],
         &["Prefer plain language"],
     ),

@@ -4,7 +4,11 @@ use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    document::{Block, EvidenceState, PresentationDocument, TreeNode},
+    document::{
+        reference_segments, Block, EvidenceState, FrameKind, Framing, PresentationDocument,
+        TextSegment, TreeNode,
+    },
+    form::{FieldKind, FormField, FormView, RationaleMode, TextFormat},
     limits,
     state::FeedbackSnapshot,
 };
@@ -13,6 +17,10 @@ pub struct RenderOptions<'a> {
     pub session_id: &'a str,
     pub revision: u64,
     pub event_sequence: u64,
+    /// The page's cursor into the answer ledger (`responses.jsonl`).
+    pub response_sequence: u64,
+    /// Each form's latest answer and its state, shown as the page loads.
+    pub answers: Option<&'a crate::delivery::FormAnswers>,
     pub script_path: Option<&'a str>,
     pub style_path: Option<&'a str>,
     pub prepaint_source: Option<&'a str>,
@@ -26,6 +34,14 @@ pub struct RenderOptions<'a> {
     pub retired: Option<&'a serde_json::Value>,
 }
 
+/// What a block renders against: the caller's options and the document's
+/// schema version and framing (SPC-014 B5).
+struct Context<'a> {
+    options: &'a RenderOptions<'a>,
+    version: u32,
+    framing: Framing,
+}
+
 #[derive(Clone, Copy)]
 pub struct RenderIdentity<'a> {
     pub src: &'a str,
@@ -34,9 +50,14 @@ pub struct RenderIdentity<'a> {
 
 #[must_use]
 pub fn render_document(document: &PresentationDocument, options: &RenderOptions<'_>) -> String {
+    let context = Context {
+        options,
+        version: document.schema_version,
+        framing: Framing::of(document),
+    };
     let mut body = String::new();
     for block in &document.blocks {
-        render_block(block, options, &mut body);
+        render_block(block, &context, &mut body);
     }
 
     let mut html = String::with_capacity(body.len() + 4_096);
@@ -96,6 +117,7 @@ pub fn render_document(document: &PresentationDocument, options: &RenderOptions<
             "session_id": options.session_id,
             "revision": options.revision,
             "event_sequence": options.event_sequence,
+            "response_sequence": options.response_sequence,
             "title": document.title,
             "shortcuts_enabled": true,
             "review_limits": {
@@ -155,6 +177,8 @@ pub fn render_retired(
             session_id: "retired",
             revision,
             event_sequence: 0,
+            response_sequence: 0,
+            answers: None,
             script_path: None,
             style_path: None,
             prepaint_source: None,
@@ -189,7 +213,9 @@ fn render_retired_diagram(block: &crate::retired::RetiredBlock<'_>, output: &mut
 }
 
 #[allow(clippy::too_many_lines)]
-fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String) {
+fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
+    let options = context.options;
+    let framing = &context.framing;
     if let (Some(stored), Block::Narrative { id, markdown }) = (options.retired, block) {
         let diagram = markdown.is_empty().then(|| {
             crate::retired::retired_blocks(stored)
@@ -221,18 +247,24 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
         summary, blocks, ..
     } = block
     {
-        output.push_str("<details><summary><span data-cf-review-text-root>");
+        output
+            .push_str("<details><summary><span data-cf-review-text-root data-cf-canonical-text=\"");
+        escape_attr_to(&block.canonical_review_text(framing), output);
+        output.push_str("\">");
         escape_html_to(summary, output);
         output.push_str("</span></summary>");
         for child in blocks {
-            render_block(child, options, output);
+            render_block(child, context, output);
         }
         output.push_str("</details></section>");
         return;
     }
     if let Block::Tabs { tabs, .. } = block {
-        output
-            .push_str("<div class=\"tabs\"><div class=\"tabs__labels\" data-cf-review-text-root>");
+        output.push_str(
+            "<div class=\"tabs\"><div class=\"tabs__labels\" data-cf-review-text-root data-cf-canonical-text=\"",
+        );
+        escape_attr_to(&block.canonical_review_text(framing), output);
+        output.push_str("\">");
         for tab in tabs {
             output.push_str("<span>");
             escape_html_to(&tab.label, output);
@@ -244,19 +276,23 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             escape_html_to(&tab.label, output);
             output.push_str("</summary>");
             for child in &tab.blocks {
-                render_block(child, options, output);
+                render_block(child, context, output);
             }
             output.push_str("</details>");
         }
         output.push_str("</div></section>");
         return;
     }
+    let frame = frame_of(block, context);
+    if let Some(frame) = &frame {
+        open_frame(frame, output);
+    }
     output.push_str("<div data-cf-review-text-root data-cf-canonical-text=\"");
-    escape_attr_to(&block.canonical_review_text(), output);
+    escape_attr_to(&block.canonical_review_text(framing), output);
     output.push_str("\">");
 
     match block {
-        Block::Narrative { markdown, .. } => render_markdown(markdown, output),
+        Block::Narrative { markdown, .. } => render_markdown(framing, markdown, output),
         Block::Bullets { ordered, items, .. } => {
             let tag = if *ordered { "ol" } else { "ul" };
             output.push('<');
@@ -264,7 +300,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             output.push('>');
             for item in items {
                 output.push_str("<li>");
-                render_markdown(item, output);
+                render_markdown(framing, item, output);
                 output.push_str("</li>");
             }
             output.push_str("</");
@@ -285,7 +321,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 escape_html_to(title, output);
                 output.push_str("</h2>");
             }
-            render_markdown(markdown, output);
+            render_markdown(framing, markdown, output);
             output.push_str("</aside>");
         }
         Block::Comparison { columns, .. } => {
@@ -294,14 +330,14 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 output.push_str("<article><h2>");
                 escape_html_to(&column.title, output);
                 output.push_str("</h2>");
-                render_markdown(&column.markdown, output);
+                render_markdown(framing, &column.markdown, output);
                 output.push_str("</article>");
             }
             output.push_str("</div>");
         }
         Block::Decision {
             title,
-            status,
+            status: Some(status),
             markdown,
             ..
         } => {
@@ -310,8 +346,16 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             output.push_str("</h2><span class=\"decision__status\">");
             escape_html_to(&format!("{status:?}"), output);
             output.push_str("</span></header>");
-            render_markdown(markdown, output);
+            render_markdown(framing, markdown, output);
             output.push_str("</article>");
+        }
+        Block::Decision { .. } | Block::Form { .. } => {
+            if let Some(view) = crate::form::FormView::of(block) {
+                let answer = options
+                    .answers
+                    .and_then(|answers| answers.get(&(view.id.to_string(), view.digest())));
+                render_form(&view, framing, options.interactive, answer, output);
+            }
         }
         Block::Table { columns, rows, .. } => {
             output.push_str("<div class=\"cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable table\"><table><thead><tr>");
@@ -325,7 +369,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 output.push_str("<tr>");
                 for cell in row {
                     output.push_str("<td>");
-                    render_markdown(cell, output);
+                    render_markdown(framing, cell, output);
                     output.push_str("</td>");
                 }
                 output.push_str("</tr>");
@@ -364,7 +408,16 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             output.push_str("<div class=\"cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable code\"><pre><code data-cf-language=\"");
             escape_attr_to(language, output);
             output.push_str("\">");
-            escape_html_to(code, output);
+            // Each line is its own element target (QA defect 6); the text
+            // is unchanged, so selections and the highlighter still see it.
+            for line in code.split_inclusive('\n') {
+                output.push_str("<span class=\"cf-line\">");
+                escape_html_to(line.strip_suffix('\n').unwrap_or(line), output);
+                output.push_str("</span>");
+                if line.ends_with('\n') {
+                    output.push('\n');
+                }
+            }
             output.push_str("</code></pre></div>");
         }
         Block::Diff { diff, caption, .. } => {
@@ -375,22 +428,25 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             }
             output.push_str("<div class=\"cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable diff\"><pre class=\"diff\"><code>");
             for line in diff.lines() {
-                let (tag, label) = if line.starts_with('+') && !line.starts_with("+++") {
-                    ("ins", "Added: ")
-                } else if line.starts_with('-') && !line.starts_with("---") {
-                    ("del", "Removed: ")
-                } else {
-                    ("span", "")
+                let (label, marker, text) = crate::document::diff_line_parts(line);
+                let tag = match label {
+                    "Added: " => "ins",
+                    "Removed: " => "del",
+                    _ => "span",
                 };
                 output.push('<');
                 output.push_str(tag);
-                output.push('>');
+                output.push_str(" class=\"cf-line\">");
+                // The label is for screen readers and the marker for the eye;
+                // neither is review text, so a quote holds only the line's words.
                 if !label.is_empty() {
-                    output.push_str("<span class=\"sr-only\">");
+                    output.push_str("<span class=\"sr-only\" data-cf-review-skip>");
                     output.push_str(label);
+                    output.push_str("</span><span class=\"cf-diff-marker\" data-cf-review-skip aria-hidden=\"true\">");
+                    escape_html_to(marker, output);
                     output.push_str("</span>");
                 }
-                escape_html_to(line, output);
+                escape_html_to(text, output);
                 output.push_str("</");
                 output.push_str(tag);
                 output.push_str(">\n");
@@ -403,6 +459,33 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             output.push_str("</h2><ul class=\"tree\">");
             render_tree(nodes, output);
             output.push_str("</ul>");
+        }
+        Block::Figure { declaration, .. } => {
+            // The grammar module draws the figure on the client. Until
+            // then, and without scripts, the placeholder shows the title and
+            // the one-sentence caption.
+            let title = declaration
+                .pointer("/figure/title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let caption = declaration
+                .pointer("/figure/caption")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let number = framing.number(block.id()).map(|(_, number)| number);
+            output.push_str("<div class=\"figure-block\" data-cf-figure-block=\"pending\"");
+            if let Some(number) = number {
+                let _ = write!(output, " data-cf-figure-number=\"{number}\"");
+            }
+            output.push_str(" data-cf-figure-declaration=\"");
+            escape_attr_to(&declaration.to_string(), output);
+            output.push_str("\"><div data-cf-figure-output><p class=\"figure-block__title\">");
+            escape_html_to(title, output);
+            output.push_str("</p><p class=\"figure-block__caption\">");
+            escape_html_to(caption, output);
+            output.push_str(
+                "</p></div><p data-cf-figure-status class=\"sr-only\" role=\"status\"></p></div>",
+            );
         }
         Block::Media {
             mime_type,
@@ -462,7 +545,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 output.push_str("<figure class=\"stage\"><div class=\"cf-stage-host\" id=\"");
                 escape_attr_to(&host, output);
                 output.push_str("\">");
-                match crate::safe_html::scoped_html(html, &host) {
+                match crate::safe_html::scoped_html(html, &host, context.version) {
                     Ok(scoped) => output.push_str(&scoped),
                     Err(_) => output.push_str("<p>HTML content failed isolation validation.</p>"),
                 }
@@ -476,7 +559,117 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             }
         }
     }
-    output.push_str("</div></section>");
+    output.push_str("</div>");
+    if let Some(frame) = &frame {
+        close_frame(block, frame, output);
+    }
+    output.push_str("</section>");
+}
+
+/// The runtime-drawn frame of a block (SPC-014 B5): its number and title.
+/// The `figure` block draws its own title line in the grammar module, so it
+/// gets only its number, on the mount.
+struct Frame {
+    kind: FrameKind,
+    number: Option<usize>,
+    title: String,
+}
+
+fn frame_of(block: &Block, context: &Context<'_>) -> Option<Frame> {
+    let number = context.framing.number(block.id()).map(|(_, number)| number);
+    match block {
+        Block::Html {
+            title: Some(title), ..
+        } => Some(Frame {
+            kind: FrameKind::Figure,
+            number,
+            title: title.clone(),
+        }),
+        Block::Table {
+            title: Some(title), ..
+        } if context.version >= 2 => Some(Frame {
+            kind: FrameKind::Table,
+            number,
+            title: title.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn open_frame(frame: &Frame, output: &mut String) {
+    output.push_str("<figure class=\"cf-frame\" data-cf-frame=\"");
+    output.push_str(match frame.kind {
+        FrameKind::Figure => "figure",
+        FrameKind::Table => "table",
+    });
+    output.push('"');
+    if let Some(number) = frame.number {
+        let _ = write!(output, " data-cf-number=\"{number}\"");
+    }
+    output.push_str("><p class=\"cf-frame-title\">");
+    if let Some(number) = frame.number {
+        output.push_str("<span class=\"cf-frame-number\">");
+        output.push_str(frame.kind.noun());
+        let _ = write!(output, " {number}");
+        output.push_str("</span> · ");
+    }
+    output.push_str("<span class=\"cf-frame-name\">");
+    escape_html_to(&frame.title, output);
+    output.push_str("</span></p>");
+}
+
+fn close_frame(block: &Block, _frame: &Frame, output: &mut String) {
+    match block {
+        Block::Html {
+            caption,
+            legend,
+            description,
+            ..
+        } => {
+            if let Some(legend) = legend {
+                output.push_str("<ul class=\"cf-legend\" aria-label=\"Legend\">");
+                for (index, entry) in legend.iter().enumerate() {
+                    let id = format!("{}{}", crate::entity::LEGEND_PREFIX, index + 1);
+                    output.push_str("<li data-cf-entity=\"");
+                    escape_attr_to(&id, output);
+                    output.push_str("\" data-cf-entity-label=\"");
+                    escape_attr_to(
+                        &crate::entity::finish_label(&crate::entity::legend_entry_text(
+                            &entry.label,
+                            &entry.means,
+                        )),
+                        output,
+                    );
+                    output.push_str("\"><span class=\"cf-legend-label\">");
+                    escape_html_to(&entry.label, output);
+                    output.push_str("</span>: ");
+                    escape_html_to(&entry.means, output);
+                    output.push_str("</li>");
+                }
+                output.push_str("</ul>");
+            }
+            if let Some(caption) = caption {
+                output.push_str("<figcaption class=\"cf-frame-caption\">");
+                escape_html_to(caption, output);
+                output.push_str("</figcaption>");
+            }
+            if let Some(description) = description {
+                output.push_str("<details class=\"cf-frame-details\"><summary>Details</summary><p class=\"cf-frame-description\">");
+                escape_html_to(description, output);
+                output.push_str("</p></details>");
+            }
+        }
+        Block::Table {
+            caption: Some(caption),
+            ..
+        } => {
+            output.push_str("<figcaption class=\"cf-frame-caption\">");
+            escape_html_to(caption, output);
+            output.push_str("</figcaption>");
+        }
+        _ => {}
+    }
+    output.push_str("</figure>");
 }
 
 fn block_kind(block: &Block) -> &'static str {
@@ -486,11 +679,13 @@ fn block_kind(block: &Block) -> &'static str {
         Block::Callout { .. } => "callout",
         Block::Comparison { .. } => "comparison",
         Block::Decision { .. } => "decision",
+        Block::Form { .. } => "form",
         Block::Table { .. } => "table",
         Block::Status { .. } => "status",
         Block::Code { .. } => "code",
         Block::Diff { .. } => "diff",
         Block::Tree { .. } => "tree",
+        Block::Figure { .. } => "figure",
         Block::Media { .. } => "media",
         Block::Disclosure { .. } => "disclosure",
         Block::Tabs { .. } => "tabs",
@@ -499,7 +694,11 @@ fn block_kind(block: &Block) -> &'static str {
     }
 }
 
-fn render_markdown(markdown: &str, output: &mut String) {
+fn render_markdown(framing: &Framing, markdown: &str, output: &mut String) {
+    if framing.enabled() {
+        render_markdown_with_references(framing, markdown, output);
+        return;
+    }
     let mut link_stack = Vec::new();
     let parser =
         Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH).filter_map(|event| match event {
@@ -531,12 +730,519 @@ fn render_markdown(markdown: &str, output: &mut String) {
     html::push_html(output, parser);
 }
 
+/// Schema v2 Markdown: `[fig:<id>]` and `[table:<id>]` outside links render
+/// as a link to the numbered block, whose text is the label the canonical
+/// review text also holds (SPC-014 B5).
+fn render_markdown_with_references(framing: &Framing, markdown: &str, output: &mut String) {
+    let mut link_stack = Vec::new();
+    let mut events = Vec::new();
+    for (event, in_link) in crate::document::coalesced_markdown(markdown) {
+        match event {
+            Event::Html(_)
+            | Event::InlineHtml(_)
+            | Event::Start(Tag::Image { .. })
+            | Event::End(TagEnd::Image) => {}
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                let destination = dest_url.as_ref();
+                let safe = safe_markdown_destination(destination);
+                link_stack.push(safe);
+                if safe {
+                    let mut trusted = String::from("<a href=\"");
+                    escape_attr_to(destination, &mut trusted);
+                    trusted.push('"');
+                    if !destination.starts_with('#') {
+                        trusted.push_str(" target=\"_blank\" rel=\"noopener noreferrer\"");
+                    }
+                    trusted.push('>');
+                    events.push(Event::Html(CowStr::Boxed(trusted.into_boxed_str())));
+                }
+            }
+            Event::End(TagEnd::Link) => {
+                if link_stack.pop().unwrap_or(false) {
+                    events.push(Event::Html(CowStr::Borrowed("</a>")));
+                }
+            }
+            Event::Text(text) if !in_link => {
+                for segment in reference_segments(&text) {
+                    match segment {
+                        TextSegment::Text(part) => {
+                            events.push(Event::Text(CowStr::Boxed(part.into())));
+                        }
+                        TextSegment::Reference { kind, id } => {
+                            if let Some(label) = framing.reference_label(kind, id) {
+                                let mut link = String::from("<a class=\"cf-ref\" href=\"#");
+                                escape_attr_to(id, &mut link);
+                                link.push_str("\">");
+                                escape_html_to(&label, &mut link);
+                                link.push_str("</a>");
+                                events.push(Event::Html(CowStr::Boxed(link.into_boxed_str())));
+                            } else {
+                                let literal = format!("[{}:{id}]", kind.reference_prefix());
+                                events.push(Event::Text(CowStr::Boxed(literal.into_boxed_str())));
+                            }
+                        }
+                    }
+                }
+            }
+            event => events.push(event),
+        }
+    }
+    html::push_html(output, events.into_iter());
+}
+
 fn safe_markdown_destination(destination: &str) -> bool {
     let lower = destination.to_ascii_lowercase();
     destination.starts_with('#')
         || lower.starts_with("https://")
         || lower.starts_with("http://")
         || lower.starts_with("mailto:")
+}
+
+/// A form or a v2 decision (SPC-014 B6): the runtime renders its fields,
+/// with no value set and nothing preselected, and the page's own script
+/// submits it through `POST /app/api/answers` (there is no `<form>` element,
+/// so the page policy keeps `form-action 'none'`). The title, prompt, labels,
+/// descriptions and option labels are the block's review text; every word
+/// the runtime adds (flags, hints, "Recommended", the actions) is marked
+/// `data-cf-review-skip`. An export shows the question with its controls
+/// disabled and no actions. A form already answered carries its latest
+/// answer and that answer's state (TSK-120), which the page shows on load.
+fn render_form(
+    view: &FormView<'_>,
+    framing: &Framing,
+    interactive: bool,
+    answer: Option<&crate::delivery::FormAnswer>,
+    output: &mut String,
+) {
+    let decision = matches!(view.block, Block::Decision { .. });
+    let base = format!("cf-form-{}", view.id);
+    let title_id = format!("{base}-title");
+    output.push_str("<article class=\"cf-form");
+    if decision {
+        output.push_str(" decision");
+    }
+    output.push_str("\" data-cf-form=\"");
+    escape_attr_to(view.id, output);
+    output.push_str("\" data-cf-form-kind=\"");
+    output.push_str(if decision { "decision" } else { "form" });
+    output.push_str("\" data-cf-form-digest=\"");
+    output.push_str(&view.digest());
+    if let Some(answer) = answer.filter(|_| interactive) {
+        output.push_str("\" data-cf-answer-id=\"");
+        output.push_str(&answer.original.to_string());
+        output.push_str("\" data-cf-latest-answer-id=\"");
+        output.push_str(&answer.latest.to_string());
+        output.push_str("\" data-cf-answer-state=\"");
+        output.push_str(answer.status.page_state());
+    }
+    output.push_str("\" role=\"group\" aria-labelledby=\"");
+    escape_attr_to(&title_id, output);
+    output.push_str("\"><header><h2 class=\"cf-form__title\" id=\"");
+    escape_attr_to(&title_id, output);
+    output.push_str("\">");
+    escape_html_to(view.title, output);
+    output.push_str("</h2></header>");
+    match view.block {
+        Block::Decision { markdown, .. }
+        | Block::Form {
+            markdown: Some(markdown),
+            ..
+        } => render_markdown(framing, markdown, output),
+        _ => {}
+    }
+    output.push_str("<div class=\"cf-form__fields\">");
+    for field in view.fields.iter() {
+        render_field(
+            view,
+            field,
+            &base,
+            decision.then_some(title_id.as_str()),
+            interactive,
+            output,
+        );
+    }
+    output.push_str("</div>");
+    if interactive {
+        render_form_actions(&base, output);
+    }
+    output.push_str("</article>");
+}
+
+/// The ids and flags one field's markup shares.
+struct FieldMarkup {
+    input_id: String,
+    described: String,
+    grouped: bool,
+    required: bool,
+    disabled: &'static str,
+}
+
+fn render_field(
+    view: &FormView<'_>,
+    field: &FormField,
+    base: &str,
+    labelled_by: Option<&str>,
+    interactive: bool,
+    output: &mut String,
+) {
+    let input_id = format!("{base}-{}", field.id);
+    let hint = field_hint(field);
+    let mut described = Vec::new();
+    if field.description.is_some() {
+        described.push(format!("{input_id}-description"));
+    }
+    if hint.is_some() {
+        described.push(format!("{input_id}-hint"));
+    }
+    described.push(format!("{input_id}-error"));
+    let markup = FieldMarkup {
+        described: described.join(" "),
+        input_id,
+        grouped: matches!(
+            field.kind,
+            FieldKind::Boolean | FieldKind::Choice | FieldKind::Choices
+        ),
+        required: view.is_required(&field.id),
+        disabled: if interactive { "" } else { " disabled" },
+    };
+    open_field(field, &markup, labelled_by, output);
+    // A decision's one field is labelled by the decision's title.
+    if labelled_by.is_none() {
+        output.push_str(if markup.grouped {
+            "<legend class=\"cf-field__label\">"
+        } else {
+            "<label class=\"cf-field__label\" for=\""
+        });
+        if !markup.grouped {
+            escape_attr_to(&markup.input_id, output);
+            output.push_str("\">");
+        }
+        escape_html_to(&field.label, output);
+        if markup.required {
+            output
+                .push_str("<span class=\"cf-field__flag\" data-cf-review-skip> (required)</span>");
+        }
+        output.push_str(if markup.grouped {
+            "</legend>"
+        } else {
+            "</label>"
+        });
+    }
+    if let Some(description) = &field.description {
+        output.push_str("<p class=\"cf-field__description\" id=\"");
+        escape_attr_to(&markup.input_id, output);
+        output.push_str("-description\">");
+        escape_html_to(description, output);
+        output.push_str("</p>");
+    }
+    if let Some(hint) = &hint {
+        output.push_str("<p class=\"cf-field__hint\" data-cf-review-skip id=\"");
+        escape_attr_to(&markup.input_id, output);
+        output.push_str("-hint\">");
+        escape_html_to(hint, output);
+        output.push_str("</p>");
+    }
+    render_control(field, &markup, output);
+    // The error sits with the control it most often concerns, above the
+    // rationale; the page marks whichever of the two is wrong.
+    output.push_str("<p class=\"cf-field__error\" data-cf-review-skip role=\"alert\" id=\"");
+    escape_attr_to(&markup.input_id, output);
+    output.push_str("-error\" hidden></p>");
+    let mode = field.rationale_mode();
+    if mode != RationaleMode::None {
+        output.push_str("<div class=\"cf-field__rationale\" data-cf-review-skip><label for=\"");
+        escape_attr_to(&markup.input_id, output);
+        output.push_str("-rationale\">");
+        output.push_str(if mode == RationaleMode::Required {
+            "Why? (required)"
+        } else {
+            "Why? (optional)"
+        });
+        output.push_str("</label><textarea class=\"cf-input\" rows=\"2\" id=\"");
+        escape_attr_to(&markup.input_id, output);
+        output.push_str(
+            "-rationale\" data-cf-rationale-input autocomplete=\"off\" aria-describedby=\"",
+        );
+        escape_attr_to(&markup.input_id, output);
+        output.push_str("-error\"");
+        output.push_str(markup.disabled);
+        output.push_str("></textarea></div>");
+    }
+    output.push_str(if markup.grouped {
+        "</fieldset>"
+    } else {
+        "</div>"
+    });
+}
+
+/// The field's container, carrying the rules the page validates against.
+fn open_field(
+    field: &FormField,
+    markup: &FieldMarkup,
+    labelled_by: Option<&str>,
+    output: &mut String,
+) {
+    output.push_str(if markup.grouped { "<fieldset" } else { "<div" });
+    output.push_str(" class=\"cf-field\" data-cf-field=\"");
+    escape_attr_to(&field.id, output);
+    output.push_str("\" data-cf-field-kind=\"");
+    output.push_str(field_kind_name(field.kind));
+    output.push('"');
+    if markup.required {
+        output.push_str(" data-cf-required");
+    }
+    match field.rationale_mode() {
+        RationaleMode::None => {}
+        RationaleMode::Optional => output.push_str(" data-cf-rationale=\"optional\""),
+        RationaleMode::Required => output.push_str(" data-cf-rationale=\"required\""),
+    }
+    if let Some(format) = field.format {
+        output.push_str(" data-cf-format=\"");
+        output.push_str(text_format_name(format));
+        output.push('"');
+    }
+    if field.kind == FieldKind::Text {
+        let _ = write!(
+            output,
+            " data-cf-min-length=\"{}\" data-cf-max-length=\"{}\"",
+            field.min_length.unwrap_or(0),
+            field.text_max()
+        );
+    }
+    for (name, bound) in [("minimum", &field.minimum), ("maximum", &field.maximum)] {
+        if let Some(bound) = bound {
+            let _ = write!(output, " data-cf-{name}=\"{bound}\"");
+        }
+    }
+    for (name, count) in [
+        ("min-items", field.min_items),
+        ("max-items", field.max_items),
+    ] {
+        if let Some(count) = count {
+            let _ = write!(output, " data-cf-{name}=\"{count}\"");
+        }
+    }
+    if markup.grouped {
+        output.push_str(" aria-describedby=\"");
+        escape_attr_to(&markup.described, output);
+        output.push('"');
+        if let Some(labelled_by) = labelled_by {
+            output.push_str(" aria-labelledby=\"");
+            escape_attr_to(labelled_by, output);
+            output.push('"');
+        }
+    }
+    output.push('>');
+}
+
+/// The field's input: no value, nothing checked (B6).
+fn render_control(field: &FormField, markup: &FieldMarkup, output: &mut String) {
+    match field.kind {
+        FieldKind::Text | FieldKind::Number | FieldKind::Integer => {
+            let multiline = field.format == Some(TextFormat::Multiline);
+            if multiline {
+                output.push_str("<textarea class=\"cf-input\" rows=\"4\"");
+            } else {
+                output.push_str("<input class=\"cf-input\" type=\"");
+                output.push_str(if field.format == Some(TextFormat::Date) {
+                    "date\""
+                } else {
+                    "text\""
+                });
+                let mode = match (field.kind, field.format) {
+                    (FieldKind::Number, _) => Some("decimal"),
+                    (FieldKind::Integer, _) => Some("numeric"),
+                    (_, Some(TextFormat::Email)) => Some("email"),
+                    (_, Some(TextFormat::Uri)) => Some("url"),
+                    _ => None,
+                };
+                if let Some(mode) = mode {
+                    output.push_str(" inputmode=\"");
+                    output.push_str(mode);
+                    output.push('"');
+                }
+            }
+            output.push_str(" id=\"");
+            escape_attr_to(&markup.input_id, output);
+            output.push_str("\" data-cf-value autocomplete=\"off\" aria-describedby=\"");
+            escape_attr_to(&markup.described, output);
+            output.push('"');
+            if markup.required {
+                output.push_str(" aria-required=\"true\"");
+            }
+            output.push_str(markup.disabled);
+            output.push_str(if multiline { "></textarea>" } else { ">" });
+        }
+        FieldKind::Boolean => {
+            for (index, (value, label)) in
+                [("true", "Yes"), ("false", "No")].into_iter().enumerate()
+            {
+                render_option(markup, index, "radio", value, label, false, true, output);
+            }
+        }
+        FieldKind::Choice | FieldKind::Choices => {
+            let control = if field.kind == FieldKind::Choice {
+                "radio"
+            } else {
+                "checkbox"
+            };
+            for (index, option) in field.options.iter().flatten().enumerate() {
+                render_option(
+                    markup,
+                    index,
+                    control,
+                    &option.value,
+                    &option.label,
+                    option.recommended,
+                    false,
+                    output,
+                );
+            }
+        }
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one option's markup from its parts"
+)]
+fn render_option(
+    markup: &FieldMarkup,
+    index: usize,
+    control: &str,
+    value: &str,
+    label: &str,
+    recommended: bool,
+    runtime_label: bool,
+    output: &mut String,
+) {
+    let input_id = markup.input_id.as_str();
+    output.push_str("<label class=\"cf-option\"><input type=\"");
+    output.push_str(control);
+    output.push_str("\" name=\"");
+    escape_attr_to(input_id, output);
+    output.push_str("\" id=\"");
+    escape_attr_to(input_id, output);
+    let _ = write!(output, "-{index}");
+    output.push_str("\" value=\"");
+    escape_attr_to(value, output);
+    output.push_str("\" data-cf-value");
+    output.push_str(markup.disabled);
+    output.push_str("><span class=\"cf-option__label\"");
+    // Yes and No are the runtime's words, not the author's.
+    if runtime_label {
+        output.push_str(" data-cf-review-skip");
+    }
+    output.push('>');
+    escape_html_to(label, output);
+    output.push_str("</span>");
+    if recommended {
+        output.push_str("<span class=\"cf-recommended\" data-cf-review-skip>Recommended</span>");
+    }
+    output.push_str("</label>");
+}
+
+fn render_form_actions(base: &str, output: &mut String) {
+    output.push_str("<div class=\"cf-form__decline\" data-cf-review-skip hidden><label for=\"");
+    escape_attr_to(base, output);
+    output.push_str("-reason\">Reason for declining (optional)</label><textarea class=\"cf-input\" rows=\"2\" id=\"");
+    escape_attr_to(base, output);
+    output.push_str(
+        "-reason\" data-cf-decline-reason autocomplete=\"off\"></textarea></div>\
+         <div class=\"cf-form__actions\" data-cf-review-skip>\
+         <button type=\"button\" class=\"cf-form__submit\" data-cf-form-action=\"submit\">Submit answer</button>\
+         <button type=\"button\" data-cf-form-action=\"decline\">Decline to answer</button>\
+         <button type=\"button\" data-cf-form-action=\"cancel\">Dismiss for now</button>\
+         <button type=\"button\" data-cf-form-action=\"resend\" hidden>Resend</button>\
+         <button type=\"button\" data-cf-form-action=\"confirm\" hidden>Confirm against the current revision</button>\
+         <button type=\"button\" data-cf-form-action=\"amend\" hidden>Correct this answer</button>\
+         <p class=\"cf-form__state\" role=\"status\" aria-live=\"polite\" data-cf-form-state=\"editing\"></p></div>",
+    );
+}
+
+/// The constraint line the page shows under a field.
+fn field_hint(field: &FormField) -> Option<String> {
+    let range = |low: Option<String>, high: Option<String>, unit: &str| match (low, high) {
+        (Some(low), Some(high)) => Some(format!("{low} to {high}{unit}.")),
+        (Some(low), None) => Some(format!("At least {low}{unit}.")),
+        (None, Some(high)) => Some(format!("At most {high}{unit}.")),
+        (None, None) => None,
+    };
+    match field.kind {
+        FieldKind::Text => {
+            let format = match field.format {
+                Some(TextFormat::Email) => Some("An email address."),
+                Some(TextFormat::Uri) => Some("An absolute address, such as https://example.org."),
+                Some(TextFormat::Date) => Some("A date, such as 2026-09-28."),
+                Some(TextFormat::DateTime) => {
+                    Some("A date and time, such as 2026-09-28T14:30:00Z.")
+                }
+                Some(TextFormat::Multiline) | None => None,
+            };
+            let length = range(
+                field
+                    .min_length
+                    .filter(|min| *min > 0)
+                    .map(|min| min.to_string()),
+                Some(field.text_max().to_string()),
+                " characters",
+            );
+            Some(
+                [format.map(str::to_string), length]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+        }
+        FieldKind::Number | FieldKind::Integer => {
+            let kind = if field.kind == FieldKind::Integer {
+                "A whole number"
+            } else {
+                "A number"
+            };
+            let bounds = match (&field.minimum, &field.maximum) {
+                (Some(low), Some(high)) => format!(" from {low} to {high}"),
+                (Some(low), None) => format!(" of at least {low}"),
+                (None, Some(high)) => format!(" of at most {high}"),
+                (None, None) => String::new(),
+            };
+            Some(format!("{kind}{bounds}."))
+        }
+        // Worded like the page's too_few and too_many errors.
+        FieldKind::Choices => match (field.min_items.filter(|min| *min > 0), field.max_items) {
+            (Some(low), Some(high)) if low == high => Some(format!("Choose exactly {low}.")),
+            (Some(low), Some(high)) if high.checked_sub(low) == Some(1) => {
+                Some(format!("Choose {low} or {high}."))
+            }
+            (Some(low), Some(high)) => Some(format!("Choose between {low} and {high}.")),
+            (Some(low), None) => Some(format!("Choose at least {low}.")),
+            (None, Some(high)) => Some(format!("Choose at most {high}.")),
+            (None, None) => None,
+        },
+        FieldKind::Boolean | FieldKind::Choice => None,
+    }
+}
+
+const fn field_kind_name(kind: FieldKind) -> &'static str {
+    match kind {
+        FieldKind::Text => "text",
+        FieldKind::Number => "number",
+        FieldKind::Integer => "integer",
+        FieldKind::Boolean => "boolean",
+        FieldKind::Choice => "choice",
+        FieldKind::Choices => "choices",
+    }
+}
+
+const fn text_format_name(format: TextFormat) -> &'static str {
+    match format {
+        TextFormat::Email => "email",
+        TextFormat::Uri => "uri",
+        TextFormat::Date => "date",
+        TextFormat::DateTime => "date-time",
+        TextFormat::Multiline => "multiline",
+    }
 }
 
 fn render_tree(nodes: &[TreeNode], output: &mut String) {
@@ -605,7 +1311,7 @@ pub(crate) mod tests {
         // T114-1: every other block renders as it always did.
         for kept in [
             "The qualification path before the diagram block was retired.",
-            "<summary><span data-cf-review-text-root>Message order</span></summary>",
+            ">Message order</span></summary>",
         ] {
             assert!(html.contains(kept), "{kept}: {html}");
         }
@@ -619,12 +1325,12 @@ pub(crate) mod tests {
             (
                 "flow: Qualification flow",
                 "flowchart LR\n  Input --&gt; Review --&gt; Evidence",
-                "Former flowchart diagram; convert it to an html block holding an inline SVG.",
+                "Former flowchart diagram; convert it to a flow figure.",
             ),
             (
                 "handshake: Open handshake",
                 "sequenceDiagram\n  Agent-&gt;&gt;Service: open\n  Service--&gt;&gt;Agent: ready",
-                "Former sequence diagram; convert it to an html block holding an inline SVG, or a table of the messages in order.",
+                "Former sequence diagram; convert it to a sequence figure.",
             ),
         ] {
             assert!(html.contains(&format!("<h2>{heading}</h2>")), "{html}");
@@ -673,6 +1379,7 @@ pub(crate) mod tests {
     #[test]
     fn markdown_drops_raw_html() {
         let document = PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Safe".to_string(),
             language: None,
@@ -688,6 +1395,8 @@ pub(crate) mod tests {
                 session_id: "00000000-0000-0000-0000-000000000000",
                 revision: 1,
                 event_sequence: 0,
+                response_sequence: 0,
+                answers: None,
                 script_path: None,
                 style_path: None,
                 prepaint_source: None,
@@ -707,6 +1416,7 @@ pub(crate) mod tests {
     fn markdown_links_and_images_cannot_navigate_to_unsafe_resources() {
         let mut rendered = String::new();
         render_markdown(
+            &Framing::default(),
             "[safe](https://example.com) [bad](JaVaScRiPt:alert(1)) ![remote](https://example.com/a.png)",
             &mut rendered,
         );
@@ -738,6 +1448,19 @@ pub(crate) mod tests {
                     markdown: "Nested body".to_string(),
                 }],
             },
+            Block::Figure {
+                id: "figure".to_string(),
+                declaration: serde_json::json!({
+                    "schema_version": 1,
+                    "figure": {
+                        "id": "review-path",
+                        "family": "flow",
+                        "binding": "authored",
+                        "title": "Résumé <path>",
+                        "caption": "A change passes review before it lands."
+                    }
+                }),
+            },
             Block::Tabs {
                 id: "tabs".to_string(),
                 tabs: vec![
@@ -759,6 +1482,7 @@ pub(crate) mod tests {
             },
         ];
         let document = PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Nested".to_string(),
             language: Some("en-CA".to_string()),
@@ -771,6 +1495,8 @@ pub(crate) mod tests {
                 session_id: "00000000-0000-0000-0000-000000000000",
                 revision: 1,
                 event_sequence: 0,
+                response_sequence: 0,
+                answers: None,
                 script_path: None,
                 style_path: None,
                 prepaint_source: None,
@@ -803,10 +1529,98 @@ pub(crate) mod tests {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(roots.len(), 1);
+            // Every root carries the canonical text the client quotes from; the
+            // client maps a selection to it ignoring whitespace (selection.ts),
+            // which separates a block's parts, and skipping what is marked
+            // data-cf-review-skip (a diff line's label and marker).
+            let canonical = block.canonical_review_text(&crate::document::Framing::default());
             assert_eq!(
-                roots[0].text().collect::<String>(),
-                block.canonical_review_text()
+                roots[0].value().attr("data-cf-canonical-text"),
+                Some(canonical.as_str())
             );
+            let compact = |text: &str| text.split_whitespace().collect::<String>();
+            assert_eq!(compact(&reviewed_text(roots[0])), compact(&canonical));
         }
+    }
+
+    /// The text a reader can quote from a review root: every text node but
+    /// those under `data-cf-review-skip`.
+    fn reviewed_text(root: ElementRef<'_>) -> String {
+        root.descendants()
+            .filter_map(|node| node.value().as_text().map(|text| (node, text)))
+            .filter(|(node, _)| {
+                !node
+                    .ancestors()
+                    .filter_map(ElementRef::wrap)
+                    .any(|element| element.value().attr("data-cf-review-skip").is_some())
+            })
+            .map(|(_, text)| text.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn figure_placeholder_carries_its_declaration_for_the_client() {
+        let declaration = serde_json::json!({
+            "schema_version": 1,
+            "figure": {
+                "id": "review-path",
+                "family": "flow",
+                "binding": "authored",
+                "title": "Quotes \" and <tags> stay text",
+                "caption": "A change passes review before it lands."
+            }
+        });
+        let document = PresentationDocument {
+            summary: None,
+            schema_version: 1,
+            title: "Figure".to_string(),
+            language: None,
+            provenance: Provenance::default(),
+            blocks: vec![Block::Figure {
+                id: "figure".to_string(),
+                declaration: declaration.clone(),
+            }],
+        };
+        let rendered = render_document(
+            &document,
+            &RenderOptions {
+                session_id: "00000000-0000-0000-0000-000000000000",
+                revision: 1,
+                event_sequence: 0,
+                response_sequence: 0,
+                answers: None,
+                script_path: None,
+                style_path: None,
+                prepaint_source: None,
+                utility_style: None,
+                identity: None,
+                feedback: None,
+                read_only_warning: None,
+                interactive: false,
+                retired: None,
+            },
+        );
+        let parsed = Html::parse_document(&rendered);
+        // The client draws from the declaration attribute, which parses back
+        // to the declaration the document carried.
+        let placeholder = parsed
+            .tree
+            .nodes()
+            .filter_map(ElementRef::wrap)
+            .find(|element| element.value().attr("data-cf-figure-block") == Some("pending"))
+            .expect("figure placeholder");
+        assert!(placeholder
+            .descendants()
+            .filter_map(ElementRef::wrap)
+            .any(|element| element.value().attr("data-cf-figure-status").is_some()));
+        let carried = placeholder
+            .value()
+            .attr("data-cf-figure-declaration")
+            .expect("declaration attribute");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(carried).unwrap(),
+            declaration
+        );
+        assert!(!rendered.contains("<tags>"));
     }
 }
