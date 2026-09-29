@@ -771,3 +771,23 @@ fn gitlab_refuses_a_target_it_cannot_fetch() {
     );
     assert!(fx.calls().is_empty(), "{:?}", fx.calls());
 }
+
+/// A branch that started before the target raised its pin, and never
+/// touched the pin, lowers nothing: merging it keeps the target's pin, and
+/// the target's binary judges it.
+#[test]
+fn a_branch_that_predates_a_raised_pin_does_not_lower_it() {
+    let fx = Fixture::new();
+    let d = diverged(&fx, "feat: add a file");
+    for (label, out, calls) in diverged_runs(&fx, &d) {
+        assert!(out.status.success(), "{label}: {}", text(&out));
+        assert!(!text(&out).contains("lowers"), "{label}: {}", text(&out));
+        for gate in ["ci --base", "test --strict", "validate --docs"] {
+            assert!(ran(&calls, "1.2.4", gate), "{label} {gate}: {calls:?}");
+        }
+        assert!(
+            calls.iter().all(|c| c.starts_with("1.2.4 ")),
+            "{label}: {calls:?}"
+        );
+    }
+}

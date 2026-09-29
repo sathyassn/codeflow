@@ -111,6 +111,12 @@ pipelines:
               pin=$(codeflow_pin "$target")
               [ -n "$pin" ] || codeflow_fail "no scaffold_version pinned in .codeflow/project.toml at ${target}"
               head_pin=$(codeflow_pin "$head")
+              # A head that kept the pin it branched from lowers nothing: merging it
+              # keeps the target's pin, and the target's binary judges it.
+              fork=$(git merge-base "$target" "$head") || fork=
+              if [ -n "$fork" ] && [ "$head_pin" = "$(codeflow_pin "$fork")" ]; then
+                head_pin="$pin"
+              fi
               bin=$(mktemp -d)
               codeflow_install "$pin" "$bin"
               PATH="${bin}:${PATH}"
