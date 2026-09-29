@@ -771,6 +771,31 @@ fn names_both_spec_routes(message: &str) -> bool {
         && message.contains("once it is implemented, a changed contract is a new spec")
 }
 
+/// TSK-169 AC-3: `spec status <id> draft` reaches the lifecycle judge and
+/// writes nothing, for an open approved spec and a derived implemented one.
+#[test]
+fn the_draft_verb_names_both_spec_routes_and_writes_nothing() {
+    const SPEC: &str = "project-management/specs/SPC-001.md";
+    let repo = Repo::new();
+    repo.write(SPEC, &spec("SPC-001", "approved", ""));
+    repo.write(TASK_PATH, &consumer("TSK-001", "todo", "SPC-001"));
+    repo.commit("approved, consumer open");
+    for state in ["open", "implemented"] {
+        if state == "implemented" {
+            repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
+            repo.commit("consumer complete");
+            let graph = Graph::from_worktree(repo.root());
+            assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
+        }
+        let before = repo.read(SPEC);
+        let refused = refusal(
+            set_status(repo.root(), RecordKind::Spec, "SPC-001", &change("draft")).map(drop),
+        );
+        assert!(names_both_spec_routes(&refused), "{state}: {refused}");
+        assert_eq!(repo.read(SPEC), before, "{state}: nothing written");
+    }
+}
+
 #[test]
 fn approving_a_spec_reads_open_questions_from_the_structured_field() {
     let repo = Repo::new();

@@ -67,11 +67,15 @@ pub enum EpicStatusArg {
     Archived,
 }
 
-/// Statuses `spec status` writes; `implemented` is derived.
+/// Statuses `spec status` writes; `implemented` is derived. `draft` is
+/// never written: it is accepted only so the lifecycle judge refuses it with
+/// the route an approved spec takes (TSK-169).
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum SpecStatusArg {
     Approved,
     Superseded,
+    #[value(hide = true)]
+    Draft,
 }
 
 /// What a transition records beside the status.
@@ -588,6 +592,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
             let target = match status {
                 SpecStatusArg::Approved => "approved",
                 SpecStatusArg::Superseded => "superseded",
+                SpecStatusArg::Draft => "draft",
             };
             return run_status(
                 RecordKind::Spec,
