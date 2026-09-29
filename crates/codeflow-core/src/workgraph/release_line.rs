@@ -57,6 +57,11 @@ pub const NO_OWNER: &str = "no release-integration task to own it";
 /// The project-config table mapping each epic line to its release-rule
 /// cutoff commit (SPC-013 R-120, planning resolution 28).
 pub const BASELINE_KEY: &str = "release_rule_baseline";
+/// The project-config table mapping each epic line to its records cutoff:
+/// a complete task brought from the line without an acceptance block, whose
+/// record last changed there at or before the cutoff, is listed as
+/// information (SPC-013 R-120, planning resolution 29).
+pub const RECORDS_BASELINE_KEY: &str = "release_records_baseline";
 /// The project-config key marking where a project adopted R-120, with its
 /// one value `1` (SPC-013 R-120, planning resolution 29). It fixes only the
 /// point the transition tables stop at; R-120 is enforced whatever it says
@@ -973,9 +978,13 @@ pub fn release_findings(
         .collect::<Result<_, _>>()
         .map_err(|error| error.to_string())?;
     path.reverse();
-    if let Some((name, tip)) = &destination.default {
-        marker_holds(&repo, name, *tip, &path)?;
-    }
+    let mut lines = Lines::new(repo_root, &repo, destination);
+    // Read at the default target's tip, never from the range.
+    let bridge = match &destination.default {
+        Some((name, tip)) => bridge(&repo, name, *tip, &path, &mut || lines.fetch())?,
+        None => Bridge::default(),
+    };
+    let cutoffs = &bridge.rules;
     let Some(oldest) = path.first() else {
         return Ok(Judgement::default());
     };
@@ -984,18 +993,12 @@ pub fn release_findings(
         .ok()
         .and_then(|commit| commit.parent_id(0).ok());
     let graph = Graph::from_revision(&repo, &head_oid.to_string())?;
-    // Read at the default target's tip, never from the range.
-    let cutoffs = match default_tip {
-        Some(tip) => cutoffs_at(&repo, tip)?,
-        None => BTreeMap::new(),
-    };
     let policy_at = destination
         .default
         .as_ref()
         .map(|(name, tip)| format!("{name} at {}", short(*tip)))
         .unwrap_or_default();
     let mut notes = Vec::new();
-    let mut lines = Lines::new(repo_root, &repo, destination);
     let mut findings = Vec::new();
     let mut work: Vec<Work> = Vec::new();
     // Each task completed directly: the commit that made it and the record
@@ -1474,18 +1477,36 @@ impl Marker {
     }
 }
 
-/// The marker a commit's project config carries, memoized by blob.
+/// A commit's project config as the release checks read it.
+#[derive(Clone, PartialEq)]
+struct Config {
+    /// The commit carries `.codeflow/project.toml`.
+    present: bool,
+    marker: Marker,
+    /// Each transition table the config holds, by key.
+    tables: BTreeMap<&'static str, toml::Value>,
+}
+
+/// The transition tables (SPC-013 R-120, planning resolution 29).
+const TABLES: [&str; 2] = [BASELINE_KEY, RECORDS_BASELINE_KEY];
+
+/// The project config a commit carries, memoized by blob.
 ///
 /// # Errors
 ///
 /// Returns a message when the commit, a tree on the config's path or the
 /// config blob is not in this clone: whether the marker was there cannot
 /// be read, so it is never taken as absent.
-fn marker_at(
+fn config_at(
     repo: &Repository,
     commit: Oid,
-    blobs: &mut HashMap<Oid, Marker>,
-) -> Result<Marker, String> {
+    blobs: &mut HashMap<Oid, Config>,
+) -> Result<Config, String> {
+    let absent = Config {
+        present: false,
+        marker: Marker::Absent,
+        tables: BTreeMap::new(),
+    };
     let unavailable = |what: &str, id: Oid, error: &git2::Error| {
         format!(
             "{what} at {} (object {id}) is not in this clone ({}), so whether it carries {MARKER_KEY} cannot be read; fetch it (`git fetch --unshallow` for a shallow clone, `git cat-file -p {id}` for a partial one), then retry (SPC-013 R-120)",
@@ -1500,19 +1521,19 @@ fn marker_at(
         .tree()
         .map_err(|error| unavailable("the commit's tree", found.tree_id(), &error))?;
     let Some(folder) = tree.get_name(".codeflow") else {
-        return Ok(Marker::Absent);
+        return Ok(absent);
     };
     if folder.kind() != Some(git2::ObjectType::Tree) {
-        return Ok(Marker::Absent);
+        return Ok(absent);
     }
     let folder = repo
         .find_tree(folder.id())
         .map_err(|error| unavailable(".codeflow", folder.id(), &error))?;
     let Some(entry) = folder.get_name("project.toml") else {
-        return Ok(Marker::Absent);
+        return Ok(absent);
     };
     if entry.kind() != Some(git2::ObjectType::Blob) {
-        return Ok(Marker::Absent);
+        return Ok(absent);
     }
     if let Some(known) = blobs.get(&entry.id()) {
         return Ok(known.clone());
@@ -1520,16 +1541,27 @@ fn marker_at(
     let blob = repo
         .find_blob(entry.id())
         .map_err(|error| unavailable(".codeflow/project.toml", entry.id(), &error))?;
-    let marker = match String::from_utf8_lossy(blob.content()).parse::<toml::Value>() {
-        Err(error) => Marker::Invalid(format!("not valid TOML: {error}")),
-        Ok(config) => match config.get(MARKER_KEY) {
-            None => Marker::Absent,
-            Some(toml::Value::Integer(1)) => Marker::Adopted,
-            Some(value) => Marker::Changed(value.to_string()),
+    let config = match String::from_utf8_lossy(blob.content()).parse::<toml::Value>() {
+        Err(error) => Config {
+            present: true,
+            marker: Marker::Invalid(format!("not valid TOML: {error}")),
+            tables: BTreeMap::new(),
+        },
+        Ok(config) => Config {
+            present: true,
+            marker: match config.get(MARKER_KEY) {
+                None => Marker::Absent,
+                Some(toml::Value::Integer(1)) => Marker::Adopted,
+                Some(value) => Marker::Changed(value.to_string()),
+            },
+            tables: TABLES
+                .iter()
+                .filter_map(|key| config.get(*key).map(|value| (*key, value.clone())))
+                .collect(),
         },
     };
-    blobs.insert(entry.id(), marker.clone());
-    Ok(marker)
+    blobs.insert(entry.id(), config.clone());
+    Ok(config)
 }
 
 /// `why` a walk of the release range failed, saying so when this clone's
@@ -1659,54 +1691,108 @@ fn shallow_boundary(repo: &Repository) -> Result<HashSet<Oid>, String> {
         .collect()
 }
 
-/// [`MARKER_KEY`] is written once: from the first commit on the default
-/// target's first-parent chain whose project config names it, every later
-/// commit on that chain carries it as `1`, and so does every commit of the
-/// judged `path` whose first parent does. The key's first appearance must
-/// be `1` as well. The marker never decides whether R-120 applies; this
-/// only keeps the adoption point it fixes from being moved.
-///
-/// # Errors
-///
-/// Returns a message naming the commit that removed, changed or broke the
-/// marker, so every release check refuses.
-fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Result<(), String> {
-    // A walk that stops at a shallow boundary is not the start of history:
-    // adoption before the cut cannot be seen, so nothing is inferred.
-    let boundary = shallow_boundary(repo)?;
-    let truncated = |commit: Oid| {
-        boundary.contains(&commit).then(|| {
+/// The default target's history, read from the parents each commit
+/// records, so no graft, replacement or shallow boundary stands in for the
+/// chain the destination holds.
+struct History<'r> {
+    repo: &'r Repository,
+    odb: git2::Odb<'r>,
+    boundary: HashSet<Oid>,
+    default: &'r str,
+    blobs: HashMap<Oid, Config>,
+}
+
+impl<'r> History<'r> {
+    fn new(repo: &'r Repository, default: &'r str) -> Result<Self, String> {
+        Ok(Self {
+            repo,
+            odb: repo.odb().map_err(|error| error.message().to_string())?,
+            // A walk that stops at a shallow boundary is not the start of
+            // history: adoption before the cut cannot be seen.
+            boundary: shallow_boundary(repo)?,
+            default,
+            blobs: HashMap::new(),
+        })
+    }
+
+    fn parent_of(&self, commit: Oid) -> Result<Option<Oid>, String> {
+        let Some(parent) = recorded_first_parent(&self.odb, commit)? else {
+            return Ok(None);
+        };
+        if self.odb.exists(parent) {
+            return Ok(Some(parent));
+        }
+        let default = self.default;
+        Err(if self.boundary.contains(&commit) {
             format!(
                 "this clone's history is shallow at {}, so whether {default} adopted {MARKER_KEY} before it cannot be read; run `git fetch --unshallow`, then retry (SPC-013 R-120)",
                 short(commit)
             )
-        })
-    };
-    // Parents as each commit records them, so no graft, replacement or
-    // shallow boundary stands in for the chain the destination holds.
-    let odb = repo.odb().map_err(|error| error.message().to_string())?;
-    let parent_of = |commit: Oid| -> Result<Option<Oid>, String> {
-        let Some(parent) = recorded_first_parent(&odb, commit)? else {
-            return Ok(None);
-        };
-        if odb.exists(parent) {
-            return Ok(Some(parent));
-        }
-        Err(truncated(commit).unwrap_or_else(|| {
+        } else {
             format!(
                 "{} records the parent {parent}, which is not in this clone, so whether {default} adopted {MARKER_KEY} cannot be read; fetch the default target's full history, then retry (SPC-013 R-120)",
                 short(commit)
             )
-        }))
-    };
-    let mut chain = Vec::new();
-    let mut next = Some(tip);
-    while let Some(commit) = next {
-        chain.push(commit);
-        next = parent_of(commit)?;
+        })
     }
-    chain.reverse();
-    let mut blobs = HashMap::new();
+
+    /// The first-parent chain from the root to `tip`, oldest first.
+    fn chain(&self, tip: Oid) -> Result<Vec<Oid>, String> {
+        let mut chain = Vec::new();
+        let mut next = Some(tip);
+        while let Some(commit) = next {
+            chain.push(commit);
+            next = self.parent_of(commit)?;
+        }
+        chain.reverse();
+        Ok(chain)
+    }
+
+    fn config(&mut self, commit: Oid) -> Result<Config, String> {
+        config_at(self.repo, commit, &mut self.blobs)
+    }
+}
+
+/// The transition tables the default target's history honours.
+#[derive(Debug, Default)]
+struct Bridge {
+    /// Release-rule cutoffs ([`BASELINE_KEY`]), by line.
+    rules: BTreeMap<String, Oid>,
+}
+
+/// Read the default target's first-parent history at `tip` once: the
+/// adoption marker and the transition tables.
+///
+/// [`MARKER_KEY`] is written once: from the first commit on the chain whose
+/// project config names it, every later commit there carries it as `1`,
+/// and so does every commit of the judged `path` whose first parent does.
+/// Its first appearance must be `1` as well. The marker never decides
+/// whether R-120 applies; it fixes the adoption point the tables stop at.
+///
+/// Each table is honoured only as a one-time bridge: added in one commit
+/// and never changed after it, at or before the adoption commit, with a
+/// commit carrying project config without the marker before adoption, and
+/// each cutoff's tree carrying project config without the marker, neither
+/// the adoption commit nor a descendant of it. `ensure_lines` fetches the
+/// advertised lines, whose history holds the cutoffs, before they are read.
+///
+/// # Errors
+///
+/// Returns a message naming the condition and the commit that broke it, so
+/// every release check refuses.
+fn bridge(
+    repo: &Repository,
+    default: &str,
+    tip: Oid,
+    path: &[Oid],
+    ensure_lines: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<Bridge, String> {
+    let mut history = History::new(repo, default)?;
+    let chain = history.chain(tip)?;
+    let mut configs = Vec::with_capacity(chain.len());
+    for commit in &chain {
+        configs.push(history.config(*commit)?);
+    }
     let refuse = |adopted: Oid, at: Oid, marker: &Marker, place: &str| {
         format!(
             "the adoption marker `{MARKER_KEY} = 1` set on {default} at {} is {} at {} {place}; it is written once and never changed, so every release check refuses (SPC-013 R-120)",
@@ -1716,72 +1802,175 @@ fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Res
         )
     };
     let mut adopted = None;
-    for commit in chain {
-        let marker = marker_at(repo, commit, &mut blobs)?;
-        match (adopted, &marker) {
-            (None, Marker::Adopted) => adopted = Some(commit),
+    for (at, config) in configs.iter().enumerate() {
+        match (adopted, &config.marker) {
+            (None, Marker::Adopted) => adopted = Some(at),
             (None, Marker::Changed(value)) => {
                 return Err(format!(
                     "the adoption marker on {default} first appears at {} as `{MARKER_KEY} = {value}`; its one value is 1, so every release check refuses (SPC-013 R-120)",
-                    short(commit)
+                    short(chain[at])
                 ))
             }
             (Some(first), Marker::Absent | Marker::Changed(_) | Marker::Invalid(_)) => {
-                return Err(refuse(first, commit, &marker, &format!("on {default}")))
+                return Err(refuse(
+                    chain[first],
+                    chain[at],
+                    &config.marker,
+                    &format!("on {default}"),
+                ))
             }
             // Before adoption, config without the key or that is not TOML
             // carries no marker; after it, the marker kept is the rule.
             (None, Marker::Absent | Marker::Invalid(_)) | (Some(_), Marker::Adopted) => {}
         }
     }
-    let Some(first) = adopted else {
-        return Ok(());
-    };
-    for commit in path {
-        let Some(parent) = parent_of(*commit)? else {
-            continue;
-        };
-        if marker_at(repo, parent, &mut blobs)? != Marker::Adopted {
-            continue;
-        }
-        let marker = marker_at(repo, *commit, &mut blobs)?;
-        if marker != Marker::Adopted {
-            return Err(refuse(first, *commit, &marker, "in the judged range"));
+    if let Some(first) = adopted {
+        for commit in path {
+            let Some(parent) = history.parent_of(*commit)? else {
+                continue;
+            };
+            if history.config(parent)?.marker != Marker::Adopted {
+                continue;
+            }
+            let marker = history.config(*commit)?.marker;
+            if marker != Marker::Adopted {
+                return Err(refuse(
+                    chain[first],
+                    *commit,
+                    &marker,
+                    "in the judged range",
+                ));
+            }
         }
     }
-    Ok(())
+    let mut tables = Vec::new();
+    for key in TABLES {
+        tables.push(table_on_chain(&chain, &configs, adopted, key, default)?);
+    }
+    if tables.iter().any(|table| !table.is_empty()) {
+        ensure_lines()?;
+    }
+    for (key, table) in TABLES.iter().zip(&tables) {
+        for (line, cutoff) in table {
+            let why = cutoff_problem(repo, &mut history, &chain, adopted, *cutoff)?;
+            if let Some(why) = why {
+                return Err(bridge_refusal(
+                    key,
+                    default,
+                    &format!("names {} as the cutoff of {line}, {why}", short(*cutoff)),
+                ));
+            }
+        }
+    }
+    let rules = tables.swap_remove(0);
+    Ok(Bridge { rules })
 }
 
-/// The release-rule cutoffs recorded in `.codeflow/project.toml` at `tip`,
-/// the default target's advertised tip: a table from each line's branch
-/// name to one full commit id. Absent file or key: none.
+fn bridge_refusal(key: &str, default: &str, condition: &str) -> String {
+    format!(
+        "the transition table `{key}` on {default} {condition}; it is a one-time bridge for history from before the project adopted `{MARKER_KEY} = 1`, so every release check refuses (SPC-013 R-120)"
+    )
+}
+
+/// One table as the chain's configs hold it: written once, at or before
+/// adoption, with project config without the marker before adoption.
+fn table_on_chain(
+    chain: &[Oid],
+    configs: &[Config],
+    adopted: Option<usize>,
+    key: &str,
+    default: &str,
+) -> Result<BTreeMap<String, Oid>, String> {
+    let refuse = |condition: String| bridge_refusal(key, default, &condition);
+    let mut added: Option<(usize, &toml::Value)> = None;
+    for (at, config) in configs.iter().enumerate() {
+        let value = config.tables.get(key);
+        match (added, value) {
+            (None, Some(value)) => added = Some((at, value)),
+            (Some((first, was)), now) if now != Some(was) => {
+                return Err(refuse(format!(
+                    "added at {} is {} at {}: it is written once and never edited, extended, removed or added again",
+                    short(chain[first]),
+                    if now.is_none() { "removed" } else { "changed" },
+                    short(chain[at])
+                )))
+            }
+            _ => {}
+        }
+    }
+    let Some((first, value)) = added else {
+        return Ok(BTreeMap::new());
+    };
+    let table = parse_table(key, value)?;
+    let Some(adoption) = adopted else {
+        return Err(refuse(format!(
+            "is added at {}, but {default} never adopted `{MARKER_KEY} = 1`, so the table has no adoption point to stop at",
+            short(chain[first])
+        )));
+    };
+    if first > adoption {
+        return Err(refuse(format!(
+            "is added at {}, after the adoption commit {}; a table is added at or before adoption",
+            short(chain[first]),
+            short(chain[adoption])
+        )));
+    }
+    if !configs[..adoption]
+        .iter()
+        .any(|config| config.present && config.marker == Marker::Absent)
+    {
+        return Err(refuse(format!(
+            "is added at {}, but no commit with project config without the marker precedes the adoption commit {}, so the project started under the release rule and has no earlier history to carry",
+            short(chain[first]),
+            short(chain[adoption])
+        )));
+    }
+    Ok(table)
+}
+
+/// Why `cutoff` cannot stop a table: its tree carries no project config or
+/// carries the marker, or it is the adoption commit or descends from it.
+fn cutoff_problem(
+    repo: &Repository,
+    history: &mut History<'_>,
+    chain: &[Oid],
+    adopted: Option<usize>,
+    cutoff: Oid,
+) -> Result<Option<String>, String> {
+    let config = history.config(cutoff)?;
+    if !config.present {
+        return Ok(Some("whose tree carries no project config".to_string()));
+    }
+    if config.marker != Marker::Absent {
+        return Ok(Some(format!("whose project config carries `{MARKER_KEY}`")));
+    }
+    let Some(adoption) = adopted.map(|at| chain[at]) else {
+        return Ok(None);
+    };
+    let after = cutoff == adoption
+        || repo
+            .graph_descendant_of(cutoff, adoption)
+            .map_err(|error| error.message().to_string())?;
+    Ok(after.then(|| {
+        format!(
+            "which is the adoption commit {} or descends from it",
+            short(adoption)
+        )
+    }))
+}
+
+/// A transition table's entries: a table from each line's branch name to
+/// one full commit id.
 ///
 /// # Errors
 ///
-/// Returns a message when the file cannot be read or parsed, the key is not
-/// a table, or a value is not a full 40-character lowercase commit id.
-fn cutoffs_at(repo: &Repository, tip: Oid) -> Result<BTreeMap<String, Oid>, String> {
-    let tree = repo
-        .find_commit(tip)
-        .and_then(|commit| commit.tree())
-        .map_err(|error| error.message().to_string())?;
-    let Ok(entry) = tree.get_path(Path::new(".codeflow/project.toml")) else {
-        return Ok(BTreeMap::new());
-    };
-    let blob = repo
-        .find_blob(entry.id())
-        .map_err(|error| format!(".codeflow/project.toml cannot be read: {}", error.message()))?;
-    let config: toml::Value = String::from_utf8_lossy(blob.content())
-        .parse()
-        .map_err(|error| format!(".codeflow/project.toml is not valid TOML: {error}"))?;
-    let table = match config.get(BASELINE_KEY) {
-        None => return Ok(BTreeMap::new()),
-        Some(toml::Value::Table(table)) => table,
-        Some(_) => {
-            return Err(format!(
-                "{BASELINE_KEY} at the default target is not a table of line names to commit ids"
-            ))
-        }
+/// Returns a message when the value is not a table or an entry is not a
+/// full 40-character lowercase commit id.
+fn parse_table(key: &str, value: &toml::Value) -> Result<BTreeMap<String, Oid>, String> {
+    let toml::Value::Table(table) = value else {
+        return Err(format!(
+            "{key} at the default target is not a table of line names to commit ids"
+        ));
     };
     let mut cutoffs = BTreeMap::new();
     for (line, value) in table {
@@ -1795,7 +1984,7 @@ fn cutoffs_at(repo: &Repository, tip: Oid) -> Result<BTreeMap<String, Oid>, Stri
             .flatten()
             .ok_or_else(|| {
                 format!(
-                    "{BASELINE_KEY} entry for {line} at the default target (`{entry}`) is not a full 40-character lowercase commit id"
+                    "{key} entry for {line} at the default target (`{entry}`) is not a full 40-character lowercase commit id"
                 )
             })?;
         cutoffs.insert(line.clone(), oid);

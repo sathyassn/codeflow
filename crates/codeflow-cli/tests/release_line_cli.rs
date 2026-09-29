@@ -162,6 +162,9 @@ impl Fx {
             ),
         );
         fx.write("src/lib.rs", "pub fn base() {}\n");
+        // Project config from before the release rule, which the lines
+        // carry: the history a transition table can bridge.
+        fx.write(".codeflow/project.toml", PROJECT);
         fx.commit("chore: plan the work");
         for line in [LINE_A, LINE_B] {
             fx.git(&["branch", line, "main"]);
@@ -476,6 +479,8 @@ fn a_criteria_change_landed_with_code_on_its_line_is_frozen() {
 
 /// A project config for the baseline fixtures to extend.
 const PROJECT: &str = "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n";
+/// The adoption marker line (SPC-013 R-120).
+const MARKER: &str = "release_rules = 1\n";
 
 /// Land a looser TSK-003 criterion with code on line A; returns the landing.
 fn land_mixed(fx: &Fx, file: &str) -> String {
@@ -488,12 +493,13 @@ fn land_mixed(fx: &Fx, file: &str) -> String {
 }
 
 /// Record `entries` (`line = "commit"` lines) as the release-rule cutoffs
-/// on main and publish main; returns main's new tip.
+/// on main, with the adoption marker in the same commit as the one-time
+/// bridge asks, and publish main; returns main's new tip.
 fn record_cutoffs(fx: &Fx, entries: &str) -> String {
     fx.git(&["switch", "-q", "main"]);
     fx.write(
         ".codeflow/project.toml",
-        &format!("{PROJECT}\n[release_rule_baseline]\n{entries}"),
+        &format!("{PROJECT}{MARKER}\n[release_rule_baseline]\n{entries}"),
     );
     let tip = fx.commit("chore: record the release-rule cutoffs");
     fx.git(&["push", "-q", "origin", "main"]);
@@ -812,7 +818,15 @@ fn a_moved_or_malformed_cutoff_covers_nothing() {
 fn set_marker(fx: &Fx, marker: &str) -> String {
     fx.git(&["switch", "-q", "main"]);
     fx.write(".codeflow/project.toml", &format!("{PROJECT}{marker}"));
-    let tip = fx.commit("chore: write the project config");
+    fx.git(&["add", "-A"]);
+    fx.git(&[
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "chore: write the project config",
+    ]);
+    let tip = fx.head();
     fx.git(&["push", "-q", "origin", "main"]);
     tip
 }
@@ -3367,4 +3381,189 @@ fn a_brought_one_pr_fix_is_judged_at_its_own_review() {
             passes(&result, "new review on imported fix");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// TSK-140 AC-14, AC-15: the transition tables are a one-time bridge
+// ---------------------------------------------------------------------------
+
+/// `key`'s table naming `cutoff` for line A.
+fn table(key: &str, cutoff: &str) -> String {
+    format!("\n[{key}]\n\"{LINE_A}\" = \"{cutoff}\"\n")
+}
+
+/// Line A lands a completed TSK-001; `main` then writes each project config
+/// in `configs` in turn; the release branch imports line A and is judged
+/// through CI and pre-push. `fresh` starts main's history without project
+/// config, so the first config main writes is its first, as for a project
+/// initialized at 3.x. Returns the result and the commits the configs made
+/// on main.
+fn bridged(fresh: bool, configs: &dyn Fn(&Fx) -> Vec<String>) -> ((i32, String), Vec<String>) {
+    let fx = Fx::new(false);
+    if fresh {
+        // Rewrite main's root without project config, and cut both lines
+        // from it again.
+        fx.git(&["switch", "-q", "main"]);
+        fx.git(&["rm", "-q", ".codeflow/project.toml"]);
+        fx.git(&["commit", "-q", "--amend", "--no-edit"]);
+        for line in [LINE_A, LINE_B] {
+            fx.git(&["branch", "-f", line, "main"]);
+        }
+        fx.git(&["push", "-q", "--force", "origin", "main", LINE_A, LINE_B]);
+    }
+    fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+    fx.land(LINE_A, "task/TSK-001-work");
+    let mut tips = Vec::new();
+    for config in configs(&fx) {
+        fx.git(&["switch", "-q", "main"]);
+        fx.write(".codeflow/project.toml", &config);
+        tips.push(fx.commit("chore: write the project config"));
+        fx.git(&["push", "-q", "origin", "main"]);
+    }
+    fx.cut_release();
+    fx.import(LINE_A);
+    (agree(&fx, "the transition tables"), tips)
+}
+
+/// AC-14 and AC-15 for `key`: a table added with the adoption marker,
+/// naming a line commit from before the rule, is honoured; every way of
+/// moving it or adding it outside that one commit refuses every release
+/// check through pre-push and CI, naming the condition and the commit.
+#[allow(clippy::too_many_lines)] // One fixture per loophole of planning resolution 29.
+fn the_table_is_a_one_time_bridge(key: &str) {
+    let line_tip = |fx: &Fx| fx.git(&["rev-parse", LINE_A]);
+    let root = |fx: &Fx| fx.git(&["rev-list", "--max-parents=0", "main"]);
+
+    let (result, _) = bridged(false, &|fx| {
+        vec![format!("{PROJECT}{MARKER}{}", table(key, &line_tip(fx)))]
+    });
+    passes(&result, &format!("{key}: added with the marker"));
+
+    let (result, tips) = bridged(false, &|fx| {
+        vec![
+            format!("{PROJECT}{MARKER}{}", table(key, &line_tip(fx))),
+            format!("{PROJECT}{MARKER}{}", table(key, &root(fx))),
+        ]
+    });
+    blocks(
+        &result,
+        &format!("{key}: an edited entry"),
+        &[
+            &format!(
+                "`{key}` on main added at {} is changed at {}",
+                &tips[0][..9],
+                &tips[1][..9]
+            ),
+            "every release check refuses",
+        ],
+    );
+
+    let (result, tips) = bridged(false, &|fx| {
+        let entry = table(key, &line_tip(fx));
+        vec![
+            format!("{PROJECT}{MARKER}{entry}"),
+            format!("{PROJECT}{MARKER}{entry}\"{LINE_B}\" = \"{}\"\n", root(fx)),
+        ]
+    });
+    blocks(
+        &result,
+        &format!("{key}: an extension"),
+        &[&format!("is changed at {}", &tips[1][..9])],
+    );
+
+    let (result, tips) = bridged(false, &|fx| {
+        let entry = table(key, &line_tip(fx));
+        vec![
+            format!("{PROJECT}{MARKER}{entry}"),
+            format!("{PROJECT}{MARKER}"),
+            format!("{PROJECT}{MARKER}{entry}"),
+        ]
+    });
+    blocks(
+        &result,
+        &format!("{key}: removed and added again"),
+        &[&format!("is removed at {}", &tips[1][..9])],
+    );
+
+    let (result, tips) = bridged(false, &|fx| {
+        vec![
+            format!("{PROJECT}{MARKER}"),
+            format!("{PROJECT}{MARKER}{}", table(key, &line_tip(fx))),
+        ]
+    });
+    blocks(
+        &result,
+        &format!("{key}: added after adoption"),
+        &[&format!(
+            "is added at {}, after the adoption commit {}",
+            &tips[1][..9],
+            &tips[0][..9]
+        )],
+    );
+
+    let (result, _) = bridged(false, &|fx| {
+        vec![format!("{PROJECT}{}", table(key, &line_tip(fx)))]
+    });
+    blocks(
+        &result,
+        &format!("{key}: no adoption"),
+        &["never adopted `release_rules = 1`"],
+    );
+
+    let (result, _) = bridged(true, &|fx| {
+        vec![format!("{PROJECT}{MARKER}{}", table(key, &line_tip(fx)))]
+    });
+    blocks(
+        &result,
+        &format!("{key}: a project initialized at 3.x"),
+        &["no commit with project config without the marker precedes the adoption commit"],
+    );
+
+    let (result, _) = bridged(false, &|fx| {
+        // A commit made after the rule, on a branch of line A.
+        fx.git(&["switch", "-q", "-C", "chore/adopt-on-line", LINE_A]);
+        fx.write(".codeflow/project.toml", &format!("{PROJECT}{MARKER}"));
+        let adopted = fx.commit("chore: adopt the release rule on the line");
+        vec![format!("{PROJECT}{MARKER}{}", table(key, &adopted))]
+    });
+    blocks(
+        &result,
+        &format!("{key}: a cutoff after adoption"),
+        &["whose project config carries `release_rules`"],
+    );
+
+    let (result, _) = bridged(false, &|fx| {
+        fx.git(&["switch", "-q", "-C", "chore/drop-config", LINE_A]);
+        fx.git(&["rm", "-q", ".codeflow/project.toml"]);
+        let bare = fx.commit("chore: drop the project config");
+        vec![format!("{PROJECT}{MARKER}{}", table(key, &bare))]
+    });
+    blocks(
+        &result,
+        &format!("{key}: a cutoff without project config"),
+        &["whose tree carries no project config"],
+    );
+
+    let (result, tips) = bridged(false, &|fx| {
+        let entry = table(key, &line_tip(fx));
+        vec![
+            format!("{PROJECT}{MARKER}{entry}"),
+            format!("{PROJECT}{entry}"),
+        ]
+    });
+    blocks(
+        &result,
+        &format!("{key}: the marker removed to look pre-rule"),
+        &[&format!("is removed at {} on main", &tips[1][..9])],
+    );
+}
+
+#[test]
+fn the_release_rule_table_is_a_one_time_bridge() {
+    the_table_is_a_one_time_bridge("release_rule_baseline");
+}
+
+#[test]
+fn the_records_table_is_a_one_time_bridge() {
+    the_table_is_a_one_time_bridge("release_records_baseline");
 }
