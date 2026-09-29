@@ -1258,6 +1258,17 @@ publication date._
   `find . -name '*.o' -delete`, still runs.
 
 <!-- codeflow:release-impact patch -->
+- **A reset trap no longer refuses a later cleanup.** exec-guard kept a
+  `trap` action or zsh hook function feasible for the rest of the line
+  after it was reset or removed, so
+  `trap 'D=/' DEBUG; trap - DEBUG; D=build; rm -rf "$D"` was refused. A
+  reset (`trap - SIG`, `trap '' SIG`, a new action), `unfunction`,
+  `unset -f` or a new hook body now takes the action away where it runs on
+  every path, outside any function call, and names the same signal or
+  function. A reset inside an `if`, after `||`, in a subshell or a function,
+  or of a signal the guard cannot resolve still leaves the action feasible.
+
+<!-- codeflow:release-impact patch -->
 - **A peer CLI's help no longer counts as a headless run.** `claude --help
   -p` and `codex exec --help` print help and exit, so exec-guard no longer
   reports them under `security.headless_peer_runs`; at the `block` level
