@@ -9,11 +9,13 @@
 
 use std::path::Path;
 
-use crate::testing::config::{load_test_config, TargetConfig};
+use crate::testing::config::{load_test_config, ExecutionConfig, TargetConfig};
 use crate::testing::coverage::FileCoverage;
+use crate::testing::delivery;
+pub use crate::testing::delivery::{matches as inputs_match, GateOptions};
 use crate::testing::error::TestingError;
 use crate::testing::report::{CanonicalTestReport, CtrfStatus};
-use crate::testing::runner::{run_all_targets, TargetRunResult};
+use crate::testing::runner::{run_dependency_targets, TargetRunResult};
 use crate::testing::setup::detect::detect_stacks;
 use crate::testing::validation;
 
@@ -21,7 +23,7 @@ use crate::testing::validation;
 pub const TEST_CONFIG_PATH: &str = ".codeflow/test-config.json";
 
 /// Result of one target's run through the gate.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GateTargetResult {
     pub name: String,
     /// Process exit code; `-1` when the command could not run at all.
@@ -52,7 +54,7 @@ impl GateTargetResult {
 /// Pass/fail/skip counts plus the individual failing tests parsed from a
 /// target's report artifact. Surfaced above the raw scrollback so a failed run
 /// names *what* failed (and where) instead of only dumping tool output.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FailureReport {
     pub passed: u64,
     pub failed: u64,
@@ -63,7 +65,7 @@ pub struct FailureReport {
 }
 
 /// A single failing test extracted from the report.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FailedTest {
     /// Test identifier: `suite::name` when a suite is known, else `name`.
     pub id: String,
@@ -77,7 +79,7 @@ pub struct FailedTest {
 /// Coverage summary for one target (charter §3.1 coverage audit). A configured
 /// threshold that a measured file misses fails the gate (`thresholds_failed`);
 /// a full-mode run with no coverage data recorded is informational only.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CoverageReport {
     pub target: String,
     /// Overall line coverage percentage, or `None` when no coverage data was
@@ -135,7 +137,7 @@ impl GateOutcome {
 /// Returns `TestingError` when a present config file cannot be loaded —
 /// a broken config is a failure, never a silent skip.
 pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingError> {
-    run_gate_resolved(project_dir, mode, true)
+    run_gate_resolved(project_dir, mode, true, &GateOptions::default())
 }
 
 /// Run only the targets that define `mode` themselves, with no `quick` to
@@ -148,13 +150,27 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
 ///
 /// Returns `TestingError` when a present config file cannot be loaded.
 pub fn run_gate_exact(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingError> {
-    run_gate_resolved(project_dir, mode, false)
+    run_gate_resolved(project_dir, mode, false, &GateOptions::default())
 }
 
+/// Run the gate with conservative comparison or explicit complete selection.
+///
+/// # Errors
+/// Configuration, prerequisite, preflight and evidence-write failures refuse the run.
+pub fn run_gate_with_options(
+    project_dir: &Path,
+    mode: &str,
+    options: &GateOptions,
+) -> Result<GateOutcome, TestingError> {
+    run_gate_resolved(project_dir, mode, true, options)
+}
+
+#[allow(clippy::too_many_lines)]
 fn run_gate_resolved(
     project_dir: &Path,
     mode: &str,
     alias_quick: bool,
+    options: &GateOptions,
 ) -> Result<GateOutcome, TestingError> {
     let resolve = |targets: &[TargetConfig]| {
         if alias_quick {
@@ -165,7 +181,7 @@ fn run_gate_resolved(
     };
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 
-    let (targets, parallel, fail_fast, effective_mode) = if config_path.exists() {
+    let (mut targets, execution, effective_mode) = if config_path.exists() {
         let config = load_test_config(&config_path)?;
         if config.targets.is_empty() {
             return Ok(GateOutcome::NoTargets {
@@ -173,12 +189,7 @@ fn run_gate_resolved(
             });
         }
         let effective = resolve(&config.targets);
-        (
-            config.targets,
-            config.execution.parallel,
-            config.execution.fail_fast,
-            effective,
-        )
+        (config.targets, config.execution, effective)
     } else {
         let detected = detect_stacks(project_dir);
         if detected.is_empty() {
@@ -188,20 +199,93 @@ fn run_gate_resolved(
         }
         let targets: Vec<TargetConfig> = detected.into_iter().map(|d| d.config).collect();
         let effective = resolve(&targets);
-        (targets, false, false, effective)
+        (targets, ExecutionConfig::default(), effective)
     };
 
-    let raw = run_all_targets(
+    let config_digest = if config_path.exists() {
+        // Bind evidence to the complete configured input, including defaults.
+        delivery::digest(&std::fs::read(&config_path)?)
+    } else {
+        delivery::digest(&serde_json::to_vec(&(&targets, &execution))?)
+    };
+    let home = crate::registry::codeflow_home();
+    let selection = delivery::select(
+        project_dir,
+        &targets,
+        &execution,
+        &effective_mode,
+        options,
+        home.as_deref(),
+        &config_digest,
+    );
+    for target in &targets {
+        if selection.selected.contains(&target.name) {
+            eprintln!(
+                "[codeflow test] selected {}: {}; requires [{}]",
+                target.name,
+                selection.reason,
+                target.requires.join(", ")
+            );
+        } else if selection.skipped.contains(&target.name) {
+            eprintln!(
+                "[codeflow test] skipped {}: {}",
+                target.name, selection.reason
+            );
+        }
+    }
+    targets.retain(|t| selection.selected.contains(&t.name));
+    if targets.is_empty() {
+        return Ok(GateOutcome::NoTargets {
+            reason: format!("no enabled target defines mode \"{effective_mode}\""),
+        });
+    }
+    for target in &targets {
+        for required in &target.requires {
+            if targets
+                .iter()
+                .find(|t| &t.name == required)
+                .is_some_and(|t| {
+                    crate::testing::runner::is_ci_environment() && t.ci_skip == Some(true)
+                })
+            {
+                return Err(delivery::invalid(
+                    project_dir,
+                    format!("prerequisite '{required}' is skipped in CI"),
+                ));
+            }
+        }
+    }
+    targets.retain(|t| !(crate::testing::runner::is_ci_environment() && t.ci_skip == Some(true)));
+    let tools = delivery::preflight(project_dir, &targets, &effective_mode)?;
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let target_dir = delivery::target_dir(project_dir);
+    std::fs::create_dir_all(&target_dir)?;
+    let target_dir = target_dir.canonicalize()?;
+    let run_dir = target_dir.join("codeflow-gate").join(&run_id);
+    std::fs::create_dir_all(&run_dir)?;
+    configure_run_targets(
+        &mut targets,
+        project_dir,
+        &target_dir,
+        &run_dir,
+        options.all,
+    );
+    let before = delivery::tracked(project_dir)?;
+    let raw = run_dependency_targets(
         &targets,
         &effective_mode,
         project_dir,
-        parallel,
-        fail_fast,
-        &[],
-        &[],
-        &[],
-        &[],
+        execution.parallel,
+        execution.max_parallel,
+        execution.fail_fast,
+        &run_dir,
     );
+    let after = delivery::tracked(project_dir)?;
+    // Producers are complete now. This is the named candidate; a writer that
+    // changed tracked bytes cannot receive exact-candidate evidence.
+    let tree = delivery::digest(&serde_json::to_vec(&after)?);
+    let generation_unchanged = before == after;
+    let revision = delivery::revision(project_dir).unwrap_or_default();
 
     if raw.is_empty() {
         return Ok(GateOutcome::NoTargets {
@@ -257,12 +341,175 @@ fn run_gate_resolved(
         })
         .collect();
 
-    let passed = gate_verdict(&results, &coverage);
+    if !generation_unchanged {
+        let changed: Vec<_> = after
+            .iter()
+            .filter(|(p, hash)| before.get(*p) != Some(*hash))
+            .map(|(p, _)| p.as_str())
+            .collect();
+        eprintln!(
+            "[codeflow test] generation changed the candidate: {}",
+            changed.join(", ")
+        );
+    }
+    let passed = generation_unchanged && gate_verdict(&results, &coverage);
+    let dirty_paths: Vec<String> = match git2::Repository::discover(project_dir) {
+        Ok(repo) => match repo.statuses(None) {
+            Ok(statuses) => statuses
+                .iter()
+                .filter(|e| !e.status().is_empty() && e.status() != git2::Status::IGNORED)
+                .map(|e| format!("{}: {:?}", e.path().unwrap_or("<non-UTF8>"), e.status()))
+                .collect(),
+            Err(error) => vec![format!("status unavailable: {error}")],
+        },
+        Err(error) => vec![format!("repository unavailable: {error}")],
+    };
+    let clean = dirty_paths.is_empty();
+    let complete =
+        selection.skipped.is_empty() && results.len() == targets.len() && effective_mode == "full";
+    let artifact = serde_json::json!({
+        "schema_version": 1, "run_id": run_id, "revision": revision,
+        "tree": tree, "config_digest": config_digest, "mode": effective_mode,
+        "selection": selection, "passed": passed, "complete": complete, "clean": clean,
+        "generation_unchanged": generation_unchanged, "dirty_paths": dirty_paths,
+        "results": results, "coverage": coverage,
+        "targets": targets.iter().map(|t| serde_json::json!({"name":t.name,"command":t.modes[&effective_mode].command,"requires":t.requires,"env":t.env})).collect::<Vec<_>>(),
+        "environment": {"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"target_dir":target_dir},
+        "tools": tools
+    });
+    std::fs::write(
+        run_dir.join("run.json"),
+        serde_json::to_vec_pretty(&artifact)?,
+    )?;
+    eprintln!(
+        "[codeflow test] artifact: {}",
+        run_dir.join("run.json").display()
+    );
+    if effective_mode == "full" && !revision.is_empty() {
+        let home = home.ok_or_else(|| {
+            delivery::invalid(
+                project_dir,
+                "CodeFlow home unavailable for durable full-run evidence",
+            )
+        })?;
+        let destination = delivery::durable_root(project_dir, &home).join(&run_id);
+        copy_evidence(&run_dir, &destination)?;
+        eprintln!(
+            "[codeflow test] durable artifact: {}",
+            destination.join("run.json").display()
+        );
+    }
     Ok(GateOutcome::Completed {
         results,
         passed,
         coverage,
     })
+}
+
+fn configure_run_targets(
+    targets: &mut [TargetConfig],
+    root: &Path,
+    target_dir: &Path,
+    run_dir: &Path,
+    with_repeat: bool,
+) {
+    let binary = targets
+        .iter()
+        .find(|t| t.name == "codeflow-bin")
+        .and_then(|t| t.outputs.first())
+        .map(|output| resolve_output(output, root, target_dir));
+    for target in targets {
+        if let Some(binary) = &binary {
+            if target.name != "codeflow-bin" {
+                target
+                    .env
+                    .insert("CODEFLOW_BIN".into(), binary.to_string_lossy().into_owned());
+                target.env.insert(
+                    "CF_PRESENT_CODEFLOW".into(),
+                    binary.to_string_lossy().into_owned(),
+                );
+            }
+        }
+        target.env.insert(
+            "CODEFLOW_GATE_RESULTS".into(),
+            run_dir
+                .join("rust-coverage/junit.xml")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        target.env.insert(
+            "CODEFLOW_GATE_STARTED_AT".into(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64()
+                .to_string(),
+        );
+        target.env.insert(
+            "CODEFLOW_GATE_RUN_ID".into(),
+            run_dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        if target
+            .modes
+            .values()
+            .any(|m| m.command.contains("cargo llvm-cov"))
+        {
+            target.env.insert(
+                "CARGO_LLVM_COV_TARGET_DIR".into(),
+                target_dir
+                    .join("llvm-cov-target")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        target.outputs = target
+            .outputs
+            .iter()
+            .map(|p| {
+                resolve_output(p, root, target_dir)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        if let Some(report) = &mut target.report {
+            if report.path.starts_with("target/") {
+                report.path = resolve_output(&report.path, root, target_dir)
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        }
+        if with_repeat {
+            for command in target.modes.values_mut() {
+                command.command = command.command.replace(
+                    "node scripts/check-present-binary-delta.mjs",
+                    "node scripts/check-present-binary-delta.mjs --with-repeat",
+                );
+            }
+        }
+    }
+}
+
+fn resolve_output(output: &str, root: &Path, target_dir: &Path) -> std::path::PathBuf {
+    output
+        .strip_prefix("target/")
+        .map_or_else(|| root.join(output), |p| target_dir.join(p))
+}
+
+fn copy_evidence(from: &Path, to: &Path) -> Result<(), TestingError> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            copy_evidence(&entry.path(), &to.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), to.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Whether a gate run in `mode` would run cargo: an enabled target that
@@ -911,6 +1158,35 @@ mod tests {
         assert!(
             matches!(outcome, GateOutcome::Completed { .. }),
             "detected stack must run, got {outcome:?}"
+        );
+    }
+    #[test]
+    fn config_evidence_digest_includes_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        let path = dir.path().join(TEST_CONFIG_PATH);
+        let name = format!("digest-{}", uuid::Uuid::new_v4());
+        for minimum in [80, 90] {
+            let config = serde_json::json!({
+                "schema_version":"1.0",
+                "defaults":{"coverage":[{"scope":"global","minimum":minimum}]},
+                "targets":[{"name":name,"runner":"custom","modes":{"quick":{"command":"echo pass"}}}]
+            });
+            std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+            assert!(run_gate(dir.path(), "quick").unwrap().allows_proceed());
+        }
+        let digests: std::collections::BTreeSet<String> =
+            std::fs::read_dir(super::delivery::target_dir(dir.path()).join("codeflow-gate"))
+                .unwrap()
+                .filter_map(|entry| std::fs::read(entry.ok()?.path().join("run.json")).ok())
+                .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .filter(|artifact| artifact["targets"][0]["name"] == name)
+                .map(|artifact| artifact["config_digest"].as_str().unwrap().to_owned())
+                .collect();
+        assert_eq!(
+            digests.len(),
+            2,
+            "defaults are part of the evidence identity"
         );
     }
 }
