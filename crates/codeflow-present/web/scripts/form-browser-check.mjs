@@ -88,6 +88,16 @@ try {
   page.on("request", (request) => {
     if (new URL(request.url()).pathname === ANSWERS) sent.push(request.postData() ?? "");
   });
+  // The service answers a poll as soon as a revision lands, so the page's
+  // polls pass through here, where a case can hold an answer back and choose
+  // when a revision notice reaches the page (TSK-162).
+  let pollHold = null;
+  await page.route("**/app/api/events/poll", async (route) => {
+    let response;
+    try { response = await route.fetch({ timeout: 60_000 }); } catch { await route.abort().catch(() => {}); return; }
+    if (pollHold) await pollHold.promise;
+    await route.fulfill({ response }).catch(() => {});
+  });
   await page.goto(pathToFileURL(bootstrap).href, { waitUntil: "commit", timeout: 120_000 });
   await page.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"), { waitUntil: "domcontentloaded", timeout: 60_000 });
   await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
@@ -211,12 +221,21 @@ try {
   const third = JSON.parse(await readFile(fixture, "utf8"));
   third.title = "Forms fixture, revision 3";
   await writeFile(join(project, "forms-3.json"), `${JSON.stringify(third, null, 2)}\n`);
+  // The revision 3 notice is held until the stale refusal has moved the form
+  // to revision 3, the order that once marked it stale (TSK-162).
+  pollHold = Promise.withResolvers();
   run(["present", "update", sessionId, join(project, "forms-3.json")]);
   await form.locator("[data-cf-form-action='amend']").click();
   await field("keep-days").locator("input").fill("7");
   await form.locator("[data-cf-form-action='submit']").click();
   const staleCorrection = await waitState(form, "stale");
   assert.match(staleCorrection.says, /Revision 3 is current\. This question is unchanged there\./u, staleCorrection.says);
+  // The notice for the revision the form already uses changes nothing, so a
+  // refused confirmation below still returns the form to editing.
+  pollHold.resolve();
+  pollHold = null;
+  await page.locator(".cf-event-message", { hasText: "Revision 3 is available." }).waitFor({ state: "attached" });
+  assert.deepEqual(await stateOf(form), staleCorrection, "late notice: a notice for the form's own revision changed it");
   await refuseOnce((body) => { body.values.home = "cloud"; });
   await form.locator("[data-cf-form-action='confirm']").click();
   await waitState(form, "editing");
@@ -231,7 +250,7 @@ try {
   assert.equal(lines[1].amends, lines[0].answer_id);
   assert.equal(lines[1].revision, 3);
   assert.equal(lines[1].values["keep-days"], 7);
-  passed.push("amendment: 'Correct this answer' stores an amendment naming the original answer, both lines stay; a refused confirmation of a stale correction leaves 'Send correction', which stores it against revision 3");
+  passed.push("amendment: 'Correct this answer' stores an amendment naming the original answer, both lines stay; a refused confirmation of a stale correction leaves 'Send correction', which stores it against revision 3; the revision 3 notice, held until the form used revision 3, changed nothing");
 
   // A reload shows the last sent values (TSK-176). A second tab, loaded at
   // revision 3, sends a correction with a value in every field kind, then

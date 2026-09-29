@@ -2,6 +2,10 @@ const observed = new WeakSet<Element>();
 const MAX_EAGER_ENHANCEMENT_MILLISECONDS = 5_000;
 
 export function enhanceDocument(root: HTMLElement, eager = false): () => void {
+  for (const stage of root.querySelectorAll<SVGSVGElement>(".block--html .cf-stage-svg")) {
+    const width = stage.viewBox.baseVal.width;
+    if (Number.isFinite(width) && width > 0) stage.style.minWidth = `${Math.ceil(width * 0.75)}px`;
+  }
   const targets = [
     ...root.querySelectorAll<HTMLElement>("code[data-cf-language]"),
     ...root.querySelectorAll<HTMLElement>("[data-cf-figure-block='pending']"),

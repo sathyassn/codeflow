@@ -138,6 +138,7 @@ try {
   await checkIframeComments(browser, origin);
   await checkSubmitRace(browser, origin, reviewPosts);
   await checkInteractiveSurface(browser, origin, reviewPosts);
+  await checkPhoneSurface(browser, origin);
   // TSK-096: the same interactive cases, chip included, in other engines on
   // request (CF_PRESENT_CHIP_ENGINES=firefox,webkit), each in its own browser.
   for (const name of (process.env.CF_PRESENT_CHIP_ENGINES ?? "").split(",").filter(Boolean)) {
@@ -367,6 +368,51 @@ async function checkProseLazyPath(browser, origin) {
   await context.close();
 }
 
+async function checkPhoneSurface(browser, origin) {
+  const context = await browser.newContext({ viewport: { width: 375, height: 760 } });
+  try {
+    const page = await context.newPage();
+    await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
+    await page.getByTestId("comment-btn").click();
+    const dock = page.getByTestId("notes-dock");
+    await dock.locator(".hd").waitFor();
+    assert.equal(await dock.getAttribute("data-expanded"), "false", "375 px opens as a peek");
+    assert.ok((await dock.boundingBox()).height <= 57, "the peek covers more than 56 px");
+    const stage = await page.locator(".block--html .cf-stage-svg").evaluate((svg) => ({
+      width: svg.getBoundingClientRect().width,
+      floor: svg.viewBox.baseVal.width * 0.75,
+      scroll: svg.closest(".cf-stage-host").scrollWidth,
+      viewport: svg.closest(".cf-stage-host").clientWidth,
+    }));
+    assert.ok(stage.width >= stage.floor && stage.scroll > stage.viewport, `stage lost its scale floor or pan: ${JSON.stringify(stage)}`);
+    assert.ok(!/block-(summary|flow|stage|code)/u.test(await page.locator(".cf-section-route").innerText()), "the rail exposes block ids");
+    const label = page.locator("#gesture-target");
+    await label.scrollIntoViewIfNeeded();
+    await label.click();
+    const chip = page.getByTestId("float-chip");
+    await chip.waitFor();
+    const overlap = await page.evaluate(() => {
+      const a = document.querySelector("[data-testid=float-chip]").getBoundingClientRect();
+      const b = document.querySelector("#gesture-target").getBoundingClientRect();
+      return Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    });
+    assert.equal(overlap, 0, "the selection chip covers its target");
+    assert.equal(await dock.getAttribute("data-expanded"), "true", "a pin should expand notes");
+    // On a fresh page, pulling the peek bar up expands the sheet, to no more
+    // than the dock height, min(46vh, 440px).
+    const fresh = await context.newPage();
+    await fresh.goto(`${origin}/app`, { waitUntil: "networkidle" });
+    await fresh.getByTestId("comment-btn").click();
+    const peek = fresh.getByTestId("notes-dock");
+    await peek.locator(".hd").waitFor();
+    assert.equal(await peek.getAttribute("data-expanded"), "false", "375 px opens as a peek");
+    await peek.locator(".hd").dispatchEvent("pointerdown", { clientY: 740 });
+    await peek.locator(".hd").dispatchEvent("pointerup", { clientY: 700 });
+    await fresh.locator("[data-testid=notes-dock][data-expanded='true']").waitFor();
+    assert.ok((await peek.boundingBox()).height <= Math.min(760 * 0.46, 440) + 1, "the expanded sheet is taller than the dock");
+  } finally { await context.close(); }
+}
+
 async function checkInteractiveSurface(browser, origin, capturedReviews) {
   const context = await browser.newContext({ viewport: { width: 320, height: 760 }, colorScheme: "light" });
   const page = await context.newPage();
@@ -381,12 +427,13 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
   await assertBundledFonts(page);
-  // At phone width arming Comment leaves the notes sheet closed (QA defect 7);
-  // the second press opens it.
+  // At phone width arming Comment opens the 56 px notes peek.
   await page.getByRole("button", { name: /Comment/ }).click();
   await page.locator(".cf-hint.on").waitFor();
-  assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-open"), "false", "the sheet opened on arming at phone width");
+  assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-open"), "true");
+  assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-expanded"), "false");
   await page.getByRole("button", { name: /Comment/ }).click();
+  await page.locator("#cf-feedback-panel[data-expanded='true']").waitFor();
   await page.getByTestId("feedback-history").waitFor();
   await page.getByTestId("feedback-history").locator("summary").click();
   await page.getByText("Matched uniquely in this revision.").waitFor();
@@ -861,9 +908,10 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   );
   // At phone width the notes sheet opens on request: Comment, when armed.
   async function openSheet() {
-    if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true") return;
-    await page.locator("#cf-comment-toggle").click();
-    await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
+    if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) !== "true" || (await page.locator("#cf-feedback-panel").getAttribute("data-expanded")) !== "true") {
+      await page.locator("#cf-comment-toggle").click();
+      await page.locator("#cf-feedback-panel[data-expanded='true']").waitFor();
+    }
   }
   async function revealDocumentForGestures() {
     if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true") {
@@ -1076,6 +1124,10 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false, limit
             <p data-cf-figure-status class="sr-only" role="status"></p>
           </div>
         </div>
+      </section>
+      <section class="block block--html" data-cf-block-id="block-stage" data-cf-block-label="Stage" data-cf-block-digest="${"f".repeat(64)}">
+        <h2 id="stage">Stage</h2>
+        <div class="cf-stage-host"><svg class="cf-stage-svg" viewBox="0 0 640 180" role="img" aria-label="Stage scale fixture"><rect x="0" y="0" width="640" height="180"/><text x="20" y="40">Stage scale fixture</text></svg></div>
       </section>`;
   const sandbox = iframeOnly
     ? `<section data-cf-block-id="frame-block" data-cf-block-label="Embedded view" data-cf-block-digest="${"e".repeat(64)}">

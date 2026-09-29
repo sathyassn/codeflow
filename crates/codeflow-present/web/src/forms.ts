@@ -23,7 +23,7 @@ import {
 
 /** The chrome forwards session events to the document root under this name. */
 export const SESSION_EVENT = "cf-present:session-event";
-export type SessionEventDetail = "revision" | "session_closed";
+export type SessionEventDetail = { readonly kind: "revision"; readonly revision: number } | "session_closed";
 /** The chrome forwards the poll's answer states under this name (SPC-014 B8). */
 export const ANSWER_STATE_EVENT = "cf-present:answer-state";
 export type AnswerStateDetail = readonly AnswerStateEntry[];
@@ -99,8 +99,8 @@ export function enhanceForms(root: HTMLElement, config: ChromeConfig): void {
   root.addEventListener(SESSION_EVENT, (event) => {
     const detail = (event as CustomEvent<SessionEventDetail>).detail;
     for (const form of forms) {
-      if (detail === "revision") form.newerRevision();
-      else if (detail === "session_closed") form.close();
+      if (detail === "session_closed") form.close();
+      else form.newerRevision(detail.revision);
     }
   });
 }
@@ -193,7 +193,8 @@ class FormController {
     }
   }
 
-  public newerRevision(): void {
+  public newerRevision(revision: number): void {
+    if (revision <= this.revision) return;
     this.newer = true;
     if (this.state === "editing" || this.state === "failed") {
       this.render(this.state === "failed"

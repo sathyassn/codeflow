@@ -584,6 +584,7 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
   max-inline-size: 100%;
 }
 .cf-stage-host {
+  overflow-x: auto;
   padding: clamp(1.1rem, 2.2vw, 1.75rem);
   border: 1px solid var(--cf-border);
   border-radius: 14px;
@@ -1600,6 +1601,8 @@ body { font-size: var(--cf-fs-body); font-feature-settings: var(--cf-font-featur
 html:has(.cf-chrome-frame[data-rail="open"]) .cf-hint { max-inline-size: none; }
 @media (max-width: 879.98px) {
   .cf-dock { inset: auto 0 0; width: auto; height: min(46vh, 440px); z-index: 55; border: 0; border-top: 1px solid var(--cf-hairline); border-radius: var(--cf-radius-panel) var(--cf-radius-panel) 0 0; overflow-y: auto; }
+  .cf-dock[data-expanded="false"] { height: 56px; overflow: hidden; }
+  .cf-dock .hd { touch-action: none; }
   .cf-dock .list { flex: 0 0 auto; min-height: 100px; }
   .cf-dock > * { flex-shrink: 0; }
 }
