@@ -1113,6 +1113,37 @@ fn a_replace_ref_never_stands_in_for_recorded_history() {
     );
 }
 
+/// AC-13, Codex R145-R7-1: git reads `GIT_REPLACE_REF_BASE` as a literal
+/// prefix, so `refs/custom` selects `refs/custom<id>` and `refs/prefix-`
+/// selects `refs/prefix-<id>`. Each is refused in CI and pre-push over a
+/// valid history that passes without it.
+#[test]
+fn a_replace_ref_base_is_a_literal_prefix() {
+    let fx = Fx::new(false);
+    set_marker(&fx, "release_rules = 1\n");
+    let tip = set_marker(&fx, "release_rules = 1\nstack_note = \"kept\"\n");
+    let url = fx.origin.to_str().unwrap().to_string();
+    fx.git(&["replace", "--graft", &tip]);
+    let replacement = fx.git(&["rev-parse", &format!("refs/replace/{tip}")]);
+    fx.git(&["replace", "-d", &tip]);
+    passes(&ci_empty_at(&fx.root, &url), "no overlay");
+    for base in ["refs/custom", "refs/prefix-"] {
+        let name = format!("{base}{tip}");
+        fx.git(&["update-ref", &name, &replacement]);
+        let env = [("GIT_REPLACE_REF_BASE", base)];
+        let needle = format!("the replace ref {name}");
+        blocks(&ci_empty_with(&fx.root, &url, &env), base, &[&needle]);
+        fx.git(&["switch", "-q", LINE_A]);
+        blocks(
+            &pre_push_new_with(&fx.root, &url, RELEASE, &tip, &env),
+            &format!("{base} at pre-push"),
+            &[&needle],
+        );
+        fx.git(&["switch", "-q", "main"]);
+        fx.git(&["update-ref", "-d", &name]);
+    }
+}
+
 /// AC-3 (Codex R145-1): the freeze follows the record's identity, so
 /// deleting a task record and re-creating it with looser criteria in a
 /// later commit is refused, and so is the deletion alone.
@@ -1283,7 +1314,19 @@ fn a_release_push_judges_all_it_adds_to_the_default_tip() {
 /// The pre-push hook in `dir` for a new branch `branch` at `local`,
 /// pushed to `url`.
 fn pre_push_new(dir: &Path, url: &str, branch: &str, local: &str) -> (i32, String) {
+    pre_push_new_with(dir, url, branch, local, &[])
+}
+
+/// As [`pre_push_new`], with `env` set for the hook.
+fn pre_push_new_with(
+    dir: &Path,
+    url: &str,
+    branch: &str,
+    local: &str,
+    env: &[(&str, &str)],
+) -> (i32, String) {
     let mut child = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .envs(env.iter().copied())
         .args(["git-hook", "pre-push", url, url])
         .current_dir(dir)
         .stdin(Stdio::piped())
