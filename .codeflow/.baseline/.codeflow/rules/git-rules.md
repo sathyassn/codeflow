@@ -102,11 +102,13 @@ missing automation for adoption rather than silently enabling publication.
   names its work with `Task: TSK-NNN` or `Task: none: <reason>`. The Summary
   anchors a reader with no context in a few lines: the result, why it
   matters and where it stands; a key file name or number belongs there when
-  it is part of that context, and the details follow as bullets. Match
-  presentation to the shape of the data: tables for
-  matrices, fenced blocks for pasted output, one-line bullets for the rest,
-  never paragraph walls. A code PR **must** carry real test evidence in
-  `## Testing`: pasted test summary, coverage number, new tests, and what was
+  it is part of that context, and the details follow as bullets. Write the
+  body plainly: simple, straightforward and clear, no mannered prose (see
+  `.codeflow/rules/writing.md`). Match presentation to the shape of the
+  data: tables for matrices, fenced blocks for pasted output, one-line
+  bullets for the rest, never paragraph walls. A code PR **must** carry
+  real test evidence in `## Testing`: pasted test summary, coverage number,
+  new tests, and what was
   NOT tested; "tests pass" as prose is a claim, not evidence. Docs-only PRs
   say so in one line plus the doc checks run. A release-impact note agrees
   with the authoritative release input; it is not a second calculator.

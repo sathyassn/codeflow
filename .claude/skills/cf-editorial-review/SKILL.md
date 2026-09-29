@@ -5,6 +5,15 @@ description: Review or revise substantial repository and user-facing prose witho
 
 # cf-editorial-review — preserve meaning, improve delivery
 
+**Write plainly.** Everything an agent writes, replies and status updates
+included, is simple, straightforward and clear, with the detail the reader
+needs and no more. Default to short prose and bullets, and write long prose
+only when the reader asks for it or the artifact is prose by nature.
+Mannered prose, writing that performs for effect, is a defect; "Mannered
+prose" in
+[references/editorial-smells.md](references/editorial-smells.md) lists each
+pattern with its plain rewrite.
+
 Review the artifact in its real project, audience, medium, and task context.
 Improve clarity and credibility without flattening a legitimate voice or
 inventing one.
@@ -63,7 +72,9 @@ misrepresent the author or project.
    answer needs no apparatus, and when relationships, hierarchy, state,
    timelines, mappings, or a decision are materially clearer drawn, use a
    diagram whose scope and detail fit the explanation, in the form the
-   surface renders as the lifecycle reply rule sets out. Prefer the least
+   surface renders as the lifecycle reply rule sets out. In a Markdown file
+   (a README, doc, record or PR body) that form is fenced ASCII, and on a
+   docs-portal page it is the portal's figure grammar. Prefer the least
    complicated form that remains complete, not the physically smallest;
    complex subjects may need a larger, layered, or multi-view diagram. Add a
    brief caption or legend when it aids orientation. A decorative or forced

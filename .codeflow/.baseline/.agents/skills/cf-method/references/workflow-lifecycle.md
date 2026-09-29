@@ -184,8 +184,10 @@ voice/examples, audience, medium, task, and requested tone. Preserve technical
 meaning; never fabricate personality, experience, feelings, familiarity, or
 slang.
 
-Operator-facing replies follow the written content policy (ADR-0067). When
-the point is a flow, dependency, structure, state change, or comparison that
+Operator-facing replies follow the written content policy (ADR-0067) and
+are written plainly: simple, straightforward and clear, no mannered prose
+(see `.codeflow/rules/writing.md`). When the point is a flow, dependency,
+structure, state change, or comparison that
 is clearer drawn, the reply carries a figure. Match the form to the surface.
 
 - Where the harness renders one, use an inline HTML figure, or a

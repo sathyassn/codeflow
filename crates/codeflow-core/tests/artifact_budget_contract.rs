@@ -1663,7 +1663,7 @@ const REPLY_DUTIES_AT_THE_REPORTING_MOMENT: &[(&str, &str, &str, &str)] = &[
     ("no manufactured ask", "With nothing owed there is no heading, and a manufactured ask is a defect.", "Replies and status", "With nothing owed there is no heading, and a manufactured ask is a defect."),
     ("heading exclusions", "never appears in a pull request body, document, commit message, outbound draft or machine payload.", "Replies and status", "never appears in a pull request body, document, commit message, outbound draft or machine payload."),
     ("simple answer", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.", "Replies and status", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line."),
-    ("figure by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders.", "Figures by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders."),
+    ("figure by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders.", "Figures by surface", "Use fenced ASCII in other Markdown files (READMEs, docs, records, PR bodies), in terminal output and on any other plain-text surface, or when unsure what the surface renders."),
     ("no Mermaid", "Never use Mermaid", "Figures by surface", "Never use Mermaid"),
     ("exact links", "Never guess a URL, port, or pull request number; state an unknown link as unknown.", "Replies and status", "Never guess a URL, port, or pull request number; state an unknown link as unknown."),
     ("dash guideline", "Avoid em and en dashes in prose", "Written content policy", "avoid em and en dashes in prose"),
@@ -1848,5 +1848,164 @@ fn figure_duties_match_for_author_reviewer_and_editor() {
             "{} lacks nothing decorative or forced",
             FIGURE_DUTY_READERS[1]
         )]
+    );
+}
+
+/// The short form of the plain-writing rule (TSK-177), as each skill and
+/// agent states it once where it tells the agent to write.
+const PLAIN_SHORT_FORM: &str =
+    "simple, straightforward and clear, no mannered prose (see `.codeflow/rules/writing.md`)";
+
+/// TSK-177: each writing surface with the clauses that place the rule
+/// there, and the retired wording the rule replaced.
+const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
+    (
+        "assets/base/rules/writing.md",
+        &[
+            "**Write plainly.** Everything you write, replies and status updates included, is simple, straightforward and clear, with the detail the reader needs and no more.",
+            "`.agents/skills/cf-editorial-review/references/editorial-smells.md` lists each pattern under \"Mannered prose\" with a plain rewrite.",
+            "**Prose length.** Default to short prose and bullets. Write long prose only when the reader asks for it or the artifact is prose by nature",
+            "Bullets for the enumerable, short prose for the rest",
+            "On docs-portal pages, use the portal's figure grammar, a `cf-stage` fence",
+        ],
+        &[
+            "Write plainly: no slogans",
+            "Write in a plain, calm voice",
+            "prose that earns its place",
+            "Use fenced ASCII only on a terminal",
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-editorial-review/SKILL.md",
+        &[
+            "**Write plainly.** Everything an agent writes, replies and status updates included, is simple, straightforward and clear",
+            "Default to short prose and bullets, and write long prose only when the reader asks for it or the artifact is prose by nature.",
+            "\"Mannered prose\" in [references/editorial-smells.md](references/editorial-smells.md) lists each pattern with its plain rewrite.",
+            "In a Markdown file (a README, doc, record or PR body) that form is fenced ASCII, and on a docs-portal page it is the portal's figure grammar.",
+        ],
+        &[],
+    ),
+    ("assets/base/agents/skills/cf-consult/SKILL.md", &["Write the synthesis plainly:"], &[]),
+    (
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        &["Write every brief, status update and report plainly:"],
+        &[],
+    ),
+    ("assets/base/claude/skills/cf-delegate/SKILL.md", &["Write each delegate prompt plainly:"], &[]),
+    (
+        "assets/base/agents/skills/cf-plan/SKILL.md",
+        &["Write each record plainly:", "in short prose and bullets, with a fenced ASCII figure where a flow or structure carries the point."],
+        &[],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        &["Write the body and release notes plainly:", "in short prose and bullets."],
+        &[],
+    ),
+    ("assets/base/agents/skills/cf-develop/SKILL.md", &["Write the report plainly:"], &[]),
+    (
+        "assets/base/agents/skills/cf-present/SKILL.md",
+        &["Write the page plainly:", "in short prose and bullets."],
+        &["Keep language plain, direct, calm"],
+    ),
+    (
+        "assets/base/agents/skills/cf-docs-portal/SKILL.md",
+        &[
+            "Write the pages plainly:",
+            "with descriptive titles and short prose and bullets by default.",
+            "drawn in the portal's figure grammar (a `cf-stage` fence).",
+        ],
+        &["Prefer plain language"],
+    ),
+    ("assets/base/agents/skills/cf-design/SKILL.md", &["Write the copy plainly:"], &[]),
+    ("assets/base/agents/skills/cf-estimate/SKILL.md", &["Write the report plainly:"], &[]),
+    ("assets/base/agents/skills/cf-evaluate-model/SKILL.md", &["Write grader notes plainly:"], &[]),
+    (
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+        &["Operator-facing replies follow the written content policy (ADR-0067) and are written plainly:"],
+        &[],
+    ),
+    (
+        "assets/base/claude/agents/cf-reviewer.md",
+        &["Mannered prose in any changed text is a finding, and your own report is written plainly:"],
+        &[],
+    ),
+    ("assets/base/rules/git-rules.md", &["Write the body plainly:"], &[]),
+    ("assets/base/ci/pull_request_template.md", &["Write it plainly:"], &[]),
+    (".github/pull_request_template.md", &["Write it plainly:"], &[]),
+];
+
+/// The faults of one surface: a placing clause missing, a retired line
+/// kept, or the short form stated other than once (the full-form files
+/// state the rule in their own words and carry no short form).
+fn plain_writing_faults(path: &str, text: &str, placed: &[&str], retired: &[&str]) -> Vec<String> {
+    let text = normalized(text);
+    let mut faults = Vec::new();
+    for clause in placed {
+        if !text.contains(clause) {
+            faults.push(format!("{path} lacks {clause:?}"));
+        }
+    }
+    for line in retired {
+        if text.contains(line) {
+            faults.push(format!("{path} keeps {line:?}"));
+        }
+    }
+    let full_form = path.ends_with("rules/writing.md") || path.contains("cf-editorial-review");
+    let count = text.matches(PLAIN_SHORT_FORM).count();
+    if !full_form && count != 1 {
+        faults.push(format!("{path} states the short form {count} times"));
+    }
+    faults
+}
+
+/// TSK-177 AC-2 to AC-4: the plain-writing rule sits once at every surface
+/// where an agent writes, with the short-prose default and the figure forms
+/// where documents are written, and the lines it replaced are gone. The
+/// writing reference's installed copy and baseline carry the same text.
+#[test]
+fn every_writing_surface_states_the_plain_writing_rule() {
+    let root = repo_root();
+    let mut faults = Vec::new();
+    for (path, placed, retired) in PLAIN_WRITING_SURFACES {
+        let text = read_text(&root.join(path));
+        faults.extend(plain_writing_faults(path, &text, placed, retired));
+    }
+    let writing = read_text(&root.join("assets/base/rules/writing.md"));
+    for copy in [
+        ".codeflow/rules/writing.md",
+        ".codeflow/.baseline/.codeflow/rules/writing.md",
+    ] {
+        if read_text(&root.join(copy)) != writing {
+            faults.push(format!("{copy} differs from assets/base/rules/writing.md"));
+        }
+    }
+    assert!(faults.is_empty(), "{faults:#?}");
+
+    // Negative controls: a dropped line, a second copy and a kept retired
+    // line are each named.
+    let (path, placed, retired) = PLAIN_WRITING_SURFACES[4];
+    let text = read_text(&root.join(path));
+    let dropped = text.replacen(
+        "Write each delegate prompt plainly:",
+        "Write each delegate prompt:",
+        1,
+    );
+    assert_eq!(
+        plain_writing_faults(path, &dropped, placed, retired),
+        vec![format!(
+            "{path} lacks \"Write each delegate prompt plainly:\""
+        )]
+    );
+    let twice = format!("{text}\nAlso: {PLAIN_SHORT_FORM}.");
+    assert_eq!(
+        plain_writing_faults(path, &twice, placed, retired),
+        vec![format!("{path} states the short form 2 times")]
+    );
+    let (path, placed, retired) = PLAIN_WRITING_SURFACES[0];
+    let kept = format!("{writing}\nWrite in a plain, calm voice.");
+    assert_eq!(
+        plain_writing_faults(path, &kept, placed, retired),
+        vec![format!("{path} keeps \"Write in a plain, calm voice\"")]
     );
 }
