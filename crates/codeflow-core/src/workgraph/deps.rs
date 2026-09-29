@@ -202,7 +202,13 @@ mod tests {
             let deps = parse_dependencies(Some(&yaml(&quoted))).unwrap();
             assert_eq!(deps[0].pin.as_deref(), Some(pin), "{pin}");
         }
-        for pin in ["0123abcd", "\"0123abcd\"", "07028361", "12e45678", "\"12e45678\""] {
+        for pin in [
+            "0123abcd",
+            "\"0123abcd\"",
+            "07028361",
+            "12e45678",
+            "\"12e45678\"",
+        ] {
             let text = format!("[{{id: TSK-001, kind: research, pin: {pin}}}]");
             let deps = parse_dependencies(Some(&yaml(&text))).unwrap();
             assert_eq!(

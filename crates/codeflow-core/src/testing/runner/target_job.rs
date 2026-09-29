@@ -82,8 +82,7 @@ impl TargetJob {
             return Err(std::io::Error::last_os_error());
         }
         // SAFETY: both handles are valid for the duration of the call.
-        if unsafe { AssignProcessToJobObject(job.handle(), child.as_raw_handle() as HANDLE) } == 0
-        {
+        if unsafe { AssignProcessToJobObject(job.handle(), child.as_raw_handle() as HANDLE) } == 0 {
             return Err(std::io::Error::last_os_error());
         }
         Ok(job)
@@ -122,8 +121,8 @@ fn resume(pid: u32) -> std::io::Result<()> {
     let mut resumed = 0_usize;
     // SAFETY: THREADENTRY32 is plain data; dwSize is set before use.
     let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
-    entry.dwSize = u32::try_from(std::mem::size_of::<THREADENTRY32>())
-        .expect("the thread entry fits in u32");
+    entry.dwSize =
+        u32::try_from(std::mem::size_of::<THREADENTRY32>()).expect("the thread entry fits in u32");
     // SAFETY: `entry` is a valid, sized THREADENTRY32 for each call.
     let mut more = unsafe { Thread32First(snapshot, &raw mut entry) } != 0;
     while more {

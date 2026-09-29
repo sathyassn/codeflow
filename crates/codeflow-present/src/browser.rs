@@ -1415,16 +1415,19 @@ mod tests {
         listing.extend_from_slice(format!("  34 /bin/sh -c read value {owned}\n").as_bytes());
         listing.extend_from_slice(b"  56 chrome \xc3 ");
         listing.extend_from_slice(format!("{owned}\n").as_bytes());
-        listing.extend_from_slice(b"  78 \xe2\x82 /bin/sh --user-data-dir=/state/browser-profile\n");
+        listing
+            .extend_from_slice(b"  78 \xe2\x82 /bin/sh --user-data-dir=/state/browser-profile\n");
         assert_eq!(
             macos_inventory_candidates(&listing, instance, profile).unwrap(),
             [34, 56]
         );
         // A line whose identity is split by a stray byte does not match.
         let split = format!("  90 chrome --user-data-dir=/state/browser-profile\u{fffd} --cf-present-instance={instance}\n");
-        assert!(macos_inventory_candidates(split.as_bytes(), instance, profile)
-            .unwrap()
-            .is_empty());
+        assert!(
+            macos_inventory_candidates(split.as_bytes(), instance, profile)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
