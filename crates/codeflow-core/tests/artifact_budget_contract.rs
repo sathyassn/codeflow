@@ -317,6 +317,14 @@ fn referenced_doctrine_keeps_every_moved_duty() {
     assert_contains_all(
         &discipline,
         &[
+            (
+                "finish line without check-ins",
+                "A task runs to its finish line (build, verify, review, open and follow the PR, report readiness) with no check-ins or offers.",
+            ),
+            (
+                "stop scope",
+                "It stops only at an escalation or gate named below, and only for that action.",
+            ),
             ("materiality", "Find broadly; act by materiality"),
             (
                 "durable implementation quality",
@@ -582,6 +590,790 @@ fn orchestration_byte_efficiency_cannot_delete_semantic_duties() {
             ),
             ("one byte failure", "**One byte check still fails.**"),
         ],
+    );
+}
+
+/// The autonomy reference owns the only full operator-owned list (TSK-075,
+/// ADR-0070). Each surface that decides when to ask points at it with the
+/// clauses below; TSK-076 adds the orchestrator preflight and the quality
+/// contract's operator-decision and settled-dissent sentences.
+const AUTONOMY_REFERENCE: &str = "cf-method/references/autonomy.md";
+// The standard kernel's escalation sentence lives in the workflow-discipline
+// reference since TSK-127 moved the doctrine one hop from the map; the
+// reference installs at every tier, so it names the tiers that carry the
+// autonomy reference.
+const STANDARD_AUTONOMY_POINTER: &str = "`.agents/skills/cf-method/references/autonomy.md` names these gates: what to settle yourself and what to escalate.";
+const CLAUDE_AUTONOMY_POINTER: &str = "Read `.claude/skills/cf-method/references/autonomy.md` for what to settle yourself and what to escalate.";
+const CF_PLAN_AUTONOMY_POINTER: &str =
+    "Ask the operator only what `cf-method/references/autonomy.md` reserves to them.";
+const ORCHESTRATOR_SKILL: &str = "assets/base/agents/skills/cf-model-orchestrator/SKILL.md";
+// The quality contract loads by section (TSK-150); each pin names the
+// section that owns its duty.
+const QUALITY_PLAN: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/quality/plan.md";
+const QUALITY_BLOCKERS: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md";
+const QUALITY_COMPLETION: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/quality/completion.md";
+const ORCHESTRATOR_PREFLIGHT_POINTER: &str =
+    "ask the operator only what `cf-method/references/autonomy.md` reserves to them.";
+const QUALITY_CONTRACT_POINTERS: &[&str] = &[
+    "a choice that `cf-method/references/autonomy.md` reserves to the operator",
+    "Ask the operator only what `cf-method/references/autonomy.md` reserves to them",
+    "as `cf-method/references/autonomy.md` \"Settled dissent\" allows",
+];
+const AUTONOMY_POINTERS: &[(&str, &[&str])] = &[
+    (
+        ".codeflow/rules/workflow-discipline.md",
+        &[STANDARD_AUTONOMY_POINTER],
+    ),
+    (
+        "assets/base/rules/workflow-discipline.md",
+        &[STANDARD_AUTONOMY_POINTER],
+    ),
+    (
+        ".codeflow/.baseline/.codeflow/rules/workflow-discipline.md",
+        &[STANDARD_AUTONOMY_POINTER],
+    ),
+    ("CLAUDE.md", &[CLAUDE_AUTONOMY_POINTER]),
+    ("assets/base/CLAUDE.md.tmpl", &[CLAUDE_AUTONOMY_POINTER]),
+    (".codeflow/.baseline/CLAUDE.md", &[CLAUDE_AUTONOMY_POINTER]),
+    (
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+        &[
+            "A request for a change selects implementation and runs to the readiness report",
+            "both seats approve that exact version or record settled dissent per `autonomy.md`",
+            "`autonomy.md` says which merges the primary takes and which stay with a human",
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-plan/SKILL.md",
+        &[CF_PLAN_AUTONOMY_POINTER],
+    ),
+    (ORCHESTRATOR_SKILL, &[ORCHESTRATOR_PREFLIGHT_POINTER]),
+    (
+        QUALITY_BLOCKERS,
+        &[QUALITY_CONTRACT_POINTERS[0], QUALITY_CONTRACT_POINTERS[1]],
+    ),
+    (QUALITY_PLAN, &[QUALITY_CONTRACT_POINTERS[2]]),
+];
+
+/// Files besides `cf-plan` whose ask sentences must not keep a second
+/// operator-axis list next to the pointer.
+const NO_SECOND_ASK_LIST: &[&str] = &[ORCHESTRATOR_SKILL, QUALITY_BLOCKERS, QUALITY_PLAN];
+
+/// Operator-owned axes that belong only in the autonomy reference. A sentence
+/// that tells the agent when to ask the operator and names one of them is a
+/// second list that can drift from the owner.
+const OPERATOR_AXES: &[&str] = &[
+    "outcome",
+    "public behavior",
+    "authority",
+    "security",
+    "irreversible",
+    "taste",
+    "scope",
+    "spend",
+];
+
+fn autonomy_pointer_problems(label: &str, text: &str, clauses: &[&str]) -> Vec<String> {
+    let content = normalized(text);
+    let mut problems = Vec::new();
+    if !content.contains(AUTONOMY_REFERENCE) {
+        problems.push(format!("{label}: no pointer to {AUTONOMY_REFERENCE}"));
+    }
+    for clause in clauses {
+        if !content.contains(&normalized(clause)) {
+            problems.push(format!("{label}: lost pointer clause `{clause}`"));
+        }
+    }
+    problems
+}
+
+fn operator_axis_list_problems(label: &str, text: &str) -> Vec<String> {
+    let content = normalized(text);
+    let mut problems = Vec::new();
+    let mut found = false;
+    for (start, _) in content.match_indices("Ask the operator only") {
+        found = true;
+        let rest = &content[start..];
+        let sentence = rest.find(". ").map_or(rest, |end| &rest[..=end]);
+        if !sentence.contains(AUTONOMY_REFERENCE) {
+            problems.push(format!(
+                "{label}: `{sentence}` does not point at the reference"
+            ));
+        }
+        for axis in OPERATOR_AXES {
+            if sentence.contains(axis) {
+                problems.push(format!("{label}: `{sentence}` lists the axis `{axis}`"));
+            }
+        }
+    }
+    if !found {
+        problems.push(format!(
+            "{label}: the clarity gate lost `Ask the operator only`"
+        ));
+    }
+    problems.extend(second_ask_list_problems(label, text));
+    problems
+}
+
+/// A list is two or more axes in any sentence about asking, so a second ask
+/// rule outside the pointer sentence fails too.
+fn second_ask_list_problems(label: &str, text: &str) -> Vec<String> {
+    let content = normalized(text);
+    let mut problems = Vec::new();
+    for sentence in content.split(". ") {
+        let asks = sentence.split_whitespace().any(|word| {
+            word.trim_matches(|c: char| !c.is_alphabetic())
+                .to_lowercase()
+                .starts_with("ask")
+        });
+        let named: Vec<&str> = OPERATOR_AXES
+            .iter()
+            .copied()
+            .filter(|axis| sentence.contains(axis))
+            .collect();
+        if asks && named.len() > 1 {
+            problems.push(format!(
+                "{label}: `{sentence}` keeps a second list of axes {named:?}"
+            ));
+        }
+    }
+    problems
+}
+
+#[test]
+fn operator_owned_lists_point_at_the_autonomy_reference() {
+    let root = repo_root();
+    let mut problems = Vec::new();
+    for (path, clauses) in AUTONOMY_POINTERS {
+        problems.extend(autonomy_pointer_problems(
+            path,
+            &read_text(&root.join(path)),
+            clauses,
+        ));
+    }
+    problems.extend(operator_axis_list_problems(
+        "cf-plan",
+        &read_text(&root.join("assets/base/agents/skills/cf-plan/SKILL.md")),
+    ));
+    for path in NO_SECOND_ASK_LIST {
+        problems.extend(second_ask_list_problems(path, &read_text(&root.join(path))));
+    }
+    assert!(
+        problems.is_empty(),
+        "operator-owned lists must point at {AUTONOMY_REFERENCE}:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn autonomy_pointer_checks_reject_a_missing_pointer_and_a_second_list() {
+    let old_blocker = "preserves accepted outcome, scope, authority, and quality. Escalate only \
+         an external dependency or operator-owned choice, with a recommendation.";
+    assert_eq!(
+        autonomy_pointer_problems("fixture", old_blocker, &[STANDARD_AUTONOMY_POINTER]).len(),
+        2,
+        "a contract without the pointer must fail"
+    );
+
+    let old_clarity_gate = "Make a reversible implementation choice from evidence. Ask the \
+         operator only when plausible answers would change the outcome, public behavior, \
+         authority, material security boundary, irreversible action, or another decision \
+         they own. Ask the smallest consequential question.";
+    let problems = operator_axis_list_problems("fixture", old_clarity_gate);
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("does not point")),
+        "the old clarity gate has no pointer: {problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("`irreversible`")),
+        "the old clarity gate lists its own axes: {problems:?}"
+    );
+
+    let listed_pointer = "Ask the operator only what `cf-method/references/autonomy.md` \
+         reserves to them, such as taste. Ask the smallest consequential question.";
+    assert!(
+        !operator_axis_list_problems("fixture", listed_pointer).is_empty(),
+        "a pointer that keeps a partial list must fail"
+    );
+
+    let second_rule = format!("{CF_PLAN_AUTONOMY_POINTER} Also ask about taste, scope and spend.");
+    assert!(
+        operator_axis_list_problems("fixture", &second_rule)
+            .iter()
+            .any(|problem| problem.contains("second list")),
+        "a separate ask sentence that lists axes must fail"
+    );
+
+    let current = format!("Choose from evidence. {CF_PLAN_AUTONOMY_POINTER} Ask the smallest.");
+    assert_eq!(
+        operator_axis_list_problems("fixture", &current),
+        Vec::<String>::new()
+    );
+
+    let old_preflight = "Use `cf-plan`'s clarity gate: discover repository and external \
+         facts autonomously, and ask only when a missing answer changes an operator-owned \
+         outcome, public behavior, authority, material security boundary, or irreversible action.";
+    assert!(
+        !autonomy_pointer_problems("fixture", old_preflight, &[ORCHESTRATOR_PREFLIGHT_POINTER])
+            .is_empty(),
+        "the old orchestrator preflight has no pointer"
+    );
+    assert!(
+        !second_ask_list_problems("fixture", old_preflight).is_empty(),
+        "the old orchestrator preflight keeps its own list"
+    );
+    let old_owner_sentence = "Ask the operator only for a real external dependency or \
+         owner decision, and present verified state.";
+    assert!(
+        !autonomy_pointer_problems("fixture", old_owner_sentence, QUALITY_CONTRACT_POINTERS)
+            .is_empty(),
+        "the old quality-contract operator sentence has no pointer"
+    );
+}
+
+/// TSK-076 corrections: the finish-line mode, settled dissent, seat loss, the
+/// target-aware merge rule and readiness on local evidence. Each pin names the
+/// rule a reviewer should find at that place.
+const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
+    (
+        ORCHESTRATOR_SKILL,
+        &[
+            (
+                "escalation reads the operator list",
+                "Before deciding whether to ask the operator, escalate or stop, read \"What belongs to the operator\" in `cf-method/references/autonomy.md`.",
+            ),
+            (
+                "change request runs to readiness",
+                "A change request selects implementation through the readiness report; research, plan or review alone needs a brief that asks for just that.",
+            ),
+            (
+                "reconciliation bound settles dissent",
+                "past them, the plan contract's `SETTLED_DISSENT` rule governs each open item.",
+            ),
+            (
+                "hand-off accepts settled dissent",
+                "After both seats approve the exact Plan vN and task graph, any settled dissent aside, invoke `cf-plan`",
+            ),
+            (
+                "mid-run seat loss reroutes",
+                "a mid-run failure gets one bounded retry, then capability-routing's seat-loss route, never a silent downgrade.",
+            ),
+            (
+                "tasking entry admits settled dissent",
+                "After both seats approve Plan vN, any settled dissent aside, expand the agreed plan",
+            ),
+        ],
+    ),
+    (
+        QUALITY_PLAN,
+        &[
+            (
+                "settled dissent record",
+                "SETTLED_DISSENT: <none | item | both verdicts | evidence | why reversible>",
+            ),
+            (
+                "dissent is never approval",
+                "The dissenting seat's verdict on that item stays as given and is never recorded as approval; that seat must still approve the rest of Plan vN.",
+            ),
+            (
+                "unsettleable dissent keeps its gate",
+                "an operator-owned item stops only that item for the operator, and a dissent on an axis that section lists as not settleable returns to repair.",
+            ),
+            (
+                "plan approval after seat loss",
+                "after a recorded seat loss, the exception in [task-graph.md](../task-graph.md) says who approves.",
+            ),
+        ],
+    ),
+    (
+        QUALITY_BLOCKERS,
+        &[
+            (
+                "blocker classification reads the operator list",
+                "check its \"What belongs to the operator\" list at this point, not from memory.",
+            ),
+            (
+                "readiness on local evidence",
+                "\"Ready for your merge on local evidence\" needs a completed green result of every owed required check at the pull request head;",
+            ),
+            (
+                "never-ran check is a named blocker",
+                "That is a missing gate: name it as the blocker, never a pass.",
+            ),
+            (
+                "target-aware merge",
+                "the primary merges only into an `integration/` branch no protected-branch policy covers, and a human merges every protected target.",
+            ),
+        ],
+    ),
+    (
+        QUALITY_COMPLETION,
+        &[
+            (
+                "completion gate accepts settled dissent",
+                "or it is approved with recorded settled dissent on named reversible items, or the standing seats approved it after a recorded seat loss;",
+            ),
+            (
+                "completion keeps protected merges human",
+                "no agent merged it into a protected target;",
+            ),
+            (
+                "every finding recorded",
+                "every finding from every review, material and minor, is recorded in the task closeout or the PR body as finding, severity, disposition and evidence",
+            ),
+            (
+                "minor findings recorded",
+                "A minor finding never blocks, and it is never left unrecorded;",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-model-orchestrator/resources/task-graph.md",
+        &[
+            (
+                "both-seats rule",
+                "Create Plan vN+1 and obtain fresh approval from both primary seats",
+            ),
+            (
+                "seat-loss exception",
+                "is Plan vN+1 approved by every available standing seat.",
+            ),
+            (
+                "lost seat verdict kept",
+                "never recorded as approving, and any verdict it gave before the loss stays as given.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
+        &[(
+            "reassignment points at seat loss",
+            "obtain fresh Claude and Codex approval before work continues, except after a seat loss",
+        )],
+    ),
+    (
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing/review.md",
+        &[
+            (
+                "seat-loss reassignment",
+                "The reassignment is Plan vN+1, approved by every available standing seat under the exception in [task-graph.md](../task-graph.md).",
+            ),
+            (
+                "spend stays with the operator",
+                "Buying credits is spend and stays with the operator: do not purchase",
+            ),
+        ],
+    ),
+    (
+        "assets/base/claude/skills/cf-method/references/project-organization.md",
+        &[
+            ("decision path", "reconcile and dual-approve Plan vN+1"),
+            (
+                "decision path points at the exception",
+                "including its recorded seat-loss exception.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-plan/SKILL.md",
+        &[(
+            "amendments point at seat loss",
+            "Substantive amendments return to both seats as Plan vN+1, under the seat-loss rule",
+        )],
+    ),
+    (
+        "assets/base/pm/task.md.tmpl",
+        &[
+            (
+                "template keeps both seats and points at seat loss",
+                "settle Plan vN+1 with both primary seats (seat-loss rule: task-graph.md), then continue.",
+            ),
+            (
+                "template records review findings",
+                "Review findings, each with severity and disposition.",
+            ),
+        ],
+    ),
+    (
+        // The kernel's parallel-work paragraph moved to the worktree
+        // reference with the rule map (TSK-127).
+        "assets/base/rules/worktrees.md",
+        &[(
+            "graph mutation points at the exception",
+            "a dual-approved Plan vN+1 (seat loss: see the orchestrator's `task-graph.md`)",
+        )],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        &[
+            (
+                "integration merge",
+                "The primary merges a green, reviewed PR into an `integration/` branch no protected-branch policy covers",
+            ),
+            (
+                "protected targets stay human",
+                "A protected target, including a protected `integration/` glob, is reported ready",
+            ),
+            (
+                "no agent protected merge",
+                "An agent never merges into a protected target",
+            ),
+            (
+                "redness pointer",
+                "the quality contract classifies redness",
+            ),
+            ("cleanup after either merge", "Clean up after either merge, with proof."),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        &[
+            (
+                "readiness condition",
+                "Say \"ready for your merge on local evidence\" only when every owed required check has a completed green result of the same check at the PR head, locally or in a completed hosted job.",
+            ),
+            (
+                "local gate summary",
+                "Paste the local full gate summary with the head SHA, and name each hosted job that never ran with the reason the tool gave.",
+            ),
+            (
+                "missing gate",
+                "is a missing gate: name it as the blocker, keep the PR draft where required evidence is missing, and continue other authorized work.",
+            ),
+            (
+                "findings in the readiness report",
+                "every review finding in the record the quality contract's completion gate defines",
+            ),
+            (
+                "protected next action",
+                "for every protected target, including a protected `integration/` glob, the next action is a human merge.",
+            ),
+        ],
+    ),
+];
+
+const HERDR_TRUST_POINTER: &str =
+    "Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`).";
+
+#[test]
+fn finish_line_corrections_keep_their_rules() {
+    let root = repo_root();
+    for (path, clauses) in FINISH_LINE_PINS {
+        assert_contains_all(&root.join(path), clauses);
+    }
+    let herdr = read_text(&root.join("assets/base/agents/skills/cf-herdr/SKILL.md"));
+    assert!(
+        herdr.lines().any(|line| line == HERDR_TRUST_POINTER),
+        "cf-herdr lost its trust prompt pointer"
+    );
+    assert!(
+        HERDR_TRUST_POINTER.len() < 90,
+        "the cf-herdr trust pointer must stay under 90 bytes"
+    );
+}
+
+/// The orchestrator's "Bounded, evidence-moving loops" invariant and the
+/// reference's settled-dissent bound must mean the same thing: a round counts
+/// only when it moves evidence, and the bound changes strategy rather than
+/// ending the work (operator direction, 2026-09-24).
+const LOOP_BOUND_CLAUSES: &[&str] = &[
+    "two",
+    "A repeated attempt without a new hypothesis or changed evidence is not another round.",
+    "At the bound,",
+    "fresh evidence",
+];
+
+fn loop_bound_problems(label: &str, text: &str) -> Vec<String> {
+    let content = normalized(text);
+    LOOP_BOUND_CLAUSES
+        .iter()
+        .filter(|clause| !content.contains(&normalized(clause)))
+        .map(|clause| format!("{label}: loop bound lost `{clause}`"))
+        .collect()
+}
+
+#[test]
+fn loop_bound_means_the_same_in_the_orchestrator_and_the_reference() {
+    let root = repo_root();
+    let skill = read_text(&root.join(ORCHESTRATOR_SKILL));
+    let invariant_start = skill
+        .find("**Bounded, evidence-moving loops.**")
+        .expect("orchestrator keeps its loop invariant");
+    let invariant = &skill[invariant_start..];
+    let invariant = &invariant[..invariant.find("\n- **").unwrap_or(invariant.len())];
+
+    let reference =
+        read_text(&root.join("assets/base/claude/skills/cf-method/references/autonomy.md"));
+    let section_start = reference
+        .find("## Settled dissent")
+        .expect("reference keeps its settled-dissent section");
+    let section = &reference[section_start..];
+    let section = &section[..section[3..]
+        .find("\n## ")
+        .map_or(section.len(), |end| end + 3)];
+
+    let mut problems = loop_bound_problems("orchestrator", invariant);
+    problems.extend(loop_bound_problems("autonomy.md", section));
+    if !normalized(section).contains("The bound never closes a material finding") {
+        problems.push("autonomy.md: a material finding no longer stays open".to_string());
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+
+    let old_reference = "Plan reconciliation and post-review rework each get two rounds. If \
+         two seats still disagree after that on a reversible choice, the primary settles it.";
+    assert!(
+        !loop_bound_problems("fixture", old_reference).is_empty(),
+        "a bare round cap must fail"
+    );
+}
+
+/// Unconditional no-merge wording that TSK-076 made target-aware. Any of these
+/// in the managed tree means a text still forbids the integration merge the
+/// primary now takes.
+fn unconditional_no_merge_clauses(text: &str) -> Vec<String> {
+    let content = normalized(text);
+    let lower = content.to_lowercase();
+    let mut found = Vec::new();
+    for (start, _) in lower.match_indices("never merge") {
+        let rest = &lower[start + "never merge".len()..];
+        let scoped = rest.trim_start_matches('s').trim_start();
+        let clause = scoped
+            .find(['.', ';', ':', '!', '?'])
+            .map_or(scoped, |end| &scoped[..end]);
+        let window: String = clause.chars().take(40).collect();
+        // Naming `main` names the protected target (the workspace landing
+        // rule of TSK-165).
+        if !window.contains("protected") && !window.contains("`main`") {
+            found.push(content[start..].chars().take(60).collect());
+        }
+    }
+    for phrase in ["agents still never merge", "no agent merged it;"] {
+        if lower.contains(phrase) {
+            found.push(phrase.to_string());
+        }
+    }
+    found
+}
+
+#[test]
+fn managed_tree_has_no_unconditional_no_merge_clause() {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read managed dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| matches!(ext, "md" | "tmpl" | "json"))
+            {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&repo_root().join("assets/base"), &mut files);
+    let problems: Vec<String> = files
+        .iter()
+        .flat_map(|path| {
+            unconditional_no_merge_clauses(&read_text(path))
+                .into_iter()
+                .map(move |clause| format!("{}: {clause}", path.display()))
+        })
+        .collect();
+    assert!(
+        problems.is_empty(),
+        "no-merge clauses must name the protected target:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn no_merge_check_rejects_the_old_wording() {
+    assert_eq!(
+        unconditional_no_merge_clauses("Never merge. When every required check is green").len(),
+        1
+    );
+    assert_eq!(
+        unconditional_no_merge_clauses("not a failed test. Agents still never merge.").len(),
+        2
+    );
+    assert_eq!(
+        unconditional_no_merge_clauses("URL the tool printed; no agent merged it;").len(),
+        1
+    );
+    assert_eq!(
+        unconditional_no_merge_clauses("Never merge. Protected targets remain human.").len(),
+        1,
+        "a protected target in the next sentence does not scope the prohibition"
+    );
+    assert!(unconditional_no_merge_clauses(
+        "An agent never merges into a protected target: no by-hand merge there."
+    )
+    .is_empty());
+}
+
+/// Spend is a hard gate. A table row about spend or credits may send the agent
+/// on without purchasing, but it must never say "do not wait", which an agent
+/// can read as permission to buy.
+fn spend_rows_that_do_not_wait(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| line.starts_with('|'))
+        .filter(|line| {
+            let lower = line.to_lowercase();
+            (lower.contains("spend") || lower.contains("credit")) && lower.contains("do not wait")
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn spend_row_check_rejects_do_not_wait() {
+    let old_row = "| Spend, including buying credits, would help | 4: name it in the report \
+         and do not wait on it | this reference |";
+    assert_eq!(spend_rows_that_do_not_wait(old_row).len(), 1);
+    let current = "| Spending money, including buying credits | 4: wait for the operator; \
+         do not spend | this reference |";
+    assert!(spend_rows_that_do_not_wait(current).is_empty());
+}
+
+#[test]
+fn autonomy_reference_keeps_its_owned_parts() {
+    let path = repo_root()
+        .join("assets/base/claude/skills/cf-method/references")
+        .join("autonomy.md");
+    assert_contains_all(
+        &path,
+        &[
+            (
+                "finish-line statement",
+                "A task runs from its settled outcome to its finish line",
+            ),
+            (
+                "only listed stops",
+                "Stop only at a question or gate this reference lists.",
+            ),
+            (
+                "gate defined",
+                "A gate here is any listed stop: a question on rung 3 or a hard gate on rung 4.",
+            ),
+            ("hard gates heading", "Hard gates, rung 4:"),
+            (
+                "contract hard-gate class",
+                "a system-level, cross-boundary, destructive-disk or security-weakening action, the class `AGENTS.md` \"Match the gate to the blast radius\" names;",
+            ),
+            ("ladder hard-gate class", "contract's hard-gate class"),
+            (
+                "missing credit is not a purchase",
+                "2: do not purchase; name the gap, record reduced assurance and continue on the recorded fallback",
+            ),
+            ("spend waits", "4: wait for the operator; do not spend"),
+            (
+                "no offer or progress stop",
+                "Do not stop to offer the next step",
+            ),
+            ("stop holds one action", "A stop holds only that one action"),
+            ("reduced assurance", "Record a missing seat, tool or credit"),
+            ("ladder hard gate", "4  HARD GATE"),
+            ("ladder ask", "3  ASK"),
+            ("ladder notify", "2  NOTIFY AND ACT"),
+            ("ladder act", "1  ACT"),
+            ("ladder caption", "Figure: the four rungs."),
+            ("hard-gate owner", "\"Match the gate to the blast radius\""),
+            ("the only full list", "This is the only full list."),
+            ("spend gate", "spend, including buying credits;"),
+            (
+                "risk tolerance is operator-owned",
+                "risk tolerance inside the accepted outcome that the brief does not fix: how much residual risk to accept",
+            ),
+            (
+                "security boundary is operator-owned",
+                "a material security boundary the brief does not fix: where a trust, data or access boundary sits or moves, even when nothing is weakened",
+            ),
+            ("outbound gate", "anything sent outside the conversation"),
+            (
+                "protected integration glob",
+                "including a protected `integration/` glob",
+            ),
+            (
+                "unrestorable delete",
+                "a delete that version control, a backup or a scratch area cannot restore",
+            ),
+            (
+                "trust prompt rule",
+                "answer it yourself for a path inside your task's own authorized project or worktree",
+            ),
+            ("trust prompt identity", "Decide by authorization and path identity"),
+            (
+                "hook trust is the operator's",
+                "A prompt to trust hook definitions, such as Codex's review of a project's hooks, is not a folder trust prompt: it goes to the operator.",
+            ),
+            (
+                "refused families stay the operator's",
+                "and so do the action families the permission presets refuse: privilege escalation, publishing packages and gists, releases and tag pushes, repository and account changes, keychain reads and user-level persistence. They are refused in agent sessions, and the operator runs them.",
+            ),
+            ("settled dissent record", "`SETTLED_DISSENT`"),
+            (
+                "dissent is never approval",
+                "never recorded as approval",
+            ),
+            (
+                "unsettleable dissent",
+                "safety, security, correctness or evidence-adequacy axis is not settleable",
+            ),
+            (
+                "local readiness",
+                "\"ready for your merge on local evidence\" only with a completed green result of every owed check",
+            ),
+            ("missing gate", "An owed check has no completed result anywhere"),
+            (
+                "integration merge",
+                "`integration/` branch that policy does not protect",
+            ),
+            (
+                "classified retry",
+                "take the one classified unsandboxed retry without asking, never for an action the presets refuse",
+            ),
+            (
+                "bypass removes prompts, not boundaries",
+                "the launch removes prompts, not boundaries; the action families the presets refuse stay the operator's",
+            ),
+            (
+                "delete row cites the retired prompts",
+                "CodeFlow ADR-0075, which retires ADR-0066's delete prompts",
+            ),
+            ("seat loss", "the available standing seats approve the reassignment"),
+        ],
+    );
+}
+
+#[test]
+fn autonomy_reference_has_no_unwaited_spend_or_policy_dashes() {
+    let path = repo_root()
+        .join("assets/base/claude/skills/cf-method/references")
+        .join("autonomy.md");
+    let text = read_text(&path);
+    assert_eq!(
+        spend_rows_that_do_not_wait(&text),
+        Vec::<String>::new(),
+        "a spend or credit row must never tell the agent not to wait"
+    );
+    let dashes: Vec<_> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains(['\u{2013}', '\u{2014}']))
+        .map(|(index, _)| index + 1)
+        .collect();
+    assert!(
+        dashes.is_empty(),
+        "autonomy.md carries em or en dashes on lines {dashes:?}"
     );
 }
 

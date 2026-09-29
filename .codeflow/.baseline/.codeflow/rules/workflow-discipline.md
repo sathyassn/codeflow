@@ -25,7 +25,9 @@ documentation, repair and ship. Load only the stage owners the work needs.
   gate or review is input to the next step, not the end. Iterate until the
   outcome is verified, or stop and surface a genuine blocker promptly and well
   framed: the situation, the options weighed, and a recommendation; never
-  late, never bare.
+  late, never bare. A task runs to its finish line (build, verify, review,
+  open and follow the PR, report readiness) with no check-ins or offers. It
+  stops only at an escalation or gate named below, and only for that action.
 - **Ground it in evidence, never assume.** Treat an unclear requirement, API,
   or fact as a stop-and-verify, not a guess. Research non-trivial decisions in
   breadth and depth: the project's own code and docs first, then the best
@@ -45,7 +47,9 @@ documentation, repair and ship. Load only the stage owners the work needs.
   authority, and quality. Escalate only an external dependency or a choice
   that changes intent, public behavior, risk, authority, or an irreversible
   tradeoff; include evidence, attempts, real options, consequences, and a
-  recommendation. Before applying a change that newly departs from the
+  recommendation. At the standard and full tiers,
+  `.agents/skills/cf-method/references/autonomy.md` names these gates: what
+  to settle yourself and what to escalate. Before applying a change that newly departs from the
   approved contract, scope, authority, or risk boundary, stop and surface it
   in that form first; the dependent action waits while authorized independent
   work continues. Honor a red check. An unfinished CI job is missing

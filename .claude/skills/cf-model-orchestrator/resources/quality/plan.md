@@ -23,11 +23,23 @@ COVERAGE_PLAN:
 ROLLBACK_OR_RECOVERY:
 CLAUDE_APPROVAL:
 CODEX_APPROVAL:
+SETTLED_DISSENT: <none | item | both verdicts | evidence | why reversible>
 ```
 
 Use a content digest or durable link for the immutable brief. Approvals must name
 the same plan version. A changed plan invalidates both approvals until each seat
-reviews the new version.
+reviews the new version; after a recorded seat loss, the exception in
+[task-graph.md](../task-graph.md) says who approves.
+
+After two reconciliation rounds, the Claude judgment primary settles a
+disagreement on a reversible choice inside the accepted outcome as
+`cf-method/references/autonomy.md` "Settled dissent" allows. `SETTLED_DISSENT`
+records the item, both verdicts, the evidence, and why the item is reversible
+and settleable. The dissenting seat's verdict on that item stays as given and is
+never recorded as approval; that seat must still approve the rest of Plan vN.
+Any other open item keeps its gate: an operator-owned item stops only that item
+for the operator, and a dissent on an axis that section lists as not settleable
+returns to repair.
 
 For multi-task work, `TASK_GRAPH` follows
 [the settled task graph contract](../task-graph.md), covers exactly the assigned

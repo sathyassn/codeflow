@@ -13,8 +13,15 @@ Mixed authorship and discarded attempts follow the quality contract's
 [independent review](../quality/review.md).
 
 If a planned seat, route, or required tool is unavailable before approval,
-select another qualified assignment and settle a new plan version. Mid-run loss
-gets one bounded retry and diagnosis; changing a named seat requires
-reassignment and fresh approval. If no cross-lineage route remains, use the
-documented solo fallback with separate read-only review where possible, record
-the missing capability and reduced assurance, and never claim duo completion.
+select another qualified assignment and settle a new plan version. A seat lost
+after approval gets one bounded retry and diagnosis. Then the unit moves to
+that participant's next eligible alternative, which is the recorded fallback
+until the model catalog lands. The reassignment is Plan vN+1, approved by every
+available standing seat under the exception in [task-graph.md](../task-graph.md).
+Record the lost seat unavailable with reduced assurance; never wait on it or
+record it as approving, and keep any verdict it gave before the loss as given.
+Buying credits is spend and stays with the operator: do not purchase, name it
+in the report and continue on the fallback. If no cross-lineage route remains,
+use the documented solo fallback with separate read-only review where possible,
+record the missing capability and reduced assurance, and never claim duo
+completion.

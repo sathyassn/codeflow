@@ -395,6 +395,26 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "For CodeFlow multi-task work",
         "only for a multi-task plan",
     ),
+    // TSK-076 (ADR-0070): an amended plan after a lost seat is approved as the
+    // task graph's seat-loss exception says.
+    conditional(
+        "cf-plan/SKILL.md",
+        TASK_GRAPH,
+        "Substantive amendments return to both seats as Plan vN+1",
+        "only when an approved plan is amended",
+    ),
+    conditional(
+        "cf-model-orchestrator/resources/quality/plan.md",
+        TASK_GRAPH,
+        "after a recorded seat loss, the exception in",
+        "only after a recorded seat loss",
+    ),
+    conditional(
+        "cf-model-orchestrator/resources/routing/review.md",
+        TASK_GRAPH,
+        "The reassignment is Plan vN+1, approved by every available standing seat under the exception in",
+        "only after a seat is lost mid-run",
+    ),
     // TSK-108: the stage skills follow the one work lifecycle section.
     conditional(
         "cf-method/SKILL.md",
@@ -632,6 +652,12 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "turns/<turn>/continuations/<task-id>/accepted.json",
     "~/.codex/auth.json",
     "~/.gemini/config/hooks.json",
+    // The evaluation kit's per-trial runtime records (TSK-077): the pin
+    // record and host pointer under the run root, and the gh stand-in's
+    // state file in the trial checkout.
+    "pins.json",
+    "stand-in-host.json",
+    "gh-stand-in.json",
 ];
 
 /// The inventory the chain walk checks against. The shipped one is

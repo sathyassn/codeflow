@@ -33,13 +33,16 @@ test strength, read
 [resources/verification-selection.md](resources/verification-selection.md).
 For a new or materially reshaped user-facing surface, load `cf-design` before
 settling Plan vN; a bounded change may record its explicit `conform` or `N/A`
-path instead. Staged routes keep startup concise: read each resource at the
-moment its trigger names, not all of them up front.
+path instead. Before deciding whether to ask the operator, escalate or stop,
+read "What belongs to the operator" in `cf-method/references/autonomy.md`.
+Staged routes keep startup concise: read each resource at the moment its
+trigger names, not all of them up front.
 
 ## Outcome modes
 
-Select the smallest complete stage set before starting; do not manufacture an
-implementation stage for an analysis-only request.
+Select the smallest complete stage set. A change request selects implementation
+through the readiness report; research, plan or review alone needs a brief that
+asks for just that.
 
 - **Research/analysis:** independent discovery, evidence comparison, settled
   findings, then stop without edits.
@@ -121,8 +124,11 @@ implementation stage for an analysis-only request.
 - **Bounded, evidence-moving loops.** Plan reconciliation is bounded to at
   most two rounds. When review findings are acted on, a round runs every
   reviewer in parallel and [findings](resources/quality/findings.md) bounds
-  rounds by change class. A repeat without a new hypothesis or changed
-  evidence is not another round. A deterministic or safety gate is fixed or
+  rounds by change class. A repeated attempt without a new hypothesis or
+  changed evidence is not another round. At the bound, diagnose the
+  persistent constraint and either take an approved-outcome-preserving
+  strategic route with fresh evidence or surface a genuine external or owner
+  block. A deterministic or safety gate is fixed or
   honored; its redness alone neither authorizes bypass nor makes the operator
   choose an implementation tactic.
 - **Bounded parallelism.** Parallelize independent discovery and implementation
@@ -149,9 +155,9 @@ exhaust qualified routes before recorded solo fallback.
 ## Preflight
 
 1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
-   non-goals. Discover facts yourself; ask the operator only when an answer
-   changes the outcome, public behavior, authority, a material security
-   boundary, or an irreversible action (`cf-plan`'s clarity gate). Reuse a
+   non-goals. Under `cf-plan`'s clarity gate, discover facts yourself and
+   ask the operator only what `cf-method/references/autonomy.md` reserves to
+   them. Reuse a
    mature approved task after a compact currency, acceptance, dependency and
    planning-anchor check. When the brief concerns agentic estimates, capacity
    or deadlines, read [estimates](references/estimates.md).
@@ -211,8 +217,8 @@ exhaust qualified routes before recorded solo fallback.
    availability, applied selection, or savings.
 
 A solo `/cf-develop` run follows [solo fallback](references/solo-fallback.md).
-Auth failure stops; a mid-run failure gets bounded retry/diagnosis, then
-human escalation, never a silent downgrade.
+Auth failure stops; a mid-run failure gets one bounded retry, then
+capability-routing's seat-loss route, never a silent downgrade.
 
 ## Workflow
 
@@ -241,8 +247,8 @@ satisfies the same requirements. A Grok host does not author that design pass.
 The host reconciles the two drafts into **Plan v1** using the plan contract in
 the quality resource. Both seats review exactly that version. Amendments create
 v2, v3, and so on; approval of an older version does not carry forward.
-Convergence is bounded to two reconciliation rounds. If both do not explicitly
-approve the same version, stop for the human.
+Convergence is bounded to two reconciliation rounds; past them, the plan
+contract's `SETTLED_DISSENT` rule governs each open item.
 
 For multi-task work, both approvals cover the same canonical task graph. A
 material node, dependency, decision guard, ownership, acceptance, interface, or
@@ -252,8 +258,8 @@ evidence and do not manufacture replanning ceremony.
 
 ### 3. Detailed tasking
 
-After dual approval, expand the agreed plan using capability-routing's
-assignment row:
+After both seats approve Plan vN, any settled dissent aside, expand the agreed
+plan using capability-routing's assignment row:
 
 - each task's assignment row;
 - for multi-step work, the current critical dependency or blocker, resource
@@ -275,7 +281,8 @@ Claude reviews design fidelity and Codex executability; both approve tasks and
 assignments. For independent parallel tasks, add the execution graph in
 [parallel tasks](references/parallel-tasks.md).
 
-After both seats approve the exact Plan vN and task graph, invoke `cf-plan` to
+After both seats approve the exact Plan vN and task graph, any settled
+dissent aside, invoke `cf-plan` to
 materialize only the warranted epic/spec/task/ADR records on a `plan/` branch.
 Validate them and merge that planning PR into each task's declared
 `integration_target`. Before implementation, each durable task uses
@@ -338,12 +345,12 @@ verification and review.
 
 ### 6. Joint closeout
 
-Both seats approve the final diff and evidence ledger. The report opens with
+Seats approve the diff and evidence per the completion gate. The report opens with
 the result reached for its consumer and what still depends on other work;
 items the operator must act on follow once under NEED YOUR ATTENTION, as the
 lifecycle reply rule sets out. Then the host reports:
 
-- final plan version and both approvals;
+- final plan version and its approvals;
 - session roles and every responsible-primary/executor/reviewer assignment with
   routing reason, requested-versus-observed provenance and usage evidence;
 - design option chosen (or the recorded waiver);

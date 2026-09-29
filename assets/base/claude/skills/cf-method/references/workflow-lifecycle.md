@@ -48,6 +48,10 @@ concerns.
   code evidence. Documentation that synchronizes truth after code changes stays
   in the implementation's `cf-ship` flow and same PR.
 
+A request for a change selects implementation and runs to the readiness
+report; `cf-method/references/autonomy.md` says which steps to settle and
+which to escalate.
+
 A mature accepted task needs a compact currency and acceptance check, not blind
 replanning. Re-enter `cf-plan` only when a material change affects the desired
 outcome, scope, authority, acceptance/interface, dependency or decision graph,
@@ -61,9 +65,10 @@ research, analyze, identify risks, and draft their plan before seeing the
 other's conclusions. Claude produces design direction and real design work;
 Codex challenges feasibility, operability, security, proportionality, and test
 strategy. The host reconciles a versioned plan, and both seats approve that
-exact version. Workers never run the top-level duo or replace a primary's
-approval. Missing seats are recorded as reduced assurance after qualified
-routes are exhausted, never fabricated as completion.
+exact version or record settled dissent per `autonomy.md`. Workers never run
+the top-level duo or replace a primary's approval. Missing seats are recorded
+as reduced assurance after qualified routes are exhausted, never fabricated as
+completion.
 
 Use `cf-plan` to materialize only warranted records. Where CodeFlow durable
 tracking is active, an implementation task must have its validated planning
@@ -260,7 +265,9 @@ human-performed even after approval; model agreement never authorizes it.
 Externalize decisions, progress, and evidence in their durable owner while
 working. Implementation completion hands off to `cf-ship` for same-PR truth
 synchronization, release-impact assessment, and PR evidence. A reviewed PR or
-backup push is not publication or protected-merge authority.
+backup push is not publication or protected-merge authority. Follow the PR to
+its readiness report; `autonomy.md` says which merges the primary takes and
+which stay with a human.
 
 After a human landing, inspect dirty and untracked state and confirm ownership
 before cleanup. Prove a normal merge by ancestry; prove a squash by the merged

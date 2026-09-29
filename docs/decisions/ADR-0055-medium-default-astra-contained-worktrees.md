@@ -78,3 +78,13 @@ orchestrator and spawns same-family workers at that effort. It does not
 restart the host session. Judgment, plan approval, and named review stay
 with the primary. Opus/Sol/Terra remain bounded/simple routes, not the
 high-effort substitute for Fable/Astra. Grok internals may use xhigh.
+
+## Note (2026-09-25)
+
+Item 2's bindings are replaced by the ADR-0069 roster. On seat
+`claude-primary` the first line designs and orchestrates; the second line is
+the recorded fallback for orchestration, planning and review with reduced
+assurance and never designs without a task-specific `OPERATOR_OVERRIDE`. On
+seat `codex-primary` the first line serves, then the second line's versions,
+newest first, the oldest being fallback-only. Fallbacks are catalog data that
+`codeflow models resolve` reads, not prose. Seat effort follows ADR-0056.

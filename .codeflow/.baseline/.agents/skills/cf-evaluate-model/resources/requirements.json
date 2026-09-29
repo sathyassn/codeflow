@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-28-outcome-first-v1",
+  "requirements_version": "2026-09-29-outcome-first-and-autonomy-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -772,7 +772,7 @@
         {
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
-            "Clean up after the human merge, with proof",
+            "Clean up after either merge, with proof",
             "never use `git worktree remove --force`",
             "to report `MERGED` and the branch-tip SHA",
             "no unapplied `+` entry",
@@ -979,12 +979,13 @@
     {
       "id": "CF-MM-004",
       "level": "hard",
-      "statement": "Both seats approve the exact plan and task assignments; changed ownership, scope, lineage, isolation, or reviewer invalidates both approvals, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
+      "statement": "Both seats approve the exact plan and task assignments, except that a reversible item may carry recorded settled dissent while the dissenting seat still approves the rest; changed ownership, scope, lineage, isolation, or reviewer invalidates both approvals, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/plan.md",
           "markers": [
             "A changed plan invalidates both approvals",
+            "that seat must still approve the rest of Plan vN",
             "TASK_ASSIGNMENTS:",
             "CLAUDE_APPROVAL:",
             "CODEX_APPROVAL:"
@@ -1072,11 +1073,11 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
             "\"role\": \"claude-judgment-primary\"",
-            "\"model_class\": \"latest-fable\"",
-            "\"model_class\": \"latest-opus\"",
-            "\"default_effort\": \"medium\"",
-            "\"default_effort\": \"high\"",
-            "without transferring judgment"
+            "\"design_owner\": \"claude-primary\"",
+            "\"relation\": \"opposite-author\"",
+            "\"effort\": \"medium\"",
+            "Primary seats retain independent planning and approval duties",
+            "Internal workers never replace a primary or named cross-lineage reviewer"
           ]
         }
       ]
@@ -1099,7 +1100,7 @@
     {
       "id": "CF-MM-009",
       "level": "hard",
-      "statement": "A missing peer degrades only after proven unavailability and is recorded; a mid-run loss retries boundedly and blocks rather than silently continuing.",
+      "statement": "A missing peer degrades only after proven unavailability and is recorded; a mid-run loss retries boundedly, then moves to the recorded fallback as Plan vN+1 approved by the available standing seats, with the lost seat recorded unavailable and never as approving, rather than silently continuing.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -1130,9 +1131,9 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
-            "\"default_effort\": \"high\"",
-            "\"escalation_effort\": \"xhigh\"",
-            "\"model_class\": \"latest-terra\"",
+            "\"effort\": \"high\"",
+            "\"xhigh_triggers\"",
+            "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at high and keeps approval",
             "Claude-side internal routing belongs to the Claude primary",
             "A high primary retains orchestration",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"
@@ -1521,14 +1522,14 @@
     {
       "id": "CF-PM-002",
       "level": "hard",
-      "statement": "Task closeout records review-relevant bounded implementation discoveries and evidence without diary ceremony; a material scope, graph, ownership, acceptance/interface, or safety change stops execution and receives dual-approved Plan vN+1 before work continues, never retrospective approval in closeout.",
+      "statement": "Task closeout records review-relevant bounded implementation discoveries and evidence without diary ceremony; a material scope, graph, ownership, acceptance/interface, or safety change stops execution and receives Plan vN+1 approved by both seats, or by the available standing seats after a recorded seat loss, before work continues, never retrospective approval in closeout.",
       "sources": [
         {
           "path": "project-management/templates/task.md",
           "markers": [
             "Bounded discoveries/deviations",
             "never legalized here after implementation",
-            "settle Plan vN+1 with both primary seats, then continue"
+            "settle Plan vN+1 with both primary seats (seat-loss rule: task-graph.md), then continue"
           ]
         },
         {
@@ -2261,7 +2262,7 @@
     {
       "id": "CF-QA-013",
       "level": "hard",
-      "statement": "A gate is the verification check, not the CI job name. An assertion-red completed check cannot be overridden by model consensus. A CI job that never completed (runner loss, OOM, timeout, billing) is missing job evidence, not a failed check; a completed same-check in a sibling job or local codeflow test satisfies that gate. A check that never ran anywhere remains missing and is a blocker or declared limitation, never a pass. Agents still do not merge.",
+      "statement": "A gate is the verification check, not the CI job name. An assertion-red completed check cannot be overridden by model consensus. A CI job that never completed (runner loss, OOM, timeout, billing) is missing job evidence, not a failed check; a completed same-check in a sibling job or local codeflow test satisfies that gate. A check that never ran anywhere and has no local equivalent is a missing gate, named as the blocker, never a pass. Agents never merge a protected target.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
@@ -2283,7 +2284,7 @@
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "a gate is the check, not the job name",
-            "an infra-killed job that only restacks already-green checks does not"
+            "the quality contract classifies redness"
           ]
         }
       ]
@@ -2365,7 +2366,7 @@
     {
       "id": "CF-SHIP-001",
       "level": "hard",
-      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches when required checks are evidenced green; an infra-killed duplicate CI job is not a failed check and is not agent merge authority. After opening a PR the agent follows its required checks at most once a minute for at most thirty minutes without an unbounded watch (a watch refreshes at a one-minute interval under a thirty-minute timeout); the required checks are the project's gates, so when remote protection marks none required it reads all check runs, matches each gate to its run, and treats an unmatched gate as missing evidence rather than calling an empty required list ready. It repairs an assertion-red check its change caused without waiting to be asked, reports an infrastructure-incomplete job as missing evidence with the tool's reason rather than fixing it as a product defect, never merges, and sends one unprompted readiness report with the printed PR URL, each required check's state, and the next action.",
+      "statement": "Agents prepare reviewable PRs and evidence; a human merges every protected target when required checks are evidenced green, and the primary merges a green, reviewed PR only into an integration branch no protected-branch policy covers; an infra-killed duplicate CI job is not a failed check and is not agent merge authority. After opening a PR the agent follows its required checks at most once a minute for at most thirty minutes without an unbounded watch (a watch refreshes at a one-minute interval under a thirty-minute timeout); the required checks are the project's gates, so when remote protection marks none required it reads all check runs, matches each gate to its run, and treats an unmatched gate as missing evidence rather than calling an empty required list ready. It repairs an assertion-red check its change caused without waiting to be asked, reports an infrastructure-incomplete job as missing evidence with the tool's reason rather than fixing it as a product defect, never merges a protected target, and sends one unprompted readiness report with the printed PR URL, each required check's state, and the next action; it says ready on local evidence only with a completed green result of every owed required check.",
       "sources": [
         {
           "path": ".codeflow/rules/git-rules.md",
@@ -2378,14 +2379,14 @@
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "required *checks* are evidenced",
-            "An agent never merges into"
+            "An agent never merges into a protected target"
           ]
         },
         {
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "poll required checks at most once a minute for up to thirty minutes",
-            "fix assertion-red without asking, report infra-incomplete as missing evidence, never merge",
+            "fix assertion-red without asking, report infra-incomplete as missing evidence, and report",
             "report readiness with the PR URL the tool printed"
           ]
         },
@@ -2402,7 +2403,9 @@
             "`timeout 30m gh pr checks <url> --watch --interval 60`",
             "Do not wait for the operator to name the job",
             "Report it as missing evidence with the reason the tool gave, not as a product defect",
-            "Never merge. When every required check is green, or the thirty minutes end, send one readiness report without being asked"
+            "When every required check is green, or the thirty minutes end, send one readiness report without being asked",
+            "for every protected target, including a protected `integration/` glob, the next action is a human merge",
+            "Say \"ready for your merge on local evidence\" only when every owed required check has a completed green result"
           ]
         },
         {
@@ -2487,6 +2490,88 @@
           "path": ".codeflow/rules/workflow-discipline.md",
           "markers": [
             "never unilaterally cross an ethical, authority, or privacy boundary to finish"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-AUTO-001",
+      "level": "hard",
+      "statement": "A change request runs from its settled outcome to the readiness report. Discoverable facts, reversible choices, a repeated safe step, a red job, a missing seat or credit, a green reviewed merge into an integration branch no protected-branch policy covers, a trust prompt for the task's own project or this run's sample, and a reversible seat dissent are settled from evidence and disclosed without asking; a settled dissent keeps the dissenting verdict as given. Only intent, public behavior, taste, and authority or scope beyond the brief are asked, and hard gates (spend, credentials, sending outside the conversation or to a changed recipient, a merge into a protected target including a protected integration glob, an unrestorable delete) wait for a human for that action only; a trust prompt for any other path goes to the operator. Ready on local evidence needs a completed green result of every owed check and names the hosted gap; a check that never ran anywhere is a missing gate.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-method/references/autonomy.md",
+          "markers": [
+            "A brief that asks for a change selects implementation through the readiness report.",
+            "Do not stop to offer the next step, to confirm a safe step you already have authority for",
+            "A stop holds only that one action",
+            "Record a missing seat, tool or credit as reduced assurance and continue on the recorded fallback.",
+            "intent or public behavior the brief does not fix;",
+            "spend, including buying credits;",
+            "anything sent outside the conversation, as or for the operator;",
+            "every protected glob in `.codeflow/policy.json`, including a protected `integration/` glob;",
+            "a delete that version control, a backup or a scratch area cannot restore;",
+            "Decide by authorization and path identity",
+            "A folder that another run created, or a path that only resembles yours, is foreign.",
+            "The dissenting verdict stays as given and is never recorded as approval",
+            "1: take it without asking; progress goes in the running report, never in an offer",
+            "1: choose from evidence and disclose it",
+            "1: classify and continue; fix an assertion-red check, push and poll again",
+            "2: the primary merges it without fast forward or with `codeflow integrate`, then reruns the gate",
+            "3: ask for a fresh grant",
+            "4: wait for the operator; do not spend",
+            "4: report it ready; a human merges"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "A change request selects implementation through the readiness report",
+            "contract's `SETTLED_DISSENT` rule governs each open item"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/plan.md",
+          "markers": [
+            "The dissenting seat's verdict on that item stays as given and is never recorded as approval"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+          "markers": [
+            "needs a completed green result of every owed required check at the pull request head"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/task-graph.md",
+          "markers": [
+            "It is never waited on and never recorded as approving"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/review.md",
+          "markers": [
+            "Buying credits is spend and stays with the operator: do not purchase, name it in the report and continue on the fallback."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "The primary merges a green, reviewed PR into an `integration/` branch no protected-branch policy covers",
+            "A protected target, including a protected `integration/` glob, is reported ready"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "Paste the local full gate summary with the head SHA, and name each hosted job that never ran with the reason the tool gave.",
+            "is a missing gate: name it as the blocker, keep the PR draft where required evidence is missing"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-herdr/SKILL.md",
+          "markers": [
+            "Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`)."
           ]
         }
       ]

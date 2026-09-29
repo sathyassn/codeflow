@@ -9,6 +9,7 @@ pub mod git_hook;
 pub mod hook;
 pub mod ids;
 pub mod integrate;
+pub mod models;
 pub mod new;
 pub mod orient;
 pub mod policy;

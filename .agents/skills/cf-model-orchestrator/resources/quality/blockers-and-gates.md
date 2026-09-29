@@ -11,8 +11,9 @@ impediment before escalating it:
   repository evidence and the safest durable route, with the choice disclosed;
 - an external dependency or enforced gate is recorded with the exact evidence
   or input that clears it; and
-- a choice that changes desired outcome, public contract, scope or authority,
-  risk tolerance, or an irreversible tradeoff belongs to the operator.
+- a choice that `cf-method/references/autonomy.md` reserves to the operator
+  goes to them as one question with a recommendation; check its "What belongs
+  to the operator" list at this point, not from memory.
 
 Before applying a change that newly departs from the approved contract, scope,
 authority or risk boundary (a public contract break, a moved security
@@ -31,9 +32,9 @@ failure, change hypothesis or strategy and never retry it again unchanged. When
 a bounded tactical cycle fails, move up a level: restate the actual constraint
 and current critical path, compare viable strategies, and reroute only if
 accepted outcome, scope, authority, and every quality/safety gate remain intact.
-Ask the operator only for a real external dependency or owner decision, and
-present verified state, attempts, options with consequences, and a
-recommendation. Gate failure is information to fix or honor, not automatic
+Ask the operator only what `cf-method/references/autonomy.md` reserves to
+them, including an input only they can supply, and present verified state,
+attempts, options with consequences, and a recommendation. Gate failure is information to fix or honor, not automatic
 evidence that the operator must decide.
 
 A **gate** is the verification check (`codeflow test` target, coverage floor,
@@ -52,14 +53,21 @@ it. Classify redness before acting:
    infra death as `track once` (runner capacity or job shape), not a product
    defect. Retrying the same unfinished umbrella job without a new hypothesis
    is orbiting.
-3. **Never ran.** The owed check has no completed result anywhere. That is a
-   missing gate: blocker or declared limitation, never a pass.
+3. **Never ran.** The owed check has no completed result anywhere and no
+   local equivalent. That is a missing gate: name it as the blocker, never a
+   pass. The pull request stays draft where required evidence is missing, and
+   other authorized work continues.
 
 A red job that only restacks already-green checks is (2), not (1). Asking the
 operator to pick an implementation tactic because a job name is red is the
 failure ADR-0038 forbids. Asking them to wait, rerun, or override a host
 required-status that is infra-incomplete *is* operator-owned: it is merge
-authorization on that host, not a failed test. Agents still never merge.
+authorization on that host, not a failed test. "Ready for your merge on local
+evidence" needs a completed green result of every owed required check at the
+pull request head; `cf-ship`'s `references/pr-evidence.md` owns that report.
+Merges follow `cf-ship` step 8: the primary merges only into an `integration/`
+branch no protected-branch policy covers, and a human merges every protected
+target.
 
 A failing or missing gate cannot be overridden by model consensus.
 "Failing" means an assertion-red completed check. "Missing" means the owed

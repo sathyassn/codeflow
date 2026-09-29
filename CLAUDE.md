@@ -66,7 +66,8 @@ unsure, route.
   selection, read and follow
   `.claude/skills/cf-method/references/workflow-lifecycle.md` for the
   mandatory compositional transition and failed-stage return; stage skills
-  own their details.
+  own their details. Read `.claude/skills/cf-method/references/autonomy.md`
+  for what to settle yourself and what to escalate.
 - Compose stages and models in config (`args.stages`, `args.models`), never
   hardcode them; the pipeline file is user-owned and `codeflow update` never
   touches it.

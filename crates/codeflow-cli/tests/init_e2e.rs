@@ -320,6 +320,42 @@ fn assert_update_round_trips(root: &Path) {
     );
 }
 
+/// TSK-085: the scaffolded catalog is the managed schema 5 roster and the
+/// model-bindings check accepts it after an update. A designated roster
+/// without full-suite records is advisory (WARN), never a failure.
+fn assert_model_bindings_after_update(root: &Path) {
+    let out = codeflow(root, &["update"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let managed = read(
+        &repo_root(),
+        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    );
+    for prefix in [".agents", ".claude"] {
+        assert_eq!(
+            read(
+                root,
+                &format!("{prefix}/skills/cf-model-orchestrator/resources/current-ensemble.json")
+            ),
+            managed,
+            "{prefix} catalog differs from the managed asset"
+        );
+    }
+    let out = codeflow(root, &["doctor", "--check", "model-bindings"]);
+    let report = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        out.status.success(),
+        "doctor model-bindings failed: {report}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!report.contains("FAIL"), "{report}");
+    assert!(report.contains("illustrative: context-free"), "{report}");
+    assert!(report.contains("doctor did not launch a model"), "{report}");
+}
+
 fn assert_present_cleanup_inventory_is_narrow(root: &Path) {
     let manifest = codeflow_core::scaffold::ScaffoldManifest::load(
         &codeflow_core::scaffold::DirSource::new(repo_root().join("assets")),
@@ -469,6 +505,7 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
 
     assert_engine_placeholders_rendered(&root);
     assert_present_artifact_parity(&root);
+    assert_model_bindings_after_update(&root);
     assert_update_round_trips(&root);
     assert_present_artifact_parity(&root);
     assert_present_cleanup_inventory_is_narrow(&root);

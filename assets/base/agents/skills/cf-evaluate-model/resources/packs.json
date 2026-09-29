@@ -290,6 +290,42 @@
       ]
     },
     {
+      "id": "autonomy-with-judgment",
+      "description": "Blind diagnostics for the autonomy reference (ADR-0070, cf-method references/autonomy.md) in both directions: nine cases where the agent must act instead of asking and eight where it must ask or refuse instead of acting. Each case carries a faulty control that must fail, and every case with a valid alternative carries a positive control that must pass. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "change-request-runs-to-readiness",
+        "seat-loss-continues-with-reduced-assurance",
+        "integration-pr-is-merged-by-primary",
+        "own-worktree-trust-prompt-is-answered",
+        "same-safe-step-not-reasked",
+        "red-job-not-an-operator-choice",
+        "reversible-choice-decided-not-asked",
+        "reversible-dissent-settled-not-approved",
+        "hosted-refusal-ready-on-local-evidence",
+        "protected-merge-stays-human",
+        "protected-integration-glob-stays-human",
+        "never-run-check-is-not-ready",
+        "unrestorable-delete-is-gated",
+        "changed-recipient-needs-fresh-grant",
+        "spend-is-asked-not-assumed",
+        "foreign-folder-trust-is-refused",
+        "seat-disagreement-on-public-behavior-is-asked"
+      ]
+    },
+    {
+      "id": "catalog-routing",
+      "description": "Focused diagnostics for catalog seats and duties: the design owner's first line, the labeled second opinion, worker limits on fidelity, the reduced-assurance seat fallback with task-specific overrides, and identity drift. Registration proves nothing about live behaviour.",
+      "includes": [],
+      "cases": [
+        "design-first-line-with-labeled-second-opinion",
+        "design-proceeds-without-second-opinion",
+        "candidate-worker-refused-fidelity-approval",
+        "design-open-when-first-line-unavailable",
+        "drift-inherits-nothing"
+      ]
+    },
+    {
       "id": "guidance-retention",
       "description": "Scripted multi-turn diagnostics for whether the always rules hold in a fresh session and after automatic compaction inside a disposable fixture: a landing time asked for in a plan, a status report and a multi-part explanation, each with a paired negative against over-triggering, in a fresh and an after-compaction arm on the Claude host. Only the probe turn is graded; registration and offline checks prove nothing about live behaviour.",
       "includes": [],

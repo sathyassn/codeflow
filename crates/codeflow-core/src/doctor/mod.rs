@@ -97,8 +97,12 @@ pub struct Options {
     pub exec_command: Option<ExecCommandFn>,
     /// Runs a command with text on stdin and returns its output.
     pub exec_command_stdin: Option<ExecCommandStdinFn>,
-    /// User-owned qualified-binding directory. `None` disables the optional
-    /// check; the CLI supplies `CODEFLOW_HOME/qualified-bindings`.
+    /// User-owned `CodeFlow` home holding the personal catalog overlay and the
+    /// recorded canary observations. `None` reads neither; the CLI supplies
+    /// `CODEFLOW_HOME`. Never derived from `qualification_dir`.
+    pub codeflow_home: Option<PathBuf>,
+    /// User-owned qualified-binding directory. `None` loads no binding
+    /// records; the CLI supplies `CODEFLOW_HOME/qualified-bindings`.
     pub qualification_dir: Option<PathBuf>,
     /// The home directory whose `.codex/` and `.grok/` hold the harnesses'
     /// trust records. `None` is the user's home (Codex honours
@@ -1206,22 +1210,33 @@ fn check_config(opts: &Options) -> CheckResult {
     }
 }
 
-/// Validate promoted model+harness records and the live drift signals that are
-/// externally observable without launching or scraping a model session.
+/// Validate the schema 5 catalog, the personal overlay, promoted binding
+/// records and the project selection, then report illustrative resolutions
+/// and the live drift signals that are observable without launching a model.
 ///
 /// The check never claims to observe a selected model or reasoning effort.
 /// Those values remain native-interactive evaluation evidence.
 fn check_model_bindings(opts: &Options) -> CheckResult {
     let start = Instant::now();
-    let ensemble = match model_qualification::current_ensemble() {
-        Ok(ensemble) => ensemble,
-        Err(error) => {
-            return model_binding_result(
-                start,
-                Status::Fail,
-                format!("embedded current ensemble invalid: {error}"),
-            )
-        }
+    let root = if opts.project_dir.is_empty() {
+        Path::new(".")
+    } else {
+        Path::new(&opts.project_dir)
+    };
+    let inputs = match crate::model_catalog::load_catalog(root).and_then(|catalog| {
+        crate::model_catalog::CatalogInputs::load(
+            catalog,
+            root,
+            opts.codeflow_home.as_deref(),
+            opts.qualification_dir.as_deref(),
+        )
+    }) {
+        Ok(inputs) => inputs,
+        Err(error) => return model_binding_result(start, Status::Fail, error),
+    };
+    let (report, warned) = match inputs.diagnostic_report() {
+        Ok(report) => report,
+        Err(error) => return model_binding_result(start, Status::Fail, error),
     };
     let catalog = match model_qualification::harness_catalog() {
         Ok(catalog) => catalog,
@@ -1233,51 +1248,45 @@ fn check_model_bindings(opts: &Options) -> CheckResult {
             )
         }
     };
-    let route_report = managed_worker_route_report(opts, &ensemble, &catalog);
-    let mut result = check_promoted_model_bindings(opts, start, &catalog);
-    result.message = format!("{}; {route_report}", result.message);
-    result
+    let (status, bindings) = binding_record_drift(opts, &inputs, &catalog);
+    let status = match (status, warned) {
+        // Catalog warnings (a designated version with no full-suite record,
+        // a canary identity drift) clear by qualifying with /cf-evaluate-model.
+        (Status::Pass | Status::Note(_), true) => Status::Warn(remedy::DOCTOR_REQUALIFY.remedy()),
+        (status, _) => status,
+    };
+    model_binding_result(start, status, format!("{report}\n{bindings}"))
 }
 
-fn check_promoted_model_bindings(
+/// Harness-version and settings drift for the loaded binding records. An
+/// actively selected record that drifted fails; any other drift warns.
+fn binding_record_drift(
     opts: &Options,
-    start: Instant,
+    inputs: &crate::model_catalog::CatalogInputs,
     catalog: &BTreeMap<String, model_qualification::HarnessMetadata>,
-) -> CheckResult {
-    let Some(directory) = opts.qualification_dir.as_deref() else {
-        return model_binding_result(
-            start,
-            Status::Pass,
-            "qualified-binding check not configured for this caller",
-        );
-    };
-    let (records, selected) = match load_model_binding_inputs(opts, directory) {
-        Ok(inputs) => inputs,
-        Err(error) => return model_binding_result(start, Status::Fail, error),
-    };
+) -> (Status, String) {
+    let records = &inputs.catalog.bindings;
     if records.is_empty() {
-        return model_binding_result(
-            start,
+        return (
             Status::Pass,
-            format!(
-                "no local promoted model bindings in {} and no project override (optional; shipped ensemble remains effective)",
-                directory.display()
-            ),
+            "no promoted model bindings and no project selection; the managed catalog remains effective"
+                .into(),
         );
     }
-    let (drift, unobservable) = observe_binding_drift(opts, &records, catalog);
-    let active_ids: BTreeSet<&str> = selected
+    let selected: Vec<&crate::model_catalog::BindingReference> = inputs
+        .catalog
+        .selection
         .iter()
-        .map(|binding| binding.binding_id.as_str())
+        .flat_map(|selection| &selection.bindings)
         .collect();
+    let (drift, unobservable) = observe_binding_drift(opts, records, catalog);
     let active_drift: Vec<&str> = drift
         .iter()
-        .filter(|(binding_id, _)| active_ids.contains(binding_id.as_str()))
+        .filter(|(id, _)| selected.iter().any(|entry| &entry.binding_id == id))
         .map(|(_, message)| message.as_str())
         .collect();
     if !active_drift.is_empty() {
-        return model_binding_result(
-            start,
+        return (
             Status::Fail,
             format!(
                 "active project model selection requires requalification: {}. No override is applied",
@@ -1286,8 +1295,7 @@ fn check_promoted_model_bindings(
         );
     }
     if !drift.is_empty() {
-        return model_binding_result(
-            start,
+        return (
             Status::Warn(remedy::DOCTOR_REQUALIFY.remedy()),
             format!(
                 "binding requalification required: {}. Requested model/effort remain native-session observations, never inferred by doctor",
@@ -1300,8 +1308,7 @@ fn check_promoted_model_bindings(
         );
     }
     if !unobservable.is_empty() {
-        return model_binding_result(
-            start,
+        return (
             Status::Note(remedy::DOCTOR_CANARY.remedy()),
             format!(
                 "{} approved binding(s) are structurally valid; {}",
@@ -1310,107 +1317,25 @@ fn check_promoted_model_bindings(
             ),
         );
     }
-    let message = effective_selection_message(records.len(), &selected);
-    model_binding_result(start, Status::Pass, message)
-}
-
-fn managed_worker_route_report(
-    opts: &Options,
-    ensemble: &BTreeMap<String, model_qualification::EnsembleBinding>,
-    catalog: &BTreeMap<String, model_qualification::HarnessMetadata>,
-) -> String {
-    let routes = ensemble
-        .values()
-        .flat_map(|binding| {
-            binding.internal_routes.iter().map(move |route| {
-                let selectors = route
-                    .native_selectors
-                    .iter()
-                    .map(|(harness_id, selector)| {
-                        let probe = catalog
-                            .get(harness_id)
-                            .and_then(|harness| harness.version_probe.as_deref())
-                            .and_then(model_qualification::trusted_version_probe);
-                        let probe_state = match probe {
-                            Some(probe) if opts.do_look_path(probe.command).is_ok() => {
-                                "probe-command-present"
-                            }
-                            Some(_) => "probe-command-missing",
-                            None => "probe-not-exposed",
-                        };
-                        format!("{harness_id}:{selector}:{probe_state}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join("|");
-                let workloads = route
-                    .workloads
-                    .iter()
-                    .map(|workload| workload.as_str())
-                    .collect::<Vec<_>>()
-                    .join("|");
-                format!(
-                    "{}/{}[status={},default={},workloads={},selectors={}]",
-                    binding.role,
-                    route.route_id,
-                    route.status.as_str(),
-                    route.default_effort.as_str(),
-                    workloads,
-                    selectors
-                )
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "managed worker routes: {routes}; candidate status and probe-command presence do not establish qualification, model availability, or applied selection; doctor did not launch a model"
-    )
-}
-
-fn effective_selection_message(
-    record_count: usize,
-    selected: &[model_qualification::ResolvedSelection],
-) -> String {
-    if selected.is_empty() {
-        return format!(
-            "{record_count} approved binding(s) passed structural, harness-version, and declared-settings drift checks; no project override is active and live model/effort still require native observation"
-        );
-    }
-    let bindings = selected
-        .iter()
-        .map(|binding| {
-            format!(
-                "{}={} ({} {}@{})",
-                binding.role, binding.binding_id, binding.harness, binding.model, binding.effort
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "{} project override(s) passed qualification and drift checks: {bindings}; live model/effort still require native observation",
-        selected.len()
-    )
-}
-
-fn load_model_binding_inputs(
-    opts: &Options,
-    directory: &Path,
-) -> Result<
-    (
-        Vec<model_qualification::QualifiedBinding>,
-        Vec<model_qualification::ResolvedSelection>,
-    ),
-    String,
-> {
-    let records = model_qualification::load_bindings(directory)
-        .map_err(|error| format!("invalid qualified-binding record: {error}"))?;
-    let project_root = if opts.project_dir.is_empty() {
-        Path::new(".")
+    let selection = if selected.is_empty() {
+        "no project selection is active".to_owned()
     } else {
-        Path::new(&opts.project_dir)
+        format!(
+            "project selection: {}",
+            selected
+                .iter()
+                .map(|entry| format!("{}={}", entry.role, entry.binding_id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
-    let selected = model_qualification::resolve_project_selection(project_root, &records)
-        .map_err(|error| format!("invalid project model selection: {error}"))?;
-    Ok((records, selected))
+    (
+        Status::Pass,
+        format!(
+            "{} approved binding(s) passed structural, harness-version, and declared-settings drift checks; {selection}; live model/effort still require native observation",
+            records.len()
+        ),
+    )
 }
 
 fn model_binding_result(start: Instant, status: Status, message: impl Into<String>) -> CheckResult {
@@ -2912,20 +2837,20 @@ mod tests {
         let digest = format!("sha256:{}", "a".repeat(64));
         let record = serde_json::json!({
             "schema_version": 1,
-            "binding_id": "claude-fable-high",
+            "binding_id": "orchid-approved-high",
             "provider": "anthropic",
             "lineage": "claude",
             "eligible_roles": ["primary", "reviewer", "claude-judgment-primary"],
             "qualified_at": "2026-07-25T10:00:00Z",
             "requested": {
-                "model": "fable-5",
+                "model": "orchid-one-pin",
                 "effort": "high",
                 "harness": "claude-code",
                 "harness_version": "2.1.220",
                 "settings_digest": digest
             },
             "observed": {
-                "model": "fable-5",
+                "model": "orchid-one-pin",
                 "effort": observed_effort,
                 "evidence": [{"kind": "session", "digest": digest}]
             },
@@ -2943,56 +2868,32 @@ mod tests {
             }
         });
         std::fs::write(
-            directory.join("claude-fable-high.json"),
+            directory.join("orchid-approved-high.json"),
             serde_json::to_vec_pretty(&record).unwrap(),
         )
         .unwrap();
     }
 
     #[test]
-    fn model_bindings_missing_is_cleanly_not_applicable() {
+    fn model_bindings_without_records_reports_the_managed_catalog_without_probing() {
         let directory = tempfile::tempdir().unwrap();
-        let mut opts = test_opts();
-        opts.qualification_dir = Some(directory.path().join("qualified-bindings"));
-        let result = check_model_bindings(&opts);
-        assert_eq!(result.status, Status::Pass);
-        assert!(result
-            .message
-            .contains("shipped ensemble remains effective"));
-        assert!(result.message.contains("managed worker routes:"));
-        assert!(result.message.contains("status=candidate"));
-    }
-
-    #[test]
-    fn model_bindings_reports_managed_route_probes_without_launching_models() {
         let opts = Options {
-            qualification_dir: None,
-            look_path: Some(|name| {
-                (name == "claude")
-                    .then(|| "/usr/local/bin/claude".into())
-                    .ok_or_else(|| "not found".into())
-            }),
-            exec_command: Some(|_, _| panic!("managed route reporting must not launch a model")),
+            qualification_dir: Some(directory.path().join("qualified-bindings")),
+            look_path: Some(|_| panic!("no binding record, so nothing to probe")),
+            exec_command: Some(|_, _| panic!("doctor must not launch a model")),
             ..Options::default()
         };
         let result = check_model_bindings(&opts);
-        assert_eq!(result.status, Status::Pass);
-        assert!(result
-            .message
-            .contains("claude-judgment-primary/fable-high-reasoning"));
-        assert!(result
-            .message
-            .contains("claude-code:fable:probe-command-present"));
-        assert!(result
-            .message
-            .contains("codex-cli:gpt-5.6-sol:probe-command-missing"));
-        assert!(result
-            .message
-            .contains("codex-app:gpt-5.6-sol:probe-not-exposed"));
-        assert!(result.message.contains(
-            "candidate status and probe-command presence do not establish qualification, model availability, or applied selection"
-        ));
-        assert!(result.message.contains("doctor did not launch a model"));
+        // The managed roster is designated, not qualified: advisory, never a failure.
+        assert!(result.status.is_warn(), "got: {}", result.message);
+        for expected in [
+            "illustrative: context-free, not a task's resolution",
+            "designated version with no full-suite record",
+            "no promoted model bindings and no project selection",
+            "doctor did not launch a model",
+        ] {
+            assert!(result.message.contains(expected), "missing {expected}");
+        }
     }
 
     #[test]
@@ -3011,8 +2912,11 @@ mod tests {
             Ok("2.1.220 (Claude Code)\n".into())
         });
         let result = check_model_bindings(&opts);
-        assert_eq!(result.status, Status::Pass, "got: {}", result.message);
-        assert!(result.message.contains("live model/effort"));
+        assert!(result.status.is_warn(), "got: {}", result.message);
+        assert!(result
+            .message
+            .contains("1 approved binding(s) passed structural, harness-version"));
+        assert!(!result.message.contains("requalification"));
     }
 
     #[test]
@@ -3021,7 +2925,7 @@ mod tests {
         // note naming the manual confirmation, never a warning that stays.
         let directory = tempfile::tempdir().unwrap();
         write_binding(directory.path(), "high");
-        let path = directory.path().join("claude-fable-high.json");
+        let path = directory.path().join("orchid-approved-high.json");
         let mut record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         record["binding_id"] = "codex-app-sol-high".into();
@@ -3040,17 +2944,28 @@ mod tests {
         let mut opts = test_opts();
         opts.qualification_dir = Some(directory.path().to_path_buf());
         let result = check_model_bindings(&opts);
-        let Status::Note(remedy) = &result.status else {
-            panic!("expected a note: {:?}: {}", result.status, result.message);
-        };
+        // The unobservable binding alone is a note (DOCTOR_CANARY). The
+        // managed schema 5 catalog adds its standing warning until each
+        // designated version has a full-suite record (ADR-0069), and a
+        // warning outranks a note, so the check warns and still names the
+        // binding doctor cannot probe.
+        assert!(
+            result.status.is_warn(),
+            "{:?}: {}",
+            result.status,
+            result.message
+        );
         assert!(
             result.message.contains("no external probe"),
             "{}",
             result.message
         );
         assert!(
-            remedy.contains("native canary") && remedy.contains("cannot verify"),
-            "{remedy}"
+            result
+                .message
+                .contains("designated version with no full-suite record"),
+            "{}",
+            result.message
         );
     }
 
@@ -3076,7 +2991,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let directory = workspace.path().join("qualified-bindings");
         write_binding(&directory, "high");
-        write_project_selection(workspace.path(), "claude-fable-high");
+        write_project_selection(workspace.path(), "orchid-approved-high");
         let mut opts = test_opts();
         opts.project_dir = workspace.path().to_string_lossy().into_owned();
         opts.qualification_dir = Some(directory);
@@ -3087,9 +3002,10 @@ mod tests {
         });
         opts.exec_command = Some(|_, _| Ok("2.1.220 (Claude Code)".into()));
         let result = check_model_bindings(&opts);
-        assert_eq!(result.status, Status::Pass, "got: {}", result.message);
-        assert!(result.message.contains("claude-judgment-primary"));
-        assert!(result.message.contains("claude-fable-high"));
+        assert!(result.status.is_warn(), "got: {}", result.message);
+        assert!(result
+            .message
+            .contains("project selection: claude-judgment-primary=orchid-approved-high"));
     }
 
     #[test]
@@ -3103,7 +3019,7 @@ mod tests {
         opts.qualification_dir = Some(directory);
         let result = check_model_bindings(&opts);
         assert_eq!(result.status, Status::Fail);
-        assert!(result.message.contains("references missing binding"));
+        assert!(result.message.contains("missing binding record"));
     }
 
     #[test]
@@ -3111,7 +3027,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let directory = workspace.path().join("qualified-bindings");
         write_binding(&directory, "high");
-        write_project_selection(workspace.path(), "claude-fable-high");
+        write_project_selection(workspace.path(), "orchid-approved-high");
         let mut opts = test_opts();
         opts.project_dir = workspace.path().to_string_lossy().into_owned();
         opts.qualification_dir = Some(directory);
@@ -3144,7 +3060,7 @@ mod tests {
         let settings = workspace.path().join("settings.json");
         std::fs::write(&settings, b"initial").unwrap();
         write_binding(&directory, "high");
-        let record_path = directory.join("claude-fable-high.json");
+        let record_path = directory.join("orchid-approved-high.json");
         let mut record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
         record["settings_sources"] = serde_json::json!([{
@@ -3177,7 +3093,7 @@ mod tests {
         let file = std::fs::File::create(&settings).unwrap();
         file.set_len(MAX_SETTINGS_BYTES + 1).unwrap();
         write_binding(&directory, "high");
-        let record_path = directory.join("claude-fable-high.json");
+        let record_path = directory.join("orchid-approved-high.json");
         let mut record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
         record["settings_sources"] = serde_json::json!([{

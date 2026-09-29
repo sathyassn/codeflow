@@ -48,7 +48,8 @@ A materially fresh native signal may clear or replace the exclusion.
 
 A change to the responsible primary or cross-lineage reviewer seat or lineage is
 reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
-work continues. A same-seat trigger-based effort escalation, including direct
+work continues, except after a seat loss (see [Review and degradation](review.md)). A
+same-seat trigger-based effort escalation, including direct
 high→xhigh, is ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
 high primary stays the orchestrator and spawns same-family workers at that
 effort. Same-family workers run inside the host harness: spawn each one as a

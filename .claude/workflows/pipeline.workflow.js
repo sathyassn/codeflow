@@ -24,7 +24,8 @@
 //                         (CodeFlow ADR-0023).
 //                         'consult' is an optional independent second read
 //                         (single-vendor; CodeFlow ADR-0023); off unless named.
-//   models     object?    per-stage model, e.g. { build: 'sonnet' }; every
+//   models     object?    per-stage model, e.g. { build: '<selector>' }, where the
+//                         selector comes from `codeflow models resolve`; every
 //                         stage defaults to 'inherit' (the caller's model).
 //   maxRework  number?    total build-attempt budget shared by all gate back-edges
 //                         (review/security/qa changes_requested -> build). Counts

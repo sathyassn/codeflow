@@ -68,3 +68,15 @@ The scaffold contract and evaluation corpus now distinguish responsible
 primaries from actual execution routes and provenance. The binary remains a
 validator and diagnostic surface; routing decisions and evidence stay in the
 orchestrated Plan vN and reviewed task artifacts.
+
+## Note (2026-09-25)
+
+The design owner is seat `claude-primary` on its first line (ADR-0069). The
+sentence on the recorded same-Claude primary fallback is narrowed: the seat's
+later line may hold the seat for orchestration, planning and review with
+reduced assurance, but it does not author design or give design or fidelity
+approval, and the `design` duty stays open, unless an `OPERATOR_OVERRIDE` block
+in the approved Plan vN task record names that exact task, duty, route and
+effort. Workers never hold direction or fidelity approval. Candidate and
+scoped-qualified routes are now catalog versions with scoped evidence for one
+exact tuple.

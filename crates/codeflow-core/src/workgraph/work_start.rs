@@ -896,6 +896,49 @@ pub fn check_work_start_anchored(
     })
 }
 
+/// Read a task's approved planning snapshot, never its working-tree contents.
+/// The committed HEAD declaration locates the target; the shared work-start
+/// rule then validates the task and dependencies at their merge-base.
+///
+/// # Errors
+/// Rejects malformed ids, unstable targets and unanchored or invalid plans.
+pub fn anchored_task_content(repo_root: &Path, task_id: &str) -> Result<String, String> {
+    if !super::is_canonical_task_format_id(task_id) {
+        return Err("override requires a canonical task id".into());
+    }
+    let repo = Repository::discover(repo_root).map_err(|e| e.to_string())?;
+    let head = repo
+        .head()
+        .and_then(|r| r.peel_to_commit())
+        .map_err(|e| e.to_string())?;
+    let path = format!("project-management/tasks/{task_id}.md");
+    let read = |tree: &git2::Tree<'_>| -> Result<String, String> {
+        let entry = tree
+            .get_path(Path::new(&path))
+            .map_err(|_| format!("task {task_id} not committed"))?;
+        if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
+            return Err("task record must be a regular file".into());
+        }
+        let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
+        String::from_utf8(blob.content().to_vec()).map_err(|e| e.to_string())
+    };
+    let content = read(&head.tree().map_err(|e| e.to_string())?)?;
+    let declared = parse_record(&content, RecordKind::Task)?;
+    let target = declared
+        .integration_target
+        .ok_or("task has no integration_target")?;
+    if !is_stable_work_target(&target) {
+        return Err("override target must be a stable non-task branch".into());
+    }
+    let (base, records) = anchored_records(repo_root, &target).map_err(|e| e.to_string())?;
+    validate_anchored_task(&repo, &records, task_id, &target).map_err(|e| e.to_string())?;
+    let commit = repo
+        .find_commit(git2::Oid::from_str(&base).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let tree = commit.tree().map_err(|e| e.to_string())?;
+    read(&tree)
+}
+
 fn anchored_records(
     repo_root: &Path,
     target: &str,

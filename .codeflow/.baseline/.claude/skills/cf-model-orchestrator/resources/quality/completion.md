@@ -2,7 +2,9 @@
 
 Completion requires:
 
-- both seats approved the final plan version and task breakdown;
+- both seats approved the final plan version and task breakdown, or it is
+  approved with recorded settled dissent on named reversible items, or the
+  standing seats approved it after a recorded seat loss;
 - every acceptance criterion is evidenced, and the result the task exists to
   produce is reached: criteria that pass while that result is missed are a
   finding that returns to `cf-plan`, not a pass;
@@ -10,12 +12,18 @@ Completion requires:
   [blocker navigation and gate redness](blockers-and-gates.md);
 - when a PR was opened, its required checks were followed within the ship
   poll budget, and the operator received the readiness report with the PR
-  URL the tool printed; no agent merged it;
+  URL the tool printed; no agent merged it into a protected target;
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;
 - every unit has approved cross-lineage review and the selected Claude judgment
   primary has approved the integrated design/code judgment;
 - design and implementation proportionality are approved;
+- every finding from every review, material and minor, is recorded in the task
+  closeout or the PR body as finding, severity, disposition and evidence, with
+  a disposition that [materiality and prioritization](materiality.md) defines:
+  fixed, with the commit; tracked once, with its home and event trigger; or
+  dropped, with the reason. A minor finding never blocks, and it is never left
+  unrecorded;
 - substantial changed prose has its contextual editorial approval;
 - no unresolved critical/high security issue or material assumption remains.
 - every catastrophic action, if any, has the human authorization and recovery

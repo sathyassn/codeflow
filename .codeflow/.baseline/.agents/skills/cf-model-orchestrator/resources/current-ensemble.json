@@ -1,264 +1,808 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "policy_id": "claude-codex-duo",
-  "standing_roles": [
-    "claude-judgment-primary",
-    "codex-engineering-primary"
-  ],
-  "design_execution_owner": "claude-judgment-primary",
-  "bindings": [
+  "families": [
     {
-      "role": "claude-judgment-primary",
-      "seat": "claude-primary",
+      "id": "claude",
       "provider": "anthropic",
       "lineage": "claude",
-      "model_class": "latest-fable",
-      "native_selectors": {
-        "claude-code": "fable"
-      },
-      "default_effort": "high",
-      "escalation_effort": "xhigh",
-      "responsibilities": [
-        "independent planning",
-        "design production in the native Claude session",
-        "design leadership",
-        "plan approval",
-        "integrated design and code judgment",
-        "contextual editorial judgment"
+      "harnesses": [
+        "claude-code"
       ],
-      "internal_routes": [
+      "probes": [
+        "claude-cli-version"
+      ],
+      "usage_bucket": "claude-subscription"
+    },
+    {
+      "id": "codex",
+      "provider": "openai",
+      "lineage": "codex",
+      "harnesses": [
+        "codex-app",
+        "codex-cli"
+      ],
+      "probes": [
+        "codex-cli-version"
+      ],
+      "usage_bucket": "codex-subscription"
+    },
+    {
+      "id": "grok",
+      "provider": "xai",
+      "lineage": "grok",
+      "harnesses": [
+        "grok-cli"
+      ],
+      "probes": [
+        "grok-cli-version"
+      ],
+      "usage_bucket": "grok-subscription"
+    }
+  ],
+  "lines": [
+    {
+      "id": "opus",
+      "family": "claude",
+      "adoption": "manual",
+      "adopted_version": "claude-opus-5-5",
+      "versions": [
         {
-          "route_id": "fable-high-reasoning",
-          "model_class": "latest-fable",
-          "native_selectors": {
-            "claude-code": "fable"
+          "id": "claude-opus-5-5",
+          "alias": "opus",
+          "pinned_id": "claude-opus-5-5",
+          "selectors": {
+            "claude-code": "claude-opus-5-5"
           },
-          "efforts": ["high"],
-          "default_effort": "high",
-          "workloads": ["reasoning"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "CodeFlow instruction: Fable at high for complex in-family worker work; the high primary stays the orchestrator"
-        },
-        {
-          "route_id": "fable-xhigh-reasoning",
-          "model_class": "latest-fable",
-          "native_selectors": {
-            "claude-code": "fable"
-          },
-          "efforts": ["xhigh"],
-          "default_effort": "xhigh",
-          "workloads": ["reasoning"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "CodeFlow instruction: Fable at xhigh when high stalls or an xhigh_trigger applies; judgment stays with the primary"
-        },
-        {
-          "route_id": "opus-medium-evidence",
-          "model_class": "latest-opus",
-          "native_selectors": {
-            "claude-code": "opus"
-          },
-          "efforts": ["medium"],
-          "default_effort": "medium",
-          "workloads": ["evidence"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "bounded deterministic tool or UI evidence collection"
-        },
-        {
-          "route_id": "opus-high-tool-work",
-          "model_class": "latest-opus",
-          "native_selectors": {
-            "claude-code": "opus"
-          },
-          "efforts": ["high"],
-          "default_effort": "high",
-          "workloads": ["evidence", "review-support"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "ambiguous or multi-step tool operation without transferring judgment"
-        },
-        {
-          "route_id": "opus-high-implementation",
-          "model_class": "latest-opus",
-          "native_selectors": {
-            "claude-code": "opus"
-          },
-          "efforts": ["high"],
-          "default_effort": "high",
-          "workloads": ["implementation"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "bounded non-design implementation under Fable primary review and acceptance"
-        },
-        {
-          "route_id": "opus-design-implementation-pilot",
-          "model_class": "latest-opus",
-          "native_selectors": {
-            "claude-code": "opus"
-          },
-          "efforts": ["high"],
-          "default_effort": "high",
-          "workloads": ["design-implementation"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "controlled disposable design-implementation qualification fixtures only; real product design stays with the Fable primary until this route is scoped-qualified"
-        },
-        {
-          "route_id": "opus-xhigh-reasoning",
-          "model_class": "latest-opus",
-          "native_selectors": {
-            "claude-code": "opus"
-          },
-          "efforts": ["xhigh"],
-          "default_effort": "xhigh",
-          "workloads": ["reasoning"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "candidate in-family reasoning route; the documented explicit Opus degraded primary fallback remains separate from worker qualification"
+          "efforts": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "lifecycle": "active",
+          "designations": [
+            {
+              "seat": "claude-primary",
+              "date": "2026-09-23",
+              "record": "EPC-018 Q2 answer, 2026-09-23; ADR-0069 roster"
+            }
+          ],
+          "qualification": []
         }
       ]
     },
     {
-      "role": "codex-engineering-primary",
-      "seat": "codex-primary",
-      "provider": "openai",
-      "lineage": "codex",
-      "model_class": "latest-astra-coding",
-      "native_selectors": {
-        "codex-app": "gpt-6-astra",
-        "codex-cli": "gpt-6-astra"
-      },
-      "default_effort": "high",
-      "escalation_effort": "xhigh",
-      "responsibilities": [
-        "independent planning",
-        "implementation feasibility",
-        "production when assigned",
-        "first verification when producing",
-        "adversarial implementation and security review"
-      ],
-      "internal_routes": [
+      "id": "fable",
+      "family": "claude",
+      "adoption": "manual",
+      "adopted_version": "claude-fable-5-1",
+      "versions": [
         {
-          "route_id": "astra-high-reasoning",
-          "model_class": "latest-astra-coding",
-          "native_selectors": {
+          "id": "claude-fable-5-1",
+          "alias": "fable",
+          "pinned_id": "claude-fable-5-1",
+          "selectors": {
+            "claude-code": "claude-fable-5-1"
+          },
+          "efforts": [
+            "high",
+            "xhigh"
+          ],
+          "lifecycle": "active",
+          "designations": [
+            {
+              "seat": "claude-primary",
+              "date": "2026-09-23",
+              "record": "EPC-018 Q2 answer, 2026-09-23: fallback for orchestration, planning and review only; design only by OPERATOR_OVERRIDE; ADR-0069 roster"
+            }
+          ],
+          "qualification": []
+        }
+      ]
+    },
+    {
+      "id": "astra",
+      "family": "codex",
+      "adoption": "manual",
+      "adopted_version": "gpt-6-astra",
+      "versions": [
+        {
+          "id": "gpt-6-astra",
+          "alias": "gpt-6-astra",
+          "pinned_id": "gpt-6-astra",
+          "selectors": {
             "codex-app": "gpt-6-astra",
             "codex-cli": "gpt-6-astra"
           },
-          "efforts": ["high"],
-          "default_effort": "high",
-          "workloads": ["reasoning", "implementation"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "CodeFlow instruction: Astra at high for complex in-family worker work; the high primary stays the orchestrator"
-        },
+          "efforts": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "lifecycle": "active",
+          "designations": [
+            {
+              "seat": "codex-primary",
+              "date": "2026-09-23",
+              "record": "EPC-018 Q2 answer, 2026-09-23; ADR-0069 roster"
+            }
+          ],
+          "qualification": []
+        }
+      ]
+    },
+    {
+      "id": "sol",
+      "family": "codex",
+      "adoption": "manual",
+      "adopted_version": "gpt-6-sol",
+      "versions": [
         {
-          "route_id": "astra-xhigh-reasoning",
-          "model_class": "latest-astra-coding",
-          "native_selectors": {
-            "codex-app": "gpt-6-astra",
-            "codex-cli": "gpt-6-astra"
-          },
-          "efforts": ["xhigh"],
-          "default_effort": "xhigh",
-          "workloads": ["reasoning", "implementation"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "CodeFlow instruction: Astra at xhigh when high stalls or an xhigh_trigger applies; judgment stays with the primary"
-        },
-        {
-          "route_id": "sol-bounded-execution",
-          "model_class": "latest-sol",
-          "native_selectors": {
+          "id": "gpt-5.6-sol",
+          "alias": "gpt-5.6-sol",
+          "pinned_id": "gpt-5.6-sol",
+          "selectors": {
             "codex-app": "gpt-5.6-sol",
             "codex-cli": "gpt-5.6-sol"
           },
-          "efforts": ["medium", "high"],
-          "default_effort": "high",
-          "workloads": ["reasoning", "implementation", "evidence", "review-support"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "bounded candidate work through explicit native routing; the documented explicit Sol degraded primary fallback remains separate from worker qualification"
+          "efforts": [
+            "medium",
+            "high"
+          ],
+          "lifecycle": "fallback-only",
+          "designations": [
+            {
+              "seat": "codex-primary",
+              "date": "2026-09-23",
+              "record": "EPC-018 Q2 answer, 2026-09-23; ADR-0069 roster"
+            }
+          ],
+          "qualification": []
         },
         {
-          "route_id": "terra-simple-execution",
-          "model_class": "latest-terra",
-          "native_selectors": {
-            "codex-app": "gpt-5.6-terra",
-            "codex-cli": "gpt-5.6-terra"
+          "id": "gpt-6-sol",
+          "alias": "gpt-6-sol",
+          "pinned_id": "gpt-6-sol",
+          "selectors": {
+            "codex-app": "gpt-6-sol",
+            "codex-cli": "gpt-6-sol"
           },
-          "efforts": ["medium", "high"],
-          "default_effort": "medium",
-          "workloads": ["implementation", "evidence"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "simple bounded candidate work through explicit native routing"
+          "efforts": [
+            "medium",
+            "high"
+          ],
+          "lifecycle": "active",
+          "designations": [
+            {
+              "seat": "codex-primary",
+              "date": "2026-09-23",
+              "record": "EPC-018 Q2 answer, 2026-09-23; ADR-0069 roster"
+            }
+          ],
+          "qualification": []
         }
       ]
     },
     {
-      "role": "grok-engineering-primary",
-      "seat": "grok-primary",
-      "provider": "xai",
-      "lineage": "grok",
-      "model_class": "latest-grok-coding",
-      "native_selectors": {
-        "grok-cli": "grok-4.6"
-      },
-      "default_effort": "high",
-      "escalation_effort": "xhigh",
-      "responsibilities": [
-        "host coordination when Grok Build is the active harness",
-        "independent planning when seated",
-        "production when assigned",
-        "first verification when producing",
-        "named extra-family review when a documented trigger fires and the family is available"
-      ],
-      "internal_routes": [
+      "id": "luna",
+      "family": "codex",
+      "adoption": "manual",
+      "adopted_version": "gpt-6-luna",
+      "versions": [
         {
-          "route_id": "grok-medium-execution",
-          "model_class": "latest-grok-coding",
-          "native_selectors": {
+          "id": "gpt-6-luna",
+          "alias": "gpt-6-luna",
+          "pinned_id": "gpt-6-luna",
+          "selectors": {
+            "codex-app": "gpt-6-luna",
+            "codex-cli": "gpt-6-luna"
+          },
+          "efforts": [
+            "medium"
+          ],
+          "lifecycle": "active",
+          "designations": [],
+          "qualification": []
+        }
+      ]
+    },
+    {
+      "id": "terra",
+      "family": "codex",
+      "adoption": "manual",
+      "adopted_version": "gpt-5.6-terra",
+      "versions": [
+        {
+          "id": "gpt-5.6-terra",
+          "alias": "gpt-5.6-terra",
+          "pinned_id": "gpt-5.6-terra",
+          "selectors": {
+            "codex-app": "gpt-5.6-terra",
+            "codex-cli": "gpt-5.6-terra"
+          },
+          "efforts": [
+            "medium",
+            "high"
+          ],
+          "lifecycle": "retired",
+          "designations": [],
+          "qualification": []
+        }
+      ]
+    },
+    {
+      "id": "grok",
+      "family": "grok",
+      "adoption": "manual",
+      "adopted_version": "grok-4.7",
+      "versions": [
+        {
+          "id": "grok-4.6",
+          "alias": "grok-4.6",
+          "pinned_id": "grok-4.6",
+          "selectors": {
             "grok-cli": "grok-4.6"
           },
-          "efforts": ["medium"],
-          "default_effort": "medium",
-          "workloads": ["reasoning", "implementation", "review-support"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "CodeFlow instruction: grok-4.6 at medium for ordinary in-family sub-agent work; vendor-internal routers are not this policy"
+          "efforts": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "lifecycle": "retired",
+          "designations": [],
+          "qualification": []
         },
         {
-          "route_id": "grok-high-execution",
-          "model_class": "latest-grok-coding",
-          "native_selectors": {
-            "grok-cli": "grok-4.6"
+          "id": "grok-4.7",
+          "alias": "grok-4.7",
+          "pinned_id": "grok-4.7",
+          "selectors": {
+            "grok-cli": "grok-4.7"
           },
-          "efforts": ["high"],
-          "default_effort": "high",
-          "workloads": ["reasoning", "implementation", "review-support"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "CodeFlow instruction: grok-4.6 at high for complex in-family sub-agent work; the high primary stays the orchestrator"
-        },
-        {
-          "route_id": "grok-xhigh-reasoning",
-          "model_class": "latest-grok-coding",
-          "native_selectors": {
-            "grok-cli": "grok-4.6"
-          },
-          "efforts": ["xhigh"],
-          "default_effort": "xhigh",
-          "workloads": ["reasoning"],
-          "status": "candidate",
-          "evidence": [],
-          "use": "CodeFlow instruction: grok-4.6 at xhigh when high stalls or an xhigh_trigger applies"
+          "efforts": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "lifecycle": "active",
+          "designations": [
+            {
+              "seat": "grok-primary",
+              "date": "2026-09-23",
+              "record": "EPC-018 Q2 answer, 2026-09-23; ADR-0069 roster"
+            }
+          ],
+          "qualification": []
         }
       ]
     }
   ],
+  "seats": [
+    {
+      "id": "claude-primary",
+      "family": "claude",
+      "role": "claude-judgment-primary",
+      "lines": [
+        "opus",
+        "fable"
+      ]
+    },
+    {
+      "id": "codex-primary",
+      "family": "codex",
+      "role": "codex-engineering-primary",
+      "lines": [
+        "astra",
+        "sol"
+      ]
+    },
+    {
+      "id": "grok-primary",
+      "family": "grok",
+      "role": "grok-engineering-primary",
+      "lines": [
+        "grok"
+      ]
+    }
+  ],
+  "standing_seats": [
+    "claude-primary",
+    "codex-primary"
+  ],
+  "design_owner": "claude-primary",
+  "duties": {
+    "orchestrate": {
+      "required": [
+        {
+          "id": "host",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "host-seat"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "independent-plan": {
+      "required": [
+        {
+          "id": "design-primary",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "claude-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        },
+        {
+          "id": "engineering-primary",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "codex-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "design": {
+      "required": [
+        {
+          "id": "designer",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "claude-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "engineering-implementation": {
+      "required": [
+        {
+          "id": "executor",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "codex-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "line",
+                "id": "sol"
+              },
+              "harness": null,
+              "effort": "medium"
+            },
+            {
+              "target": {
+                "kind": "line",
+                "id": "opus"
+              },
+              "harness": null,
+              "effort": "medium"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "bounded-execution": {
+      "required": [
+        {
+          "id": "executor",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "line",
+                "id": "sol"
+              },
+              "harness": null,
+              "effort": "medium"
+            },
+            {
+              "target": {
+                "kind": "line",
+                "id": "opus"
+              },
+              "harness": null,
+              "effort": "medium"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "light-execution": {
+      "required": [
+        {
+          "id": "executor",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "line",
+                "id": "luna"
+              },
+              "harness": null,
+              "effort": "medium"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "evidence-collection": {
+      "required": [
+        {
+          "id": "collector",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "line",
+                "id": "opus"
+              },
+              "harness": null,
+              "effort": "medium"
+            },
+            {
+              "target": {
+                "kind": "line",
+                "id": "sol"
+              },
+              "harness": null,
+              "effort": "medium"
+            },
+            {
+              "target": {
+                "kind": "line",
+                "id": "luna"
+              },
+              "harness": null,
+              "effort": "medium"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "reasoning-support": {
+      "required": [
+        {
+          "id": "reasoner",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "line",
+                "id": "fable"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "line",
+                "id": "opus"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "line",
+                "id": "sol"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "line",
+                "id": "astra"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "same-host",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "unit-review": {
+      "required": [
+        {
+          "id": "independent",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "codex-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "claude-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "opposite-author",
+          "label": "required"
+        }
+      ],
+      "triggered": [
+        {
+          "trigger": "extra-family-review",
+          "unless_author": "grok",
+          "participant": {
+            "id": "extra-family",
+            "alternatives": [
+              {
+                "target": {
+                  "kind": "seat",
+                  "id": "grok-primary"
+                },
+                "harness": null,
+                "effort": "high"
+              }
+            ],
+            "relation": "opposite-author",
+            "label": "required"
+          }
+        }
+      ]
+    },
+    "body-review": {
+      "required": [
+        {
+          "id": "engineering-primary",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "codex-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        },
+        {
+          "id": "design-primary",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "claude-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": [
+        {
+          "trigger": "extra-family-review",
+          "unless_author": "grok",
+          "participant": {
+            "id": "extra-family",
+            "alternatives": [
+              {
+                "target": {
+                  "kind": "seat",
+                  "id": "grok-primary"
+                },
+                "harness": null,
+                "effort": "high"
+              }
+            ],
+            "relation": "opposite-author",
+            "label": "required"
+          }
+        }
+      ]
+    },
+    "general-review": {
+      "required": [
+        {
+          "id": "independent",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "grok-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "codex-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "claude-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "opposite-author",
+          "label": "required"
+        },
+        {
+          "id": "advisory",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "line",
+                "id": "fable"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "same-author",
+          "label": "second-opinion"
+        }
+      ],
+      "triggered": []
+    },
+    "design-and-editorial-review": {
+      "required": [
+        {
+          "id": "advisory",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "line",
+                "id": "fable"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "any",
+          "label": "second-opinion"
+        },
+        {
+          "id": "executability",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "codex-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "consultation": {
+      "required": [
+        {
+          "id": "consultant",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "line",
+                "id": "fable"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "codex-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "grok-primary"
+              },
+              "harness": null,
+              "effort": "high"
+            }
+          ],
+          "relation": "any",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    },
+    "computer-use-qa": {
+      "required": [
+        {
+          "id": "qa",
+          "alternatives": [
+            {
+              "target": {
+                "kind": "seat",
+                "id": "codex-primary"
+              },
+              "harness": "codex-app",
+              "effort": "high"
+            },
+            {
+              "target": {
+                "kind": "seat",
+                "id": "claude-primary"
+              },
+              "harness": "claude-code",
+              "effort": "high"
+            }
+          ],
+          "relation": "opposite-author",
+          "label": "required"
+        }
+      ],
+      "triggered": []
+    }
+  },
   "high_triggers": [
     "complex or difficult architecture, technical, planning, or design work, whether greenfield or improving existing systems",
     "material ambiguity or complexity beyond a bounded routine worker's qualified medium scope"
@@ -269,20 +813,37 @@
     "unresolved cross-lineage disagreement",
     "failed or stalled high-effort work"
   ],
+  "named_policies": {
+    "extra-family-review": [
+      "operator instruction",
+      "complex architecture",
+      "material technical depth",
+      "security-sensitive change",
+      "capability-sensitive or long-horizon work",
+      "unresolved standing-pair disagreement or unclear settlement",
+      "consequential or irreversible work",
+      "high or xhigh complexity",
+      "standing pair cannot reach justified confidence"
+    ]
+  },
   "rules": [
+    "Resolve every duty with codeflow models resolve and launch only the pinned id it returns; an alias never launches a seat.",
     "Primary seats retain independent planning and approval duties.",
     "High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker.",
     "The standing pair is the usual quality floor; extra catalog families never vote silently.",
     "A high primary retains orchestration; use same-family workers when delegation adds value or an xhigh trigger requires stronger reasoning.",
+    "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at high and keeps approval. With no such worker the obligation stays open and the trigger is unmet.",
     "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     "Internal workers never replace a primary or named cross-lineage reviewer.",
     "Cross-family entry always invokes the receiving qualified primary at default effort as ROLE: peer; only that primary dispatches its own same-family ROLE: worker escalation. A caller never selects a foreign worker directly.",
     "Claude-side internal routing belongs to the Claude primary.",
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",
-    "Default effort is high, not a ceiling: complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task at high or xhigh; design follows the separate Claude owner and route-status contract.",
+    "The design owner seat's first line owns design direction, real design and fidelity approval. A later line of that seat may orchestrate, plan and review with reduced assurance, and serves design only through a matching task-specific OPERATOR_OVERRIDE.",
+    "Default effort is high, not a ceiling: complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task at high or xhigh; design follows the design owner rule.",
     "Assess triggers before work and as difficulty changes. An xhigh_trigger permits direct xhigh without a failed high attempt; routine well-specified work does not escalate automatically. Novelty is not a trigger; complexity and difficulty are.",
-    "If Fable is unavailable, the Claude primary may use the documented explicit Opus degraded fallback at the same effort after native preflight, with actual scope and reduced assurance recorded. If Astra is unavailable, the Codex primary may use the documented explicit gpt-5.6-sol degraded fallback under the same conditions. These fallback paths preserve graceful operation but do not qualify or promote an internal worker route.",
+    "A designation is not qualification: report it as designated, full suite not run, until an exact full-suite binding record exists.",
+    "An observed id that differs from the pinned id inherits no designation and no evidence.",
     "Unobserved model, effort, worker routing, availability, and usage remain unknown.",
     "A changed concrete binding requires native-interactive qualification before promotion."
   ]

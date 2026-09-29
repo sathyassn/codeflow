@@ -87,3 +87,15 @@ binding. Promotion still requires the complete full suite.
   and would create brittle coupling.
 - Predeclaring untested Grok, Kimi, ACP, or A2A bindings: protocol presence does
   not meet the native capability contract.
+
+## Note (2026-09-25)
+
+Layer 4 is now the schema 5 model catalog (ADR-0069): families, product lines
+with ordered versions, seats and duties, still one fully managed
+`current-ensemble.json`. It owns pinned ids, efforts and triggers in place of
+primary selectors and internal worker classes. A designation is not a
+promoted binding: a seat served by designation alone is reported as
+"designated, full suite not run", and qualification still needs the full
+suite and an approved binding record under this decision. `doctor --check
+model-bindings` adds illustrative catalog resolutions and keeps the
+harness-version and settings drift checks for binding records.

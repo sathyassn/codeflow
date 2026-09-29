@@ -106,3 +106,18 @@ new engine policy or general runtime plugin system.
 The scaffold gains a managed capability-routing resource, updated skill/docs,
 and deterministic/model-eval pins. No Rust runtime routing or pipeline schema is
 added. CAP-010 remains the capability record for the duo.
+
+## Note (2026-09-25)
+
+Seats: the producer and reviewer seats in this decision are catalog seats
+(ADR-0069), resolved per duty. `unit-review` owes the lineage opposite the
+actual author, and `body-review` owes both standing seats. The Fable-class and
+Sol-class wording describes the roster at the time.
+
+Approval: ADR-0070 amends the clause that a changed producer or reviewer seat
+needs fresh approval from both primary seats, in two cases. A reversible item
+settled after two rounds carries `SETTLED_DISSENT` in place of the dissenting
+seat's approval. After a recorded mid-run seat loss, every available standing
+seat approves the reassignment, the lost seat is recorded unavailable with
+reduced assurance, and any verdict it gave before the loss stays as given.
+Every other part of this decision stands.

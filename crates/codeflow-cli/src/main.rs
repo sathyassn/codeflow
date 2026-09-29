@@ -79,6 +79,8 @@ enum Command {
     /// delegates, repo integrity, CI perimeter, managed drift, customization,
     /// instruction size, and test config; `doctor --list` names them all.
     Doctor(cmd::doctor::DoctorArgs),
+    /// Resolve catalog duties without launching models.
+    Models(cmd::models::ModelsArgs),
     /// Inspect .codeflow/policy.json: `explain` the full key schema from the
     /// binary; `show` the effective values, their source, and invalid keys.
     Policy(cmd::policy::PolicyArgs),
@@ -119,6 +121,7 @@ fn touches_registry(command: &Command) -> bool {
             | Command::Validate(_)
             | Command::Work(_)
             | Command::Estimate(_)
+            | Command::Models(_)
             | Command::Report(_)
     )
 }
@@ -187,16 +190,20 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
 
-    // Update itself is the cure, so it skips the nag. Forecast checking also
-    // skips this unrelated, unbounded project-state read to remain isolated.
-    if !matches!(cli.command, Command::Update { .. } | Command::Estimate(_)) {
+    // Update itself is the cure, so it skips the nag. Read-only resolvers
+    // skip unrelated project-state reads to remain isolated.
+    if !matches!(
+        cli.command,
+        Command::Update { .. } | Command::Estimate(_) | Command::Models(_)
+    ) {
         if let Some(warning) = scaffold::version_skew_warning(&cwd, BINARY_VERSION) {
             eprintln!("{warning}");
         }
     }
 
     // Hooks, CI and read-only commands leave the user registry alone: they
-    // run in sandboxes and CI, and forecast checking is strictly read-only.
+    // run in sandboxes and CI, and forecast checking and model resolution are
+    // strictly read-only.
     // Other commands keep their best-effort upkeep (charter §7).
     if touches_registry(&cli.command) {
         cmd::touch_registry_best_effort();
@@ -273,6 +280,7 @@ fn main() -> anyhow::Result<()> {
         Command::Ci(args) => std::process::exit(cmd::ci::run(&args)),
         Command::Status(args) => std::process::exit(cmd::status::run(&args)),
         Command::Integrate(args) => std::process::exit(cmd::integrate::run(&args)),
+        Command::Models(args) => std::process::exit(cmd::models::run(&args)),
         Command::Doctor(args) => std::process::exit(cmd::doctor::run(&args)),
         Command::Policy(args) => std::process::exit(cmd::policy::run(&args)),
         Command::Recall(args) => cmd::recall::run(&args)?,
