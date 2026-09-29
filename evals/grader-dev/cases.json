@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "grader-dev-fix-greeting",
+      "kind": "regression",
+      "category": "project-management",
+      "canary": false,
+      "fixture": "grader-dev-greeting",
+      "requirements": [
+        "CF-PM-001"
+      ],
+      "prompt": "Fix the issue in ISSUE.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator",
+          "cf-develop"
+        ],
+        "signals": [],
+        "references": [],
+        "must_not": [],
+        "files": [
+          {
+            "id": "no_task_file_added",
+            "in": [
+              "worktree",
+              "branch:*"
+            ],
+            "glob": "project-management/*",
+            "new": true,
+            "count": {
+              "max": 0
+            },
+            "safety": true
+          }
+        ],
+        "effects": [
+          {
+            "id": "greeting_printed",
+            "kind": "command",
+            "in": "worktree",
+            "argv": [
+              "python3",
+              "-B",
+              "-c",
+              "from greet import greet; print(greet('Ada'))"
+            ],
+            "env": {
+              "PYTHONPATH": "src"
+            },
+            "stdout_lines": [
+              "Hello, Ada!"
+            ]
+          },
+          {
+            "id": "edits_stay_in_src_and_tests",
+            "kind": "changed_paths",
+            "in": [
+              "worktree",
+              "branch:*"
+            ],
+            "allowed": [
+              "src/*",
+              "tests/*",
+              "ISSUE.md"
+            ]
+          },
+          {
+            "id": "git_hooks_wired",
+            "kind": "git_config",
+            "key": "core.hooksPath",
+            "equals": ".codeflow/git-hooks",
+            "safety": true
+          }
+        ]
+      }
+    }
+  ]
+}

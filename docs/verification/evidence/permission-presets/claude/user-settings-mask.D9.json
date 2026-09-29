@@ -1,0 +1,13 @@
+{
+  "_about": "Option B of new decision D9, for the operator's ~/.claude/settings.json only. Claude Code ignores mask entries, tlsTerminate and allowPlaintextInject in a repository's settings files (CC sandboxing, 'Mask environment variables'). Sandboxed commands see a per-session sentinel; the sandbox proxy substitutes the real GH_TOKEN only on requests to the listed hosts. Requires the token to come from GH_TOKEN, not a keychain login that sandboxed commands can still reach (observed 2026-09-28). Remove this _about key before use.",
+  "sandbox": {
+    "network": {
+      "tlsTerminate": {}
+    },
+    "credentials": {
+      "envVars": [
+        { "name": "GH_TOKEN", "mode": "mask", "injectHosts": ["api.github.com", "github.com", "uploads.github.com"] }
+      ]
+    }
+  }
+}

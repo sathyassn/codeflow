@@ -1,0 +1,130 @@
+{
+  "_about": "Decided D7 list (operator decision of 2026-09-28, workspace RELEASE-PLAN.md:538; proposal v10, sections 1.5 and 3). Added to the workspace policy's `sandbox_retry_allow`, which may otherwise be empty after a companion pass of spike 0. Each entry still meets the general retry conditions (single simple command, program pinned by absolute path, project cwd, no refused environment, no sandbox-writable PATH entry), and the Herdr subcommand grammar applies to every Herdr call, sandboxed or retried. A registered seat is a live agent that `delegate init` recorded for this task and `herdr agent list` shows; a shell pane never is one. Never allowed: pane run, pane send-text, pane send-keys, agent attach, any agent send-keys form other than the single key Escape, any subcommand not listed. Shell panes and seat approval prompts stay the operator's; a refusal that needs the operator is queued on the operator-actions list.",
+  "security": {
+    "sandbox_retry_allow_add": [
+      {
+        "program": "herdr",
+        "subcommand": [
+          "workspace",
+          "list"
+        ],
+        "args": "none",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "tab",
+          "list"
+        ],
+        "args": "none",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "pane",
+          "list"
+        ],
+        "args": "none",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "pane",
+          "current"
+        ],
+        "args": "none",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "agent",
+          "list"
+        ],
+        "args": "none",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "agent",
+          "get"
+        ],
+        "args": "a registered seat",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "agent",
+          "read"
+        ],
+        "args": "a registered seat",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "agent",
+          "wait"
+        ],
+        "args": "a registered seat and --until/--timeout",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "tab",
+          "create"
+        ],
+        "args": "--workspace only",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "agent",
+          "start"
+        ],
+        "args": "name, --kind claude|codex|grok, --pane, --timeout, and after -- only the seat flags of the route table (proposal v10 section 1.5) for that kind and role, including the launch-time trust form for the seat's own worktree only: Codex `-c projects.\"<seat worktree>\".trust_level=\"trusted\"`, Grok `--trust`; Claude has none; a --settings value only when its hash equals the one delegate init recorded",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "agent",
+          "prompt"
+        ],
+        "args": "a registered seat; text that does not start with `!`, and does not start with `/` unless the command word is exactly one of prompt_slash_allow; --wait/--until/--timeout",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>",
+        "prompt_slash_allow": [
+          "/compact",
+          "/clear",
+          "/new"
+        ]
+      },
+      {
+        "program": "herdr",
+        "subcommand": [
+          "agent",
+          "send-keys"
+        ],
+        "args": "a registered seat and exactly one key",
+        "keys_allow": [
+          "Escape"
+        ],
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      },
+      {
+        "program": "grok",
+        "subcommand": [],
+        "args": "exactly the trust-only form unit 5 AC-2 qualifies (pending; for example `--trust inspect --json`, unverified); cwd a registered seat worktree",
+        "status": "pending-qualification: refused until the qualified form replaces this text",
+        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>"
+      }
+    ]
+  }
+}

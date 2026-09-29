@@ -99,21 +99,19 @@ def validate_config(value: Any) -> dict[str, Any]:
     return value
 
 
-def normalize_value(value: str) -> str:
-    value = value.strip()
-    marker = chr(96)
-    if len(value) >= 2 and value[0] == value[-1] == marker:
-        value = value[1:-1].strip()
-    return value
-
-
 def is_placeholder(value: str) -> bool:
     return not substantive_text(value, [])
 
 
+# ASCII-only lower case, as `codeflow ci` compares: a Unicode case fold
+# would read `\u212a` (Kelvin) as `k`.
+ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
 def guidance_text(value: str) -> str:
-    """Casefolded text with Markdown quoting and repeated whitespace removed."""
-    return " ".join(re.sub(r"[`\"']", "", value).split()).casefold()
+    """Text lower-cased in ASCII, with Markdown quoting and repeated
+    whitespace removed, as `codeflow ci` compares guidance."""
+    return " ".join(re.sub(r"[`\"']", "", value).split()).translate(ASCII_LOWER)
 
 
 def is_unresolved_alternative(value: str) -> bool:
@@ -143,108 +141,107 @@ def lacks_migration_guidance(value: str) -> bool:
     return not substantive_text(value, UNRESOLVED_ALTERNATIVES | {"see breaking change"})
 
 
-# Markdown structure of a PR body, read the way the Rust PR-body check reads
-# it: fenced code and HTML comments are never fields, only ATX headings at
-# column zero open sections, and a section's fields end at its first
-# subsection. `scripts/fixtures/release_impact_cases.json` holds the cases
-# both parsers must agree on.
-FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-ATX_HEADING = re.compile(r"^(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
-
-
-def markdown_lines(body: str, *, include_code: bool) -> list[tuple[str, tuple[int, str] | None]]:
-    """Visible lines, each with its (depth, name) when it is a heading."""
-    lines: list[tuple[str, tuple[int, str] | None]] = []
-    fence: str | None = None
-    in_comment = False
-    for raw in body.splitlines():
-        line = raw
-        if fence is not None:
-            closing = re.match(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*$", line)
-            if closing:
-                fence = None
-            elif include_code:
-                lines.append((line, None))
-            continue
-        if in_comment:
-            end = line.find("-->")
-            if end < 0:
-                continue
-            line, in_comment = line[end + 3 :], False
-        while (start := line.find("<!--")) >= 0:
-            end = line.find("-->", start + 4)
-            if end < 0:
-                line, in_comment = line[:start], True
-                break
-            line = line[:start] + line[end + 3 :]
-        opening = FENCE_OPEN.match(line)
-        if opening:
-            fence = opening.group(1)
-            continue
-        heading = ATX_HEADING.match(line)
-        if heading:
-            name = re.sub(r"[*_`]", "", heading.group(2) or "").strip()
-            lines.append((line, (len(heading.group(1)), name)))
-        else:
-            lines.append((line, None))
-    return lines
-
-
-def markdown_section(body: str, name: str, *, include_code: bool, own_only: bool) -> list[list[str]]:
-    """Each section named `name` (at depth 2, else depth 3) as its lines.
-
-    `own_only` stops at the first subsection; otherwise a section runs to the
-    next heading at its depth or above.
-    """
-    lines = markdown_lines(body, include_code=include_code)
-    headings = [
-        (index, depth, title)
-        for index, (_, heading) in enumerate(lines)
-        if heading is not None
-        for depth, title in [heading]
-    ]
-    wanted = name.casefold()
-    depth = 2 if any(d == 2 and t.casefold() == wanted for _, d, t in headings) else 3
-    found = []
-    for index, heading_depth, title in headings:
-        if heading_depth != depth or title.casefold() != wanted:
-            continue
-        end = len(lines)
-        for next_index, next_depth, _ in headings:
-            if next_index > index and (own_only or next_depth <= depth):
-                end = next_index
-                break
-        found.append([line for line, heading in lines[index + 1 : end] if heading is None])
-    return found
-
-
 RELEASE_FIELDS = {
     "unit", "impact", "breaking", "contract", "rationale", "migration", "evidence", "withdrawal",
 }
-FIELD_LINE = re.compile(r"^\s*(?:[-*+]|\d+[.)])?\s*([A-Za-z*_ ]+?)[*_]*\s*:[*_]*\s*(.*?)\s*$")
+
+# A PR body is read by the codeflow binary, the same reader `codeflow ci`
+# uses (`codeflow ci --read-release-impact`), so the two can never read a
+# body differently (TSK-147 F4). The caller names the binary, with
+# --codeflow-bin or CODEFLOW_BIN: pre-push passes the codeflow running the
+# hook, CI the one it built from this tree. release.py never searches PATH,
+# where an older codeflow could read differently from the enforcer.
+CODEFLOW_BIN = "CODEFLOW_BIN"
+# The reader's JSON contract (`crates/codeflow-cli/src/cmd/ci.rs`,
+# READ_PROTOCOL). A binary answering another version reads with other
+# semantics, so it is refused rather than trusted by shape.
+READER_PROTOCOL = 1
 
 
-def parse_release_impact(body: str) -> dict[str, str]:
-    sections = markdown_section(body, "Release impact", include_code=False, own_only=True)
-    if len(sections) != 1:
+def codeflow_bin(args: argparse.Namespace | None = None) -> Path:
+    named = getattr(args, "codeflow_bin", None) or os.environ.get(CODEFLOW_BIN)
+    if not named:
+        fail(
+            "reading a PR body needs the codeflow binary: pass --codeflow-bin or set "
+            f"{CODEFLOW_BIN} (release.py does not search PATH)"
+        )
+    path = Path(named)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        fail(f"the codeflow binary {path} is not an executable file")
+    # Absolute, so the file just checked is the one that runs: a relative
+    # name such as `./codeflow` prints as `codeflow`, which a subprocess
+    # would look up on PATH (TSK-147 round 5 F7).
+    return path.resolve()
+
+
+def read_pr_bodies(bodies: list[str], binary: Path | None = None) -> list[dict[str, Any]]:
+    """The codeflow binary's reading of each body: `release_impact`, the one
+    Release impact section's own (key, value) fields in order, or None
+    without exactly one section; `breaking_change`, the visible text of each
+    Breaking change section; `findings`, `codeflow ci`'s Release impact
+    findings under the default policy."""
+    binary = binary or codeflow_bin()
+    try:
+        done = subprocess.run(
+            [str(binary), "ci", "--read-release-impact"],
+            input=json.dumps(bodies), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        fail(f"{binary} could not run: {error}")
+    if done.returncode != 0:
+        fail(
+            f"{binary} ci --read-release-impact failed ({done.returncode}): "
+            f"{done.stderr.strip() or done.stdout.strip()}; a codeflow built from this tree reads PR bodies"
+        )
+    try:
+        answer = json.loads(done.stdout)
+    except json.JSONDecodeError as error:
+        fail(f"{binary} ci --read-release-impact printed no JSON: {error}")
+    protocol = answer.get("protocol") if isinstance(answer, dict) else None
+    if type(protocol) is not int or protocol != READER_PROTOCOL:
+        fail(
+            f"{binary} answers reader protocol {protocol!r}; this release.py reads protocol "
+            f"{READER_PROTOCOL}: use a codeflow built from this tree"
+        )
+    readings = answer.get("readings")
+    if not isinstance(readings, list) or len(readings) != len(bodies) or not all(
+        isinstance(reading, dict)
+        and (reading.get("release_impact") is None or isinstance(reading["release_impact"], list))
+        and isinstance(reading.get("breaking_change"), list)
+        and isinstance(reading.get("findings"), list)
+        and all(isinstance(finding, str) for finding in reading["findings"])
+        for reading in readings
+    ):
+        fail(f"{binary} ci --read-release-impact printed an unexpected reading")
+    return readings
+
+
+def release_impact_fields(reading: dict[str, Any]) -> list[tuple[str, str]] | None:
+    pairs = reading["release_impact"]
+    if pairs is None:
+        return None
+    # Keys as the reader gives them, lower-cased in ASCII only: a key that
+    # `codeflow ci` does not read as a field is not one here either.
+    return [(str(key), str(value)) for key, value in pairs]
+
+
+def parse_release_impact(
+    body: str, binary: Path | None = None, *, reading: dict[str, Any] | None = None
+) -> dict[str, str]:
+    reading = reading or read_pr_bodies([body], binary)[0]
+    pairs = release_impact_fields(reading)
+    if pairs is None:
         fail("PR body must contain exactly one '## Release impact' section")
     fields: dict[str, str] = {}
-    for line in sections[0]:
-        match = FIELD_LINE.match(line)
-        if not match:
-            continue
-        label = re.sub(r"[*_]", "", match.group(1)).strip()
-        if not label:
-            continue
-        key = label.casefold().replace(" ", "_")
+    for key, value in pairs:
         if key in fields:
             if key in RELEASE_FIELDS:
-                fail(f"release impact field {label} is duplicated")
+                fail(f"release impact field {key} is duplicated")
             continue
-        fields[key] = normalize_value(re.sub(r"^[*_]+|[*_]+$", "", match.group(2)))
-    for key in ["impact", "breaking"]:
+        fields[key] = value
+    for key in ["impact", "breaking", "contract"]:
         if key in fields:
-            fields[key] = fields[key].casefold()
+            fields[key] = fields[key].translate(ASCII_LOWER)
     for key in ["unit", "impact", "rationale", "evidence"]:
         if key not in fields or (
             key in {"rationale", "evidence"} and is_placeholder(fields[key])
@@ -269,11 +266,17 @@ def parse_release_impact(body: str) -> dict[str, str]:
         fields["breaking"] = CONTRACT_BREAKING[fields["contract"]]
     if "migration" in fields and is_unresolved_alternative(fields["migration"]):
         fail("release impact field migration still holds the template alternatives")
-    fields[MIGRATION_GUIDANCE] = "yes" if migration_guidance(body, fields.get("migration", "")) else "no"
+    fields[MIGRATION_GUIDANCE] = "yes" if migration_guidance(reading, fields.get("migration", "")) else "no"
     if (fields["breaking"] == "yes") != (fields["impact"] == "major"):
         fail("breaking must be yes if and only if impact is major")
     if fields["breaking"] == "yes" and fields[MIGRATION_GUIDANCE] != "yes":
         fail("a breaking change requires migration guidance")
+    # The rules `codeflow ci` applies are this check's too, whatever this
+    # file adds (TSK-147 round 5): a finding it reports rejects the block.
+    # It reads a legacy Contract-only block with the transition rules above
+    # (round 6), so no declaration is exempt.
+    if reading["findings"]:
+        fail("codeflow ci rejects the Release impact block: " + "; ".join(reading["findings"]))
     return fields
 
 
@@ -282,10 +285,10 @@ def parse_release_impact(body: str) -> dict[str, str]:
 MIGRATION_GUIDANCE = "_migration_guidance"
 
 
-def migration_guidance(body: str, migration: str) -> bool:
+def migration_guidance(reading: dict[str, Any], migration: str) -> bool:
     if guidance_text(migration) == "see breaking change":
-        sections = markdown_section(body, "Breaking change", include_code=True, own_only=False)
-        return len(sections) == 1 and substantive_text("\n".join(sections[0]), [])
+        sections = reading["breaking_change"]
+        return len(sections) == 1 and not lacks_migration_guidance(sections[0])
     return not lacks_migration_guidance(migration)
 
 
@@ -985,7 +988,7 @@ def check_pr(args: argparse.Namespace) -> None:
         if args.body_file
         else os.getenv(args.body_env, "")
     )
-    fields = parse_release_impact(body)
+    fields = parse_release_impact(body, codeflow_bin(args))
     floor = commit_impact(base, head, cwd=args.root)
     if IMPACT_ORDER[fields["impact"]] < IMPACT_ORDER[floor]:
         changed = set(changed_paths(base, head, cwd=args.root))
@@ -1488,7 +1491,7 @@ def draft_intent(args: argparse.Namespace, notes: list[str]) -> str | None:
     if path is None:
         return None
     try:
-        return parse_release_impact(path.read_text(encoding="utf-8"))["impact"]
+        return parse_release_impact(path.read_text(encoding="utf-8"), codeflow_bin(args))["impact"]
     except (OSError, ReleaseError) as error:
         notes.append(f"the PR draft {path} gives no readable Release impact: {error}")
         return None
@@ -1853,6 +1856,7 @@ def parser() -> argparse.ArgumentParser:
     source = check.add_mutually_exclusive_group(required=True)
     source.add_argument("--body-file", type=Path)
     source.add_argument("--body-env")
+    check.add_argument("--codeflow-bin", help=f"the codeflow that reads the body (else ${CODEFLOW_BIN})")
     add_host_args(check)
     check.set_defaults(func=check_pr)
 
@@ -1878,6 +1882,7 @@ def parser() -> argparse.ArgumentParser:
     local.add_argument("--target", default="")
     local.add_argument("--base", default="")
     local.add_argument("--body-file", type=Path)
+    local.add_argument("--codeflow-bin", help=f"the codeflow that reads the draft (else ${CODEFLOW_BIN})")
     local.set_defaults(func=preflight)
 
     inventory = sub.add_parser("host-state")

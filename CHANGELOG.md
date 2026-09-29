@@ -379,7 +379,39 @@ publication date._
   and every stamp, baseline and hash
   consistent, and takes errata as dated notes in a `## Errata` block.
 
-### Changed
+<!-- codeflow:release-impact minor -->
+- **Evaluation grades file state and tool effects.** A model-evaluation case
+  can now carry `expected.files` and `expected.effects`, and `eval_kit.py
+  grade` judges the work a session left: file content and frontmatter, reviews
+  read only in the reviewer's verdict format, from the verdict field alone and
+  only when a recorded judgement finds them coherent, claimed branches and
+  their tracking, records consistent with the id registry, the paths the
+  session changed, meaning settled by recorded judgements bound to the exact
+  text, product checks run under confinement with their expected output, and
+  commit gates and acceptance blocks judged by the shipped `codeflow`
+  checkers, whose failure to finish fails the assertion. It measures the
+  result, not how it was made: CLI use, readiness checks and review before
+  completion need the harness's own record of the session, and a command's
+  process record is only reported beside the effect it names. A judgement
+  counts only from a judge, with its exact configuration, whose calibration
+  meets every labelled control of the graded suite (`judge-check`, `grade
+  --calibration`); otherwise its assertion is ungraded and the trial is never
+  scored as a pass. `record-judgement` signs each judgement under an
+  evaluator key kept in the evaluator's CodeFlow home, and grading and
+  scoring count only judgements whose signature verifies. Grading signs the
+  whole grade, with every judgement it read, as a receipt under the same key,
+  and scoring counts a pass or a failure only when that receipt verifies,
+  names the result's run, the retained judgements rederive it, and the
+  trial, graded again from its retained record, workspace and files, gives
+  the same outcome. Trial records and reservations are signed under the
+  evaluator key, so a rewritten baseline or a forged registration counts as
+  an error. Keep a run's roots until every consumer has read it. Graded cases live in a graded
+  suite outside the shipped kit (`--graded-suite`); a qualification holdout
+  stays outside the published repository, and `holdout-check` fails when a
+  holdout path, file, JSON object or copied run of text appears in the tracked
+  tree. Subjects work in a separate subjects root, the fixture boundary covers
+  both roots at every depth, a timed-out or errored session is kept and graded
+  as a failure, and a pack result must keep every trial.
 
 <!-- codeflow:release-impact minor -->
 - **Present no longer draws Mermaid diagrams.** The `diagram` block leaves
@@ -619,6 +651,60 @@ publication date._
   value an existing install has and prints one line recommending `block`. To
   keep the advisory push, set `"test_gate_on_push": "warn"` under `git` in
   `.codeflow/policy.json`.
+
+<!-- codeflow:release-impact minor -->
+- **Every warning names the step that clears it.** Public behaviour change:
+  with `git.test_gate_on_push` at `warn`, a push whose `codeflow ci` finds an
+  always-blocking rule (such as the id registry) or a rule the project set
+  to `block` is now stopped; before, the hook printed `BLOCKED` and let the
+  push through. To let such a push through again, set that rule to `warn`
+  in `.codeflow/policy.json`; an always-blocking rule stays blocking. Other
+  findings print at the push gate's level, and the closing line of each
+  hook says whether the commit or push was stopped.
+  Each warning and note from `codeflow ci`, `validate --docs`, `doctor`, the
+  git hooks and the session guards now names the step that clears it: a
+  `codeflow` command, a named `git` command or a file edit; a test fails on
+  one printed without. `validate --docs` no longer warns for an approved spec
+  whose consumers are all accepted, its healthy derived `implemented` state,
+  and prints no note for a layer the project's tier does not install.
+  `doctor` reads Codex hook trust from `~/.codex/config.toml` (or
+  `$CODEX_HOME`) and Grok folder trust from `~/.grok/trusted_folders.toml`
+  (or `$GROK_HOME`). A static reading proves only that a hook does not run:
+  a Codex hook that is untrusted, disabled or changed (hashed as Codex
+  normalizes it), a folder Grok does not trust, or a Grok store it cannot
+  read is a warning. A configuration that matches is a note, "configured;
+  runtime not verified", naming the real hook event that verifies it;
+  doctor never reports these hooks as running. Where doctor cannot
+  reproduce the harness's decision (a matcher Codex rejects, an empty
+  command, a linked worktree whose hooks Codex takes from the main
+  checkout, Grok `version_overrides`, a relative `GROK_HOME`, a
+  Grok-managed worktree) the note says it cannot verify it.
+  `doctor --check hooks` warns when another hook manager's hook is missing,
+  not executable or names no codeflow shim outside a comment; when every
+  hook is executable and names its shim, it prints a note, "wiring not
+  verified", naming the commit with a bad subject that confirms the calls
+  run, since reading a hook cannot show that it runs the shim.
+  `doctor --check delegates` gives what this machine installs its own step,
+  apart from the Codex sign-in. The session summary names the path its
+  ledger write failed on and the repair that path needs, and outside a git
+  repository records nothing instead of warning. A guard input that is not
+  a JSON hook payload, or whose `tool_name`, `tool_input`, `command` or
+  `cwd` has the wrong type, names the field and the harness hook entry to
+  repair. A commit on
+  a `git.breaking_watch_paths` surface now prints a note, not a warning,
+  pointing at the pull request's Release impact, and `codeflow ci` and
+  `scripts/release.py` given a body that states `Breaking: no` with a
+  `Rationale`, outside code and quotes, report nothing for it.
+  `scripts/release.py` reads a pull request body through the `codeflow`
+  binary its caller names (`--codeflow-bin` or `CODEFLOW_BIN`), with the
+  parser `codeflow ci` uses, so the two cannot read a body differently; it
+  never takes a `codeflow` from `PATH`. The pre-push preflight passes the
+  `codeflow` running the hook, and the release impact job builds one from
+  the checked-out tree. A project that runs `release.py check-pr` itself
+  passes a `codeflow` built from its tree. The reader's answer carries a
+  protocol version, and `release.py` refuses a binary that answers another.
+  `codeflow ci` accepts the legacy `Contract` field as `release.py` does,
+  alone or agreeing with `Breaking`, so the two no longer disagree on it.
 
 <!-- codeflow:release-impact minor -->
 - **One full gate at a time, running the suite once.** Public behaviour

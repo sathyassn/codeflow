@@ -1,0 +1,84 @@
+# Codex config for a CodeFlow-managed repository (CodeFlow ADR-0008).
+#
+# Project hooks provide session guidance and fast feedback. The named permission
+# profile below is the OS-enforced boundary: normal work has workspace write
+# access, broad public-network access, and loopback access for local UI testing,
+# while sensitive files, private-network destinations, privileged operations,
+# and destructive escalations remain guarded. Ordinary eligible escalation
+# prompts would go to Codex's reviewer subagent if approval_policy were
+# on-request. Production is `never` (never request approval) plus CLI
+# `--sandbox danger-full-access` (ADR-0055), so no approval prompts fire and
+# the OS sandbox is off for that process; git-guard/exec-guard/git hooks/CI
+# remain. Keep `approvals_reviewer` so flipping back to on-request restores
+# auto-review. Select `user` before any catastrophic/high-blast-radius action.
+# `never` alone grants no permissions: blocked operations fail rather than
+# asking. Filesystem/network authority comes from the effective sandbox profile.
+
+approval_policy = "never"
+approvals_reviewer = "auto_review"
+web_search = "live"
+default_permissions = "cf-guard"
+# Pin the primary Codex seat's ordinary starting effort. Use bounded medium
+# workers where appropriate and xhigh on a documented trigger (ADR-0056).
+model_reasoning_effort = "high"
+
+# Codex uses its Linux sandbox inside WSL2. On native Windows, prefer the
+# elevated native sandbox; this table is ignored on other platforms.
+[windows]
+sandbox = "elevated"
+
+[features]
+hooks = true
+
+# Keep Codex's built-in case-insensitive KEY/SECRET/TOKEN environment scrub
+# active for every shell command even if the upstream default changes.
+[shell_environment_policy]
+ignore_default_excludes = false
+
+[permissions.cf-guard]
+extends = ":workspace"
+
+# Deny direct reads of pure-secret stores. Authenticated tools should use their
+# OAuth, keychain, app/MCP, or credential-broker path. GitHub CLI and Docker
+# configuration are deliberately not denied because those tools need to read
+# their own configuration.
+[permissions.cf-guard.filesystem]
+glob_scan_max_depth = 6
+"~/.ssh/**" = "deny"
+"~/.aws/**" = "deny"
+"~/.gnupg/**" = "deny"
+"~/.netrc" = "deny"
+"~/.kube/**" = "deny"
+"~/.cargo/credentials*" = "deny"
+"~/.codex/auth.json" = "deny"
+
+[permissions.cf-guard.filesystem.":workspace_roots"]
+"**/.env" = "deny"
+"**/.env.*" = "deny"
+"**/*.pem" = "deny"
+"**/*.key" = "deny"
+"**/*.p12" = "deny"
+"**/*.pfx" = "deny"
+"**/.netrc" = "deny"
+"**/id_rsa*" = "deny"
+"**/id_ed25519*" = "deny"
+
+# Allow research, dependency resolution, and external tool APIs on public
+# hosts. Keep private/link-local destinations and arbitrary Unix sockets closed;
+# exact loopback exceptions support local dev servers and browser/UI tests.
+[permissions.cf-guard.network]
+enabled = true
+# Use the full subprocess-network proxy so public research, package managers,
+# and authenticated tool APIs are not constrained by the limited proxy mode.
+# The domain rules and private-network boundary below still constrain targets.
+mode = "full"
+allow_local_binding = false
+allow_upstream_proxy = false
+dangerously_allow_non_loopback_proxy = false
+dangerously_allow_all_unix_sockets = false
+
+[permissions.cf-guard.network.domains]
+"*" = "allow"
+"localhost" = "allow"
+"127.0.0.1" = "allow"
+"::1" = "allow"
