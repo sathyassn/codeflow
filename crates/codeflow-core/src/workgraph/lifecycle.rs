@@ -1429,64 +1429,106 @@ fn frozen_spec_problems(
 
 /// Whether `spec_id` was implemented at any commit reachable from `tip`
 /// (TSK-169). The state is derived only from the spec and the records that
-/// name it, so git's pickaxe first finds every record path whose text ever
-/// gained or lost the id, then the state is derived at each commit that
-/// changed one of those paths, from those paths alone; a commit that changed
-/// none of them keeps its parent's state. Side branches count
+/// name it, and changes only at a commit that changes one of them. One
+/// `git log --raw` lists every record blob each commit wrote under
+/// `project-management/`; each distinct blob is parsed once, and a path is
+/// relevant when any version of it is the spec or lists it in `specs`, read
+/// as the judge reads it, never by searching the text for the id (an
+/// escaped YAML string names the spec too). The state is then derived at
+/// each commit that changed a relevant path, from those paths alone, and
+/// the walk stops at the first implemented state. Side branches count
 /// (`--full-history`); a shallow clone reads only the history it has.
 fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Result<bool, String> {
-    let log = |args: &[&str]| -> Result<String, String> {
-        let output = crate::git::command()
-            .arg("--git-dir")
-            .arg(repo.path())
-            .args([
-                "log",
-                "--no-renames",
-                "--full-history",
-                "--format=commit %H",
-            ])
-            .args(args)
-            .output()
-            .map_err(|error| format!("git log: {error}"))?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    };
     let message = |error: git2::Error| error.message().to_string();
-    let tip = tip.to_string();
-    let pickaxe = format!("-S{spec_id}");
-    let named = log(&[
-        "--diff-merges=first-parent",
-        "--name-only",
-        &pickaxe,
-        &tip,
-        "--",
-        "project-management/",
-    ])?;
-    let relevant: BTreeSet<&str> = named
-        .lines()
-        .filter(|line| !line.is_empty() && !line.starts_with("commit "))
-        .filter(|path| record_kind_for_tree_path(path).is_some())
-        .collect();
-    if relevant.is_empty() {
-        return Ok(false);
+    let output = crate::git::command()
+        .arg("--git-dir")
+        .arg(repo.path())
+        .args([
+            "log",
+            "--no-renames",
+            "--full-history",
+            "--diff-merges=first-parent",
+            "--raw",
+            "--no-abbrev",
+            "--format=commit %H",
+        ])
+        .arg(tip.to_string())
+        .args(["--", "project-management/"])
+        .output()
+        .map_err(|error| format!("git log: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
-    let mut args = vec![tip.as_str(), "--"];
-    args.extend(relevant.iter().copied());
-    let commits = log(&args)?;
+    let log = String::from_utf8_lossy(&output.stdout);
+    let mut commits: Vec<(git2::Oid, Vec<String>)> = Vec::new();
+    let mut names: HashMap<git2::Oid, bool> = HashMap::new();
+    let mut relevant: BTreeSet<String> = BTreeSet::new();
+    for line in log.lines() {
+        if let Some(hash) = line.strip_prefix("commit ") {
+            commits.push((
+                git2::Oid::from_str(hash.trim()).map_err(message)?,
+                Vec::new(),
+            ));
+            continue;
+        }
+        // `:<old mode> <new mode> <old blob> <new blob> <status>\t<path>`
+        let Some((meta, path)) = line
+            .strip_prefix(':')
+            .and_then(|rest| rest.split_once('\t'))
+        else {
+            continue;
+        };
+        let Some(kind) = record_kind_for_tree_path(path) else {
+            continue;
+        };
+        if let Some((_, paths)) = commits.last_mut() {
+            paths.push(path.to_string());
+        }
+        let Some(blob) = meta
+            .split_whitespace()
+            .nth(3)
+            .and_then(|hash| git2::Oid::from_str(hash).ok())
+            .filter(|oid| !oid.is_zero())
+        else {
+            continue;
+        };
+        let names_spec = *names.entry(blob).or_insert_with(|| {
+            repo.find_blob(blob).ok().is_some_and(|blob| {
+                RecordView::parse(kind, path, &String::from_utf8_lossy(blob.content())).is_ok_and(
+                    |record| {
+                        record.id == spec_id || record.specs.iter().any(|spec| spec == spec_id)
+                    },
+                )
+            })
+        });
+        if names_spec {
+            relevant.insert(path.to_string());
+        }
+    }
+    implemented_at_a_commit(repo, &commits, &relevant, spec_id)
+}
+
+/// Whether `spec_id` is implemented at one of `commits` that changed a
+/// `relevant` path, derived from those paths alone and stopping at the
+/// first implemented state (TSK-169, see [`shipped_in_history`]).
+fn implemented_at_a_commit(
+    repo: &Repository,
+    commits: &[(git2::Oid, Vec<String>)],
+    relevant: &BTreeSet<String>,
+    spec_id: &str,
+) -> Result<bool, String> {
+    let message = |error: git2::Error| error.message().to_string();
     let mut parsed: HashMap<git2::Oid, Option<RecordView>> = HashMap::new();
-    for hash in commits
-        .lines()
-        .filter_map(|line| line.strip_prefix("commit "))
-    {
-        let oid = git2::Oid::from_str(hash.trim()).map_err(message)?;
+    for (oid, paths) in commits {
+        if !paths.iter().any(|path| relevant.contains(path)) {
+            continue;
+        }
         let tree = repo
-            .find_commit(oid)
+            .find_commit(*oid)
             .and_then(|commit| commit.tree())
             .map_err(message)?;
         let mut graph = Graph::default();
-        for path in &relevant {
+        for path in relevant {
             let (Ok(entry), Some(kind)) = (
                 tree.get_path(Path::new(path)),
                 record_kind_for_tree_path(path),

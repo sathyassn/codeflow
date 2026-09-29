@@ -716,3 +716,101 @@ fn an_approved_spec_is_amended_until_it_ships_and_frozen_after() {
     let reopened = commit(&root, "chore: reopen the first task");
     refused_after(&reopened, "plan/reopen-first");
 }
+
+/// TSK-169 review round 3: a consumer that names its spec in an escaped YAML
+/// string (`"SPC-001"`) still ships it, so after a separate
+/// reopen `validate --since` and `codeflow ci` refuse an amendment of the
+/// spec's text. The records are historical at a migration baseline, as an
+/// adopter's would be.
+#[test]
+fn an_escaped_spec_reference_keeps_the_freeze_after_a_reopen() {
+    const SPEC: &str = "project-management/specs/SPC-001.md";
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "plan/spec-freeze"]);
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    let write = |path: &str, text: &str| {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        EPIC,
+        "---\nid: EPC-001\ntitle: Outcome\nstatus: planning\nwork_type: feat\nspecs: []\n\
+created: 2026-09-29\n---\n\n# EPC-001: Outcome\n\n## Summary\n\nAn outcome.\n\n\
+## Acceptance Criteria\n\n- AC-1 When run, the system shall deliver.\n",
+    );
+    write(
+        TASK,
+        "---\nid: TSK-001\nepic_id: EPC-001\nstandalone_reason: null\ntitle: Consumer\n\
+status: complete\nwork_type: feat\nspecs: [\"SPC-\\u0030\\u0030\\u0031\"]\ndepends_on: []\n\
+integration_target: main\ncreated: 2026-09-29\n---\n\n# TSK-001: Consumer\n\n\
+## Description\n\nA consumer.\n\n## Acceptance Criteria\n\n\
+- AC-1 When run, the system shall deliver.\n\n## Closeout\n\nHistorical delivery.\n",
+    );
+    write(
+        SPEC,
+        "---\nid: SPC-001\ntitle: Contract\nstatus: approved\nopen_questions: []\n\
+created: 2026-09-29\n---\n\n# SPC-001: Contract\n\n## Summary\n\nA contract.\n\n\
+## Behavior\n\nThe limit is 10.\n\n## Open questions\n\nNone.\n",
+    );
+    assert!(!std::fs::read_to_string(root.join(TASK))
+        .unwrap()
+        .contains("SPC-001"));
+    git(&root, &["add", "project-management"]);
+    git(
+        &root,
+        &["commit", "-q", "-m", "docs: record the historical consumer"],
+    );
+    let baseline = git(&root, &["rev-parse", "HEAD"]);
+    let config = root.join(".codeflow/project.toml");
+    let state = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        format!("work_records_baseline = \"{baseline}\"\n{state}"),
+    )
+    .unwrap();
+    let base = commit(&root, "chore: record the migration baseline");
+    let frozen = "SPC-001 was implemented, so its text is frozen";
+
+    edit(&root, SPEC, "The limit is 10.", "The limit is 999.");
+    let (code, errors) = verdict(&root, &base);
+    assert_eq!(code, Some(1), "shipped at the base: {errors:?}");
+    assert!(errors.iter().any(|e| e.contains(frozen)), "{errors:?}");
+    git(&root, &["checkout", "--", SPEC]);
+
+    let args = [
+        "task",
+        "status",
+        "TSK-001",
+        "todo",
+        "--reason",
+        "regression",
+    ];
+    ok(&codeflow(&root, &args), "task reopen");
+    let reopened = commit(&root, "docs: reopen the consumer");
+    edit(&root, SPEC, "The limit is 10.", "The limit is 999.");
+    let (code, errors) = verdict(&root, &reopened);
+    assert_eq!(code, Some(1), "after the reopen: {errors:?}");
+    assert!(errors.iter().any(|e| e.contains(frozen)), "{errors:?}");
+    commit(&root, "docs: amend the contract after the reopen");
+    let ci = codeflow(
+        &root,
+        &[
+            "ci",
+            "--base",
+            &reopened,
+            "--head",
+            "HEAD",
+            "--branch",
+            "plan/spec-freeze",
+        ],
+    );
+    let ci_err = String::from_utf8_lossy(&ci.stderr);
+    assert!(!ci.status.success(), "{ci_err}");
+    assert!(ci_err.contains(frozen), "{ci_err}");
+}

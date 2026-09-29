@@ -877,6 +877,42 @@ fn a_shipped_spec_stays_frozen_after_a_separate_consumer_reopen() {
     assert!(frozen_spec(&verdict, "SPC-001"), "{:?}", verdict.errors);
 }
 
+/// TSK-169 review round 3: a consumer that names the spec in an escaped
+/// YAML form (`"SPC-\u0030\u0030\u0031"`) is still found in the history,
+/// so the freeze holds after a separate reopen. Discovery parses each
+/// record's `specs` list; it never searches the text for the id.
+#[test]
+fn a_consumer_naming_the_spec_in_escaped_yaml_keeps_the_freeze() {
+    let escaped = |status: &str| {
+        consumer("TSK-001", status, "SPC-001")
+            .replace("specs: [SPC-001]", "specs: [\"SPC-\\u0030\\u0030\\u0031\"]")
+    };
+    let repo = Repo::new();
+    repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
+    repo.write(TASK_PATH, &escaped("todo"));
+    repo.commit("approved, consumer open");
+    assert!(
+        !repo.read(TASK_PATH).contains("SPC-001"),
+        "the id is escaped"
+    );
+    repo.write(TASK_PATH, &escaped("complete"));
+    repo.commit("consumer complete");
+    let graph = Graph::from_worktree(repo.root());
+    assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
+    let reopen = StatusChange {
+        reason: Some("regression".into()),
+        ..change("todo")
+    };
+    set_status(repo.root(), RecordKind::Task, "TSK-001", &reopen).unwrap();
+    let reopened = repo.commit("reopen the consumer");
+    let text = repo
+        .read(SHIPPED_SPEC)
+        .replace("\nB.\n", "\nB, with a limit of 999.\n");
+    repo.write(SHIPPED_SPEC, &text);
+    let verdict = repo.judge(&reopened);
+    assert!(frozen_spec(&verdict, "SPC-001"), "{:?}", verdict.errors);
+}
+
 /// TSK-169: an approved spec is amended in place until it is implemented;
 /// once implemented its text is frozen, whether the state is derived at the
 /// base or written by a legacy record, and reopening its consumer in the
