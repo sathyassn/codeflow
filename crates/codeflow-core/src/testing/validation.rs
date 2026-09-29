@@ -394,7 +394,7 @@ fn build_target_ledger_summary(
 /// merge-base marker) the caller configures.
 #[must_use]
 pub fn detect_changed_files(project_dir: &Path, base_ref: &str) -> Vec<String> {
-    let output = std::process::Command::new("git")
+    let output = crate::git::command()
         .args(["diff", "--name-only", base_ref])
         .current_dir(project_dir)
         .output();
@@ -431,7 +431,7 @@ pub fn detect_changed_files(project_dir: &Path, base_ref: &str) -> Vec<String> {
 /// Callers can override this by setting `CODEFLOW_COVERAGE_BASE_REF`.
 #[must_use]
 pub fn default_base_ref(project_dir: &Path) -> String {
-    let output = std::process::Command::new("git")
+    let output = crate::git::command()
         .args(["merge-base", "HEAD", "origin/main"])
         .current_dir(project_dir)
         .output();

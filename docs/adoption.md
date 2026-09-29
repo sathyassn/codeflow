@@ -500,10 +500,13 @@ The home page names the exact repository commit the guide was built from. A
 `release_version` value renders as a release label, so it stays `null` unless
 a verified published release exists for the built commit.
 
-Node roles differ by lane, and neither pin changes here: the aggregate CI gate
-runs on Node 26.4.0, and its full strict target installs, checks, builds, and
-validates this portal; the portal-local `.node-version` and the Windows
-adapter-test lane use 24.18.0; the starter itself accepts 22.19.0 or newer.
+Each Node target runs on the version its own version file pins, locally and
+in CI: the portal's full strict target installs, checks, builds, and validates
+this portal on the 24.18.0 in `docs-portal/.node-version`, as the Windows
+adapter-test lane does, and the presentation renderer's target runs on the
+26.4.0 in `crates/codeflow-present/web/.node-version`. `scripts/with-node.py`
+selects each version for its target, and `gate-parity` holds the CI pins to
+those files. The starter itself accepts 22.19.0 or newer.
 
 ## Optional interactive review documents
 
@@ -833,7 +836,7 @@ permissions. Local checks are required feedback, but remain editable.
 | Push / force-push / delete to protected | pre-push | git-guard | — | yes |
 | `gh pr merge` into a protected base | — (hooks can't see a PR) | git-guard | — | yes |
 | Destructive command (`rm -rf /`, `mkfs`, fork bomb) | — | exec-guard (block) | — | — |
-| Privilege escalation (`sudo`, `LD_PRELOAD`) | — | exec-guard (warn) | — | — |
+| Privilege escalation (`sudo`, `LD_PRELOAD`) | no | preset deny rules, exec-guard (block) | no | no |
 | Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | — |
 | Override-token laundering, `--no-verify` bypass | — | git-guard (structural) | — | — |
 

@@ -146,7 +146,7 @@ pub struct ResolvedWorkTarget {
     /// The target to anchor on (`main`, `origin/main` or a full ref).
     pub target: String,
     /// Why the remote-tracking ref was chosen, for the caller to print.
-    pub note: Option<String>,
+    pub note: Option<crate::remedy::Finding>,
 }
 
 /// How a refusal of the readiness core reads in a derived view (R-27).
@@ -365,10 +365,13 @@ fn local_or_upstream(
     match (ahead, behind) {
         (_, 0) => keep(),
         (0, behind) => Ok(Some(ResolvedWorkTarget {
-            note: Some(format!(
-                "local branch '{local}' is {behind} commit(s) behind its upstream \
-                 '{upstream}'; anchoring on '{upstream}' (fast-forward '{local}' to \
-                 silence this)"
+            note: Some(crate::remedy::Finding::new(
+                format!(
+                    "local branch '{local}' is {behind} commit(s) behind its upstream \
+                     '{upstream}'; anchoring on '{upstream}'"
+                ),
+                crate::remedy::TARGET_BEHIND_UPSTREAM
+                    .with(&[("local", local), ("upstream", upstream.as_str())]),
             )),
             target: upstream,
         })),
@@ -1464,7 +1467,7 @@ mod tests {
     }
 
     fn git(root: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = crate::git::command()
             .arg("-C")
             .arg(root)
             .args(args)
@@ -1528,7 +1531,7 @@ mod tests {
     fn anchored_graph_passes_without_mutating_repo() {
         let dir = fixture();
         let before_head = fs::read_to_string(dir.path().join(".git/HEAD")).expect("HEAD readable");
-        let before_status = Command::new("git")
+        let before_status = crate::git::command()
             .arg("-C")
             .arg(dir.path())
             .args(["status", "--porcelain"])
@@ -1543,7 +1546,7 @@ mod tests {
             fs::read_to_string(dir.path().join(".git/HEAD")).unwrap(),
             before_head
         );
-        let after_status = Command::new("git")
+        let after_status = crate::git::command()
             .arg("-C")
             .arg(dir.path())
             .args(["status", "--porcelain"])
@@ -1798,6 +1801,7 @@ mod tests {
         assert!(resolved
             .note
             .unwrap()
+            .text
             .contains("behind its upstream 'refs/remotes/upstream/main'"));
         assert!(is_stable_work_target(&resolved.target));
         assert!(work_target_resolves(dir.path(), &resolved.target));
@@ -1822,7 +1826,13 @@ mod tests {
         assert_eq!(resolved.target, "refs/remotes/origin/main");
         let note = resolved.note.unwrap();
         assert!(
-            note.contains("'main' is 1 commit(s) behind its upstream 'refs/remotes/origin/main'"),
+            note.text
+                .contains("'main' is 1 commit(s) behind its upstream 'refs/remotes/origin/main'"),
+            "{note}"
+        );
+        assert!(
+            note.remedy
+                .contains("`git fetch . refs/remotes/origin/main:main`"),
             "{note}"
         );
         assert_eq!(

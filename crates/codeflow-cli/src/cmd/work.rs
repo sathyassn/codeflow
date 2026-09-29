@@ -223,7 +223,7 @@ fn plan_check(
                     note: None,
                 });
             if let Some(note) = &resolved.note {
-                eprintln!("work start: note: {note}");
+                eprintln!("{}", note.line("work start", "note"));
             }
             resolved.target
         }

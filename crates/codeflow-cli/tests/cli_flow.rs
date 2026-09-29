@@ -312,14 +312,17 @@ fn validate_docs_superseded_adr_without_superseded_by_exits_one() {
 }
 
 #[test]
-fn validate_docs_absent_tiers_skip_with_notes() {
+fn validate_docs_on_an_unscaffolded_tree_is_quiet() {
+    // TSK-147: a tree no tier scaffolded never had the docs or record
+    // layers, so there is nothing to note and nothing to act on.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
     let output = codeflow(dir.path(), &["validate", "--docs"]);
     assert_eq!(output.status.code(), Some(0));
     let out = stdout(&output);
-    assert!(out.contains("note:"), "absent dirs must be noted: {out}");
+    assert!(!out.contains("note:"), "no layer was installed: {out}");
+    assert!(out.contains("doc graph clean"), "{out}");
 }
 
 // ---------------------------------------------------------------------------

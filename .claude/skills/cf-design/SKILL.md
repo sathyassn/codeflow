@@ -76,7 +76,9 @@ Resolve only the dimensions that materially steer the surface:
 4. **Language and voice.** The product's documented voice, terminology,
    audience literacy, trust and risk context, and the copy its navigation,
    actions, guidance, validation, empty, loading, error, success, destructive,
-   and recovery states need. Refer substantial language judgment to
+   and recovery states need. Write the copy plainly: simple, straightforward
+   and clear, no mannered prose (see `.codeflow/rules/writing.md`), within
+   the product's documented voice. Refer substantial language judgment to
    `cf-editorial-review`; do not invent a product personality.
 5. **Appearance modes.** Decide only the applicable light, dark, high-contrast,
    system-following, override, persistence, reduced-motion, and mode-safe media

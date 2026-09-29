@@ -15,6 +15,7 @@ use std::path::Path;
 use crate::scaffold::version::is_older;
 
 use super::Status;
+use crate::remedy;
 
 /// Where the checkout stands against the target's pin.
 pub(super) struct PinReport {
@@ -40,9 +41,9 @@ pub(super) fn report(root: &Path) -> PinReport {
     let head_state = read(STATE);
     let Some(head_pin) = head_state.as_deref().and_then(pinned) else {
         return PinReport {
-            status: Status::Warn,
+            status: Status::Warn(remedy::DOCTOR_CI_PIN_MISSING.remedy()),
             message: format!(
-                "no scaffold_version is pinned in {STATE}, so the pinned CI install fails closed; pin the codeflow version CI installs"
+                "no scaffold_version is pinned in {STATE}, so the pinned CI install fails closed"
             ),
         };
     };
@@ -56,7 +57,7 @@ pub(super) fn report(root: &Path) -> PinReport {
     };
     let Some(target_pin) = show(STATE).as_deref().and_then(pinned) else {
         return PinReport {
-            status: Status::Warn,
+            status: Status::Warn(remedy::DOCTOR_CI_PIN_TARGET.with(&[("target", &target)])),
             message: format!(
                 "{target} pins no scaffold_version, so CI on it fails closed until a pin lands there"
             ),
@@ -72,7 +73,9 @@ pub(super) fn report(root: &Path) -> PinReport {
     }
     if is_older(&head_pin, &target_pin) {
         return PinReport {
-            status: Status::Warn,
+            status: Status::Warn(
+                remedy::DOCTOR_CI_PIN_LOWERED.with(&[("pin", &target_pin), ("target", &target)]),
+            ),
             message: format!(
                 "this checkout lowers scaffold_version from {target_pin} ({target}) to {head_pin}; CI judges it with codeflow {target_pin} and fails a lowered pin"
             ),
@@ -93,9 +96,9 @@ pub(super) fn report(root: &Path) -> PinReport {
         };
     }
     PinReport {
-        status: Status::Warn,
+        status: Status::Warn(remedy::DOCTOR_CI_PIN_ORDER.remedy()),
         message: format!(
-            "this checkout raises scaffold_version from {target_pin} ({target}) to {head_pin} and also carries {}, which codeflow {target_pin}, the binary CI installs until the raise lands, may not read, so CI fails. Upgrades take two pull requests, in order: first raise only scaffold_version in {STATE} and land it; then run `codeflow update` on a new branch",
+            "this checkout raises scaffold_version from {target_pin} ({target}) to {head_pin} and also carries {}, which codeflow {target_pin}, the binary CI installs until the raise lands, may not read, so CI fails",
             carried.join(", ")
         ),
     }
@@ -199,7 +202,7 @@ mod tests {
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -273,7 +276,7 @@ mod tests {
             "schema_version = 1\ntier = \"minimal\"\n",
         );
         let report = report(dir.path());
-        assert_eq!(report.status, Status::Warn);
+        assert!(report.status.is_warn(), "{}", report.message);
         assert!(
             report.message.contains("no scaffold_version is pinned"),
             "{}",
@@ -296,14 +299,21 @@ mod tests {
             r#"{"schema_version": 1, "git": {"commit_format": "block", "future_key": "warn"}}"#,
         );
         let report = report(dir.path());
-        assert_eq!(report.status, Status::Warn);
+        assert!(report.status.is_warn(), "{}", report.message);
         for part in [
             "raises scaffold_version from 1.2.3 (main) to 1.3.0",
             "new policy keys (git.future_key)",
-            "Upgrades take two pull requests, in order",
-            "run `codeflow update` on a new branch",
         ] {
             assert!(report.message.contains(part), "{part}: {}", report.message);
+        }
+        let Status::Warn(remedy) = &report.status else {
+            panic!("{}", report.message)
+        };
+        for part in [
+            "two pull requests, in order",
+            "run `codeflow update` on a new branch",
+        ] {
+            assert!(remedy.contains(part), "{part}: {remedy}");
         }
     }
 
@@ -325,7 +335,7 @@ mod tests {
         let dir = project("1.2.3");
         write(dir.path(), STATE, &state("1.0.0"));
         let report = report(dir.path());
-        assert_eq!(report.status, Status::Warn);
+        assert!(report.status.is_warn(), "{}", report.message);
         assert!(
             report
                 .message

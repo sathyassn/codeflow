@@ -121,7 +121,9 @@ allowlist-only environment, so provider-secret environment variables are not
 inherited.
 Linux/WSL2 reads bounded, no-follow `/proc` identity and terminates only the
 proven process group; macOS uses delimiter-aware identity and the same ownership
-rule, and Unix state-root inputs must be absolute. A session lease serializes
+rule, and Unix state-root inputs must be absolute. On macOS a listed process
+whose command line is not UTF-8, such as one caught mid-start, neither fails the
+inventory nor matches an owned identity. A session lease serializes
 each browser launch from exact per-attempt recovery publication through durable
 registration; close, show, and later launch consume interrupted evidence. If a
 recorded PID disappears or is reused, the native adapter searches for the exact

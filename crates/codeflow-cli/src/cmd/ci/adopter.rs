@@ -5,7 +5,6 @@
 //! and the two-step upgrade message for policy keys this binary cannot read.
 
 use std::path::Path;
-use std::process::Command;
 
 use codeflow_core::hooks::adoption::{self, EffectiveLevel, LevelOrigin};
 use codeflow_core::hooks::policy::{AutomationProfile, Policy, UNKNOWN_ACTOR};
@@ -139,12 +138,10 @@ pub(super) fn resolve(
                 println!("codeflow ci: {finding}");
             }
         }
-        Err(error) => violations.push(Violation::new(
+        Err(error) => violations.push(Violation::always_blocking(
             "release.backend",
-            PolicyLevel::Block,
             error,
-            "set `[release] backend` in .codeflow/project.toml to none, external or codeflow"
-                .to_string(),
+            "set `[release] backend` in .codeflow/project.toml to none, external or codeflow",
         )),
     }
     Adoption {
@@ -184,7 +181,7 @@ pub(super) fn supply_sections(profile: Option<&AutomationProfile>, body: &str) -
 /// range. A head cannot add or widen a profile for itself. A missing or
 /// invalid target policy yields no profile.
 fn target_profiles(root: &Path, base: &str) -> Vec<AutomationProfile> {
-    let Ok(out) = Command::new("git")
+    let Ok(out) = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["show", &format!("{base}:.codeflow/policy.json")])
@@ -214,7 +211,7 @@ fn target_profiles(root: &Path, base: &str) -> Vec<AutomationProfile> {
 /// head's own workflow no longer validates it. `Some(2)` stops the run.
 pub(super) fn check_head_config(root: &Path, head: &str) -> Option<i32> {
     let show = |path: &str| {
-        let out = Command::new("git")
+        let out = codeflow_core::git::command()
             .arg("-C")
             .arg(root)
             .args(["show", &format!("{head}:{path}")])
