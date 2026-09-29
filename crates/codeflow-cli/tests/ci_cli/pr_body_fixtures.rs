@@ -674,6 +674,74 @@ fn release_impact_depends_on_base_or_breaking_commit() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+    // The hosted policy workflows pass the base as a commit id. Then the
+    // branch the pull request merges into decides: `--into`, or the host's
+    // PR-target variable, names it; a bare commit id names no branch.
+    let main_sha = Command::new("git")
+        .args(["rev-parse", "main"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let main_sha = String::from_utf8(main_sha.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    let with_env = |extra: &[&str], env: &[(&str, &str)]| {
+        let mut args = vec![
+            "ci",
+            "--base",
+            main_sha.as_str(),
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/test",
+            "--pr-body",
+            body,
+        ];
+        args.extend_from_slice(extra);
+        let mut command = codeflow();
+        command.args(&args).current_dir(dir.path());
+        for key in [
+            "GITHUB_BASE_REF",
+            "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
+            "BITBUCKET_PR_DESTINATION_BRANCH",
+        ] {
+            command.env_remove(key);
+        }
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command.output().unwrap()
+    };
+    for (extra, env, accepted) in [
+        (&[][..], &[][..], true),
+        (&["--into", "main"][..], &[][..], false),
+        (&["--into", "integration/line"][..], &[][..], true),
+        (&[][..], &[("GITHUB_BASE_REF", "main")][..], false),
+        (
+            &[][..],
+            &[("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "main")][..],
+            false,
+        ),
+        (
+            &[][..],
+            &[("BITBUCKET_PR_DESTINATION_BRANCH", "release/stable")][..],
+            false,
+        ),
+        (
+            &[][..],
+            &[("GITHUB_BASE_REF", "integration/line")][..],
+            true,
+        ),
+    ] {
+        let out = with_env(extra, env);
+        assert_eq!(
+            out.status.success(),
+            accepted,
+            "base {main_sha} {extra:?} {env:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
     git(
         dir.path(),
         &[

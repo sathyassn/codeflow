@@ -392,14 +392,21 @@ pub fn run(args: &CiArgs) -> i32 {
                 &change_class::project_paths(&root, base),
             )
         });
+        // The hosted workflows pass the base as a commit id, so the branch
+        // the pull request merges into (`--into`, or the host's PR-target
+        // environment) decides protection as much as a named base does.
+        let protected = base_candidates
+            .iter()
+            .any(|base| protected_base(&root, git, base))
+            || into
+                .as_deref()
+                .is_some_and(|name| git.branch_is_protected(name));
         tagged.extend(evaluate_pr_checks(
             git,
             &body,
             class,
             range.breaking_commit,
-            base_candidates
-                .iter()
-                .any(|base| protected_base(&root, git, base)),
+            protected,
         ));
         ran.push("PR-body");
     }
