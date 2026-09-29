@@ -49,9 +49,6 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
-        "quick": {
-          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version 'npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web'"
-        },
         "essential": {
           "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version 'npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web'"
         },
@@ -71,9 +68,6 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
-        "quick": {
-          "command": "cargo build --workspace --all-targets --locked"
-        },
         "essential": {
           "command": "cargo build --workspace --all-targets --locked"
         },
@@ -93,9 +87,6 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
-        "quick": {
-          "command": "cargo build --locked -p codeflow-cli"
-        },
         "essential": {
           "command": "cargo build --locked -p codeflow-cli"
         },
@@ -128,9 +119,7 @@
           "command": "cargo fmt --all -- --check"
         }
       },
-      "requires": [
-        "rust-build"
-      ]
+      "requires": []
     },
     {
       "name": "rust-workspace",
@@ -173,9 +162,7 @@
           "command": "cargo clippy --workspace --all-targets -- -D warnings"
         }
       },
-      "requires": [
-        "rust-build"
-      ]
+      "requires": []
     },
     {
       "name": "rustdoc",

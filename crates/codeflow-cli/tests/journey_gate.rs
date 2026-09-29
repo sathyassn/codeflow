@@ -334,3 +334,47 @@ fn instrumented_suite_has_serial_membership_and_a_junit_consumer() {
         .contains("--results"));
     assert!(job(&read(".github/workflows/codeflow-ci.yml"), "windows").contains("--results"));
 }
+
+/// The quick gate, which the pre-push hook runs on every push, is the light
+/// set: fmt, clippy and the Python contracts. The producers (the web build,
+/// the workspace build and the binary) belong to essential and full, where
+/// the tests embed their output; a quick target requires nothing outside
+/// the quick set, or the runner would wait for a target that never runs.
+#[test]
+fn the_quick_gate_runs_only_the_light_targets() {
+    let config: serde_json::Value =
+        serde_json::from_str(&read(".codeflow/test-config.json")).expect("test config");
+    let targets = config["targets"].as_array().expect("targets");
+    let quick: std::collections::BTreeSet<&str> = targets
+        .iter()
+        .filter(|t| t["modes"].get("quick").is_some())
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        quick,
+        [
+            "gate-parity",
+            "herdr-delivery",
+            "rust-clippy",
+            "rust-format",
+            "skill-triggers",
+        ]
+        .into_iter()
+        .collect(),
+        "the quick gate runs the light targets only"
+    );
+    for target in targets
+        .iter()
+        .filter(|t| quick.contains(t["name"].as_str().unwrap()))
+    {
+        let requires: Vec<&str> = target["requires"]
+            .as_array()
+            .map(|r| r.iter().map(|v| v.as_str().unwrap()).collect())
+            .unwrap_or_default();
+        assert!(
+            requires.iter().all(|r| quick.contains(r)),
+            "{} requires {requires:?} outside the quick set",
+            target["name"]
+        );
+    }
+}
