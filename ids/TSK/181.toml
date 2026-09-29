@@ -1,0 +1,11 @@
+id = "TSK-181"
+uid = "5dfd5ab8-97dd-4fe0-9def-fb0c33b24f0e"
+kind = "TSK"
+title = "Windows full gate target guarding and Node launcher form"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T01:07:48Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
