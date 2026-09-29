@@ -158,6 +158,8 @@ pub fn bind_completion(
     // On the target itself there is no PR range to anchor. The status verb
     // still checks the transition and reviewed span, including uncommitted
     // changes; a named fix branch must instead review inside its range.
+    let anchor =
+        base.or_else(|| target.and_then(|tip| repo.merge_base(tip, landing.commit()).ok()));
     let on_target = base.is_none()
         && matches!(landing, Landing::Worktree { .. })
         && repo
@@ -165,9 +167,7 @@ pub fn bind_completion(
             .ok()
             .is_some_and(|head| head.shorthand().ok() == task.integration_target.as_deref());
     let reopen = (!on_target)
-        .then_some(
-            base.or_else(|| target.and_then(|tip| repo.merge_base(tip, landing.commit()).ok())),
-        )
+        .then_some(anchor)
         .flatten()
         .and_then(|anchor| {
             let content = blob_at(repo, anchor, &task.path)?;
@@ -180,11 +180,11 @@ pub fn bind_completion(
                         &anchor.to_string(),
                         Some(&landing.commit().to_string()),
                         &Graph::default().with(task.clone()),
-                        &Graph::default().with(old.clone()),
                     )
                     .contains(&task.id));
             reopened.then_some((anchor, old))
-        });
+        })
+        .or_else(|| previous_completion(repo, task, &block, landing));
     let mut findings = Vec::new();
     if let Some((_, old)) = &reopen {
         findings.extend(
@@ -230,6 +230,46 @@ pub fn bind_completion(
     }
     findings.extend(leaf_journey(task, graph, &block));
     findings
+}
+
+/// Find the prior completed record when a range or target checkout starts
+/// after the task was reopened. The range base can be `todo`, so it cannot
+/// itself supply the acceptance block that the reopen must preserve.
+fn previous_completion(
+    repo: &Repository,
+    task: &RecordView,
+    block: &AcceptanceBlock,
+    landing: Landing<'_>,
+) -> Option<(Oid, RecordView)> {
+    let mut at = landing.commit();
+    match landing {
+        Landing::Commit(head) => {
+            let introduced = introduced_at(repo, task, block, head);
+            at = repo.find_commit(introduced).ok()?.parent_id(0).ok()?;
+        }
+        Landing::Worktree { head, .. } => {
+            let current = blob_at(repo, head, &task.path)
+                .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok());
+            if current.as_ref().is_some_and(|record| {
+                record.status == "complete"
+                    && active_block(record).as_ref() == Some(block)
+                    && record.superseded_blocks() == task.superseded_blocks()
+            }) {
+                let introduced = introduced_at(repo, task, block, head);
+                at = repo.find_commit(introduced).ok()?.parent_id(0).ok()?;
+            }
+        }
+    }
+    let mut crossed_reopen = false;
+    loop {
+        let content = blob_at(repo, at, &task.path)?;
+        let record = RecordView::parse(RecordKind::Task, &task.path, &content).ok()?;
+        if record.status == "complete" {
+            return crossed_reopen.then_some((at, record));
+        }
+        crossed_reopen = true;
+        at = repo.find_commit(at).ok()?.parent_id(0).ok()?;
+    }
 }
 
 /// Every path the working tree changes against `HEAD`: staged, unstaged and
@@ -692,7 +732,7 @@ pub fn completions_in_range(
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
     let reopened_in_history =
-        super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after, &before);
+        super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after);
     let mut findings = Vec::new();
     for task in after
         .records

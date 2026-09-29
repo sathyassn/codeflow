@@ -1504,7 +1504,7 @@ fn judge_range_against(
         }
     }
     let paths = changed_paths(&repo, base, head)?;
-    let reopened = reopened_in_range(&repo, base, head, &after, &base_graph);
+    let reopened = reopened_in_range(&repo, base, head, &after);
     let context = ChangeContext {
         base: Some(&before),
         changed_paths: Some(&paths),
@@ -1549,19 +1549,11 @@ pub(super) fn reopened_in_range(
     base: &str,
     head: Option<&str>,
     after: &Graph,
-    base_graph: &Graph,
 ) -> BTreeSet<String> {
     let candidates: Vec<&RecordView> = after
         .records
         .values()
         .filter(|record| record.kind == RecordKind::Task && record.status == "complete")
-        .filter(|record| {
-            record.active_blocks().is_empty()
-                || base_graph
-                    .records
-                    .get(&record.id)
-                    .is_some_and(|old| old.status == "complete")
-        })
         .collect();
     let mut reopened = BTreeSet::new();
     if candidates.is_empty() {

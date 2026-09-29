@@ -1575,3 +1575,98 @@ fn a_late_completion_carries_an_ancestor_review_past_unrelated_line_work() {
     commit(root, "docs: complete the landed task");
     assert_passes(&ci_on(root, LINE, "plan/complete", ""), "R C P M D landing");
 }
+
+/// Complete a task after its first reviewed work has landed on its line.
+fn late_completed_line() -> (tempfile::TempDir, String, String) {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    git(root, &["switch", "-c", "plan/complete-first", LINE]);
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs: complete task after landing");
+    land(root, "plan/complete-first");
+    let archived = valid_block(&reviewed).replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: regression\n",
+    );
+    (dir, reviewed, archived)
+}
+
+/// A todo range base can hide the completed record whose review a reopen
+/// must supersede. Every record transition below lands through a merge.
+#[test]
+fn a_fully_merged_recompletion_cannot_reuse_review_across_a_reopen() {
+    let (dir, reviewed, archived) = late_completed_line();
+    let root = dir.path();
+    git(root, &["switch", "-c", "plan/reopen", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", &archived),
+    );
+    commit(root, "docs: reopen task");
+    land(root, "plan/reopen");
+
+    git(root, &["switch", "-c", "fix/implementation", LINE]);
+    write(root, "src/work.rs", "// fixed after review\n");
+    commit(root, "fix: change reviewed work");
+    land(root, "fix/implementation");
+
+    git(root, &["switch", "-c", "plan/recomplete", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task(
+            "TSK-001",
+            "complete",
+            &format!("{archived}{}", valid_block(&reviewed)),
+        ),
+    );
+    commit(root, "docs: reuse the earlier review");
+    land(root, "plan/recomplete");
+
+    assert_blocks(
+        &ci_on(root, "main", LINE, "Task: TSK-001"),
+        "fully merged reopen and recompletion with stale review",
+        &["must lie inside the fix range"],
+    );
+}
+
+/// The target checkout has no range base to reveal the completion that the
+/// task record reopened before accepting a fresh status transition.
+#[test]
+fn target_checkout_status_cannot_reuse_review_after_a_merged_fix() {
+    let (dir, reviewed, archived) = late_completed_line();
+    let root = dir.path();
+    git(root, &["switch", "-c", "plan/reopen", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", &archived),
+    );
+    commit(root, "docs: reopen task");
+    land(root, "plan/reopen");
+
+    git(root, &["switch", "-c", "fix/implementation", LINE]);
+    write(root, "src/work.rs", "// fixed after review\n");
+    commit(root, "fix: change reviewed work");
+    land(root, "fix/implementation");
+
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task(
+            "TSK-001",
+            "todo",
+            &format!("{archived}{}", valid_block(&reviewed)),
+        ),
+    );
+    let result = status_complete(root, "TSK-001");
+    assert_ne!(result.0, 0, "stale review accepted on target: {}", result.1);
+    assert!(
+        result.1.contains("must lie inside the fix range"),
+        "{}",
+        result.1
+    );
+}
