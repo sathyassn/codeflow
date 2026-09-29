@@ -241,7 +241,7 @@ pub fn select(
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(args)
         .current_dir(root)
         .env_remove("GIT_DIR")
@@ -310,7 +310,7 @@ pub fn preflight(
     for tool in tools {
         let path = which::which(tool)
             .map_err(|e| invalid(root, format!("missing tool '{tool}' in this sandbox: {e}")))?;
-        let output = Command::new(&path).arg("--version").output()?;
+        let output = crate::git::process(&path).arg("--version").output()?;
         if !output.status.success() {
             return Err(invalid(
                 root,

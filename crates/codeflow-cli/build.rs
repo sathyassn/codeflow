@@ -21,7 +21,9 @@ fn main() {
         println!("cargo:rerun-if-changed={}", root.join(input).display());
     }
     let supplied = std::env::var("CODEFLOW_SOURCE_REVISION").ok();
-    let (revision, dirty, metadata) = source_identity::revision(&root, supplied.as_deref());
+    // A build script runs no hook, so its git is a plain process.
+    let git = || std::process::Command::new("git");
+    let (revision, dirty, metadata) = source_identity::revision(&root, supplied.as_deref(), &git);
     for path in source_identity::INPUT_ROOTS {
         println!("cargo:rerun-if-changed={}", root.join(path).display());
     }

@@ -69,8 +69,12 @@ pub fn hex_digest(bytes: &[u8]) -> String {
     out
 }
 
-fn git(root: &Path, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git")
+/// How a caller starts git: the crate's one constructor, or, in the build
+/// script that shares this file, a plain process (it runs no hook).
+pub type Git<'a> = &'a dyn Fn() -> std::process::Command;
+
+fn git(root: &Path, args: &[&str], make: Git<'_>) -> Option<String> {
+    let out = make()
         .args(args)
         .current_dir(root)
         .env_remove("GIT_DIR")
@@ -86,7 +90,11 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
 /// Source revision, dirty state and Git metadata paths to watch. Archive
 /// builds use the supplied revision and never discover an enclosing repo.
 #[must_use]
-pub fn revision(root: &Path, supplied: Option<&str>) -> (String, String, Vec<PathBuf>) {
+pub fn revision(
+    root: &Path,
+    supplied: Option<&str>,
+    make: Git<'_>,
+) -> (String, String, Vec<PathBuf>) {
     if !root.join(".git").exists() {
         return (
             supplied
@@ -97,15 +105,20 @@ pub fn revision(root: &Path, supplied: Option<&str>) -> (String, String, Vec<Pat
             Vec::new(),
         );
     }
-    let revision = git(root, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unavailable".into());
-    let dirty = git(root, &["status", "--porcelain", "--untracked-files=normal"]).map_or_else(
+    let revision = git(root, &["rev-parse", "HEAD"], make).unwrap_or_else(|| "unavailable".into());
+    let dirty = git(
+        root,
+        &["status", "--porcelain", "--untracked-files=normal"],
+        make,
+    )
+    .map_or_else(
         || "unavailable".into(),
         |status| (!status.is_empty()).to_string(),
     );
     let mut paths = Vec::new();
     for name in [
         Some("HEAD".to_string()),
-        git(root, &["symbolic-ref", "-q", "HEAD"]),
+        git(root, &["symbolic-ref", "-q", "HEAD"], make),
         Some("packed-refs".to_string()),
         Some("index".to_string()),
     ]
@@ -115,6 +128,7 @@ pub fn revision(root: &Path, supplied: Option<&str>) -> (String, String, Vec<Pat
         if let Some(path) = git(
             root,
             &["rev-parse", "--path-format=absolute", "--git-path", &name],
+            make,
         ) {
             paths.push(PathBuf::from(path));
         }
@@ -155,7 +169,7 @@ mod tests {
     #[test]
     fn archive_revision_is_supplied_or_unavailable_even_inside_a_repo() {
         let dir = tempfile::tempdir().unwrap();
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(["init", "-q"])
             .current_dir(dir.path())
             .output()
@@ -163,14 +177,15 @@ mod tests {
         assert!(out.status.success());
         let archive = dir.path().join("archive");
         std::fs::create_dir(&archive).unwrap();
-        assert_eq!(revision(&archive, Some("candidate")).0, "candidate");
-        assert_eq!(revision(&archive, None).0, "unavailable");
+        let make = crate::git::command;
+        assert_eq!(revision(&archive, Some("candidate"), &make).0, "candidate");
+        assert_eq!(revision(&archive, None, &make).0, "unavailable");
     }
     #[test]
     fn linked_and_detached_worktrees_resolve_native_revision_and_head_path() {
         let dir = tempfile::tempdir().unwrap();
         let run = |args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let out = crate::git::command()
                 .args(args)
                 .current_dir(dir.path())
                 .env("GIT_AUTHOR_NAME", "t")
@@ -197,17 +212,18 @@ mod tests {
             "task/linked",
             linked.to_str().unwrap(),
         ]);
-        let (sha, _, paths) = revision(&linked, None);
+        let make = crate::git::command;
+        let (sha, _, paths) = revision(&linked, None, &make);
         assert_eq!(sha, expected);
         assert!(paths
             .iter()
             .any(|p| p.file_name().unwrap() == "HEAD" && p.exists()));
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(["checkout", "--detach", "-q"])
             .current_dir(&linked)
             .output()
             .unwrap();
         assert!(out.status.success());
-        assert_eq!(revision(&linked, None).0, expected);
+        assert_eq!(revision(&linked, None, &make).0, expected);
     }
 }
