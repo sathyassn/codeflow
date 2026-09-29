@@ -946,8 +946,10 @@ fn split_references_install_and_update_replaces_whole_files_at_standard_and_full
         let assets = repo_root().join("assets/base");
         for tree in [".claude", ".agents"] {
             let added = tsk129_added_files(&root, tree);
+            // TSK-184: five routing sections and the other-hosts reference
+            // merged into the orchestrator's seat section and plan section.
             assert!(
-                added.len() >= 3 + 16 + 8 + 6,
+                added.len() >= 3 + 16 + 3 + 5,
                 "{tier} {tree}: split files missing: {added:?}"
             );
             for rel in added.iter().cloned().chain(
@@ -1347,7 +1349,7 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
             ),
             (
                 ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Docs and records: two review rounds per submitted version",
+                "Review is one holistic pass per revision",
             ),
             (
                 ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
@@ -1355,7 +1357,7 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
             ),
             (
                 ".claude/skills/cf-develop/SKILL.md",
-                "Maximum 2 evidence-moving cycles for code",
+                "No cycle count decides: continue while repairs produce relevant evidence",
             ),
             (
                 ".claude/agents/cf-reviewer.md",
@@ -1391,10 +1393,9 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
                 Some(&index.replace(FINDINGS_ROW, "")),
             );
             let develop = format!("{tree}/skills/cf-develop/SKILL.md");
-            let older = read(&root, &develop).replace(
-                "Maximum 2 evidence-moving cycles for code",
-                "Maximum 3 evidence-moving cycles",
-            );
+            let current = read(&root, &develop);
+            let older = current.replace("cycle count decides", "Maximum 3 evidence-moving cycles");
+            assert_ne!(older, current, "{tier}: cf-develop lost the progress rule");
             record_as_installed(&root, &develop, Some(&older));
         }
         let writing = read(&root, ".codeflow/rules/writing.md");

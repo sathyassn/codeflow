@@ -40,12 +40,23 @@ fn read(relative: &str) -> String {
     let text = std::fs::read_to_string(root().join(relative))
         .unwrap_or_else(|error| panic!("read {relative}: {error}"));
     // TSK-129: capability-routing loads by section from an index, so a pin on
-    // it reads the index together with every section file.
+    // it reads the index together with every section file. TSK-184: the
+    // session-level routing read is the orchestrator's seat section and the
+    // assignment line lives in the plan section, so a pin on routing reads
+    // those homes too.
     if relative == ROUTING {
-        return with_sections(
+        let mut text = with_sections(
             text,
             "assets/base/agents/skills/cf-model-orchestrator/resources/routing",
         );
+        for home in [
+            ORCHESTRATOR,
+            "assets/base/agents/skills/cf-model-orchestrator/resources/quality/plan.md",
+        ] {
+            text.push('\n');
+            text.push_str(&read(home));
+        }
+        return text;
     }
     text
 }
@@ -90,28 +101,43 @@ fn assert_ordered(relative: &str, markers: &[&str]) {
     }
 }
 
-const LIFECYCLE_ARROW: &str =
-    "`delegate init` → wait-ready → `arm` → canonical UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal";
-
 #[test]
 fn lifecycle_sequence_is_ordered_across_delegate_assets() {
-    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
-        assert_ordered(
-            asset,
-            &[
-                "codeflow delegate init",
-                "--until ready",
-                "codeflow delegate arm",
-                "paste-buffer -p",
-                "Enter",
-                "--until accepted",
-                "--until terminal",
-            ],
-        );
-    }
-    for asset in [CONSULT, CUSTOMIZE] {
-        assert_contains(asset, &[LIFECYCLE_ARROW, "bounded cleanup"]);
-    }
+    // TSK-184: the launch sequence is stated once, in the lifecycle lane; the
+    // adapter keeps the correlation contract and names the same order, and
+    // consult and customize point at cf-delegate instead of restating it.
+    assert_ordered(
+        DELEGATE_LIFECYCLE_LANE,
+        &[
+            "codeflow delegate init",
+            "--until ready",
+            "codeflow delegate arm",
+            "paste-buffer -p",
+            "Enter",
+            "--until accepted",
+            "--until terminal",
+        ],
+    );
+    assert_contains(
+        DELEGATE_LIFECYCLE_LANE,
+        &["This is the one launch sequence"],
+    );
+    assert_ordered(
+        ADAPTER,
+        &[
+            "`init`",
+            "`wait --until ready`",
+            "`arm`",
+            "deliver it as below",
+            "`wait --until accepted`",
+            "`wait --until terminal`",
+        ],
+    );
+    assert_contains(
+        CONSULT,
+        &["Launch through `cf-delegate`: it owns the lanes, the launch and delivery sequence"],
+    );
+    assert_contains(CUSTOMIZE, &["as `cf-delegate` and its lane files set out"]);
     assert_contains(
         ORCHESTRATOR,
         &[
@@ -155,7 +181,7 @@ fn lifecycle_documents_stable_exits_immutability_turns_and_pane_discipline() {
     assert_contains(
         DELEGATE_LIFECYCLE_LANE,
         &[
-            "settings file is **immutable**",
+            "the generated settings file is immutable",
             "one outstanding armed turn per run",
             "Pane access is diagnosis-only.",
             "stable exit states",
@@ -165,25 +191,38 @@ fn lifecycle_documents_stable_exits_immutability_turns_and_pane_discipline() {
 
 #[test]
 fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
+    // TSK-184: the canonical-prompt rule has one home, the adapter's
+    // correlation contract; the lifecycle lane keeps the bounded settle and
+    // the single retry in its one launch sequence.
+    assert_contains(
+        ADAPTER,
+        &[
+            "UTF-8",
+            "internal LF line endings",
+            "no terminal line break",
+            "no other control characters",
+            "empty",
+            "300 ms",
+            "Carry out the pasted instructions.",
+            "send Enter once more",
+            "Never",
+            "repeated Enter",
+        ],
+    );
+    assert_contains(
+        DELEGATE_LIFECYCLE_LANE,
+        &[
+            "exact-byte delivery and acceptance",
+            "sleep 0.3  # bounded input-settle; not completion detection",
+            "Carry out the pasted instructions.",
+            "send Enter once more",
+            "never blind or repeated Enter",
+        ],
+    );
     for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
-        assert_contains(
-            asset,
-            &[
-                "UTF-8",
-                "internal LF line endings",
-                "no terminal line break",
-                "no other control characters",
-                "empty",
-                "300 ms",
-                "Carry out the pasted instructions.",
-                "send Enter once more",
-                "Never",
-                "repeated Enter",
-            ],
-        );
+        assert_contains(asset, &["user scope"]);
     }
     for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER, CONSULT] {
-        assert_contains(asset, &["user scope"]);
         assert!(
             !read(asset).contains("user or CLI scope"),
             "{asset} incorrectly promises lifecycle settings composition through repeated CLI flags"
@@ -221,10 +260,11 @@ fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
     );
     // TSK-129: the plugin-exchange detail moved to the plugin lane (pinned
     // above); the orchestrator's provenance invariant points at the routing
-    // evidence section, which owns the recheck and labelling rules.
+    // evidence section. TSK-184: the recheck and labelling rules live with
+    // the five obligations in the cf-delegate evidence contract.
     assert_contains(ORCHESTRATOR, &["routing/evidence.md"]);
     assert_contains(
-        ROUTING,
+        DELEGATE_SKILL,
         &[
             "native Codex thread ID",
             "the resumable Codex thread forward",
@@ -259,12 +299,11 @@ fn generic_claude_relay_never_counts_as_codex() {
 
 #[test]
 fn sibling_preflight_rejects_unknown_stop_hooks() {
+    // TSK-184: the preflight has one home, the adapter; the lifecycle lane
+    // names it as a step before delivery and consult points at cf-delegate.
     assert_contains(
         DELEGATE_LIFECYCLE_LANE,
-        &[
-            "Reject any sibling Stop hook whose nonblocking behavior you do not deterministically know.",
-            "unverified sibling fails the preflight",
-        ],
+        &["the sibling Stop-hook preflight to run before delivery"],
     );
     assert_contains(
         ADAPTER,
@@ -273,29 +312,23 @@ fn sibling_preflight_rejects_unknown_stop_hooks() {
             "an unknown or unverified sibling fails the preflight",
         ],
     );
-    for asset in [CONSULT, CUSTOMIZE] {
-        assert_contains(asset, &["sibling Stop-hook preflight"]);
-    }
+    assert_contains(CUSTOMIZE, &["sibling Stop-hook preflight"]);
+    assert_contains(CONSULT, &["the preflight and the evidence contract"]);
 }
 
 #[test]
 fn sibling_preflight_permits_only_the_exact_known_safe_nonblocking_hook() {
-    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
-        assert_contains(
-            asset,
-            &[
-                "stop-review-gate-hook.mjs",
-                "`stopReviewGate` is off",
-                "plugin's own surface",
-            ],
-        );
-    }
+    // TSK-184: the preflight's one home is the adapter.
+    assert_contains(
+        ADAPTER,
+        &[
+            "stop-review-gate-hook.mjs",
+            "`stopReviewGate` is off",
+            "plugin's own surface",
+        ],
+    );
     // The check is the operator's, against the plugin's own configuration —
     // CodeFlow ships no code that reads or infers plugin-private state.
-    assert_contains(
-        DELEGATE_LIFECYCLE_LANE,
-        &["CodeFlow never reads or infers plugin-private state"],
-    );
     assert_contains(
         ADAPTER,
         &["CodeFlow does not read or infer plugin-private state"],
@@ -329,27 +362,28 @@ fn no_headless_peer_execution_anywhere_in_doctrine() {
         ],
     );
     assert_contains(CONSULT, &["never headless (`codex exec`, `claude -p`)"]);
-    assert_contains(CUSTOMIZE, &["Never use `claude -p`"]);
+    assert_contains(
+        CUSTOMIZE,
+        &["Never use headless `codex exec` or `claude -p`"],
+    );
 }
 
 #[test]
 fn legacy_result_mode_is_compatibility_only_and_mutually_exclusive() {
-    assert_contains(
-        ADAPTER,
-        &[
-            "legacy one-shot record-and-signal mode",
-            "until a later major release",
-            "mutually exclusive and never fall back to one another",
-            "New work always uses the schema-v2 lifecycle",
-        ],
-    );
+    // TSK-184 removed the legacy-mode section from the shipped lanes (change
+    // list WP5, cf-delegate row); the lanes offer only the schema-v2 lifecycle,
+    // `delegate_cli.rs` keeps the never-fall-back rejection, and SPC-002 keeps
+    // the contract sentence.
     assert_contains(
         DELEGATE_LIFECYCLE_LANE,
-        &[
-            "byte-compatible compatibility for existing callers until a later major release",
-            "mutually exclusive and never fall back",
-        ],
+        &["This is the one launch sequence"],
     );
+    for asset in [DELEGATE_SKILL, DELEGATE_LIFECYCLE_LANE, ADAPTER] {
+        assert!(
+            !read(asset).contains("--result"),
+            "{asset} offers the legacy --result mode as a route"
+        );
+    }
     assert_contains(
         SPEC,
         &["The two hook modes are mutually exclusive and never fall back to one another."],
@@ -358,8 +392,10 @@ fn legacy_result_mode_is_compatibility_only_and_mutually_exclusive() {
 
 #[test]
 fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
-    // TSK-129: the five obligations have one home in capability-routing; the
-    // cf-delegate core points there and each lane states its specifics.
+    // TSK-184: the five obligations have one home in the cf-delegate core,
+    // which points at the routing evidence section for admissibility; that
+    // section points back for the obligations. Each lane states its
+    // specifics.
     assert_contains(
         DELEGATE_SKILL,
         &[
@@ -378,6 +414,10 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     );
     assert_contains(
         ROUTING,
+        &["five-obligation evidence contract (launch, provenance, return, failure, recheck) stated once in"],
+    );
+    assert_contains(
+        DELEGATE_SKILL,
         &[
             "one five-obligation evidence contract",
             "**Launch**",
@@ -432,11 +472,13 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
         &[
             "Propagate current observed unavailability into every later worker choice",
             "do not infer that sibling models or another account are unavailable",
-            "On a Codex, Grok or other non-Claude host, before launching a Claude worker through the delegated lifecycle, **read and follow**",
+            // TSK-184: the worker effort preflight joined the orchestrator's
+            // preflight, whose adapter sentence names every Claude launch.
+            "On a Codex, Grok or other non-Claude host, before every Claude worker or same-session reviewer launch through the delegated lifecycle, load the",
             "claude-turn-completion.md",
-            "A Claude host does not load it.",
+            "a Claude host does not load it.",
             "collect the worker result before the primary returns",
-            "It does not govern an in-session Agent launch.",
+            "It does not govern an in-session Agent launch",
             "the verified return is the task notification from this session's own launch",
             "Do not report the unit complete before it arrives",
             "preserve the existing Stop-hook and lifecycle safety policy unchanged",
@@ -448,9 +490,9 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
             "## Sequential turns",
             "This section governs the delegated Claude lifecycle",
             "Collect delegated worker results before the primary returns",
-            "do not use Claude Bash `run_in_background` watchers",
+            "never through Claude Bash `run_in_background` watchers",
             "work is still running is incomplete",
-            "schema-v2 cannot correlate that continuation",
+            "a worker that resumes the primary after its terminal result without an admitted notice poisons the run",
         ],
     );
 }

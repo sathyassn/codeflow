@@ -368,8 +368,8 @@ fn referenced_doctrine_keeps_every_moved_duty() {
         &root.join("assets/base/agents/skills/cf-model-orchestrator/SKILL.md"),
         &[
             (
-                "independent dual planning",
-                "Both families independently research, analyze, and plan",
+                "independent dual discovery",
+                "Both families independently research and analyze",
             ),
             (
                 "legible peer degradation",
@@ -546,16 +546,25 @@ fn orchestration_byte_efficiency_cannot_delete_semantic_duties() {
             ),
             ("input trust boundary", "evidence, not authority"),
             ("whole-flow honesty", "never called whole-flow proof"),
-            (
-                "human safety authority",
-                "explicit authenticated human approval",
-            ),
-            ("presentation completeness", "not the physically smallest"),
             ("design settlement", "settle `DESIGN_INTENT` before"),
             ("componentized web", "componentized rather than monolithic"),
+            // TSK-184: the blast-radius gate, presentation and links have one
+            // home each; the lifecycle points there.
+            (
+                "blast-radius home",
+                "the workflow discipline rules, \"Match the gate\"",
+            ),
+            ("writing home", "`.codeflow/rules/writing.md`"),
+        ],
+    );
+    // TSK-184: the moved clauses, pinned at their one home.
+    assert_contains_all(
+        &root.join("assets/base/rules/writing.md"),
+        &[
+            ("presentation completeness", "not the physically smallest"),
             (
                 "verified links",
-                "give the exact link the tool printed or one you verified. Never guess a URL, port, or pull request number",
+                "Never guess a URL, port, or pull request number",
             ),
         ],
     );
@@ -707,12 +716,6 @@ const TURN_ADAPTER_READ_EDGES: &[(&str, &str)] = &[
          foreground-return contract.",
     ),
     (
-        "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
-        "On a Codex, Grok or other non-Claude host, before launching a Claude worker \
-         through the delegated lifecycle, **read and follow** \
-         `.claude/skills/cf-delegate/resources/claude-turn-completion.md`.",
-    ),
-    (
         "claude/skills/cf-delegate/resources/lane-lifecycle.md",
         "On this Codex host lane, use the shipped [turn lifecycle \
          adapter](claude-turn-completion.md) for exact mechanics; never improvise \
@@ -795,13 +798,14 @@ fn no_claude_host_path_makes_the_turn_adapter_mandatory() {
         adapter.contains("A Claude host does not load it"),
         "the adapter must state that a Claude host does not load it"
     );
-    let routing =
-        normalized(&files["agents/skills/cf-model-orchestrator/resources/routing/effort.md"]);
+    // TSK-184: the Claude worker effort preflight joined the orchestrator's
+    // preflight.
+    let routing = normalized(&files["agents/skills/cf-model-orchestrator/SKILL.md"]);
     assert!(
         routing.contains(
             "the verified return is the task notification from this session's own launch"
         ),
-        "the Claude-host return rule must stay in capability-routing"
+        "the Claude-host return rule must stay in the orchestrator preflight"
     );
 }
 
@@ -827,11 +831,12 @@ fn a_claude_or_both_host_adapter_mandate_fails() {
     // A reviewed sentence rescoped to a Claude host.
     let mut rescoped = files;
     let effort = rescoped
-        .get_mut("agents/skills/cf-model-orchestrator/resources/routing/effort.md")
-        .expect("effort section");
-    *effort = effort.replacen(
-        "On a Codex, Grok or other non-Claude host, before launching",
-        "On a Claude host, before launching",
+        .get_mut("agents/skills/cf-model-orchestrator/SKILL.md")
+        .expect("orchestrator preflight");
+    // The preflight wraps this sentence across lines; compare it normalized.
+    *effort = normalized(effort).replacen(
+        "On a Codex, Grok or other non-Claude host, before every Claude worker",
+        "On a Claude host, before every Claude worker",
         1,
     );
     let violations = turn_adapter_violations(&rescoped);
@@ -1125,22 +1130,17 @@ fn restored_audit_passages_stay_where_they_are_read() {
                 ("Q53 staged-loading rationale", "Staged routes keep startup concise"),
             ],
         ),
+        // TSK-184: the assignment record moved into the plan section and
+        // the other-hosts detail into the orchestrator's seat section.
         (
-            orch.join("resources/routing/effort.md"),
-            &[(
-                "Q01 adapter on every delegated-lifecycle host",
-                "On a Codex, Grok or other non-Claude host, before launching a Claude worker",
-            )],
-        ),
-        (
-            orch.join("resources/routing/assignment.md"),
+            orch.join("resources/quality/plan.md"),
             &[(
                 "Q27 exclusion reason",
                 "so it does not choose the known-unavailable route again",
             )],
         ),
         (
-            orch.join("references/other-hosts.md"),
+            orch.join("SKILL.md"),
             &[(
                 "H24 Grok detail read before launch",
                 "Before a Grok preflight or launch, also read",
@@ -1433,8 +1433,8 @@ fn every_link_form_to_a_missing_file_fails() {
 fn the_grok_host_detail_keeps_its_trigger() {
     let mut files = skill_trees();
     let hosts = files
-        .get_mut(&format!("{ORCH}/references/other-hosts.md"))
-        .expect("other hosts");
+        .get_mut(&format!("{ORCH}/SKILL.md"))
+        .expect("orchestrator seat section");
     *hosts = hosts.replace("Before a Grok preflight or launch, also read", "Also read");
     let faults = structure_faults(&files, &Inventory::SHIPPED);
     assert!(
@@ -1473,28 +1473,22 @@ fn the_kernel_check_rejects_a_removed_entry_or_a_wrong_target() {
     );
 }
 
-/// The lifecycle reply rule and route, the main owner of rules 3, 4, 6, 7
-/// and 8 on this source (TSK-108 AC-6).
+/// The lifecycle route's framing clauses (TSK-108 AC-6). TSK-184 moved the
+/// reply rule, the owner of rules 3, 4, 6, 7 and 8, to the writing
+/// reference, pinned below.
 const LIFECYCLE_OUTCOME_CLAUSES: &[(&str, &str)] = &[
-    ("real parts", "Frame a non-trivial subject by its own parts as its consumer meets them"),
+    (
+        "real parts",
+        "Frame a non-trivial subject by its own parts as its consumer meets them",
+    ),
     ("not a checklist", "This is judgment, not a checklist"),
-    ("order not headings", "This is an order, not a set of headings."),
-    ("no forced labels", "labels forced onto a short answer are a defect"),
-    ("anchoring summary", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines."),
-    ("summary judgment", "That is judgment, not a sentence count or a list of banned items"),
-    ("running report", "A running report on long work opens with the result the work serves and where it stands"),
-    ("marker once", "NEED YOUR ATTENTION, at most once per reply, after the opening and before the detail"),
-    ("marker verbs", "(Decide, Do, Confirm, Clarify or Note)"),
-    ("no marker when nothing is owed", "With nothing owed there is no heading, and a manufactured ask is a defect."),
-    ("marker exclusions", "The heading never appears in a pull request body, document, commit message, outbound draft or machine payload."),
-    ("marker override", "A consuming project may rename or drop it in its own instructions."),
-    ("dash guideline", "Avoid em and en dashes in prose, replies included"),
 ];
 
 /// TSK-108 AC-6 (SPC-013 R-117): each outcome-first rule of ADR-0071 lives
 /// at its owner on this source. The running report and the attention
-/// heading, owned by `autonomy.md` on the EPC-018 line, live in the
-/// lifecycle reply rule and the orchestrator's joint closeout here.
+/// heading, owned by `autonomy.md` on the EPC-018 line, live in the writing
+/// reference's reply rule (TSK-184: its one home; the lifecycle points there)
+/// and the orchestrator's completion here.
 #[test]
 fn outcome_first_rules_live_at_their_owners() {
     let root = repo_root();
@@ -1514,8 +1508,15 @@ fn outcome_first_rules_live_at_their_owners() {
             &[
                 ("report order", "A reply or report opens with the result it serves and where the work stands"),
                 ("order not headings", "This is an order, not a set of headings"),
+                ("no forced labels", "labels forced onto a short answer are a defect"),
                 ("anchoring summary", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines."),
+                ("summary judgment", "It is judgment, not a sentence count or a list of banned items"),
+                ("running report", "A running report on long work opens with the result the work serves and where it stands"),
                 ("one attention marker", "items the operator must act on go once under NEED YOUR ATTENTION"),
+                ("marker verbs", "(Decide, Do, Confirm, Clarify or Note)"),
+                ("no marker when nothing is owed", "With nothing owed there is no heading, and a manufactured ask is a defect."),
+                ("marker exclusions", "The heading never appears in a pull request body, document, commit message, outbound draft or machine payload."),
+                ("marker override", "A project may rename or drop it"),
                 ("dash guideline", "The written content policy (ADR-0067): avoid em and en dashes in prose"),
             ],
         ),
@@ -1537,7 +1538,7 @@ fn outcome_first_rules_live_at_their_owners() {
         (
             "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
             &[
-                ("closeout order", "The report opens with the result reached for its consumer and what still depends on other work"),
+                ("closeout order", "opens with the result reached for its consumer and what still depends on other work"),
                 ("closeout attention", "follow once under NEED YOUR ATTENTION"),
             ],
         ),
@@ -1638,14 +1639,15 @@ fn no_owner_keeps_the_retired_summary_or_dash_wording() {
     }
 }
 
-/// Each reply duty the lifecycle reply rule owns (SPC-013 R-117), with the
-/// clause that states it in the owner's section, and the section and clause
-/// that state it in the writing reference. The writing reference is what an
-/// agent reads at the moment it reports, at every tier: the rule map routes
-/// "report status" to it, and the minimal tier installs no lifecycle. A
-/// clause that ends the owner's sentence carries its full stop, so a
-/// qualifier inside that sentence fails. A separate sentence that contradicts
-/// a duty is not caught here; review judges meaning.
+/// Each reply duty (SPC-013 R-117), with the clause the lifecycle reply rule
+/// used to state it with, and the section and clause that state it in the
+/// writing reference. TSK-184 made the writing reference the one home: it is
+/// what an agent reads at the moment it reports, at every tier (the rule map
+/// routes "report status" to it, and the minimal tier installs no
+/// lifecycle), and the lifecycle points there without restating a duty. A
+/// clause that ends its sentence carries its full stop, so a qualifier
+/// inside that sentence fails. A separate sentence that contradicts a duty is
+/// not caught here; review judges meaning.
 const REPLY_DUTIES_AT_THE_REPORTING_MOMENT: &[(&str, &str, &str, &str)] = &[
     ("report order", "A reply or report opens with the result it serves and where the work stands", "Replies and status", "A reply or report opens with the result it serves and where the work stands"),
     ("steps last", "steps, gates, counts and tooling come last, and only where they explain those.", "Replies and status", "steps, gates, counts and tooling come last, and only where they explain those."),
@@ -1670,8 +1672,6 @@ const REPLY_DUTIES_AT_THE_REPORTING_MOMENT: &[(&str, &str, &str, &str)] = &[
     ("replies judged without a hook", "no hook sees a reply", "Written content policy", "No hook sees a chat reply"),
 ];
 
-const REPLY_RULE_OWNER_SECTION: &str = "Evidence, safety, and closeout";
-
 /// The text of one `##` section of a whitespace-normalized Markdown file, or
 /// an empty string when the heading is missing.
 fn normalized_section<'a>(text: &'a str, heading: &str) -> &'a str {
@@ -1686,13 +1686,12 @@ fn normalized_section<'a>(text: &'a str, heading: &str) -> &'a str {
     })
 }
 
-fn missing_reply_duties(owner: &str, reporting: &str) -> Vec<String> {
-    let (owner, reporting) = (normalized(owner), normalized(reporting));
-    let owner = normalized_section(&owner, REPLY_RULE_OWNER_SECTION);
+fn missing_reply_duties(lifecycle: &str, reporting: &str) -> Vec<String> {
+    let (lifecycle, reporting) = (normalized(lifecycle), normalized(reporting));
     let mut missing = Vec::new();
-    for (duty, owner_clause, section, reporting_clause) in REPLY_DUTIES_AT_THE_REPORTING_MOMENT {
-        if !owner.contains(owner_clause) {
-            missing.push(format!("owner lost {duty}"));
+    for (duty, restated_clause, section, reporting_clause) in REPLY_DUTIES_AT_THE_REPORTING_MOMENT {
+        if lifecycle.contains(restated_clause) {
+            missing.push(format!("lifecycle restates {duty}"));
         }
         if !normalized_section(&reporting, section).contains(reporting_clause) {
             missing.push(format!("writing reference lacks {duty} under {section}"));
@@ -1701,14 +1700,18 @@ fn missing_reply_duties(owner: &str, reporting: &str) -> Vec<String> {
     missing
 }
 
-/// TSK-138 AC-1: the writing reference, read when an agent reports at every
-/// tier, states each reply duty its owner states, so the two cannot drift
-/// apart and the minimal tier loses none of them.
+/// TSK-138 AC-1, TSK-184: the writing reference, read when an agent reports
+/// at every tier, states each reply duty once, and the lifecycle points
+/// there instead of keeping a second copy that could drift.
 #[test]
 fn reply_duties_read_when_reporting_match_their_owner() {
     let root = repo_root();
     let owner = read_text(
         &root.join("assets/base/claude/skills/cf-method/references/workflow-lifecycle.md"),
+    );
+    assert!(
+        normalized(&owner).contains("`.codeflow/rules/writing.md`"),
+        "the lifecycle must point at the writing reference for the reply rule"
     );
     for path in [
         "assets/base/rules/writing.md",
@@ -1720,8 +1723,9 @@ fn reply_duties_read_when_reporting_match_their_owner() {
         assert!(missing.is_empty(), "{path}: {missing:#?}");
     }
 
-    // Negative controls: a duty dropped from either side, qualified inside
-    // the owner's sentence, or moved out of its section is named.
+    // Negative controls: a duty dropped from the writing reference, qualified
+    // inside its sentence, moved out of its section, or restated in the
+    // lifecycle is named.
     let reporting = normalized(&read_text(&root.join("assets/base/rules/writing.md")));
     let dropped = reporting.replacen("a manufactured ask is a defect", "an ask is fine", 1);
     assert_eq!(
@@ -1745,56 +1749,53 @@ fn reply_duties_read_when_reporting_match_their_owner() {
         missing_reply_duties(&owner, &relocated),
         vec!["writing reference lacks no manufactured ask under Replies and status".to_string()]
     );
-    let owner_dropped = owner.replacen("other work keeps moving", "all work waits", 1);
+    let restated = format!(
+        "{owner}\n\nWith nothing owed there is no heading, and a manufactured ask is a defect.\n"
+    );
     assert_eq!(
-        missing_reply_duties(&owner_dropped, &reporting),
-        vec!["owner lost hard gate".to_string()]
+        missing_reply_duties(&restated, &reporting),
+        vec!["lifecycle restates no manufactured ask".to_string()]
     );
 }
 
 /// The figure proportionality duties, as the author reads them in the
-/// lifecycle (CF-OUT-003), the reviewer grades them in the duo quality
-/// contract and the editor applies them in `cf-editorial-review`. Each clause
-/// is that file's own wording, ending at its full stop where its sentence
-/// ends there.
-const FIGURE_DUTIES_BY_READER: &[(&str, [&str; 3])] = &[
+/// writing reference (CF-OUT-003; TSK-184 made it their author-side home)
+/// and the editor and reviewer apply them in `cf-editorial-review` (the duo
+/// quality contract's editorial section points there). Each clause is that
+/// file's own wording, ending at its full stop where its sentence ends there.
+const FIGURE_DUTIES_BY_READER: &[(&str, [&str; 2])] = &[
     (
         "form follows the surface",
         [
-            "Match the form to the surface.",
-            "in the form the surface renders as the lifecycle reply rule sets out.",
-            "in the form the surface renders as the lifecycle reply rule sets out.",
+            "Match the form to the surface",
+            "in the form the surface renders",
         ],
     ),
     (
         "scope fits the explanation",
         [
-            "Use a diagram whose scope and detail fit the explanation",
-            "diagram whose scope and detail fit the explanation",
+            "a figure whose scope fits the explanation",
             "diagram whose scope and detail fit the explanation",
         ],
     ),
     (
         "least complicated complete form",
         [
-            "prefer the least complicated form that remains complete, not the physically smallest;",
-            "Prefer the least complicated form that remains complete, not the physically smallest;",
+            "Use the least complicated form that stays complete, not the physically smallest;",
             "Prefer the least complicated form that remains complete, not the physically smallest;",
         ],
     ),
     (
         "complex subjects may need more",
         [
-            "complex subjects may need a larger, layered, or multi-view diagram",
-            "complex subjects may need a larger, layered, or multi-view diagram.",
+            "complex subjects may need a larger or layered view",
             "complex subjects may need a larger, layered, or multi-view diagram.",
         ],
     ),
     (
         "caption or legend",
         [
-            "caption or legend when it aids orientation.",
-            "caption or legend when it aids orientation.",
+            "a caption or legend when useful.",
             "caption or legend when it aids orientation.",
         ],
     ),
@@ -1802,19 +1803,17 @@ const FIGURE_DUTIES_BY_READER: &[(&str, [&str; 3])] = &[
         "nothing decorative or forced",
         [
             "Never add decorative or forced diagrams, headings, tables, or recaps.",
-            "Decorative or forced diagrams, headings, tables, and recaps are findings, not polish.",
             "A decorative or forced diagram, heading, table, or recap is a defect, not polish.",
         ],
     ),
 ];
 
-const FIGURE_DUTY_READERS: [&str; 3] = [
-    "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
-    "assets/base/agents/skills/cf-model-orchestrator/resources/quality/editorial.md",
+const FIGURE_DUTY_READERS: [&str; 2] = [
+    "assets/base/rules/writing.md",
     "assets/base/agents/skills/cf-editorial-review/SKILL.md",
 ];
 
-fn missing_figure_duties(texts: &[String; 3]) -> Vec<String> {
+fn missing_figure_duties(texts: &[String; 2]) -> Vec<String> {
     let mut missing = Vec::new();
     for (duty, clauses) in FIGURE_DUTIES_BY_READER {
         for ((path, text), clause) in FIGURE_DUTY_READERS.iter().zip(texts).zip(clauses) {
@@ -1826,8 +1825,8 @@ fn missing_figure_duties(texts: &[String; 3]) -> Vec<String> {
     missing
 }
 
-/// TSK-138 AC-1: the author, reviewer and editor copies of the figure
-/// proportionality rule state the same duties, each in its reader's voice.
+/// TSK-138 AC-1: the author and editor copies of the figure proportionality
+/// rule state the same duties, each in its reader's voice.
 #[test]
 fn figure_duties_match_for_author_reviewer_and_editor() {
     let root = repo_root();
@@ -1835,11 +1834,11 @@ fn figure_duties_match_for_author_reviewer_and_editor() {
     let missing = missing_figure_duties(&texts);
     assert!(missing.is_empty(), "{missing:#?}");
 
-    // Negative control: a qualifier after the reviewer's full stop is named.
+    // Negative control: a qualifier after the editor's full stop is named.
     let mut qualified = texts.clone().map(|text| normalized(&text));
     qualified[1] = qualified[1].replacen(
-        "are findings, not polish.",
-        "are findings, not polish, unless the author prefers them.",
+        "is a defect, not polish.",
+        "is a defect, not polish, unless the author prefers them.",
         1,
     );
     assert_eq!(
@@ -1922,10 +1921,7 @@ const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
     ("assets/base/agents/skills/cf-evaluate-model/SKILL.md", &["Write grader notes plainly:"], &[]),
     (
         "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
-        &[
-            "Operator-facing replies follow the written content policy (ADR-0067) and are written plainly:",
-            "Use fenced ASCII on a terminal or other plain-text surface, in a Markdown file (a README, doc, record or PR body), or when unsure what the surface renders.",
-        ],
+        &["Operator-facing replies follow the written content policy (ADR-0067) and are written plainly:"],
         &["Use fenced ASCII only on a terminal"],
     ),
     (
