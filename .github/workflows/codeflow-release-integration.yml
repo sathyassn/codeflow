@@ -1,0 +1,56 @@
+# Repository-owned automation, never installed in adopter projects.
+# workflow_run and schedule load this YAML from the default branch. The
+# triggering line supplies data only, never the privileged job's definition.
+name: codeflow-release-integration
+
+on:
+  workflow_run:
+    workflows: [codeflow-release]
+    types: [completed]
+    branches: ["integration/EPC-*"]
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  release-integration:
+    name: release integration after landing
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       startsWith(github.event.workflow_run.head_branch, 'integration/EPC-'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: codeflow-release-integration
+      cancel-in-progress: false
+    env:
+      RELEASE_BRANCH: integration/release-3-0-0-r2
+    steps:
+      # Both accepted events bind github.sha to the default-branch commit.
+      # Never build from workflow_run.head_sha or consume upstream artifacts.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build repository release integration runner and judge
+        run: |
+          cargo build --locked -p codeflow-cli --bin codeflow --example release_integration
+          echo "${GITHUB_WORKSPACE}/target/debug" >> "$GITHUB_PATH"
+      - name: Integrate verified epic lines
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LANDED_LINE: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          printf 'Triggering line: %s; checking every verified epic line\n' "${LANDED_LINE:-daily catch-up}"
+          gh auth setup-git
+          # GitHub can replace a pending run. Every surviving run catches up
+          # all current line tips, including the landings whose runs it replaced.
+          target/debug/examples/release_integration --release "$RELEASE_BRANCH" --push

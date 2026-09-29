@@ -124,14 +124,15 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
 
 Git discipline enforced across four planes reading one config (the `git`
 section of `.codeflow/policy.json`). Two give fast local feedback — the git
-client hooks (pre-commit secret scan + staged-.env, commit-msg
+client hooks (pre-commit secret scan + staged-.env and unresolved conflict
+markers, commit-msg
 format/attribution/emoji and the ADR-0067 em and en dash check,
 pre-merge-commit and reference-transaction protected-branch merge/ref rules,
 pre-push branch naming and protected-branch rules) and the Claude
@@ -171,6 +172,14 @@ The ADR-0067 dash check (`policy_characters`) also defaults to warn; CodeFlow's
 own policy sets block. Its added-lines scan skips a file only when its bytes
 equal the whole-file managed asset the running binary ships for that path, so
 unmodified scaffold content never trips it and a project record proves nothing.
+The conflict-marker check (`git.conflict_markers`, default block, TSK-170)
+judges the lines a change adds to a text file, in pre-commit over the staged
+diff and in `codeflow ci` over the range, which also catches a marker left
+while resolving `git rebase --continue`. A separator line counts only
+between an opening and a closing marker, so a Markdown heading underline
+passes, and a file that must hold markers sets `conflict-marker-size` for
+its path in `.gitattributes` (tests: `hooks::conflict_markers`,
+`git_hook` pre-commit tests, `ci_cli.rs`, `hooks_cli.rs`).
 The generic PR template ships at every tier. The structural
 anti-bypass layer is not flippable, by design: the strict policy validator (an
 invalid file fails loud rather than silently reverting to defaults), the schema
@@ -200,6 +209,16 @@ the managed CI file.
 Secret scanning fails closed if libgit2 cannot traverse the complete staged
 diff. Hook stdin read failures remain advisory but print an explicit degraded
 ref-check warning instead of passing silently.
+Each operation a git hook or session guard stops appends one `refusal` event
+to the clone's ledger, naming the plane, the effective level and the rules,
+never the command; a finding at warn stops nothing and is not written.
+`codeflow report ceremony` reads it with the merge history over a window of
+pull requests or dates: pull requests per logical change, record status pull
+requests on their own row, review rounds asked of the host (`unknown` when the
+host cannot answer, the one host-backed read of SPC-013 R-103) and refusals
+(`unknown` before the clone began recording). The baseline over pull requests
+568 to 644 is `docs/verification/ceremony-baseline-2026-09-28.md`, and the
+release checklist compares each release's window with it.
 
 ## CAP-004 — test-gate
 
@@ -620,9 +639,57 @@ epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a
 listed follow-up. A tag opens or closes its criterion, trailing sentence
 punctuation included; a tag inside the text does not count. `git.work_records` sets the binding and journey rules;
-frozen criteria always block. The check states that it proves structure and
+frozen criteria always block. A release branch (SPC-013 R-120) is one whose
+name matches `git.release_branch_pattern` in the policy at the
+destination's default target, or `integration/release-*` when the key is
+absent; the policy check refuses a pattern that matches the default target
+or an epic line. On a push to a release branch, a pull request into one, or
+its pull request into the default target, pre-push, `codeflow ci` and
+`task status complete` judge each change where it was introduced. A merge
+whose other parents lie on a verified epic line's or the default target's
+first-parent chain is an import: a path equal to the expected import's
+tree entry is brought, and its completions bind where they were introduced
+(only a later completion from the task's own line that binds there, and
+that the line landed after the earlier ones, supersedes them; a direct
+completion is judged as it was made);
+a brought criteria change is judged again where it landed on its line,
+unless that landing is at or before the cutoff of the line the task
+targets, on that line's first-parent chain, in the project-config table
+`release_rule_baseline` read at the default target, which lists it as
+information. The adoption marker `release_rules = 1` in project config
+never decides whether these rules apply; once the default target carries
+it, removing it or changing its value, there or in the judged range,
+makes every release check refuse. The marker's history is read from the
+parents each commit records. History the check needs that it cannot read
+in full, cut by a shallow boundary or missing a config object, refuses as
+well: adoption is never inferred absent from it. A graft file or a replace
+ref, which would change the commits a release check walks, refuses too.
+Anything else is direct work: it freezes criteria, and beyond planning
+records it belongs to the one open task with `role: release-integration`,
+whose completion binds to the release head. Pre-push judges a push to a
+release branch on everything it adds to the default target's tip, as its
+pull request is. Whether the release rules apply is read at the checkout,
+the pushed commit and the default target's tip, fetched when missing; a
+push is refused when the destination does not answer or any of these
+cannot be read. The hook asks the destination once per push and hands
+that answer to its own `codeflow ci` through a hidden input; a run given
+that input is advisory only, and hosted CI, the authority, never takes it. When the
+default target's policy or objects cannot be read, the check fails
+closed. The check states that it proves structure and
 binding only, and cf-reviewer, cf-consult and cf-ship ask whether each
 criterion is supported on this source and achieves the outcome.
+
+CodeFlow's repository-only release integration workflow loads its write-token
+job from the default branch after epic-line workflow completions and on a daily
+schedule. Each surviving run imports all verified epic-line tips, including
+landings whose pending runs were replaced. The `release_integration` example runner
+checks prospective merges with this judge and the shared reading-structure
+check before pushing. Conflicts and findings leave the release branch unchanged
+and name the open release-integration task from the destination's default tip
+plus a local reproduction command.
+The workflow is not a task-PR gate and is not installed for adopters. Its local
+fixtures are in `release_line_cli`; `init_e2e` checks the conditional ship guidance.
+
 Review-relevant bounded discoveries persist at task closeout; closeout cannot
 retroactively approve a
 material change. Project organization keeps one authoritative work-item home

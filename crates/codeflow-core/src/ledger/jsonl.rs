@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 
@@ -31,6 +32,7 @@ use super::{Event, LedgerError, LedgerWriter};
 pub struct JsonlWriter {
     ledger_dir: PathBuf,
     session_id: Option<String>,
+    lock_wait: Option<Duration>,
 }
 
 impl JsonlWriter {
@@ -66,7 +68,48 @@ impl JsonlWriter {
         Ok(Self {
             ledger_dir,
             session_id,
+            lock_wait: None,
         })
+    }
+
+    /// Wait at most `wait` for the file lock, then fail with
+    /// [`LedgerError::LockTimeout`] instead of blocking. For a writer whose
+    /// caller must not stall on another process's lock (the refusal record
+    /// of a hook or guard, TSK-149).
+    #[must_use]
+    pub fn with_lock_wait(mut self, wait: Duration) -> Self {
+        self.lock_wait = Some(wait);
+        self
+    }
+
+    /// Take the exclusive lock, bounded by `lock_wait` when set.
+    fn lock(&self, lock_file: &std::fs::File, lock_path: &Path) -> Result<(), LedgerError> {
+        let Some(wait) = self.lock_wait else {
+            return lock_file.lock_exclusive().map_err(|e| {
+                LedgerError::Lock(format!("acquiring lock on {}: {e}", lock_path.display()))
+            });
+        };
+        let deadline = Instant::now() + wait;
+        loop {
+            match lock_file.try_lock_exclusive() {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() == fs2::lock_contended_error().kind() => {
+                    if Instant::now() >= deadline {
+                        return Err(LedgerError::LockTimeout {
+                            path: lock_path.to_path_buf(),
+                            waited: wait,
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => {
+                    return Err(LedgerError::Lock(format!(
+                        "acquiring lock on {}: {e}",
+                        lock_path.display()
+                    )))
+                }
+            }
+        }
     }
 
     /// Resolve the file path for a given ledger type name.
@@ -104,9 +147,7 @@ impl JsonlWriter {
             .map_err(at(&lock_path))?;
 
         // Acquire exclusive lock.
-        lock_file.lock_exclusive().map_err(|e| {
-            LedgerError::Lock(format!("acquiring lock on {}: {e}", lock_path.display()))
-        })?;
+        self.lock(&lock_file, &lock_path)?;
 
         // Serialize event to a single JSON line.
         let mut line = serde_json::to_vec(event)?;

@@ -69,6 +69,7 @@
       "integration/"
     ],
     "secret_scan": "block",
+    "conflict_markers": "block",
     "test_gate_on_push": "block",
     "security_review": "block",
     "dep_audit": "block",
