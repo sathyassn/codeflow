@@ -230,7 +230,10 @@ publication date._
   release the target commit pins, verified against its `sha256.sum`, run
   `codeflow ci` from a checkout of the target, test a raised pin's release
   separately, and fail a lowered pin. `ci-generic.sh` now takes the target
-  commit as its first argument and refuses to run without it. If you copied
+  commit as its first argument and refuses to run without it. On GitLab the
+  target is the target branch's current commit, never the diff base, and
+  the job fails when it cannot fetch it. A branch that kept the pin it
+  started from is not a lowered pin. If you copied
   one of these files and wired your own install, replace that install with
   the new template's shared script, or install the version your target's
   `scaffold_version` names and verify it the same way. `codeflow doctor`'s

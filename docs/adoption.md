@@ -373,13 +373,20 @@ when it is older than they are, then run the checks it has.
 The other CI templates carry the same pin. `.gitlab-ci.yml`,
 `bitbucket-pipelines.yml` and `ci-generic.sh` (in `assets/base/ci/` of the
 CodeFlow repository; copy the one your host needs) run one shared script: it
-reads the pin from the target commit (`CI_MERGE_REQUEST_DIFF_BASE_SHA` on
-GitLab, `BITBUCKET_PR_DESTINATION_COMMIT` on Bitbucket, the first argument of
-`ci-generic.sh`, which refuses to run without it), installs that release with
-the same checksum verification, and runs `codeflow ci` from a checkout of the
-target, so the target's policy judges the change. A raised pin's release is
-installed separately and only tested; a lowered pin is judged by the
-target's binary and then fails the job.
+reads the pin from the target branch's current commit, installs that
+release with the same checksum verification, and runs `codeflow ci` from a
+checkout of that commit, so the target's policy judges the change. On GitLab
+the target is `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` in a merged results
+pipeline; an ordinary merge request pipeline leaves that empty, so the job
+fetches `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` from the merge request's
+project and fails when it cannot. It never uses
+`CI_MERGE_REQUEST_DIFF_BASE_SHA`, the diff's base, which stays behind when
+the target advances. Bitbucket uses `BITBUCKET_PR_DESTINATION_COMMIT`, and
+`ci-generic.sh` takes the target commit as its first argument and refuses to
+run without it. A raised pin's release is installed separately and only
+tested; a lowered pin is judged by the target's binary and then fails the
+job. A branch that started before the target raised its pin, and kept the
+pin it started from, lowers nothing and is judged by the new binary.
 
 The pin does not defend the CI file itself. On a GitHub `pull_request` event,
 and on every GitLab and Bitbucket pipeline, the job file runs from the pull

@@ -12,10 +12,10 @@
 # The binary is the version the TARGET pins in .codeflow/project.toml
 # (`scaffold_version`), downloaded from its release and verified against the
 # release's published sha256.sum; a missing or wrong checksum fails the run and
-# nothing unverified is installed (SPC-013 R-113). The target is the commit the
-# change will land on, such as the pull request's base; this script refuses to
-# run without it and never guesses it, since a pin read from the change itself
-# would let the change choose the binary that judges it. An upgrade takes two
+# nothing unverified is installed (SPC-013 R-113). The target is the current
+# commit of the branch the change lands on, not the merge base; this script
+# refuses to run without it and never guesses it, since a pin read from the
+# change itself would let the change choose the binary that judges it. An upgrade takes two
 # changes, in order: first raise only `scaffold_version` (the target's binary
 # judges it and the candidate is tested alongside), then run `codeflow update`.
 #
