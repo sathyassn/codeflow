@@ -1207,7 +1207,8 @@
       "state": {
         "branch": "fixture/in-node-detail",
         "peer": "available",
-        "approved_plan": "v1"
+        "approved_plan": "v1",
+        "grading": "The execution ledger is the host's run record, not a repository file, and no pull request exists yet: grade ledger_evidence_recorded from the ledger entry the reply records for the order change and why ownership, guards and safety are unchanged, and review_relevant_discovery_recorded_in_pr_body from what the reply names for the acceptance block and PR body; an entry for each routine in-node step is implementation_diary_added."
       },
       "files": {
         "PLAN.md": "# Plan v1\n\nTASK_GRAPH v1\nSTART -> T1\nSTART -> T2\n\nT1 owns `src/parser/`; T2 owns `docs/parser.md`. Both use the same Codex engineering producer and Claude judgment reviewer. Either valid integration order is allowed.\n\nCLAUDE_APPROVAL: v1\nCODEX_APPROVAL: v1\n",
@@ -1489,12 +1490,14 @@
           "tests",
           "public-web"
         ],
-        "cross_exposure_log": []
+        "cross_exposure_log": [],
+        "grading": "The execution ledger is the host's run record, not a repository file, and this fixture has none: grade a ledger signal from the entry the reply records (what changed, the trigger and its source, the seat and effort)."
       },
       "files": {
-        "BRIEF.md": "# Cache consistency\n\nPlan how reads remain coherent after writes across two service instances. Preserve the public API. Do not implement.\n",
+        "BRIEF.md": "# Cache consistency\n\nPlan how reads remain coherent after writes across two service instances. Preserve the public API described in `docs/architecture.md`. Do not implement.\n",
         "docs/product.md": "# Product\n\nA configuration service where correctness is more important than stale-read latency.\n",
-        "docs/capabilities.md": "# Capabilities\n\n## CAP-001 — coherent reads\n\nReads must not return a value older than the most recently acknowledged write.\n"
+        "docs/capabilities.md": "# Capabilities\n\n## CAP-001 — coherent reads\n\nReads must not return a value older than the most recently acknowledged write.\n",
+        "docs/architecture.md": "# Architecture\n\nTwo stateless service instances run behind one load balancer. Both read and\nwrite one shared PostgreSQL database, the source of truth for configuration\nvalues. Each instance keeps an in-process read cache.\n\n## Public API\n\nClients depend on these two endpoints; their paths, bodies and status codes\nmust not change.\n\n- `GET /config/{key}` returns `200` with `{\"key\", \"value\", \"version\"}`, or\n  `404` for an unknown key.\n- `PUT /config/{key}` with `{\"value\"}` returns `200` with the new `version`\n  once the write is acknowledged.\n"
       }
     },
     {
