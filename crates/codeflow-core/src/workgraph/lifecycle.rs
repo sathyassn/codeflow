@@ -1446,17 +1446,20 @@ pub fn judge_change(
 ///
 /// Returns a message when the repository or a revision cannot be read.
 pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<Verdict, String> {
-    judge_range_against(repo_root, base, base, head)
+    judge_range_against(repo_root, base, base, head, false)
 }
 
 /// [`judge_range`] with the records diffed from `base` and the governing
 /// baseline list read from `target`, which differ for a pull request whose
-/// branch forked before the target's current tip.
+/// branch forked before the target's current tip. `on_line` says the range
+/// is a verified integration line (the caller proved it), whose landings
+/// are judged one by one; any other range is judged whole.
 fn judge_range_against(
     repo_root: &Path,
     base: &str,
     target: &str,
     head: Option<&str>,
+    on_line: bool,
 ) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let target_commit = resolve_commit(&repo, target)
@@ -1497,9 +1500,15 @@ fn judge_range_against(
             None if baseline.is_legacy_blob(record) => continue,
             None => baseline.copies(&record.id),
         };
-        // A spec approval landed on a line by a merge is judged by that
-        // landing's change, never by the whole line (R-32 on a line).
-        let landing = landing_paths(&repo, base, head, record);
+        // On a verified line, a spec approval landed by a merge is judged
+        // by that landing's change, never by the whole line (R-32 on a
+        // line). Any other range is judged whole, so a private merge inside
+        // a task branch cannot manufacture the exception.
+        let landing = if on_line {
+            landing_paths(&repo, base, head, record)
+        } else {
+            None
+        };
         let context = match &landing {
             Some(paths) => ChangeContext {
                 changed_paths: Some(paths),
@@ -1523,12 +1532,12 @@ fn judge_range_against(
     Ok(verdict)
 }
 
-/// The paths of the landing that brought a spec's approval or supersession
-/// into the range, when that landing is a merge on the first-parent chain
-/// from `head` back to `base`: the merged pull request's own change, judged
-/// as the planning-only change the transition must travel in. `None` when
-/// the transition arrived by a plain commit, or on the working tree, so the
-/// whole range is judged as before.
+/// On a verified integration line, the paths of the landing that brought a
+/// spec's approval or supersession into the range, when that landing is a
+/// merge on the line's first-parent chain from `head` back to `base`: the
+/// landed pull request's own change, judged as the planning-only change the
+/// transition must travel in. `None` when the transition arrived by a plain
+/// commit, or on the working tree, so the whole range is judged as before.
 fn landing_paths(
     repo: &Repository,
     base: &str,
@@ -1719,6 +1728,23 @@ pub fn judge_pull_request(repo_root: &Path, base: &str, head: &str) -> Result<Ve
     judge_pull_request_under(repo_root, base, head, base)
 }
 
+/// [`judge_pull_request_under`] for a verified integration line judged as
+/// one pull request (R-60): each planning landing on the line's
+/// first-parent chain is judged by its own change. The caller proves the
+/// line (`check_epic_line`); an unverified range is judged whole.
+///
+/// # Errors
+///
+/// Returns a message when a revision or the merge-base cannot be resolved.
+pub fn judge_line_under(
+    repo_root: &Path,
+    base: &str,
+    head: &str,
+    authority: &str,
+) -> Result<Verdict, String> {
+    judge_pull_request_shaped(repo_root, base, head, authority, true)
+}
+
 /// [`judge_pull_request`] with the governing baseline list read from
 /// `authority` instead of `base`. The pre-push hook passes the destination
 /// branch's current tip here, because its `base` is a boundary of every
@@ -1732,6 +1758,16 @@ pub fn judge_pull_request_under(
     base: &str,
     head: &str,
     authority: &str,
+) -> Result<Verdict, String> {
+    judge_pull_request_shaped(repo_root, base, head, authority, false)
+}
+
+fn judge_pull_request_shaped(
+    repo_root: &Path,
+    base: &str,
+    head: &str,
+    authority: &str,
+    on_line: bool,
 ) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let commit = |revision: &str| {
@@ -1749,6 +1785,7 @@ pub fn judge_pull_request_under(
         &anchor.to_string(),
         &target.to_string(),
         Some(head),
+        on_line,
     )
 }
 

@@ -312,6 +312,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &base_candidates,
         &head,
         args.baseline_from.as_deref(),
+        verified_epic_line(&root, &branch, &base_candidates, &head),
         &mut tagged,
         &mut ran,
     );
@@ -543,11 +544,25 @@ fn record_checks(
     base_candidates: &[String],
     head: &str,
     authority: Option<&str>,
+    on_line: bool,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
-    work_records::dispatch(root, base_candidates, head, authority, tagged, ran);
+    work_records::dispatch(root, base_candidates, head, authority, on_line, tagged, ran);
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
+}
+
+/// Whether the range is a verified epic integration line (SPC-013 R-60): the
+/// same proof the acceptance step uses, so the record judge treats each
+/// landing on the line as its own change. Any other range is judged whole.
+fn verified_epic_line(root: &Path, branch: &str, base_candidates: &[String], head: &str) -> bool {
+    branch.starts_with("integration/")
+        && base_candidates
+            .iter()
+            .find_map(|name| rev_parse(root, name).map(|sha| (name, sha)))
+            .is_some_and(|(name, sha)| {
+                codeflow_core::workgraph::check_epic_line(root, branch, name, &sha, head).is_ok()
+            })
 }
 
 /// Name every invalid policy key and, when a key is unknown to this binary,

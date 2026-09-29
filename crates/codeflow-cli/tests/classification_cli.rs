@@ -752,3 +752,87 @@ fn standalone_record_and_code_are_admitted_together_at_completion() {
         "only its own standalone task record",
     );
 }
+
+const SPEC: &str = "---\nid: SPC-001\ntitle: \"contract\"\nstatus: draft\nopen_questions: []\n---\n\n# SPC-001: contract\n\n## Summary\n\nS.\n\n## Behavior\n\nB.\n\n## Open questions\n\nNone.\n";
+
+/// A spec approval travels only in a planning-only change (R-32). A task
+/// pull request that hides the approval behind a private merge on its own
+/// branch is judged whole and refused, like the plain approval commit; only
+/// a planning pull request landed on a verified epic line is judged by its
+/// own change, so a later task merge on the line does not refuse the
+/// line's pull request.
+#[test]
+fn a_spec_approval_behind_a_private_merge_is_refused() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("project-management/specs")).unwrap();
+    std::fs::write(root.join("project-management/specs/SPC-001.md"), SPEC).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "docs(specs): draft the contract"]);
+    let approved = SPEC.replace("status: draft", "status: approved");
+    for private in [false, true] {
+        git(root, &["switch", "-q", "-C", "task/TSK-001-work", "main"]);
+        if private {
+            git(root, &["switch", "-q", "-C", "plan/private-approval"]);
+        }
+        std::fs::write(root.join("project-management/specs/SPC-001.md"), &approved).unwrap();
+        git(
+            root,
+            &["commit", "-qam", "docs(specs): approve the contract"],
+        );
+        if private {
+            git(root, &["switch", "-q", "task/TSK-001-work"]);
+            merge(root, "plan/private-approval");
+        }
+        std::fs::write(root.join("src/new.rs"), "pub fn new() {}\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "feat: implement the work"]);
+        assert_blocks(
+            &ci(root, "task/TSK-001-work", &body("Task: TSK-001")),
+            if private {
+                "private merge"
+            } else {
+                "plain approval"
+            },
+            "a spec becomes approved only in a planning-only change",
+        );
+    }
+
+    // The approval landed on a verified epic line by a planning PR.
+    let line = "integration/EPC-001-outcome";
+    git(root, &["branch", line, "main"]);
+    let record = task("TSK-003", "feat", "todo").replace(
+        "integration_target: main",
+        &format!("integration_target: {line}"),
+    );
+    branch_with(
+        root,
+        "plan/line",
+        &[("project-management/tasks/TSK-003.md", &record)],
+    );
+    let seeded = codeflow()
+        .args(["ids", "seed"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(seeded.status.success(), "ids seed");
+    git(root, &["switch", "-q", line]);
+    merge(root, "plan/line");
+    git(root, &["switch", "-q", "-c", "plan/approve"]);
+    std::fs::write(root.join("project-management/specs/SPC-001.md"), &approved).unwrap();
+    git(
+        root,
+        &["commit", "-qam", "docs(specs): approve the contract"],
+    );
+    git(root, &["switch", "-q", line]);
+    merge(root, "plan/approve");
+    git(root, &["switch", "-q", "-c", "task/TSK-003-work"]);
+    std::fs::write(root.join("src/lib.rs"), "pub fn line() {}\n").unwrap();
+    git(root, &["commit", "-qam", "feat: build on the line"]);
+    git(root, &["switch", "-q", line]);
+    merge(root, "task/TSK-003-work");
+    assert_passes(
+        &ci(root, line, &body("Task: EPC-001")),
+        "planning landing on a verified line",
+    );
+}

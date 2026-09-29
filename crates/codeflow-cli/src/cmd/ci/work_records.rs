@@ -7,16 +7,18 @@ use std::path::Path;
 
 use codeflow_core::hooks::{PolicyLevel, Violation};
 use codeflow_core::workgraph::durable_work_tracking_enabled;
-use codeflow_core::workgraph::lifecycle::judge_pull_request_under;
+use codeflow_core::workgraph::lifecycle::{judge_line_under, judge_pull_request_under};
 
 /// Run the check for `codeflow ci`, record its findings and whether it ran,
 /// and print its notices. `authority` is the commit whose baseline list
-/// governs; `None` means the resolved base.
+/// governs; `None` means the resolved base. `on_line` says the range is a
+/// verified epic line, whose landings are judged one by one.
 pub(super) fn dispatch(
     root: &Path,
     base_candidates: &[String],
     head: &str,
     authority: Option<&str>,
+    on_line: bool,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -25,6 +27,7 @@ pub(super) fn dispatch(
         super::resolve_base(root, base_candidates).as_deref(),
         head,
         authority,
+        on_line,
     );
     if outcome.ran {
         ran.push("work-records");
@@ -64,6 +67,7 @@ pub(super) fn check(
     base: Option<&str>,
     head: &str,
     authority: Option<&str>,
+    on_line: bool,
 ) -> Outcome {
     match durable_work_tracking_enabled(root) {
         Ok(true) => {}
@@ -89,7 +93,12 @@ pub(super) fn check(
             ran: false,
         };
     };
-    match judge_pull_request_under(root, base, head, authority.unwrap_or(base)) {
+    let judged = if on_line {
+        judge_line_under(root, base, head, authority.unwrap_or(base))
+    } else {
+        judge_pull_request_under(root, base, head, authority.unwrap_or(base))
+    };
+    match judged {
         Ok(verdict) => {
             let mut violations: Vec<Violation> = verdict.errors.into_iter().map(block).collect();
             violations.extend(verdict.warnings.into_iter().map(|warning| {
