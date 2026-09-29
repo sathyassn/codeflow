@@ -17,6 +17,7 @@ pub mod present;
 mod push_set;
 pub mod recall;
 pub mod remote;
+pub mod report;
 pub mod status;
 pub mod test;
 pub mod validate;
