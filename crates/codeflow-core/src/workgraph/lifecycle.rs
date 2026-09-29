@@ -1348,6 +1348,39 @@ fn context_problems(
     problems
 }
 
+/// An implemented spec is frozen (TSK-169): until then an approved spec is
+/// amended in place, after it its text never changes. The state is read
+/// before the change (written `implemented` on a legacy record, or derived
+/// from the base tree), so reopening a consumer in the same change does not
+/// thaw it. Only the text below the frontmatter is compared: status,
+/// supersession links and a `uid` backfill are judged by their own rules.
+fn frozen_spec_problems(
+    before: Option<&RecordView>,
+    after: &RecordView,
+    context: ChangeContext<'_>,
+) -> Vec<String> {
+    let Some(before) = before.filter(|record| record.kind == RecordKind::Spec) else {
+        return Vec::new();
+    };
+    if before.body == after.body {
+        return Vec::new();
+    }
+    let derived = context
+        .base
+        .and_then(|base| {
+            base.get(&before.id, RecordKind::Spec)
+                .map(|spec| (spec, base))
+        })
+        .is_some_and(|(spec, base)| derived_spec_state(spec, base, None) == SpecState::Implemented);
+    if before.status != "implemented" && !derived {
+        return Vec::new();
+    }
+    vec![format!(
+        "{id} is implemented, so its text is frozen: a changed contract is a new spec that lists `supersedes: [{id}]`, or an explicit superseding record",
+        id = before.id
+    )]
+}
+
 // ---------------------------------------------------------------------------
 // Judgements
 // ---------------------------------------------------------------------------
@@ -1375,6 +1408,11 @@ pub fn judge_change(
         Mode::Strict,
         &after.path,
         context_problems(before, after, context),
+    );
+    verdict.apply(
+        Mode::Strict,
+        &after.path,
+        frozen_spec_problems(before, after, context),
     );
     let reopened = baseline.reopened_since(after)
         || context

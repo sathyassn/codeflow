@@ -591,6 +591,10 @@ present and empty; the `## Open questions` prose is context and is not
 parsed. A spec written before the field stays valid, but it is approved
 only once it carries the list; null or a value that is not a list is an
 error (TSK-135).
+An approved spec is amended in place until it is `implemented`; after that
+its text below the frontmatter is frozen and a change to it is refused, so a
+changed contract is a new spec. `spec status <id> draft` is never written:
+it gets the same refusal as the hand edit, naming both routes (TSK-169).
 The verbs are safe editors, not the only writers: one core judge rules on a
 verb's proposal, on a hand edit (`validate --docs --since <ref>`) and on each
 record a pull request changes (`codeflow ci`). No verb writes `in_progress`,

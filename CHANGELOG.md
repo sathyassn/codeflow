@@ -1010,7 +1010,10 @@ publication date._
   meaning and each bound consumer's disposition named; once implemented it
   is frozen and a change is a new spec. They no longer say that approval
   freezes the criteria. `codeflow update` brings the changed guidance and
-  template.
+  template. The freeze is now checked: `validate --docs --since`,
+  `codeflow ci` and the pre-push hook refuse a change to the text of an
+  implemented spec, and `codeflow spec status <id> draft` gives the refusal
+  naming both routes instead of an argument error.
 
 <!-- codeflow:release-impact patch -->
 - **Pre-push landing base.** Fast-forwards of protected and integration
