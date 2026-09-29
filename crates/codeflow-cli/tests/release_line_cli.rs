@@ -49,6 +49,12 @@ fn output(out: &std::process::Output) -> (i32, String) {
     )
 }
 
+/// `CodeFlow`'s own root commit, which the release judge compiles in: the
+/// transition tables bridge only a default target that starts at it.
+const CODEFLOW_ROOT: &str = "f461c77bd411f5512b1fbfca3928ffee775ad869";
+/// That commit's one file and the rest of its object after the tree line.
+const CODEFLOW_README: &str = "# CodeFlow\n\nAI-native development framework template for Claude Code.\n\n## Status\n\nPhase 1: Foundation - In Progress\n";
+const CODEFLOW_ROOT_COMMIT: &str = "author sathyassn <26560960+sathyassn@users.noreply.github.com> 1770095422 -0500\ncommitter sathyassn <26560960+sathyassn@users.noreply.github.com> 1770095422 -0500\n\nchore: initial commit\n";
 const LINE_A: &str = "integration/EPC-001-one";
 const LINE_B: &str = "integration/EPC-002-two";
 const RELEASE: &str = "integration/release-1";
@@ -145,6 +151,7 @@ impl Fx {
         );
         fx.git(&["init", "-q", "-b", "main"]);
         fx.git(&["remote", "add", "origin", fx.origin.to_str().unwrap()]);
+        fx.plant_codeflow_root();
         for id in ["EPC-001", "EPC-002"] {
             fx.write(&format!("project-management/epics/{id}.md"), &epic(id));
         }
@@ -171,6 +178,20 @@ impl Fx {
         }
         fx.git(&["push", "-q", "origin", "main", LINE_A, LINE_B]);
         fx
+    }
+
+    /// Start main at `CodeFlow`'s own root commit, rebuilt byte for byte, so
+    /// the fixture's default target is `CodeFlow`'s history, the only one the
+    /// transition tables bridge.
+    fn plant_codeflow_root(&self) {
+        self.write("README.md", CODEFLOW_README);
+        self.git(&["add", "README.md"]);
+        let tree = self.git(&["write-tree"]);
+        let raw = self.root.parent().unwrap().join("root-commit");
+        std::fs::write(&raw, format!("tree {tree}\n{CODEFLOW_ROOT_COMMIT}")).unwrap();
+        let root = self.git(&["hash-object", "-t", "commit", "-w", raw.to_str().unwrap()]);
+        assert_eq!(root, CODEFLOW_ROOT, "the rebuilt root must be CodeFlow's");
+        self.git(&["update-ref", "refs/heads/main", &root]);
     }
 
     fn git(&self, args: &[&str]) -> String {
@@ -506,6 +527,17 @@ fn record_cutoffs(fx: &Fx, entries: &str) -> String {
     tip
 }
 
+/// The refusal of a `key` entry naming `cutoff` for `line`, off that line's
+/// first-parent chain: every release check refuses, whether or not a
+/// finding uses the entry.
+fn off_chain(key: &str, line: &str, cutoff: &str) -> String {
+    format!(
+        "`{key}` on main names {} as the cutoff of {line}, but {line}'s cutoff {} is not on its first-parent chain",
+        &cutoff[..9],
+        &cutoff[..9]
+    )
+}
+
 fn frozen_at(landing: &str) -> String {
     format!(
         "TSK-003 changes its criteria on its line at {}",
@@ -605,7 +637,7 @@ fn a_criteria_change_the_cutoff_does_not_cover_is_refused() {
         &["work.criteria_frozen", &frozen_at(&landing)],
     );
 
-    // The wrong line: the cutoff is recorded for line B.
+    // The wrong line: the cutoff is recorded for line B, off its chain.
     let fx = Fx::new(false);
     let landing = land_mixed(&fx, "src/mixed.rs");
     record_cutoffs(&fx, &format!("\"{LINE_B}\" = \"{landing}\"\n"));
@@ -614,13 +646,13 @@ fn a_criteria_change_the_cutoff_does_not_cover_is_refused() {
     blocks(
         &agree(&fx, "wrong line"),
         "a cutoff recorded for another line",
-        &["work.criteria_frozen", &frozen_at(&landing)],
+        &[&off_chain("release_rule_baseline", LINE_B, &landing)],
     );
 
     // A cutoff from another line's chain that holds the landing (line B
-    // synced line A): ancestry alone never covers it.
+    // synced line A): ancestry never puts it on line A's chain.
     let fx = Fx::new(false);
-    let landing = land_mixed(&fx, "src/mixed.rs");
+    land_mixed(&fx, "src/mixed.rs");
     fx.git(&["switch", "-q", LINE_B]);
     let sync = fx.merge(LINE_A);
     fx.git(&["push", "-q", "origin", LINE_B]);
@@ -630,7 +662,7 @@ fn a_criteria_change_the_cutoff_does_not_cover_is_refused() {
     blocks(
         &agree(&fx, "foreign cutoff"),
         "a cutoff from another line's chain",
-        &["work.criteria_frozen", &frozen_at(&landing)],
+        &[&off_chain("release_rule_baseline", LINE_A, &sync)],
     );
 }
 
@@ -749,13 +781,13 @@ fn a_moved_or_malformed_cutoff_covers_nothing() {
     fx.git(&["switch", "-q", LINE_A]);
     fx.git(&["reset", "-q", "--hard", "main~1"]);
     fx.git(&["push", "-q", "--force", "origin", LINE_A]);
-    let landing = land_mixed(&fx, "src/rewritten.rs");
+    land_mixed(&fx, "src/rewritten.rs");
     fx.cut_release();
     fx.import(LINE_A);
     blocks(
         &agree(&fx, "rewrite"),
         "a rewritten line",
-        &["work.criteria_frozen", &frozen_at(&landing)],
+        &[&off_chain("release_rule_baseline", LINE_A, &old)],
     );
 
     // A cutoff written only on the pushed release branch is ignored.
@@ -3581,10 +3613,32 @@ fn a_cutoff_the_clone_lacks_is_fetched_before_it_is_read() {
             &["clone", "-q", fx.origin.to_str().unwrap(), "other"],
         );
         let other = parent.join("other");
-        run_git(&other, &["switch", "-q", LINE_B]);
+        // Line B lands work by a merge, as a verified epic line does.
+        run_git(
+            &other,
+            &[
+                "switch",
+                "-q",
+                "-c",
+                "task/TSK-002-work",
+                &format!("origin/{LINE_B}"),
+            ],
+        );
         std::fs::write(other.join("src/two.rs"), "// line B\n").unwrap();
         run_git(&other, &["add", "-A"]);
         run_git(&other, &["commit", "-q", "-m", "feat: line B work"]);
+        run_git(&other, &["switch", "-q", LINE_B]);
+        run_git(
+            &other,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "merge: line B work",
+                "task/TSK-002-work",
+            ],
+        );
         run_git(&other, &["push", "-q", "origin", LINE_B]);
         let unseen = run_git(&other, &["rev-parse", "HEAD"]);
 
@@ -3614,6 +3668,113 @@ fn a_cutoff_the_clone_lacks_is_fetched_before_it_is_read() {
             &fx.ci_release(),
             &format!("{key}: a cutoff on a line the clone never fetched"),
         );
+    }
+}
+
+/// AC-14, AC-15: a cutoff off its line's first-parent chain refuses every
+/// release check although no finding uses it: line A's entry names a topic
+/// that never landed, and the release brings only a normally completed
+/// task, for each table.
+#[test]
+fn an_unused_cutoff_off_its_line_refuses() {
+    for key in ["release_rule_baseline", "release_records_baseline"] {
+        let fx = Fx::new(false);
+        fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+        fx.land(LINE_A, "task/TSK-001-work");
+        fx.git(&["switch", "-q", "-C", "chore/unlanded-cutoff", LINE_A]);
+        fx.write(
+            "docs/plan/topic.md",
+            "A topic that never lands on the line.\n",
+        );
+        let cutoff = fx.commit("docs: unlanded topic");
+        fx.git(&["switch", "-q", "main"]);
+        fx.write(
+            ".codeflow/project.toml",
+            &format!("{PROJECT}{MARKER}{}", table(key, &cutoff)),
+        );
+        fx.commit("chore: record an off-chain cutoff");
+        fx.git(&["push", "-q", "origin", "main"]);
+        fx.cut_release();
+        fx.import(LINE_A);
+        blocks(
+            &agree(&fx, "an unused off-chain cutoff"),
+            &format!("{key}: an unused off-chain cutoff"),
+            &[
+                &format!(
+                    "`{key}` on main names {} as the cutoff of {LINE_A}, but {LINE_A}'s cutoff {} is not on its first-parent chain",
+                    &cutoff[..9],
+                    &cutoff[..9]
+                ),
+                "every release check refuses",
+            ],
+        );
+    }
+}
+
+/// Rebuild `fx`'s main as a consuming project's: a new root commit with
+/// main's tree and `config` as its project config (none when empty), both
+/// lines cut from it again, all published.
+fn as_consumer(fx: &Fx, config: &str) {
+    fx.git(&["switch", "-q", "--orphan", "consumer"]);
+    fx.git(&["checkout", "-q", "main", "--", "."]);
+    if config.is_empty() {
+        fx.git(&["rm", "-q", "-f", ".codeflow/project.toml"]);
+    } else {
+        fx.write(".codeflow/project.toml", config);
+    }
+    fx.commit("chore: plan the consumer's work");
+    fx.git(&["branch", "-f", "main", "consumer"]);
+    fx.git(&["switch", "-q", "main"]);
+    for line in [LINE_A, LINE_B] {
+        fx.git(&["branch", "-f", line, "main"]);
+    }
+    fx.git(&["push", "-q", "--force", "origin", "main", LINE_A, LINE_B]);
+}
+
+/// AC-14 (operator ruling, 2026-09-28): no consuming project can use a
+/// table. A 2.x project that upgrades and a project initialized at 3.x,
+/// neither starting at `CodeFlow`'s root commit, each add a table with the
+/// marker in one commit, naming a legacy completion as its line's cutoff;
+/// every release check refuses and no legacy notice is given, for each
+/// table.
+#[test]
+fn a_consuming_project_never_uses_a_table() {
+    for key in ["release_rule_baseline", "release_records_baseline"] {
+        for (what, config) in [
+            ("an upgraded 2.x project", PROJECT.replace("3.0.0", "2.0.0")),
+            ("a project initialized at 3.x", String::new()),
+        ] {
+            let fx = Fx::new(false);
+            as_consumer(&fx, &config);
+            let landing = land_legacy_completion(&fx, "chore/consumer-legacy");
+            fx.git(&["switch", "-q", "main"]);
+            fx.write(
+                ".codeflow/project.toml",
+                &format!("{PROJECT}{MARKER}{}", table(key, &landing)),
+            );
+            let added = fx.commit("chore: record the transition table");
+            fx.git(&["push", "-q", "origin", "main"]);
+            fx.cut_release();
+            fx.import(LINE_A);
+            let result = agree(&fx, what);
+            blocks(
+                &result,
+                &format!("{key}: {what}"),
+                &[
+                    &format!(
+                        "`{key}` on main is added at {}, but main's history does not start at CodeFlow's root commit {}",
+                        &added[..9],
+                        &CODEFLOW_ROOT[..9]
+                    ),
+                    "no consuming project can use one",
+                ],
+            );
+            assert!(
+                !result.1.contains("legacy record") && !result.1.contains("legacy criteria"),
+                "{key}: {what}: no relief:\n{}",
+                result.1
+            );
+        }
     }
 }
 

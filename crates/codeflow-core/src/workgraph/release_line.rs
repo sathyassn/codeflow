@@ -68,6 +68,12 @@ pub const RECORDS_BASELINE_KEY: &str = "release_records_baseline";
 /// or whether it is there. Once the default target carries it, removing it
 /// or changing its value refuses every release check.
 pub const MARKER_KEY: &str = "release_rules";
+/// The root commit of `CodeFlow`'s own default target. The transition tables
+/// bridge only `CodeFlow`'s own 2.x to 3.0 history (operator ruling,
+/// 2026-09-28: no effect on consuming projects), so a default target whose
+/// first-parent history starts anywhere else is a consuming project, and a
+/// table there refuses every release check.
+const CODEFLOW_ROOT: &str = "f461c77bd411f5512b1fbfca3928ffee775ad869";
 /// Every epic line's name starts with this.
 const EPIC_PREFIX: &str = "integration/EPC-";
 
@@ -698,12 +704,9 @@ impl<'a> Lines<'a> {
         ok
     }
 
-    /// Why `landing` is not `cutoff` or before it on the verified epic
-    /// line `line`'s first-parent chain as advertised now, if it is not.
-    /// Dates and plain ancestry never count: a topic landed after the
-    /// cutoff is after it, a cutoff rewritten away covers nothing, and a
-    /// landing on another line's chain is not this line's.
-    fn uncovered(&mut self, line: &str, cutoff: Oid, landing: Oid) -> Option<String> {
+    /// Why `cutoff` is not on the verified epic line `line`'s first-parent
+    /// chain as advertised now, if it is not.
+    fn off_line(&mut self, line: &str, cutoff: Oid) -> Option<String> {
         let Some(tip) = self
             .candidates
             .iter()
@@ -719,9 +722,21 @@ impl<'a> Lines<'a> {
         }
         if !self.chain(tip).contains(&cutoff) {
             return Some(format!(
-                "{line}'s release-rule cutoff {} is not on its first-parent chain",
+                "{line}'s cutoff {} is not on its first-parent chain",
                 short(cutoff)
             ));
+        }
+        None
+    }
+
+    /// Why `landing` is not `cutoff` or before it on the verified epic
+    /// line `line`'s first-parent chain as advertised now, if it is not.
+    /// Dates and plain ancestry never count: a topic landed after the
+    /// cutoff is after it, a cutoff rewritten away covers nothing, and a
+    /// landing on another line's chain is not this line's.
+    fn uncovered(&mut self, line: &str, cutoff: Oid, landing: Oid) -> Option<String> {
+        if let Some(why) = self.off_line(line, cutoff) {
+            return Some(why);
         }
         if !self.chain(cutoff).contains(&landing) {
             return Some(format!(
@@ -984,7 +999,7 @@ pub fn release_findings(
     let mut lines = Lines::new(repo_root, &repo, destination);
     // Read at the default target's tip, never from the range.
     let bridge = match &destination.default {
-        Some((name, tip)) => bridge(&repo, name, *tip, &path, &mut || lines.fetch())?,
+        Some((name, tip)) => bridge(&repo, name, *tip, &path, &mut lines)?,
         None => Bridge::default(),
     };
     let cutoffs = &bridge.rules;
@@ -1942,12 +1957,15 @@ struct Bridge {
 /// Its first appearance must be `1` as well. The marker never decides
 /// whether R-120 applies; it fixes the adoption point the tables stop at.
 ///
-/// Each table is honoured only as a one-time bridge: added in one commit
-/// and never changed after it, at or before the adoption commit, with a
-/// commit carrying project config without the marker before adoption, and
-/// each cutoff's tree carrying project config without the marker, neither
-/// the adoption commit nor a descendant of it. `ensure_lines` fetches the
-/// advertised lines, whose history holds the cutoffs, before they are read.
+/// Each table is honoured only as a one-time bridge: in `CodeFlow`'s own
+/// repository, whose default target starts at [`CODEFLOW_ROOT`]; added in
+/// one commit and never changed after it, at or before the adoption commit,
+/// with a commit carrying project config without the marker before
+/// adoption; and each cutoff's tree carrying project config without the
+/// marker, neither the adoption commit nor a descendant of it, and on its
+/// line's verified first-parent chain as the destination advertises it,
+/// whether or not a finding uses the entry. `lines` fetches the advertised
+/// lines, whose history holds the cutoffs, before they are read.
 ///
 /// # Errors
 ///
@@ -1958,7 +1976,7 @@ fn bridge(
     default: &str,
     tip: Oid,
     path: &[Oid],
-    ensure_lines: &mut dyn FnMut() -> Result<(), String>,
+    lines: &mut Lines<'_>,
 ) -> Result<Bridge, String> {
     let mut history = History::new(repo, default)?;
     let chain = history.chain(tip)?;
@@ -2021,11 +2039,16 @@ fn bridge(
         tables.push(table_on_chain(&chain, &configs, adopted, key, default)?);
     }
     if tables.iter().any(|table| !table.is_empty()) {
-        ensure_lines()?;
+        lines.fetch()?;
     }
     for (key, table) in TABLES.iter().zip(&tables) {
         for (line, cutoff) in table {
-            let why = cutoff_problem(repo, &mut history, &chain, adopted, *cutoff)?;
+            let why = match cutoff_problem(repo, &mut history, &chain, adopted, *cutoff)? {
+                Some(why) => Some(why),
+                None => lines
+                    .off_line(line, *cutoff)
+                    .map(|why| format!("but {why}")),
+            };
             if let Some(why) = why {
                 return Err(bridge_refusal(
                     key,
@@ -2046,8 +2069,9 @@ fn bridge_refusal(key: &str, default: &str, condition: &str) -> String {
     )
 }
 
-/// One table as the chain's configs hold it: written once, at or before
-/// adoption, with project config without the marker before adoption.
+/// One table as the chain's configs hold it: on `CodeFlow`'s own default
+/// target, written once, at or before adoption, with project config without
+/// the marker before adoption.
 fn table_on_chain(
     chain: &[Oid],
     configs: &[Config],
@@ -2075,6 +2099,13 @@ fn table_on_chain(
     let Some((first, value)) = added else {
         return Ok(BTreeMap::new());
     };
+    if chain.first().map(ToString::to_string).as_deref() != Some(CODEFLOW_ROOT) {
+        return Err(refuse(format!(
+            "is added at {}, but {default}'s history does not start at CodeFlow's root commit {}: the tables bridge only CodeFlow's own 2.x to 3.0 history, and no consuming project can use one",
+            short(chain[first]),
+            &CODEFLOW_ROOT[..9]
+        )));
+    }
     let table = parse_table(key, value)?;
     let Some(adoption) = adopted else {
         return Err(refuse(format!(

@@ -679,10 +679,12 @@ first-parent chain, are listed as information. `codeflow init` and
 and never a table. The marker never decides whether these rules apply;
 once the default target carries it, removing it or changing its value,
 there or in the judged range, makes every release check refuse. A table
-is honoured only as a one-time bridge: added in one commit and never
-changed, at or before the marker's first commit on the default target,
-after project config without the marker, with cutoffs from before the
-rule; otherwise every release check refuses. No flag, variable or policy
+is honoured only as a one-time bridge in CodeFlow's own repository, whose
+default target starts at CodeFlow's root commit: added in one commit and
+never changed, at or before the marker's first commit on the default
+target, after project config without the marker, with every cutoff from
+before the rule and on its line's first-parent chain; otherwise every
+release check refuses. A consuming project cannot use a table. No flag, variable or policy
 key skips the rule or a table. The marker's history is read from the
 parents each commit records. History the check needs that it cannot read
 in full, cut by a shallow boundary or missing a config object, refuses as
