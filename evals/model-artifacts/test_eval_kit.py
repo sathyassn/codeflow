@@ -155,13 +155,13 @@ class VirtualClock:
 
 
 def run_bounded_watch(fixture_id: str, interval: int) -> list[dict]:
-    """Run `timeout 30m gh pr checks <url> --watch --interval N` virtually."""
+    """Run `timeout 30m gh pr checks <url> --required --watch --interval N` virtually."""
     with materialized_stand_in(fixture_id) as (gh, root):
         clock = VirtualClock(gh.terminated)
         url = json.loads((root / "tools/gh-scenario.json").read_text())["pr_url"]
         with patch.object(gh, "time", clock), patch("sys.stdout"):
             gh.main(["pr", "create"])
-            argv = ["pr", "checks", url, "--watch", "--interval", str(interval)]
+            argv = ["pr", "checks", url, "--required", "--watch", "--interval", str(interval)]
             with unittest.TestCase().assertRaises(SystemExit):
                 gh.main(argv)
         return gh.load_state()["calls"]
@@ -3532,6 +3532,183 @@ class HoldoutSeparationTests(unittest.TestCase):
             eval_kit.write_json(manifest_path, {"schema_version": 1})
             with self.assertRaisesRegex(eval_kit.EvalError, "not a holdout manifest"):
                 eval_kit.holdout_leaks(repo, manifest_path)
+
+
+class ProcessRepairTests(unittest.TestCase):
+    def runner(self):
+        spec = importlib.util.spec_from_file_location("qualification_runner", ROOT / "evals/qualification/runner.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_trial_environment_pins_home_and_harness_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            environment = eval_kit.subject_environment(root, root / "bin/codeflow", [])
+            for key, path in {"HOME": "home", "TMPDIR": "tmp", "CODEFLOW_HOME": "home/.codeflow",
+                              "CODEX_HOME": "home/.codex", "CLAUDE_CONFIG_DIR": "home/.claude"}.items():
+                self.assertEqual(environment[key], str(root / path))
+
+    def test_planted_and_changed_entries_invalidate_bounded_observation(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            watched, outside = root / "watched", root / "outside"
+            watched.mkdir(); outside.mkdir()
+            tracked = watched / "existing"
+            tracked.write_text("before")
+            (watched / "link").symlink_to(outside, target_is_directory=True)
+            before = runner.snapshot([str(watched)])
+            self.assertEqual([], runner.compare(before, runner.snapshot([str(watched)]))["validity_flags"])
+            (outside / "not-observed").write_text("outside the declared directory")
+            self.assertEqual([], runner.compare(before, runner.snapshot([str(watched)]))["validity_flags"])
+            tracked.write_text("after!")
+            planted = watched / "planted"
+            planted.write_text("benign control")
+            result = runner.compare(before, runner.snapshot([str(watched)]))
+            self.assertIn("declared_directory_changed", result["validity_flags"])
+            self.assertIn(str(planted), result["added"])
+            self.assertIn(str(tracked), result["changed"])
+            self.assertIn("not observed", result["limitation"])
+
+    def test_directory_validity_flag_prevents_a_passing_trial(self):
+        case = next(c for c in eval_kit.suite_documents()[1]["cases"] if c["id"] == "one-line-question-stays-one-line")
+        trial = {"outcome": "completed", "observed": {
+            "route": case["expected"]["routes"][0], "signals": case["expected"]["signals"],
+            "references": case["expected"]["references"], "violations": []},
+            "evidence": [{"kind": "session", "ref": "synthetic-control", "digest": "sha256:" + "d" * 64}],
+            "trace_ref": "synthetic-control", "validity_flags": []}
+        self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
+        trial["validity_flags"] = ["declared_directory_changed"]
+        self.assertIn(trial["validity_flags"][0], eval_kit.KNOWN_VALIDITY_FLAGS)
+        self.assertEqual("fail", eval_kit.computed_trial_status(trial, case))
+
+    def test_unreadable_directory_invalidates_observation(self):
+        runner = self.runner()
+        bad = runner.snapshot(["/a-nonexistent-qualification-directory"])
+        self.assertIn("directory_observation_incomplete", runner.compare(bad, bad)["validity_flags"])
+
+    def test_permission_flags_are_explicit_and_headless_is_refused(self):
+        runner = self.runner()
+        for harness, native, expected in [
+            ("codex", ["--model", "chosen", "--ask-for-approval", "never", "--sandbox", "danger-full-access"],
+             {"--ask-for-approval": "never", "--sandbox": "danger-full-access"}),
+            ("claude", ["--permission-mode", "auto"], {"--permission-mode": "auto"}),
+            ("grok", ["--always-approve"], {"--always-approve": "true"}),
+        ]:
+            self.assertEqual(expected, runner.permission_flags(harness, native))
+            with self.assertRaises(runner.Refused):
+                runner.permission_flags(harness, native + ["--print"])
+        with self.assertRaises(runner.Refused):
+            runner.permission_flags("codex", [])
+
+    def test_runner_launch_passes_isolated_environment_and_retains_exact_arguments(self):
+        import argparse
+        runner = self.runner()
+        (ROOT / "target").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "target") as temp:
+            root = Path(temp)
+            repository = root / "subjects/trial/repository"
+            repository.mkdir(parents=True)
+            (repository / "TASK.md").write_text("Reply ok.\n")
+            (repository.parent / "tmp").mkdir()
+            (repository.parent / "home").mkdir()
+            binary = root / "subjects/bin/codeflow"
+            binary.parent.mkdir()
+            binary.write_text("fixture executable")
+            environment = runner.kit.subject_environment(repository.parent, binary, [])
+            record = runner.kit.signed_registration({
+                "path": str(repository), "subjects_root": str(root / "subjects"),
+                "fixture_digest": runner.kit.tree_digest(repository),
+                "subject_codeflow": str(binary), "codeflow_executable": {"sha256": runner.kit.executable_digest(binary)},
+                "subject_environment": environment, "case_id": "trial",
+            })
+            record_path = root / "fixture.json"
+            runner.write(record_path, record)
+            calls = []
+
+            def herdr(*argv, **_kwargs):
+                calls.append(argv)
+                if argv[:2] == ("tab", "create"):
+                    return {"result": {"tab": {"tab_id": "owned-tab"}, "root_pane": {"pane_id": "owned-pane"}}}
+                if argv[:2] == ("pane", "process-info"):
+                    return {"result": {"process_info": {"foreground_processes": [{"name": "zsh"}]}}}
+                return {"result": {"agent": {"agent_status": "idle", "state_change_seq": 0}}}
+
+            native = ["--model", "chosen-selector", "--permission-mode", "auto"]
+            args = argparse.Namespace(record=record_path, output=root / "evidence", harness="claude",
+                                      native=["--", *native], workspace="owned-workspace", watch_dir=[], start_timeout=1)
+            with patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "snapshot", return_value={"entries": {}, "errors": []}), \
+                 patch.object(runner, "deliver_claude", return_value=1), patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            saved = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual("started", saved["status"])
+            self.assertEqual(native, saved["native_args"])
+            self.assertEqual({"--permission-mode": "auto"}, saved["permission_flags"])
+            create = next(c for c in calls if c[:2] == ("tab", "create"))
+            for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]:
+                self.assertIn(f"{key}={environment[key]}", create)
+            self.assertEqual(native, list(next(c for c in calls if c[:2] == ("agent", "start"))[-len(native):]))
+            record["path"] = "/another/repository"
+            runner.write(record_path, record)
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "signature"):
+                runner.launch(args)
+            transport.assert_not_called()
+
+    def test_closeout_inventory_matches_real_local_worktrees(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repository"
+            root.mkdir()
+            (root / ".gitignore").write_text(".worktrees/\n")
+            (root / "README.md").write_text("fixture\n")
+            eval_kit.reset_fixture_history(root, "test/worktree-closeout", install_hooks=False)
+            eval_kit.configure_closeout_inventory(root)
+            records = eval_kit.git_output(["worktree", "list", "--porcelain"], root)
+            for name in ["export-ui", "retry-race", "cache"]:
+                path = root / ".worktrees" / name
+                self.assertIn(str(path), records)
+                self.assertIn(str(path), (root / "CODEFLOW_STATUS.txt").read_text())
+            clean = root / ".worktrees/export-ui"
+            self.assertEqual("", eval_kit.git_output(["status", "--porcelain"], clean).strip())
+            ancestry = subprocess.run(["git", "merge-base", "--is-ancestor", "feat/export-ui", "origin/main"], cwd=root)
+            self.assertEqual(0, ancestry.returncode)
+            self.assertIn(" M fixture-work.txt", eval_kit.git_output(["status", "--porcelain"], root / ".worktrees/retry-race"))
+            self.assertIn("?? untracked.txt", eval_kit.git_output(["status", "--porcelain"], root / ".worktrees/retry-race"))
+            self.assertIn("+", eval_kit.git_output(["cherry", "origin/main", "spike/cache"], root))
+            eval_kit.run_command(["git", "worktree", "remove", str(clean)], root)
+            self.assertFalse(clean.exists())
+            self.assertTrue((root / ".worktrees/retry-race/untracked.txt").is_file())
+            self.assertTrue((root / ".worktrees/cache").is_dir())
+
+    def test_process_and_r105_judge_controls_calibrate_and_reject_a_wrong_answer(self):
+        controls_path = ROOT / "evals/qualification/judge-controls.json"
+        controls = eval_kit.load_judge_controls(controls_path)
+        process = set(eval_kit.resolve_pack("process-round"))
+        covered = {item["assertion"] for item in controls}
+        self.assertTrue(process <= covered)
+        self.assertTrue({"r105-finish-task", "r105-unavailable-prerequisite", "r105-backlog-selection",
+                         "r105-review-missed-criterion", "r105-release-change", "r105-small-fix"} <= covered)
+        for case in covered:
+            self.assertEqual({"pass", "fail"}, {c["expected"] for c in controls if c["assertion"] == case})
+        with tempfile.TemporaryDirectory() as temp:
+            answers = Path(temp) / "judgements.json"
+            entries = [eval_kit.signed_judgement({
+                "assertion": c["assertion"], "excerpt_digest": eval_kit.excerpt_digest(c["excerpt"]),
+                "verdict": c["expected"], "judge": "synthetic plumbing control",
+                "judge_config": "unit test, not native judge qualification", "rationale": "labelled control",
+            }) for c in controls]
+            eval_kit.write_json(answers, {"schema_version": 1, "judgements": entries})
+            done = subprocess.run([sys.executable, "-B", str(MODULE_PATH), "judge-check", "--controls",
+                                   str(controls_path), "--judgements", str(answers)], capture_output=True, text=True)
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            self.assertIn(f"{len(controls)} control(s) met", done.stdout)
+            entries[0] = eval_kit.signed_judgement({**entries[0], "verdict": "fail"})
+            eval_kit.write_json(answers, {"schema_version": 1, "judgements": entries})
+            done = subprocess.run([sys.executable, "-B", str(MODULE_PATH), "judge-check", "--controls",
+                                   str(controls_path), "--judgements", str(answers)], capture_output=True, text=True)
+            self.assertNotEqual(0, done.returncode)
+            self.assertIn("not qualified", done.stdout)
 
 if __name__ == "__main__":
     unittest.main()

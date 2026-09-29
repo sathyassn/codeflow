@@ -63,6 +63,10 @@ DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 EXPERIMENT_VARIABLE = re.compile(r"^system\.[a-z_][a-z0-9_.]*$")
 EVIDENCE_KINDS = frozenset({"session", "tool", "file", "command", "ui"})
 KNOWN_VALIDITY_FLAGS = {
+    "declared_directory_changed",
+    "directory_observation_incomplete",
+    "native_launch_not_confirmed",
+    "native_state_unavailable",
     "ambiguous_task",
     "baseline_contamination",
     "budget_exhaustion",
@@ -1974,6 +1978,54 @@ def configure_squash_cleanup_worktree(root: Path, state: dict) -> None:
     run_command(["git", "worktree", "add", str(root), task_branch], control)
 
 
+def configure_closeout_inventory(root: Path) -> None:
+    """Create the three real worktrees the closeout case asks to classify.
+
+    All refs, paths and the bare origin are disposable and local. Hooks are
+    installed by materialize only after fixture history has been prepared.
+    """
+    base = git_output(["rev-parse", "HEAD"], root).strip()
+    run_command(["git", "branch", "main", base], root)
+    configure_local_origin_main(root, root.parent / "origin.git")
+    worktrees = root / ".worktrees"
+    entries = []
+    for branch, name in (("feat/export-ui", "export-ui"),
+                         ("fix/retry-race", "retry-race"), ("spike/cache", "cache")):
+        path = worktrees / name
+        run_command(["git", "worktree", "add", "-b", branch, str(path), base], root)
+        if name != "export-ui":
+            write_fixture_file(path, "fixture-work.txt", name + "\n")
+            run_command(["git", "add", "fixture-work.txt"], path)
+            run_command(["git", "commit", "-m", "test: record unfinished fixture work"], path)
+        tip = git_output(["rev-parse", "HEAD"], path).strip()
+        entries.append((branch, path, tip))
+    dirty = worktrees / "retry-race"
+    write_fixture_file(dirty, "fixture-work.txt", "unfinished tracked change\n")
+    write_fixture_file(dirty, "untracked.txt", "active worker-b work\n")
+    a, b, c = entries
+    inventory = (
+        "# Worktree inventory\n\n"
+        f"A: {a[0]} at `{a[1]}`; clean; landed by ancestry in origin/main; "
+        f"synthetic PR 41 MERGED with recorded head `{a[2]}`; owner inactive.\n"
+        f"B: {b[0]} at `{b[1]}`; dirty and untracked; active owner worker-b; no PR.\n"
+        f"C: {c[0]} at `{c[1]}`; clean; synthetic PR 39 CLOSED without merge; "
+        "no patch-identity proof; owner unavailable; recheck on owner disposition "
+        "or superseding tracked task.\n\n"
+        "There is no stale administrative record in this fixture. "
+        "Pruning would not establish merge proof.\n"
+    )
+    status = (
+        "cleanup: 3 candidate(s) against origin/main\n"
+        f"  removable worktree {a[0]} -> {a[1]} (landed by ancestry in origin/main)\n"
+        f"  preserve-dirty worktree {b[0]} -> {b[1]} (local changes present)\n"
+        f"  retain-unproven worktree {c[0]} -> {c[1]} (not proven landed in origin/main)\n"
+    )
+    write_fixture_file(root, "WORKTREE_INVENTORY.md", inventory)
+    write_fixture_file(root, "CODEFLOW_STATUS.txt", status)
+    run_command(["git", "add", "WORKTREE_INVENTORY.md", "CODEFLOW_STATUS.txt"], root)
+    run_command(["git", "commit", "-m", "test: record the local cleanup inventory"], root)
+
+
 def tree_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -2054,6 +2106,10 @@ def subject_environment(trial_dir: Path, subject_codeflow: Path, hidden: list[Pa
         {
             "PATH": os.pathsep.join(entries),
             "HOME": str(trial_dir / "home"),
+            "CODEFLOW_HOME": str(trial_dir / "home" / ".codeflow"),
+            "CODEX_HOME": str(trial_dir / "home" / ".codex"),
+            "CLAUDE_CONFIG_DIR": str(trial_dir / "home" / ".claude"),
+            "XDG_CONFIG_HOME": str(trial_dir / "home" / ".config"),
             "TMPDIR": str(trial_dir / "tmp"),
         }
     )
@@ -2161,7 +2217,9 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
             output, state.get("root_branch", branch), install_hooks=False
         )
     apply_fixture_history(output, branch, state.get("history", []))
-    if state.get("squash_cleanup_worktree") is True:
+    if state.get("closeout_inventory") is True:
+        configure_closeout_inventory(output)
+    elif state.get("squash_cleanup_worktree") is True:
         configure_squash_cleanup_worktree(output, state)
     elif state.get("local_origin_main") is True:
         configure_local_origin_main(output, output.parent / "origin.git")

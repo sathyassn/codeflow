@@ -257,6 +257,11 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
   It is a read-only preflight: it checks the task branch, the anchor (at the
   merge-base for an epic task, at head for a standalone task's own record),
   parent or standalone rationale, approved specs, and met dependencies.
+  A task branch is not an integration target and cannot authorize its own
+  epic planning record. The target must resolve to a real local or
+  remote-tracking branch, never HEAD, a tag, object ID or revision expression.
+  `codeflow work start`, `codeflow ci` and pre-commit enforce these same
+  target and anchor checks.
   Whenever a task branch stages work, pre-commit validates the visible graph
   and applies the same check; CI repeats both, including in detached
   checkouts. None of them creates branches, worktrees, records, or status

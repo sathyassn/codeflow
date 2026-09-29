@@ -6,16 +6,19 @@ stuck, or the adopted policy requires hosted checks green before landing.
 ## The bounded wait
 
 Only where the adopted policy requires hosted checks green before landing,
-wait for them with a bounded poll: `gh pr checks <url> --required` at most
-once a minute, for at most thirty minutes (exit code 8 means still
-pending), or `timeout 30m gh pr checks <url> --watch --interval 60`. Do not
-use `--watch` without a ceiling, and do not poll without an end: `--watch`
-refreshes every ten seconds and has no timeout of its own. Remote protection
-may mark no check required: then `--required` fails with `no required checks
-reported`, and an empty list is not readiness. Read all check runs with
-`gh pr checks <url>` on the same cadence and match each project gate to the
-run that carries it. A gate with no matching run,
-or whose run you cannot read, is missing evidence.
+run `timeout 30m gh pr checks <url> --required --watch --interval 60`.
+Use the harness command timeout of 1800 seconds if `timeout` is unavailable.
+This is the only polling command: do not add a preliminary poll, a parallel
+poll or a background loop. Wait for this command to finish before reporting
+readiness; timeout means missing evidence, not a failed product check.
+Never run `--watch` without the ceiling.
+
+If remote protection marks no check required, `--required` fails with
+`no required checks reported`. An empty list is not readiness. In that case
+only, replace the watch with `timeout 30m gh pr checks <url> --watch
+--interval 60`, within the original thirty-minute budget. Match the returned
+runs to the project gates. A gate with no readable matching run is missing
+evidence.
 
 ## Redness classes
 

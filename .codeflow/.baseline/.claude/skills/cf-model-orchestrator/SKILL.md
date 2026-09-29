@@ -207,7 +207,10 @@ standing pair through Herdr; it does not start a nested duo.
 Run preflight once per session per lane. Recheck it explicitly when a tool,
 binding, permission or selector changed since it ran.
 
-1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
+1. Before choosing a landing route, read `PLAN.md` and the landing policy
+   in `README.md` when present, alongside the project operating contract.
+   An existing approved plan controls the target until amended.
+   Pin the brief: objective, scope, constraints, acceptance criteria, and known
    non-goals. Discover facts yourself; ask the operator only when an answer
    changes the outcome, public behavior, authority, a material security
    boundary, or an irreversible action (the clarity checklist in

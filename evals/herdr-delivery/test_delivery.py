@@ -199,6 +199,8 @@ class HerdrDeliveryTests(unittest.TestCase):
         self.assertIn("send-keys", help_text)
 
     def test_live_send_text_round_trip(self) -> None:
+        if os.environ.get("CF_HERDR_LIVE_CANARY") != "1":
+            self.skipTest("live canaries require explicit CF_HERDR_LIVE_CANARY=1")
         if os.environ.get("HERDR_ENV") != "1":
             self.skipTest("not inside Herdr")
         if shutil.which("herdr") is None:
@@ -260,6 +262,8 @@ class HerdrDeliveryTests(unittest.TestCase):
         arguments after `--` come from `CF_HERDR_CANARY_ARGS`, split on
         spaces. The canary prints the tab, agent and pane it used.
         """
+        if os.environ.get("CF_HERDR_LIVE_CANARY") != "1":
+            self.skipTest("live canaries require explicit CF_HERDR_LIVE_CANARY=1")
         if os.environ.get("HERDR_ENV") != "1":
             self.skipTest("not inside Herdr (HERDR_ENV is not 1)")
         if shutil.which("herdr") is None:
@@ -478,6 +482,78 @@ class StubDeliveryTests(unittest.TestCase):
         ):
             self.assertIn(marker, skill, f"cf-herdr lost {marker!r}")
 
+
+
+class QualificationDeliveryTests(unittest.TestCase):
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("qualification_runner", ROOT / "evals/qualification/runner.py")
+        self.runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.runner)
+
+    @staticmethod
+    def screen(body):
+        return "history\n────────────────\n❯ " + body + "\n────────────────\n  ⏸ manual mode on\n"
+
+    def test_recognizer_rejects_history_dialogs_and_unknown_footers(self):
+        editor = self.runner.editor
+        self.assertEqual("", editor(self.screen("")))
+        self.assertEqual("pending", editor(self.screen("pending")))
+        self.assertEqual("pending", editor(self.screen("pending").replace("❯ ", "❯\u00a0")))
+        for bad in ["", "❯ pending\n", self.screen("pending") + "Permission dialog\n",
+                    self.screen("pending").replace("⏸ manual mode on", "unknown footer"),
+                    self.screen("pending").replace("❯ ", "❯\t"), self.screen(" pending"),
+                    self.screen(" "), self.screen("pending\n❯ second prompt")]:
+            self.assertIsNone(editor(bad), bad)
+
+    def test_second_enter_only_when_this_prompt_remains_in_verified_editor(self):
+        from unittest.mock import patch
+        runner = self.runner
+        with patch.object(runner, "visible", side_effect=["", "prompt", "prompt"]), \
+             patch.object(runner, "started", side_effect=[False, True]), \
+             patch.object(runner, "herdr") as call, patch.object(runner.time, "sleep"):
+            self.assertEqual(2, runner.deliver_claude("own-pane", "prompt", {}, 1))
+            self.assertEqual(2, sum(c.args[:2] == ("pane", "send-keys") for c in call.call_args_list))
+        for after in [None, "", "another prompt"]:
+            with patch.object(runner, "visible", side_effect=["", "prompt", after]), \
+                 patch.object(runner, "started", return_value=False), \
+                 patch.object(runner, "herdr") as call, patch.object(runner.time, "sleep"):
+                with self.assertRaises(runner.Refused):
+                    runner.deliver_claude("own-pane", "prompt", {}, 1)
+                self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in call.call_args_list))
+
+    def test_unreadable_or_nonempty_initial_editor_gets_no_text(self):
+        from unittest.mock import patch
+        runner = self.runner
+        for initial in [None, "previous input"]:
+            with patch.object(runner, "visible", return_value=initial), patch.object(runner, "herdr") as call:
+                with self.assertRaises(runner.Refused):
+                    runner.deliver_claude("own-pane", "prompt", {}, 1)
+                call.assert_not_called()
+
+    def test_fold_directive_must_be_visible_before_enter(self):
+        from unittest.mock import patch
+        runner = self.runner
+        folded = "[Pasted text #1 +4 lines]"
+        for confirmed in [False, True]:
+            after = folded + runner.DIRECTIVE if confirmed else folded
+            with patch.object(runner, "visible", side_effect=["", folded, after]), \
+                 patch.object(runner, "started", return_value=True), \
+                 patch.object(runner, "herdr") as call, patch.object(runner.time, "sleep"):
+                if confirmed:
+                    self.assertEqual(1, runner.deliver_claude("own-pane", "prompt", {}, 1))
+                else:
+                    with self.assertRaises(runner.Refused):
+                        runner.deliver_claude("own-pane", "prompt", {}, 1)
+                self.assertEqual(int(confirmed), sum(c.args[:2] == ("pane", "send-keys") for c in call.call_args_list))
+
+    def test_waits_for_starting_seat_before_delivery(self):
+        from unittest.mock import patch
+        runner = self.runner
+        with patch.object(runner, "state", side_effect=[{"agent_status": "starting"}, {"agent_status": "idle"}]) as state, \
+             patch.object(runner.time, "sleep"):
+            self.assertEqual("idle", runner.wait_ready("own-pane", 1)["agent_status"])
+            self.assertEqual(2, state.call_count)
 
 if __name__ == "__main__":
     unittest.main()

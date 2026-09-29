@@ -459,7 +459,9 @@ EDITOR_FOUND=0
 EDITOR_NONE=1
 EDITOR_UNREADABLE=2
 
-# current_editor <pane-id> - one bounded read of the screen, returning
+# current_editor <pane-id> [yes] - one bounded read of the screen, returning
+# an empty editor only with the explicit yes used before the initial paste.
+# Subsequent reads require nonempty pending text. Returning
 # EDITOR_FOUND and printing the editor's text only when the screen has the
 # layout a live Claude Code 2.1.283 pane draws around its editor:
 #
@@ -496,7 +498,7 @@ current_editor() {
     unset _ce_file _ce_read
     return "$EDITOR_UNREADABLE"
   fi
-  _ce_text=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" -v status="$QUALIFY_STATUS_LINE" '
+  _ce_text=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" -v status="$QUALIFY_STATUS_LINE" -v empty="${2:-no}" '
     BEGIN { nbsp = "\302\240" }
     { line[NR] = $0 }
     /^[[:space:]]*(─)+[[:space:]]*$/ { top = bottom; bottom = NR }
@@ -504,8 +506,10 @@ current_editor() {
       if (top == 0 || bottom - top < 2) exit 1
       for (i = top + 1; i < bottom; i++) {
         text = line[i]
+        original = text
         sub(/[[:space:]]+$/, "", text)
         if (i == top + 1) {
+          if (empty == "yes" && (original == "❯" || original == "❯ " || original == "❯" nbsp)) { body = "\n"; continue }
           if (index(text, "❯ ") == 1) text = substr(text, length("❯ ") + 1)
           else if (index(text, "❯" nbsp) == 1) text = substr(text, length("❯" nbsp) + 1)
           else exit 1
@@ -601,6 +605,11 @@ deliver_stop() {
 # deliver_turn <pane> <prompt-file> <run-id> <state-dir> <turn-id> - returns 0
 # once the turn is accepted, non-zero when it was not.
 deliver_turn() {
+  _dt_ready=$(current_editor "$1" yes) && _dt_read=0 || _dt_read=$?
+  if [ "$_dt_read" != "$EDITOR_FOUND" ] || [ -n "$_dt_ready" ]; then
+    deliver_stop 'no verified empty current editor before the paste'
+    return 1
+  fi
   herdr pane send-text "$1" "$(cat "$2")" >>"$TRANSCRIPT" 2>&1 || true
   sleep "$DELIVER_SETTLE_SECONDS"
   _dt_text=$(current_editor "$1") && _dt_read=0 || _dt_read=$?

@@ -2362,7 +2362,7 @@
           "markers": [
             "stated once in the workflow discipline rules, \"Match the gate\"",
             "Claude auto mode, Codex auto-review or peer approval is never human authorization",
-            "For the non-relaxable class, the models record the operator's result"
+            "After the operator acts, the models record the operator's result"
           ]
         }
       ]
@@ -2428,12 +2428,12 @@
         {
           "path": ".agents/skills/cf-ship/references/pr-checks.md",
           "markers": [
-            "at most once a minute, for at most thirty minutes",
-            "an empty list is not readiness",
-            "Read all check runs with `gh pr checks <url>` on the same cadence",
-            "A gate with no matching run,",
-            "or whose run you cannot read, is missing evidence",
-            "Do not use `--watch` without a ceiling, and do not poll without an end",
+            "timeout 30m gh pr checks <url> --required --watch --interval 60",
+            "An empty list is not readiness",
+            "within the original thirty-minute budget",
+            "A gate with no readable matching run is missing",
+            "evidence.",
+            "Never run `--watch` without the ceiling",
             "`timeout 30m gh pr checks <url> --watch --interval 60`",
             "Do not wait for the operator to name the job",
             "Report it as missing evidence with the reason the tool gave, not as a product defect"
