@@ -1518,7 +1518,9 @@ fn the_report_lists_what_changed_and_the_next_steps() {
 #[test]
 fn the_policy_key_is_inserted_or_replaced_in_place() {
     let text = "{\n  \"git\": {\n    \"protected_branches\": [\"main\"]\n  }\n}\n";
-    let inserted = policy_with_root_branch(text, WORKSPACE_ROOT_BRANCH).unwrap();
+    let inserted = policy_with_root_branch(text, WORKSPACE_ROOT_BRANCH)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         inserted,
         "{\n  \"git\": {\n    \"root_branch\": \"integration/workspace\",\n    \
@@ -1526,10 +1528,46 @@ fn the_policy_key_is_inserted_or_replaced_in_place() {
     );
     assert_eq!(
         policy_with_root_branch(&inserted, WORKSPACE_ROOT_BRANCH),
-        None
+        Ok(None)
     );
-    let replaced = policy_with_root_branch(&inserted, "integration/hub").unwrap();
+    let replaced = policy_with_root_branch(&inserted, "integration/hub")
+        .unwrap()
+        .unwrap();
     assert!(replaced.contains("\"root_branch\": \"integration/hub\""));
+}
+
+#[test]
+fn the_policy_key_is_added_to_a_policy_without_a_git_object() {
+    for text in ["{}", "{}\n", "{\n  \"schema_version\": 1\n}\n"] {
+        let updated = policy_with_root_branch(text, WORKSPACE_ROOT_BRANCH)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{text:?} gained no key"));
+        let parsed: serde_json::Value = serde_json::from_str(&updated).unwrap();
+        assert_eq!(
+            parsed["git"]["root_branch"], WORKSPACE_ROOT_BRANCH,
+            "{text:?}"
+        );
+        if text.contains("schema_version") {
+            assert_eq!(parsed["schema_version"], 1);
+        }
+    }
+    for text in ["{\"git\": 1}", "not json", "[]"] {
+        assert!(
+            policy_with_root_branch(text, WORKSPACE_ROOT_BRANCH).is_err(),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn finish_on_a_policy_without_a_git_object_sets_the_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = umbrella(dir.path());
+    write_policy(&root, "{}");
+    let report = finish(&root, prepare_branch(&root, &GitPolicy::default()).unwrap()).unwrap();
+    assert!(report.policy_changed);
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(&root);
+    assert_eq!(policy.git.root_branch, WORKSPACE_ROOT_BRANCH);
 }
 
 // ---- plain init and update --------------------------------------------------

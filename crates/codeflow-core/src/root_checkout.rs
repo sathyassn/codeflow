@@ -1391,21 +1391,47 @@ pub fn workspace_branch_name(policy: &GitPolicy) -> String {
     }
 }
 
-/// Write `git.root_branch` into the policy text, keeping its layout. Returns
-/// the new text, or `None` when the key already holds `branch`.
-#[must_use]
-pub fn policy_with_root_branch(text: &str, branch: &str) -> Option<String> {
-    let value = serde_json::to_string(branch).ok()?;
-    let current = serde_json::from_str::<serde_json::Value>(text)
-        .ok()?
-        .pointer("/git/root_branch")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    match current {
-        Some(c) if c == branch => None,
-        Some(_) => crate::scaffold::json_edit::replace_value(text, &["git", "root_branch"], &value),
-        None => crate::scaffold::json_edit::insert_member(text, &["git"], "root_branch", &value),
-    }
+/// Write `git.root_branch` into the policy text, keeping its layout, and
+/// adding the `git` object when the policy has none. `Ok(None)` when the
+/// key already holds `branch`; an error names why the text cannot take the
+/// key. The edit is kept only when it parses to the intended policy.
+///
+/// # Errors
+///
+/// When the text is not a JSON object, its `git` member is not an object,
+/// or the edit cannot be made in place.
+pub fn policy_with_root_branch(text: &str, branch: &str) -> Result<Option<String>, String> {
+    use crate::scaffold::json_edit;
+    let mut expected: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("it is not valid JSON ({e})"))?;
+    let value = serde_json::Value::String(branch.to_string());
+    let json = value.to_string();
+    let top = expected
+        .as_object_mut()
+        .ok_or("its top level is not a JSON object")?;
+    let edited = match top.get_mut("git") {
+        None => {
+            top.insert(
+                "git".to_string(),
+                serde_json::json!({ "root_branch": branch }),
+            );
+            json_edit::insert_member(text, &[], "git", &format!("{{\"root_branch\": {json}}}"))
+        }
+        Some(serde_json::Value::Object(git)) => {
+            let edit = match git.get("root_branch") {
+                Some(current) if *current == value => return Ok(None),
+                Some(_) => json_edit::replace_value(text, &["git", "root_branch"], &json),
+                None => json_edit::insert_member(text, &["git"], "root_branch", &json),
+            };
+            git.insert("root_branch".to_string(), value);
+            edit
+        }
+        Some(_) => return Err("its git member is not a JSON object".to_string()),
+    };
+    edited
+        .and_then(|e| json_edit::verified(e, &expected))
+        .map(Some)
+        .ok_or_else(|| "the key could not be written in place".to_string())
 }
 
 /// The `.gitignore` text with a line for each nested repository that no
@@ -1467,7 +1493,19 @@ pub fn finish(root: &Path, branch: BranchStep) -> Result<WorkspaceReport, Worksp
     };
     let text =
         std::fs::read_to_string(&policy_path).map_err(|e| io("read .codeflow/policy.json", e))?;
-    let policy_changed = match policy_with_root_branch(&text, &name) {
+    let edit = policy_with_root_branch(&text, &name).map_err(|why| {
+        stop(
+            format!(
+                "codeflow init --workspace could not set {ROOT_BRANCH_KEY} in \
+                 .codeflow/policy.json: {why}"
+            ),
+            format!(
+                "set \"git\": {{ \"root_branch\": \"{name}\" }} in .codeflow/policy.json by \
+                 hand, then rerun codeflow init --workspace"
+            ),
+        )
+    })?;
+    let policy_changed = match edit {
         Some(updated) => {
             std::fs::write(&policy_path, updated)
                 .map_err(|e| io("write .codeflow/policy.json", e))?;

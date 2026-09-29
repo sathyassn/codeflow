@@ -382,3 +382,39 @@ fn journey_the_root_checkout_rule_through_the_real_hooks_and_doctor() {
         "{said}"
     );
 }
+
+#[test]
+fn init_workspace_sets_the_root_branch_in_a_policy_without_a_git_object() {
+    // A sparse policy is valid; init --workspace must add the key, not
+    // report it as already set.
+    let dir = tempfile::tempdir().unwrap();
+    let root = umbrella(dir.path());
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(root.join(".codeflow/policy.json"), "{}").unwrap();
+    git(&root, &["add", ".codeflow/policy.json"]);
+    git(&root, &["commit", "--quiet", "-m", "sparse policy"]);
+
+    let out = codeflow(&root, &["init", "--yes", "--minimal", "--workspace"]);
+    let said = both(&out);
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("set git.root_branch in .codeflow/policy.json"),
+        "{said}"
+    );
+    assert!(!said.contains("git.root_branch already set"), "{said}");
+    assert_eq!(root_branch_key(&root), WORKSPACE_ROOT_BRANCH);
+
+    // The root rule now reads the workspace branch as the root branch.
+    let doctor = codeflow(&root, &["doctor", "--check", "repo-integrity"]);
+    let said = both(&doctor);
+    assert!(
+        said.contains(&format!(
+            "stays on '{WORKSPACE_ROOT_BRANCH}' (set by git.root_branch)"
+        )),
+        "{said}"
+    );
+    assert!(
+        !said.contains(&format!("is on '{WORKSPACE_ROOT_BRANCH}'")),
+        "{said}"
+    );
+}
