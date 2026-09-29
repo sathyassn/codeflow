@@ -15,7 +15,9 @@
 // - after the service is killed and restarted, a pending answer is
 //   delivered once and a later wait finds nothing;
 // - after a reload, Amend starts from the last sent values: a correction
-//   that changes one field sends the others unchanged (TSK-176);
+//   that changes one field sends the others unchanged, and a reason left
+//   empty stays absent, even for a field named like an object member
+//   (constructor) (TSK-176);
 // - a closure binds every form to its answer as a reload renders it, before
 //   the forms latch closed: a tab following an original the other tab
 //   corrected, a page that never saw an answer, and a state not yet seen;
@@ -349,6 +351,65 @@ try {
     assert.deepEqual(lines(waited.stdout).map((line) => line.event_id), [amended.event_id]);
     await waitState(form, "delivered");
     passed.push("reload, then Amend: the controls start from the last sent values; changing one field stores an amendment with the others unchanged");
+  }
+
+  // A field named constructor whose optional reason was left empty: after a
+  // reload its reason stays empty, and a correction to another field sends
+  // no reason for it (TSK-176 review). Before the fix the page read the
+  // object's inherited constructor and sent it as the reviewer's reason.
+  {
+    const names = join(project, "names.json");
+    await writeFile(names, `${JSON.stringify({
+      schema_version: 2,
+      title: "Inherited names",
+      blocks: [{
+        type: "form",
+        id: "names",
+        title: "Field names",
+        fields: [
+          { id: "constructor", label: "Constructor", kind: "text", rationale: "optional" },
+          { id: "other", label: "Other", kind: "text" },
+        ],
+        required: ["constructor"],
+      }],
+    }, null, 2)}\n`);
+    const opened = run(["present", "open", names, "--no-launch"]);
+    const id = opened.match(/session ([0-9a-f-]+) ready/u)?.[1];
+    const bootstrap = opened.match(/owner-private bootstrap file (.+?) in a qualified/u)?.[1];
+    if (!id || !bootstrap) throw new Error(`could not parse present open output: ${opened}`);
+    const port = JSON.parse(run(["present", "list"])).find((entry) => entry.id === id)?.service_port;
+    const tab = await context.newPage();
+    tab.on("pageerror", (error) => errors.push(error.message));
+    try {
+      await tab.goto(pathToFileURL(bootstrap).href, { waitUntil: "commit", timeout: 120_000 });
+      await tab.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"), { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await tab.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+      const named = tab.locator("article[data-cf-form='names']");
+      const at = (field) => named.locator(`[data-cf-field='${field}']`);
+      const settled = (state) => tab.waitForFunction((state) => document.querySelector("article[data-cf-form='names']")?.getAttribute("data-cf-form-state") === state, state, { timeout: 20_000 });
+      await at("constructor").locator("[data-cf-value]").fill("first value");
+      await at("other").locator("[data-cf-value]").fill("one");
+      await named.locator("[data-cf-form-action='submit']").click();
+      await settled("stored");
+      await tab.reload({ waitUntil: "domcontentloaded" });
+      await tab.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+      await settled("stored");
+      assert.equal(await at("constructor").locator("[data-cf-value]").inputValue(), "first value");
+      assert.equal(await at("constructor").locator("[data-cf-rationale-input]").inputValue(), "", "reload: an empty reason shows inherited text");
+      await named.locator("[data-cf-form-action='amend']").click();
+      await at("other").locator("[data-cf-value]").fill("two");
+      await named.locator("[data-cf-form-action='submit']").click();
+      await settled("stored");
+      const [first, amended] = lines(run(["present", "responses", "list", id, "--form", "names"]));
+      assert.deepEqual([first.rationales, amended.kind, amended.amends], [{}, "amendment", first.event_id]);
+      assert.deepEqual(amended.values, { constructor: "first value", other: "two" });
+      assert.deepEqual(amended.rationales, {}, "reload, Amend: the correction sent a reason the reviewer never gave");
+    } finally {
+      await tab.close();
+      run(["present", "close", id]);
+      run(["present", "clear", id, "--older-than", "0d"]);
+    }
+    passed.push("inherited name: a field named constructor with its optional reason left empty keeps an empty reason after a reload, and a correction to another field sends no reason for it");
   }
 
   // Closure cases run on their own sessions. Tab A stores the original O

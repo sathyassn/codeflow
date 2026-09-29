@@ -22,7 +22,8 @@
 // - a reload shows the last sent values of every field kind, read back
 //   from the service, never from browser storage, and a correction after
 //   it starts from them (TSK-176);
-// - a decline carries its reason;
+// - a decline carries its reason, which the form shows read only once
+//   stored, after a reload too, and keeps in sight under Amend (TSK-176);
 // - a session_closed refusal of an answer closes every form and the chrome,
 //   which drops the review draft; closure while answers are in flight stays
 //   closed when their replies arrive, stored or failed.
@@ -447,9 +448,11 @@ try {
     assert.equal(line.outcome, "decline");
     assert.equal(line.reason, "Not my call.");
     assert.deepEqual(line.values, {});
-    assert.equal(await reason.isVisible(), false, "decline: the reason shows after the decline is stored");
+    assert.equal(await reason.isVisible(), true, "decline: the sent reason is hidden once the decline is stored");
+    assert.ok(await reason.isDisabled(), "decline: the sent reason is editable once stored");
+    assert.equal(await reason.inputValue(), "Not my call.");
     assert.deepEqual(await hiddenShown(), [], "decline: a hidden part of a form shows");
-    passed.push("decline: the reason box shows only after Decline, is stored with no values, and hides once stored");
+    passed.push("decline: the reason box shows only after Decline, is stored with no values, and stays in sight, read only, once stored");
   }
 
   // Revision 4 relabels an option under the same value: the question the
@@ -496,9 +499,13 @@ try {
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
     await page.getByTestId("toast").getByText(/Restored 1 unsent note/u).waitFor({ timeout: 20_000 });
-    // The reload shows the stored decline; a new choice starts from Amend.
+    // The reload shows the stored decline and its reason, read only; Amend
+    // keeps the reason in sight and editable, and a new choice starts there.
     assert.equal((await stateOf(decision)).state, "stored", "reload: the stored decline is not shown");
+    const declineReason = decision.locator("[data-cf-decline-reason]");
+    assert.deepEqual([await declineReason.isVisible(), await declineReason.isDisabled(), await declineReason.inputValue()], [true, true, "Not my call."], "reload: the sent decline reason is not shown read only");
     await decision.locator("[data-cf-form-action='amend']").click();
+    assert.deepEqual([await declineReason.isVisible(), await declineReason.isDisabled(), await declineReason.inputValue()], [true, false, "Not my call."], "reload, Amend: the sent decline reason is not offered for correction");
     await decision.locator("input[value='a']").check();
     await page.route(`**${ANSWERS}`, (route) => route.fulfill({
       status: 410,

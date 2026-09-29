@@ -139,6 +139,9 @@ class FormController {
   private latest: string | null = null;
   private amending = false;
   private declining = false;
+  // The answer this form shows is a decline: its reason stays in sight,
+  // read only, and in reach when the reviewer corrects it.
+  private declined = false;
   private sent: Sent | null = null;
   private stale: StaleTarget | null = null;
   private gone = false;
@@ -180,7 +183,9 @@ class FormController {
     if (original && latest && (answered === "stored" || answered === "delivered" || answered === "acknowledged")) {
       this.original = original;
       this.latest = latest;
-      fillSent(article, readSent(article));
+      const sent = readSent(article);
+      fillSent(article, sent);
+      this.declined = sent?.outcome === "decline";
       this.render(answered === "stored" ? STORED_TEXT : DELIVERY_TEXT[answered], answered);
     } else {
       this.render("");
@@ -216,6 +221,8 @@ class FormController {
     const entry = entries.find((candidate) => candidate.form_id === this.id && candidate.form_digest === this.digest);
     if (!entry) return;
     this.original = entry.answer_id;
+    // Another page's answer: what it sent is not known here.
+    if (entry.latest_answer_id !== this.latest) this.declined = false;
     this.latest = entry.latest_answer_id;
     this.article.dataset.cfAnswerId = entry.answer_id;
     this.answered = entry.state;
@@ -330,13 +337,13 @@ class FormController {
       return;
     }
     if (status === 200) {
-      this.stored(text, sent.target);
+      this.stored(text, sent.target, sent.outcome);
       return;
     }
     this.refused(status, text, sent.target);
   }
 
-  private stored(text: string, target: StaleTarget | null): void {
+  private stored(text: string, target: StaleTarget | null, outcome: Outcome): void {
     if (this.closed && this.confirmed) {
       // The closure snapshot already holds this receipt's answer, as a
       // reload shows it: a late receipt changes nothing.
@@ -362,6 +369,7 @@ class FormController {
     if (!this.amending || !this.original) this.original = receipt.answer_id;
     this.article.dataset.cfAnswerId = this.original;
     this.latest = receipt.answer_id;
+    this.declined = outcome === "decline";
     this.sent = null;
     this.stale = null;
     this.amending = false;
@@ -419,6 +427,7 @@ class FormController {
         const answered: AnswerDelivery = details.state === "delivered" || details.state === "acknowledged" ? details.state : "pending";
         this.original = details.answer_id;
         this.latest = details.latest_answer_id;
+        this.declined = false;
         this.article.dataset.cfAnswerId = details.answer_id;
         this.amending = false;
         this.declining = false;
@@ -601,7 +610,7 @@ class FormController {
     if (decline) decline.textContent = this.declining ? "Send decline" : "Decline to answer";
     const submit = this.buttons.get("submit");
     if (submit) submit.textContent = this.amending ? "Send correction" : "Submit answer";
-    if (this.declineArea) this.declineArea.hidden = !(this.declining && editable);
+    if (this.declineArea) this.declineArea.hidden = !((this.declining && editable) || this.declined);
   }
 }
 
@@ -677,7 +686,7 @@ function fillSent(article: HTMLElement, sent: SentAnswer | null): void {
       if (input) input.value = value === undefined || value === null ? "" : String(value);
     }
     const rationale = field.querySelector<HTMLTextAreaElement>("[data-cf-rationale-input]");
-    if (rationale) rationale.value = sent.rationales[id] ?? "";
+    if (rationale) rationale.value = Object.hasOwn(sent.rationales, id) ? sent.rationales[id] ?? "" : "";
   }
   const reason = article.querySelector<HTMLTextAreaElement>("[data-cf-decline-reason]");
   if (reason) reason.value = sent.outcome === "decline" ? sent.reason ?? "" : "";
