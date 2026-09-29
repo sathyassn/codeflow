@@ -925,13 +925,15 @@ fn completion_changed(before: Option<&RecordView>, after: &RecordView) -> bool {
 /// A direct change of a task record's criteria, keyed on the record's
 /// identity: removing a record, creating one, or putting another identity
 /// (`uid`) at its path changes criteria as much as editing them, so a
-/// delete and a later re-create cannot reset the freeze.
+/// delete and a later re-create cannot reset the freeze. A record without
+/// a `uid` that gains one, as `ids backfill` writes it, keeps its identity.
 fn direct_criteria_changed(before: Option<&RecordView>, after: Option<&RecordView>) -> bool {
     match (before, after) {
         (None, None) => false,
         (Some(before), Some(after)) => {
+            let uid = uid_of(before);
             before.criteria.signature() != after.criteria.signature()
-                || uid_of(before) != uid_of(after)
+                || (uid.is_some() && uid != uid_of(after))
         }
         _ => true,
     }
@@ -1137,7 +1139,17 @@ fn judge(
                 }
                 let then = record_of(&repo, expected.get(*path), path);
                 let now = record_of(&repo, after.get(*path), path);
-                if direct_criteria_changed(then.as_ref(), now.as_ref()) {
+                // The release side's identity, which the resolution may keep
+                // (a `uid` another line backfilled) but never replace.
+                let ours = commit
+                    .parent_id(0)
+                    .ok()
+                    .and_then(|parent| record_at(&repo, parent, path));
+                let replaced = ours.as_ref().and_then(uid_of).is_some_and(|was| {
+                    let kept = now.as_ref().and_then(uid_of);
+                    kept.as_deref() != Some(was.as_str()) && kept != then.as_ref().and_then(uid_of)
+                });
+                if replaced || direct_criteria_changed(then.as_ref(), now.as_ref()) {
                     findings.push(frozen(
                         now.as_ref().or(then.as_ref()),
                         path,

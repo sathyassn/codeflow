@@ -535,3 +535,87 @@ fn an_approved_records_cutoff_lists_only_covered_legacy_records() {
     let verdict = fx.records(&judged);
     assert!(missing_block(&verdict), "{:?}", verdict.errors);
 }
+
+/// TSK-093's history in the 3.0.0 release: main lacks the record; one line
+/// brings it with the `uid` it backfilled, and a later import brings it
+/// from its own line without one. The merge keeps the `uid`, so it differs
+/// from what the import brings, but a record that gains a `uid` keeps its
+/// identity: no criteria change. Putting another `uid` there still is one.
+#[test]
+fn a_resolution_keeping_a_backfilled_uid_changes_no_criteria() {
+    const UID: &str = "9b92f152-ea2d-4372-8ffa-ae3d5771f83d";
+    for other in [false, true] {
+        let fx = Fx::new();
+        let plain = record("TSK-003", "todo", CRITERIA, "Pending.\n").replace("TSK-003", "TSK-006");
+        let with_uid =
+            |uid: &str| plain.replacen("id: TSK-006\n", &format!("id: TSK-006\nuid: {uid}\n"), 1);
+        fx.land_files(
+            LINE_B,
+            "chore/bring-tsk-006",
+            &[(path("TSK-006"), with_uid(UID))],
+        );
+        fx.land_files(
+            LINE_A,
+            "docs/plan-tsk-006",
+            &[(
+                path("TSK-006"),
+                plain.replace("Pending.\n", "Pending, planned.\n"),
+            )],
+        );
+        fx.git(&["switch", "-q", "-C", RELEASE, "main"]);
+        fx.git(&["push", "-q", "origin", RELEASE]);
+        fx.git(&["fetch", "-q", "origin"]);
+        fx.git(&[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "merge: import line B",
+            &format!("origin/{LINE_B}"),
+        ]);
+        // Both sides add the record: the resolution takes line A's record
+        // and keeps the release side's `uid`.
+        let _ = Command::new("git")
+            .args([
+                "merge",
+                "-q",
+                "--no-ff",
+                "--no-commit",
+                &format!("origin/{LINE_A}"),
+            ])
+            .current_dir(&fx.root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        let kept = if other {
+            "00000000-0000-4000-8000-000000000000"
+        } else {
+            UID
+        };
+        fx.write(
+            &path("TSK-006"),
+            &plain.replace("Pending.\n", "Pending, planned.\n").replacen(
+                "id: TSK-006\n",
+                &format!("id: TSK-006\nuid: {kept}\n"),
+                1,
+            ),
+        );
+        fx.commit("merge: import line A, keeping the uid");
+        let judged = fx.judged(&[]).unwrap();
+        assert!(
+            judged
+                .path
+                .iter()
+                .any(|line| line.contains("resolved path")),
+            "the merge is a resolution: {:?}",
+            judged.path
+        );
+        let frozen = judged.findings.iter().any(|finding| {
+            finding
+                .message
+                .contains("TSK-006 changes its criteria directly")
+        });
+        assert_eq!(frozen, other, "another uid: {other}: {:?}", judged.findings);
+    }
+}

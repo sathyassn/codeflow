@@ -218,8 +218,19 @@ pub fn bind_completion(
             task.id, block.reviewed
         )),
         Some(reviewed) => {
-            let problem = if reopen.as_ref().is_some_and(|(anchor, _)| {
-                reviewed == *anchor || !is_ancestor_or_same(repo, *anchor, reviewed)
+            // The review lies after the reopened completion. One exception:
+            // a completion made and reopened inside this range (the range
+            // base holds no completion) stood last at `at`, and a review of
+            // `at` covers every change the range made before the reopen;
+            // the binding below still refuses any later change but this
+            // record's status and Closeout (AC-2).
+            let completed_in_range = |at: Oid| {
+                reopened_earlier
+                    && anchor.is_some_and(|base| base != at && is_ancestor_or_same(repo, base, at))
+            };
+            let problem = if reopen.as_ref().is_some_and(|(at, _)| {
+                (reviewed == *at && !completed_in_range(*at))
+                    || !is_ancestor_or_same(repo, *at, reviewed)
             }) {
                 Some(format!("a reopened task's reviewed commit {reviewed} must lie inside the fix range, after its anchored base"))
             } else if transport == Transport::TaskLanding && (reopen.is_none() || reopened_earlier)

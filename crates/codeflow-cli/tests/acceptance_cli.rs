@@ -1750,6 +1750,64 @@ fn a_one_pr_reopen_does_not_carry_a_merged_review_past_later_code() {
     );
 }
 
+/// TSK-170's history on EPC-020 (pull request 761): a task completed on its
+/// branch, which then takes the line by a merge, is reopened and completed
+/// again reviewed at that merge. The range base holds no completion, and
+/// the review names the range's last change outside the record, so it binds
+/// (AC-2). Naming the first review instead still refuses: the merge came
+/// after it.
+#[test]
+fn a_completion_reopened_inside_its_own_range_binds_at_the_later_merge() {
+    for stale in [false, true] {
+        let dir = line_repo(&["TSK-001"]);
+        let root = dir.path();
+        let first = build(root, "task/TSK-001-work", "src/work.rs");
+        write_done(root, "TSK-001", "complete", &first);
+        commit(root, "docs: complete the task");
+        git(root, &["switch", "-c", "other/change", LINE]);
+        write(root, "src/other.rs", "pub fn other() {}\n");
+        commit(root, "feat: other line work");
+        land(root, "other/change");
+        git(root, &["switch", "task/TSK-001-work"]);
+        git(
+            root,
+            &["merge", "--no-ff", "-m", "chore: take the line", LINE],
+        );
+        let merged = head(root);
+        let archived = valid_block(&first).replace(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: review the line merge\n",
+        );
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task("TSK-001", "todo", &archived),
+        );
+        commit(root, "docs: reopen for the line merge");
+        let reviewed = if stale { &first } else { &merged };
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task(
+                "TSK-001",
+                "complete",
+                &format!("{archived}{}", valid_block(reviewed)),
+            ),
+        );
+        commit(root, "docs: complete at the line merge");
+        let result = ci_on(root, LINE, "task/TSK-001-work", "Task: TSK-001");
+        if stale {
+            assert_blocks(
+                &result,
+                "the first review reused after the merge",
+                &["must lie inside the fix range"],
+            );
+        } else {
+            assert_passes(&result, "a review of the line merge");
+        }
+    }
+}
+
 /// The target checkout has no range base to reveal the completion that the
 /// task record reopened before accepting a fresh status transition.
 #[test]
