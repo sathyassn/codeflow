@@ -550,6 +550,44 @@ fn the_guard_leaves_reads_aborts_and_the_root_branch_alone() {
 }
 
 #[test]
+fn an_abort_or_quit_counts_only_as_the_whole_operation() {
+    // `--abort` or `--quit` given as a value or next to other arguments is
+    // not an operation control: git runs the commit.
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    git(&root, &["switch", "--quiet", "-c", "feat/x"]);
+    let policy = GitPolicy::default();
+    for command in [
+        "git commit -m --abort",
+        "git commit -m --quit",
+        "git commit --allow-empty -m --abort",
+        "git commit --abort",
+        "git merge -m --abort feat/y",
+        "git pull --abort",
+        "git rebase --onto main --quit",
+    ] {
+        assert_eq!(
+            rule_hits(&guard(&root, &policy, command)).len(),
+            1,
+            "{command}"
+        );
+    }
+    for command in [
+        "git merge --abort",
+        "git merge --quit",
+        "git cherry-pick --abort",
+        "git revert --quit",
+        "git am --abort",
+        "git rebase --quit",
+    ] {
+        assert!(
+            rule_hits(&guard(&root, &policy, command)).is_empty(),
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn the_guard_follows_the_level_warn_and_off() {
     let dir = tempfile::tempdir().unwrap();
     let root = repo_with_commit(&dir.path().join("r"));

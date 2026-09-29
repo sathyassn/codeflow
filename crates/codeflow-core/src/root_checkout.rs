@@ -426,6 +426,17 @@ impl RootCheckout {
     }
 }
 
+/// The subcommands whose in-progress operation `--abort` or `--quit` ends.
+const ENDABLE_SUBCOMMANDS: [&str; 5] = ["merge", "cherry-pick", "revert", "am", "rebase"];
+
+/// Whether `git <sub> <rest>` only ends an operation, which creates no
+/// commit. git takes `--abort` and `--quit` alone, so any other argument
+/// means they are something else, such as a message value.
+fn ends_an_operation(sub: &str, rest: &[String]) -> bool {
+    ENDABLE_SUBCOMMANDS.contains(&sub)
+        && matches!(rest, [only] if only == "--abort" || only == "--quit")
+}
+
 /// git-guard's verdict for `git <sub> <rest>` run at this root checkout on
 /// `branch` (empty: detached), at the policy's `level`. git-guard runs only
 /// in an agent session, so it applies the level without reading the
@@ -438,10 +449,7 @@ pub fn guard_violation(
     root: &RootCheckout,
     level: PolicyLevel,
 ) -> Option<Violation> {
-    if !level.is_active()
-        || !COMMIT_SUBCOMMANDS.contains(&sub)
-        || rest.iter().any(|a| a == "--abort" || a == "--quit")
-    {
+    if !level.is_active() || !COMMIT_SUBCOMMANDS.contains(&sub) || ends_an_operation(sub, rest) {
         return None;
     }
     root.commit_on(branch)
