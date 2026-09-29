@@ -30,7 +30,7 @@ pub struct SessionRecord {
     pub timestamp: String,
 }
 
-/// The session ledger could not be written.
+/// A ledger (the session or the refusals ledger) could not be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LedgerUnwritten {
     /// What keeps the ledger from being written, from the path the write
@@ -209,8 +209,9 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
 /// What keeps the ledger from being written, from the path the writer
 /// failed on: a file in the way of a directory it creates, a directory in
 /// the way of a file it opens, or else the nearest existing part of that
-/// path, which this user cannot write.
-fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
+/// path, which this user cannot write. The refusal record reads it too.
+#[must_use]
+pub fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
     let cause = error.to_string();
     let LedgerError::IoAt { path, source } = error else {
         return LedgerUnwritten {

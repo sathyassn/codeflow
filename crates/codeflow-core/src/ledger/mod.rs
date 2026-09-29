@@ -10,7 +10,8 @@
 //! │   └── work-graph-ses-{id}.jsonl     ← session fragment
 //! ├── sessions/
 //! ├── memory-events/
-//! └── config/
+//! ├── config/
+//! └── refusals/                         ← hook and guard refusals (TSK-149)
 //! ```
 //!
 //! v2 trim: pathflow-events, coordination-events, and autorun-events ledger
@@ -19,6 +20,7 @@
 pub mod compact;
 mod jsonl;
 pub mod rebuild;
+pub mod refusal;
 mod routing;
 
 use std::collections::HashMap;
@@ -76,9 +78,11 @@ pub mod files {
     pub const MEMORY_EVENTS: &str = "memory-events";
     pub const SESSIONS: &str = "sessions";
     pub const CONFIG: &str = "config";
+    /// Operations a git hook or session guard refused (TSK-149).
+    pub const REFUSALS: &str = "refusals";
 
     /// All canonical ledger type names.
-    pub const ALL: &[&str] = &[WORK_GRAPH, MEMORY_EVENTS, SESSIONS, CONFIG];
+    pub const ALL: &[&str] = &[WORK_GRAPH, MEMORY_EVENTS, SESSIONS, CONFIG, REFUSALS];
 }
 
 /// Resolve the canonical base file path for a ledger type under an explicit
@@ -274,7 +278,8 @@ mod tests {
         assert_eq!(files::MEMORY_EVENTS, "memory-events");
         assert_eq!(files::SESSIONS, "sessions");
         assert_eq!(files::CONFIG, "config");
-        assert_eq!(files::ALL.len(), 4);
+        assert_eq!(files::REFUSALS, "refusals");
+        assert_eq!(files::ALL.len(), 5);
     }
 
     // -- resolve_path_in --

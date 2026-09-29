@@ -113,7 +113,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
     };
 
     match result {
-        Ok(report) => super::render_stage(plane, &report, 1),
+        Ok(report) => super::render_stage(plane, &root, &report, 1),
         Err(e) => {
             // A hook that cannot evaluate must not block work invisibly:
             // report and pass (CI remains the hard line, charter D19).
@@ -228,7 +228,7 @@ fn run_reference_transaction_with_reader(
     let token = super::integrate_token_present();
     let human = super::human_override_present();
     match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
-        Ok(report) => super::render_stage("reference-transaction", &report, 1),
+        Ok(report) => super::render_stage("reference-transaction", root, &report, 1),
         Err(e) => {
             eprintln!(
                 "codeflow reference-transaction: could not evaluate protected-ref transaction ({e}) — operation blocked"

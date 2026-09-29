@@ -336,8 +336,13 @@ fn run_check(
             );
         }
         Ok(out) => {
-            eprint!("{}", String::from_utf8_lossy(&out.stdout));
-            eprint!("{}", String::from_utf8_lossy(&out.stderr));
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            eprint!("{stdout}");
+            eprint!("{stderr}");
+            report
+                .refused_by
+                .extend(blocking_rules(&format!("{stdout}{stderr}")));
             // A check run at the push gate's level (R-80) that still fails
             // holds a finding that keeps its block: it stops the push.
             let kept_block = rerun.len() < args.len() && out.status.code() == Some(1);
@@ -387,6 +392,27 @@ fn relayed_findings(stderr: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// The rules a failed check printed as `BLOCKED`, in order, for the
+/// refusal record: a policy rule or a lifecycle invariant.
+fn blocking_rules(printed: &str) -> Vec<String> {
+    let mut rules: Vec<String> = Vec::new();
+    for line in printed.lines() {
+        let Some((_, after)) = line.split_once(": BLOCKED — ") else {
+            continue;
+        };
+        let rule = after
+            .strip_prefix("policy rule ")
+            .or_else(|| after.strip_prefix("lifecycle invariant "))
+            .and_then(|rest| rest.split_whitespace().next());
+        if let Some(rule) = rule {
+            if !rules.iter().any(|seen| seen == rule) {
+                rules.push(rule.to_string());
+            }
+        }
+    }
+    rules
 }
 
 /// Whether `line` opens a finding: `<plane>: warning`, `note` or `notice`,
