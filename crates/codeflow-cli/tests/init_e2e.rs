@@ -1774,7 +1774,7 @@ fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
             let line = String::from_utf8(reminder.stdout).unwrap();
             assert_eq!(line.lines().count(), 1, "{flag} {harness}: {line}");
             assert!(
-                line.starts_with("codeflow reminder: Durations"),
+                line.starts_with("codeflow reminder: When you give a duration"),
                 "{flag} {harness}: {line}"
             );
             for payload in [

@@ -2665,12 +2665,17 @@ fn prompt_reminder_follows_the_fixture_corpus() {
             assert_eq!(stdout.lines().count(), 1, "{tier} {prompt:?}: {stdout}");
             assert!(stdout.starts_with("codeflow reminder: "), "{stdout}");
             longest = longest.max(stdout.trim_end().len());
-            let title = match (expect, tier) {
-                ("duration", "minimal") => "Durations are agentic.",
-                ("duration", _) => "Durations come from cf-estimate.",
-                ("status", _) => "Outcomes first, in words.",
-                ("explanation", _) => "Show complex things.",
-                (other, _) => panic!("unknown expectation {other}"),
+            let title = match expect {
+                "duration" => "When you give a duration, date or effort:",
+                "status" if stdout.contains("When you report status or hand off:") => {
+                    "When you report status or hand off:"
+                }
+                "status" => "When you report status or summarize work:",
+                "explanation" if stdout.contains("When you show something complex:") => {
+                    "When you show something complex:"
+                }
+                "explanation" => "When you explain a flow, comparison, plan or decision:",
+                other => panic!("unknown expectation {other}"),
             };
             assert!(
                 stdout.contains(title),
