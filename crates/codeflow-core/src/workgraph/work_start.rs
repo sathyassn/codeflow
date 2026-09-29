@@ -817,8 +817,11 @@ pub(crate) struct PinBranches {
     tips: BTreeMap<String, BTreeMap<String, std::collections::BTreeSet<Oid>>>,
     /// A branch of the task whose tip could not be read.
     unreadable: BTreeMap<String, String>,
-    /// Whether the tree at a revision holds a task's record.
-    holds: std::cell::RefCell<std::collections::HashMap<(Oid, String), Result<bool, String>>>,
+    /// The task ids whose record the graph at a revision holds, parsed once
+    /// per revision however many pins name it.
+    task_ids: std::cell::RefCell<
+        std::collections::HashMap<Oid, Result<std::collections::BTreeSet<String>, String>>,
+    >,
 }
 
 impl PinBranches {
@@ -865,7 +868,7 @@ impl PinBranches {
         Ok(Self {
             tips,
             unreadable,
-            holds: std::cell::RefCell::default(),
+            task_ids: std::cell::RefCell::default(),
         })
     }
 
@@ -926,8 +929,8 @@ impl PinBranches {
         Ok((*name).clone())
     }
 
-    /// Whether the pinned revision holds the pinned task's record, read once
-    /// per revision and task.
+    /// Whether the pinned revision holds the pinned task's record, the
+    /// revision's graph read once.
     ///
     /// # Errors
     /// Refuses a pin whose tree cannot be read or lacks the record.
@@ -936,22 +939,25 @@ impl PinBranches {
         repo: &Repository,
         pin: &ReviewedPin,
     ) -> Result<(), String> {
-        let key = (pin.revision, pin.task_id.clone());
         let holds = self
-            .holds
+            .task_ids
             .borrow_mut()
-            .entry(key)
+            .entry(pin.revision)
             .or_insert_with(|| {
                 super::lifecycle::Graph::from_revision(repo, &pin.revision.to_string()).map(
                     |graph| {
                         graph
                             .records
-                            .get(&pin.task_id)
-                            .is_some_and(|r| r.kind == RecordKind::Task)
+                            .into_iter()
+                            .filter(|(_, record)| record.kind == RecordKind::Task)
+                            .map(|(id, _)| id)
+                            .collect()
                     },
                 )
             })
-            .clone()?;
+            .as_ref()
+            .map_err(Clone::clone)?
+            .contains(&pin.task_id);
         if !holds {
             return Err(format!(
                 "{} pin does not hold that task's record",
@@ -2328,6 +2334,28 @@ mod tests {
         git(dir.path(), &["commit", "-m", "plan"]);
         git(dir.path(), &["switch", "-c", "task/TSK-002-work"]);
         dir
+    }
+
+    /// Pins of different tasks at one revision read that revision's graph
+    /// once: a stack of many reviewed predecessors stays linear.
+    #[test]
+    fn pins_at_one_revision_parse_its_graph_once() {
+        let dir = fixture();
+        git(dir.path(), &["branch", "task/TSK-001-work"]);
+        let repo = Repository::open(dir.path()).unwrap();
+        let revision = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let branches = PinBranches::read(&repo, dir.path()).unwrap();
+        for (task_id, branch) in [
+            ("TSK-001", "task/TSK-001-work"),
+            ("TSK-002", "task/TSK-002-work"),
+        ] {
+            let pin = ReviewedPin {
+                task_id: task_id.into(),
+                revision,
+            };
+            assert_eq!(branches.pin_branch(&repo, &pin).unwrap(), branch);
+        }
+        assert_eq!(branches.task_ids.borrow().len(), 1);
     }
 
     fn replace_on_main(
