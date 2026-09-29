@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 use crate::security::git::is_on_protected_branch;
 use crate::security::SecurityPolicy;
 
+/// Branch prefix for integration lines shared by policy and range checks.
+pub const INTEGRATION_BRANCH_PREFIX: &str = "integration/";
+
 /// Enforcement level for a policy rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -423,7 +426,7 @@ impl Default for GitPolicy {
                 "task/",
                 "spike/",
                 "experiment/",
-                "integration/",
+                INTEGRATION_BRANCH_PREFIX,
             ]
             .iter()
             .map(ToString::to_string)
