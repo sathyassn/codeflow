@@ -3567,3 +3567,327 @@ fn the_release_rule_table_is_a_one_time_bridge() {
 fn the_records_table_is_a_one_time_bridge() {
     the_table_is_a_one_time_bridge("release_records_baseline");
 }
+
+// ---------------------------------------------------------------------------
+// TSK-140 AC-11 to AC-13: brought records judged where they were introduced
+// ---------------------------------------------------------------------------
+
+const SPEC: &str = "project-management/specs/SPC-001.md";
+/// A standalone task on main, completed before the migration: no block.
+const LEGACY: &str = "TSK-007";
+
+fn spec(status: &str) -> String {
+    format!(
+        "---\nid: SPC-001\ntitle: \"a contract\"\nstatus: {status}\nopen_questions: []\ncreated: 2026-09-26\n---\n\n# SPC-001: a contract\n\n## Summary\n\nA contract.\n\n## Acceptance Criteria\n\n- AC-1 When used, the contract shall hold.\n"
+    )
+}
+
+/// A fixture whose main, before either line moves, also holds a draft
+/// SPC-001 and TSK-007 completed without an acceptance block.
+fn records_fixture() -> Fx {
+    let fx = Fx::new(false);
+    fx.git(&["switch", "-q", "main"]);
+    fx.write(SPEC, &spec("draft"));
+    fx.write(
+        &path(LEGACY),
+        &record(
+            LEGACY,
+            "complete",
+            CRITERIA,
+            "Completed before the migration.\n",
+        ),
+    );
+    fx.commit("docs(records): a draft contract and a legacy task");
+    for line in [LINE_A, LINE_B] {
+        fx.git(&["branch", "-f", line, "main"]);
+    }
+    fx.git(&["push", "-q", "--force", "origin", "main", LINE_A, LINE_B]);
+    fx
+}
+
+/// Land a branch cut from `line` that writes `files` (path, content);
+/// returns the landing merge.
+fn land_files(fx: &Fx, line: &str, branch: &str, files: &[(&str, String)]) -> String {
+    fx.git(&["switch", "-q", "-C", branch, line]);
+    for (file, content) in files {
+        fx.write(file, content);
+    }
+    fx.commit("chore: change the line");
+    fx.land(line, branch)
+}
+
+/// The records rule's findings of one run.
+fn records_blocked(result: &(i32, String)) -> bool {
+    result.1.contains("work.records")
+}
+
+/// AC-11: a spec approval brought from a line where a planning-only pull
+/// request landed it is judged at that landing, not refused because the
+/// release range also brings code; an approval landed with code, or made
+/// directly in a range with code, is still refused.
+#[test]
+fn a_brought_spec_approval_is_judged_where_it_landed() {
+    let bring = |approve: &dyn Fn(&Fx)| {
+        let fx = records_fixture();
+        fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+        fx.land(LINE_A, "task/TSK-001-work");
+        approve(&fx);
+        fx.cut_release();
+        fx.import(LINE_A);
+        fx
+    };
+
+    let fx = bring(&|fx| {
+        land_files(fx, LINE_A, "plan/approve", &[(SPEC, spec("approved"))]);
+    });
+    let result = agree(&fx, "a planning-only approval");
+    passes(&result, "an approval landed by a planning pull request");
+    assert!(!records_blocked(&result), "{}", result.1);
+
+    let fx = bring(&|fx| {
+        let landing = land_files(
+            fx,
+            LINE_A,
+            "task/TSK-003-approve",
+            &[
+                (SPEC, spec("approved")),
+                ("src/three.rs", "// three\n".into()),
+            ],
+        );
+        fx.write("landing", &landing);
+    });
+    let landing = std::fs::read_to_string(fx.root.join("landing")).unwrap();
+    blocks(
+        &agree(&fx, "an approval landed with code"),
+        "an approval landed with code",
+        &[
+            "work.records",
+            &format!("SPC-001 became approved on its line at {}", &landing[..9]),
+            "src/three.rs",
+        ],
+    );
+
+    let fx = bring(&|_| {});
+    fx.write(SPEC, &spec("approved"));
+    fx.commit("docs(records): approve the contract on the release line");
+    blocks(
+        &agree(&fx, "a direct approval"),
+        "an approval made directly in a range with code",
+        &[
+            "work.records",
+            "a spec becomes approved only in a planning-only change",
+        ],
+    );
+}
+
+/// Run `codeflow` with `args` in the checkout; it must succeed.
+fn codeflow_ok(fx: &Fx, args: &[&str]) {
+    let out = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .args(args)
+        .current_dir(&fx.root)
+        .output()
+        .unwrap();
+    let (code, text) = output(&out);
+    assert_eq!(code, 0, "codeflow {args:?}:\n{text}");
+}
+
+/// Copy the registry's uids into the checked-out records, the way a line
+/// lands its backfill, and edit TSK-007's Closeout too when `closeout`.
+fn backfill(fx: &Fx, closeout: Option<&str>) {
+    codeflow_ok(fx, &["ids", "backfill"]);
+    if let Some(closeout) = closeout {
+        let legacy = std::fs::read_to_string(fx.root.join(path(LEGACY))).unwrap();
+        fx.write(
+            &path(LEGACY),
+            &legacy.replace("Completed before the migration.\n", closeout),
+        );
+    }
+}
+
+/// AC-12: a record whose only change is a `uid` backfill landed on a
+/// verified line is not re-judged under the current record rules; a
+/// backfill with another change, and a `uid` added directly on the release
+/// line, are judged in full.
+#[test]
+fn a_brought_uid_backfill_is_not_judged_again() {
+    let bring = |closeout: Option<&str>, on_line: bool| {
+        let fx = records_fixture();
+        // A maintainer seeds the shared registry once (TSK-101).
+        codeflow_ok(&fx, &["ids", "seed"]);
+        fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+        fx.land(LINE_A, "task/TSK-001-work");
+        if on_line {
+            fx.git(&["switch", "-q", "-C", "chore/backfill", LINE_A]);
+            backfill(&fx, closeout);
+            fx.commit("chore(records): backfill the uids");
+            fx.land(LINE_A, "chore/backfill");
+        }
+        fx.cut_release();
+        fx.import(LINE_A);
+        if !on_line {
+            backfill(&fx, closeout);
+            fx.commit("chore(records): backfill the uids on the release line");
+        }
+        fx.git(&[
+            "fetch",
+            "-q",
+            "origin",
+            "codeflow/registry:refs/remotes/origin/codeflow/registry",
+        ]);
+        fx
+    };
+
+    let fx = bring(None, true);
+    let result = agree(&fx, "a brought backfill");
+    passes(&result, "a uid backfill landed on the line");
+    assert!(!records_blocked(&result), "{}", result.1);
+
+    let fx = bring(Some("Completed before the migration, amended.\n"), true);
+    blocks(
+        &agree(&fx, "a backfill with another change"),
+        "a backfill that also changes the Closeout",
+        &[
+            "work.records",
+            "a complete record needs an acceptance block",
+        ],
+    );
+
+    let fx = bring(None, false);
+    blocks(
+        &agree(&fx, "a direct uid"),
+        "a uid added directly on the release line",
+        &[
+            "work.records",
+            "a complete record needs an acceptance block",
+        ],
+    );
+}
+
+/// Record `entries` as the records cutoffs on main with the adoption
+/// marker, and publish main.
+fn record_records_cutoffs(fx: &Fx, entries: &str) -> String {
+    fx.git(&["switch", "-q", "main"]);
+    fx.write(
+        ".codeflow/project.toml",
+        &format!("{PROJECT}{MARKER}\n[release_records_baseline]\n{entries}"),
+    );
+    let tip = fx.commit("chore: record the records cutoffs");
+    fx.git(&["push", "-q", "origin", "main"]);
+    tip
+}
+
+/// TSK-003 completed on line A without an acceptance block, as a line did
+/// before the migration; returns the landing.
+fn land_legacy_completion(fx: &Fx, branch: &str) -> String {
+    land_files(
+        fx,
+        LINE_A,
+        branch,
+        &[(
+            &path("TSK-003"),
+            record(
+                "TSK-003",
+                "complete",
+                CRITERIA,
+                "Completed before the migration.\n",
+            ),
+        )],
+    )
+}
+
+/// AC-13: a brought complete task without an acceptance block, whose record
+/// last changed on its line at or before the line's records cutoff, is
+/// listed as information; after the cutoff, under another line's cutoff,
+/// with a cutoff off the line's chain, landed from an old base after the
+/// cutoff, or with a malformed entry, it is refused. No block is written.
+#[test]
+fn a_legacy_record_at_or_before_the_records_cutoff_is_information() {
+    let fx = Fx::new(false);
+    let landing = land_legacy_completion(&fx, "chore/legacy");
+    let policy = record_records_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{landing}\"\n"));
+    fx.cut_release();
+    fx.import(LINE_A);
+    let result = agree(&fx, "a covered legacy record");
+    passes(&result, "a legacy record at its line's cutoff");
+    let note = format!(
+        "legacy record, completed before the release rule: TSK-003 on {LINE_A}, landing {}, cutoff {}, policy main at {}",
+        &landing[..9],
+        &landing[..9],
+        &policy[..9]
+    );
+    assert!(result.1.contains(&note), "{}", result.1);
+    assert!(fx.pre_push_release().1.contains(&note), "the hook shows it");
+    let written = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
+    assert!(!written.contains("acceptance:"), "no block is written");
+
+    let refused = |fx: &Fx, what: &str| {
+        blocks(
+            &agree(fx, what),
+            what,
+            &[
+                "work.records",
+                "a complete record needs an acceptance block",
+            ],
+        );
+    };
+
+    // After the cutoff.
+    let fx = Fx::new(false);
+    let before = fx.git(&["rev-parse", LINE_A]);
+    land_legacy_completion(&fx, "chore/legacy");
+    record_records_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{before}\"\n"));
+    fx.cut_release();
+    fx.import(LINE_A);
+    refused(&fx, "a legacy record landed after the cutoff");
+
+    // Another line's cutoff.
+    let fx = Fx::new(false);
+    let landing = land_legacy_completion(&fx, "chore/legacy");
+    record_records_cutoffs(&fx, &format!("\"{LINE_B}\" = \"{landing}\"\n"));
+    fx.cut_release();
+    fx.import(LINE_A);
+    refused(&fx, "a cutoff recorded for another line");
+
+    // A cutoff off the line's chain: line B's sync of line A.
+    let fx = Fx::new(false);
+    land_legacy_completion(&fx, "chore/legacy");
+    fx.git(&["switch", "-q", LINE_B]);
+    let sync = fx.merge(LINE_A);
+    fx.git(&["push", "-q", "origin", LINE_B]);
+    record_records_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{sync}\"\n"));
+    fx.cut_release();
+    fx.import(LINE_A);
+    refused(&fx, "a cutoff off the line's chain");
+
+    // A topic branched from an old base, landed after the cutoff.
+    let fx = Fx::new(false);
+    fx.git(&["switch", "-q", "-C", "chore/old-base", LINE_A]);
+    fx.write(
+        &path("TSK-003"),
+        &record(
+            "TSK-003",
+            "complete",
+            CRITERIA,
+            "Completed before the migration.\n",
+        ),
+    );
+    fx.commit("docs(records): an old completion");
+    let cutoff = fx.amend_on_line(LINE_A, "TSK-004", STRONGER);
+    fx.land(LINE_A, "chore/old-base");
+    record_records_cutoffs(&fx, &format!("\"{LINE_A}\" = \"{cutoff}\"\n"));
+    fx.cut_release();
+    fx.import(LINE_A);
+    refused(&fx, "an old-base topic landed after the cutoff");
+
+    // A malformed entry fails closed.
+    let fx = Fx::new(false);
+    land_legacy_completion(&fx, "chore/legacy");
+    record_records_cutoffs(&fx, &format!("\"{LINE_A}\" = \"abc123\"\n"));
+    fx.cut_release();
+    fx.import(LINE_A);
+    blocks(
+        &agree(&fx, "a malformed records cutoff"),
+        "a malformed entry",
+        &["release_records_baseline entry for", "full 40-character"],
+    );
+}

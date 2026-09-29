@@ -482,7 +482,7 @@ impl Baseline {
 
 /// `content` without the frontmatter `uid:` line `ids backfill` writes, or
 /// `None` when its frontmatter has no such line.
-fn without_backfilled_uid(content: &str) -> Option<String> {
+pub(super) fn without_backfilled_uid(content: &str) -> Option<String> {
     let mut lines = content.split_inclusive('\n');
     let first = lines.next()?;
     if first.trim_end() != "---" {
@@ -710,7 +710,33 @@ pub struct ChangeContext<'a> {
     /// judged per commit so a reopen and re-completion inside one range is
     /// still seen (R-83).
     pub reopened: Option<&'a BTreeSet<String>>,
+    /// On a release range, the records it brings from verified lines, each
+    /// judged where it was introduced there (SPC-013 R-120).
+    pub brought: Option<&'a Brought>,
 }
+
+/// A release range's brought records, each judged where it was introduced
+/// on its line instead of across the whole range (SPC-013 R-120, TSK-140
+/// AC-11 to AC-13). Only a record every change of which the range brings
+/// from a verified line is listed; a record the range also changes
+/// directly is judged in full.
+#[derive(Debug, Clone, Default)]
+pub struct Brought {
+    /// Records whose only change is the `uid` line `ids backfill` writes,
+    /// landed on a line: the backfill was judged there, and the uid checks
+    /// judge the line on their own.
+    pub backfills: BTreeSet<String>,
+    /// Specs brought `approved` or `superseded`: the problem of the landing
+    /// that made the change on the line, `None` when it was planning-only.
+    pub approvals: BTreeMap<String, Option<String>>,
+    /// Complete tasks without an acceptance block whose record last changed
+    /// on their line at or before its records cutoff: the notice that lists
+    /// each as information.
+    pub legacy: BTreeMap<String, String>,
+}
+
+/// The finding a legacy record's notice replaces (TSK-140 AC-13).
+const NO_BLOCK: &str = "a complete record needs an acceptance block in its Closeout";
 
 /// Paths a planning-only change may touch (R-70).
 const PLANNING_PATHS: [&str; 2] = ["project-management/", "docs/plan/"];
@@ -1382,7 +1408,13 @@ fn context_problems(
     if after.kind != RecordKind::Spec || !moved || !matches!(to, "approved" | "superseded") {
         return problems;
     }
-    if let Some(paths) = context.changed_paths {
+    if let Some(landing) = context
+        .brought
+        .and_then(|brought| brought.approvals.get(&after.id))
+    {
+        // Brought from a line: judged where it landed there.
+        problems.extend(landing.iter().cloned());
+    } else if let Some(paths) = context.changed_paths {
         let product: Vec<&str> = paths
             .iter()
             .map(String::as_str)
@@ -1456,17 +1488,21 @@ pub fn judge_change(
     } else {
         baseline.mode(after)
     };
-    verdict.apply(
-        mode,
-        &after.path,
-        // A record the change adds is new whatever history the checkout has.
-        state_problems(
-            after,
-            graph,
-            before.is_none() || baseline.is_new(after),
-            mode != Mode::Strict && baseline.completed_before(after),
-        ),
+    // A record the change adds is new whatever history the checkout has.
+    let mut state = state_problems(
+        after,
+        graph,
+        before.is_none() || baseline.is_new(after),
+        mode != Mode::Strict && baseline.completed_before(after),
     );
+    if context
+        .brought
+        .is_some_and(|brought| brought.legacy.contains_key(&after.id))
+    {
+        // Listed as information instead (SPC-013 R-120, TSK-140 AC-13).
+        state.retain(|problem| !problem.starts_with(NO_BLOCK));
+    }
+    verdict.apply(mode, &after.path, state);
     verdict.apply(
         Mode::Strict,
         &after.path,
@@ -1487,7 +1523,7 @@ pub fn judge_change(
 ///
 /// Returns a message when the repository or a revision cannot be read.
 pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<Verdict, String> {
-    judge_range_against(repo_root, base, base, head)
+    judge_range_against(repo_root, base, base, head, None)
 }
 
 /// [`judge_range`] with the records diffed from `base` and the governing
@@ -1498,6 +1534,7 @@ fn judge_range_against(
     base: &str,
     target: &str,
     head: Option<&str>,
+    brought: Option<&Brought>,
 ) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let target_commit = resolve_commit(&repo, target)
@@ -1524,14 +1561,27 @@ fn judge_range_against(
         base: Some(&before),
         changed_paths: Some(&paths),
         reopened: Some(&reopened),
+        brought,
     };
     let mut verdict = Verdict {
         notices,
         ..Verdict::default()
     };
+    if let Some(brought) = brought {
+        verdict.notices.extend(
+            brought
+                .legacy
+                .values()
+                .map(|notice| Finding::new(notice.clone(), remedy::RELEASE_LEGACY_RECORD.remedy())),
+        );
+    }
     verdict.warnings.extend(baseline.warning());
     verdict.errors.extend(baseline.errors());
     for record in after.records.values() {
+        if brought.is_some_and(|brought| brought.backfills.contains(&record.id)) {
+            // A `uid` backfill landed on a line was judged there.
+            continue;
+        }
         let olds: Vec<&RecordView> = match base_graph.records.get(&record.id) {
             Some(old) if old.content == record.content && !reopened.contains(&record.id) => {
                 continue
@@ -1738,6 +1788,40 @@ pub fn judge_pull_request_under(
         &anchor.to_string(),
         &target.to_string(),
         Some(head),
+        None,
+    )
+}
+
+/// [`judge_pull_request_under`] for a release range: each record in
+/// `brought` is judged where it was introduced on its line (SPC-013 R-120).
+///
+/// # Errors
+///
+/// Returns a message when a revision or the merge-base cannot be resolved.
+pub fn judge_release_range(
+    repo_root: &Path,
+    base: &str,
+    head: &str,
+    authority: &str,
+    brought: &Brought,
+) -> Result<Verdict, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let commit = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| format!("{revision}: {}", error.message()))
+    };
+    let target = commit(authority)?;
+    let anchor = repo
+        .merge_base(commit(base)?, commit(head)?)
+        .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
+    judge_range_against(
+        repo_root,
+        &anchor.to_string(),
+        &target.to_string(),
+        Some(head),
+        Some(brought),
     )
 }
 

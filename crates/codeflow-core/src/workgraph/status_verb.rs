@@ -154,6 +154,7 @@ pub fn set_status(
             base: base.as_ref(),
             changed_paths: paths.as_deref(),
             reopened: None,
+            brought: None,
         },
     );
     if !verdict.is_clean() {

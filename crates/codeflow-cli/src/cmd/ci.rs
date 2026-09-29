@@ -303,12 +303,39 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut ran,
     );
 
+    let into = args
+        .into
+        .clone()
+        .or_else(|| detect_target(|k| std::env::var(k).ok().filter(|v| !v.is_empty())))
+        .or_else(|| args.base.as_deref().and_then(named_branch));
+    let destination = args.destination.clone().or_else(|| origin_url(&root));
+    let advertisement = if args.advertisement_stdin {
+        let mut listed = String::new();
+        if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
+            eprintln!(
+                "codeflow ci: cannot read the destination's advertisement from stdin: {error}"
+            );
+            return 2;
+        }
+        Some(listed)
+    } else {
+        None
+    };
+    let names = Names {
+        branch: &branch,
+        into: into.as_deref(),
+        destination: destination.as_deref(),
+        advertisement: advertisement.as_deref(),
+        release: std::cell::OnceCell::new(),
+    };
+
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     record_checks(
         &root,
         &base_candidates,
         &head,
         args.baseline_from.as_deref(),
+        &names,
         &mut tagged,
         &mut ran,
     );
@@ -332,34 +359,11 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
-    let into = args
-        .into
-        .clone()
-        .or_else(|| detect_target(|k| std::env::var(k).ok().filter(|v| !v.is_empty())))
-        .or_else(|| args.base.as_deref().and_then(named_branch));
-    let destination = args.destination.clone().or_else(|| origin_url(&root));
-    let advertisement = if args.advertisement_stdin {
-        let mut listed = String::new();
-        if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
-            eprintln!(
-                "codeflow ci: cannot read the destination's advertisement from stdin: {error}"
-            );
-            return 2;
-        }
-        Some(listed)
-    } else {
-        None
-    };
     let tracked_claim = work_checks(
         &root,
         git,
         pr_body.as_deref(),
-        &Names {
-            branch: &branch,
-            into: into.as_deref(),
-            destination: destination.as_deref(),
-            advertisement: advertisement.as_deref(),
-        },
+        &names,
         &base_candidates,
         &head,
         &mut tagged,
@@ -531,10 +535,35 @@ fn record_checks(
     base_candidates: &[String],
     head: &str,
     authority: Option<&str>,
+    names: &Names<'_>,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
-    work_records::dispatch(root, base_candidates, head, authority, tagged, ran);
+    // On a release range, the records it brings are judged where each was
+    // introduced on its line (SPC-013 R-120).
+    let brought = base_candidates
+        .iter()
+        .find_map(|name| rev_parse(root, name).map(|sha| (name.as_str(), sha)))
+        .and_then(|(base_ref, base)| {
+            acceptance::brought(
+                root,
+                &classification::Range {
+                    base_ref,
+                    base: &base,
+                    head,
+                },
+                names,
+            )
+        });
+    work_records::dispatch(
+        root,
+        base_candidates,
+        head,
+        authority,
+        brought.as_ref(),
+        tagged,
+        ran,
+    );
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
 }
 
@@ -1313,6 +1342,16 @@ pub(super) struct Names<'a> {
     pub destination: Option<&'a str>,
     /// The destination's advertisement, when the caller already asked it.
     pub advertisement: Option<&'a str>,
+    /// The release scope, asked once per run and shared by the checks.
+    pub release: std::cell::OnceCell<
+        Result<
+            Option<(
+                codeflow_core::workgraph::release_line::Destination,
+                codeflow_core::workgraph::release_line::Scope,
+            )>,
+            String,
+        >,
+    >,
 }
 
 /// Auto-detect the target branch NAME of a pull request. Verified variable

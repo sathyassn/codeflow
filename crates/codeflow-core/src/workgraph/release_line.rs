@@ -45,7 +45,7 @@ use super::acceptance::{
     BINDING_RULE, FROZEN_RULE,
 };
 use super::classify::is_planning_path;
-use super::lifecycle::{Graph, RecordView};
+use super::lifecycle::{Brought, Graph, RecordView};
 use super::work_start::{record_kind_for_tree_path, RecordKind};
 
 /// The `role` value of the task that owns direct release work.
@@ -932,6 +932,9 @@ pub struct Judgement {
     /// Information that refuses nothing: each legacy criteria change, landed
     /// on its line at or before the release-rule baseline.
     pub notes: Vec<String>,
+    /// The records the range brings from verified lines, for the records
+    /// rule to judge where each was introduced.
+    pub brought: Brought,
 }
 
 /// The judgement of a release range from `base` to `head`: every commit of
@@ -1009,6 +1012,10 @@ pub fn release_findings(
     // Each task's brought completions: see [`Held`].
     let mut brought_completions: BTreeMap<String, Held> = BTreeMap::new();
     let mut report = Vec::new();
+    // Each record path an import brought, with the parent it came from, and
+    // each record path a direct change or a resolution touched.
+    let mut record_sources: BTreeMap<String, Oid> = BTreeMap::new();
+    let mut direct_records: BTreeSet<String> = BTreeSet::new();
 
     for commit_oid in &path {
         let commit = repo
@@ -1053,6 +1060,26 @@ pub fn release_findings(
                         "merge {at} resolves {first}{more} differently from the import it brings"
                     ),
                 });
+            }
+            // A resolution is a direct change, even with no first-parent
+            // diff.
+            direct_records.extend(
+                resolutions
+                    .iter()
+                    .filter(|path| record_kind_for_tree_path(path).is_some())
+                    .map(|path| (*path).clone()),
+            );
+            for path in changed.keys() {
+                if record_kind_for_tree_path(path).is_none() || resolutions.contains(&path) {
+                    continue;
+                }
+                if let Some(source) = commit
+                    .parent_ids()
+                    .skip(1)
+                    .find(|parent| entry_at(&repo, *parent, path) == after.get(path).copied())
+                {
+                    record_sources.insert(path.clone(), source);
+                }
             }
             for path in &resolutions {
                 if record_kind_for_tree_path(path) != Some(RecordKind::Task) {
@@ -1205,6 +1232,12 @@ pub fn release_findings(
             continue;
         }
         // Direct: a commit, or a merge with a parent that is no import.
+        direct_records.extend(
+            changed
+                .keys()
+                .filter(|path| record_kind_for_tree_path(path).is_some())
+                .cloned(),
+        );
         let planning_only = changed.keys().all(|path| is_planning_path(path));
         report.push(format!(
             "{at}: {}{}",
@@ -1380,11 +1413,149 @@ pub fn release_findings(
     );
     let mut seen = HashSet::new();
     findings.retain(|found| seen.insert((found.rule, found.message.clone())));
+    record_sources.retain(|path, _| !direct_records.contains(path));
+    let brought = brought_records(
+        &repo,
+        &mut lines,
+        &bridge.records,
+        &policy_at,
+        anchor,
+        head_oid,
+        &record_sources,
+    );
     Ok(Judgement {
         findings,
         path: report,
         notes,
+        brought,
     })
+}
+
+/// A path's full tree entry at `commit`, when it has one.
+fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Option<Entry> {
+    let entry = repo
+        .find_commit(commit)
+        .ok()?
+        .tree()
+        .ok()?
+        .get_path(Path::new(path))
+        .ok()?;
+    Some((entry.id(), entry.filemode().cast_unsigned()))
+}
+
+/// Where a brought change landed on its line: walking `source`'s
+/// first-parent chain, the first commit whose first parent no longer
+/// `holds` it.
+fn landing_on_line(repo: &Repository, source: Oid, holds: &dyn Fn(Oid) -> bool) -> Oid {
+    let mut at = source;
+    while let Some(parent) = repo
+        .find_commit(at)
+        .ok()
+        .and_then(|commit| commit.parent_id(0).ok())
+        .filter(|parent| holds(*parent))
+    {
+        at = parent;
+    }
+    at
+}
+
+/// The records the range brings wholly from verified lines (every change
+/// to them an import brought), each judged where it was introduced there:
+/// a `uid` backfill, a spec's approval or supersession at the landing that
+/// made it, and a complete task without an acceptance block against its
+/// line's records cutoff (SPC-013 R-120, TSK-140 AC-11 to AC-13).
+fn brought_records(
+    repo: &Repository,
+    lines: &mut Lines<'_>,
+    cutoffs: &BTreeMap<String, Oid>,
+    policy_at: &str,
+    anchor: Oid,
+    head: Oid,
+    sources: &BTreeMap<String, Oid>,
+) -> Brought {
+    let mut brought = Brought::default();
+    for (path, source) in sources {
+        let Some(kind) = record_kind_for_tree_path(path) else {
+            continue;
+        };
+        let parse = |content: &str| RecordView::parse(kind, path, content).ok();
+        let Some(now) = blob_at(repo, head, path).as_deref().and_then(parse) else {
+            continue;
+        };
+        let then = blob_at(repo, anchor, path).as_deref().and_then(parse);
+        if then.as_ref().is_some_and(|then| {
+            super::lifecycle::without_backfilled_uid(&now.content).as_deref()
+                == Some(then.content.as_str())
+        }) {
+            brought.backfills.insert(now.id.clone());
+            continue;
+        }
+        let status_at = |oid: Oid| {
+            blob_at(repo, oid, path)
+                .as_deref()
+                .and_then(parse)
+                .map(|record| record.status)
+        };
+        if kind == RecordKind::Spec
+            && matches!(now.status.as_str(), "approved" | "superseded")
+            && then.as_ref().is_none_or(|then| then.status != now.status)
+        {
+            let landing = landing_on_line(repo, *source, &|oid| {
+                status_at(oid).as_deref() == Some(now.status.as_str())
+            });
+            let problem = match super::acceptance::non_planning_change(
+                repo,
+                repo.find_commit(landing)
+                    .ok()
+                    .and_then(|commit| commit.parent_id(0).ok()),
+                landing,
+            ) {
+                Ok(None) => None,
+                Ok(Some(changed)) => Some(format!(
+                    "a spec becomes {} only in a planning-only change (project-management/ and docs/plan/); {} became {} on its line at {}, which also changes {changed}",
+                    now.status,
+                    now.id,
+                    now.status,
+                    short(landing)
+                )),
+                Err(error) => Some(format!(
+                    "the landing {} that made {} {} on its line cannot be read: {}",
+                    short(landing),
+                    now.id,
+                    now.status,
+                    error.message()
+                )),
+            };
+            brought.approvals.insert(now.id.clone(), problem);
+        }
+        if kind == RecordKind::Task && now.status == "complete" && now.active_blocks().is_empty() {
+            let Some(line) = now
+                .integration_target
+                .as_deref()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            else {
+                continue;
+            };
+            let Some(cutoff) = cutoffs.get(line) else {
+                continue;
+            };
+            let blob = blob_at(repo, head, path);
+            let landing = landing_on_line(repo, *source, &|oid| blob_at(repo, oid, path) == blob);
+            if lines.uncovered(line, *cutoff, landing).is_none() {
+                brought.legacy.insert(
+                    now.id.clone(),
+                    format!(
+                        "legacy record, completed before the release rule: {} on {line}, landing {}, cutoff {}, policy {policy_at}",
+                        now.id,
+                        short(landing),
+                        short(*cutoff)
+                    ),
+                );
+            }
+        }
+    }
+    brought
 }
 
 /// A criteria change made directly on the release line.
@@ -1758,6 +1929,8 @@ impl<'r> History<'r> {
 struct Bridge {
     /// Release-rule cutoffs ([`BASELINE_KEY`]), by line.
     rules: BTreeMap<String, Oid>,
+    /// Records cutoffs ([`RECORDS_BASELINE_KEY`]), by line.
+    records: BTreeMap<String, Oid>,
 }
 
 /// Read the default target's first-parent history at `tip` once: the
@@ -1862,8 +2035,9 @@ fn bridge(
             }
         }
     }
-    let rules = tables.swap_remove(0);
-    Ok(Bridge { rules })
+    let records = tables.pop().unwrap_or_default();
+    let rules = tables.pop().unwrap_or_default();
+    Ok(Bridge { rules, records })
 }
 
 fn bridge_refusal(key: &str, default: &str, condition: &str) -> String {
