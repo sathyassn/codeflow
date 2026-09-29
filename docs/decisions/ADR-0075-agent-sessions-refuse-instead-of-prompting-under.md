@@ -361,3 +361,77 @@ rows.
   `git-init(1)`, `git-config(1)`, `git-merge-tree(1)`, `git-fetch(1)`,
   `git-pull(1)` at <https://git-scm.com/docs>.
 - Review record: settings review rounds 1 to 6, Grok round 4 and the EPC-018 reconciliation, 2026-09-28; the operator's decisions D7 to D10 of 2026-09-28; Codex rounds 7 to 9 and Grok rounds 5 and 6.
+
+## Amendment, 2026-09-29: guard the commands without a separate state system
+
+TSK-188 replaces the guard work in TSK-172 and the planned mechanisms in
+TSK-174 and TSK-175. This note supersedes the earlier delivery schedule and
+architecture description where they differ. Version 3.0.0 is still pending;
+its earlier delivery note records the implementation before this amendment.
+The pending changelog now includes these guard fixes in 3.0.0.
+
+Decisions 1, 2, 3 and 7 remain: no ask rules in agent sessions; guards judge
+parsed commands and edits; guards fail closed at every tier; and the
+operator owns enforcement settings. TSK-188 carries decision 2's wrappers,
+leading flags, interpreter forms, loss of local-only work and edit-guard.
+TSK-189 carries decision 3's fail-closed hooks and contract checks. Keeping
+decision 3 does not claim that TSK-188 has shipped those checks. Opaque
+programs that launch children remain outside command parsing; a hook or a
+native deny list is not an operating-system boundary.
+
+Decision 6 is amended. A delegated seat denies an unsandboxed retry through
+its native configuration. A primary's permitted retry remains subject to
+the seat's native permissions and to exec-guard and git-guard judging the
+retried command. There is no argument-bound retry allowlist, executable
+pinning store or separate retry approval mechanism. A refusal is not a
+reason to choose another spelling or launcher. This replaces the allowlist
+reading of ADR-0029 above; it does not authorize an otherwise refused
+action.
+
+D7's Herdr list remains unshipped workspace practice. Its enforcement clause
+is withdrawn: CodeFlow does not implement Herdr subcommand, key or slash-
+command grammar enforcement. The workspace's briefing and trust practice
+may still use `herdr agent prompt` and its stated restrictions, but those
+instructions are not a guard guarantee. An unavailable route is reported
+as unavailable; it does not authorize a shell-pane or approval bypass.
+
+Decisions 4, 5 and 8 are dropped:
+
+- Decision 4's readiness receipts and admission pins would add a session
+  state protocol without proving that a seat-writable receipt was genuine.
+  Native launch evidence and the existing route preflight remain; no
+  receipt store is introduced.
+- Decision 5's external baseline, binding registry, enrollment, approval
+  identities and fixture-root authority would add a second policy system.
+  TSK-189 instead owns the landed-policy source and its tracking-ref
+  protections. It applies the stricter policy from the configured remote's
+  default branch and the declared target. Its no-remote fallback and other
+  residuals are stated in that task; this note does not claim that those
+  checks are already implemented by TSK-188.
+- Decision 8's operator-actions queue duplicates the host's record of work
+  waiting on the operator. A refusal names the operator's route, and the
+  session records the blocker in the existing task or status report while
+  continuing authorized work. No queue file, writer or automatic replay is
+  introduced. Earlier statements that an action is queued no longer apply.
+
+D10's operator-admitted fixture root and `ready (fixture)` status are also
+withdrawn. The evaluation flow retains disposable marked fixtures,
+trial-specific containment, local fixture remotes, evidence preserved
+outside the fixture and cleanup limited to the run's marked roots. These
+are the evaluation flow's containment rules, not a new production guard
+policy or authority store.
+
+D4's proposed `security.headless_opt_in` mechanism is dropped. Existing
+policy files may still carry the key: validation accepts it with a clear
+deprecation warning, enforcement ignores it, and `codeflow update` removes
+it. Removing the unused Rust structure does not invalidate adopter policy.
+`security.headless_peer_runs` remains the single configurable policy level
+for headless peer runs, including interpreter forms. Changing that level
+does not change the interactive-only consult, delegate and qualification
+contracts. Native deny rules are independent and still apply.
+
+TSK-188 owns the corresponding retry, deletion and route-availability text
+from TSK-164 AC-1, AC-4 and AC-7. TSK-189 owns the policy-source,
+fail-closed, integration and hook-trust text in AC-2, AC-3 and AC-6. TSK-190
+owns the Codex launch-profile changes. No dropped mechanism is a
+prerequisite to those tasks.

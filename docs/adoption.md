@@ -596,11 +596,14 @@ shell access as credential-bearing and tighten that task's tool boundary.
 - Claude's project preset enables a fail-closed OS sandbox, autonomous
   sandbox-contained Bash, web search/fetch, wildcard public-domain egress for
   dependency/tool subprocesses, and local port binding for dev/UI tests;
-  common private, link-local, and internal-name destinations remain denied. It
-  permits an auto-classified unsandboxed retry only after sandbox failure and
-  only for a trusted installed tool that needs host state, such as the official
-  Codex plugin. Arbitrary unsandboxed commands remain out of bounds, and
-  destructive, privileged, publish, and secret-read boundaries remain. Claude deliberately ignores repository
+  common private, link-local, and internal-name destinations remain denied. A primary's retry outside the sandbox must be permitted by
+  its native
+  configuration, and the guards judge the retried command under the same
+  policy. Delegated seats deny that retry natively. CodeFlow has no pinned
+  retry allowlist or Herdr command grammar; the named Herdr list is
+  unshipped workspace practice. A retry does not lift a destructive,
+  privileged, publishing, secret-read or enforcement-file refusal. Claude deliberately ignores
+  repository
   requests for auto mode and classifier policy, so a Codex-hosted peer launches
   interactively with `--permission-mode auto` and CLI-scoped
   `autoMode.classifyAllShell`; `/cf-customize` can offer the equivalent user
@@ -643,6 +646,43 @@ scope, and non-goals—not the CodeFlow CLI. `docs/architecture.md` describes ho
 that project is built. Common project facts, commands, and constraints belong in
 `AGENTS.md`; `CLAUDE.md` carries only Claude-specific differences. CodeFlow does
 not introduce a competing `project.md` or `projects.md`.
+
+### Refusals and operator relief
+
+The native permission presets and the in-session guards are separate
+checks. Removing a native deny does not disable a guard. Adding an ask
+rule does not override a native deny. An operator who changes project
+policy must account for both; the agent does not edit enforcement files
+to clear its own refusal.
+
+Under the shipped defaults, guards refuse the parsed wrapped, flag-led
+and interpreter forms of privilege escalation, package or gist
+publishing, release and tag changes, repository or account changes,
+secret-store reads and user-level persistence. Git-guard also refuses
+loss of local-only work, and edit-guard refuses enforcement-path edits
+through Codex `apply_patch` and Grok `write` or `search_replace`. These
+checks judge supported commands and payloads; they cannot inspect every
+opaque child program. Ordinary builds, a task-branch push and an explicit
+single-file restore remain ordinary work.
+
+A refusal names the policy rule and the operator's route. Project relief
+uses that rule's existing policy level, such as
+`security.privilege_escalation`, `security.outward_actions`,
+`security.secret_reads` or `git.discard_uncommitted`, together with any
+native deny that still applies. Interpreter syntax does not create a
+second permission for the underlying action. In particular,
+`security.headless_peer_runs` is the only policy-level relief for a
+headless peer run. Existing `security.headless_opt_in` is accepted but
+ignored with a deprecation warning; `codeflow update` removes it. The
+consult, delegate and model-qualification flows remain interactive-only
+regardless of that configurable level. The catastrophic
+`security.dangerous_commands` floor cannot be lowered.
+
+TSK-189 separately changes where guards read policy and makes missing or
+older hooks fail closed. TSK-188 does not provide those guarantees. There
+is no enforcement-baseline enrollment, guard-readiness receipt or
+operator-actions queue to configure. Keep an operator-dependent blocker
+in the existing task or status report and continue authorized work.
 
 ## The daily flow
 

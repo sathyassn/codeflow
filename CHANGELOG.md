@@ -57,9 +57,9 @@ publication date._
   setup-git, token, refresh and logout, and `git credential`; keychain
   reads; and user-level persistence (`defaults write`, `launchctl`,
   `crontab -e` and `-r`, `systemctl enable`, registry writes). The deny
-  rules match these commands as written; another spelling, such as `cargo
-  +stable publish` or `git push origin v1.2.3`, is not refused in this
-  release. Codex gets `.codex/rules/codeflow.rules`, and its `cf-guard`
+  rules match these commands as written; exec-guard and git-guard also
+  parse covered wrappers, leading flags and tag-push spellings, including
+  `cargo +stable publish` and `git push origin v1.2.3`. Codex gets `.codex/rules/codeflow.rules`, and its `cf-guard`
   profile now runs the network proxy, with a `cf-builder` profile defined
   beside it but not selected (tested on Codex 0.157.1; earlier versions
   are unqualified). Grok gets `.grok/sandbox.toml`, written only when
@@ -71,11 +71,12 @@ publication date._
   `codex exec`, `grok -p`) and a privilege launcher run directly, chained
   or wrapped in a shell `-c` string or `eval`; a shell string that reaches
   no launcher, `source` and `LD_LIBRARY_PATH` are not refused. The policy
-  file also carries the keys planned for later guard checks
-  (`script_bypass`, `outward_actions`, `interpreter_scan`, `secret_reads`,
+  file carries `outward_actions` and `secret_reads` for their action
+  families. Interpreter forms use the underlying action's policy level.
+  The reserved keys `script_bypass`, `interpreter_scan`,
   `enforcement_baseline`, `workflow_pushes`, `sandbox_retry` and
-  `sandbox_retry_allow`), and `headless_opt_in` is accepted; no check
-  reads any of them in 3.0.0.
+  `sandbox_retry_allow` remain unread. Legacy `headless_opt_in` is
+  accepted but ignored with a warning; `codeflow update` removes it.
   - Order: install the new `codeflow` on `PATH`, then run `codeflow
     update`. Update merges the permission arrays three ways against the
     last shipped copy: a rule the preset retired is removed, the 2.x ask
@@ -1111,6 +1112,28 @@ publication date._
   section of `AGENTS.md` untouched.
 
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **Agent-session refusal coverage.** Exec-guard and git-guard apply the
+  existing action-family policy to parsed wrappers, leading flags,
+  interpreter forms and tag-push spellings. Git-guard refuses covered
+  discards of local-only work. Codex `apply_patch` and Grok `write` and
+  `search_replace` pass enforcement-path edits through the new
+  `codeflow hook edit-guard`; ordinary edits remain available. Refusals
+  name the rule and the operator's route. These command and payload
+  checks do not inspect opaque child programs.
+  - Relief stays with the underlying action's policy level and the
+    harness's independent native deny rules. `security.headless_peer_runs`
+    is the sole policy-level relief for a headless peer run; the unread
+    `security.headless_opt_in` structure remains accepted but ignored,
+    with a warning and removal on `codeflow update`. The built-in
+    catastrophic-command floor is unchanged.
+  - ADR-0075 drops the proposed readiness receipts, external enforcement
+    baseline, operator-actions queue and fixture-root admission. A
+    primary's permitted sandbox retry is judged by native permissions
+    and the guards; delegated seats deny the retry natively. Herdr's
+    named list remains workspace practice. Landed-policy authority and
+    fail-closed hooks are separate TSK-189 work.
 
 <!-- codeflow:release-impact patch -->
 - **An approved spec is amended until it ships, and frozen after.** The
