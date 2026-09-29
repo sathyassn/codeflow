@@ -341,7 +341,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "a40e3229e8b8dc471f3109d45888b12ce0a4ebb8cc866cb1de0c61232b22f036",
+      "sha256": "881c837ab8a0f4a9767ff67b9b2a5ba4b4605b7766ab49a34d01afd707d6954d",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -1001,7 +1001,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "a40e3229e8b8dc471f3109d45888b12ce0a4ebb8cc866cb1de0c61232b22f036",
+      "sha256": "881c837ab8a0f4a9767ff67b9b2a5ba4b4605b7766ab49a34d01afd707d6954d",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
