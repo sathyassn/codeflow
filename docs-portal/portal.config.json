@@ -31,6 +31,7 @@
   ],
   "page_classes": [
     { "source": "docs/glossary.md", "class": "pass-through", "reason": "no-relationship", "note": "A table of term definitions with links; no relationship between terms needs drawing." },
+    { "source": "docs/workspace-mode.md", "class": "illustrated" },
     { "source": "docs/skills.md", "class": "derived-lookup", "derive": "skill-catalog" },
     { "source": "docs/policy-reference.md", "class": "derived-lookup", "derive": "policy-reference" },
     { "source": "docs/CONTRIBUTING.md", "class": "pass-through", "reason": "governance" },
@@ -60,6 +61,7 @@
     { "declaration": "docs-portal/figures/cap-015/architecture.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "architecture" },
     { "declaration": "docs-portal/figures/cap-015/technical.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "technical" },
     { "declaration": "docs-portal/figures/cap-015/howto-adopt.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "technical", "anchor": "adopt-and-build-the-portal" },
+    { "declaration": "docs-portal/figures/workspace-mode/layout.json", "route": "guides/workspace-mode" },
     { "declaration": "docs-portal/figures/delivery/concept.json", "route": "guides/delivery", "panel": "concept" },
     { "declaration": "docs-portal/figures/delivery/architecture.json", "route": "guides/delivery", "panel": "architecture" },
     { "declaration": "docs-portal/figures/delivery/technical.json", "route": "guides/delivery", "panel": "technical" },
