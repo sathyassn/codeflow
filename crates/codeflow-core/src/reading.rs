@@ -272,22 +272,11 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "high-blast-radius action stops the host and follows",
         "only before a catastrophic or irreversible action",
     ),
-    conditional(
-        ORCH_SKILL,
-        "cf-model-orchestrator/references/other-hosts.md",
-        "| Grok Build, or another harness including Hermes |",
-        "only on a Grok Build or other host",
-    ),
-    conditional(
-        ORCH_SKILL,
-        "cf-model-orchestrator/references/other-hosts.md",
-        "Grok, when a Grok seat is used",
-        "only when a Grok seat is used",
-    ),
     // TSK-150 (audit row H24): the Grok host detail is read before a Grok
-    // preflight or launch.
+    // preflight or launch. TSK-184: the other-hosts reference merged into the
+    // orchestrator's seat section.
     conditional(
-        "cf-model-orchestrator/references/other-hosts.md",
+        ORCH_SKILL,
         "cf-model-orchestrator/resources/grok-host.md",
         "Before a Grok preflight or launch, also read",
         "only before a Grok preflight or launch",
@@ -328,6 +317,14 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         ORGANIZATION,
         "for new-project boundary choices, brownfield adoption, monorepos",
         "only for project-organization choices; an obvious bounded task needs none",
+    ),
+    // TSK-184: the delivery process narrative is read when a body of work
+    // is shaped, a batch lands or something changes midway, never per task.
+    conditional(
+        "cf-method/references/workflow-lifecycle.md",
+        "cf-method/references/delivery-process.md",
+        "When you shape a body of work, land a batch or handle a change midway, read",
+        "only when shaping a body of work, landing a batch or handling a change midway",
     ),
     conditional(
         "cf-method/SKILL.md",
@@ -475,21 +472,18 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "| when the run is research, analysis or planning only |",
         "only for a research, analysis or planning-only run",
     ),
+    // TSK-184: the assignment record moved into the plan section.
     conditional(
-        "cf-model-orchestrator/resources/routing/assignment.md",
+        "cf-model-orchestrator/resources/quality/plan.md",
         ROUTE_STATUS,
         "Qualifying a route, or claiming scoped qualification",
         "only when a route is qualified or a qualification, promotion or savings claim is made",
     ),
+    // TSK-184: the host routes merged into the orchestrator's seat section;
+    // the worker effort preflight joined its preflight, whose adapter read is
+    // recorded above.
     conditional(
-        "cf-model-orchestrator/resources/routing/effort.md",
-        TURN_ADAPTER,
-        "On a Codex, Grok or other non-Claude host, before launching a Claude worker",
-        "the turn adapter is read on a host that launches Claude through the \
-         delegated lifecycle",
-    ),
-    conditional(
-        "cf-model-orchestrator/resources/routing/hosts.md",
+        ORCH_SKILL,
         ROUTING_DESIGN,
         "when a task has product, UX, UI, interaction, or visual design work",
         "only for product, UX, UI, interaction, or visual design work",
@@ -626,7 +620,6 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     ".codeflow/rules/writing.md",
     ".codeflow/schemas/present/document-v1.schema.json",
     ".codeflow/schemas/present/utility-tokens-v1.schema.json",
-    "${CODEFLOW_HOME:-$HOME/.codeflow}/herdr-runs/<repo>.json",
     "DIR/settings.json",
     "result.json",
     "turns/<turn>/continuations/<task-id>/accepted.json",
