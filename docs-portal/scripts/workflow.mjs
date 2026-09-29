@@ -15,7 +15,7 @@ await withSignalAwareChildLifecycle(async (lifecycle) => {
     if (workflow === "check") {
       const stale = await lockDigestFailure(root);
       if (stale !== null) throw new Error(stale);
-      await run(lifecycle, process.execPath, ["--test", "tests/adapter.test.mjs", "tests/composition.test.mjs", "tests/chrome.test.mjs"]);
+      await run(lifecycle, process.execPath, ["--test", "tests/adapter.test.mjs", "tests/composition.test.mjs", "tests/chrome.test.mjs", "tests/site-server.test.mjs"]);
     }
     if (workflow !== "preview") await run(lifecycle, process.execPath, ["scripts/adapter.mjs"]);
     await run(lifecycle, process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), workflow]);

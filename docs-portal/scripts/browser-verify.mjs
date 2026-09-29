@@ -1,8 +1,6 @@
 import { verifyChrome } from "./chrome-verify.mjs";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,16 +8,16 @@ import AxeBuilder from "@axe-core/playwright";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertGeneratorIdentity } from "./generator.mjs";
-import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
+import { withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { PORTAL_ACCENT_BACKGROUNDS, pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
 import { REGENERATE, RUNTIME_SCRIPTS_FILE, allowedInlineScripts, scriptSha256 } from "./runtime-scripts.mjs";
 import { canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "./figure-grammar.mjs";
 import { ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
+import { serveBuiltSite } from "./site-server.mjs";
 
 const root = process.cwd();
-const MAX_SERVER_OUTPUT_BYTES = 64 * 1024;
 const MAX_RESULT_ERROR_BYTES = 16 * 1024;
 const MAX_RESULTS_BYTES = 1024 * 1024;
 const MAX_BROWSER_EVIDENCE_BYTES = 64 * 1024 * 1024;
@@ -70,22 +68,17 @@ async function verifyPortal(lifecycle) {
   await mkdir(output);
   await assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]);
 
-  const port = await availablePort();
-  const origin = `http://127.0.0.1:${port}`;
+  // The built pages are served in this process with no idle close, so no
+  // page request can be sent on a socket the server has just closed
+  // (site-server.mjs).
+  const site = await serveBuiltSite({ directory: path.join(root, "dist"), base: config.base });
+  const removeSiteCleanup = lifecycle.addCleanup(() => site.close());
+  const { origin } = site;
+  const port = Number(new URL(origin).port);
   const siteRoot = new URL(config.base, origin).toString();
-  const server = spawn(process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), "preview", "--host", "127.0.0.1", "--port", String(port)], {
-    cwd: root,
-    env: hardenedChildEnvironment(process.env, { BROWSER: "none" }),
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const untrackServer = lifecycle.trackChild(server);
-  let serverOutput = Buffer.alloc(0);
-  server.stdout.on("data", (chunk) => { serverOutput = appendBounded(serverOutput, chunk, MAX_SERVER_OUTPUT_BYTES); });
-  server.stderr.on("data", (chunk) => { serverOutput = appendBounded(serverOutput, chunk, MAX_SERVER_OUTPUT_BYTES); });
 
   const results = [];
   try {
-    await waitForServer(siteRoot, server, () => serverOutput.toString("utf8"));
     for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
       lifecycle.throwIfInterrupted();
       results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, declarations, kitSheets, inlineScripts, lifecycle }));
@@ -94,8 +87,8 @@ async function verifyPortal(lifecycle) {
     lifecycle.throwIfInterrupted();
     results.push({ engine: "preview", status: "failed", error: boundedError(error) });
   } finally {
-    await stopChild(server, "SIGTERM");
-    untrackServer();
+    await site.close();
+    removeSiteCleanup();
   }
 
   lifecycle.throwIfInterrupted();
@@ -966,6 +959,7 @@ export function observePortalPage(page) {
     const headersOf = (table) => [...table.querySelectorAll("thead th")].map((cell) => cell.textContent.trim());
     const folderTable = tables.find((table) => headersOf(table).join("\u0000") === columns.join("\u0000")) ?? null;
     return {
+      pageClassMarker: document.querySelector(".portal-source")?.getAttribute("data-cf-page-class") ?? null,
       headings: [...document.querySelectorAll("h1")].filter(shown).length,
       provenance: [...document.querySelectorAll(".portal-provenance")].some(shown),
       displayControls: [...document.querySelectorAll('[data-testid="portal-display-btn"]')].filter(shown).length,
@@ -1403,12 +1397,6 @@ export function assertArtifactClaims(claimed, actual, phase) {
   if (JSON.stringify(expected) !== JSON.stringify(observed)) throw new Error(`current dist bytes do not match commit-bound artifact claims ${phase}`);
 }
 
-export function appendBounded(current, chunk, maximum) {
-  const next = Buffer.concat([current, Buffer.from(chunk)]);
-  if (next.length <= maximum) return next;
-  return next.subarray(next.length - maximum);
-}
-
 export function boundedError(error) {
   const bytes = Buffer.from(String(error?.stack ?? error));
   if (bytes.length <= MAX_RESULT_ERROR_BYTES) return bytes.toString("utf8");
@@ -1502,26 +1490,6 @@ async function evidenceInventory(directory, { exclude, artifactBytes, totalBytes
 
 function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-function availablePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close((error) => error ? reject(error) : resolve(address.port));
-    });
-  });
-}
-
-async function waitForServer(base, processHandle, output) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (processHandle.exitCode !== null) throw new Error(`portal preview exited before readiness: ${output()}`);
-    if (await fetch(base).then((response) => response.ok, () => false)) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`portal preview did not become ready: ${output()}`);
 }
 
 // The entry point runs last, once every module-level binding is initialized:

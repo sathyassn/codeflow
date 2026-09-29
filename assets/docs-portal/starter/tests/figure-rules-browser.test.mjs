@@ -1,7 +1,8 @@
 // Each of the twelve figure rules, read off a real render. The figures render
 // with the portal's own sheets, so what the probe reads is what a reader sees.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -9,8 +10,31 @@ import { chromium, firefox, webkit } from "@playwright/test";
 import { bindDerivedData, canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { specimen, specimens } from "./page-shapes.mjs";
+import { serveBuiltSite } from "../scripts/site-server.mjs";
 
 const styles = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/styles");
+
+test("495 navigations complete against the verifier server", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "cf-portal-stall-"));
+  await mkdir(path.join(directory, "page"));
+  await writeFile(path.join(directory, "page", "index.html"), "<!doctype html><title>Probe</title><p>Ready</p>");
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    const site = await serveBuiltSite({ directory });
+    try {
+      const page = await browser.newPage();
+      for (let index = 0; index < 495; index += 1) {
+        const response = await page.goto(`${site.origin}/page/?n=${index}`, { waitUntil: "load", timeout: 10_000 });
+        assert.equal(response.status(), 200, `navigation ${index}`);
+        assert.equal(await page.locator("p").innerText(), "Ready");
+      }
+      await page.close();
+    } finally { await site.close(); }
+  } finally {
+    await browser.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 // The sheets carry the portal's own faces inline, so text boxes are measured
 // in the fonts a reader gets, not an engine's fallback: Firefox reports a
@@ -113,6 +137,36 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
     const fact = layering.figure.facts[0];
     assert.ok(rulesOf(clean, { facts: [{ claim: fact.claim, source: fact.source, drawn: fact.value, derived: false, matches: false }] }).includes(6));
     assert.ok(rulesOf(clean, { facts: [], data: null }).includes(6));
+  } finally { await browser.close(); }
+});
+
+test("a vertical end cap moved down the side fails rule 2", { skip: process.platform === "win32" }, async () => {
+  const layering = await specimen("03-layering.json");
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    const page = await browser.newPage();
+    const css = await sheet();
+    const html = renderFigure(layering, { idPrefix: "cap" });
+    assert.deepEqual(figureRuleFailures(await probe(page, css, html)), []);
+    const side = await probe(page, css, html, () => {
+      document.querySelector(".cf-fig-svg--narrow .cf-m-cap").setAttribute("d", "M293 160H303V272H293Z");
+    });
+    assert.ok(figureRuleFailures(side).some(({ rule, message }) => rule === 2 && message.includes("cap must span the short axis")));
+  } finally { await browser.close(); }
+});
+
+test("sequence lane labels stay inside the SVG at 375 px", { skip: process.platform === "win32" }, async () => {
+  const sequence = await specimen("04-sequence.json");
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    const page = await browser.newPage({ viewport: { width: 375, height: 850 } });
+    await page.setContent(`<style>${await sheet()} body{margin:0}main{padding:0 8px}</style><main>${renderFigure(sequence, { idPrefix: "seq" })}</main>`);
+    const labels = await page.locator(".cf-fig-svg--narrow text").evaluateAll((nodes) => nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      const svg = node.ownerSVGElement.getBoundingClientRect();
+      return { label: node.textContent, left: box.left - svg.left, right: svg.right - box.right };
+    }));
+    assert.ok(labels.every(({ left, right }) => left >= -1 && right >= -1), JSON.stringify(labels));
   } finally { await browser.close(); }
 });
 

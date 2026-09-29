@@ -789,9 +789,15 @@ function markParts(item, markName, mark) {
   if (item.cap === "end") {
     if (item.shape !== "rect") throw new Error("a cap closes a bar");
     const { x, y, w, h } = item;
-    const rx = Math.min(item.rx ?? 0, h / 2, 6);
-    const start = x + w - 14;
-    parts.push(`<path class="cf-m-cap" d="M${num(start)} ${num(y)}H${num(x + w - rx)}Q${num(x + w)} ${num(y)} ${num(x + w)} ${num(y + rx)}V${num(y + h - rx)}Q${num(x + w)} ${num(y + h)} ${num(x + w - rx)} ${num(y + h)}H${num(start)}Z"/>`);
+    if (h > w) {
+      const rx = Math.min(item.rx ?? 0, w / 2, 6);
+      const start = y + h - 14;
+      parts.push(`<path class="cf-m-cap" d="M${num(x)} ${num(start)}H${num(x + w)}V${num(y + h - rx)}Q${num(x + w)} ${num(y + h)} ${num(x + w - rx)} ${num(y + h)}H${num(x + rx)}Q${num(x)} ${num(y + h)} ${num(x)} ${num(y + h - rx)}Z"/>`);
+    } else {
+      const rx = Math.min(item.rx ?? 0, h / 2, 6);
+      const start = x + w - 14;
+      parts.push(`<path class="cf-m-cap" d="M${num(start)} ${num(y)}H${num(x + w - rx)}Q${num(x + w)} ${num(y)} ${num(x + w)} ${num(y + rx)}V${num(y + h - rx)}Q${num(x + w)} ${num(y + h)} ${num(x + w - rx)} ${num(y + h)}H${num(start)}Z"/>`);
+    }
   }
   const crossClass = mark.cross ?? "cf-m-cross";
   if (item.cross !== undefined || mark.cross !== undefined) {
@@ -1138,6 +1144,7 @@ export function probeFigures(options) {
       marks: [],
       texts: [],
       geometry: [],
+      caps: [],
       collisions: [],
       signatures: {},
     };
@@ -1177,6 +1184,17 @@ export function probeFigures(options) {
         const drawn = group.tagName.toLowerCase() === "g" ? [...group.children].filter((node) => DRAWN.includes(node.tagName.toLowerCase())) : [group];
         if (!drawn.length) continue;
         const [primary, ...extras] = drawn;
+        const cap = extras.find((node) => node.classList.contains("cf-m-cap"));
+        if (primary.tagName.toLowerCase() === "rect" && cap) {
+          const barBox = primary.getBBox();
+          const capBox = cap.getBBox();
+          record.caps.push({
+            state,
+            bar: [barBox.x, barBox.y, barBox.width, barBox.height],
+            cap: [capBox.x, capBox.y, capBox.width, capBox.height],
+            scale: scaleOf(primary),
+          });
+        }
         const token = {
           interior: interiorOf(primary, ground),
           edge: edgeOf(primary, ground),
@@ -1353,6 +1371,16 @@ export function figureRuleFailures({ wide, narrow, wideDark = null, narrowDark =
     for (const [a, b] of pairs(Object.keys(record.states))) {
       const differing = channelDifferences(record.states[a], record.states[b]);
       if (differing.length < THRESHOLDS.minChannels) add(3, `${label}: states ${a} and ${b} differ on ${differing.length ? differing.join(", ") : "no channel"}, need ${THRESHOLDS.minChannels}`);
+    }
+    for (const { state, bar, cap, scale } of record.caps) {
+      const tolerance = 1 / scale;
+      const vertical = bar[3] > bar[2];
+      if (vertical) {
+        if (cap[1] < bar[1] + bar[3] - 14 - tolerance || cap[0] > bar[0] + tolerance || cap[0] + cap[2] < bar[0] + bar[2] - tolerance)
+          add(2, `${label}: the ${state} cap must span the short axis at the foot of the vertical bar`);
+      } else if (cap[0] < bar[0] + bar[2] - 14 - tolerance || cap[1] > bar[1] + tolerance || cap[1] + cap[3] < bar[1] + bar[3] - tolerance) {
+        add(2, `${label}: the ${state} cap must span the short axis at the end of the horizontal bar`);
+      }
     }
   }
   for (const [light, dark, label] of [[wide, wideDark, "wide"], [narrow, narrowDark, "narrow"]]) {

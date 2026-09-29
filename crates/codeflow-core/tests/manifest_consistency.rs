@@ -956,8 +956,9 @@ fn portal_bundle_is_single_complete_and_bounded() {
     let browser = std::fs::read_to_string(bundle.join("scripts/browser-verify.mjs"))
         .expect("portal browser verifier is readable");
     assert!(
-        browser.contains("env: hardenedChildEnvironment(process.env, { BROWSER: \"none\" })")
-            && browser.contains("env: hardenedChildEnvironment(),"),
+        browser.contains(
+            "serveBuiltSite({ directory: path.join(root, \"dist\"), base: config.base })"
+        ) && browser.contains("env: hardenedChildEnvironment(),"),
         "portal preview and browser children must receive the shared allowlisted environment"
     );
     assert!(

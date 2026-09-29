@@ -1044,6 +1044,7 @@ fn verify_page_class(
     match class {
         EXPLANATORY => {
             if let Some(output) = rendered {
+                verify_explanatory_marker(route, output, report);
                 verify_rendered_figures(page, output, body.as_deref(), declarations, report);
             }
             if page.source_region.is_some() || page.lookup.is_some() {
@@ -1068,6 +1069,14 @@ fn verify_page_class(
             )),
             (Some(_), None) => {}
         },
+    }
+}
+
+fn verify_explanatory_marker(route: &str, output: &str, report: &mut PortalValidationReport) {
+    if !output.contains("data-cf-page-class=\"explanatory\"") {
+        report.issues.push(format!(
+            "{route} explanatory built page lacks data-cf-page-class"
+        ));
     }
 }
 
@@ -2233,6 +2242,21 @@ mod tests {
                 "{heading}: {issues:?}"
             );
         }
+    }
+
+    #[test]
+    fn explanatory_built_route_requires_its_page_class_marker() {
+        let built = "<html><body><div class=\"portal-source\" data-cf-page-class=\"explanatory\">Guide</div></body></html>";
+        let mut report = PortalValidationReport::default();
+        verify_explanatory_marker("orient/guide", built, &mut report);
+        assert!(report.issues.is_empty());
+
+        let removed = built.replace(" data-cf-page-class=\"explanatory\"", "");
+        verify_explanatory_marker("orient/guide", &removed, &mut report);
+        assert_eq!(
+            report.issues,
+            ["orient/guide explanatory built page lacks data-cf-page-class"]
+        );
     }
 
     /// A whole illustrated portal, written the way the adapter writes one: a

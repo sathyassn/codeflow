@@ -5,12 +5,11 @@
 // are applied to what actually renders.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { createServer } from "node:http";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { chromium } from "@playwright/test";
+import { chromium, firefox, webkit } from "@playwright/test";
 import { sha256 } from "../scripts/lib.mjs";
 import { figureGateFailures, finishTrace, observePortalPage, pageCssFailures, pinnedBuiltSheets, pinnedDeclarations, pinnedKitSheets, pinnedRuntimeScripts } from "../scripts/browser-verify.mjs";
 import { REGENERATE, builtRuntimeScripts } from "../scripts/runtime-scripts.mjs";
@@ -18,6 +17,7 @@ import { drawnValuesMatch } from "../scripts/figure-grammar.mjs";
 import { GitSnapshot } from "../scripts/git-snapshot.mjs";
 import { classifyPortalPages, declaredCarrierFailures, pageClassFailures } from "../scripts/page-classes.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
+import { serveBuiltSite } from "../scripts/site-server.mjs";
 import { COMPOSED_PAGE, FIGURE_FACTS_PATH, SHELL_PAGE, panelBindings, specimen, writeFigureInputs } from "./page-shapes.mjs";
 import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture, starterRoot } from "./portal-fixture.mjs";
 
@@ -98,27 +98,6 @@ async function reconfigure(root, overrides, message) {
   commitFixture(root, message);
 }
 
-// Serves the built site the way the preview does, so the figure sheet, the
-// container queries and the theme tokens all load.
-async function serve(directory) {
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url, "http://127.0.0.1");
-    let file = path.join(directory, decodeURIComponent(url.pathname));
-    try { if ((await stat(file)).isDirectory()) file = path.join(file, "index.html"); } catch { /* not found below */ }
-    try {
-      const body = await readFile(file);
-      const type = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".json": "application/json" }[path.extname(file)] ?? "application/octet-stream";
-      response.writeHead(200, { "content-type": type });
-      response.end(body);
-    } catch {
-      response.writeHead(404);
-      response.end();
-    }
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { origin: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve) => server.close(resolve)) };
-}
-
 // `browser:verify` awaits its entry point at the top level, so a module-level
 // binding declared below it is read before initialization. The first consumer
 // build with bound figures failed that way; the entry point must come last.
@@ -179,7 +158,7 @@ test("the adapter refuses a figure binding it can prove wrong from committed inp
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("the mixed fixture renders every class and the gates name only what falls short", { skip: process.platform === "win32", timeout: 900_000 }, async () => {
+test("the mixed fixture renders every class and the gates name only what falls short", { skip: process.platform === "win32", timeout: 2_700_000 }, async (context) => {
   const root = await mixedFixture();
   try {
     const adapted = runLocalAdapter(root);
@@ -245,230 +224,238 @@ test("the mixed fixture renders every class and the gates name only what falls s
     const config = JSON.parse(await readFile(path.join(root, "portal.config.json"), "utf8"));
     const assignments = classifyPortalPages(config, evidence.pages);
     assert.deepEqual(declaredCarrierFailures(config, assignments), []);
-    const site = await serve(path.join(root, "dist"));
-    const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+    // Each engine reads the built site through the verifier's own server.
+    const site = await serveBuiltSite({ directory: path.join(root, "dist") });
     try {
-      const page = await browser.newPage();
-      const visitRoute = async (route) => { await page.goto(`${site.origin}/${route}/`, { waitUntil: "networkidle" }); };
-      const observations = [];
-      for (const assignment of assignments) {
-        await visitRoute(assignment.route);
-        observations.push({ route: assignment.route, ...await observePortalPage(page) });
-      }
-      // The composed page, the illustrated guide with its figures, the
-      // pass-through record and the broken figure's page all carry their
-      // class; the bare illustrated source and the plain page do not.
-      assert.deepEqual(pageClassFailures(assignments, observations), [
-        "docs/bare.md (illustrated source at reference/bare) lacks a companion figure at the page head: no figure drawn above the source",
-        "docs/plain.md (explanatory page at reference/plain) lacks the altitude trio concept, architecture, technical: missing concept, architecture, technical; present none",
-      ]);
+      for (const [engineName, engine] of Object.entries({ chromium, firefox, webkit })) {
+        await context.test(engineName, async () => {
+          const browser = await engine.launch({ headless: true, env: hardenedChildEnvironment() });
+          try {
+          const page = await browser.newPage();
+          const visitRoute = async (route) => { await page.goto(`${site.origin}/${route}/`, { waitUntil: "networkidle" }); };
+          const observations = [];
+          for (const assignment of assignments) {
+            await visitRoute(assignment.route);
+            observations.push({ route: assignment.route, ...await observePortalPage(page) });
+          }
+          // The composed page, the illustrated guide with its figures, the
+          // pass-through record and the broken figure's page all carry their
+          // class; the bare illustrated source and the plain page do not.
+          assert.deepEqual(pageClassFailures(assignments, observations), [
+            "docs/bare.md (illustrated source at reference/bare) lacks a companion figure at the page head: no figure drawn above the source",
+            "docs/plain.md (explanatory page at reference/plain) lacks the altitude trio concept, architecture, technical: missing concept, architecture, technical; present none",
+          ]);
 
-      const snapshot = new GitSnapshot(path.resolve(root, config.repository_root));
-      const declarations = pinnedDeclarations(snapshot, evidence.repository.commit, evidence);
-      assert.equal(declarations.size, 6);
-      const misrecorded = structuredClone(evidence);
-      misrecorded.figures[0].declaration_sha256 = "0".repeat(64);
-      assert.throws(() => pinnedDeclarations(snapshot, evidence.repository.commit, misrecorded), new RegExp(`figure declaration ${misrecorded.figures[0].declaration_path} does not match its recorded hash`));
-      const kitSheets = pinnedKitSheets(snapshot, evidence.repository.commit, path.relative(path.resolve(root, config.repository_root), root));
-      const inlineScripts = pinnedRuntimeScripts(snapshot, evidence.repository.commit, path.relative(path.resolve(root, config.repository_root), root), config.theme);
-      // The committed list of the runtime's inline scripts is what a fresh
-      // build of this lockfile emits; when either moves, regenerate it.
-      const committedScripts = JSON.parse(await readFile(path.join(root, "scripts/runtime-scripts.json"), "utf8"));
-      assert.deepEqual(await builtRuntimeScripts(path.join(root, "dist"), config.theme, committedScripts), committedScripts.scripts, `scripts/runtime-scripts.json is stale against a fresh build; run: ${REGENERATE}`);
-      assert.equal(committedScripts.lock_sha256, sha256(await readFile(path.join(root, "package-lock.json"))), `scripts/runtime-scripts.json was built from another lockfile; run: ${REGENERATE}`);
-      // The clean control: the real build, with the site's own sheets and
-      // chrome styles, fails only the figure built to break a rule.
-      const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, built, declarations, kitSheets, inlineScripts);
-      assert.equal(drawn, 7);
-      assert.ok(failures.length > 0);
-      for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
-      assert.deepEqual(failures.filter((failure) => /served page|page CSS|executable content|clean copy|not visible to a reader|effective opacity|legend key sits|twin marker/.test(failure)), []);
-      assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states layer and layer-remote differ on overlay, need 2/.test(failure)), failures.join("\n"));
+          const snapshot = new GitSnapshot(path.resolve(root, config.repository_root));
+          const declarations = pinnedDeclarations(snapshot, evidence.repository.commit, evidence);
+          assert.equal(declarations.size, 6);
+          const misrecorded = structuredClone(evidence);
+          misrecorded.figures[0].declaration_sha256 = "0".repeat(64);
+          assert.throws(() => pinnedDeclarations(snapshot, evidence.repository.commit, misrecorded), new RegExp(`figure declaration ${misrecorded.figures[0].declaration_path} does not match its recorded hash`));
+          const kitSheets = pinnedKitSheets(snapshot, evidence.repository.commit, path.relative(path.resolve(root, config.repository_root), root));
+          const inlineScripts = pinnedRuntimeScripts(snapshot, evidence.repository.commit, path.relative(path.resolve(root, config.repository_root), root), config.theme);
+          // The committed list of the runtime's inline scripts is what a fresh
+          // build of this lockfile emits; when either moves, regenerate it.
+          const committedScripts = JSON.parse(await readFile(path.join(root, "scripts/runtime-scripts.json"), "utf8"));
+          assert.deepEqual(await builtRuntimeScripts(path.join(root, "dist"), config.theme, committedScripts), committedScripts.scripts, `scripts/runtime-scripts.json is stale against a fresh build; run: ${REGENERATE}`);
+          assert.equal(committedScripts.lock_sha256, sha256(await readFile(path.join(root, "package-lock.json"))), `scripts/runtime-scripts.json was built from another lockfile; run: ${REGENERATE}`);
+          // The clean control: the real build, with the site's own sheets and
+          // chrome styles, fails only the figure built to break a rule.
+          const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, built, declarations, kitSheets, inlineScripts);
+          assert.equal(drawn, 7);
+          assert.ok(failures.length > 0);
+          for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
+          assert.deepEqual(failures.filter((failure) => /served page|page CSS|executable content|clean copy|not visible to a reader|effective opacity|legend key sits|twin marker/.test(failure)), []);
+          assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states layer and layer-remote differ on overlay, need 2/.test(failure)), failures.join("\n"));
 
-      // Page CSS (R3-2, R4-1, R4-2). Each rule is refused at its source, as a
-      // stylesheet that is not a built sheet, and is also seen by the checks
-      // behind that: every computed property against a clean copy of the page,
-      // the ancestors of each figure, and the figure's visibility.
-      const guideOnly = assignments.filter((assignment) => assignment.route === "reference/guide");
-      const hostile = async (change) => (await figureGateFailures(page, async (route) => { await visitRoute(route); await page.evaluate(change.inject, change.css); }, guideOnly, built, declarations, kitSheets, inlineScripts)).failures;
-      const addSheet = (css) => document.head.append(Object.assign(document.createElement("style"), { textContent: css }));
-      const onGuide = /^docs\/guide\.md \(at reference\/guide(?:, (?:page head|#[^,]+), figures\/(?:commit-limits|install-steps)\.json)?\): /;
-      const cases = [
-        [".cf-fig { opacity: 0; }", /<figure class="cf-fig[^"]*"> computes opacity 0 where the clean copy computes 1/, /the figure is not visible to a reader/],
-        [".cf-companion { opacity: 0; }", /<div class="cf-companion[^"]*"> computes opacity 0 where the clean copy computes 1/, /an ancestor <div class="cf-companion[^"]*"> has opacity 0 where the clean copy has 1/],
-        [".cf-fig { clip-path: inset(50%); }", /<figure class="cf-fig[^"]*"> computes clip-path inset\(50%\) where the clean copy computes none/],
-        [".cf-fig { filter: opacity(0); }", /<figure class="cf-fig[^"]*"> computes filter opacity\(0\) where the clean copy computes none/],
-        [".cf-fig-caption { visibility: hidden; }", /<figcaption class="cf-fig-caption"> computes visibility hidden where the clean copy computes visible/, /the caption is not visible to a reader/],
-        // The title line is part of the figure (SPC-014 B5): hiding it fails
-        // the figure however the rest of the page reads.
-        [".cf-fig-title { visibility: hidden; }", /<p class="cf-fig-title"> computes visibility hidden where the clean copy computes visible/, /the title is not visible to a reader/],
-        [".cf-fig { translate: 0 1000px; }", /<figure class="cf-fig[^"]*"> computes translate 0px 1000px where the clean copy computes none/],
-        [".cf-fig-svg .cf-m-trans { stroke-dasharray: 0 100000; }", /computes stroke-dasharray 0px, 100000px where the clean copy computes none/],
-        [".cf-m-used { translate: 0 1000px; }", /a drawn <rect> has translate 0px 1000px where the kit sheets alone give none/, /the row-0 mark spans y/],
-      ];
-      for (const [css, ...expected] of cases) {
-        const failures = await hostile({ inject: addSheet, css });
-        assert.ok(failures.some((failure) => onGuide.test(failure) && /page CSS: a stylesheet from a <style> element in the head is not a built sheet/.test(failure)), `${css}: ${failures.join("\n")}`);
-        for (const pattern of expected) assert.ok(failures.some((failure) => onGuide.test(failure) && / rule 6 \(/.test(failure) && pattern.test(failure)), `${css} ${pattern}: ${failures.join("\n")}`);
-      }
-      // Starlight's content rules reach into a companion that does not opt
-      // out of them: the list rule pushes each legend key 10px above its
-      // label and the details rule paints the Details marker as a dot. The clean
-      // copy carries the same site styles, so only the absolute reading of
-      // the legend and the marker sees it, at every width and mode.
-      const opted = await hostile({ inject: () => { for (const companion of document.querySelectorAll(".cf-companion")) companion.classList.remove("not-content"); }, css: null });
-      for (const [width, mode] of [[1440, "light"], [390, "light"], [1440, "dark"], [390, "dark"]]) {
-        const where = `docs/guide.md (at reference/guide, ${width}px ${mode}): figure install-steps: `;
-        assert.ok(opted.some((failure) => failure.startsWith(where) && /the [a-z-]+ legend key sits \d+(?:\.\d)?px above its label/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
-        assert.ok(opted.some((failure) => failure.startsWith(where) && /the Details marker is not the figure sheet's chevron/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
-      }
+          // Page CSS (R3-2, R4-1, R4-2). Each rule is refused at its source, as a
+          // stylesheet that is not a built sheet, and is also seen by the checks
+          // behind that: every computed property against a clean copy of the page,
+          // the ancestors of each figure, and the figure's visibility.
+          const guideOnly = assignments.filter((assignment) => assignment.route === "reference/guide");
+          const hostile = async (change) => (await figureGateFailures(page, async (route) => { await visitRoute(route); await page.evaluate(change.inject, change.css); }, guideOnly, built, declarations, kitSheets, inlineScripts)).failures;
+          const addSheet = (css) => document.head.append(Object.assign(document.createElement("style"), { textContent: css }));
+          const onGuide = /^docs\/guide\.md \(at reference\/guide(?:, (?:page head|#[^,]+), figures\/(?:commit-limits|install-steps)\.json)?\): /;
+          const cases = [
+            [".cf-fig { opacity: 0; }", /<figure class="cf-fig[^"]*"> computes opacity 0 where the clean copy computes 1/, /the figure is not visible to a reader/],
+            [".cf-companion { opacity: 0; }", /<div class="cf-companion[^"]*"> computes opacity 0 where the clean copy computes 1/, /an ancestor <div class="cf-companion[^"]*"> has opacity 0 where the clean copy has 1/],
+            [".cf-fig { clip-path: inset(50%); }", /<figure class="cf-fig[^"]*"> computes clip-path inset\(50%\) where the clean copy computes none/],
+            [".cf-fig { filter: opacity(0); }", /<figure class="cf-fig[^"]*"> computes filter opacity\(0\) where the clean copy computes none/],
+            [".cf-fig-caption { visibility: hidden; }", /<figcaption class="cf-fig-caption"> computes visibility hidden where the clean copy computes visible/, /the caption is not visible to a reader/],
+            // The title line is part of the figure (SPC-014 B5): hiding it fails
+            // the figure however the rest of the page reads.
+            [".cf-fig-title { visibility: hidden; }", /<p class="cf-fig-title"> computes visibility hidden where the clean copy computes visible/, /the title is not visible to a reader/],
+            [".cf-fig { translate: 0 1000px; }", /<figure class="cf-fig[^"]*"> computes translate 0px 1000px where the clean copy computes none/],
+            [".cf-fig-svg .cf-m-trans { stroke-dasharray: 0 100000; }", /computes stroke-dasharray 0px, 100000px where the clean copy computes none/],
+            [".cf-m-used { translate: 0 1000px; }", /a drawn <rect> has translate 0px 1000px where the kit sheets alone give none/, /the row-0 mark spans y/],
+          ];
+          for (const [css, ...expected] of cases) {
+            const failures = await hostile({ inject: addSheet, css });
+            assert.ok(failures.some((failure) => onGuide.test(failure) && /page CSS: a stylesheet from a <style> element in the head is not a built sheet/.test(failure)), `${css}: ${failures.join("\n")}`);
+            for (const pattern of expected) assert.ok(failures.some((failure) => onGuide.test(failure) && / rule 6 \(/.test(failure) && pattern.test(failure)), `${css} ${pattern}: ${failures.join("\n")}`);
+          }
+          // Starlight's content rules reach into a companion that does not opt
+          // out of them: the list rule pushes each legend key 10px above its
+          // label and the details rule paints the Details marker as a dot. The clean
+          // copy carries the same site styles, so only the absolute reading of
+          // the legend and the marker sees it, at every width and mode.
+          const opted = await hostile({ inject: () => { for (const companion of document.querySelectorAll(".cf-companion")) companion.classList.remove("not-content"); }, css: null });
+          for (const [width, mode] of [[1440, "light"], [390, "light"], [1440, "dark"], [390, "dark"]]) {
+            const where = `docs/guide.md (at reference/guide, ${width}px ${mode}): figure install-steps: `;
+            assert.ok(opted.some((failure) => failure.startsWith(where) && /the [a-z-]+ legend key sits \d+(?:\.\d)?px above its label/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
+            assert.ok(opted.some((failure) => failure.startsWith(where) && /the Details marker is not the figure sheet's chevron/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
+          }
 
-      // A style attribute on the content, the figure's ancestor, is refused
-      // at its source and seen on the ancestor chain.
-      const attributed = await hostile({ inject: () => document.querySelector(".sl-markdown-content").setAttribute("style", "opacity: 0.5"), css: null });
-      assert.ok(attributed.some((failure) => /page CSS: a style attribute on <div class="sl-markdown-content[^"]*"> carries CSS the site's sheets do not/.test(failure)), attributed.join("\n"));
-      assert.ok(attributed.some((failure) => /an ancestor <div class="sl-markdown-content[^"]*"> has opacity 0\.5 where the clean copy has 1/.test(failure)), attributed.join("\n"));
+          // A style attribute on the content, the figure's ancestor, is refused
+          // at its source and seen on the ancestor chain.
+          const attributed = await hostile({ inject: () => document.querySelector(".sl-markdown-content").setAttribute("style", "opacity: 0.5"), css: null });
+          assert.ok(attributed.some((failure) => /page CSS: a style attribute on <div class="sl-markdown-content[^"]*"> carries CSS the site's sheets do not/.test(failure)), attributed.join("\n"));
+          assert.ok(attributed.some((failure) => /an ancestor <div class="sl-markdown-content[^"]*"> has opacity 0\.5 where the clean copy has 1/.test(failure)), attributed.join("\n"));
 
-      // Executable content (R5-1). The review's CSSOM insertion leaves the
-      // served sheet unchanged, so only its rule list and the figure's own
-      // visibility can show it; handlers and scripts in the content are
-      // refused where they stand.
-      const insertRule = () => { const sheet = [...document.styleSheets].find((candidate) => candidate.media.mediaText !== "print"); sheet.insertRule(".cf-fig {opacity:0}", sheet.cssRules.length); };
-      const inserted = await hostile({ inject: insertRule, css: null });
-      assert.ok(inserted.some((failure) => /page CSS: the stylesheet \/_astro\/common\.[^ ]+\.css holds \d+ rules that are not the \d+ its served bytes parse to/.test(failure)), inserted.join("\n"));
-      assert.ok(inserted.some((failure) => /rule 6 .*: wide: the figure is not visible to a reader/.test(failure)), inserted.join("\n"));
-      const handler = await hostile({ inject: () => document.querySelector(".sl-markdown-content p").setAttribute("onclick", "void 0"), css: null });
-      assert.ok(handler.some((failure) => /executable content: an event-handler attribute on <p>/.test(failure)), handler.join("\n"));
-      const script = await hostile({ inject: () => document.querySelector(".sl-markdown-content").append(Object.assign(document.createElement("script"), { textContent: "void 0" })), css: null });
-      assert.ok(script.some((failure) => /executable content: a <script> element in the page content/.test(failure)), script.join("\n"));
+          // Executable content (R5-1). The review's CSSOM insertion leaves the
+          // served sheet unchanged, so only its rule list and the figure's own
+          // visibility can show it; handlers and scripts in the content are
+          // refused where they stand.
+          const insertRule = () => { const sheet = [...document.styleSheets].find((candidate) => candidate.media.mediaText !== "print"); sheet.insertRule(".cf-fig {opacity:0}", sheet.cssRules.length); };
+          const inserted = await hostile({ inject: insertRule, css: null });
+          assert.ok(inserted.some((failure) => /page CSS: the stylesheet \/_astro\/common\.[^ ]+\.css holds \d+ rules that are not the \d+ its served bytes parse to/.test(failure)), inserted.join("\n"));
+          assert.ok(inserted.some((failure) => /rule 6 .*: wide: the figure is not visible to a reader/.test(failure)), inserted.join("\n"));
+          const handler = await hostile({ inject: () => document.querySelector(".sl-markdown-content p").setAttribute("onclick", "void 0"), css: null });
+          assert.ok(handler.some((failure) => /executable content: an event-handler attribute on <p>/.test(failure)), handler.join("\n"));
+          const script = await hostile({ inject: () => document.querySelector(".sl-markdown-content").append(Object.assign(document.createElement("script"), { textContent: "void 0" })), css: null });
+          assert.ok(script.some((failure) => /executable content: a <script> element in the page content/.test(failure)), script.join("\n"));
 
-      // The same insertion written into the built page, where the clean copy
-      // runs it too: the served page is not the recorded one, it carries a
-      // script, and the figure must be visible whatever the copy shows. A
-      // closed shadow root in the built page, beside the open-root control,
-      // is read from the served bytes before the browser consumes it (R5-2).
-      const builtGuide = path.join(root, "dist/reference/guide/index.html");
-      const builtBytes = await readFile(builtGuide, "utf8");
-      const intoContent = (markup) => builtBytes.replace(/(<div class="sl-markdown-content"[^>]*>)/, `$1${markup}`);
-      const onDisk = async (markup) => {
-        await writeFile(builtGuide, intoContent(markup));
-        try { return (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(builtGuide, builtBytes); }
-      };
-      const rerun = await onDisk("<script>{ const sheet = [...document.styleSheets].find((candidate) => candidate.media.mediaText !== \"print\"); sheet.insertRule(\".cf-fig {opacity:0}\", sheet.cssRules.length); }</script>");
-      assert.ok(rerun.some((failure) => /served page: dist\/reference\/guide\/index\.html is served with sha256 \w+, not the recorded \w+/.test(failure)), rerun.join("\n"));
-      assert.ok(rerun.some((failure) => /executable content: a <script> element in the page content/.test(failure)), rerun.join("\n"));
-      assert.ok(rerun.some((failure) => /holds \d+ rules that are not the \d+ its served bytes parse to/.test(failure)), rerun.join("\n"));
-      assert.ok(rerun.some((failure) => /rule 6 .*: wide: the figure is not visible to a reader/.test(failure)), rerun.join("\n"));
-      // The clean copy runs only the runtime's scripts, so it does not repeat
-      // the page's insertion and the figure differs from it.
-      assert.ok(rerun.some((failure) => /rule 6 .*: wide: <figure class="cf-fig[^"]*"> computes opacity 0 where the clean copy computes 1/.test(failure)), rerun.join("\n"));
+          // The same insertion written into the built page, where the clean copy
+          // runs it too: the served page is not the recorded one, it carries a
+          // script, and the figure must be visible whatever the copy shows. A
+          // closed shadow root in the built page, beside the open-root control,
+          // is read from the served bytes before the browser consumes it (R5-2).
+          const builtGuide = path.join(root, "dist/reference/guide/index.html");
+          const builtBytes = await readFile(builtGuide, "utf8");
+          const intoContent = (markup) => builtBytes.replace(/(<div class="sl-markdown-content"[^>]*>)/, `$1${markup}`);
+          const onDisk = async (markup) => {
+            await writeFile(builtGuide, intoContent(markup));
+            try { return (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(builtGuide, builtBytes); }
+          };
+          const rerun = await onDisk("<script>{ const sheet = [...document.styleSheets].find((candidate) => candidate.media.mediaText !== \"print\"); sheet.insertRule(\".cf-fig {opacity:0}\", sheet.cssRules.length); }</script>");
+          assert.ok(rerun.some((failure) => /served page: dist\/reference\/guide\/index\.html is served with sha256 \w+, not the recorded \w+/.test(failure)), rerun.join("\n"));
+          assert.ok(rerun.some((failure) => /executable content: a <script> element in the page content/.test(failure)), rerun.join("\n"));
+          assert.ok(rerun.some((failure) => /holds \d+ rules that are not the \d+ its served bytes parse to/.test(failure)), rerun.join("\n"));
+          assert.ok(rerun.some((failure) => /rule 6 .*: wide: the figure is not visible to a reader/.test(failure)), rerun.join("\n"));
+          // The clean copy runs only the runtime's scripts, so it does not repeat
+          // the page's insertion and the figure differs from it.
+          assert.ok(rerun.some((failure) => /rule 6 .*: wide: <figure class="cf-fig[^"]*"> computes opacity 0 where the clean copy computes 1/.test(failure)), rerun.join("\n"));
 
-      // Inline scripts outside the content are the runtime's own: an extra
-      // one in the page chrome fails, and so does a changed Starlight script,
-      // with the regeneration to run if the runtime really changed.
-      const regenerate = `if the runtime changed, regenerate scripts/runtime-scripts.json: ${REGENERATE}`;
-      const extra = await hostile({ inject: () => document.head.append(Object.assign(document.createElement("script"), { textContent: "void 0" })), css: null });
-      assert.ok(extra.some((failure) => failure.includes("executable content: inline scripts outside the content are not ones the site's runtime emits (sha256 ") && failure.endsWith(regenerate)), extra.join("\n"));
-      assert.ok(builtBytes.includes("window.StarlightThemeProvider = (() => {"));
-      await writeFile(builtGuide, builtBytes.replace("window.StarlightThemeProvider = (() => {", "window.StarlightThemeProvider = (() => { "));
-      let changed;
-      try { changed = (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(builtGuide, builtBytes); }
-      assert.ok(changed.some((failure) => failure.includes("executable content: inline scripts outside the content are not ones the site's runtime emits (sha256 ") && failure.endsWith(regenerate)), changed.join("\n"));
-      for (const mode of ["closed", "open"]) {
-        const shadowed = await onDisk(`<div><template shadowrootmode="${mode}"><style>:host{opacity:0}</style>Shadow</template></div>`);
-        assert.ok(shadowed.some((failure) => /served page: the served page declares a shadow root/.test(failure)), `${mode}: ${shadowed.join("\n")}`);
-        assert.ok(shadowed.some((failure) => /served page: dist\/reference\/guide\/index\.html is served with sha256/.test(failure)), `${mode}: ${shadowed.join("\n")}`);
-      }
+          // Inline scripts outside the content are the runtime's own: an extra
+          // one in the page chrome fails, and so does a changed Starlight script,
+          // with the regeneration to run if the runtime really changed.
+          const regenerate = `if the runtime changed, regenerate scripts/runtime-scripts.json: ${REGENERATE}`;
+          const extra = await hostile({ inject: () => document.head.append(Object.assign(document.createElement("script"), { textContent: "void 0" })), css: null });
+          assert.ok(extra.some((failure) => failure.includes("executable content: inline scripts outside the content are not ones the site's runtime emits (sha256 ") && failure.endsWith(regenerate)), extra.join("\n"));
+          assert.ok(builtBytes.includes("window.StarlightThemeProvider = (() => {"));
+          await writeFile(builtGuide, builtBytes.replace("window.StarlightThemeProvider = (() => {", "window.StarlightThemeProvider = (() => { "));
+          let changed;
+          try { changed = (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(builtGuide, builtBytes); }
+          assert.ok(changed.some((failure) => failure.includes("executable content: inline scripts outside the content are not ones the site's runtime emits (sha256 ") && failure.endsWith(regenerate)), changed.join("\n"));
+          for (const mode of ["closed", "open"]) {
+            const shadowed = await onDisk(`<div><template shadowrootmode="${mode}"><style>:host{opacity:0}</style>Shadow</template></div>`);
+            assert.ok(shadowed.some((failure) => /served page: the served page declares a shadow root/.test(failure)), `${mode}: ${shadowed.join("\n")}`);
+            assert.ok(shadowed.some((failure) => /served page: dist\/reference\/guide\/index\.html is served with sha256/.test(failure)), `${mode}: ${shadowed.join("\n")}`);
+          }
 
-      // Code blocks. The clean control above holds the real build, whose
-      // blocks link their recorded sheet and script and carry token custom
-      // properties. A real property on a token, a custom property outside a
-      // block's frame, a style element, and a figure inside a block, real or
-      // imitated, are refused; an imitated block holding only the properties
-      // Expressive Code writes is harmless and passes.
-      const pageCss = (failures) => failures.filter((failure) => /page CSS|executable content/.test(failure));
-      // The block's sheet reaches only blocks: each rule that styles an
-      // element is scoped to .expressive-code, the rest declare only custom
-      // properties, and no other built sheet reads those properties.
-      const codeSheet = built.artifacts.find((artifact) => /^dist\/_astro\/ec\.[\w-]+\.css$/.test(artifact.path)).path;
-      const codeScript = built.artifacts.find((artifact) => /^dist\/_astro\/ec\.[\w-]+\.js$/.test(artifact.path)).path;
-      const reach = await page.evaluate((text) => {
-        const sheet = new CSSStyleSheet();
-        sheet.replaceSync(text);
-        const parts = (selector) => { const found = []; let depth = 0; let current = ""; for (const character of selector) { if (character === "(") depth += 1; if (character === ")") depth -= 1; if (character === "," && depth === 0) { found.push(current.trim()); current = ""; } else current += character; } return [...found, current.trim()]; };
-        const outside = [];
-        const walk = (rules) => { for (const rule of rules) {
-          if (rule instanceof CSSStyleRule) {
-            const scoped = parts(rule.selectorText).every((part) => /(?:^|[\s>+~])(?:[\w-]*|\*)\.expressive-code(?![\w-])/.test(part.replace(/:(?:not|is|where|has)\([^)]*\)/g, "")));
-            if (!scoped && ![...rule.style].every((name) => name.startsWith("--"))) outside.push(rule.selectorText);
-          } else if (rule.cssRules) walk(rule.cssRules);
-        } };
-        walk(sheet.cssRules);
-        return outside;
-      }, await readFile(path.join(root, codeSheet), "utf8"));
-      assert.deepEqual(reach, []);
-      for (const other of built.artifacts.filter((artifact) => artifact.path.endsWith(".css") && artifact.path !== codeSheet)) {
-        assert.doesNotMatch(await readFile(path.join(root, other.path), "utf8"), /var\(\s*--ec-/, other.path);
-      }
-      assert.doesNotMatch(kitSheets, /--ec-/);
-      for (const css of ["color: red", "opacity: 0", "transform: scale(2)", "display: none", "background: url(/x.png)", "--0:#82AAFF;color:red", "--0:url(/x.png)"]) {
-        const failures = await hostile({ inject: (style) => document.querySelector(".expressive-code pre span[style]").setAttribute("style", style), css });
-        assert.ok(failures.some((failure) => /page CSS: a style attribute on <span> carries CSS the site's sheets do not/.test(failure)), `${css}: ${failures.join("\n")}`);
-      }
-      const outside = await hostile({ inject: () => [...document.querySelectorAll(".sl-markdown-content p")].find((paragraph) => !paragraph.closest(".cf-companion")).setAttribute("style", "--0:#82AAFF"), css: null });
-      assert.ok(outside.some((failure) => /page CSS: a style attribute on <p> carries CSS the site's sheets do not/.test(failure)), outside.join("\n"));
-      const blockStyle = await hostile({ inject: () => document.querySelector(".expressive-code").append(Object.assign(document.createElement("style"), { textContent: ".cf-fig{opacity:0}" })), css: null });
-      assert.ok(blockStyle.some((failure) => /page CSS: a <style> element in the page content/.test(failure)), blockStyle.join("\n"));
-      const wrapped = await hostile({ inject: () => { const companion = document.querySelector(".cf-companion"); const block = Object.assign(document.createElement("div"), { className: "expressive-code" }); companion.replaceWith(block); block.append(companion); }, css: null });
-      assert.ok(wrapped.some((failure) => /page CSS: a figure or companion inside a code block/.test(failure)), wrapped.join("\n"));
-      // Each carrier on an element is judged on its own: an allowed token
-      // attribute does not excuse a style element or a link beside it in the
-      // frame (Codex CB-1, Grok F2). The sheet scopes on the expressive-code
-      // class whatever the tag, so a figure or companion on or inside any
-      // element with that class fails (Codex CB-2, Grok F1). The real page,
-      // a code block beside its companions, is the positive control.
-      const sheets = pinnedBuiltSheets(built.artifacts);
-      const cssAfter = async (inject) => { await visitRoute("reference/guide"); await page.evaluate(inject); return pageCssFailures(page, sheets); };
-      assert.deepEqual(await cssAfter("void 0"), []);
-      for (const [markup, pattern] of [
-        ["<style style=\"--0:#82AAFF\">.cf-fig{opacity:0}</style>", /^a <style> element in the page content carries CSS/],
-        ["<link style=\"--0:#82AAFF\" rel=\"stylesheet\" href=\"/evil.css\">", /^a <link> element in the page content carries CSS/],
-      ]) {
-        const failures = await cssAfter(`document.querySelector(".expressive-code pre").insertAdjacentHTML("beforeend", ${JSON.stringify(markup)})`);
-        assert.ok(failures.some((failure) => pattern.test(failure)), `${markup}: ${failures.join("\n")}`);
-      }
-      const wrap = (tag) => `{ const companion = document.querySelector(".cf-companion"); const wrapper = document.createElement("${tag}"); wrapper.className = "note expressive-code"; companion.replaceWith(wrapper); wrapper.append(companion); }`;
-      for (const inject of [...["div", "section", "article", "span", "aside"].map(wrap), "document.querySelector('.cf-companion').classList.add('expressive-code')", "document.querySelector('figure.cf-fig').classList.add('expressive-code')", "document.querySelector('.cf-legend').classList.add('expressive-code')"]) {
-        const failures = await cssAfter(inject);
-        assert.ok(failures.includes("a figure or companion inside a code block carries CSS the site's sheets do not"), `${inject}: ${failures.join("\n")}`);
-      }
-      const imitated = await hostile({ inject: () => [...document.querySelectorAll(".sl-markdown-content p")].find((paragraph) => !paragraph.closest(".cf-companion")).insertAdjacentHTML("afterend", "<div class=\"expressive-code\"><figure><pre><span style=\"--0:#FFFFFF;--0fw:bold\">imitated</span></pre></figure></div>"), css: null });
-      assert.deepEqual(pageCss(imitated), [], imitated.join("\n"));
+          // Code blocks. The clean control above holds the real build, whose
+          // blocks link their recorded sheet and script and carry token custom
+          // properties. A real property on a token, a custom property outside a
+          // block's frame, a style element, and a figure inside a block, real or
+          // imitated, are refused; an imitated block holding only the properties
+          // Expressive Code writes is harmless and passes.
+          const pageCss = (failures) => failures.filter((failure) => /page CSS|executable content/.test(failure));
+          // The block's sheet reaches only blocks: each rule that styles an
+          // element is scoped to .expressive-code, the rest declare only custom
+          // properties, and no other built sheet reads those properties.
+          const codeSheet = built.artifacts.find((artifact) => /^dist\/_astro\/ec\.[\w-]+\.css$/.test(artifact.path)).path;
+          const codeScript = built.artifacts.find((artifact) => /^dist\/_astro\/ec\.[\w-]+\.js$/.test(artifact.path)).path;
+          const reach = await page.evaluate((text) => {
+            const sheet = new CSSStyleSheet();
+            sheet.replaceSync(text);
+            const parts = (selector) => { const found = []; let depth = 0; let current = ""; for (const character of selector) { if (character === "(") depth += 1; if (character === ")") depth -= 1; if (character === "," && depth === 0) { found.push(current.trim()); current = ""; } else current += character; } return [...found, current.trim()]; };
+            const outside = [];
+            const walk = (rules) => { for (const rule of rules) {
+              if (rule instanceof CSSStyleRule) {
+                const scoped = parts(rule.selectorText).every((part) => /(?:^|[\s>+~])(?:[\w-]*|\*)\.expressive-code(?![\w-])/.test(part.replace(/:(?:not|is|where|has)\([^)]*\)/g, "")));
+                if (!scoped && ![...rule.style].every((name) => name.startsWith("--"))) outside.push(rule.selectorText);
+              } else if (rule.cssRules) walk(rule.cssRules);
+            } };
+            walk(sheet.cssRules);
+            return outside;
+          }, await readFile(path.join(root, codeSheet), "utf8"));
+          assert.deepEqual(reach, []);
+          for (const other of built.artifacts.filter((artifact) => artifact.path.endsWith(".css") && artifact.path !== codeSheet)) {
+            assert.doesNotMatch(await readFile(path.join(root, other.path), "utf8"), /var\(\s*--ec-/, other.path);
+          }
+          assert.doesNotMatch(kitSheets, /--ec-/);
+          for (const css of ["color: red", "opacity: 0", "transform: scale(2)", "display: none", "background: url(/x.png)", "--0:#82AAFF;color:red", "--0:url(/x.png)"]) {
+            const failures = await hostile({ inject: (style) => document.querySelector(".expressive-code pre span[style]").setAttribute("style", style), css });
+            assert.ok(failures.some((failure) => /page CSS: a style attribute on <span> carries CSS the site's sheets do not/.test(failure)), `${css}: ${failures.join("\n")}`);
+          }
+          const outside = await hostile({ inject: () => [...document.querySelectorAll(".sl-markdown-content p")].find((paragraph) => !paragraph.closest(".cf-companion")).setAttribute("style", "--0:#82AAFF"), css: null });
+          assert.ok(outside.some((failure) => /page CSS: a style attribute on <p> carries CSS the site's sheets do not/.test(failure)), outside.join("\n"));
+          const blockStyle = await hostile({ inject: () => document.querySelector(".expressive-code").append(Object.assign(document.createElement("style"), { textContent: ".cf-fig{opacity:0}" })), css: null });
+          assert.ok(blockStyle.some((failure) => /page CSS: a <style> element in the page content/.test(failure)), blockStyle.join("\n"));
+          const wrapped = await hostile({ inject: () => { const companion = document.querySelector(".cf-companion"); const block = Object.assign(document.createElement("div"), { className: "expressive-code" }); companion.replaceWith(block); block.append(companion); }, css: null });
+          assert.ok(wrapped.some((failure) => /page CSS: a figure or companion inside a code block/.test(failure)), wrapped.join("\n"));
+          // Each carrier on an element is judged on its own: an allowed token
+          // attribute does not excuse a style element or a link beside it in the
+          // frame (Codex CB-1, Grok F2). The sheet scopes on the expressive-code
+          // class whatever the tag, so a figure or companion on or inside any
+          // element with that class fails (Codex CB-2, Grok F1). The real page,
+          // a code block beside its companions, is the positive control.
+          const sheets = pinnedBuiltSheets(built.artifacts);
+          const cssAfter = async (inject) => { await visitRoute("reference/guide"); await page.evaluate(inject); return pageCssFailures(page, sheets); };
+          assert.deepEqual(await cssAfter("void 0"), []);
+          for (const [markup, pattern] of [
+            ["<style style=\"--0:#82AAFF\">.cf-fig{opacity:0}</style>", /^a <style> element in the page content carries CSS/],
+            ["<link style=\"--0:#82AAFF\" rel=\"stylesheet\" href=\"/evil.css\">", /^a <link> element in the page content carries CSS/],
+          ]) {
+            const failures = await cssAfter(`document.querySelector(".expressive-code pre").insertAdjacentHTML("beforeend", ${JSON.stringify(markup)})`);
+            assert.ok(failures.some((failure) => pattern.test(failure)), `${markup}: ${failures.join("\n")}`);
+          }
+          const wrap = (tag) => `{ const companion = document.querySelector(".cf-companion"); const wrapper = document.createElement("${tag}"); wrapper.className = "note expressive-code"; companion.replaceWith(wrapper); wrapper.append(companion); }`;
+          for (const inject of [...["div", "section", "article", "span", "aside"].map(wrap), "document.querySelector('.cf-companion').classList.add('expressive-code')", "document.querySelector('figure.cf-fig').classList.add('expressive-code')", "document.querySelector('.cf-legend').classList.add('expressive-code')"]) {
+            const failures = await cssAfter(inject);
+            assert.ok(failures.includes("a figure or companion inside a code block carries CSS the site's sheets do not"), `${inject}: ${failures.join("\n")}`);
+          }
+          const imitated = await hostile({ inject: () => [...document.querySelectorAll(".sl-markdown-content p")].find((paragraph) => !paragraph.closest(".cf-companion")).insertAdjacentHTML("afterend", "<div class=\"expressive-code\"><figure><pre><span style=\"--0:#FFFFFF;--0fw:bold\">imitated</span></pre></figure></div>"), css: null });
+          assert.deepEqual(pageCss(imitated), [], imitated.join("\n"));
 
-      // An Expressive Code link or script to an asset the evidence does not
-      // record, or a recorded asset served with other bytes, fails.
-      const astro = path.join(root, "dist/_astro");
-      await writeFile(path.join(astro, "ec.zzzzz.css"), ".expressive-code{}\n");
-      await writeFile(path.join(astro, "ec.zzzzz.js"), "void 0;\n");
-      try {
-        const link = await hostile({ inject: () => document.querySelector(".expressive-code").prepend(Object.assign(document.createElement("link"), { rel: "stylesheet", href: "/_astro/ec.zzzzz.css" })), css: null });
-        assert.ok(link.some((failure) => /page CSS: a <link> element in the page content carries CSS the site's sheets do not/.test(failure)), link.join("\n"));
-        const script = await hostile({ inject: () => { const element = document.createElement("script"); element.type = "module"; element.src = "/_astro/ec.zzzzz.js"; document.querySelector(".expressive-code").prepend(element); }, css: null });
-        assert.ok(script.some((failure) => /executable content: a <script> element in the page content/.test(failure)), script.join("\n"));
-        assert.ok(script.some((failure) => /executable content: the script \/_astro\/ec\.zzzzz\.js is not a built script the evidence records/.test(failure)), script.join("\n"));
-      } finally {
-        await rm(path.join(astro, "ec.zzzzz.css"));
-        await rm(path.join(astro, "ec.zzzzz.js"));
-      }
-      for (const [asset, pattern] of [[codeSheet, /page CSS: the stylesheet \/_astro\/ec\.[\w-]+\.css is served with sha256 \w+, not the recorded \w+/], [codeScript, /executable content: the script \/_astro\/ec\.[\w-]+\.js is served with sha256 \w+, not the recorded \w+/]]) {
-        const original = await readFile(path.join(root, asset));
-        await writeFile(path.join(root, asset), Buffer.concat([original, Buffer.from("\n/* edited */\n")]));
-        let failures;
-        try { failures = (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(path.join(root, asset), original); }
-        assert.ok(failures.some((failure) => pattern.test(failure)), `${asset}: ${failures.join("\n")}`);
+          // An Expressive Code link or script to an asset the evidence does not
+          // record, or a recorded asset served with other bytes, fails.
+          const astro = path.join(root, "dist/_astro");
+          await writeFile(path.join(astro, "ec.zzzzz.css"), ".expressive-code{}\n");
+          await writeFile(path.join(astro, "ec.zzzzz.js"), "void 0;\n");
+          try {
+            const link = await hostile({ inject: () => document.querySelector(".expressive-code").prepend(Object.assign(document.createElement("link"), { rel: "stylesheet", href: "/_astro/ec.zzzzz.css" })), css: null });
+            assert.ok(link.some((failure) => /page CSS: a <link> element in the page content carries CSS the site's sheets do not/.test(failure)), link.join("\n"));
+            const script = await hostile({ inject: () => { const element = document.createElement("script"); element.type = "module"; element.src = "/_astro/ec.zzzzz.js"; document.querySelector(".expressive-code").prepend(element); }, css: null });
+            assert.ok(script.some((failure) => /executable content: a <script> element in the page content/.test(failure)), script.join("\n"));
+            assert.ok(script.some((failure) => /executable content: the script \/_astro\/ec\.zzzzz\.js is not a built script the evidence records/.test(failure)), script.join("\n"));
+          } finally {
+            await rm(path.join(astro, "ec.zzzzz.css"));
+            await rm(path.join(astro, "ec.zzzzz.js"));
+          }
+          for (const [asset, pattern] of [[codeSheet, /page CSS: the stylesheet \/_astro\/ec\.[\w-]+\.css is served with sha256 \w+, not the recorded \w+/], [codeScript, /executable content: the script \/_astro\/ec\.[\w-]+\.js is served with sha256 \w+, not the recorded \w+/]]) {
+            const original = await readFile(path.join(root, asset));
+            await writeFile(path.join(root, asset), Buffer.concat([original, Buffer.from("\n/* edited */\n")]));
+            let failures;
+            try { failures = (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(path.join(root, asset), original); }
+            assert.ok(failures.some((failure) => pattern.test(failure)), `${asset}: ${failures.join("\n")}`);
+          }
+          } finally {
+            await browser.close();
+          }
+        });
       }
     } finally {
-      await browser.close();
       await site.close();
     }
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -722,7 +709,7 @@ test("the figure gate matches page motion without accepting changed figure style
     const declarations = pinnedDeclarations(snapshot, built.repository.commit, built);
     const kitSheets = pinnedKitSheets(snapshot, built.repository.commit, "");
     const inlineScripts = pinnedRuntimeScripts(snapshot, built.repository.commit, "", config.theme);
-    site = await serve(path.join(root, "dist"));
+    site = await serveBuiltSite({ directory: path.join(root, "dist") });
     browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
     for (const reducedMotion of ["reduce", "no-preference"]) {
       const context = await browser.newContext({ reducedMotion: reducedMotion === "reduce" ? "no-preference" : "reduce" });
