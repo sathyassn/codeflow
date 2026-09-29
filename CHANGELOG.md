@@ -914,6 +914,12 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **Pre-push landing base.** Fast-forwards of protected and integration
+  branches check from their advertised tip. Other branches check from the
+  merge base with their advertised integration target and name that target,
+  preserving every commit the destination lacks in the checked range.
+
+<!-- codeflow:release-impact patch -->
 - **The writing reference carries every reply duty.** The rule map sends an
   agent about to report to `.codeflow/rules/writing.md`, the only reply
   guidance a minimal-tier project installs. It now states each duty of the

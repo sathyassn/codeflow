@@ -3462,6 +3462,7 @@ fn push_set_checks_a_rewrite_for_its_own_commits_and_says_so() {
 /// non-conventional commit, fetched here. Returns the task branch's old tip.
 fn task_on_moved_line(bare: &Path, local: &Path, own: &[(&str, &str)]) -> String {
     integration_line(bare, local);
+    use_line_target(local);
     git(local, &["checkout", "-q", "-b", "task/t", "line"]);
     for (file, message) in own {
         commit_file(local, file, "t\n", message);
@@ -3604,6 +3605,15 @@ fn push_set_checks_a_commit_only_a_stale_tracking_ref_holds() {
     }
 }
 
+// These legacy fixture branches have no task record, so declare the line
+// as their policy default instead of inferring their target from ancestry.
+fn use_line_target(local: &Path) {
+    write_policy(
+        local,
+        r#"{"git": {"protected_branches": ["integration/line", "stable"], "test_gate_on_push": "block"}}"#,
+    );
+}
+
 /// An integration line `integration/line` on the destination, cut from
 /// `stable` with a legacy non-conventional commit, fetched here; returns the
 /// line's tip.
@@ -3617,11 +3627,11 @@ fn integration_line(bare: &Path, local: &Path) -> String {
 
 #[test]
 fn push_set_checks_only_the_own_commits_of_a_new_branch_off_a_line() {
-    // A new branch cut from an integration line is bounded by what the
-    // destination advertises now, not by its protected branches alone: the
+    // A new branch uses its configured line target's advertised tip: the
     // line's legacy commit is not checked again, a bad own commit is.
     let (bare, local) = stable_destination("chore: legacy base");
     integration_line(bare.path(), local.path());
+    use_line_target(local.path());
     git(local.path(), &["checkout", "-q", "-b", "feat/new", "line"]);
     let good = commit_file(local.path(), "n.txt", "n\n", "feat: add new work");
     let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &good)]);
@@ -4184,8 +4194,7 @@ fn release_of_both_lines(local: &Path, a: &str, b: &str) -> String {
 #[test]
 fn push_to_an_existing_branch_without_a_list_is_judged_by_its_own_list() {
     // The release branch exists on the destination at the list-less seed.
-    // The range is bounded by every destination tip, so its base is a line
-    // tip whose list lacks the other line's records; the branch's own old
+    // The range starts at the release branch's advertised old tip. That
     // tip has no list, so the push introduces the migration and the head's
     // list governs, every entry printed.
     let (bare, local, a, b) = two_lines_with_lists();
@@ -4206,9 +4215,9 @@ fn push_to_an_existing_branch_without_a_list_is_judged_by_its_own_list() {
 fn push_to_an_existing_branch_with_a_list_is_judged_by_that_list() {
     // The release branch already holds line a with list [a]. The push merges
     // line b, adds a record of its own and lists everything. The old tip's
-    // list governs: line a's record stays legacy although the range's base
-    // is line b's tip (whose list lacks it), and the push's own record is
-    // new, since a list edit takes effect only after it lands.
+    // list governs: line a's record stays legacy. Line b's record and the
+    // push's own record are both new to this target and must satisfy its
+    // rules, since a list edit takes effect only after it lands.
     let (bare, local, a, b) = two_lines_with_lists();
     git(local.path(), &["checkout", "-q", "-b", "release", "main"]);
     merge_line(local.path(), "a");
@@ -4229,7 +4238,10 @@ fn push_to_an_existing_branch_with_a_list_is_judged_by_that_list() {
         "{err}"
     );
     assert!(!err.contains("TSK-001.md"), "{err}");
-    assert!(!err.contains("TSK-002.md"), "{err}");
+    assert!(
+        err.contains("TSK-002.md: a complete record needs an acceptance block"),
+        "{err}"
+    );
     assert!(
         err.contains("edits work_records_baseline") && err.contains(&own),
         "{err}"
