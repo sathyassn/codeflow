@@ -8,15 +8,38 @@ target naming that version.
 """
 
 import os
+import importlib.util
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "scripts" / "with-node.py"
 WHICH = 'command -v node; node --version'
+SPEC = importlib.util.spec_from_file_location("with_node", LAUNCHER)
+launcher = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(launcher)
+
+
+class WindowsLaunchControls(unittest.TestCase):
+    def test_windows_uses_bash_for_the_posix_chain(self):
+        command = "printf '%s' \"$(pwd)\" && test -n \"${PATH}\""
+        with patch.object(launcher.shutil, "which", return_value="C:/Git/bin/bash.exe"), \
+             patch.object(launcher.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            self.assertEqual(launcher.run_inner(command, {"PATH": "pinned"}, windows=True), 0)
+        run.assert_called_once_with(
+            ["C:/Git/bin/bash.exe", "-c", command], env={"PATH": "pinned"}, check=False)
+
+    def test_windows_without_bash_fails_before_the_chain(self):
+        with patch.object(launcher.shutil, "which", return_value=None), \
+             patch.object(launcher.subprocess, "run") as run:
+            with self.assertRaises(SystemExit):
+                launcher.run_inner("echo marker", {"PATH": "pinned"}, windows=True)
+        run.assert_not_called()
 
 
 def fake_node(directory: Path, reports: str) -> Path:

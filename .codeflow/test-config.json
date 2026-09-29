@@ -50,10 +50,10 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version 'npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web'"
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web\""
         },
         "full": {
-          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version 'npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web'"
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web\""
         }
       },
       "requires": [],
@@ -343,7 +343,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version 'npm run check --prefix crates/codeflow-present/web && npm run check:windows-profile-confinement --prefix crates/codeflow-present/web'"
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run check --prefix crates/codeflow-present/web && npm run check:windows-profile-confinement --prefix crates/codeflow-present/web\""
         }
       },
       "timeout_seconds": 900,
@@ -357,7 +357,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/with-node.py docs-portal/.node-version 'npm run deps:install --prefix docs-portal && node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && \"$CODEFLOW_BIN\" validate --portal docs-portal'"
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal && node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
         }
       },
       "timeout_seconds": 300,
@@ -393,7 +393,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version 'npm run supply-chain --prefix crates/codeflow-present/web'"
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run supply-chain --prefix crates/codeflow-present/web\""
         }
       },
       "requires": [
@@ -409,7 +409,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version 'npm run check:browser --prefix crates/codeflow-present/web && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web'"
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run check:browser --prefix crates/codeflow-present/web && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web\""
         }
       },
       "requires": [
@@ -425,7 +425,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version 'node --test scripts/test_binary_delta.mjs && node scripts/check-present-binary-delta.mjs'"
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"node --test scripts/test_binary_delta.mjs && node scripts/check-present-binary-delta.mjs\""
         }
       },
       "requires": [

@@ -4,7 +4,9 @@
 //! Changes: exit 0 means the range was classified light, exit 1 with a
 //! Reviews finding means it was checked in full. Release impact follows the base and commits.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use super::{codeflow, git};

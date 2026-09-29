@@ -58,6 +58,10 @@
 //!   functions (`TRAPDEBUG`, `chpwd`, `precmd`, …). Once one is set, its
 //!   action may run at every command boundary after, so the state after
 //!   each command also joins the state after the action, to a fixpoint.
+//!   A reset of that signal (`trap - SIG`, `trap '' SIG`, a new action) or
+//!   a removal of that function (`unfunction`, `unset -f`, a new body)
+//!   takes the action away from there on, where it runs on every path,
+//!   outside any function call, and names what the action was set under.
 //!
 //! Everything else taints, among it: a builtin in `UNMODELLED_BUILTINS`
 //! (`enable`, `emulate`, `fc`, `zmodload`, `autoload`, `integer`) or a
@@ -167,7 +171,7 @@ pub(super) fn composed_deletion_in(command: &str, base: Option<&Path>) -> Option
     // A trap's action runs when the line ends, in the state it ends in.
     state.dead = false;
     reader.in_trap = true;
-    for action in std::mem::take(&mut reader.traps) {
+    for action in reader.live_traps(&state) {
         let mut end = state.clone();
         reader.child_run(&action, &mut end);
     }
@@ -1933,6 +1937,11 @@ struct State {
     /// The line cannot reach here (after `exit`, or a `break`, `continue`
     /// or `return` that leaves).
     dead: bool,
+    /// The reader's trap and hook actions (by index) that a reset or a
+    /// removal took away on every path to here.
+    retracted: BTreeSet<usize>,
+    /// Functions made read-only, which `unset -f` and a new body leave.
+    locked_funcs: BTreeSet<String>,
 }
 
 /// Variables whose value changes how the shell, or a shell it starts, reads
@@ -2062,6 +2071,8 @@ impl State {
             wild: None,
             scopes: Vec::new(),
             dead: false,
+            retracted: BTreeSet::new(),
+            locked_funcs: BTreeSet::new(),
         }
     }
 
@@ -2247,6 +2258,12 @@ impl State {
         }
         self.arrays.extend(other.arrays.iter().cloned());
         self.readonly.extend(other.readonly.iter().cloned());
+        self.retracted = self
+            .retracted
+            .intersection(&other.retracted)
+            .copied()
+            .collect();
+        self.locked_funcs.extend(other.locked_funcs.iter().cloned());
         for (name, reason) in &other.sticky {
             self.sticky.entry(name.clone()).or_insert(reason);
         }
@@ -2495,9 +2512,10 @@ struct Reader<'a> {
     jumps: Vec<Frame>,
     /// Aliases being expanded, which are not expanded again inside.
     expanding: Vec<String>,
-    /// Trap actions and hook functions: each may run before any later
-    /// command, and runs again when the line ends.
-    traps: Vec<Node>,
+    /// Trap actions and hook functions, each with what it was set under:
+    /// each may run before any later command, and runs again when the line
+    /// ends, unless the state has it retracted.
+    traps: Vec<(Slot, Node)>,
     /// Set while a trap action is read; it runs no trap itself.
     in_trap: bool,
     /// Where the last simple command left the line when it succeeds and
@@ -2775,9 +2793,12 @@ impl Reader<'_> {
             }
             Node::Func(name, body) => {
                 st.funcs.insert(name.clone(), vec![Some((**body).clone())]);
-                // A trap function or hook runs between later commands.
+                // A trap function or hook runs between later commands; a
+                // new body replaces the one before.
                 if is_hook(name) {
-                    self.traps.push((**body).clone());
+                    let slot = Slot::Function(name.clone());
+                    self.retract(&slot, st);
+                    self.register(slot, (**body).clone(), st);
                 }
             }
             Node::Anon(body, words) => {
@@ -2855,16 +2876,15 @@ impl Reader<'_> {
     /// any number of times: the state here is joined with every state the
     /// actions may leave, until it settles.
     fn apply_traps(&mut self, st: &mut State) {
-        if self.traps.is_empty() || self.in_trap || st.dead || self.done() {
+        if self.in_trap || st.dead || self.done() || self.live_traps(st).is_empty() {
             return;
         }
         self.in_trap = true;
-        let actions = self.traps.clone();
         let mut before = st.clone();
         let mut settled = false;
         for _ in 0..LOOP_PASSES {
             let mut next = st.clone();
-            for action in &actions {
+            for action in &self.live_traps(st) {
                 let mut ran = st.clone();
                 self.frame(FrameKind::Child, action, &mut ran);
                 next.join(&ran);
@@ -2879,6 +2899,51 @@ impl Reader<'_> {
             st.widen(&before);
         }
         self.in_trap = false;
+    }
+
+    /// The trap and hook actions `st` has not retracted.
+    fn live_traps(&self, st: &State) -> Vec<Node> {
+        self.traps
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| !st.retracted.contains(at))
+            .map(|(_, (_, action))| action.clone())
+            .collect()
+    }
+
+    /// Set `action` under `slot`: it is live from here on, even where an
+    /// earlier reset took the same action away.
+    fn register(&mut self, slot: Slot, action: Node, st: &mut State) {
+        let known = self
+            .traps
+            .iter()
+            .position(|(s, a)| *s == slot && *a == action);
+        let at = known.unwrap_or_else(|| {
+            self.traps.push((slot, action));
+            self.traps.len() - 1
+        });
+        st.retracted.remove(&at);
+    }
+
+    /// Take every action set under `slot` away from here on. A path that
+    /// skips the reset keeps the action, since states join by what every
+    /// path retracted. Inside a function call nothing is taken away: zsh
+    /// may restore the traps a function changes (`localtraps`) and runs a
+    /// function's `EXIT` trap when it returns.
+    fn retract(&self, slot: &Slot, st: &mut State) {
+        if !st.scopes.is_empty() {
+            return;
+        }
+        if let Slot::Function(name) = slot {
+            if st.locked_funcs.contains(name) {
+                return;
+            }
+        }
+        for (at, (set, _)) in self.traps.iter().enumerate() {
+            if set == slot {
+                st.retracted.insert(at);
+            }
+        }
     }
 
     fn pipe(&mut self, stages: &[Node], st: &mut State) {
@@ -3421,6 +3486,7 @@ impl Reader<'_> {
                                 st.unset(name);
                             }
                             if mode == 'f' {
+                                self.retract(&Slot::Function(name.to_string()), st);
                                 st.funcs.remove(name);
                             } else if mode == ' ' {
                                 // `unset NAME` removes a function when no
@@ -3608,25 +3674,36 @@ impl Reader<'_> {
     }
 
     /// `trap ACTION SIGNAL…`: the action may run before any later command,
-    /// and runs again when the line ends.
+    /// and runs again when the line ends. It replaces what each signal had,
+    /// as a reset (`-`) or an ignore (`''`) does.
     fn trap(&mut self, argv: &[String], st: &mut State) {
         let operands = match argv.get(1).map(String::as_str) {
             Some("--") => &argv[2..],
             _ => &argv[1..],
         };
         match operands {
-            // Listing, printing and resetting forms.
+            // Listing and printing forms, and a lone operand, whose reading
+            // differs between the shells.
             [] | [_] => {}
             [first, ..] if first.len() > 1 && first.starts_with('-') => {}
-            [action, ..] => {
-                if action == "-" || action.is_empty() {
-                    return;
-                }
-                if unproven(action).is_some() {
+            [action, signals @ ..] => {
+                let clears = action == "-" || action.is_empty();
+                if !clears && unproven(action).is_some() {
                     st.go_wild(why::TRAP);
                     return;
                 }
-                self.traps.push(Parser::parse(action));
+                if resets_each(signals) {
+                    for signal in signals {
+                        self.retract(&Slot::Signal(signal.clone()), st);
+                    }
+                }
+                if clears {
+                    return;
+                }
+                let action = Parser::parse(action);
+                for signal in signals {
+                    self.register(Slot::Signal(signal.clone()), action.clone(), st);
+                }
             }
         }
     }
@@ -3727,8 +3804,18 @@ impl Reader<'_> {
     /// `export`, `readonly`, `local`, `declare` and `typeset`.
     fn declare(&mut self, program: &str, words: &[Word], st: &mut State) {
         let (at, flags) = declaration_flags(words);
-        // Printing and functions change no variable.
+        // Printing and functions change no variable. A function made
+        // read-only cannot be removed or given a new body.
         if flags.contains(['f', 'F', 'p']) {
+            if flags.contains('f') && (program == "readonly" || flags.contains('r')) {
+                for word in &words[at..] {
+                    let Some(name) = literal_text(word) else {
+                        st.go_wild(why::NAME);
+                        return;
+                    };
+                    st.locked_funcs.insert(name);
+                }
+            }
             return;
         }
         if flags.contains('n') {
@@ -5742,6 +5829,34 @@ fn inert_option(name: &str) -> bool {
             .is_some_and(|rest| INERT_OPTIONS.contains(&rest))
 }
 
+/// What a trap action or hook function is set under: the signal a `trap`
+/// names, as written, or the function's name. The two are kept apart, so
+/// `trap - DEBUG` leaves a `TRAPDEBUG` function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Slot {
+    Signal(String),
+    Function(String),
+}
+
+/// Signals every shell the reader models knows, so a `trap` naming only
+/// these handles each one.
+const TRAP_SIGNALS: &[&str] = &[
+    "EXIT", "DEBUG", "HUP", "INT", "QUIT", "TERM", "USR1", "USR2", "ALRM", "PIPE", "CHLD", "WINCH",
+];
+
+/// Whether a `trap` surely handles each of `signals`: each is resolved,
+/// and either it is the only one or every one is a signal each shell
+/// knows, since zsh stops at the first it does not.
+fn resets_each(signals: &[String]) -> bool {
+    signals
+        .iter()
+        .all(|signal| unproven(signal).is_none() && !spelled(signal))
+        && (signals.len() == 1
+            || signals
+                .iter()
+                .all(|signal| TRAP_SIGNALS.contains(&signal.as_str())))
+}
+
 /// A function the shell runs on its own between commands: a zsh trap
 /// function (`TRAPEXIT`) or hook (`chpwd`), or a handler for a command
 /// that is not found.
@@ -7257,7 +7372,8 @@ mod tests {
     use super::super::dangerous::DangerousModule;
     use super::super::guard_forms::{
         Expect, COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS, REVIEW_PROBES,
-        REVIEW_ROUND_THREE_PROBES, REVIEW_ROUND_TWO_PROBES, REVIEW_SYMLINK_PROBES,
+        REVIEW_ROUND_FOUR_PROBES, REVIEW_ROUND_THREE_PROBES, REVIEW_ROUND_TWO_PROBES,
+        REVIEW_SYMLINK_PROBES,
     };
     use super::composed_deletion_in;
     use crate::security::{CheckContext, SecurityModule, SecurityPolicy, Verdict};
@@ -7419,6 +7535,14 @@ mod tests {
     #[test]
     fn every_round_three_probe_keeps_its_verdict() {
         hold_probes(REVIEW_ROUND_THREE_PROBES);
+    }
+
+    /// TSK-180: a trap reset or a removed hook takes its action away only
+    /// where the reset surely runs and names what the action was set under.
+    #[cfg(unix)]
+    #[test]
+    fn every_round_four_probe_keeps_its_verdict() {
+        hold_probes(REVIEW_ROUND_FOUR_PROBES);
     }
 
     /// The kind of each node the parser builds, and the nodes inside it.

@@ -1016,6 +1016,7 @@ fn exec_guard_allows_removal_below_temp_roots_and_blocks_system_paths() {
 
 /// A scratch directory below the shared temp root, and its spellings: the
 /// canonical one and, where `/tmp` is a link to `/private/tmp`, the other.
+#[cfg(unix)]
 fn shared_temp_scratch() -> (tempfile::TempDir, Vec<String>) {
     let scratch = tempfile::Builder::new()
         .tempdir_in("/tmp")
@@ -3252,6 +3253,7 @@ fn push_hook(dir: &Path, remote: &str, refs: &[(&str, &str)]) -> (Option<i32>, S
 /// A repo on `main` whose quick target fails when `bad.txt` exists, with a
 /// sibling branch `feat/bad` that commits `bad.txt` and `feat/good` that
 /// does not.
+#[cfg(unix)]
 fn sibling_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
@@ -3907,6 +3909,7 @@ fn push_set_asks_the_push_location_not_the_fetch_location() {
 
 /// A loopback HTTP server: `respond` answers every request with a 401 that
 /// asks for credentials; otherwise each connection is held open, unanswered.
+#[cfg(unix)]
 fn http_destination(respond: bool) -> String {
     use std::io::{Read as _, Write as _};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3933,6 +3936,7 @@ fn http_destination(respond: bool) -> String {
 /// The pre-push hook for a new branch pushed to `url` under `dest`, with
 /// `askpass` as the inherited `GIT_ASKPASS`; returns its exit, stderr and
 /// how long it took.
+#[cfg(unix)]
 fn push_hook_over_http(
     dir: &Path,
     url: &str,

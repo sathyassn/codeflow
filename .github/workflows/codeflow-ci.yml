@@ -131,6 +131,9 @@ jobs:
           npm run deps:install --prefix docs-portal
           node --test docs-portal/tests/adapter.test.mjs
 
+      - name: Windows Node target through cmd.exe
+        run: python scripts/test_gate_parity.py
+
   secret-scan:
     name: secret scan
     runs-on: ubuntu-24.04
