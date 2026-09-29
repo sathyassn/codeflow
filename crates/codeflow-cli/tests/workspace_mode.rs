@@ -486,3 +486,43 @@ fn init_workspace_ignores_a_nested_repository_under_a_locally_excluded_parent() 
     let ignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
     assert!(ignore.lines().any(|l| l == "/group/nested/"), "{ignore}");
 }
+
+#[test]
+fn a_case_sensitive_umbrella_gets_the_warning_and_the_literal_rule() {
+    // Codex round 2: `/NESTED/` does not ignore `nested` when the
+    // repository matches case, whatever the file system's default.
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("workspace"));
+    git(&root, &["config", "core.ignoreCase", "false"]);
+    std::fs::write(root.join(".gitignore"), "/NESTED/\n").unwrap();
+    git(&root, &["add", ".gitignore"]);
+    git(&root, &["commit", "--quiet", "-m", "ignore"]);
+    repo_with_commit(&root.join("nested"));
+    assert!(!git_ignores(&root, "nested"));
+
+    let doctor = codeflow(&root, &["doctor", "--check", "repo-integrity"]);
+    let said = both(&doctor);
+    assert!(
+        said.contains("the nested git repository 'nested'"),
+        "{said}"
+    );
+
+    for run in ["first", "rerun"] {
+        let out = codeflow(&root, &["init", "--yes", "--minimal", "--workspace"]);
+        let said = both(&out);
+        assert!(out.status.success(), "{run}: {said}");
+        assert!(git_ignores(&root, "nested"), "{run}: {said}");
+        if run == "first" {
+            assert!(
+                said.contains("ignored the nested git repository /nested/ in .gitignore"),
+                "{said}"
+            );
+        }
+    }
+    let ignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert_eq!(
+        ignore.lines().filter(|l| *l == "/nested/").count(),
+        1,
+        "{ignore}"
+    );
+}

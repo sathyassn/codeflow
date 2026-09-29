@@ -970,6 +970,52 @@ fn a_parent_ignored_only_locally_is_still_searched() {
     }
 }
 
+#[test]
+fn the_shared_rule_check_matches_case_as_the_repository_does() {
+    // The throwaway repository behind the shared-rule check must match case
+    // as this repository does, whatever the file system's default.
+    let dir = tempfile::tempdir().unwrap();
+    for (i, ignore_case) in ["false", "true"].into_iter().enumerate() {
+        let root = repo_with_commit(&dir.path().join(format!("u{i}")));
+        git(&root, &["config", "core.ignoreCase", ignore_case]);
+        std::fs::write(root.join(".gitignore"), "/NESTED/\n").unwrap();
+        git(&root, &["add", ".gitignore"]);
+        git(&root, &["commit", "--quiet", "-m", "ignore"]);
+        repo_with_commit(&root.join("nested"));
+        let nested = found(&root);
+        let expected = if ignore_case == "true" {
+            IgnoreState::Tracked
+        } else {
+            IgnoreState::NotIgnored
+        };
+        assert_eq!(nested[0].ignore, expected, "core.ignoreCase={ignore_case}");
+        assert_eq!(git_ignores(&root, "nested"), ignore_case == "true");
+    }
+}
+
+#[test]
+fn finish_on_a_case_sensitive_repository_writes_the_literal_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("u"));
+    git(&root, &["config", "core.ignoreCase", "false"]);
+    std::fs::write(root.join(".gitignore"), "/NESTED/\n").unwrap();
+    git(&root, &["add", ".gitignore"]);
+    git(&root, &["commit", "--quiet", "-m", "ignore"]);
+    repo_with_commit(&root.join("nested"));
+    write_policy(&root, "{\n  \"git\": {}\n}\n");
+    let report = finish(&root, prepare_branch(&root, &GitPolicy::default()).unwrap()).unwrap();
+    assert_eq!(report.ignored.len(), 1, "{report:?}");
+    assert!(git_ignores(&root, "nested"));
+    let written = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert!(written.lines().any(|l| l == "/nested/"), "{written}");
+    let again = finish(&root, prepare_branch(&root, &umbrella_policy()).unwrap()).unwrap();
+    assert!(again.ignored.is_empty(), "{again:?}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".gitignore")).unwrap(),
+        written
+    );
+}
+
 /// Whether git ignores `path` in `root` (`git check-ignore`).
 fn git_ignores(root: &Path, path: &str) -> bool {
     crate::git::command()
