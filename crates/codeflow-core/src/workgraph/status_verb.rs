@@ -218,11 +218,18 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             .map(|finding| format!("{}: {}", finding.rule, finding.message))
             .collect()
     };
-    // R-60's first rule holds on every branch. Only when it fails does the
+    // The reviewed-span check applies on every branch. Only when direct binding fails does the
     // branch decide: a release branch binds a direct completion to its head
     // (SPC-013 R-120), and any other branch also takes a landing merge.
-    let at_head =
-        super::acceptance::bind_completion_at_head(&repo, task, graph, landing, default_target);
+    let at_head = super::acceptance::bind_completion(
+        &repo,
+        task,
+        graph,
+        landing,
+        default_target,
+        super::acceptance::Transport::Direct,
+        None,
+    );
     if at_head.is_empty() {
         return Vec::new();
     }
@@ -249,6 +256,8 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             graph,
             landing,
             default_target,
+            super::acceptance::Transport::TaskLanding,
+            None,
         )),
         Err(error) => {
             let mut refused = shown(at_head);

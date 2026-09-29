@@ -1266,3 +1266,312 @@ fn a_completion_cut_at_the_amendment_merge_binds() {
     assert_passes(&result, "the completion pull request");
     assert!(binding_lines(&result).is_empty(), "{}", result.1);
 }
+
+fn fix_block(reviewed: &str) -> String {
+    block(
+        reviewed,
+        &["AC-1: verified | unit", "AC-2: verified | journey"],
+        "verified | journey",
+        "none: nothing deferred",
+    )
+}
+
+/// A completed task on main, then a fix branch carrying its archived review.
+fn one_pr_fix() -> (tempfile::TempDir, String, String) {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, BRANCH, "pub fn initial() {}\n");
+    let old = fix_block(&reviewed);
+    complete(root, "TSK-001", OWN_JOURNEY, &old);
+    git(root, &["switch", "main"]);
+    git(root, &["merge", "--ff-only", BRANCH]);
+    git(root, &["switch", "-c", "task/TSK-001-fix"]);
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: regression\n",
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &archived),
+    );
+    commit(root, "docs: reopen the task");
+    (dir, old, archived)
+}
+
+#[test]
+fn one_pr_fix_accepts_reopen_fix_and_recompletion() {
+    let (dir, _, archived) = one_pr_fix();
+    let root = dir.path();
+    let start = codeflow()
+        .args(["work", "start", "TSK-001"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        start.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&start.stdout),
+        String::from_utf8_lossy(&start.stderr)
+    );
+    write(root, "src/lib.rs", "pub fn fixed() {}\n");
+    let reviewed = commit(root, "fix: repair the regression");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task(
+            "TSK-001",
+            "todo",
+            OWN_JOURNEY,
+            &format!("{archived}{}", fix_block(&reviewed)),
+        ),
+    );
+    let done = codeflow()
+        .args(["task", "status", "TSK-001", "complete"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        done.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&done.stdout),
+        String::from_utf8_lossy(&done.stderr)
+    );
+    commit(root, "docs: complete the fixed task");
+    assert_passes(
+        &ci(root, "task/TSK-001-fix", "TSK-001"),
+        "one pull request fix",
+    );
+}
+
+#[test]
+fn one_pr_fix_copied_review_is_bound_even_when_unchanged() {
+    let (dir, old, archived) = one_pr_fix();
+    let root = dir.path();
+    write(root, "src/lib.rs", "pub fn unreviewed_fix() {}\n");
+    commit(root, "fix: repair the regression");
+    complete(root, "TSK-001", OWN_JOURNEY, &format!("{archived}{old}"));
+    assert_blocks(
+        &ci(root, "task/TSK-001-fix", "TSK-001"),
+        "copied review",
+        &["work.acceptance_binding", "reviewed commit"],
+    );
+}
+
+#[test]
+fn one_pr_fix_must_preserve_the_anchored_review() {
+    for fault in ["dropped", "edited", "reason", "criteria"] {
+        let (dir, _, archived) = one_pr_fix();
+        let root = dir.path();
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        let archive = match fault {
+            "dropped" => String::new(),
+            "edited" => archived.replace("verified | unit", "verified | invented"),
+            "reason" => archived.replace("  reason: regression\n", ""),
+            _ => archived,
+        };
+        let criteria = if fault == "criteria" {
+            OWN_JOURNEY.replace("shall work", "may work")
+        } else {
+            OWN_JOURNEY.to_string()
+        };
+        complete(
+            root,
+            "TSK-001",
+            &criteria,
+            &format!("{archive}{}", fix_block(&reviewed)),
+        );
+        let reason = if fault == "criteria" {
+            "criteria"
+        } else {
+            "reopen"
+        };
+        assert_blocks(&ci(root, "task/TSK-001-fix", "TSK-001"), fault, &[reason]);
+    }
+}
+
+fn assert_invalid_fix(fault: &str) {
+    let (dir, old, archived) = one_pr_fix();
+    let root = dir.path();
+    let criteria = if fault.contains("criteria") {
+        OWN_JOURNEY.replace("shall work", "shall work sometimes")
+    } else {
+        OWN_JOURNEY.to_string()
+    };
+    if fault != "records-only-criteria" {
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+    }
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &criteria, &archived),
+    );
+    let reviewed = commit(root, "fix: repair the regression");
+    if fault == "later-code" {
+        write(root, "src/lib.rs", "pub fn later() {}\n");
+        commit(root, "fix: change after review");
+    }
+    let archive = match fault {
+        "dropped" => String::new(),
+        "edited" => archived.replace("verified | unit", "verified | invented"),
+        "reason" => archived.replace("  reason: regression\n", ""),
+        _ => archived,
+    };
+    let active = match fault {
+        "copied" => old,
+        "missing" => fix_block(&reviewed).replace("    AC-1: verified | unit\n", ""),
+        "unverified" => fix_block(&reviewed).replace("AC-1: verified", "AC-1: deferred"),
+        "waiver" => {
+            fix_block(&reviewed).replace("verified | unit", &format!("waived | {reviewed}"))
+        }
+        _ => fix_block(&reviewed),
+    };
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &criteria, &format!("{archive}{active}")),
+    );
+    let out = codeflow()
+        .args(["task", "status", "TSK-001", "complete"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let message = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reason = match fault {
+        "copied" => "inside the fix range",
+        "later-code" => "after the reviewed commit",
+        "dropped" | "edited" => "old acceptance block",
+        "reason" => "reason",
+        "missing" | "unverified" => "AC-1",
+        "criteria" | "records-only-criteria" => "anchored criteria",
+        "waiver" => "waiver",
+        _ => unreachable!(),
+    };
+    assert!(
+        !out.status.success() && message.contains(reason),
+        "{fault}: {message}"
+    );
+    complete(root, "TSK-001", &criteria, &format!("{archive}{active}"));
+    assert_blocks(&ci(root, "task/TSK-001-fix", "TSK-001"), fault, &[reason]);
+}
+
+macro_rules! fix_faults {
+    ($($test:ident: $fault:literal),* $(,)?) => {$(
+        #[test]
+        fn $test() { assert_invalid_fix($fault); }
+    )*};
+}
+
+fix_faults! {
+    one_pr_fix_copied_block: "copied",
+    one_pr_fix_code_after_review: "later-code",
+    one_pr_fix_dropped_old_block: "dropped",
+    one_pr_fix_edited_old_block: "edited",
+    one_pr_fix_missing_reason: "reason",
+    one_pr_fix_missing_criterion: "missing",
+    one_pr_fix_unverified_criterion: "unverified",
+    one_pr_fix_changed_criterion: "criteria",
+    one_pr_fix_records_only_criterion: "records-only-criteria",
+    one_pr_fix_waiver_without_amendment: "waiver",
+}
+
+#[test]
+fn one_pr_fix_after_late_completion_cannot_reuse_the_landed_review() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    git(root, &["switch", "-c", "plan/complete", LINE]);
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs: complete the task late");
+    land(root, "plan/complete");
+    git(root, &["switch", "-c", "task/TSK-001-fix", LINE]);
+    let reopen = codeflow()
+        .args([
+            "task",
+            "status",
+            "TSK-001",
+            "todo",
+            "--reason",
+            "regression",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(reopen.status.success());
+    commit(root, "docs: reopen the task");
+    git(root, &["switch", "-c", "fix/implementation"]);
+    write(root, "src/work.rs", "// fixed\n");
+    commit(root, "fix: repair the regression");
+    git(root, &["switch", "task/TSK-001-fix"]);
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the fix",
+            "fix/implementation",
+        ],
+    );
+    let mut record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    record.push_str(&valid_block(&reviewed));
+    write(root, &record_path("TSK-001"), &record);
+    let out = codeflow()
+        .args(["task", "status", "TSK-001", "complete"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "old review accepted after merged fix"
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("inside the fix range"));
+    write(
+        root,
+        &record_path("TSK-001"),
+        &record.replace("status: todo", "status: complete"),
+    );
+    commit(root, "docs: re-complete the task");
+    assert_blocks(
+        &ci_on(root, LINE, "task/TSK-001-fix", "Task: TSK-001"),
+        "late merged fix",
+        &["inside the fix range"],
+    );
+}
+
+#[test]
+fn a_late_completion_carries_an_ancestor_review_past_unrelated_line_work() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", "Reviewed; completion follows landing.\n"),
+    );
+    commit(root, "docs: record the reviewed state");
+    git(root, &["switch", LINE]);
+    write(root, "src/unrelated.rs", "// independent line work\n");
+    commit(root, "feat: add unrelated line work");
+    land(root, "task/TSK-001-work");
+    git(root, &["switch", "-c", "plan/complete", LINE]);
+    write_done(root, "TSK-001", "todo", &reviewed);
+    let out = codeflow()
+        .args(["task", "status", "TSK-001", "complete"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    commit(root, "docs: complete the landed task");
+    assert_passes(&ci_on(root, LINE, "plan/complete", ""), "R C P M D landing");
+}

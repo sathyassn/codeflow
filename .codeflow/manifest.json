@@ -641,7 +641,7 @@
     ".agents/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "9aec695b555753ac93ac165fd7b9e6078bdcc860b29f2de7b42c08e3b308e8f3",
+      "sha256": "d3f86fd5aea73d1b7f0d2168110ec7357bebb5ab3cc643db8ce722dfcc02cd69",
       "exec": false
     },
     ".agents/skills/cf-ship/references/pr-evidence.md": {
@@ -1319,7 +1319,7 @@
     ".claude/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "9aec695b555753ac93ac165fd7b9e6078bdcc860b29f2de7b42c08e3b308e8f3",
+      "sha256": "d3f86fd5aea73d1b7f0d2168110ec7357bebb5ab3cc643db8ce722dfcc02cd69",
       "exec": false
     },
     ".claude/skills/cf-ship/references/pr-evidence.md": {

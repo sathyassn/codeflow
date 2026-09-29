@@ -883,6 +883,14 @@ publication date._
 
 ### Fixed
 
+<!-- codeflow:release-impact minor -->
+- **Fix completed work in one PR.** A task can reopen with its old review
+  preserved and a reason, carry the fix, and complete again with a review
+  inside the same PR. The shared structural judge rejects copied or stale
+  reviews, changed criteria and damaged reopen history. Clean task landings
+  and verified release imports retain their source review; the separate
+  planning-reopen path remains valid.
+
 <!-- codeflow:release-impact patch -->
 - **Work reads survive a partial clone and refuse an oversized record.**
   `work next`, `work claim`, `work start`, `status` and `codeflow ci` read

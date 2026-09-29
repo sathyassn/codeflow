@@ -797,3 +797,155 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
         "no release-integration task to own it",
     );
 }
+
+/// TSK-140: use the scaffolded command and CI surfaces for two complete PR
+/// ranges, then reject a copied review and a missing reopen reason.
+#[test]
+#[allow(clippy::too_many_lines)] // The ordered journey includes its two negative branches.
+fn a_completed_task_is_fixed_in_one_pull_request_on_a_fresh_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    ok(&codeflow(&root, &["init", "--yes", "--full"]), "init full");
+    git(&root, &["switch", "-qc", LINE]);
+    git(&root, &["switch", "-qc", "plan/fix-journey"]);
+    ok(
+        &codeflow(&root, &["epic", "new", "fix journey"]),
+        "epic new",
+    );
+    ok(
+        &codeflow(
+            &root,
+            &["task", "new", "--epic", "EPC-001", "--into", LINE, "first"],
+        ),
+        "task new",
+    );
+    edit(
+        &root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 When run, the system shall work.\n",
+    );
+    edit(&root, TASK, "- AC-1\n", "- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the fix shall complete.\n");
+    commit(&root, "chore: plan fix journey");
+    git(&root, &["switch", "-q", LINE]);
+    git(
+        &root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: land plan",
+            "plan/fix-journey",
+        ],
+    );
+    git(&root, &["switch", "-qc", "task/TSK-001-first"]);
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn first() {}\n").unwrap();
+    let reviewed = commit(&root, "feat: first work");
+    let old_file = acceptance(dir.path(), &reviewed, "verified | first run");
+    let old = std::fs::read_to_string(&old_file).unwrap();
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "status",
+                "TSK-001",
+                "complete",
+                "--acceptance",
+                &old_file,
+            ],
+        ),
+        "complete first PR",
+    );
+    commit(&root, "chore: complete first work");
+    ok(&ci(&root, "task/TSK-001-first", "TSK-001"), "first PR CI");
+    git(&root, &["switch", "-q", LINE]);
+    git(
+        &root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: land first work",
+            "task/TSK-001-first",
+        ],
+    );
+    git(&root, &["switch", "-qc", "task/TSK-001-fix"]);
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "status",
+                "TSK-001",
+                "todo",
+                "--reason",
+                "regression",
+            ],
+        ),
+        "reopen in fix PR",
+    );
+    commit(&root, "chore: reopen task");
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "start reopened task",
+    );
+    std::fs::write(root.join("src/lib.rs"), "pub fn fixed() {}\n").unwrap();
+    let fixed = commit(&root, "fix: repair work");
+    let reopened = std::fs::read_to_string(root.join(TASK)).unwrap();
+    let new_file = acceptance(dir.path(), &fixed, "verified | fixed run");
+    let new = std::fs::read_to_string(&new_file).unwrap();
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "status",
+                "TSK-001",
+                "complete",
+                "--acceptance",
+                &new_file,
+            ],
+        ),
+        "complete fix PR",
+    );
+    commit(&root, "chore: complete fixed work");
+    ok(
+        &ci(&root, "task/TSK-001-fix", "TSK-001"),
+        "single fix PR CI",
+    );
+
+    // Each fault forks from the reviewed fix, not from the valid completion.
+    for (fault, active, archive, reason) in [
+        (
+            "copied",
+            old.as_str(),
+            reopened.clone(),
+            "inside the fix range",
+        ),
+        (
+            "reason",
+            new.as_str(),
+            reopened.replace("  reason: regression\n", ""),
+            "reason",
+        ),
+    ] {
+        git(
+            &root,
+            &["switch", "-qc", &format!("task/TSK-001-{fault}"), &fixed],
+        );
+        let record = format!(
+            "{}\n```yaml\n{active}```\n",
+            archive.replace("status: todo", "status: complete")
+        );
+        std::fs::write(root.join(TASK), record).unwrap();
+        commit(&root, "chore: record invalid completion");
+        fails(
+            &ci(&root, &format!("task/TSK-001-{fault}"), "TSK-001"),
+            fault,
+            reason,
+        );
+    }
+}

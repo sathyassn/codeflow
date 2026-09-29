@@ -3319,3 +3319,55 @@ fn the_policy_and_the_validator_refuse_what_would_blur_scope() {
         result.1
     );
 }
+
+/// A release import preserves the one-PR fix's own review boundary, even
+/// when its active block is identical to the previously completed task's.
+#[test]
+fn a_brought_one_pr_fix_is_judged_at_its_own_review() {
+    for copied in [false, true] {
+        let fx = Fx::new(false);
+        let old = fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+        fx.land(LINE_A, "task/TSK-001-work");
+        fx.git(&["switch", "-qc", "task/TSK-001-fix", LINE_A]);
+        passes(
+            &verb(
+                &fx,
+                &[
+                    "task",
+                    "status",
+                    "TSK-001",
+                    "todo",
+                    "--reason",
+                    "regression",
+                ],
+            ),
+            "reopen",
+        );
+        fx.commit("docs: reopen task");
+        fx.write("src/one.rs", "// fixed\n");
+        let fixed = fx.commit("fix: repair task");
+        let archived = std::fs::read_to_string(fx.root.join(path("TSK-001"))).unwrap();
+        fx.write(
+            &path("TSK-001"),
+            &format!(
+                "{}\n{}",
+                archived.replace("status: todo", "status: complete"),
+                block(if copied { &old } else { &fixed })
+            ),
+        );
+        fx.commit("docs: complete task again");
+        fx.land(LINE_A, "task/TSK-001-fix");
+        fx.cut_release();
+        fx.import(LINE_A);
+        let result = agree(&fx, "a brought one-PR fix");
+        if copied {
+            blocks(
+                &result,
+                "copied review on imported fix",
+                &["work.acceptance_binding", "inside the fix range"],
+            );
+        } else {
+            passes(&result, "new review on imported fix");
+        }
+    }
+}

@@ -411,7 +411,7 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs", "codeflow-cli tests/acceptance_cli.rs", "codeflow-cli tests/acceptance_journey.rs", "codeflow-cli tests/release_line_cli.rs"]
 epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-020]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060]
 ```
@@ -568,6 +568,12 @@ Record status moves only by legal transitions (SPC-013 R-30 to R-35).
 only the sections the transition needs: a `## Blocker` with reason, owner and
 revisit for a blocked task, Closeout lines `- cancelled:` and `- scope:` for a
 cancelled record, and a fenced `yaml` acceptance block on completion.
+A complete task can be fixed in one PR: reopen with a reason, retain its
+old block under `acceptance_superseded:`, fix it, then complete again with a
+reviewed commit inside that PR. The old block and criteria are compared
+with the anchored target; copied review blocks and a stale review carried
+by an earlier landing merge are refused. The separate planning-reopen
+path remains valid (TSK-140).
 Reopening keeps the old block under `acceptance_superseded:` with its reason;
 a task completed before the migration, with no block, records a Closeout line
 `- reopened: <reason>` instead. Sections and blocks inside HTML comments or
@@ -599,7 +605,11 @@ R-62): `task status complete` and `codeflow ci` check that the block's
 `reviewed` commit, named by object id, is the head or an ancestor after
 which only the record's status and Closeout changed, and that each waiver
 names a planning-only amendment on the target that changed that criterion;
-the verb also refuses uncommitted changes outside the record. Only a
+the verb also refuses uncommitted changes outside the record. A clean task
+landing can carry that reviewed source onto its line, including when only
+status and Closeout changed between the review and the landed task head.
+Unrelated line work before the landing does not invalidate that source.
+Direct work and transported work use the same binding predicate. Only a
 planning-only change or a checked epic line can change a task's criteria;
 the pull request's class decides it, not the branch prefix. A range touching the
 adopter-facing path set needs a `(journey)` criterion or one serving the

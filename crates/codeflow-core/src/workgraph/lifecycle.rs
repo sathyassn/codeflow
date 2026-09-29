@@ -123,7 +123,7 @@ impl RecordView {
             .collect()
     }
 
-    fn superseded_blocks(&self) -> Vec<FencedAcceptance> {
+    pub(super) fn superseded_blocks(&self) -> Vec<FencedAcceptance> {
         self.blocks()
             .into_iter()
             .filter(FencedAcceptance::is_superseded)
@@ -758,9 +758,26 @@ fn release_role_problem(record: &RecordView, graph: &Graph) -> Option<String> {
     })
 }
 
-/// Whether moving `before` to `after` is a legal transition (R-30, R-32 and
-/// the epic terminal acts of R-26). A record added in the change moves from
-/// the initial state: `todo`, `draft` or an open epic.
+/// A new completion of an already complete task must retain its old review.
+/// An equal active block still counts when the archived history changes.
+pub(super) fn is_recompletion(before: Option<&RecordView>, after: &RecordView) -> bool {
+    let blocks = |record: &RecordView| {
+        record
+            .superseded_blocks()
+            .into_iter()
+            .map(|block| block.inner)
+            .collect::<Vec<_>>()
+    };
+    after.kind == RecordKind::Task
+        && after.status == "complete"
+        && before.is_some_and(|old| {
+            old.status == "complete"
+                && (blocks(old) != blocks(after)
+                    || reopen_reasons(&old.body) != reopen_reasons(&after.body))
+        })
+}
+
+/// Whether moving `before` to `after` is a legal transition (R-30, R-32).
 fn transition_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<String> {
     let to = after.status.as_str();
     let from = before.map_or(
@@ -771,7 +788,11 @@ fn transition_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<S
         |record| record.status.as_str(),
     );
     if from == to {
-        return Vec::new();
+        return if is_recompletion(before, after) {
+            reopen_problems(before, after)
+        } else {
+            Vec::new()
+        };
     }
     let allowed = match after.kind {
         RecordKind::Task => task_transition_allowed(from, to),
@@ -845,11 +866,16 @@ fn spec_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
 /// reopen reason (R-30). A task completed before the migration has no block
 /// to keep; it records the reason as a Closeout line `- reopened: <reason>`
 /// and no block is invented.
-fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<String> {
+pub(super) fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<String> {
     let mut problems = Vec::new();
-    if !after.active_blocks().is_empty() {
+    if after.status != "complete" && !after.active_blocks().is_empty() {
         problems
             .push("a reopened task keeps no active acceptance block; mark it superseded".into());
+    }
+    if after.status == "complete"
+        && before.is_some_and(|old| old.criteria.signature() != after.criteria.signature())
+    {
+        problems.push("a reopened task keeps the anchored criteria; amend them in a planning pull request on the target".into());
     }
     if before.is_some_and(|record| record.active_blocks().is_empty()) {
         let old = before.map_or(0, |record| reopen_reasons(&record.body).len());
@@ -1394,6 +1420,18 @@ pub fn judge_change(
         &after.path,
         context_problems(before, after, context),
     );
+    if let Some(old) = context.base.and_then(|base| base.records.get(&after.id)) {
+        if old.status == "complete"
+            && after.kind == RecordKind::Task
+            && (after.status == "todo"
+                || (after.status == "complete"
+                    && before.is_some_and(|record| record.status == "todo"))
+                || is_recompletion(Some(old), after)
+                || context.reopened.is_some_and(|ids| ids.contains(&after.id)))
+        {
+            verdict.apply(Mode::Strict, &after.path, reopen_problems(Some(old), after));
+        }
+    }
     let reopened = baseline.reopened_since(after)
         || context
             .reopened
@@ -1480,7 +1518,9 @@ fn judge_range_against(
     verdict.errors.extend(baseline.errors());
     for record in after.records.values() {
         let olds: Vec<&RecordView> = match base_graph.records.get(&record.id) {
-            Some(old) if old.content == record.content => continue,
+            Some(old) if old.content == record.content && !reopened.contains(&record.id) => {
+                continue
+            }
             Some(old) => vec![old],
             None if baseline.is_legacy_blob(record) => continue,
             None => baseline.copies(&record.id),
@@ -1501,12 +1541,10 @@ fn judge_range_against(
     Ok(verdict)
 }
 
-/// The complete tasks without an acceptance block whose status was not
-/// `complete` at some commit between `base` and `head` (or `HEAD` for the
-/// working tree): each commit is read, not only the range's endpoints, so
-/// a reopen and a re-completion inside one range cannot pass as the
-/// historical form of R-101. Only candidates for that form are walked.
-fn reopened_in_range(
+/// Complete tasks whose status left `complete` inside this range, including
+/// when its endpoint block is unchanged. Historical completions without a
+/// block are also walked so they cannot re-enter the migration exception.
+pub(super) fn reopened_in_range(
     repo: &Repository,
     base: &str,
     head: Option<&str>,
@@ -1517,12 +1555,12 @@ fn reopened_in_range(
         .records
         .values()
         .filter(|record| record.kind == RecordKind::Task && record.status == "complete")
-        .filter(|record| record.active_blocks().is_empty())
         .filter(|record| {
-            base_graph
-                .records
-                .get(&record.id)
-                .is_none_or(|old| old.content != record.content)
+            record.active_blocks().is_empty()
+                || base_graph
+                    .records
+                    .get(&record.id)
+                    .is_some_and(|old| old.status == "complete")
         })
         .collect();
     let mut reopened = BTreeSet::new();
@@ -1565,7 +1603,19 @@ fn reopened_in_range(
                         .map(|view| view.status)
                 });
             if status.as_deref().is_some_and(|status| status != "complete") {
-                reopened.insert(record.id.clone());
+                // A task branch can merge a line that completed another
+                // task meanwhile. Its earlier todo snapshots are not a
+                // reopen: require the actual first-parent status edge.
+                let was_complete = repo
+                    .find_commit(oid)
+                    .ok()
+                    .and_then(|commit| commit.parent_id(0).ok())
+                    .and_then(|parent| super::acceptance::blob_at(repo, parent, &record.path))
+                    .and_then(|content| RecordView::parse(record.kind, &record.path, &content).ok())
+                    .is_some_and(|before| before.status == "complete");
+                if was_complete {
+                    reopened.insert(record.id.clone());
+                }
             }
         }
     }

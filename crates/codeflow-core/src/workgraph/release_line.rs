@@ -27,7 +27,7 @@
 //!   release-integration completion; anything else (code, a resolution, a
 //!   merge that is no import) belongs to the one open task with
 //!   `role: release-integration`, whose completion inside the range binds
-//!   to the head under R-60's first rule. With no such task the finding is
+//!   to the head under R-60's shared binding rule. With no such task the finding is
 //!   [`NO_OWNER`]. A completion of any other task made directly on the line
 //!   binds to the head as a task pull request's does.
 //!
@@ -41,8 +41,8 @@ use std::path::Path;
 use git2::{Oid, Repository};
 
 use super::acceptance::{
-    active_block, bind_completion, bind_completion_at_head, blob_at, finding, introduced_at,
-    Finding, Landing, BINDING_RULE, FROZEN_RULE,
+    active_block, bind_completion, blob_at, finding, introduced_at, Finding, Landing, Transport,
+    BINDING_RULE, FROZEN_RULE,
 };
 use super::classify::is_planning_path;
 use super::lifecycle::{Graph, RecordView};
@@ -842,6 +842,7 @@ fn own_line_position(
     let same = record_at(repo, parent, path).is_some_and(|there| {
         there.criteria.signature() == now.criteria.signature()
             && active_block(&there) == active_block(now)
+            && there.superseded_blocks() == now.superseded_blocks()
     });
     Ok(if same {
         lines.position(target, introduced)
@@ -871,10 +872,11 @@ fn record_of(repo: &Repository, entry: Option<&Entry>, path: &str) -> Option<Rec
 /// Whether `after` completes a task or changes its active block, compared
 /// with `before`.
 fn completion_changed(before: Option<&RecordView>, after: &RecordView) -> bool {
-    after.status == "complete"
-        && !before.is_some_and(|before| {
-            before.status == "complete" && active_block(before) == active_block(after)
-        })
+    super::lifecycle::is_recompletion(before, after)
+        || after.status == "complete"
+            && !before.is_some_and(|before| {
+                before.status == "complete" && active_block(before) == active_block(after)
+            })
 }
 
 /// A direct change of a task record's criteria, keyed on the record's
@@ -1158,6 +1160,8 @@ pub fn release_findings(
                                 &graph,
                                 Landing::Commit(introduced),
                                 default_tip,
+                                Transport::TaskLanding,
+                                super::acceptance::source_landing_base(&repo, source, introduced),
                             );
                             // Where the task's own line landed it, when the
                             // import brings it from that line.
@@ -1246,7 +1250,7 @@ pub fn release_findings(
         }
     }
 
-    // Completions made directly on the line bind to the head (R-60 rule 1).
+    // Direct completions on the line have no task-landing transport.
     let at_head = |id: &str| {
         graph
             .records
@@ -1258,12 +1262,14 @@ pub fn release_findings(
         if at_head(id).is_some_and(|task| task.status == "complete") {
             let prefix = format!("{id}: ");
             findings.extend(
-                bind_completion_at_head(
+                bind_completion(
                     &repo,
                     task,
                     &graph,
                     Landing::Commit(head_oid),
                     default_tip,
+                    Transport::Direct,
+                    Some(anchor),
                 )
                 .into_iter()
                 .map(|mut found| {
@@ -1329,12 +1335,14 @@ pub fn release_findings(
             }
             [owner] if owner.status == "complete" => {
                 if !direct_completions.contains_key(&owner.id) {
-                    findings.extend(bind_completion_at_head(
+                    findings.extend(bind_completion(
                         &repo,
                         owner,
                         &graph,
                         Landing::Commit(head_oid),
                         default_tip,
+                        Transport::Direct,
+                        Some(anchor),
                     ));
                 }
             }
