@@ -4879,7 +4879,7 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_ci_perimeter(&opts);
-        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(r.status.is_warn(), "got: {}", r.message);
         assert!(
             r.message.contains("no scaffold_version is pinned"),
             "got: {}",
@@ -4944,7 +4944,7 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_ci_perimeter(&opts);
-        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(r.status.is_warn(), "got: {}", r.message);
         assert!(r.message.contains("not armed"), "got: {}", r.message);
     }
 
