@@ -841,6 +841,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     await page.mouse.move(0, 0);
     await assertPrimary(page.getByTestId("submit-all"));
     await page.getByTestId("submit-all").click();
+    await page.locator('.cf-chrome-frame[data-commenting="false"]').waitFor({ state: "attached" });
     await page.getByTestId("toast").getByText(/Review received/).waitFor({ timeout: 10000 });
     // The reviewer reads a plain receipt; the event id is the agent's (P3-4).
     assert.equal(await page.getByTestId("toast").innerText(), "Review received.");
