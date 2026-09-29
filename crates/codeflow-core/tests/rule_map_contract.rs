@@ -730,13 +730,17 @@ fn legacy_source() -> Legacy {
     );
     for reference in REFERENCES {
         let name = reference.trim_start_matches(".codeflow/rules/");
-        let entry = format!(
-            "\n[[entry]]\nsrc = \"rules/{name}\"\ndest = \"{reference}\"\nownership = \"managed\"\ntiers = [\"minimal\", \"standard\", \"full\"]\n"
-        );
-        assert!(
-            legacy.contains(&entry),
-            "reference entry for {name} not found"
-        );
+        // A reference that names the workspace branch renders it from the
+        // template context (TSK-165), so its entry may carry `template`.
+        let entry = ["", "template = true\n"]
+            .iter()
+            .map(|template| {
+                format!(
+                    "\n[[entry]]\nsrc = \"rules/{name}\"\ndest = \"{reference}\"\nownership = \"managed\"\n{template}tiers = [\"minimal\", \"standard\", \"full\"]\n"
+                )
+            })
+            .find(|entry| legacy.contains(entry))
+            .unwrap_or_else(|| panic!("reference entry for {name} not found"));
         legacy = legacy.replace(&entry, "");
     }
     let mut overrides = BTreeMap::new();
@@ -845,6 +849,10 @@ fn update_moves_an_existing_project_onto_the_map_at_every_tier() {
                     &repo_root()
                         .join("assets/base/rules")
                         .join(reference.trim_start_matches(".codeflow/rules/"))
+                )
+                .replace(
+                    "{{WORKSPACE_ROOT_BRANCH}}",
+                    codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH
                 ),
                 "{tier}: {reference} is not the shipped reference"
             );

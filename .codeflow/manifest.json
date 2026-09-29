@@ -1349,13 +1349,13 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "f3d4f8ed4917bc455126e29364f8c918c163ec019a4b60575a54464575b678f8",
+      "sha256": "da0cb84571f125d7503b10562ce12887ee0e20193ff3e80e0b33fc6808152b30",
       "exec": false
     },
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "3cecd2dc2d2892afafbe1dcb90d96d12db81f574470444ede30b3f11e0cea705",
+      "sha256": "dcaded777471858594c514082dd3b2e52a8d95a355407183441a5dd5e6a39109",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -1367,7 +1367,7 @@
     ".codeflow/rules/worktrees.md": {
       "src": "rules/worktrees.md",
       "ownership": "managed",
-      "sha256": "438ec6d564e03ff00fee2834987b1872eab9f443e273c65b229364b5385fc72f",
+      "sha256": "abcef69065900e4b7a79a6851f60b7dbee2b368594ef95d9c5252c122e6591cd",
       "exec": false
     },
     ".codeflow/rules/writing.md": {
@@ -1451,7 +1451,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "f3142f233aed68fa0bdbcd0a611243b450e982ef315bb635a4b4065abf1a889c",
+      "sha256": "96027c197a0cd90babf79aa1e70b9375e923fe77b07586f04ec21029bade6cbd",
       "exec": false
     },
     "CLAUDE.md": {

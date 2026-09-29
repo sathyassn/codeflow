@@ -99,6 +99,13 @@ pub fn pre_commit(
             crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
+    report
+        .violations
+        .extend(crate::root_checkout::hook_violation(
+            root,
+            policy,
+            &crate::root_checkout::process_env,
+        ));
 
     if policy.secret_scan.is_active() {
         scan_staged(&repo, policy, &mut report, false);
@@ -662,6 +669,13 @@ pub fn pre_merge_commit(
             crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
+    report
+        .violations
+        .extend(crate::root_checkout::hook_violation(
+            root,
+            policy,
+            &crate::root_checkout::process_env,
+        ));
 
     Ok(report)
 }
@@ -1221,14 +1235,34 @@ mod tests {
         }
     }
 
+    /// The scan fixtures commit at the root checkout on `feat/x`; they judge
+    /// the secret scan alone, so the root-checkout rule (TSK-165) is off.
+    fn scan_policy() -> GitPolicy {
+        GitPolicy {
+            root_checkout_commits: PolicyLevel::Off,
+            ..GitPolicy::default()
+        }
+    }
+
+    /// A repository on `main` with a linked worktree on `feat/x`, where
+    /// feature work belongs; returns the worktree.
+    fn feature_worktree(dir: &Path) -> std::path::PathBuf {
+        init_repo(dir, "main");
+        git(
+            dir,
+            &["worktree", "add", "-q", ".worktrees/x", "-b", "feat/x"],
+        );
+        dir.join(".worktrees/x")
+    }
+
     // -- pre-commit --
 
     #[test]
     fn test_pre_commit_clean_on_feature_branch() {
         let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        stage(dir.path(), "src/lib.rs", "pub fn hello() {}\n");
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let wt = feature_worktree(dir.path());
+        stage(&wt, "src/lib.rs", "pub fn hello() {}\n");
+        let report = pre_commit(&wt, &GitPolicy::default(), false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
@@ -1311,7 +1345,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env", "DB_PASSWORD=hunter2hunter2\n");
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
         assert!(
             report
                 .violations
@@ -1324,7 +1358,7 @@ mod tests {
             &["commit", "-m", "chore: pre-adoption env file"],
         );
         git(dir.path(), &["rm", ".env"]);
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
         assert!(
             report.violations.is_empty(),
             "deleting a tracked dotenv file must pass: {:?}",
@@ -1337,7 +1371,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env.example", "DB_PASSWORD=\n");
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
         assert!(report.violations.is_empty());
     }
 
@@ -1350,7 +1384,7 @@ mod tests {
             "src/config.rs",
             "let key = \"AKIAIOSFODNN7EXAMPLF\";\n",
         );
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].rule, "git.secret_scan");
         assert!(report.violations[0].message.contains("src/config.rs"));
@@ -1364,7 +1398,7 @@ mod tests {
         stage(dir.path(), ".env", "X=1\n");
         let policy = GitPolicy {
             secret_scan: PolicyLevel::Off,
-            ..GitPolicy::default()
+            ..scan_policy()
         };
         let report = pre_commit(dir.path(), &policy, false).unwrap();
         assert!(report.violations.is_empty());
@@ -2113,8 +2147,8 @@ mod tests {
     #[test]
     fn test_pre_merge_commit_feature_branch_clean() {
         let dir = tempfile::tempdir().unwrap();
-        init_repo(dir.path(), "feat/x");
-        let report = pre_merge_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
+        let wt = feature_worktree(dir.path());
+        let report = pre_merge_commit(&wt, &GitPolicy::default(), false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 

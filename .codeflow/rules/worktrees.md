@@ -5,8 +5,40 @@ The full text behind the start, landing and cleanup rows of the map in
 
 ## Where work happens
 
-Develop in a worktree per session. Checkouts go under `.worktrees/<slug>`
-(gitignored), not sibling folders. Protected branches stay at the repo root.
+Develop in a worktree per session: a linked worktree on a feature branch,
+under `.worktrees/<slug>` (gitignored) or in the folder a harness manages
+for its own worktrees. Never use a sibling folder.
+
+The root checkout, the repository's main working tree, stays on its root
+branch and takes no task work. The root branch is the repository's default
+branch unless `git.root_branch` in `.codeflow/policy.json` names another.
+Change it only for an umbrella repository whose root is a working checkout
+(workspace mode): its convention is `integration/workspace`, and
+`codeflow init --workspace` sets it up.
+
+In an umbrella, a change lands this way:
+
+- The umbrella's own files: a small edit is a commit on
+  `integration/workspace` at the root checkout. Larger or parallel
+  work uses a short-lived branch in the umbrella's own
+  `.worktrees/<slug>`, cut from the root branch and merged back with
+  `codeflow integrate`.
+- With no remote, the root branch is the landing line and `main` is a
+  protected checkpoint: at a milestone the operator moves it forward with
+  `codeflow integrate integration/workspace --into main`; agents
+  never do. With a remote the same holds, the root branch is pushed, and a
+  change into `main` is a pull request a human merges.
+- A nested repository: every change goes through that repository's own
+  flow, a worktree under its own `.worktrees/<slug>` and a pull request
+  into its integration branch or its `main`. The umbrella never commits
+  nested files, which it ignores, and agents never merge into any
+  repository's `main`.
+
+git-guard refuses an agent's commit at the root checkout on any other branch
+(`git.root_checkout_commits`). The git hooks refuse it too when a harness
+marks the session, and only warn a human at their own terminal. `codeflow
+doctor` reports the root branch, a root checkout off it or holding task
+edits, and a linked worktree outside `git.worktree_locations`.
 
 ## Work-start check
 

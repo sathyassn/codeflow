@@ -1,6 +1,9 @@
 {
   "schema_version": 1,
   "git": {
+    "worktree_locations": [".worktrees",".claude/worktrees","$CODEX_HOME/worktrees","$GROK_HOME/worktrees","$GROK_HOME/worktree_pool"],
+    "root_checkout_commits": "block",
+    "root_branch": "",
     "work_planning": "block",
     "product_paths": [
       "assets/**",

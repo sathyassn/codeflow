@@ -816,8 +816,14 @@ fn range_base(
     let note = match destination.advertised(root) {
         Advertised::Tips(tips) if !tips.commits.is_empty() => {
             let line = own_line_tip(root, r, destination);
-            return bounded_by(root, &r.local_sha, tips.commits.iter(), line.as_deref())
-                .map(|base| RangeBase { base, note: None });
+            return bounded_by(
+                root,
+                &r.local_sha,
+                tips.commits.iter(),
+                None,
+                line.as_deref(),
+            )
+            .map(|base| RangeBase { base, note: None });
         }
         Advertised::Tips(_) => None,
         Advertised::Failed(why) => Some(Finding::new(
@@ -943,6 +949,7 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
                 root,
                 &r.local_sha,
                 std::iter::once(old).chain(&tips.commits),
+                Some(old),
                 line.as_deref(),
             )
             .unwrap_or_else(|| old.clone()),
@@ -989,26 +996,34 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
 }
 
 /// The exclusive base of `local_sha` against the `known` commits the
-/// destination holds: the boundary of what is new. When several commits
-/// bound it, the newest of those on the pushed task's own integration line
-/// (`line`, its advertised tip) is the base: what the branch took from its
-/// line by a merge is the line's, already judged there, not the task's, so
-/// the range is the one its pull request into the line is judged on. The
-/// base is always a commit the destination holds, so nothing new is left
-/// out. Otherwise the first boundary is the base.
+/// destination holds: the boundary of what is new, or the pushed sha itself
+/// when nothing is. When several commits bound it, the newest of those on
+/// the pushed task's own integration line (`line`, its advertised tip) is
+/// the base: what the branch took from its line by a merge is the line's,
+/// already judged there, not the task's, so the range is the one its pull
+/// request into the line is judged on. Without such a line, [`narrowest`]
+/// picks among the boundaries, where `own` (the branch's own advertised
+/// sha) is not another ref. The base is always a commit the destination
+/// holds, so nothing new is left out. `None` when git fails or no boundary
+/// exists (no shared history).
 fn bounded_by<'a>(
     root: &Path,
     local_sha: &str,
     known: impl Iterator<Item = &'a String>,
+    own: Option<&str>,
     line: Option<&str>,
 ) -> Option<String> {
+    let known: Vec<&String> = known.collect();
     let mut input = format!("{local_sha}\n");
-    for sha in known {
+    for sha in &known {
         input.push('^');
         input.push_str(sha);
         input.push('\n');
     }
     let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
+    if listed.trim().is_empty() {
+        return Some(local_sha.to_string());
+    }
     let bounds: Vec<&str> = listed.lines().filter_map(|l| l.strip_prefix('-')).collect();
     if let (Some(line), [_, _, ..]) = (line, bounds.as_slice()) {
         let on_line: Vec<&str> = bounds
@@ -1026,7 +1041,53 @@ fn bounded_by<'a>(
             }
         }
     }
-    boundary(&listed, local_sha, None).map(|found| found.base)
+    let others: Vec<&String> = known
+        .into_iter()
+        .filter(|sha| Some(sha.as_str()) != own)
+        .collect();
+    narrowest(root, local_sha, &bounds, own, &others).map(str::to_string)
+}
+
+/// The boundary to take as the range base. One base cannot leave out every
+/// known tip, so take the one whose range holds the fewest foreign commits,
+/// then the fewest commits. A foreign commit is one another destination ref
+/// holds and the branch's own history (`own`) does not: the branch's own
+/// earlier commits may be checked again, another line's history never is
+/// when a boundary avoids it. A branch that merged its moved line twice
+/// borders both line tips, and the older one would bring in the newer
+/// one's commits (TSK-165).
+fn narrowest<'b>(
+    root: &Path,
+    local_sha: &str,
+    boundaries: &[&'b str],
+    own: Option<&str>,
+    others: &[&String],
+) -> Option<&'b str> {
+    if boundaries.len() < 2 {
+        return boundaries.first().copied();
+    }
+    let count = |input: &str| {
+        git_input(root, &["rev-list", "--count", "--stdin"], input)
+            .and_then(|n| n.trim().parse::<usize>().ok())
+            .unwrap_or(usize::MAX)
+    };
+    boundaries.iter().copied().min_by_key(|base| {
+        let range = format!("{local_sha}\n^{base}\n");
+        let all = count(&range);
+        let mut not_own = range;
+        if let Some(own) = own {
+            not_own.push('^');
+            not_own.push_str(own);
+            not_own.push('\n');
+        }
+        let mut fresh = not_own.clone();
+        for sha in others {
+            fresh.push('^');
+            fresh.push_str(sha);
+            fresh.push('\n');
+        }
+        (count(&not_own).saturating_sub(count(&fresh)), all)
+    })
 }
 
 /// The advertised tip of the integration line the pushed branch's task

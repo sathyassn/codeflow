@@ -81,6 +81,15 @@ Unrelated files occupying a parsed CodeFlow record home can still make an
 explicit `validate --docs` report a collision even when automatic durable-work
 tracking is inactive; resolve the conflict rather than claiming graph validity.
 
+The root checkout stays on its root branch and takes no task work, which
+happens in linked worktrees under `.worktrees/`. The root branch is the
+default branch unless `git.root_branch` in `.codeflow/policy.json` names
+another; `git.root_checkout_commits` sets how a commit there on another
+branch is judged, and `git.worktree_locations` lists where linked worktrees
+may live. An umbrella repository that holds several projects, each its own
+repository, uses workspace mode instead: see
+[workspace-mode.md](workspace-mode.md) and `codeflow init --workspace`.
+
 ## What each tier installs
 
 Tier is recorded in `.codeflow/project.toml`; re-running `init` at a higher tier

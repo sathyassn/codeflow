@@ -315,10 +315,10 @@ key = "start"
 group = "delivery"
 tiers = ["full"]
 when = "start a task"
-action = "work-start check first (identity, intent-match, currency); one worktree per session; `codeflow work claim <id>` then `codeflow work start <id>` before edits; on an unlanded predecessor only at its reviewed SHA"
+action = "work-start check first (identity, intent-match, currency); one worktree per session; no task work at the root checkout; `codeflow work claim <id>` then `work start <id>` before edits; on an unlanded predecessor only at its reviewed SHA"
 see = [
   { target = ".codeflow/rules/worktrees.md", section = "Work-start check" },
-  { target = ".codeflow/rules/git-rules.md", must_open = true, reason = "the commit rules the hooks enforce" },
+  { target = ".codeflow/rules/git-rules.md", must_open = true, reason = "the commit rules" },
 ]
 
 [[moment]]
@@ -326,10 +326,10 @@ key = "start"
 group = "delivery"
 tiers = ["standard", "minimal"]
 when = "start a unit of work"
-action = "work-start check first (identity, intent-match, currency); one worktree per session; on an unlanded predecessor only at its reviewed SHA"
+action = "work-start check first (identity, intent-match, currency); one worktree per session; no task work at the root checkout; on an unlanded predecessor only at its reviewed SHA"
 see = [
   { target = ".codeflow/rules/worktrees.md", section = "Work-start check" },
-  { target = ".codeflow/rules/git-rules.md", must_open = true, reason = "the commit rules the hooks enforce" },
+  { target = ".codeflow/rules/git-rules.md", must_open = true, reason = "the commit rules" },
 ]
 
 [[moment]]

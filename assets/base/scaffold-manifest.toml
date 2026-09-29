@@ -158,6 +158,7 @@ tiers = ["minimal", "standard", "full"]
 src = "rules/worktrees.md"
 dest = ".codeflow/rules/worktrees.md"
 ownership = "managed"
+template = true
 tiers = ["minimal", "standard", "full"]
 
 [[entry]]
