@@ -485,7 +485,7 @@
     ".agents/skills/cf-present/references/feedback-loop.md": {
       "src": "agents/skills/cf-present/references/feedback-loop.md",
       "ownership": "managed",
-      "sha256": "a6614e0d62068fe70e4e8e62a824b3c77c4f3c08b4212ffda10e5309878d5c99",
+      "sha256": "65f6855a447ace4d20c4697f4ccb1e789dc530f8a283412b8cbc952d2ebdb7ba",
       "exec": false
     },
     ".agents/skills/cf-present/references/visual-craft.md": {
@@ -1103,7 +1103,7 @@
     ".claude/skills/cf-present/references/feedback-loop.md": {
       "src": "agents/skills/cf-present/references/feedback-loop.md",
       "ownership": "managed",
-      "sha256": "a6614e0d62068fe70e4e8e62a824b3c77c4f3c08b4212ffda10e5309878d5c99",
+      "sha256": "65f6855a447ace4d20c4697f4ccb1e789dc530f8a283412b8cbc952d2ebdb7ba",
       "exec": false
     },
     ".claude/skills/cf-present/references/visual-craft.md": {
