@@ -32,12 +32,12 @@ this repo. The block between the codeflow markers below is maintained by
 `codeflow update`; everything outside it is project-owned, so extend it freely.
 
 <!-- codeflow:managed:begin scaffold={{SCAFFOLD_VERSION}} -->
-<!-- Owned by `codeflow update`; project instructions go below the end marker. -->
+<!-- Owned by `codeflow update`; project text goes below the end marker. -->
 
 ## How to use this map
 
 Each always rule is one line with a pointer to its full text; each row names
-what to do then, and a `MUST OPEN` pointer is read before acting.
+what to do, and a `MUST OPEN` pointer is read before acting.
 Precedence: operator, nearest AGENTS.md, parent, skill defaults; safety
 floors and [enforced] rules hold under all.
 """
@@ -62,13 +62,23 @@ kind = "moments"
 text = "## When you are about to"
 
 [[agents]]
-tiers = ["standard", "full"]
+tiers = ["standard"]
 text = """
 **Where things live:** `docs/product.md` (why),
 `docs/capabilities.md` (what), `docs/architecture.md` and `docs/decisions/`
 (how), the ledger and `codeflow recall` (trace); before building, check
 `docs/capabilities.md` and the recent ADRs. Also `/cf-stack`,
 `/cf-customize`, `/cf-docs-portal`, `codeflow --help`.
+"""
+
+[[agents]]
+tiers = ["full"]
+text = """
+**Where things live:** `docs/product.md` (why),
+`docs/capabilities.md` (what), `docs/architecture.md` and `docs/decisions/`
+(how), `project-management/` (work), the ledger and `codeflow recall`
+(trace); before building, check `docs/capabilities.md` and the recent ADRs.
+Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
 """
 
 [[agents]]
