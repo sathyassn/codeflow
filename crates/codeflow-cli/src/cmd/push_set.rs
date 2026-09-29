@@ -32,6 +32,7 @@
 //! level, with the check's own output printed above it.
 
 use std::cell::OnceCell;
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
 use std::path::Path;
@@ -39,9 +40,12 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
-use codeflow_core::hooks::policy::GitPolicy;
+use codeflow_core::hooks::policy::{GitPolicy, INTEGRATION_BRANCH_PREFIX};
 use codeflow_core::hooks::Violation;
 use codeflow_core::remedy::{self, Finding};
+
+#[cfg(test)]
+mod tests;
 
 /// Run the push set for `refs` into `report`. `remote` and `url` are the
 /// pre-push hook's arguments: a configured remote name (or the URL or path
@@ -93,7 +97,7 @@ pub(super) fn run(
         url,
         advertised: &advertised,
         namespace: namespace.as_deref(),
-        protected: &policy.protected_branches,
+        policy,
     };
     let mut steps: Vec<PushStep> = Vec::new();
 
@@ -191,7 +195,12 @@ fn run_ci_ranges(
 ) {
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        if let Some(RangeBase { base, note }) = range_base(root, r, destination) {
+        let mut notices = Vec::new();
+        let range = range_base(root, r, destination, &mut notices);
+        report
+            .status
+            .extend(notices.into_iter().map(|text| format!("note: {text}")));
+        if let Some(RangeBase { base, note }) = range {
             report.notes.extend(note);
             let running = policy.test_gate_on_push.to_string();
             let mut args = vec![
@@ -425,13 +434,20 @@ struct Destination<'a> {
     /// The tracking namespace of a remote that fetches from `url`, for the
     /// protected-branch fallback; `None` when no tracking refs describe it.
     namespace: Option<&'a str>,
-    protected: &'a [String],
+    policy: &'a GitPolicy,
+}
+
+struct AdvertisedTips {
+    /// Advertised commits available locally, sorted for membership checks.
+    commits: Vec<String>,
+    /// All advertised branch tips, including those not fetched here.
+    branches: BTreeMap<String, String>,
 }
 
 /// The destination's answer to `git ls-remote`.
 enum Advertised {
     /// The advertised commits that exist here.
-    Tips(Vec<String>),
+    Tips(AdvertisedTips),
     /// Why it could not be asked.
     Failed(String),
 }
@@ -478,7 +494,10 @@ fn advertised_commits(root: &Path, url: &str) -> Advertised {
         .filter(|sha| sha.len() >= 40 && sha.chars().all(|c| c.is_ascii_hexdigit()))
         .collect();
     if shas.is_empty() {
-        return Advertised::Tips(Vec::new());
+        return Advertised::Tips(AdvertisedTips {
+            commits: Vec::new(),
+            branches: BTreeMap::new(),
+        });
     }
     let mut input = shas.join("\n");
     input.push('\n');
@@ -496,7 +515,16 @@ fn advertised_commits(root: &Path, url: &str) -> Advertised {
         .collect();
     commits.sort();
     commits.dedup();
-    Advertised::Tips(commits)
+    let branches = listed
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter_map(|(sha, reference)| {
+            let branch = reference.strip_prefix("refs/heads/")?;
+            (sha.len() >= 40 && sha.chars().all(|c| c.is_ascii_hexdigit()))
+                .then(|| (branch.to_string(), sha.to_string()))
+        })
+        .collect();
+    Advertised::Tips(AdvertisedTips { commits, branches })
 }
 
 /// `git ls-remote --heads --tags <url>`, never interactive and bounded: no
@@ -622,38 +650,40 @@ struct RangeBase {
     note: Option<Finding>,
 }
 
-/// The base of a pushed branch's range. Only history known to be on the
-/// destination is left out, and a cached tracking ref proves that only for a
-/// branch the destination may not rewrite:
-/// 1. an existing destination branch: a boundary of the commits not
-///    reachable from the branch and tag tips the destination advertises now
-///    (`git ls-remote`) or from the branch's own advertised sha. A
-///    fast-forward is checked for the push itself, and a rebase onto an
-///    integration line for the branch's own commits: the line's commits the
-///    destination holds through other refs are not checked again. A rewrite
-///    notes how many commits are checked. With no shared history, the
-///    advertised sha is the base and `codeflow ci` reports it unrelated;
-/// 2. an existing branch when the destination cannot be asked: its
-///    advertised sha alone, noted. A rewrite then also checks the commits it
-///    brought in from other branches;
-/// 3. a new branch: the same boundary against the advertised tips alone.
-///    Those are exactly the commits the destination has, so a stale local
-///    tracking ref neither hides nor adds anything. The pushed sha itself
-///    when nothing is new;
-/// 4. a new branch when the destination cannot be asked, or none of its
-///    tips is here: the same boundary against its protected branches'
-///    tracking refs, when the remote fetches from the location pushed to.
-///    Policy forbids rewriting a protected branch, so even an old cached tip
-///    is history the destination keeps. A failed ask is noted;
-/// 5. else `None`: the range is unresolved and CI checks it. A local branch
-///    is never substituted: it may be stale or not the destination's base.
-fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option<RangeBase> {
+/// Select a range without excluding any destination-missing commit:
+/// 1. An existing protected/integration fast-forward uses its advertised old
+///    tip when the destination can be asked.
+/// 2. A branch with a task target at its pushed commit uses the merge base
+///    with that target's advertised tip when the tip is available locally.
+///    An unfetched target is noted, even if the fallback finds no base.
+/// 3. An existing branch otherwise uses the historical boundary against all
+///    locally available advertised tips and its own old sha. A rewrite is
+///    noted; unrelated history uses the old sha so CI reports it unrelated.
+/// 4. If the destination cannot be asked, an existing branch uses its old
+///    sha alone, noted.
+/// 5. A new branch uses the historical boundary against available advertised
+///    tips, or its pushed sha when the destination already holds all its history.
+/// 6. With no locally available advertised tips or a failed query, a new branch
+///    uses protected tracking refs only from the same destination, noting failure.
+/// 7. Otherwise return `None` and leave the range unresolved for CI. Never
+///    substitute a policy default or a local branch for an undeclared target.
+fn range_base(
+    root: &Path,
+    r: &PushRef,
+    destination: &Destination<'_>,
+    notices: &mut Vec<String>,
+) -> Option<RangeBase> {
+    if let Advertised::Tips(tips) = destination.advertised(root) {
+        if let Some(base) = target_base(root, r, destination.policy, tips, notices) {
+            return Some(base);
+        }
+    }
     if existing_tip(root, r).is_some() {
         return Some(existing_base(root, r, destination));
     }
     let note = match destination.advertised(root) {
-        Advertised::Tips(tips) if !tips.is_empty() => {
-            return bounded_by(root, &r.local_sha, tips.iter())
+        Advertised::Tips(tips) if !tips.commits.is_empty() => {
+            return bounded_by(root, &r.local_sha, tips.commits.iter())
                 .map(|base| RangeBase { base, note: None });
         }
         Advertised::Tips(_) => None,
@@ -668,7 +698,7 @@ fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option
     };
     let ns = destination.namespace?;
     let mut known: Vec<String> = Vec::new();
-    for branch in destination.protected {
+    for branch in &destination.policy.protected_branches {
         let reference = format!("{ns}{branch}");
         if branch.contains(['*', '?', '[']) {
             let any = git(
@@ -697,6 +727,71 @@ fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option
     boundary(&listed, &r.local_sha, note)
 }
 
+/// Match the pull request's base without excluding any destination-missing
+/// commit: the selected base is either an advertised tip or its ancestor.
+/// Line rewrites and unavailable targets retain the historical fallback.
+fn target_base(
+    root: &Path,
+    r: &PushRef,
+    policy: &GitPolicy,
+    tips: &AdvertisedTips,
+    notices: &mut Vec<String>,
+) -> Option<RangeBase> {
+    let branch = r.remote_branch()?;
+    let (base, target) =
+        if policy.branch_is_protected(branch) || branch.starts_with(INTEGRATION_BRANCH_PREFIX) {
+            let old = existing_tip(root, r)?;
+            git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?;
+            (old.to_string(), branch.to_string())
+        } else {
+            let target = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
+                root,
+                branch,
+                &r.local_sha,
+            )
+            .ok()??;
+            if !codeflow_core::workgraph::is_stable_work_target(&target) {
+                return None;
+            }
+            let target = target.trim();
+            let tip = tips.branches.get(target)?;
+            if tips.commits.binary_search(tip).is_err() {
+                notices.push(format!(
+                    "declared target '{target}' advertised at {tip} is not fetched here; \
+                     falling back to advertised-history range selection for '{branch}'"
+                ));
+                return None;
+            }
+            let base = git(root, &["merge-base", &r.local_sha, tip])?;
+            (base.trim().to_string(), target.to_string())
+        };
+    notices.push(format!(
+        "range of '{branch}' uses advertised target '{target}': `codeflow ci --base {base} --head {}`",
+        r.local_sha
+    ));
+    let mut note = None;
+    if let Some(old) = existing_tip(root, r) {
+        if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha]).is_none()
+            && git(root, &["merge-base", old, &r.local_sha]).is_some()
+        {
+            let count = git(
+                root,
+                &["rev-list", "--count", &format!("{base}..{}", r.local_sha)],
+            )?;
+            note = Some(Finding::new(
+                format!(
+                    "'{branch}' rewrites the destination's {}: `codeflow ci` checks {} commit(s), \
+                     leaving out history on the target",
+                    short(old),
+                    count.trim()
+                ),
+                remedy::PUSH_REWRITE.remedy(),
+            ));
+        }
+    }
+    Some(RangeBase { base, note })
+}
+
 /// The destination's advertised sha for a branch it already has, when that
 /// commit is here: the push updates an existing branch.
 fn existing_tip<'a>(root: &Path, r: &'a PushRef) -> Option<&'a str> {
@@ -704,15 +799,18 @@ fn existing_tip<'a>(root: &Path, r: &'a PushRef) -> Option<&'a str> {
     (!zero && is_commit(root, &r.remote_sha)).then_some(r.remote_sha.as_str())
 }
 
-/// The base of an existing destination branch's range (cases 1 and 2 of
-/// [`range_base`]).
+/// The historical advertised-history fallback for an existing branch.
 fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> RangeBase {
     let branch = r.remote_branch().unwrap_or_default();
     let old = &r.remote_sha;
     let (base, failed) = match destination.advertised(root) {
         Advertised::Tips(tips) => (
-            bounded_by(root, &r.local_sha, std::iter::once(old).chain(tips))
-                .unwrap_or_else(|| old.clone()),
+            bounded_by(
+                root,
+                &r.local_sha,
+                std::iter::once(old).chain(&tips.commits),
+            )
+            .unwrap_or_else(|| old.clone()),
             None,
         ),
         Advertised::Failed(why) => (old.clone(), Some(why)),
