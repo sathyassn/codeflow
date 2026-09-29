@@ -98,7 +98,7 @@ behave.
 | | `--by <SPC-NNN>` | The new revision that supersedes this spec. |
 | `codeflow task new [TITLE]` | | Allocate the next independent `TSK-NNN` and scaffold it |
 | | `-e, --epic <EPC-NNN>` | Parent epic id. Mutually exclusive with --standalone-reason. |
-| | `--standalone-reason <REASON>` | Why this durable task does not belong to an epic. |
+| | `--standalone-reason <REASON>` | Why this durable task does not belong to an epic; may run on its task branch. |
 | | `--into <BRANCH>` | Existing local or remote-tracking non-task branch this task will integrate into. |
 | | `--follow-up-of <TSK-NNN>` | File a follow-up of this task: records `follow_up_of`, inherits its epic and target, and must run on a plan/ branch of that target. |
 | | `--resume <TSK-NNN>` | Write the record of a reservation whose write was interrupted. |
@@ -164,6 +164,8 @@ behave.
 | `codeflow test` | | Run the test gate (configured targets or runtime stack detection) |
 | | `--mode <MODE>` | Test mode: full (default), quick, or essential. `quick` is an alias for `essential`, the lighter mode shipped test-configs define. One of `full`, `quick`, `essential`. Default `full`. |
 | | `--strict` | Treat "nothing to run" as a failure (exit non-zero) instead of a loud no-op. For scripted/unattended callers, CI, the pipeline verify gate, where a run that executed zero tests must NOT read as green. The default (no `--strict`) keeps the loud-no-op-exit-0 behavior so the bootstrap/early-setup path of a brand-new repo without tests is not broken. |
+| | `--since <SINCE>` | Compare the entire candidate delta with a recorded green base. An unproven base conservatively runs every target. |
+| | `--all` | Run every target, including the binary determinism check at epic close. |
 | `codeflow test setup` | | Configure `.codeflow/test-config.json` using root detection, an embedded template, or an appended target. Safe auto-detection is the default |
 | | `--list-templates` | List the test-config templates embedded in this binary. |
 | | `--template <NAME>` | Write an embedded test-config template by name. |
@@ -180,14 +182,16 @@ behave.
 | `codeflow doctor` | | Health checks: hooks, claude, codex, grok, config, permissions, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
-| `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched (no network call) |
+| `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
 | | `--epic <EPC-NNN>` | Only tasks of this epic. |
 | | `--json` | Print the same facts as JSON. |
 | `codeflow work claim <TASK_ID>` | | Fetch, check the task is ready and unclaimed on its target tip, then create and push `task/<id>-<slug>` from that tip. The pushed branch is an advisory mark others can see |
 | | `<TASK_ID>` | Stable task id. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. |
 | `codeflow work start <TASK_ID>` | | Verify that a durable task was planned and anchored before implementation |
 | | `<TASK_ID>` | Stable task id. |
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
 
 ### Remember
 
