@@ -12,7 +12,7 @@ use codeflow_core::scaffold;
 const BINARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
-#[command(name = "codeflow", version, about = "AI-development discipline layer")]
+#[command(name = "codeflow", version = concat!(env!("CARGO_PKG_VERSION"), " source=", env!("CODEFLOW_SOURCE_REVISION"), " dirty=", env!("CODEFLOW_SOURCE_DIRTY"), " inputs=", env!("CODEFLOW_HOOK_INPUT_DIGEST")), about = "AI-development discipline layer")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

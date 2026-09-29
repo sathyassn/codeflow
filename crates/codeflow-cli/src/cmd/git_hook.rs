@@ -46,6 +46,15 @@ pub fn run(args: &GitHookArgs) -> i32 {
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let root = super::project_root(&cwd);
+    for line in git_hook::judging_identity(
+        &root,
+        env!("CARGO_PKG_VERSION"),
+        env!("CODEFLOW_SOURCE_REVISION"),
+        env!("CODEFLOW_SOURCE_DIRTY"),
+        env!("CODEFLOW_HOOK_INPUT_DIGEST"),
+    ) {
+        eprintln!("{line}");
+    }
 
     // reference-transaction fires on every ref update, including the hundreds
     // of remote-tracking refs a `git fetch` touches. Short-circuit before any

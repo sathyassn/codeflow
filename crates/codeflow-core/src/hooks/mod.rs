@@ -41,6 +41,7 @@ pub mod policy_schema;
 pub mod repo;
 pub mod scan;
 pub mod session_summary;
+pub mod source_identity;
 pub mod standards;
 
 pub use policy::{GitPolicy, GuidanceSection, Policy, PolicyLevel, SecuritySection};

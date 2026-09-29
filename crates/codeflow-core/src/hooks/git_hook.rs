@@ -17,6 +17,37 @@ use super::repo::current_branch;
 use super::scan;
 use super::{standards, Violation};
 
+/// Identify the binary and compare its compiled input digest with this source tree.
+/// Installed consumer repositories do not contain the compiler's source inputs.
+#[must_use]
+pub fn judging_identity(
+    root: &Path,
+    version: &str,
+    revision: &str,
+    dirty: &str,
+    inputs: &str,
+) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    let binary = std::env::current_exe().ok();
+    let digest = binary
+        .as_ref()
+        .and_then(|path| std::fs::read(path).ok())
+        .map_or_else(
+            || "unavailable".into(),
+            |bytes| super::source_identity::hex_digest(&Sha256::digest(bytes)),
+        );
+    let path = binary.map_or_else(|| "unavailable".into(), |p| p.display().to_string());
+    let mut lines = vec![format!("codeflow judge: binary={path} version={version} source={revision} dirty={dirty} inputs={inputs} sha256={digest}")];
+    if root.join("crates/codeflow-core/src/hooks").is_dir() {
+        match super::source_identity::input_digest(root) {
+            Ok(current) if current != inputs => lines.push("codeflow judge: warning: built from different hook or policy sources; rebuild before trusting this judgment".into()),
+            Err(error) => lines.push(format!("codeflow judge: warning: cannot verify hook or policy source inputs: {error}")),
+            Ok(_) => {}
+        }
+    }
+    lines
+}
+
 /// Outcome of running one hook stage.
 #[derive(Debug, Default)]
 pub struct StageReport {
