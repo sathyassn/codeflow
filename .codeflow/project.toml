@@ -12,7 +12,7 @@ scaffold_version = "3.0.0"
 schema_version = 1
 stack = "rust"
 tier = "full"
-work_records_baseline = ["375c68585cbeb3a1ffe6c28c8e4945c3d892e8db", "ccd56fa85160ac58d66828933e96c000357c4baa", "51ee9374b506d9a359150ac15663c26c914b57cf"]
+work_records_baseline = ["375c68585cbeb3a1ffe6c28c8e4945c3d892e8db", "ccd56fa85160ac58d66828933e96c000357c4baa", "51ee9374b506d9a359150ac15663c26c914b57cf", "d618075e229d49f706cf1c0e9ab5b10a3c9c69e3"]
 
 [release_rule_baseline]
 "integration/EPC-014-public-docs" = "d618075e229d49f706cf1c0e9ab5b10a3c9c69e3"
