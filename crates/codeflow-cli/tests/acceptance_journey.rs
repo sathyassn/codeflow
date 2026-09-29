@@ -710,7 +710,9 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
     let (pushed, said) = push(&root, &["origin", RELEASE]);
     assert!(pushed, "the release branch pushes:\n{said}");
     assert!(
-        said.contains("release range ('integration/release-1'"),
+        said.contains(
+            "'integration/release-1' is a release branch: `codeflow ci` judges everything it adds to"
+        ),
         "{said}"
     );
 

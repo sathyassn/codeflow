@@ -27,6 +27,7 @@ pub mod json_edit;
 pub mod manifest;
 pub mod portal;
 pub mod pr_template;
+pub mod prior_release;
 pub mod region;
 pub mod report;
 pub mod rule_map;
@@ -37,7 +38,7 @@ pub mod update;
 
 mod gitutil;
 mod hash;
-mod version;
+pub(crate) mod version;
 
 /// The starter ADR is useful only when `CodeFlow` is creating a project's first
 /// decision record. Brownfield repositories already have an architecture and

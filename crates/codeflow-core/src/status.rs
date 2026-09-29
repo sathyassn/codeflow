@@ -806,10 +806,9 @@ fn format_counts(counts: &BTreeMap<String, usize>) -> String {
 mod tests {
     use super::*;
     use crate::models::{Epic, EpicStatus, Task, TaskStatus};
-    use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = crate::git::command()
             .args(args)
             .env("GIT_AUTHOR_NAME", "Test")
             .env("GIT_AUTHOR_EMAIL", "test@example.com")

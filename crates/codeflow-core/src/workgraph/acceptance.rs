@@ -846,7 +846,7 @@ mod tests {
     }
 
     fn git(dir: &std::path::Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -903,7 +903,7 @@ mod tests {
         git(root, &["reset", "-q", "--hard", "HEAD^"]);
         write("a.txt", "line too\n");
         git(root, &["commit", "-qam", "conflicting"]);
-        let merged = std::process::Command::new("git")
+        let merged = crate::git::command()
             .args(["merge", "-q", "--no-ff", "task"])
             .current_dir(root)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

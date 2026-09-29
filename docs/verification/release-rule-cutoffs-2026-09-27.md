@@ -3,7 +3,7 @@
 ## Scope
 
 This is the verification record for TSK-145 AC-10 (SPC-013 R-120,
-planning resolution 22). The raw 3.0.0 rehearsal replay refused seven
+planning resolution 28). The raw 3.0.0 rehearsal replay refused seven
 criteria changes because each landed on its line in a task pull request
 that also changed code. R-120 is newer than those landings, so it applies
 from a per-line cutoff recorded on the default target. This record lists

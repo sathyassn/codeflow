@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 
@@ -31,6 +32,7 @@ use super::{Event, LedgerError, LedgerWriter};
 pub struct JsonlWriter {
     ledger_dir: PathBuf,
     session_id: Option<String>,
+    lock_wait: Option<Duration>,
 }
 
 impl JsonlWriter {
@@ -43,7 +45,7 @@ impl JsonlWriter {
     ///
     /// # Errors
     ///
-    /// Returns `LedgerError::Io` if the directory cannot be created.
+    /// Returns `LedgerError::IoAt` naming the directory if it cannot be created.
     pub fn new(ledger_dir: impl Into<PathBuf>) -> Result<Self, LedgerError> {
         Self::new_with_session(ledger_dir, None)
     }
@@ -56,17 +58,58 @@ impl JsonlWriter {
     ///
     /// # Errors
     ///
-    /// Returns `LedgerError::Io` if the directory cannot be created.
+    /// Returns `LedgerError::IoAt` naming the directory if it cannot be created.
     pub fn new_with_session(
         ledger_dir: impl Into<PathBuf>,
         session_id: Option<String>,
     ) -> Result<Self, LedgerError> {
         let ledger_dir = ledger_dir.into();
-        fs::create_dir_all(&ledger_dir)?;
+        fs::create_dir_all(&ledger_dir).map_err(at(&ledger_dir))?;
         Ok(Self {
             ledger_dir,
             session_id,
+            lock_wait: None,
         })
+    }
+
+    /// Wait at most `wait` for the file lock, then fail with
+    /// [`LedgerError::LockTimeout`] instead of blocking. For a writer whose
+    /// caller must not stall on another process's lock (the refusal record
+    /// of a hook or guard, TSK-149).
+    #[must_use]
+    pub fn with_lock_wait(mut self, wait: Duration) -> Self {
+        self.lock_wait = Some(wait);
+        self
+    }
+
+    /// Take the exclusive lock, bounded by `lock_wait` when set.
+    fn lock(&self, lock_file: &std::fs::File, lock_path: &Path) -> Result<(), LedgerError> {
+        let Some(wait) = self.lock_wait else {
+            return lock_file.lock_exclusive().map_err(|e| {
+                LedgerError::Lock(format!("acquiring lock on {}: {e}", lock_path.display()))
+            });
+        };
+        let deadline = Instant::now() + wait;
+        loop {
+            match lock_file.try_lock_exclusive() {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() == fs2::lock_contended_error().kind() => {
+                    if Instant::now() >= deadline {
+                        return Err(LedgerError::LockTimeout {
+                            path: lock_path.to_path_buf(),
+                            waited: wait,
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => {
+                    return Err(LedgerError::Lock(format!(
+                        "acquiring lock on {}: {e}",
+                        lock_path.display()
+                    )))
+                }
+            }
+        }
     }
 
     /// Resolve the file path for a given ledger type name.
@@ -90,7 +133,7 @@ impl JsonlWriter {
 
         // Ensure the subdirectory exists.
         if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(at(parent))?;
         }
 
         let lock_path = file_path.with_extension("jsonl.lock");
@@ -100,12 +143,11 @@ impl JsonlWriter {
             .create(true)
             .write(true)
             .truncate(false)
-            .open(&lock_path)?;
+            .open(&lock_path)
+            .map_err(at(&lock_path))?;
 
         // Acquire exclusive lock.
-        lock_file.lock_exclusive().map_err(|e| {
-            LedgerError::Lock(format!("acquiring lock on {}: {e}", lock_path.display()))
-        })?;
+        self.lock(&lock_file, &lock_path)?;
 
         // Serialize event to a single JSON line.
         let mut line = serde_json::to_vec(event)?;
@@ -115,15 +157,24 @@ impl JsonlWriter {
         let mut data_file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(&file_path)?;
+            .open(&file_path)
+            .map_err(at(&file_path))?;
 
         // Write the full line in a single call.
-        data_file.write_all(&line)?;
+        data_file.write_all(&line).map_err(at(&file_path))?;
 
         // Lock is released on drop of lock_file.
         drop(lock_file);
 
         Ok(())
+    }
+}
+
+/// Name the path an I/O error happened on.
+fn at(path: &Path) -> impl FnOnce(std::io::Error) -> LedgerError + '_ {
+    move |source| LedgerError::IoAt {
+        path: path.to_path_buf(),
+        source,
     }
 }
 

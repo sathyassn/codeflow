@@ -6,7 +6,6 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use clap::Args;
 use codeflow_core::hooks::{git_hook, policy::Policy, policy_schema};
@@ -72,7 +71,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
             return 1;
         }
         for warning in policy_schema::deprecation_warnings(&root) {
-            eprintln!("codeflow commit-msg: warning: {warning}");
+            eprintln!("{}", warning.line("codeflow commit-msg", "warning"));
         }
     }
 
@@ -113,11 +112,15 @@ pub fn run(args: &GitHookArgs) -> i32 {
     };
 
     match result {
-        Ok(report) => super::render_outcome(plane, &report.violations, &report.notes, 1),
+        Ok(report) => super::render_stage(plane, &root, &report, 1),
         Err(e) => {
             // A hook that cannot evaluate must not block work invisibly:
             // report and pass (CI remains the hard line, charter D19).
-            eprintln!("codeflow {plane}: warning: {e} — check skipped");
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("{e}; check skipped"),
+                codeflow_core::remedy::HOOK_UNEVALUATED.remedy(),
+            );
+            eprintln!("{}", finding.line(&format!("codeflow {plane}"), "warning"));
             0
         }
     }
@@ -144,14 +147,17 @@ fn sync_pending_ids(
         return;
     }
     if remote != Some(AUTHORITY) {
-        report.notes.push(format!(
-            "pending id reservations stay local: this push goes to {}, not the authority `{AUTHORITY}`",
-            remote.unwrap_or("an unnamed remote")
+        report.notes.push(codeflow_core::remedy::Finding::new(
+            format!(
+                "pending id reservations stay local: this push goes to {}, not the authority `{AUTHORITY}`",
+                remote.unwrap_or("an unnamed remote")
+            ),
+            codeflow_core::remedy::IDS_PENDING_LOCAL.remedy(),
         ));
         return;
     }
     match issue::sync(root) {
-        Ok(synced) if !synced.published.is_empty() => report.notes.push(format!(
+        Ok(synced) if !synced.published.is_empty() => report.status.push(format!(
             "published pending id reservations: {}",
             synced
                 .published
@@ -162,16 +168,17 @@ fn sync_pending_ids(
         )),
         Ok(_) => {}
         Err(IdsError::Clash(message)) => {
-            report.violations.push(codeflow_core::hooks::Violation::new(
+            report
+                .violations
+                .push(codeflow_core::hooks::Violation::always_blocking(
                 "registry.sync",
-                codeflow_core::hooks::PolicyLevel::Block,
                 message,
-                "renumber the unmerged record with `codeflow ids retarget <id>`, then push again"
-                    .to_string(),
+                "renumber the unmerged record with `codeflow ids retarget <id>`, then push again",
             ));
         }
-        Err(error) => report.notes.push(format!(
-            "ids sync skipped, reservations stay pending: {error}"
+        Err(error) => report.notes.push(codeflow_core::remedy::Finding::new(
+            format!("ids sync skipped, reservations stay pending: {error}"),
+            codeflow_core::remedy::IDS_SYNC_FAILED.remedy(),
         )),
     }
 }
@@ -220,12 +227,7 @@ fn run_reference_transaction_with_reader(
     let token = super::integrate_token_present();
     let human = super::human_override_present();
     match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
-        Ok(report) => super::render_outcome(
-            "reference-transaction",
-            &report.violations,
-            &report.notes,
-            1,
-        ),
+        Ok(report) => super::render_stage("reference-transaction", root, &report, 1),
         Err(e) => {
             eprintln!(
                 "codeflow reference-transaction: could not evaluate protected-ref transaction ({e}) — operation blocked"
@@ -242,10 +244,11 @@ fn read_hook_input(mut reader: impl Read) -> std::io::Result<String> {
 }
 
 fn degraded_hook_input_note(stage: &str, error: &std::io::Error) -> String {
-    format!(
-        "codeflow {stage}: warning: could not read hook stdin ({error}) — \
-         ref checks degraded; server-side CI remains authoritative"
+    codeflow_core::remedy::Finding::new(
+        format!("could not read hook stdin ({error}); ref checks degraded"),
+        codeflow_core::remedy::HOOK_STDIN_UNREAD.remedy(),
     )
+    .line(&format!("codeflow {stage}"), "warning")
 }
 
 fn commit_msg(
@@ -260,16 +263,24 @@ fn commit_msg(
             "commit-msg: missing message file argument".to_string(),
         )
     })?;
-    let message = std::fs::read_to_string(&msg_file)?;
+    let message = std::fs::read_to_string(&msg_file).map_err(|e| {
+        codeflow_core::error::HookError::Config(format!(
+            "commit-msg: cannot read the message file {}: {e}",
+            msg_file.display()
+        ))
+    })?;
     // The contract-surface tripwire needs the files this commit stages
     // (ADR-0020); empty on any error, so it simply does not fire.
-    Ok(git_hook::commit_msg_with_files(
+    let mut report = git_hook::commit_msg_with_files(
         &policy.git,
         &message,
         &staged_files(root),
         merge_in_progress(root),
         &git_hook::MessageSource::Pending(pending_cleanup(root)),
-    ))
+    );
+    // A commit has no pull request body to settle it with (TSK-147 AC-4).
+    git_hook::note_watched_paths(&mut report);
+    Ok(report)
 }
 
 /// The hook's best-effort inference of Git's cleanup of the commit-msg
@@ -298,7 +309,7 @@ fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
 /// The NUL-separated entries of one `git config -z` read in `root`, exact
 /// bytes, value text unchanged; empty when unset or unreadable.
 fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["config", "-z"])
@@ -320,7 +331,7 @@ fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
 /// the subject text, so a normal one-parent commit named `Merge ...` is still
 /// format- and body-checked.
 fn merge_in_progress(root: &Path) -> bool {
-    let git_dir = Command::new("git")
+    let git_dir = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -338,7 +349,7 @@ fn merge_in_progress(root: &Path) -> bool {
 /// the contract-surface tripwire. Empty on any error — the tripwire is advisory,
 /// so an unavailable file list simply means no nudge.
 fn staged_files(root: &Path) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["diff", "--cached", "--name-only"])
@@ -373,6 +384,7 @@ mod tests {
         let note = degraded_hook_input_note("pre-push", &error);
         assert!(note.contains("pre-push"), "{note}");
         assert!(note.contains("ref checks degraded"), "{note}");
+        assert!(note.contains("clear it: rerun `git push`"), "{note}");
     }
 
     #[test]

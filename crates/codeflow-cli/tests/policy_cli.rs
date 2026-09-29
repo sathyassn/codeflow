@@ -106,7 +106,12 @@ fn policy_show_absent_file_is_all_defaults_exit_zero() {
         stdout.contains("default  git.commit_format               block"),
         "{stdout}"
     );
-    assert!(!stdout.contains("project"), "{stdout}");
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("project ")),
+        "{stdout}"
+    );
 }
 
 #[test]

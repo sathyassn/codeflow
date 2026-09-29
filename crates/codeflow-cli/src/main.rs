@@ -96,11 +96,13 @@ enum Command {
     Estimate(cmd::estimate::EstimateArgs),
     /// Review this session on the utility presentation surface (catalog JSON, Comment).
     Present(cmd::present::PresentArgs),
+    /// Read-only reports: `ceremony`, the process cost over merged pull requests.
+    Report(cmd::report::ReportArgs),
 }
 
 /// Whether a command records its repository in the user registry. Hook
 /// entry points, `ci` and the read-only checks (`validate`, `work`,
-/// `estimate`) do not; `orient` and `status` do, since the session-start
+/// `estimate`, `report`) do not; `orient` and `status` do, since the session-start
 /// orient is the main sign that a repository is in use.
 fn touches_registry(command: &Command) -> bool {
     !matches!(
@@ -111,6 +113,7 @@ fn touches_registry(command: &Command) -> bool {
             | Command::Validate(_)
             | Command::Work(_)
             | Command::Estimate(_)
+            | Command::Report(_)
     )
 }
 
@@ -134,6 +137,13 @@ fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> 
 }
 
 fn main() -> anyhow::Result<()> {
+    // A hook git fires during this command runs this binary (SPC-013 R-85):
+    // the path goes only into git children's environment, so an inherited
+    // value is dropped here and no other child ever sees one.
+    std::env::remove_var(codeflow_core::git::HOOK_BINARY_ENV);
+    if let Ok(binary) = std::env::current_exe() {
+        codeflow_core::git::designate_calling_binary(binary);
+    }
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
 
@@ -231,6 +241,7 @@ fn main() -> anyhow::Result<()> {
         Command::Ids(args) => std::process::exit(cmd::ids::run(&args)),
         Command::Estimate(args) => std::process::exit(cmd::estimate::run(&args)),
         Command::Present(args) => std::process::exit(cmd::present::run(&args)),
+        Command::Report(args) => std::process::exit(cmd::report::run(&args)),
     }
     Ok(())
 }

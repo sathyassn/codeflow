@@ -105,10 +105,11 @@ pub fn parse_dependency(value: &Value) -> Result<Dependency, String> {
         Some(Value::String(pin)) if is_commit_id(pin) => Some(pin.clone()),
         // YAML may have dropped the text (`949894e0` is 949894.0, a 40-digit
         // id is a rounded float, `+1234567` loses its sign), so a number is
-        // never read back (R-112).
+        // never read back (R-112). The text may well be a commit id, so the
+        // remedy is the quoting, never a verdict on the id (TSK-142 AC-4).
         Some(Value::Number(_)) => {
             return Err(format!(
-                "dependency {id} pin reads as a YAML number, not a commit id; quote it: pin: \"<commit sha>\""
+                "dependency {id} pin reads as a YAML number, which loses the text as written; the pin must be quoted: pin: \"<commit sha>\""
             ))
         }
         Some(_) => {
@@ -185,19 +186,29 @@ mod tests {
     #[test]
     fn a_number_shaped_pin_is_refused_unquoted_and_read_quoted() {
         let full_digits = "1234567890123456789012345678901234567890";
-        for pin in ["70283613", "949894e0", full_digits] {
+        // TSK-142 AC-4: an all-digit and an exponent-form prefix are refused
+        // as unquoted, never as "not a commit id". An exponent too large for
+        // a float (`12e45678`) stays text, so it is read as written below.
+        for pin in ["70283613", "12345678", "949894e0", full_digits] {
             let unquoted = format!("[{{id: TSK-001, kind: research, pin: {pin}}}]");
             let error = parse_dependencies(Some(&yaml(&unquoted))).unwrap_err();
             assert!(
                 error.contains("TSK-001 pin reads as a YAML number")
-                    && error.contains("quote it: pin: \"<commit sha>\""),
+                    && error.contains("the pin must be quoted: pin: \"<commit sha>\""),
                 "{pin}: {error}"
             );
+            assert!(!error.contains("not a commit id"), "{pin}: {error}");
             let quoted = format!("[{{id: TSK-001, kind: research, pin: \"{pin}\"}}]");
             let deps = parse_dependencies(Some(&yaml(&quoted))).unwrap();
             assert_eq!(deps[0].pin.as_deref(), Some(pin), "{pin}");
         }
-        for pin in ["0123abcd", "\"0123abcd\"", "07028361"] {
+        for pin in [
+            "0123abcd",
+            "\"0123abcd\"",
+            "07028361",
+            "12e45678",
+            "\"12e45678\"",
+        ] {
             let text = format!("[{{id: TSK-001, kind: research, pin: {pin}}}]");
             let deps = parse_dependencies(Some(&yaml(&text))).unwrap();
             assert_eq!(

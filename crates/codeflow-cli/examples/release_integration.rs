@@ -3,7 +3,6 @@
 //! by a normal fast-forward push, only after every combined check succeeds.
 use std::fmt::Write as _;
 use std::path::Path;
-use std::process::Command;
 
 use clap::Parser;
 use codeflow_core::reading::{self, Inventory, SkillFiles};
@@ -41,7 +40,8 @@ fn main() {
 }
 
 fn command(root: &Path, program: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(program)
+    // Every git spawn goes through codeflow_core's constructor (TSK-141 AC-4).
+    let output = codeflow_core::git::process(program)
         .args(args)
         .current_dir(root)
         // Do not inherit a caller's index, checkout, or pull-request context.

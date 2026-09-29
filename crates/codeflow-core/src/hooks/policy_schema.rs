@@ -50,6 +50,10 @@ pub enum KeyKind {
     Profiles,
     /// The PR-section mapping object (SPC-013 R-84).
     SectionMapping,
+    /// The headless opt-in object: `families` and `reason` (ADR-0075 D4).
+    HeadlessOptIn,
+    /// A list of argument-bound retry entry objects (TSK-174).
+    RetryEntries,
 }
 
 impl KeyKind {
@@ -63,7 +67,8 @@ impl KeyKind {
             Self::String => "string",
             Self::Enum(_) => "enum",
             Self::Profiles => "profile list",
-            Self::SectionMapping => "object",
+            Self::SectionMapping | Self::HeadlessOptIn => "object",
+            Self::RetryEntries => "entry list",
         }
     }
 }
@@ -89,7 +94,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 50] = [
+pub const SCHEMA: [KeySpec; 61] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -467,6 +472,18 @@ pub const SCHEMA: [KeySpec; 50] = [
                 disable the scan (it is policy, not hardcoded); leave at block.",
     },
     KeySpec {
+        path: "git.conflict_markers",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170).",
+        notes: "Defaults to block. Only added lines are judged. A separator \
+                line counts only between an opening and a closing marker, so \
+                a Markdown heading underline passes. A file that must hold \
+                markers sets `conflict-marker-size` for its path in \
+                .gitattributes to a length its markers do not have. \
+                Suspended by bootstrap grace.",
+    },
+    KeySpec {
         path: "git.test_gate_on_push",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
@@ -487,6 +504,22 @@ pub const SCHEMA: [KeySpec; 50] = [
         purpose: "The dependency-audit gate in CI.",
         notes: "Ships at warn (ADR-0016); harden to block when ready.",
     },
+    KeySpec {
+        path: "git.discard_uncommitted",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Commands in an agent session that discard locally unique uncommitted work (ADR-0075).",
+        notes: "Default block. The in-session guard judges it; a human \
+                terminal and the git hooks are unaffected.",
+    },
+    KeySpec {
+        path: "git.clean_regenerable",
+        kind: KeyKind::StringList,
+        valid: "an array of directory paths, each ending with `/`",
+        purpose: "Regenerable build and dependency directories `git clean` may remove without a discard refusal (ADR-0075).",
+        notes: "Default target/, node_modules/, dist/, build/, .venv/, \
+                __pycache__/, coverage/.",
+    },
     // ---- security ----------------------------------------------------------
     KeySpec {
         path: "security.dangerous_commands",
@@ -501,16 +534,87 @@ pub const SCHEMA: [KeySpec; 50] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Privilege escalation the exec-guard catches (Unix sudo/su/doas/pkexec, Windows gsudo/runas/elevated PowerShell, LD_PRELOAD/PATH injection).",
-        notes: "Default warn, not block — the harness's ask tier owns sudo \
-                prompting; the guard only surfaces in-session feedback.",
+        notes: "Default block (ADR-0075 D5): the presets deny the plain forms \
+                without a prompt, the guard refuses the wrapped ones, and the \
+                operator runs privileged commands. `codeflow update` moves a \
+                project still at the old warn default to block.",
     },
     KeySpec {
         path: "security.headless_peer_runs",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate).",
-        notes: "Default warn: scripting outside a delegation stays possible; \
-                block refuses the run.",
+        notes: "Default block (ADR-0075 D4): a project that needs a headless \
+                run names its family in security.headless_opt_in. `codeflow \
+                update` moves a project still at the old warn default to block.",
+    },
+    KeySpec {
+        path: "security.headless_opt_in",
+        kind: KeyKind::HeadlessOptIn,
+        valid: "{families: [claude | codex | grok, ...], reason: non-empty string}",
+        purpose: "The catalog families whose headless runs this project allows, with its reason (ADR-0075 D4).",
+        notes: "Absent by default. Config decides; whether an interactive \
+                harness is detected only shapes the message and doctor's report.",
+    },
+    KeySpec {
+        path: "security.script_bypass",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Refused actions found inside a script file a command runs (ADR-0075).",
+        notes: "Default warn: a script is read on a best-effort basis.",
+    },
+    KeySpec {
+        path: "security.outward_actions",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075).",
+        notes: "Default block.",
+    },
+    KeySpec {
+        path: "security.interpreter_scan",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Refused actions embedded in an interpreter call (`python -c`, `node -e`) (ADR-0075).",
+        notes: "Default block.",
+    },
+    KeySpec {
+        path: "security.secret_reads",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Shell reads of the secret stores the presets deny to the file tools (ADR-0075).",
+        notes: "Default block.",
+    },
+    KeySpec {
+        path: "security.enforcement_baseline",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Commits and ref moves whose enforcement files match no identity the operator approved (ADR-0075).",
+        notes: "Default block.",
+    },
+    KeySpec {
+        path: "security.workflow_pushes",
+        kind: KeyKind::Enum(&["queue", "allow"]),
+        valid: "queue | allow",
+        purpose: "A push from an agent session that introduces a `.github/workflows/` change (ADR-0075 D9).",
+        notes: "Default queue: refused and queued for the operator, whose \
+                login can push workflows. `allow` is for an agent credential \
+                with workflow rights.",
+    },
+    KeySpec {
+        path: "security.sandbox_retry",
+        kind: KeyKind::Enum(&["allowlist", "block"]),
+        valid: "allowlist | block",
+        purpose: "Claude's unsandboxed retry from a primary session (ADR-0075 decision 6).",
+        notes: "Default allowlist: only an argument vector an entry of \
+                sandbox_retry_allow spells out. `block` refuses every retry.",
+    },
+    KeySpec {
+        path: "security.sandbox_retry_allow",
+        kind: KeyKind::RetryEntries,
+        valid: "an array of entry objects, each naming its `program`",
+        purpose: "The argument-bound entries the unsandboxed retry may run (ADR-0075 decision 6).",
+        notes: "The shipped entry is the Codex plugin companion, pinned by \
+                path, version and digest at qualification.",
     },
     // ---- guidance ----------------------------------------------------------
     KeySpec {
@@ -634,7 +738,7 @@ fn deprecated_key(key: &str) -> Option<&'static str> {
 /// One warning per deprecated key present in `<root>/.codeflow/policy.json`.
 /// An absent or unreadable file gives none; [`validate_policy`] reports that.
 #[must_use]
-pub fn deprecation_warnings(root: &Path) -> Vec<String> {
+pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
     let Ok(data) = std::fs::read_to_string(root.join(".codeflow").join("policy.json")) else {
         return Vec::new();
     };
@@ -644,9 +748,9 @@ pub fn deprecation_warnings(root: &Path) -> Vec<String> {
     obj.keys()
         .filter_map(|key| {
             deprecated_key(key).map(|why| {
-                format!(
-                    "policy key {key} is deprecated and ignored: {why}; `codeflow update` \
-                     removes it, or delete it from .codeflow/policy.json"
+                crate::remedy::Finding::new(
+                    format!("policy key {key} is deprecated and ignored: {why}"),
+                    crate::remedy::POLICY_DEPRECATED.with(&[("key", key)]),
                 )
             })
         })
@@ -843,6 +947,8 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
         },
         KeyKind::Profiles => validate_profiles(path, value, errors),
         KeyKind::SectionMapping => validate_mapping(path, value, errors),
+        KeyKind::HeadlessOptIn => validate_headless_opt_in(path, value, errors),
+        KeyKind::RetryEntries => validate_retry_entries(path, value, errors),
         KeyKind::Enum(values) => {
             if !value.as_str().is_some_and(|s| values.contains(&s)) {
                 errors.push(PolicyError::invalid_value(
@@ -975,6 +1081,83 @@ fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
 
 /// Validate `git.pr_section_mapping`: an object with a known `state`, an
 /// optional `headings` map of strings, and `decided` as `none` or a date.
+/// Validate `security.headless_opt_in`: an object with a non-empty
+/// `families` list of catalog family ids and a non-empty `reason`, and no
+/// other field.
+fn validate_headless_opt_in(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let Some(obj) = value.as_object() else {
+        errors.push(PolicyError::invalid_value(
+            path,
+            value,
+            "an object with families and reason",
+        ));
+        return;
+    };
+    for key in obj.keys() {
+        if !matches!(key.as_str(), "families" | "reason") {
+            nested_error(
+                errors,
+                path,
+                &format!("unknown field `{key}`; expected families, reason"),
+            );
+        }
+    }
+    let families = super::policy::HEADLESS_FAMILIES;
+    let families_ok = obj
+        .get("families")
+        .and_then(Value::as_array)
+        .is_some_and(|list| {
+            !list.is_empty()
+                && list
+                    .iter()
+                    .all(|f| f.as_str().is_some_and(|f| families.contains(&f)))
+        });
+    if !families_ok {
+        nested_error(
+            errors,
+            path,
+            &format!(
+                "`families` must be a non-empty array of {}",
+                families.join(", ")
+            ),
+        );
+    }
+    if obj
+        .get("reason")
+        .and_then(Value::as_str)
+        .is_none_or(|r| r.trim().is_empty())
+    {
+        nested_error(errors, path, "`reason` must be a non-empty string");
+    }
+}
+
+/// Validate `security.sandbox_retry_allow` as far as this unit owns it: an
+/// array of objects, each naming a non-empty `program`. The retry check
+/// (TSK-174) owns the meaning of every other field.
+fn validate_retry_entries(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let Some(list) = value.as_array() else {
+        errors.push(PolicyError::invalid_value(
+            path,
+            value,
+            "an array of entry objects",
+        ));
+        return;
+    };
+    for (i, entry) in list.iter().enumerate() {
+        let program_ok = entry
+            .get("program")
+            .and_then(Value::as_str)
+            .is_some_and(|p| !p.trim().is_empty());
+        if !program_ok {
+            nested_error(
+                errors,
+                &format!("{path}[{i}]"),
+                "expected an object with a non-empty `program`",
+            );
+        }
+    }
+}
+
 fn validate_mapping(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     let Some(obj) = value.as_object() else {
         errors.push(PolicyError::invalid_value(path, value, "an object"));
@@ -1056,7 +1239,11 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 2] = ["git.pr_section_mapping", "git.release_branch_pattern"];
+        const OPTIONAL: [&str; 3] = [
+            "git.pr_section_mapping",
+            "git.release_branch_pattern",
+            "security.headless_opt_in",
+        ];
         // The drift guard: every leaf the default Policy serializes must be in
         // the schema, and every schema path must be a real serde leaf — a new
         // field (or a renamed one) fails this test until the registry follows.
@@ -1159,6 +1346,17 @@ mod tests {
     }
 
     #[test]
+    fn test_conflict_markers_takes_every_level_and_refuses_others() {
+        // TSK-170 AC-5.
+        for level in ["block", "warn", "allow", "off"] {
+            let json = format!(r#"{{"git":{{"conflict_markers":"{level}"}}}}"#);
+            assert!(validate_policy_str(&json).is_ok(), "{level}");
+        }
+        let errs = validate_policy_str(r#"{"git":{"conflict_markers":"strict"}}"#).unwrap_err();
+        assert_eq!(errs[0].key, "git.conflict_markers");
+    }
+
+    #[test]
     fn test_work_planning_accepts_block_or_warn_and_refuses_off() {
         for level in ["block", "warn"] {
             let json = format!(r#"{{"git":{{"work_planning":"{level}"}}}}"#);
@@ -1210,7 +1408,14 @@ mod tests {
         assert!(validate_policy(dir.path()).is_ok());
         let warnings = deprecation_warnings(dir.path());
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("human_authorization is deprecated"));
+        assert!(warnings[0]
+            .text
+            .contains("human_authorization is deprecated"));
+        assert!(
+            warnings[0].remedy.contains("codeflow update"),
+            "{}",
+            warnings[0]
+        );
         std::fs::write(dir.path().join(".codeflow/policy.json"), r#"{"git":{}}"#).unwrap();
         assert!(deprecation_warnings(dir.path()).is_empty());
     }
@@ -1223,6 +1428,47 @@ mod tests {
         assert!(hint.contains("scaffold_version"));
         let errs = validate_policy_str(r#"{"git":{"commit_format":"worn"}}"#).unwrap_err();
         assert!(upgrade_order_hint(&errs, "3.0.0").is_none());
+    }
+
+    #[test]
+    fn test_headless_opt_in_takes_catalog_families_with_a_reason() {
+        let ok =
+            r#"{"security": {"headless_opt_in": {"families": ["codex"], "reason": "CI host"}}}"#;
+        assert!(validate_policy_str(ok).is_ok());
+        for bad in [
+            r#"{"security": {"headless_opt_in": {"families": ["codex-cli"], "reason": "x"}}}"#,
+            r#"{"security": {"headless_opt_in": {"families": [], "reason": "x"}}}"#,
+            r#"{"security": {"headless_opt_in": {"families": ["grok"], "reason": " "}}}"#,
+            r#"{"security": {"headless_opt_in": {"harnesses": ["grok"], "reason": "x"}}}"#,
+            r#"{"security": {"headless_opt_in": ["codex"]}}"#,
+        ] {
+            let errors = validate_policy_str(bad).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .all(|e| e.key.starts_with("security.headless_opt_in")),
+                "{bad}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_new_security_keys_validate_their_values() {
+        for ok in [
+            r#"{"security": {"workflow_pushes": "allow", "sandbox_retry": "block"}}"#,
+            r#"{"security": {"sandbox_retry_allow": [{"program": "node"}]}}"#,
+            r#"{"git": {"discard_uncommitted": "warn", "clean_regenerable": ["out/"]}}"#,
+        ] {
+            assert!(validate_policy_str(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            r#"{"security": {"workflow_pushes": "block"}}"#,
+            r#"{"security": {"sandbox_retry": "allow"}}"#,
+            r#"{"security": {"sandbox_retry_allow": [{"script": "x"}]}}"#,
+            r#"{"security": {"outward_actions": "deny"}}"#,
+        ] {
+            assert!(validate_policy_str(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

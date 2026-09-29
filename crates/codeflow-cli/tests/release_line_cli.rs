@@ -354,6 +354,9 @@ fn run_git(dir: &Path, args: &[&str]) -> String {
 }
 
 const SCOPE_LINE: &str = "release range ('";
+/// What pre-push states for a release push: the scope `codeflow ci` then
+/// judges, printed as a result, since a passing check relays only findings.
+const RELEASE_PUSH: &str = "is a release branch: `codeflow ci` judges everything it adds to";
 const NO_OWNER: &str = "no release-integration task to own it";
 
 fn passes(result: &(i32, String), what: &str) {
@@ -1270,14 +1273,8 @@ fn a_new_release_branch_is_pushed_from_the_default_tip() {
     let head = fx.head();
     let hook = fx.pre_push(RELEASE, &head, zero);
     passes(&hook, "a new release branch of two imports");
-    let judged = format!("codeflow ci --base {main} --head {head}");
+    let judged = format!("{RELEASE_PUSH} main at {}", &main[..9]);
     assert!(hook.1.contains(&judged), "{}", hook.1);
-    assert!(
-        hook.1
-            .contains("is a release branch: `codeflow ci` judges everything it adds to main"),
-        "{}",
-        hook.1
-    );
     let ci = fx.ci("main", &head, RELEASE, Some("main"));
     assert_eq!(findings(&ci), findings(&hook), "{}\n{}", ci.1, hook.1);
 
@@ -3176,7 +3173,7 @@ fn a_records_only_retarget_does_not_change_the_next_push() {
         &fx.git(&["rev-parse", &format!("origin/{RELEASE}")]),
     );
     passes(&one, "the records-only retarget");
-    assert!(one.1.contains(SCOPE_LINE), "{}", one.1);
+    assert!(one.1.contains(RELEASE_PUSH), "{}", one.1);
     fx.git(&["push", "-q", "origin", RELEASE]);
     let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
     fx.write(&path("TSK-003"), &current.replace(CRITERIA, LOOSER));
