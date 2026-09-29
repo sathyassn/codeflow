@@ -223,6 +223,24 @@ publication date._
   the target branch. The `codeflow-registry` workflow installs its binary
   the same way.
 
+<!-- codeflow:release-impact minor -->
+- **The pinned CI binary on GitLab, Bitbucket and any other CI.** The
+  `.gitlab-ci.yml`, `bitbucket-pipelines.yml` and `ci-generic.sh` templates
+  no longer suggest the `releases/latest` installer. They install the
+  release the target commit pins, verified against its `sha256.sum`, run
+  `codeflow ci` from a checkout of the target, test a raised pin's release
+  separately, and fail a lowered pin. `ci-generic.sh` now takes the target
+  commit as its first argument and refuses to run without it. On GitLab the
+  target is the target branch's current commit, never the diff base, and
+  the job fails when it cannot fetch it. A branch that kept the pin it
+  started from is not a lowered pin. If you copied
+  one of these files and wired your own install, replace that install with
+  the new template's shared script, or install the version your target's
+  `scaffold_version` names and verify it the same way. `codeflow doctor`'s
+  `ci-perimeter` check now names the version CI installs, and warns on a
+  missing or lowered pin and on policy keys or schema carried before a
+  raised pin has landed, naming the two-step order.
+
 <!-- codeflow:release-impact patch -->
 - **Commit subject separator.** The commit-msg hook and `codeflow ci` now
   require a blank line after the subject, since git reads a following line

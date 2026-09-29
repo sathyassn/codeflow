@@ -22,6 +22,8 @@ use crate::scaffold::region;
 use crate::scaffold::sha256_hex;
 use crate::scaffold::state::InstalledManifest;
 
+mod ci_pin;
+
 /// Outcome of a health check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -226,9 +228,13 @@ const CI_ASSET_SRC: &str = "ci/codeflow-ci.yml";
 /// Canonical dest for the CI workflow when the installed manifest is silent.
 const CI_DEFAULT_DEST: &str = ".github/workflows/codeflow-ci.yml";
 
-/// Sentinel emitted by the scaffolded CI's placeholder install step (the loud
-/// `::error::` that fails the perimeter RED until the real installer is wired).
-const CI_PLACEHOLDER_MARK: &str = "install step is an unwired PLACEHOLDER";
+/// Sentinels of the placeholder install steps older scaffolds shipped: the
+/// GitHub workflow's loud `::error::`, and the copy-in platform files'
+/// comment. Current templates install the target-pinned release instead.
+const CI_PLACEHOLDER_MARKS: [&str; 2] = [
+    "install step is an unwired PLACEHOLDER",
+    "PLACEHOLDER: install the codeflow binary",
+];
 const MAX_SETTINGS_BYTES: u64 = 16 * 1024 * 1024;
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const VERSION_PROBE_OUTPUT_BYTES: usize = 64 * 1024;
@@ -2151,15 +2157,6 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
     out
 }
 
-/// Perimeter honesty (charter §9): the scaffolded CI workflow is the
-/// authoritative, server-enforced perimeter — branch protection can require
-/// it. `codeflow init` writes `codeflow-ci.yml` with a PLACEHOLDER install
-/// step that fails RED by design (a missing binary is an unarmed perimeter,
-/// not a pass). This WARNS while that placeholder stands — the gate compiles
-/// and runs but enforces nothing real — and skips cleanly (Pass) when no CI
-/// workflow is present (the CI workflow ships from --minimal up, so this is a
-/// repo that opted out via `[scaffold] ignore` or predates it). WARN only,
-/// never a block.
 /// Adopter fit (SPC-013 R-84, R-97, R-115): the effective PR-section level
 /// and its origin, a kept PR template's pending decision, and the release
 /// backend with any release tool that owns versions. WARN while a decision
@@ -2220,12 +2217,30 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
     }
 }
 
+/// Perimeter honesty (charter section 9): the scaffolded CI workflow is the
+/// authoritative, server-enforced perimeter, and branch protection can
+/// require it. It installs the `codeflow` release the target branch pins,
+/// checksum-verified (SPC-013 R-113, TSK-095), so this describes that pin:
+/// the version CI installs, a lowered pin, and an upgrade that carries
+/// `codeflow update` before its raised pin has landed (WARN, with the
+/// two-step order). An older scaffold's placeholder install step WARNS as an
+/// unarmed perimeter, and a CI file that installs codeflow its own way
+/// passes with no claim about the pin. No CI file at all passes cleanly: the
+/// repo opted out or predates the workflow. WARN only, never a block.
 fn check_ci_perimeter(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
-    let dest = ci_workflow_dest(&root);
-
-    let Ok(content) = std::fs::read_to_string(root.join(&dest)) else {
+    let github = ci_workflow_dest(&root);
+    // The GitHub workflow `init` scaffolds, then the copy-in platform files
+    // at the paths their platforms read.
+    let found = [github.as_str(), ".gitlab-ci.yml", "bitbucket-pipelines.yml"]
+        .into_iter()
+        .find_map(|dest| {
+            std::fs::read_to_string(root.join(dest))
+                .ok()
+                .map(|content| (dest.to_string(), content))
+        });
+    let Some((dest, content)) = found else {
         return CheckResult {
             name: "ci-perimeter".into(),
             status: Status::Pass,
@@ -2234,7 +2249,10 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
         };
     };
 
-    if content.contains(CI_PLACEHOLDER_MARK) {
+    if CI_PLACEHOLDER_MARKS
+        .iter()
+        .any(|mark| content.contains(mark))
+    {
         return CheckResult {
             name: "ci-perimeter".into(),
             status: Status::Warn(remedy::DOCTOR_CI_PLACEHOLDER.with(&[("path", &dest)])),
@@ -2245,10 +2263,25 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
         };
     }
 
+    // Every shipped pinned install reads `scaffold_version`; an install the
+    // project wired itself (a source build, its own installer) does not, and
+    // the pin says nothing about the binary it runs.
+    if !content.contains("scaffold_version") {
+        return CheckResult {
+            name: "ci-perimeter".into(),
+            status: Status::Pass,
+            message: format!(
+                "{dest} installs codeflow its own way, not from the target's scaffold_version pin; doctor cannot tell which version it runs"
+            ),
+            duration: start.elapsed(),
+        };
+    }
+
+    let pin = ci_pin::report(&root);
     CheckResult {
         name: "ci-perimeter".into(),
-        status: Status::Pass,
-        message: format!("{dest} install step is wired (CI perimeter armed)"),
+        status: pin.status,
+        message: format!("{dest}: {}", pin.message),
         duration: start.elapsed(),
     }
 }
@@ -4814,13 +4847,105 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_ci(
             dir.path(),
-            "steps:\n  - name: Install codeflow\n    run: curl -fsSL https://example/installer.sh | sh\n",
+            "steps:\n  - name: Install codeflow (target-pinned, checksum-verified)\n    # reads scaffold_version at the target\n",
         );
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/project.toml"),
+            "scaffold_version = \"1.2.3\"\n",
+        )
+        .unwrap();
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_ci_perimeter(&opts);
         assert_eq!(r.status, Status::Pass, "got: {}", r.message);
-        assert!(r.message.contains("armed"), "got: {}", r.message);
+        // The target-side pin, not the old placeholder story (TSK-095).
+        assert!(
+            r.message
+                .contains("the codeflow version the target branch pins (1.2.3 here)"),
+            "got: {}",
+            r.message
+        );
+        assert!(r.message.contains("sha256.sum"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_ci_perimeter_warns_when_nothing_is_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ci(
+            dir.path(),
+            "steps:\n  - name: Install codeflow\n    # reads scaffold_version at the target\n",
+        );
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_ci_perimeter(&opts);
+        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(
+            r.message.contains("no scaffold_version is pinned"),
+            "got: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn test_ci_perimeter_finds_a_copied_in_platform_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("bitbucket-pipelines.yml"),
+            "# >>> codeflow pinned run (SPC-013 R-113)\ncodeflow_pin() { git show \"$1:.codeflow/project.toml\" | grep scaffold_version; }\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/project.toml"),
+            "scaffold_version = \"1.2.3\"\n",
+        )
+        .unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_ci_perimeter(&opts);
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+        assert!(
+            r.message.starts_with("bitbucket-pipelines.yml"),
+            "got: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn test_ci_perimeter_does_not_claim_the_pin_for_an_own_install() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ci(
+            dir.path(),
+            "steps:\n  - name: Build codeflow from source\n    run: cargo install --path crates/codeflow-cli\n",
+        );
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/project.toml"),
+            "scaffold_version = \"1.2.3\"\n",
+        )
+        .unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_ci_perimeter(&opts);
+        assert_eq!(r.status, Status::Pass, "got: {}", r.message);
+        assert!(r.message.contains("its own way"), "got: {}", r.message);
+        assert!(!r.message.contains("1.2.3"), "got: {}", r.message);
+    }
+
+    #[test]
+    fn test_ci_perimeter_warns_on_an_old_copy_in_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".gitlab-ci.yml"),
+            "    # PLACEHOLDER: install the codeflow binary onto PATH, e.g.\n",
+        )
+        .unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        let r = check_ci_perimeter(&opts);
+        assert_eq!(r.status, Status::Warn, "got: {}", r.message);
+        assert!(r.message.contains("not armed"), "got: {}", r.message);
     }
 
     #[test]
