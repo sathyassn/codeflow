@@ -1,0 +1,11 @@
+id = "TSK-192"
+uid = "98769307-ad48-4f34-a7ec-293a30cfd928"
+kind = "TSK"
+title = "present and portal shipped defects fixed"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T20:06:52Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
