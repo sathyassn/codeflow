@@ -161,7 +161,7 @@ pub enum Transport {
 /// transport that segment onto a line; a reopening range always reviews its
 /// own work. `base` pins the range's anchored old review when supplied.
 /// A waiver names the criterion's record-only amendment on its target;
-/// [`bind_completion_with_amendment`] adds the task's own range.
+/// `bind_completion_with_amendment` adds the task's own range.
 #[must_use]
 pub fn bind_completion(
     repo: &Repository,
