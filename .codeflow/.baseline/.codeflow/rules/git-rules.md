@@ -10,9 +10,10 @@ Four planes provide defense in depth: git hooks, in-session `git-guard` and
 and CI share `.codeflow/policy.json` and the `codeflow ci` checks; remote
 setup derives its supported rules from that policy (CodeFlow ADR-0017). Every
 tier, minimal included, ships the same armed policy and all five git-hook
-shims: **pre-commit** (protected-branch commits, staged secrets),
-**commit-msg** (commit format, AI attribution, emoji), **pre-push** (branch
-naming, protected-branch push, force-push and delete), and
+shims: **pre-commit** (protected-branch commits, staged secrets,
+unresolved conflict markers), **commit-msg** (commit format, AI
+attribution, emoji), **pre-push** (branch naming, protected-branch push,
+force-push and delete), and
 **pre-merge-commit** and **reference-transaction** (the protected-branch
 merge and ref backstops). At the minimal tier the installed and load-bearing
 files are `AGENTS.md` and `CLAUDE.md`, `.codeflow/policy.json`, `.gitignore`,

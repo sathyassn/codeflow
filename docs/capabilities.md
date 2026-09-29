@@ -119,14 +119,15 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
 
 Git discipline enforced across four planes reading one config (the `git`
 section of `.codeflow/policy.json`). Two give fast local feedback — the git
-client hooks (pre-commit secret scan + staged-.env, commit-msg
+client hooks (pre-commit secret scan + staged-.env and unresolved conflict
+markers, commit-msg
 format/attribution/emoji and the ADR-0067 em and en dash check,
 pre-merge-commit and reference-transaction protected-branch merge/ref rules,
 pre-push branch naming and protected-branch rules) and the Claude
@@ -166,6 +167,14 @@ The ADR-0067 dash check (`policy_characters`) also defaults to warn; CodeFlow's
 own policy sets block. Its added-lines scan skips a file only when its bytes
 equal the whole-file managed asset the running binary ships for that path, so
 unmodified scaffold content never trips it and a project record proves nothing.
+The conflict-marker check (`git.conflict_markers`, default block, TSK-170)
+judges the lines a change adds to a text file, in pre-commit over the staged
+diff and in `codeflow ci` over the range, which also catches a marker left
+while resolving `git rebase --continue`. A separator line counts only
+between an opening and a closing marker, so a Markdown heading underline
+passes, and a file that must hold markers sets `conflict-marker-size` for
+its path in `.gitattributes` (tests: `hooks::conflict_markers`,
+`git_hook` pre-commit tests, `ci_cli.rs`, `hooks_cli.rs`).
 The generic PR template ships at every tier. The structural
 anti-bypass layer is not flippable, by design: the strict policy validator (an
 invalid file fails loud rather than silently reverting to defaults), the schema

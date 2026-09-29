@@ -45,6 +45,19 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Unresolved conflict markers are refused.** The pre-commit hook and
+  `codeflow ci` refuse an unresolved conflict marker on a line a change adds
+  to a text file, under the new `git.conflict_markers` key. It defaults to
+  `block`, a behaviour change: a commit that adds a leftover marker now
+  stops, and `codeflow update` adds the key and reports it. A separator line
+  counts only between an opening and a closing marker, so a Markdown heading
+  underline passes. A file that must hold markers sets
+  `conflict-marker-size` for its path in `.gitattributes`, git's own rule,
+  and a team can set the key to `warn` or `off`. `codeflow ci` also catches
+  a marker left while resolving `git rebase --continue`, which runs no
+  pre-commit hook.
+
+<!-- codeflow:release-impact minor -->
 - **Guidance retention evaluations.** `cf-evaluate-model` gains a scripted
   multi-turn case kind: the fixture supplies warm-up turns, the case prompt
   is the probe, and only the probe turn is graded. A new
