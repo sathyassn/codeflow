@@ -541,7 +541,7 @@ fn installed_manifest_loads_and_matches_managed_sources_and_baselines() {
     let base = root.join("assets/base");
     // A templated source renders with project values, so only its baseline
     // (the rendered pristine copy) can match the recorded hash.
-    let shipped = ScaffoldManifest::load(&DirSource::new(&root.join("assets")))
+    let shipped = ScaffoldManifest::load(&DirSource::new(root.join("assets")))
         .expect("shipped manifest loads");
     let templated: std::collections::BTreeSet<&str> = shipped
         .entries

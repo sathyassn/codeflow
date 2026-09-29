@@ -202,6 +202,19 @@ fn git_hook_help() -> &'static str {
     })
 }
 
+/// The tier `init` was asked for; none lets the scaffold choose.
+fn selected_tier(minimal: bool, standard: bool, full: bool) -> Option<scaffold::Tier> {
+    if minimal {
+        Some(scaffold::Tier::Minimal)
+    } else if full {
+        Some(scaffold::Tier::Full)
+    } else if standard {
+        Some(scaffold::Tier::Standard)
+    } else {
+        None
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // A hook git fires during this command runs this binary (SPC-013 R-85):
     // the path goes only into git children's environment, so an inherited
@@ -243,15 +256,7 @@ fn main() -> anyhow::Result<()> {
             workspace,
         } => {
             let workspace_step = prepare_workspace(&cwd, workspace)?;
-            let tier = if minimal {
-                Some(scaffold::Tier::Minimal)
-            } else if full {
-                Some(scaffold::Tier::Full)
-            } else if standard {
-                Some(scaffold::Tier::Standard)
-            } else {
-                None
-            };
+            let tier = selected_tier(minimal, standard, full);
             let answers = if yes {
                 scaffold::InitAnswers::default()
             } else {
