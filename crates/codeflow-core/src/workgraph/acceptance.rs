@@ -237,7 +237,7 @@ fn bind(
             let problem = if landing_merge {
                 unreviewed(repo, task, landing, reviewed)
             } else {
-                direct_problem(repo, task, landing, reviewed)
+                direct_problem(repo, task, landing, reviewed, false)
             };
             if let Some(problem) = problem {
                 bind(format!("{}: {problem}", task.id));
@@ -292,7 +292,7 @@ fn unreviewed(
     landing: Landing<'_>,
     reviewed: Oid,
 ) -> Option<String> {
-    let direct = direct_problem(repo, task, landing, reviewed)?;
+    let direct = direct_problem(repo, task, landing, reviewed, true)?;
     match landed_problem(repo, task, landing, reviewed) {
         Landed::NoMerge => Some(direct),
         Landed::Accepted => None,
@@ -301,12 +301,16 @@ fn unreviewed(
 }
 
 /// Rule 1: why `reviewed` is not C or an ancestor after which only this
-/// record's status and Closeout changed, if it is not.
+/// record's status and Closeout changed, if it is not. With `stacking`, a
+/// task pull request's own chain may also re-merge its integration target
+/// cleanly after the review; a completion bound at a head (SPC-013 R-120)
+/// never stacks.
 fn direct_problem(
     repo: &Repository,
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
+    stacking: bool,
 ) -> Option<String> {
     if let Landing::Worktree { changed, .. } = landing {
         let outside: Vec<&str> = changed
@@ -334,14 +338,57 @@ fn direct_problem(
             "reviewed commit {reviewed} is not the head or an ancestor of it; review the result that lands"
         ));
     }
+    // Reviewed stacking: after the review, the task branch may re-merge
+    // its integration target cleanly, and its own commits may change only
+    // this record's status and Closeout. Anything else is judged as the
+    // whole change from the reviewed commit to C.
+    let stack = if stacking {
+        stacked(repo, task, reviewed, at)
+    } else {
+        Stacked::No
+    };
+    match stack {
+        Stacked::Clean => {
+            let Some(then) = blob_at(repo, reviewed, &task.path) else {
+                return Some(format!(
+                    "{} is not in the reviewed commit, so its scope was never reviewed",
+                    task.path
+                ));
+            };
+            (reviewed_part(&then) != reviewed_part(&completed))
+                .then(|| "the record changed outside its status and Closeout after the reviewed commit; review the result again".into())
+        }
+        Stacked::Unclean(merge) => Some(format!(
+            "merge {merge} is not a clean re-merge from the task's integration target; review the result again"
+        )),
+        Stacked::No => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
+            format!("{problem} after the reviewed commit {reviewed}; review the result again")
+        }),
+    }
+}
+
+/// How C's first-parent chain back to the reviewed commit stacks on it.
+enum Stacked {
+    /// Every commit between is a clean re-merge from the task's integration
+    /// target or changes only this record's status and Closeout.
+    Clean,
+    /// A merge from the integration target whose tree is not the clean
+    /// re-merge of its parents.
+    Unclean(Oid),
+    /// The reviewed commit is not on the chain, or a commit between changes
+    /// more than a clean re-merge or the record allows.
+    No,
+}
+
+fn stacked(repo: &Repository, task: &RecordView, reviewed: Oid, at: Oid) -> Stacked {
     let target = task_target(repo, task, None);
     let mut cursor = at;
     while cursor != reviewed {
         let Ok(commit) = repo.find_commit(cursor) else {
-            return Some("the completion history cannot be read".into());
+            return Stacked::No;
         };
         let Ok(parent) = commit.parent_id(0) else {
-            return Some("the review is not on the task's first-parent history".into());
+            return Stacked::No;
         };
         if commit.parent_count() == 2 {
             let from_target = target.is_some_and(|tip| {
@@ -349,26 +396,20 @@ fn direct_problem(
                     .parent_id(1)
                     .is_ok_and(|side| is_first_parent_ancestor(repo, side, tip))
             });
-            if !from_target || !is_clean_remerge(repo, &commit).unwrap_or(false) {
-                return Some(format!("merge {cursor} is not a clean re-merge from the task's integration target; review the result again"));
+            if !from_target {
+                return Stacked::No;
             }
-        } else if let Some(problem) = blob_at(repo, cursor, &task.path)
-            .and_then(|content| later_change(repo, &task.path, &content, parent, cursor))
-        {
-            return Some(format!(
-                "{problem} after the reviewed commit {reviewed}; review the result again"
-            ));
+            if !is_clean_remerge(repo, &commit).unwrap_or(false) {
+                return Stacked::Unclean(cursor);
+            }
+        } else if blob_at(repo, cursor, &task.path).is_none_or(|content| {
+            later_change(repo, &task.path, &content, parent, cursor).is_some()
+        }) {
+            return Stacked::No;
         }
         cursor = parent;
     }
-    let Some(then) = blob_at(repo, reviewed, &task.path) else {
-        return Some(format!(
-            "{} is not in the reviewed commit, so its scope was never reviewed",
-            task.path
-        ));
-    };
-    (reviewed_part(&then) != reviewed_part(&completed))
-        .then(|| "the record changed outside its status and Closeout after the reviewed commit; review the result again".into())
+    Stacked::Clean
 }
 
 /// What the second rule found.
