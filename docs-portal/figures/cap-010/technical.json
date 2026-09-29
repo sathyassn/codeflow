@@ -5,10 +5,10 @@
     "family": "sequence",
     "binding": "authored",
     "question": "In what order do the seats exchange one unit of work?",
-    "idea": "The brief goes to both seats, the plans meet, the executor's verified unit goes to the other lineage, and the operator merges.",
+    "idea": "The brief goes to both seats, Codex returns its findings, Claude sends the one plan, Codex challenges and approves it, the executor's verified unit goes to the other lineage, and the operator merges.",
     "title": "One unit of work between the seats",
     "kicker": "Exchange order",
-    "caption": "Codex returns its own plan before it sees Plan vN, and the operator only sees work another lineage has reviewed.",
+    "caption": "Codex returns its own findings before it sees the plan, and the operator only sees work another lineage has reviewed.",
     "states": [
       {
         "name": "trans",
@@ -28,12 +28,12 @@
     ],
     "facts": [
       {
-        "claim": "both seats draft from the same immutable brief",
+        "claim": "both seats discover from the same immutable brief",
         "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
-        "derive": "the brief sentence",
+        "derive": "the discovery sentence",
         "check": {
           "kind": "contains",
-          "text": "the same immutable brief, and neither sees"
+          "text": "from the same immutable brief and\nrepository scope, and neither sees"
         },
         "value": true
       },
@@ -137,7 +137,7 @@
           "id": "m3"
         },
         {
-          "text": "its own plan",
+          "text": "its findings",
           "x": 505,
           "y": 144,
           "anchor": "middle",
@@ -154,7 +154,7 @@
           "id": "m4"
         },
         {
-          "text": "Plan vN",
+          "text": "the one plan",
           "x": 505,
           "y": 190,
           "anchor": "middle",
@@ -170,7 +170,7 @@
           "id": "m5"
         },
         {
-          "text": "approval",
+          "text": "challenge, approval",
           "x": 505,
           "y": 236,
           "anchor": "middle",
@@ -348,7 +348,7 @@
           ]
         },
         {
-          "text": "its own plan",
+          "text": "its findings",
           "x": 8,
           "y": 172,
           "style": "mute",
@@ -383,7 +383,7 @@
           ]
         },
         {
-          "text": "Plan vN",
+          "text": "the one plan",
           "x": 8,
           "y": 232,
           "for": [
@@ -417,7 +417,7 @@
           ]
         },
         {
-          "text": "approval",
+          "text": "challenge, approval",
           "x": 8,
           "y": 292,
           "style": "mute",
@@ -579,19 +579,19 @@
           "3",
           "Codex seat",
           "Claude seat",
-          "its own plan"
+          "its findings"
         ],
         [
           "4",
           "Claude seat",
           "Codex seat",
-          "Plan vN"
+          "the one plan"
         ],
         [
           "5",
           "Codex seat",
           "Claude seat",
-          "approval"
+          "its challenge, then approval of one version"
         ],
         [
           "6",

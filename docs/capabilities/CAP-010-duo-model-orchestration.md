@@ -6,7 +6,8 @@
 
 ## Concept
 
-**Two model families draft the same work independently, and only then meet.**
+**Two model families discover the same work independently, then one plan is
+challenged once.**
 
 `/cf-model-orchestrator` is the host-neutral entry for routed repository
 work, decided by the paths a change touches: an adopter-facing path (product
@@ -23,22 +24,27 @@ model router and not the unattended pipeline, which stays single-vendor.
 
 ## Architecture
 
-Both seats independently research, analyze risks, and draft complete plans from
-the same immutable brief, and neither sees the other's conclusions first. This
-is an anti-anchoring requirement: Codex must not be reduced to critiquing a plan
-Claude has already supplied. After both drafts exist, Claude leads design. The
-host reconciles a versioned plan whose task rows name the responsible primary,
-actual binding-or-route executor, execution mode, routing reason and
-provenance, available usage evidence with freshness or an explicitly unknown
-value, and cross-lineage reviewer.
+Both seats independently discover from the same immutable brief and
+repository scope, and neither sees the other's findings first: source and
+documentation evidence, assumptions verified or still unresolved, edge, error
+and security cases, and risks to compatibility, data, UX and operations. The
+host records both outputs without collapsing disagreements. Claude then
+drafts the one plan from its native session, and Codex challenges it against
+its own findings; there is no second plan and no reconciliation round. The
+plan names each task's responsible primary, actual binding-or-route executor,
+execution mode, routing reason and provenance, and cross-lineage reviewer.
+Settlement ends when both seats approve one version or the host stops for the
+operator; approval of an older version does not carry forward. A task inside
+an approved epic does not repeat discovery; it starts from the epic plan.
 
-Both seats approve those assignments before implementation; changing ownership,
-scope, lineage, isolation, or a named reviewer invalidates the approvals, while
-a permitted primary-owned executor change inside that boundary does not. Each
-actual executor first-verifies its unit, the responsible primary inspects and
-accepts it, and a lineage different from the actual author's reviews it
-independently. The selected `claude-judgment-primary` owns integrated Claude
-quality judgment without claiming independent review of its own unit.
+After approval, only a change of outcome, cross-task interface, dependency
+graph or safety boundary creates a new plan version; a reassignment is
+recorded where the assignment lives, and for an unstarted task rides in the
+batched epic amendment (ADR-0076). Each actual executor first-verifies its
+unit, the responsible primary inspects and accepts it, and a lineage
+different from the actual author's reviews it independently. The selected
+`claude-judgment-primary` owns integrated Claude quality judgment without
+claiming independent review of its own unit.
 
 Each seat is reached through its vendor's own native interactive harness, so
 the host a session starts in decides the transport, not the contract:
@@ -412,8 +418,11 @@ consuming projects by `init` or `update`.
 Independent implementation tasks use bounded, host-resource-aware parallelism:
 one owner/branch/worktree per task, a single owner for shared files, and
 landing on `integration/<epic>` in small batch candidates in dependency order:
-the primary reviews the integration effects on the candidate and runs one
-full gate on it before the line moves (ADR-0076). Missing seats degrade
+the primary inspects the resolved hunks and integration seams on product
+paths, asks the other lineage to review the integration effects only when it
+hand-resolved a product hunk or two tasks touched one hotspot, and runs one
+full gate on the candidate before the line moves (ADR-0076); unit reviews
+are not repeated. Missing seats degrade
 legibly to solo; mid-run failure blocks and escalates. Deterministic gates and
 the human-merged PR remain authoritative.
 

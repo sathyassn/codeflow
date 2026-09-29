@@ -453,12 +453,13 @@ stops before implementation. Planning happens once at the breakdown, each
 task lands through one pull request and one review, and reviewed heads land
 in small batches with one full gate (ADR-0076); the flow is on
 [how work moves to main](delivery.md).
-Both seats independently research, analyze risks, and draft complete plans from
-the same immutable brief before either sees the other's conclusions.
-Claude then leads design. The host reconciles a versioned plan that names
-each task's primary, actual executor and cross-lineage reviewer, and both
-seats approve it before implementation. Material product or visual work also
-records a `DESIGN_INTENT` in that plan (ADR-0043, ADR-0051).
+Both seats independently discover from the same immutable brief before
+either sees the other's findings. Claude then drafts the one plan and Codex
+challenges it against its own findings, with no second plan and no
+reconciliation round; the plan names each task's primary, actual executor
+and cross-lineage reviewer, and both seats approve one version before
+implementation. Material product or visual work also records a
+`DESIGN_INTENT` in that plan (ADR-0043, ADR-0051).
 
 The work records a plan produces are judged by one core (SPC-013):
 

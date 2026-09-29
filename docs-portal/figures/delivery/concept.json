@@ -174,7 +174,7 @@
           "id": "s1"
         },
         {
-          "text": "spec, approved",
+          "text": "brief or spec",
           "x": 200,
           "y": 235,
           "anchor": "middle",
@@ -432,7 +432,7 @@
           "id": "s1"
         },
         {
-          "text": "spec, approved",
+          "text": "brief or spec",
           "x": 240,
           "y": 163,
           "anchor": "middle",
@@ -608,13 +608,13 @@
         [
           "a request",
           "one outcome",
-          "a standalone task: record and code in one pull request",
+          "a standalone task: record and code in one pull request, its own candidate with its own gate",
           "the other lineage, once"
         ],
         [
           "a request",
           "a body of work",
-          "a spec, then one planning pull request with the epic, every task and the edges",
+          "a brief, or a spec when a contract needs pinning, then one planning pull request with the epic, every task and the edges",
           "the operator settles intent; the other lineage, once"
         ],
         [
@@ -627,18 +627,18 @@
           "land",
           "a small batch of reviewed heads",
           "one candidate, one full gate, the integration line moves",
-          "the primary"
+          "the primary; the other lineage only for a hand-resolved product hunk or a shared hotspot"
         ],
         [
           "close",
           "the epic",
-          "one pull request into `main`",
+          "proved once by the primary, then one pull request into `main`",
           "the operator merges"
         ],
         [
           "never",
           "a task",
-          "a planning pull request of its own, a review round cap, a full gate per pull request",
+          "a planning pull request of its own, a review round cap, or a full gate per member of a batch (a standalone pull request is its own candidate)",
           ""
         ]
       ]

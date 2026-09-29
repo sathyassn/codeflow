@@ -5,10 +5,10 @@
     "family": "layering",
     "binding": "authored",
     "question": "Which actor covers which stage of a task, and where does the operator's boundary sit?",
-    "idea": "The builder covers start to review, the other lineage reviews once, the primary owns the candidate and its gate, and the operator alone closes the epic into main.",
+    "idea": "The builder covers start to review, the other lineage reviews once and looks at a candidate only for a hand-resolved hunk or a shared hotspot, the primary owns the candidate, its gate and the epic close, and the operator alone merges main.",
     "title": "Who acts at each stage",
     "kicker": "Delivery",
-    "caption": "Each stage has one owner, and the merge into main belongs to the operator alone.",
+    "caption": "Each stage has one owner, the other lineage returns to a candidate only on two conditions, and the merge into main belongs to the operator alone.",
     "states": [
       {
         "name": "layer",
@@ -18,7 +18,12 @@
       {
         "name": "layer-remote",
         "mark": "layer-remote",
-        "means": "The operator's stages, the boundary"
+        "means": "The operator's stage, the boundary"
+      },
+      {
+        "name": "conditional",
+        "mark": "optional",
+        "means": "Covered only when the primary hand-resolved a product hunk or two tasks touched one hotspot"
       },
       {
         "name": "act",
@@ -43,12 +48,22 @@
         "value": true
       },
       {
-        "claim": "review ends on evidence, never on a round count",
+        "claim": "the other lineage reviews integration effects only for a hand-resolved product hunk or a shared hotspot",
         "source": "docs/delivery.md#architecture",
-        "derive": "the reviewer bullet",
+        "derive": "the primary bullet",
         "check": {
           "kind": "contains",
-          "text": "never on a round count."
+          "text": "reviews the integration effects only when the primary hand-resolved a\n  product hunk or two tasks touched one hotspot"
+        },
+        "value": true
+      },
+      {
+        "claim": "the primary proves the epic once, closes it and raises the pull request into main",
+        "source": "docs/delivery.md#architecture",
+        "derive": "the primary bullet",
+        "check": {
+          "kind": "contains",
+          "text": "the primary proves the epic once on the\n  integration line, closes it and raises the one pull request into `main`."
         },
         "value": true
       },
@@ -237,11 +252,21 @@
           "id": "m2"
         },
         {
+          "state": "conditional",
+          "shape": "rect",
+          "x": 372,
+          "y": 120,
+          "w": 56,
+          "h": 24,
+          "rx": 6,
+          "id": "m2c"
+        },
+        {
           "state": "layer",
           "shape": "rect",
           "x": 370,
           "y": 168,
-          "w": 200,
+          "w": 270,
           "h": 24,
           "rx": 6,
           "id": "m3"
@@ -249,9 +274,9 @@
         {
           "state": "layer-remote",
           "shape": "rect",
-          "x": 580,
+          "x": 650,
           "y": 216,
-          "w": 130,
+          "w": 60,
           "h": 24,
           "rx": 6,
           "cap": "end",
@@ -278,12 +303,8 @@
               180
             ],
             [
-              540,
-              180
-            ],
-            [
               610,
-              228
+              180
             ],
             [
               680,
@@ -344,7 +365,7 @@
           "state": "act",
           "shape": "circle",
           "cx": 610,
-          "cy": 228,
+          "cy": 180,
           "r": 8,
           "id": "m12"
         },
@@ -462,12 +483,22 @@
           "id": "m2"
         },
         {
+          "state": "conditional",
+          "shape": "rect",
+          "x": 163,
+          "y": 166,
+          "w": 24,
+          "h": 28,
+          "rx": 6,
+          "id": "m2c"
+        },
+        {
           "state": "layer",
           "shape": "rect",
           "x": 238,
           "y": 166,
           "w": 24,
-          "h": 108,
+          "h": 148,
           "rx": 6,
           "id": "m3"
         },
@@ -475,9 +506,9 @@
           "state": "layer-remote",
           "shape": "rect",
           "x": 313,
-          "y": 286,
+          "y": 326,
           "w": 24,
-          "h": 68,
+          "h": 28,
           "rx": 6,
           "cap": "end",
           "id": "m4"
@@ -504,10 +535,6 @@
             ],
             [
               250,
-              260
-            ],
-            [
-              325,
               300
             ],
             [
@@ -568,7 +595,7 @@
         {
           "state": "act",
           "shape": "circle",
-          "cx": 325,
+          "cx": 250,
           "cy": 300,
           "r": 8,
           "id": "m12"
@@ -607,8 +634,8 @@
         ],
         [
           "candidate",
-          "the primary",
-          "assembles reviewed heads into a small candidate in dependency order and inspects resolved hunks and seams"
+          "the primary; the reviewer only when the primary hand-resolved a product hunk or two tasks touched one hotspot",
+          "assembles reviewed heads into a small candidate in dependency order and inspects resolved hunks and seams; the conditional review covers integration effects only, unit reviews are not repeated"
         ],
         [
           "gate",
@@ -622,13 +649,13 @@
         ],
         [
           "close",
-          "the operator",
-          "the epic proves its criteria once; one pull request goes to `main`"
+          "the primary",
+          "proves the epic once on the integration line, closes it and raises one pull request into `main`"
         ],
         [
           "main",
           "the operator",
-          "merges; agents never do"
+          "reviews and merges; agents never do"
         ]
       ]
     }

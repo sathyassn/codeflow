@@ -48,12 +48,16 @@ last boundary.**
   evidence, never on a round count.
 - **The primary** assembles reviewed heads into a small batch candidate in
   dependency order, inspects the resolved hunks and seams on product paths,
-  and runs the full gate once on that exact candidate. Green moves the
-  integration line. Red is diagnosed first, and a member leaves the batch
-  only when evidence attributes the failure to it.
+  and runs the full gate once on that exact candidate. The other lineage
+  reviews the integration effects only when the primary hand-resolved a
+  product hunk or two tasks touched one hotspot; unit reviews are not
+  repeated. Green moves the integration line. Red is diagnosed first, and a
+  member leaves the batch only when evidence attributes the failure to it.
+  When the last batch has landed, the primary proves the epic once on the
+  integration line, closes it and raises the one pull request into `main`.
 - **The operator** settles intent at the breakdown, decides any change of
-  intent midway, and merges the one pull request from the integration line
-  into `main`. Agents never merge there.
+  intent midway, and reviews and merges that one pull request into `main`.
+  Agents never merge there.
 
 A standalone pull request is its own candidate: it lands on the integration
 line it targets, or, when it targets `main`, it is the pull request the
