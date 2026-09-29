@@ -235,7 +235,8 @@ publication date._
   the task's own range. `task status complete` also refuses uncommitted
   changes outside the record. A task's own pull request may change its
   criteria before its first completion, and `codeflow ci` prints the change
-  for the reviewer. A change to another task's criteria is refused unless the
+  for the reviewer; the pre-push check, which has no pull request body,
+  lets the task branch carry that change too. A change to another task's criteria is refused unless the
   pull request's validated class is planning-only or a checked epic line,
   whatever its branch prefix, and a reopened task keeps its criteria as its
   target has them. A range touching the adopter-facing path set needs a task
