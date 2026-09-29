@@ -913,6 +913,39 @@ fn a_consumer_naming_the_spec_in_escaped_yaml_keeps_the_freeze() {
     assert!(frozen_spec(&verdict, "SPC-001"), "{:?}", verdict.errors);
 }
 
+/// TSK-169 review round 4: a consumer under a legacy epic folder whose name
+/// Git would quote (non-ASCII, a quote, a tab, a newline) is still read
+/// from the history, so the freeze holds after a separate reopen. A
+/// backslash is not listed: the record readers treat it as a separator.
+#[test]
+fn reviewer_r4_git_quoted_record_path_keeps_the_freeze() {
+    for epic in ["EPC-001-履歴", "EPC-001 \"q\"", "EPC-001\tt", "EPC-001\nn"] {
+        let path = format!("project-management/epics/{epic}/tasks/TSK-001.md");
+        let repo = Repo::new();
+        repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
+        repo.write(&path, &consumer("TSK-001", "complete", "SPC-001"));
+        repo.commit("ship with a nested legacy record path");
+        let graph = Graph::from_worktree(repo.root());
+        assert_eq!(
+            spec_state(&graph, "SPC-001"),
+            Some(SpecState::Implemented),
+            "{epic:?}"
+        );
+        let reopen = StatusChange {
+            reason: Some("regression".into()),
+            ..change("todo")
+        };
+        set_status(repo.root(), RecordKind::Task, "TSK-001", &reopen).unwrap();
+        let reopened = repo.commit("reopen the nested consumer");
+        let text = repo
+            .read(SHIPPED_SPEC)
+            .replace("\nB.\n", "\nB, with a limit of 999.\n");
+        repo.write(SHIPPED_SPEC, &text);
+        let verdict = repo.judge(&reopened);
+        assert!(frozen_spec(&verdict, "SPC-001"), "{epic:?}: {verdict:?}");
+    }
+}
+
 /// TSK-169: an approved spec is amended in place until it is implemented;
 /// once implemented its text is frozen, whether the state is derived at the
 /// base or written by a legacy record, and reopening its consumer in the

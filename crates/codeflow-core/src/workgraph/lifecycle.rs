@@ -1430,7 +1430,7 @@ fn frozen_spec_problems(
 /// Whether `spec_id` was implemented at any commit reachable from `tip`
 /// (TSK-169). The state is derived only from the spec and the records that
 /// name it, and changes only at a commit that changes one of them. One
-/// `git log --raw` lists every record blob each commit wrote under
+/// `git log --raw -z` lists every record blob each commit wrote under
 /// `project-management/`; each distinct blob is parsed once, and a path is
 /// relevant when any version of it is the spec or lists it in `specs`, read
 /// as the judge reads it, never by searching the text for the id (an
@@ -1449,6 +1449,7 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
             "--full-history",
             "--diff-merges=first-parent",
             "--raw",
+            "-z",
             "--no-abbrev",
             "--format=commit %H",
         ])
@@ -1459,25 +1460,32 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
-    let log = String::from_utf8_lossy(&output.stdout);
     let mut commits: Vec<(git2::Oid, Vec<String>)> = Vec::new();
     let mut names: HashMap<git2::Oid, bool> = HashMap::new();
     let mut relevant: BTreeSet<String> = BTreeSet::new();
-    for line in log.lines() {
-        if let Some(hash) = line.strip_prefix("commit ") {
+    // With `-z` every field ends in NUL and paths are never quoted:
+    // `commit <hash>`, then per change `:<old mode> <new mode> <old blob>
+    // <new blob> <status>` and its path as the next field. The first raw
+    // field of a commit starts with the newline that ends its header.
+    let mut fields = output.stdout.split(|byte| *byte == 0);
+    while let Some(field) = fields.next() {
+        let field = String::from_utf8_lossy(field);
+        let field = field.trim_start_matches('\n');
+        if let Some(hash) = field.strip_prefix("commit ") {
             commits.push((
                 git2::Oid::from_str(hash.trim()).map_err(message)?,
                 Vec::new(),
             ));
             continue;
         }
-        // `:<old mode> <new mode> <old blob> <new blob> <status>\t<path>`
-        let Some((meta, path)) = line
-            .strip_prefix(':')
-            .and_then(|rest| rest.split_once('\t'))
-        else {
+        let Some(meta) = field.strip_prefix(':') else {
             continue;
         };
+        let Some(path) = fields.next() else {
+            break;
+        };
+        let path = String::from_utf8_lossy(path);
+        let path = path.as_ref();
         let Some(kind) = record_kind_for_tree_path(path) else {
             continue;
         };
