@@ -1015,6 +1015,14 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The secret scan reads the index a commit records (security).** `git
+  commit -a` and `git commit <path>` record a temporary index that git names
+  in `GIT_INDEX_FILE`. The pre-commit secret scan read the ordinary index
+  instead, so a key in a changed tracked file that was not staged first was
+  committed without a finding. The scan now reads the index the commit
+  records, and fails closed when it cannot read it.
+
+<!-- codeflow:release-impact patch -->
 - **Herdr delivery confirms a started turn.** `cf-herdr` delivers through
   `scripts/deliver.py`. For a Codex or Grok seat it sends one Enter and
   confirms within 20 s that the seat started working, and otherwise reports

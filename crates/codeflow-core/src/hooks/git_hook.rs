@@ -87,8 +87,27 @@ fn scan_staged(
     report: &mut StageReport,
     abort_traversal_for_test: bool,
 ) {
+    // The index git commits: `commit -a` and `commit <path>` name a
+    // temporary one in GIT_INDEX_FILE, so the ordinary index would miss a
+    // secret they record. An index that cannot be read fails closed.
+    let index_file = super::conflict_markers::effective_index(repo);
+    let index = match git2::Index::open(&index_file) {
+        Ok(index) => index,
+        Err(error) => {
+            report.violations.push(Violation::new(
+                "git.secret_scan",
+                policy.secret_scan,
+                format!(
+                    "staged secret scan incomplete: cannot read the index {}: {error}",
+                    index_file.display()
+                ),
+                crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
+            ));
+            return;
+        }
+    };
     let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), None, None) else {
+    let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), None) else {
         report.notes.push(crate::remedy::Finding::new(
             "secret scan skipped: could not read the staged diff",
             crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),

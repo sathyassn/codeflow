@@ -5059,7 +5059,8 @@ fn installed_hook_judges_the_index_git_commits() {
 }
 
 /// TSK-170 review P1: an index the hook cannot read is reported at the
-/// configured level, never passed.
+/// configured level, never passed. The secret scan, which has no lower
+/// level, refuses it too, so the commit stops either way.
 #[cfg(unix)]
 #[test]
 fn an_unreadable_commit_index_is_reported_at_the_configured_level() {
@@ -5067,7 +5068,7 @@ fn an_unreadable_commit_index_is_reported_at_the_configured_level() {
     let root = minimal_project(dir.path());
     let bad = dir.path().join("broken-index");
     std::fs::write(&bad, "not an index").unwrap();
-    for (level, code, verdict) in [("block", 1, "BLOCKED"), ("warn", 0, "warning")] {
+    for (level, code, verdict) in [("block", 1, "BLOCKED"), ("warn", 1, "warning")] {
         let mut policy: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(root.join(".codeflow/policy.json")).unwrap(),
         )
@@ -5093,5 +5094,36 @@ fn an_unreadable_commit_index_is_reported_at_the_configured_level() {
             "{level}: {text}"
         );
         assert!(text.contains("cannot read the index"), "{level}: {text}");
+        assert!(
+            text.contains("BLOCKED — policy rule git.secret_scan (block)")
+                && text.contains("staged secret scan incomplete"),
+            "{level}: {text}"
+        );
+    }
+}
+
+/// TSK-170 review follow-up (security): the secret scan judges the index git
+/// commits too, so a key committed with `git commit -a` or `git commit
+/// <path>` without staging it first is refused and never reaches HEAD.
+#[cfg(unix)]
+#[test]
+fn installed_hook_refuses_a_secret_in_the_index_git_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = minimal_project(dir.path());
+    let head = ok("git", &root, &["rev-parse", "HEAD"]);
+    // Built at run time, so this file carries no key shape itself.
+    let key = format!("AKIA{}", "IOSFODNN7EXAMPLF");
+    std::fs::write(root.join("work.txt"), format!("key = {key}\n")).unwrap();
+    for args in [
+        &["commit", "-am", "feat: add the key"][..],
+        &["commit", "work.txt", "-m", "feat: add the key"][..],
+    ] {
+        let out = with_installed_hooks("git", &root, args);
+        let text = both_streams(&out);
+        assert!(!out.status.success(), "{args:?}: {text}");
+        assert!(text.contains("possible secret"), "{args:?}: {text}");
+        assert_eq!(ok("git", &root, &["rev-parse", "HEAD"]), head, "{args:?}");
+        let committed = ok("git", &root, &["show", "HEAD:work.txt"]);
+        assert!(!committed.contains(&key), "{args:?}: the key reached HEAD");
     }
 }
