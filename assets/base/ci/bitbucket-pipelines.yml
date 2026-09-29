@@ -10,9 +10,20 @@
 # .codeflow/project.toml (`scaffold_version`), downloaded from its release and
 # verified against the release's published sha256.sum; a missing or wrong
 # checksum fails the step and nothing unverified is installed (SPC-013 R-113).
-# The target is BITBUCKET_PR_DESTINATION_COMMIT and the head BITBUCKET_COMMIT;
+# The target is BITBUCKET_PR_DESTINATION_COMMIT when Bitbucket sets it.
+# Atlassian's variable table lists only BITBUCKET_PR_DESTINATION_BRANCH, so
+# when the commit is unset the step fetches that branch from `origin` and
+# judges by its current commit; it fails when it cannot fetch it and never
+# falls back to the head or a merge base. The head is BITBUCKET_COMMIT, and
 # `codeflow ci` reads the source branch from BITBUCKET_BRANCH. `clone: depth:
-# full` puts the destination commit in history. An upgrade takes two pull
+# full` puts the destination commit in history.
+#
+# A pull request pipeline "merges the destination branch into your working
+# branch before it runs" (Atlassian, pipeline start conditions:
+# https://support.atlassian.com/bitbucket-cloud/docs/pipeline-start-conditions/),
+# so `codeflow test` and `codeflow validate --docs` run on that merge, while
+# `codeflow ci` judges BITBUCKET_COMMIT, the source commit, against the
+# target. An upgrade takes two pull
 # requests, in order: first raise only `scaffold_version` (the destination's
 # binary judges it and the candidate is tested alongside), then run
 # `codeflow update`. The pipeline file itself runs from the pull request, so
@@ -46,6 +57,15 @@ pipelines:
             - apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates curl git xz-utils >/dev/null
             - |
               BASE="${BITBUCKET_PR_DESTINATION_COMMIT:-}"
+              # Without the destination commit, the destination branch's
+              # current commit, fetched from `origin`, is the target.
+              if [ -z "$BASE" ] && [ -n "${BITBUCKET_PR_DESTINATION_BRANCH:-}" ]; then
+                git fetch -q --no-tags origin "+refs/heads/${BITBUCKET_PR_DESTINATION_BRANCH}:refs/codeflow/target" || {
+                  echo "codeflow: error: cannot fetch the pull request's destination branch ${BITBUCKET_PR_DESTINATION_BRANCH}; the pinned install never judges by the head or a merge base" >&2
+                  exit 1
+                }
+                BASE=$(git rev-parse refs/codeflow/target)
+              fi
               HEAD="$BITBUCKET_COMMIT"
               # >>> codeflow pinned run (SPC-013 R-113). The same text runs in ci-generic.sh,
               # .gitlab-ci.yml and bitbucket-pipelines.yml: BASE names the target commit and
