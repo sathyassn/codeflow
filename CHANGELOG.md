@@ -920,9 +920,10 @@ publication date._
   default of short prose and bullets, and names the figure form for each
   surface, including fenced ASCII in Markdown files. Each skill, the
   `cf-reviewer` agent, the git rules and the PR template state the rule
-  once where they tell the agent to write. The size guidelines `codeflow
-  doctor` reports for five of those files rise by at most 512 bytes to
-  match. `codeflow update` brings the new text and leaves a project's own
+  once where they tell the agent to write, and the reply rule names
+  Markdown files for fenced ASCII figures. The size guidelines `codeflow
+  doctor` reports for five of those files rise by at most 768 bytes, and
+  the map's rule count and rule line guidelines rise to 13 and 480 bytes. `codeflow update` brings the new text and leaves a project's own
   section of `AGENTS.md` untouched.
 
 ### Fixed

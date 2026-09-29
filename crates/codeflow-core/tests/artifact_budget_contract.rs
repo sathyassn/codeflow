@@ -1663,7 +1663,7 @@ const REPLY_DUTIES_AT_THE_REPORTING_MOMENT: &[(&str, &str, &str, &str)] = &[
     ("no manufactured ask", "With nothing owed there is no heading, and a manufactured ask is a defect.", "Replies and status", "With nothing owed there is no heading, and a manufactured ask is a defect."),
     ("heading exclusions", "never appears in a pull request body, document, commit message, outbound draft or machine payload.", "Replies and status", "never appears in a pull request body, document, commit message, outbound draft or machine payload."),
     ("simple answer", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.", "Replies and status", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line."),
-    ("figure by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders.", "Figures by surface", "Use fenced ASCII in other Markdown files (READMEs, docs, records, PR bodies), in terminal output and on any other plain-text surface, or when unsure what the surface renders."),
+    ("figure by surface", "Use fenced ASCII on a terminal or other plain-text surface, in a Markdown file (a README, doc, record or PR body), or when unsure what the surface renders.", "Figures by surface", "Use fenced ASCII in other Markdown files (READMEs, docs, records, PR bodies), in terminal output and on any other plain-text surface, or when unsure what the surface renders."),
     ("no Mermaid", "Never use Mermaid", "Figures by surface", "Never use Mermaid"),
     ("exact links", "Never guess a URL, port, or pull request number; state an unknown link as unknown.", "Replies and status", "Never guess a URL, port, or pull request number; state an unknown link as unknown."),
     ("dash guideline", "Avoid em and en dashes in prose", "Written content policy", "avoid em and en dashes in prose"),
@@ -1878,7 +1878,7 @@ const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
     (
         "assets/base/agents/skills/cf-editorial-review/SKILL.md",
         &[
-            "**Write plainly.** Everything an agent writes, replies and status updates included, is simple, straightforward and clear",
+            "**Write plainly.** Everything an agent writes, replies and status updates included, is simple, straightforward and clear, with the detail the reader needs and no more. Avoid mannered prose, writing that performs for effect: slogans, \"not X but Y\" turns, rhetorical triplets, dramatic fragments, stacked hedges, colon reveals, self-narration, ceremonial framing and walls of text. State the fact directly.",
             "Default to short prose and bullets, and write long prose only when the reader asks for it or the artifact is prose by nature.",
             "\"Mannered prose\" in [references/editorial-smells.md](references/editorial-smells.md) lists each pattern with its plain rewrite.",
             "In a Markdown file (a README, doc, record or PR body) that form is fenced ASCII, and on a docs-portal page it is the portal's figure grammar.",
@@ -1922,8 +1922,11 @@ const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
     ("assets/base/agents/skills/cf-evaluate-model/SKILL.md", &["Write grader notes plainly:"], &[]),
     (
         "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
-        &["Operator-facing replies follow the written content policy (ADR-0067) and are written plainly:"],
-        &[],
+        &[
+            "Operator-facing replies follow the written content policy (ADR-0067) and are written plainly:",
+            "Use fenced ASCII on a terminal or other plain-text surface, in a Markdown file (a README, doc, record or PR body), or when unsure what the surface renders.",
+        ],
+        &["Use fenced ASCII only on a terminal"],
     ),
     (
         "assets/base/claude/agents/cf-reviewer.md",

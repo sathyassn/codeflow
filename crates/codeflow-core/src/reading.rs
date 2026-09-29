@@ -83,7 +83,7 @@ pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
     ("cf-design", 20 * KIB),
     ("cf-develop", 5 * KIB + 256),
     ("cf-docs-portal", 9 * KIB),
-    ("cf-editorial-review", 6 * KIB + 512),
+    ("cf-editorial-review", 6 * KIB + 768),
     ("cf-estimate", 6 * KIB),
     ("cf-evaluate-model", 9 * KIB + 512),
     ("cf-herdr", 9 * KIB),

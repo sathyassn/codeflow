@@ -192,8 +192,9 @@ is clearer drawn, the reply carries a figure. Match the form to the surface.
 
 - Where the harness renders one, use an inline HTML figure, or a
   `cf-present` page when the figure needs a full page or anchored review.
-- Use fenced ASCII only on a terminal or other plain-text surface, or when
-  unsure what the surface renders.
+- Use fenced ASCII on a terminal or other plain-text surface, in a Markdown
+  file (a README, doc, record or PR body), or when unsure what the surface
+  renders.
 - Never use Mermaid for a reply figure.
 
 When a substantial comparison, review, or decision would be clearer on one

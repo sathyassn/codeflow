@@ -149,7 +149,7 @@
     ".agents/skills/cf-editorial-review/SKILL.md": {
       "src": "agents/skills/cf-editorial-review/SKILL.md",
       "ownership": "managed",
-      "sha256": "ccf0a7c11e7318a494c11496dae4cfbb5d47f7dd77f638a0b9ba6f0ee07b8ac7",
+      "sha256": "692ebd2152964d97cd35de1a6d3eb8c8ba0d259a151e449366a46337405c5c08",
       "exec": false
     },
     ".agents/skills/cf-editorial-review/agents/openai.yaml": {
@@ -263,7 +263,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "c87ef9d1b239e1f682ec36986b1e79730ab4e1eeec05a34b957f50a28f4a087a",
+      "sha256": "545b9dde92f9cb2b194a343a666fa601ceca6533273633d83e6dc9c57d28d4ab",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -341,7 +341,7 @@
     ".agents/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "47e6903f172fbe99923481f249c4c3b65c01ec2708f7d9b3d0e1e6d526884814",
+      "sha256": "f14f20bd79834138a21f9a3c1c691d702148460fee20f9100b525cfb172d634b",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
@@ -827,7 +827,7 @@
     ".claude/skills/cf-editorial-review/SKILL.md": {
       "src": "agents/skills/cf-editorial-review/SKILL.md",
       "ownership": "managed",
-      "sha256": "ccf0a7c11e7318a494c11496dae4cfbb5d47f7dd77f638a0b9ba6f0ee07b8ac7",
+      "sha256": "692ebd2152964d97cd35de1a6d3eb8c8ba0d259a151e449366a46337405c5c08",
       "exec": false
     },
     ".claude/skills/cf-editorial-review/agents/openai.yaml": {
@@ -941,7 +941,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "c87ef9d1b239e1f682ec36986b1e79730ab4e1eeec05a34b957f50a28f4a087a",
+      "sha256": "545b9dde92f9cb2b194a343a666fa601ceca6533273633d83e6dc9c57d28d4ab",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1019,7 +1019,7 @@
     ".claude/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "47e6903f172fbe99923481f249c4c3b65c01ec2708f7d9b3d0e1e6d526884814",
+      "sha256": "f14f20bd79834138a21f9a3c1c691d702148460fee20f9100b525cfb172d634b",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/SKILL.md": {

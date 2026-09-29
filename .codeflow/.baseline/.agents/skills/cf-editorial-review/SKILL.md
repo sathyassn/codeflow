@@ -7,10 +7,12 @@ description: Review or revise substantial repository and user-facing prose witho
 
 **Write plainly.** Everything an agent writes, replies and status updates
 included, is simple, straightforward and clear, with the detail the reader
-needs and no more. Default to short prose and bullets, and write long prose
-only when the reader asks for it or the artifact is prose by nature.
-Mannered prose, writing that performs for effect, is a defect; "Mannered
-prose" in
+needs and no more. Avoid mannered prose, writing that performs for effect:
+slogans, "not X but Y" turns, rhetorical triplets, dramatic fragments,
+stacked hedges, colon reveals, self-narration, ceremonial framing and walls
+of text. State the fact directly. Default to short prose and bullets, and
+write long prose only when the reader asks for it or the artifact is prose
+by nature. "Mannered prose" in
 [references/editorial-smells.md](references/editorial-smells.md) lists each
 pattern with its plain rewrite.
 
