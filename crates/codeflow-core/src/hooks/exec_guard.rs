@@ -65,7 +65,7 @@ pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
     // downgrade it to advice. The serialized key stays explicit for policy
     // compatibility, but a stale or hand-edited weaker value is not authority.
     if let Some(verdict) = DangerousModule.check(&ctx) {
-        violations.push(dangerous_violation(PolicyLevel::Block, &verdict));
+        violations.push(dangerous_violation(&verdict));
     }
     if levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
@@ -101,26 +101,20 @@ fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Violation {
                  headless flag)"
             }
         ),
-        format!(
-            "delegate through an interactive seat instead: Claude Code to Codex through the \
-             Codex plugin, Codex to Claude through `codeflow delegate` over the interactive \
-             `claude` CLI, or a named Herdr tab (cf-delegate); {enforcement} \
-             (policy security.headless_peer_runs)"
-        ),
+        crate::remedy::HEADLESS_PEER_RUN.with(&[("enforcement", enforcement)]),
     )
 }
 
-fn dangerous_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
-    Violation::new(
+fn dangerous_violation(verdict: &Verdict) -> Violation {
+    Violation::always_blocking(
         "security.dangerous_commands",
-        level,
         format!(
             "{cat}: {reason} (pattern `{pat}`)",
             cat = verdict.category,
             reason = verdict.reason,
             pat = verdict.pattern,
         ),
-        "destructive commands have no sanctioned path — do not run them; if this is a false positive, scope the command away from system paths".to_string(),
+        "destructive commands have no sanctioned path — do not run them; if this is a false positive, scope the command away from system paths",
     )
 }
 
@@ -139,7 +133,7 @@ fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
             reason = verdict.reason,
             pat = verdict.pattern,
         ),
-        format!("privilege escalation needs applicable operator authority; {enforcement}; the effective harness may show no permission prompt (policy security.privilege_escalation)"),
+        crate::remedy::PRIVILEGE_ESCALATION.with(&[("enforcement", enforcement)]),
     )
 }
 

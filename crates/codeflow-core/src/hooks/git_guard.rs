@@ -207,14 +207,46 @@ pub struct ToolInput {
     pub command: Option<String>,
 }
 
+/// Why a hook payload was not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PayloadError {
+    /// The input is not a JSON object, or a field the guard reads has the
+    /// wrong type: the harness entry that runs the guard did not pass the
+    /// payload through unchanged. The payload ignores fields it does not
+    /// read, so these are the only ways a payload fails.
+    Malformed(String),
+}
+
+impl std::fmt::Display for PayloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Malformed(why) => write!(f, "not a JSON hook payload: {why}"),
+        }
+    }
+}
+
 impl HookPayload {
     /// Parse the hook JSON from stdin.
     ///
     /// # Errors
     ///
-    /// Returns the serde error message when the payload is not valid JSON.
-    pub fn parse(json: &str) -> Result<Self, String> {
-        serde_json::from_str(json).map_err(|e| e.to_string())
+    /// [`PayloadError::Malformed`] when the input is not a JSON object or a
+    /// field the guard reads has the wrong type; the message names the field.
+    pub fn parse(json: &str) -> Result<Self, PayloadError> {
+        let value: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| PayloadError::Malformed(e.to_string()))?;
+        if !value.is_object() {
+            return Err(PayloadError::Malformed(format!(
+                "a JSON {} where an object belongs",
+                json_kind(&value)
+            )));
+        }
+        if let Some((field, expected, found)) = wrong_field_type(&value) {
+            return Err(PayloadError::Malformed(format!(
+                "field `{field}` is a JSON {found} where {expected} belongs"
+            )));
+        }
+        serde_json::from_value(value).map_err(|e| PayloadError::Malformed(e.to_string()))
     }
 
     /// The command to evaluate when this is a shell tool call.
@@ -231,6 +263,49 @@ impl HookPayload {
         } else {
             None
         }
+    }
+}
+
+/// The first field the guard reads whose value has the wrong type, as
+/// (field, expected, found). `null` stands for an absent optional field.
+fn wrong_field_type(
+    value: &serde_json::Value,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    use serde_json::Value;
+    let field = |names: &[&str]| names.iter().find_map(|name| value.get(*name));
+    if let Some(name) = field(&["tool_name", "toolName"]) {
+        if !name.is_string() {
+            return Some(("tool_name", "a string", json_kind(name)));
+        }
+    }
+    if let Some(input) = field(&["tool_input", "toolInput"]) {
+        match input {
+            Value::Object(_) => {
+                if let Some(command) = input.get("command") {
+                    if !(command.is_string() || command.is_null()) {
+                        return Some(("tool_input.command", "a string", json_kind(command)));
+                    }
+                }
+            }
+            other => return Some(("tool_input", "an object", json_kind(other))),
+        }
+    }
+    if let Some(cwd) = value.get("cwd") {
+        if !(cwd.is_string() || cwd.is_null()) {
+            return Some(("cwd", "a string", json_kind(cwd)));
+        }
+    }
+    None
+}
+
+fn json_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
     }
 }
 
@@ -263,8 +338,8 @@ pub struct Evaluation {
     /// Rule violations; block-level ones deny the command.
     pub violations: Vec<Violation>,
     /// Disclosures that accompany the verdict, such as a git op whose target
-    /// repository could not be resolved.
-    pub notes: Vec<String>,
+    /// repository could not be resolved, each with the step that clears it.
+    pub notes: Vec<crate::remedy::Finding>,
 }
 
 /// Evaluate a Bash command against the git policy.
@@ -391,7 +466,7 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
                     ctx.policy,
                     None,
                     &substitution_reason("its program name"),
-                    UNCLASSIFIABLE_REMEDY,
+                    &crate::remedy::GUARD_UNCLASSIFIABLE,
                 ));
             }
             ProgramKind::Other => {}
@@ -554,11 +629,10 @@ fn is_assignment_of(token: &str, var: &str) -> bool {
 }
 
 fn laundering_violation(var: &str) -> Violation {
-    Violation::new(
+    Violation::always_blocking(
         "git.override_token_laundering",
-        PolicyLevel::Block,
         format!("command sets the override token `{var}` in-session"),
-        "override tokens are human-only; setting them in-session is bypass — a human runs the sanctioned path (PR merge / `codeflow integrate` / `CODEFLOW_HUMAN_OVERRIDE`) from their own terminal".to_string(),
+        "override tokens are human-only; setting them in-session is bypass — a human runs the sanctioned path (PR merge / `codeflow integrate` / `CODEFLOW_HUMAN_OVERRIDE`) from their own terminal",
     )
 }
 
@@ -567,7 +641,7 @@ fn hook_integrity_violation(level: PolicyLevel, message: String) -> Violation {
         "git.hook_integrity",
         level,
         message,
-        "the enforcement hooks and their policy are not agent-editable — fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)".to_string(),
+        crate::remedy::HOOK_INTEGRITY.remedy(),
     )
 }
 
@@ -1637,8 +1711,6 @@ impl BranchTracker {
     }
 }
 
-const SANCTIONED: &str = "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
-
 /// What the whole line reveals about moves the tracker cannot follow.
 struct LineFacts {
     /// Some segment can move a shell's directory (`cd`, `pushd`, `source`, …).
@@ -1756,7 +1828,7 @@ fn check_git(
     moved: &Moves<'_>,
     ctx: &GuardContext<'_>,
     out: &mut Vec<Violation>,
-    notes: &mut Vec<String>,
+    notes: &mut Vec<crate::remedy::Finding>,
     depth: usize,
 ) {
     let policy = ctx.policy;
@@ -1864,16 +1936,25 @@ fn check_git(
         }
     }
     if let Some(why) = judged.unresolved {
-        let note = format!(
-            "target unresolved: {why}; the guard cannot prove it is not a protected branch, so it judged it as one"
-        );
-        for v in &mut found {
-            v.message = format!("{} ({note})", v.message);
-            v.remedy = UNRESOLVED_REMEDY.to_string();
-        }
-        notes.push(format!("`git {sub}`: {note}"));
+        notes.push(disclose_unresolved(sub, &why, &mut found));
     }
     out.extend(found);
+}
+
+/// Name an unresolved target on each finding judged as protected, and the
+/// note that discloses it (TSK-112).
+fn disclose_unresolved(sub: &str, why: &str, found: &mut [Violation]) -> crate::remedy::Finding {
+    let note = format!(
+        "target unresolved: {why}; the guard cannot prove it is not a protected branch, so it judged it as one"
+    );
+    for v in found.iter_mut() {
+        v.message = format!("{} ({note})", v.message);
+        v.remedy = crate::remedy::GUARD_UNRESOLVED.remedy();
+    }
+    crate::remedy::Finding::new(
+        format!("`git {sub}`: {note}"),
+        crate::remedy::GUARD_UNRESOLVED.remedy(),
+    )
 }
 
 /// Follow a branch change the op makes for the rest of the line: a checkout
@@ -1953,9 +2034,11 @@ impl Unclassified {
                 policy,
                 sub,
                 &substitution_reason(place),
-                UNCLASSIFIABLE_REMEDY,
+                &crate::remedy::GUARD_UNCLASSIFIABLE,
             ),
-            Self::Alias(reason) => unclassifiable_violation(policy, sub, reason, ALIAS_REMEDY),
+            Self::Alias(reason) => {
+                unclassifiable_violation(policy, sub, reason, &crate::remedy::GUARD_ALIAS)
+            }
         }
     }
 }
@@ -2070,7 +2153,7 @@ fn unclassifiable_violation(
     policy: &GitPolicy,
     sub: Option<&str>,
     reason: &str,
-    remedy: &str,
+    remedy: &'static crate::remedy::Clearing,
 ) -> Option<Violation> {
     // The strictest level; on a tie, the first rule listed.
     let (rule, level) = exposed_rules(sub, policy)
@@ -2084,18 +2167,9 @@ fn unclassifiable_violation(
         format!(
             "command unresolved: {reason}, so the guard cannot prove it leaves protected branches alone"
         ),
-        remedy.to_string(),
+        remedy.remedy(),
     ))
 }
-
-/// How to make an unclassifiable git command classifiable.
-const UNCLASSIFIABLE_REMEDY: &str = "write the git command, its options and its targets literally; generated text belongs only in a quoted message (`-m \"$(…)\"`), or compute a value first and pass it as a literal";
-
-/// How to make an unresolved target resolvable.
-const UNRESOLVED_REMEDY: &str = "name the repository with a literal path (`git -C /path/to/repo …`) or change to it first (`cd /path/to/repo && git …`), so the guard can read its branch and policy";
-
-/// How to make an alias the guard cannot resolve classifiable.
-const ALIAS_REMEDY: &str = "write the git command the alias stands for, or make the alias readable: a git-command alias (not a `!` shell alias) set in git config, not through `--config-env` or configuration environment variables";
 
 /// Git's builtin commands (`git --list-cmds=builtins`, Git 2.53). Git runs a
 /// builtin even when an alias of the same name exists, so only another name
@@ -2647,7 +2721,7 @@ fn judge_git_sub(
                     "git.commit_to_protected",
                     policy.commit_to_protected,
                     format!("`git {sub}` would create commits on protected branch '{branch}'"),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             }
             maybe_no_verify(sub, rest, branch, policy, out);
@@ -2665,7 +2739,7 @@ fn judge_git_sub(
                     "git.merge_to_protected",
                     policy.merge_to_protected,
                     format!("`git {sub}` would land a commit on protected branch '{branch}'"),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             }
             maybe_no_verify(sub, rest, branch, policy, out);
@@ -2679,7 +2753,7 @@ fn judge_git_sub(
                     "git.hard_reset_protected",
                     policy.hard_reset_protected,
                     format!("`git rebase` rewrites history on protected branch '{branch}'"),
-                    "rebase feature branches in their own worktree; protected history is append-only".to_string(),
+                    crate::remedy::PROTECTED_REWRITE.remedy(),
                 ));
             }
         }
@@ -2692,7 +2766,7 @@ fn judge_git_sub(
                     "git.hard_reset_protected",
                     policy.hard_reset_protected,
                     format!("`git reset --hard` on protected branch '{branch}'"),
-                    "create a revert commit instead; protected history is append-only".to_string(),
+                    crate::remedy::PROTECTED_REWRITE.remedy(),
                 ));
             }
         }
@@ -2706,7 +2780,7 @@ fn judge_git_sub(
                         "git.delete_protected",
                         policy.delete_protected,
                         format!("`git branch` would delete protected branch '{target}'"),
-                        "protected branches are never deleted; remove the entry from git.protected_branches first if truly intended".to_string(),
+                        crate::remedy::PROTECTED_DELETE.remedy(),
                     ));
                 }
             }
@@ -2734,7 +2808,7 @@ fn judge_git_sub(
                     policy.local_ref_protection,
                     "`git fast-import` can rewrite any ref, including protected branches"
                         .to_string(),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             }
         }
@@ -2903,7 +2977,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
                 "git.local_ref_protection",
                 policy.local_ref_protection,
                 "`git update-ref --stdin` updates refs from an opaque stream that may touch protected branches".to_string(),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
         return;
@@ -2931,7 +3005,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
                 "git.local_ref_protection",
                 policy.local_ref_protection,
                 format!("`git update-ref` writes the remote-tracking ref for protected branch '{branch}' — the reference-transaction sync oracle must not be agent-set"),
-                "let a real `git fetch`/`git pull` update refs/remotes; never set it by hand".to_string(),
+                crate::remedy::REMOTE_TRACKING_REF.remedy(),
             ));
         }
         return;
@@ -2947,7 +3021,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
                     "git.delete_protected",
                     policy.delete_protected,
                     format!("`git update-ref -d` deletes protected branch '{branch}'"),
-                    "protected branches are never deleted; remove the entry from git.protected_branches first if truly intended".to_string(),
+                    crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
         } else if policy.local_ref_protection.is_active() && !ctx.integrate_token {
@@ -2955,7 +3029,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
                 "git.local_ref_protection",
                 policy.local_ref_protection,
                 format!("`git update-ref` moves protected branch '{branch}' outside the sanctioned path"),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
     }
@@ -2996,7 +3070,7 @@ fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Vio
                 "git.local_ref_protection",
                 policy.local_ref_protection,
                 "`git symbolic-ref` repoints a protected branch ref".to_string(),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
     }
@@ -3005,11 +3079,10 @@ fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Vio
 /// The registry rule (SPC-013 R-8): `codeflow/registry` only grows. It
 /// always blocks, whatever the policy levels say.
 fn registry_violation(message: String) -> Violation {
-    Violation::new(
+    Violation::always_blocking(
         "registry.append_only",
-        PolicyLevel::Block,
         message,
-        "issue ids with `codeflow task|epic|spec new`; a maintainer repairs damage with `codeflow ids restore <id>...`".to_string(),
+        "issue ids with `codeflow task|epic|spec new`; a maintainer repairs damage with `codeflow ids restore <id>...`",
     )
 }
 
@@ -3073,7 +3146,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                     "git.force_push_protected",
                     policy.force_push_protected,
                     format!("bulk force-push (--all/--mirror/wildcard) reaches protected branches: {names}"),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             } else if policy.push_to_protected.is_active() && !ctx.integrate_token {
                 out.push(Violation::new(
@@ -3082,7 +3155,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                     format!(
                         "bulk push (--all/--mirror/wildcard) reaches protected branches: {names}"
                     ),
-                    SANCTIONED.to_string(),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
                 ));
             }
             if push.mirror && policy.delete_protected.is_active() {
@@ -3090,7 +3163,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                     "git.delete_protected",
                     policy.delete_protected,
                     format!("`git push --mirror` can delete protected branches to mirror local: {names}"),
-                    "protected branches are never deleted remotely; --mirror is unsafe here".to_string(),
+                    crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
         }
@@ -3103,7 +3176,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                 "git.delete_protected",
                 policy.delete_protected,
                 format!("`git push` would delete protected branch '{target}' on the remote"),
-                "protected branches are never deleted remotely; adjust git.protected_branches first if truly intended".to_string(),
+                crate::remedy::PROTECTED_DELETE.remedy(),
             ));
         }
     }
@@ -3117,7 +3190,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                         "git.force_push_protected",
                         policy.force_push_protected,
                         format!("force-push to protected branch '{target}'"),
-                        SANCTIONED.to_string(),
+                        crate::remedy::PROTECTED_BRANCH.remedy(),
                     ));
                 }
             } else if policy.force_push_unprotected.is_active() {
@@ -3127,8 +3200,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                     "git.force_push_unprotected",
                     policy.force_push_unprotected,
                     format!("force-push to branch '{target}'"),
-                    "policy git.force_push_unprotected restricts force-pushes in this repo"
-                        .to_string(),
+                    crate::remedy::FORCE_PUSH.remedy(),
                 ));
             }
         } else if protected && policy.push_to_protected.is_active() && !ctx.integrate_token {
@@ -3136,7 +3208,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
                 "git.push_to_protected",
                 policy.push_to_protected,
                 format!("direct push to protected branch '{target}'"),
-                SANCTIONED.to_string(),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
     }
@@ -3182,7 +3254,7 @@ fn scan_pr_body(body: &str, policy: &GitPolicy, out: &mut Vec<Violation>) {
                 "git.ai_attribution",
                 policy.ai_attribution,
                 format!("PR body contains AI attribution ({which})"),
-                "remove the attribution — project policy forbids AI attribution in commits and PR bodies (charter §6.4)".to_string(),
+                crate::remedy::PR_AI_ATTRIBUTION.remedy(),
             ));
         }
     }
@@ -3192,7 +3264,7 @@ fn scan_pr_body(body: &str, policy: &GitPolicy, out: &mut Vec<Violation>) {
                 "git.commit_emoji",
                 policy.commit_emoji,
                 format!("PR body contains emoji ('{c}')"),
-                "remove emoji from the PR body (charter §6.4)".to_string(),
+                crate::remedy::PR_EMOJI.remedy(),
             ));
         }
     }
@@ -3211,11 +3283,10 @@ fn check_gh_pr_merge(rest: &[&str], ctx: &GuardContext<'_>, out: &mut Vec<Violat
     // checked out in a worktree, git has flipped the root repo to core.bare
     // (reproduced twice). Block regardless of the base branch.
     if gh_merge_deletes_branch(rest) {
-        out.push(Violation::new(
+        out.push(Violation::always_blocking(
             "git.pr_merge_delete_branch",
-            PolicyLevel::Block,
             "`gh pr merge --delete-branch` can flip the root repo to core.bare when the merged branch is checked out in a worktree".to_string(),
-            "merge plain (no --delete-branch), then delete the branch from the repo root separately (`git branch -d <branch>` / `git push origin --delete <branch>`)".to_string(),
+            "merge plain (no --delete-branch), then delete the branch from the repo root separately (`git branch -d <branch>` / `git push origin --delete <branch>`)",
         ));
         return;
     }
@@ -3236,8 +3307,9 @@ fn check_gh_pr_merge(rest: &[&str], ctx: &GuardContext<'_>, out: &mut Vec<Violat
         out.push(Violation::new(
             "git.pr_merge_to_protected",
             policy.pr_merge_to_protected,
-            "`gh pr merge` into a base that is protected or could not be confirmed unprotected".to_string(),
-            "PR merges into protected branches are performed by a human (GitHub UI / their own terminal) or explicitly sanctioned — policy git.pr_merge_to_protected".to_string(),
+            "`gh pr merge` into a base that is protected or could not be confirmed unprotected"
+                .to_string(),
+            crate::remedy::PR_MERGE_PROTECTED.remedy(),
         ));
     }
 }
@@ -3824,11 +3896,10 @@ fn maybe_no_verify(
 }
 
 fn no_verify_violation(sub: &str, branch: &str) -> Violation {
-    Violation::new(
+    Violation::always_blocking(
         "git.no_verify_bypass",
-        PolicyLevel::Block,
         format!("`git {sub} --no-verify` skips the client hooks on protected branch '{branch}'"),
-        "do not bypass the hooks with --no-verify — fix the cause the gate flags, or land via the sanctioned path (PR / `codeflow integrate`)".to_string(),
+        "do not bypass the hooks with --no-verify — fix the cause the gate flags, or land via the sanctioned path (PR / `codeflow integrate`)",
     )
 }
 
@@ -4372,6 +4443,43 @@ mod tests {
     #[test]
     fn test_payload_malformed_json_is_error() {
         assert!(HookPayload::parse("{ nope").is_err());
+    }
+
+    /// TSK-147 round 3 F5: input that is not a JSON object is a harness
+    /// entry that does not pass the payload through, which a local edit
+    /// clears. Round 4: so is a JSON object whose known field has the wrong
+    /// type. The payload struct ignores unknown fields, so a wrong type on a
+    /// field it reads is the only way an object fails, and nothing in it
+    /// shows a newer harness schema rather than a mangled payload.
+    #[test]
+    fn a_payload_that_is_not_a_json_object_is_malformed() {
+        for input in ["", "not json", "{ nope", "[]", "\"x\"", "42"] {
+            assert!(
+                matches!(HookPayload::parse(input), Err(PayloadError::Malformed(_))),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_known_field_with_the_wrong_type_is_malformed_and_named() {
+        for (input, field) in [
+            (r#"{"tool_name": 5}"#, "tool_name"),
+            (r#"{"toolName": 5}"#, "tool_name"),
+            (r#"{"tool_input": "git status"}"#, "tool_input"),
+            (
+                r#"{"tool_input": {"command": ["git"]}}"#,
+                "tool_input.command",
+            ),
+            (r#"{"cwd": 7}"#, "cwd"),
+        ] {
+            let Err(PayloadError::Malformed(why)) = HookPayload::parse(input) else {
+                panic!("{input:?} is not malformed");
+            };
+            assert!(why.contains(&format!("`{field}`")), "{input:?}: {why}");
+        }
+        // Fields this build does not read are ignored, not refused.
+        assert!(HookPayload::parse(r#"{"tool_name":"Bash","extra":[1]}"#).is_ok());
     }
 
     // -- commit on protected --
@@ -6826,7 +6934,10 @@ mod tests {
             );
             assert!(v.remedy.contains("literal path") && v.remedy.contains("cd /path/to/repo &&"));
             assert_eq!(r.notes.len(), 1, "{:?}", r.notes);
-            assert!(r.notes[0].starts_with("`git commit`: target unresolved: `$DEST`"));
+            assert!(r.notes[0]
+                .text
+                .starts_with("`git commit`: target unresolved: `$DEST`"));
+            assert!(r.notes[0].remedy.contains("literal path"), "{}", r.notes[0]);
         }
         // A read of an unresolved target is not a mutation: allowed, noted.
         let r = report("git -C \"$DEST\" status", "feat/s");

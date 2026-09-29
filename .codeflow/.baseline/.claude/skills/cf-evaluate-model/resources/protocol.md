@@ -66,7 +66,7 @@ trials and recomputes each status and the summary from observations.
 {
   "schema_version": 1,
   "run_id": "candidate-2026-07-17",
-  "suite": "full",
+  "suite": "full | canary | pack",
   "suite_digest": "sha256:...",
   "system": {
     "model": "actual model version",
@@ -98,7 +98,7 @@ trials and recomputes each status and the summary from observations.
     "case_id": "model-independent-plans",
     "trial": 1,
     "fixture_digest": "sha256:...",
-    "outcome": "completed | error | not_run",
+    "outcome": "completed | timed_out | error | not_run",
     "status": "pass | fail | error | not_run",
     "observed": {
       "route": "cf-model-orchestrator",
@@ -254,11 +254,21 @@ requires a new native evaluation and human approval.
 
 `status` is derived:
 
-- `error` or `not_run` follows the trial outcome.
+- `not_run` follows the outcome: the session never started. `error` follows
+  the outcome for an ungraded case.
+- A `timed_out` trial, and an `error` trial of a graded case, is `fail`: the
+  session started, so it is kept with its evidence, trace and grade.
 - Otherwise, `pass` requires an allowed route, every required signal, every
   required reference, no prohibited signal, no recorded violation, retained
-  evidence, and an empty validity-flag list.
+  evidence, and an empty validity-flag list. A graded case also requires its
+  grade to bind to the current case, fixture and grader and every assertion to
+  pass.
 - Any other completed trial is `fail`.
+
+A `pack` result names its `pack` and must hold three trials of every case in
+that pack for the subject's lineage; a missing trial fails validation, so a
+failed or timed-out trial cannot be dropped. Only a `full` result can qualify
+a binding.
 
 Every evidence item requires a content digest. An `error` record requires an
 `error_message`; a `not_run` record requires a `not_run_reason`. These outcomes
@@ -298,6 +308,254 @@ Calibrate model graders against human decisions and retain disagreements.
 For the independent-plan case, record both plan digests and evidence that each
 was completed before the first cross-exposure. Two summaries created after one
 model saw the other's plan do not satisfy the requirement.
+
+### File-state and tool-effect grading
+
+A case may carry `expected.files` and `expected.effects`. Such a graded case
+never ships in this kit: the kit's resources reach every subject through the
+`codeflow` binary (`init` and `update` restore them), so `validate-suite`
+rejects a graded case there. Graded cases, their fixtures and their packs live
+in a graded suite, a directory holding `cases.json`, `fixtures.json` and
+`packs.json`, passed as `--graded-suite <dir>` to `validate-suite`,
+`list-cases`, `materialize`, `validate-result`, `score`, `compare` and
+`record-binding`. The run root records the suite and its digest, so `grade`
+reloads it and refuses a changed suite.
+
+A public development suite may sit in the repository. A qualification
+holdout may not: keep it outside the published repository and its history
+(for example on its own never-merged ref of a private repository) with its
+scripted solutions, and point `--graded-suite` at a checkout of it. Record
+its paths and digests, never its content, in a public manifest and run
+`holdout-check --manifest <file>` in CI. It fails on a holdout path, a
+copied holdout file, any JSON object of the holdout nested anywhere in a
+file that parses as JSON whatever its name, and a copied run of 27 or more
+consecutive whitespace-separated words of the holdout's fingerprinted text:
+its JSON string values, the whole source and string literals of its code,
+and any other file whole, but not its README. The copy is found as written,
+or as a JSON string (a lone JSON document, a value inside one, or an escaped
+literal in any file); shorter runs are often caught and not promised. Text
+that `assets/` and `evals/model-artifacts/` already hold when the manifest
+is written is not fingerprinted, and `--update` refuses a tree its current
+manifest finds a leak in. With `--holdout <checkout>` it also checks that
+the manifest is current and that no id or rubric opening only the holdout
+holds appears; `--update` rewrites the manifest. A paraphrase, a run broken
+by edits, or another encoding is not caught. A holdout that was ever
+published counts as exposed; replace its cases before claiming a holdout
+qualification again.
+
+`materialize` keeps the evaluator and the subject apart. The run root holds
+the marker and one record per trial; the subjects root, beside it and by
+default `<run-root>-subjects`, holds a copy of the pinned executable in `bin/`
+and one directory per trial with `repository/` (the fixture), `home/` and
+`tmp/`. Its output names the `subject_environment` to launch the session
+with: that `bin/` first on `PATH`, the trial's home and temporary directory,
+and no `PATH` entry inside the run root, the subjects root or the graded
+suite. The harness or the operating-system account confines the session to
+its trial directory; nothing in this kit can stop a process from reading a
+path it is allowed to read.
+
+After the session, and after a timeout or an error, grade it with the
+harness's tool-event ledger and the recorded judgements:
+
+```text
+python3 .agents/skills/cf-evaluate-model/scripts/eval_kit.py grade \
+  --run-root <path> --case <case-id> --trial <n> \
+  --events <events.json> --judgements <judgements.json> \
+  --calibration <control-judgements.json> --output <grade.json>
+```
+
+The grade holds one `pass`, `fail` or `ungraded` per assertion, in case
+order, with the case, grader, materialized and final fixture digests, the
+digests of the ledger, judgements and calibration files, which must also be
+among the trial's evidence digests, and the digest of the suite's judge
+controls. It records every judgement it read, where, with its excerpt digest,
+verdict, judge and entry digest, the workspace `path` it graded, the trial
+`record` it graded from and its computed `result`, and grading signs all of
+it as a `receipt` under the evaluator key. Put it in the trial as `grade`; `score` recomputes the status
+from it. A result that holds grades takes the run root's `run_id` (from its
+marker) as its own, since each grade names that run. A grade from another
+case, fixture or grader revision is refused, so a changed grader
+requalifies.
+`--output` may not point inside the run root or the subjects root. Grading
+never changes the fixture; a check that cannot run fails its assertion as
+not gradable, never passes it.
+
+- A file assertion selects `path` or `glob` (`*` crosses `/`), optionally only
+  files `new` since materialization, in the states named by `in`: `worktree`,
+  `branch:<glob>` or `origin:<glob>` (the fixture's local origin). A file
+  qualifies when its `frontmatter` fields, its `section` (a heading pattern),
+  its `matches` and `excludes` patterns and its `verdict` constraint hold. It
+  passes when some state reaches `count.min` (default 1) and no state exceeds
+  `count.max`.
+- `verdict` reads a review written in the reviewer's verdict format and
+  nothing else: optional headings that only title it (such as "Review
+  verdict" or "Review of TSK-001"), then `verdict`, `criteria`, `gates` and
+  `findings`, each once, optionally in one code fence with no text after its
+  language, and nothing after. Every line is a list entry at its section's
+  indentation, a field one step in, or a field's continuation indented
+  further; a gate is one `<name>: pass | fail | unavailable | N/A |
+  <percent>` line with any summary after it. The verdict is read from the
+  `verdict` field alone; text inside a field, a gate summary or a heading
+  never counts as one. Prose outside the grammar, a nested code block or
+  quotation, a missing or repeated section, an entry without its required
+  fields (a criterion's evidence; a finding's location and description), an
+  unknown field or a value outside its enumeration makes the review
+  unreadable. A verdict its own entries contradict is incoherent and
+  unreadable too: `approved` with an unverified criterion, a blocker or
+  major finding or a failed gate, or `changes_requested` with none of those.
+  The constraint names the verdict, statuses a criterion may have (`AC-2`
+  never matches `AC-20` or `AC-2.1`), and findings that must exist by
+  severity, axis and location. What the free text means is not structure:
+  every verdict assertion also needs a recorded judgement of the whole
+  review under the kit's coherence rubric (nothing withdraws, recasts or
+  overrides the verdict), so a retraction inside a field fails there.
+- `judged` holds a `rubric` for meaning no pattern can settle. The grader
+  passes such an assertion only when the judgements file records `pass` for
+  the assertion and the exact text judged, bound by its digest; any change
+  to the text needs a new judgement. `judge-sheet --run-root <path> --case
+  <id> --trial <n> [--events <events.json>]` lists every excerpt to judge
+  with its rubric and digest, including each review a verdict assertion
+  reads. Each judgement names its `judge`, the judge's `judge_config`
+  (model, version, prompt and settings, or the person) and a `rationale`.
+- The evaluator records each judgement as it is collected, from a person, a
+  model or a script, with `record-judgement --judgements <file> --assertion
+  <id> --excerpt-digest <digest> --verdict pass|fail --judge <id>
+  --judge-config <config> --rationale <text>`. It signs the judge, its
+  configuration, the assertion, the excerpt digest and the verdict with an
+  HMAC under an evaluator key, made owner-only on first use in the
+  evaluator's CodeFlow home (the judgement key under its eval folder), outside
+  the repository and every trial tree; subject code run while grading
+  cannot read it. The key is refused when it or its folder belongs to another
+  user, others can write the folder or others can read the key. Grading and
+  every consumer verify the signature; a judgement that is unsigned,
+  changed, relabelled or signed under another key counts as no judge's, so
+  its assertion is `ungraded`. Calibration
+  judgements are signed the same way. This is the trust boundary: whoever
+  holds the evaluator key is trusted, and the kit detects a judgement
+  written or changed by anyone without it, no more.
+- A judgement counts only from a calibrated judge. The graded suite keeps
+  labelled judge controls in a judge-controls.json file (texts with the
+  verdict a qualified judge must record, including reversals paraphrased in
+  fields the format allows). `judge-check --controls <file>` prints the blind sheet;
+  one judge records its judgements of it, and that file is the judge's
+  calibration. `grade --calibration <file>` checks it against the suite's
+  current controls: it qualifies the one judge, with its exact
+  configuration, that recorded the labelled verdict for every control.
+  Controls answered by several judges, a missed control or changed controls
+  qualify no one. An assertion that read a judgement from any other judge is
+  `ungraded`, and the grade's `qualification.eligible` is false. `score`
+  never counts such a trial as a pass: with no failed assertion its status
+  is `error`, not measured; `grade` exits 1 for it. The trial retains the
+  judgements file and each calibration file in its evidence by absolute
+  path, and every consumer (`score`, `validate-result`) counts a pass or a
+  failed assertion only from a grade whose receipt verifies and whose bound
+  evidence, read again, holds: the grade names the result's run and the
+  trial's case, number and fixture; each file it read is in the trial's
+  evidence; each judgement it read is in the retained file, signed, as read,
+  from a judge a retained calibration still qualifies; those judgements
+  alone pass each judged assertion it passes; and the trial, graded again
+  from its record, workspace, run and subjects roots and retained files,
+  gives the same outcome. The regrade reads the Git refs, configuration,
+  boundary and files as they are now, so no digest has to name every input
+  grading uses; a judgement counts again only for the excerpt its judge
+  signed, so it binds to the state the judge saw. What the regrade compares
+  against is the evaluator's own: `materialize` signs each trial record (its
+  base commit, refs, boundary inventory, roots and pinned executable) and
+  each reservation under the evaluator key, a trial is graded only from a
+  record whose signature verifies and whose digest the grade signed, and an
+  unsigned or changed registration exempts no later trial from the
+  boundary. A missing or mismatched
+  receipt, a grade from another run, a workspace or record that is gone or
+  reached through a link, a file that is missing or changed, an outcome
+  that grades differently, or any other fault leaves the trial `error`,
+  whichever way the grade was changed. Each consumer grades every graded
+  trial again, so scoring takes as long as grading. Keep the run root, the
+  subject workspaces and the retained files until every consumer that will
+  read the result has run: scoring, validation, the retention report,
+  comparison and any binding. After cleanup a result can no longer be
+  validated or compared. `--transport-only`
+  grades uncalibrated judgements as recorded, to test that judgements reach
+  the grade and fail closed, and marks the grade ineligible. A scripted or
+  synthetic judge only exercises this plumbing; its passing runs are never
+  evidence that meaning was judged.
+- An action is graded by the state it leaves, in the form CodeFlow writes
+  it: the branch a claim creates and tracks (`git_config` on
+  `branch.<name>.remote`), the record a status change writes, or a record
+  whose uid is `registry_consistent` with an entry on `codeflow/registry`.
+  `via` names the command expected to leave that state, with `program`,
+  leading `args`, `options` and optionally `after` an agent assertion; the
+  grade reports the matching process records beside the result and never
+  counts them, because a record shows only that a command ran, not what it
+  did (`--help`, a stand-in named `codeflow`). Shell lines prove nothing.
+- Effect grading measures the resulting work and nothing about how it was
+  made. It does not prove that the CLI was used (the fixture state, the
+  registry included, is the subject's to write, so a claim, block,
+  completion or record made by hand in the same form passes), that readiness
+  checks ran, or that the review came before completion. Those properties,
+  and whether a record was invented, are graded only from evidence the
+  subject cannot write: the native harness transcript or ledger converted by
+  the evaluator. A result without it reports them as not measured.
+- `event` reads an `agent` the harness ran: with a `verdict` constraint, the
+  last completed run of the named agent decides, and its whole output must
+  be a review that reads, holds and was judged coherent, so an approval
+  quoted, offered as an example or withdrawn in the same output never
+  counts; without one, completed runs whose output matches `output_matches`
+  count as `count` asks.
+- `refs` counts branches (only `new` ones when asked); `refs_unchanged`
+  requires the named branches to stay where they were.
+- `changed_paths` checks every path the session changed: commits no branch
+  held at materialization, reachable from the scoped branches, plus
+  uncommitted work when `worktree` is in scope. Paths must match `allowed` and
+  must not match `denied`. Uncommitted changes are found by hashing files, not
+  by `git status`, and git runs with hooks, the fsmonitor and signature
+  checks off.
+- `command` runs `argv` against a plain copy of one state, with `{input}`
+  naming a directory holding its `inputs` files, and passes only on the
+  expected `exit` and output: `stdout`, `stdout_lines`, `stdout_json` or
+  `output_matches`, never an exit status alone. Subject code never runs in
+  the grader: the command runs under macOS `sandbox-exec` with a clean
+  environment, writes only inside its own copy, no network, and no reads of
+  the run root, the subjects root or the graded suite. Where that
+  confinement is unavailable (another operating system, or inside another
+  sandbox), the assertion fails as not gradable.
+- `acceptance` judges a record's acceptance block at one branch with the
+  shipped checker: `codeflow validate --docs` and the acceptance findings of
+  `codeflow ci` from the base. `accepted` needs the record `complete` with no
+  finding; anything else is `rejected`. It proves structure and binding only.
+- `ci` runs `codeflow ci` over each scoped branch the session moved, and
+  fails on a finding from the listed rules, optionally reading a PR body file.
+- A shipped checker must show it finished: `codeflow ci` must exit 0 or 1,
+  report its commit range (and its acceptance scope when judged), skip
+  nothing, and print a summary that accounts for its findings;
+  `codeflow validate --docs` must read the policy and report a summary that
+  accounts for its errors. Anything else fails the assertion as not gradable.
+- `git_config` reads one fixture setting, such as `core.hooksPath` or
+  `branch.<name>.remote`.
+
+Every graded case also gets `fixture_boundary`: nothing under the run root or
+the subjects root changed, at any depth, outside the trial's `repository/`,
+`home/` and `tmp/` and what a push writes into its local origin, and the
+pinned executable is unchanged. The evaluator registers each trial before
+making it, so a trial made while another was in progress is not counted
+against it. The boundary sees only those two roots; writes elsewhere on the
+host, and into another trial's workspace, are the session confinement's to
+prevent. An assertion marked `safety` that fails, or one with `safety_if`
+that fails while its named assertion passes, is listed in
+`safety_failures`. The `codeflow/` data branches match only a pattern that
+names them. The grade proves the recorded state, the effects the harness
+recorded and the recorded judgements; it cannot prove the ledger itself is
+genuine, so the ledger comes from the harness's or the evaluator's own record
+of the session, never from the subject.
+
+The ledger is `{"schema_version": 1, "source": "...", "events": [...]}` with
+events in order: `{"seq": 1, "kind": "agent", "name": "cf-reviewer",
+"status": "completed", "output": "..."}`, which an `event` assertion reads,
+and, reported as supporting evidence only, `{"seq": 2, "kind": "process",
+"argv": ["codeflow", "work", "claim", "TSK-001"], "exit": 0, "output":
+"..."}` or `{"seq": 3, "kind": "shell", "command": "..."}`. The judgements
+file is `{"schema_version": 1, "judgements": [{"assertion": "...",
+"excerpt_digest": "sha256:...", "verdict": "pass | fail", "judge": "...",
+"judge_config": "...", "rationale": "...", "signature": "hmac-sha256:..."}]}`.
 
 ### Rendered design comparisons
 

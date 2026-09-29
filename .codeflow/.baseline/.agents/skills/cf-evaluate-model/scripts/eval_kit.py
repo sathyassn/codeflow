@@ -4,10 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import contextlib
 import copy
+import errno
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+import fnmatch
 import hashlib
+import hmac
+import io
 import json
 import os
 from pathlib import Path
@@ -18,13 +24,40 @@ import stat
 import statistics
 import subprocess
 import sys
+import tarfile
+import tempfile
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+try:
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None
+# What msvcrt.locking raises while another process holds the lock.
+LOCK_BUSY = getattr(errno, "EDEADLOCK", errno.EDEADLK)
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 RESOURCE_DIR = SKILL_DIR / "resources"
 RUN_MARKER = ".codeflow-eval-run.json"
+RECORD_SUFFIX = ".fixture.json"
+RESERVATION_SUFFIX = ".reserved.json"
+# The subject's workspaces live beside the run root, never inside it, so the
+# evaluator's records and grades stay outside the directory a session sees.
+SUBJECTS_SUFFIX = "-subjects"
+# A graded suite (cases, fixtures and packs with expected values, kept out of
+# the shipped kit and so out of every binary a subject can run) is merged
+# into each suite read once set_graded_suite() names it. A qualification
+# holdout is one, kept outside the published repository; a public
+# development suite is another.
+GRADED_SUITE: Path | None = None
+GRADED_SUITE_FILES = ("cases.json", "fixtures.json", "packs.json")
+# Labelled texts a judge must judge as labelled before its judgements count.
+JUDGE_CONTROLS_FILE = "judge-controls.json"
 MAX_SETTINGS_BYTES = 16 * 1024 * 1024
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 EXPERIMENT_VARIABLE = re.compile(r"^system\.[a-z_][a-z0-9_.]*$")
@@ -50,8 +83,12 @@ KNOWN_VALIDITY_FLAGS = {
 }
 EVALUATION_ROUTE_PREFIX = "| Qualify a model or harness change |"
 SAFE_BRANCH = re.compile(
-    r"^(?:main|master|fixture/[a-z0-9][a-z0-9-]*|integration/[A-Za-z0-9][A-Za-z0-9-]*)$"
+    r"^(?:main|master|fixture/[a-z0-9][a-z0-9-]*|integration/[A-Za-z0-9][A-Za-z0-9-]*"
+    r"|(?:feat|fix|docs|refactor|test|chore|ci|hotfix|plan|task|spike|experiment)"
+    r"/[A-Za-z0-9][A-Za-z0-9-]*)$"
 )
+HISTORY_LABEL = re.compile(r"^[a-z][a-z0-9-]*$")
+COMMIT_PLACEHOLDER = re.compile(r"\{\{commit:([a-z][a-z0-9-]*)\}\}")
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 RFC3339 = re.compile(
     r"^(?P<date_time>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})"
@@ -132,12 +169,56 @@ def project_root(start: Path | None = None) -> Path:
     raise EvalError("run from a CodeFlow standard/full project root")
 
 
+def set_graded_suite(path: Path | None) -> None:
+    """Merge the graded suite at `path` into every suite read, or
+    stop merging with None."""
+
+    global GRADED_SUITE
+    if path is None:
+        GRADED_SUITE = None
+        return
+    resolved = path.expanduser().resolve()
+    missing = [name for name in GRADED_SUITE_FILES if not (resolved / name).is_file()]
+    if missing:
+        raise EvalError(f"graded suite {resolved} lacks {', '.join(missing)}")
+    GRADED_SUITE = resolved
+
+
+def graded_documents() -> tuple[dict, dict, dict] | None:
+    if GRADED_SUITE is None:
+        return None
+    documents = tuple(load_json(GRADED_SUITE / name) for name in GRADED_SUITE_FILES)
+    if not all(isinstance(item, dict) and item.get("schema_version") == 1 for item in documents):
+        raise EvalError("graded suite documents must be schema_version 1 objects")
+    return documents  # type: ignore[return-value]
+
+
+def graded_suite_digest() -> str | None:
+    documents = graded_documents()
+    return None if documents is None else canonical_digest(list(documents))
+
+
+def with_graded(document: dict, key: str, graded: dict) -> dict:
+    """The shipped document with the graded suite's entries appended; a
+    duplicate id then fails validation like any other duplicate."""
+
+    public_items = document.get(key)
+    graded_items = graded.get(key, [])
+    if not isinstance(public_items, list) or not isinstance(graded_items, list):
+        return document
+    return dict(document, **{key: [*public_items, *graded_items]})
+
+
 def suite_documents(resource_dir: Path = RESOURCE_DIR) -> tuple[dict, dict, dict]:
     requirements = load_json(resource_dir / "requirements.json")
     cases = load_json(resource_dir / "cases.json")
     fixtures = load_json(resource_dir / "fixtures.json")
     if not all(isinstance(item, dict) for item in (requirements, cases, fixtures)):
         raise EvalError("requirements, cases, and fixtures must be JSON objects")
+    graded = graded_documents()
+    if graded is not None:
+        cases = with_graded(cases, "cases", graded[0])
+        fixtures = with_graded(fixtures, "fixtures", graded[1])
     return requirements, cases, fixtures
 
 
@@ -146,6 +227,9 @@ def qualification_documents(resource_dir: Path = RESOURCE_DIR) -> tuple[dict, di
     packs = load_json(resource_dir / "packs.json")
     if not all(isinstance(item, dict) for item in (harnesses, packs)):
         raise EvalError("harnesses and packs must be JSON objects")
+    graded = graded_documents()
+    if graded is not None:
+        packs = with_graded(packs, "packs", graded[2])
     return harnesses, packs
 
 
@@ -1075,7 +1159,7 @@ def retention_report(document: Any, pack_id: str) -> tuple[str, bool]:
                     "one session is one trial"
                 )
             sessions[ref] = label
-        status = computed_trial_status(trial, case)
+        status = computed_trial_status(trial, case, document.get("run_id"))
         tally[line].append(status)
         if status != "pass" and case["session"]["gate"] == "hard":
             failures.append(f"{label}: {status}")
@@ -1355,17 +1439,29 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
         if not isinstance(expected, dict):
             errors.append(f"{case_id}: expected must be an object")
             continue
+        graded = graded_case(case)
         for field in ("routes", "signals", "references", "must_not"):
             try:
                 string_list(
                     expected.get(field),
                     f"{case_id}.expected.{field}",
-                    allow_empty=field == "references",
+                    allow_empty=field == "references"
+                    or (graded and field in {"signals", "must_not"}),
                 )
             except EvalError as error:
                 errors.append(str(error))
+        if graded or "files" in expected or "effects" in expected:
+            errors.extend(assertion_errors(case_id, case))
         if not isinstance(case.get("canary"), bool):
             errors.append(f"{case_id}: canary must be boolean")
+    # Expected values in the shipped kit reach every subject through the
+    # binary's embedded assets (`codeflow init` and `update` restore them).
+    public_cases = load_json(resource_dir / "cases.json").get("cases", [])
+    for case in public_cases if isinstance(public_cases, list) else []:
+        if isinstance(case, dict) and isinstance(case.get("expected"), dict) and (
+            "files" in case["expected"] or "effects" in case["expected"]
+        ):
+            errors.append(f"{case.get('id')}: a graded case belongs in a graded suite outside the shipped resources")
 
     for fixture_id, fixture in fixtures.items():
         validated_untracked_files: list[str] = []
@@ -1407,6 +1503,7 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
                     f"{fixture_id}: target_precedes_fixture is mutually exclusive "
                     "with local_origin_main and squash_cleanup_worktree"
                 )
+            errors.extend(history_errors(fixture_id, state, branch))
             if "untracked_files" in state:
                 try:
                     validated_untracked_files = string_list(
@@ -1505,6 +1602,91 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
     return errors
 
 
+def history_errors(fixture_id: str, state: dict, branch: Any) -> list[str]:
+    """Problems in a fixture's declared history, remote-only branches and
+    registry seeding."""
+
+    errors: list[str] = []
+    steps = state.get("history", [])
+    if not isinstance(steps, list):
+        return [f"{fixture_id}: state.history must be an array"]
+    if steps and (
+        state.get("target_precedes_fixture") is True
+        or state.get("squash_cleanup_worktree") is True
+    ):
+        errors.append(
+            f"{fixture_id}: state.history is mutually exclusive with "
+            "target_precedes_fixture and squash_cleanup_worktree"
+        )
+    root_branch = state.get("root_branch", branch)
+    if "root_branch" in state:
+        if not isinstance(root_branch, str) or not SAFE_BRANCH.fullmatch(root_branch):
+            errors.append(f"{fixture_id}: unsafe root_branch {root_branch!r}")
+        elif root_branch != branch and not any(
+            isinstance(step, dict) and step.get("branch") == branch for step in steps
+        ):
+            errors.append(f"{fixture_id}: state.branch must be created by state.history when root_branch differs")
+    known = {root_branch} if isinstance(root_branch, str) else set()
+    labels = {"base"}
+    for index, step in enumerate(steps):
+        label = f"{fixture_id}.state.history[{index}]"
+        if not isinstance(step, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        unknown = set(step) - {"branch", "from", "label", "message", "files", "delete"}
+        if unknown:
+            errors.append(f"{label}: unknown keys {sorted(unknown)}")
+        step_branch = step.get("branch")
+        if not isinstance(step_branch, str) or not SAFE_BRANCH.fullmatch(step_branch):
+            errors.append(f"{label}: unsafe branch {step_branch!r}")
+            continue
+        if step_branch not in known and step.get("from") not in known:
+            errors.append(f"{label}: a new branch needs `from` naming an earlier branch")
+        message = step.get("message")
+        if not isinstance(message, str) or not message.strip() or "\n" in message:
+            errors.append(f"{label}: message must be one nonempty line")
+        files = step.get("files", {})
+        if not isinstance(files, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in files.items()
+        ):
+            errors.append(f"{label}.files must map paths to text")
+            files = {}
+        for relative, content in files.items():
+            try:
+                safe_relative_path(relative)
+            except EvalError as error:
+                errors.append(f"{label}: {error}")
+            for used in COMMIT_PLACEHOLDER.findall(content):
+                if used not in labels:
+                    errors.append(f"{label}: {relative} names unknown commit label {used!r}")
+        try:
+            for relative in string_list(step.get("delete", []), f"{label}.delete", allow_empty=True):
+                safe_relative_path(relative)
+        except EvalError as error:
+            errors.append(str(error))
+        if not files and not step.get("delete"):
+            errors.append(f"{label}: a step must change at least one file")
+        if "label" in step:
+            if not isinstance(step["label"], str) or not HISTORY_LABEL.fullmatch(step["label"]) or step["label"] in labels:
+                errors.append(f"{label}: label must be a new lowercase name")
+            else:
+                labels.add(step["label"])
+        known.add(step_branch)
+    try:
+        remote_only = string_list(state.get("remote_only", []), f"{fixture_id}.state.remote_only", allow_empty=True)
+    except EvalError as error:
+        errors.append(str(error))
+        remote_only = []
+    if remote_only and state.get("local_origin_main") is not True:
+        errors.append(f"{fixture_id}: remote_only requires local_origin_main")
+    for name in remote_only:
+        if name == branch or name not in known:
+            errors.append(f"{fixture_id}: remote_only branch {name!r} is not a history branch")
+    if "registry" in state and state["registry"] != "seeded":
+        errors.append(f"{fixture_id}: state.registry must be \"seeded\"")
+    return errors
+
+
 def safe_relative_path(value: str) -> Path:
     path = Path(value)
     if not value or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
@@ -1554,13 +1736,28 @@ def run_command(args: list[str], cwd: Path) -> None:
         raise EvalError(f"command failed ({' '.join(args)}):\n{tail}")
 
 
-def ensure_run_root(run_root: Path) -> dict:
+def refuse_broad_directory(path: Path, label: str) -> None:
+    if path == Path(path.anchor) or path == Path.home().resolve():
+        raise EvalError(f"refusing root or home directory as {label}")
+
+
+def nested(inner: Path, outer: Path) -> bool:
+    return inner == outer or outer in inner.parents
+
+
+def ensure_run_root(run_root: Path, subjects_root: Path | None = None) -> dict:
+    """Create or reopen a run root and its separate subjects root.
+
+    The run root holds the evaluator's marker and records; the subjects root
+    holds the pinned executable copy and one workspace per trial. Neither
+    contains the other, so a session confined to the subjects root cannot
+    read what the evaluator keeps."""
+
     raw = run_root.expanduser()
     if raw.is_symlink():
         raise EvalError("evaluation run root must not be a symlink")
     run_root = raw.resolve()
-    if run_root == Path(run_root.anchor) or run_root == Path.home().resolve():
-        raise EvalError("refusing root or home directory as an evaluation run root")
+    refuse_broad_directory(run_root, "an evaluation run root")
     marker_path = run_root / RUN_MARKER
     if run_root.exists():
         if not marker_path.is_file():
@@ -1568,18 +1765,41 @@ def ensure_run_root(run_root: Path) -> dict:
         marker = load_json(marker_path)
         if not isinstance(marker, dict) or marker.get("schema_version") != 1:
             raise EvalError("invalid evaluation run marker")
+        graded = marker.get("graded_suite")
+        if isinstance(graded, dict) and isinstance(graded.get("path"), str):
+            if GRADED_SUITE is None:
+                set_graded_suite(Path(graded["path"]))
+            elif GRADED_SUITE != Path(graded["path"]):
+                raise EvalError("the run root was made with another graded suite")
         if marker.get("suite_digest") != suite_digest():
             raise EvalError("evaluation run marker belongs to a different suite revision")
+        if not isinstance(marker.get("subjects_root"), str):
+            raise EvalError("the run root predates separate subject workspaces; start a new run root")
+        if subjects_root is not None and subjects_root.expanduser().resolve() != Path(marker["subjects_root"]):
+            raise EvalError("the run root already names another subjects root")
         return marker
+    raw_subjects = (subjects_root or run_root.parent / f"{run_root.name}{SUBJECTS_SUFFIX}").expanduser()
+    if raw_subjects.is_symlink():
+        raise EvalError("the subjects root must not be a symlink")
+    subjects = raw_subjects.resolve()
+    refuse_broad_directory(subjects, "a subjects root")
+    if nested(subjects, run_root) or nested(run_root, subjects):
+        raise EvalError("the run root and the subjects root must not contain each other")
+    if subjects.exists():
+        raise EvalError(f"the subjects root already exists: {subjects}")
     run_root.mkdir(parents=True)
+    subjects.mkdir(parents=True)
     marker = {
         "schema_version": 1,
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         + "-"
         + secrets.token_hex(4),
         "suite_digest": suite_digest(),
+        "subjects_root": str(subjects),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if GRADED_SUITE is not None:
+        marker["graded_suite"] = {"path": str(GRADED_SUITE), "digest": graded_suite_digest()}
     write_json(marker_path, marker)
     return marker
 
@@ -1689,6 +1909,38 @@ def configure_target_before_fixture(root: Path, target: str, branch: str) -> Non
     run_command(["git", "switch", "-c", branch], root)
 
 
+def apply_fixture_history(root: Path, checkout: str, steps: list[dict]) -> None:
+    """Commit declared branch history on top of the base commit, then return
+    to the checkout branch. `{{commit:<label>}}` in a file names the full sha
+    of the base commit or of an earlier labelled step."""
+
+    if not steps:
+        return
+    labels = {"base": git_output(["rev-parse", "HEAD"], root).strip()}
+    for step in steps:
+        branch = step["branch"]
+        exists = git_output(
+            ["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], root, check=False
+        ).strip()
+        if exists:
+            run_command(["git", "switch", "--quiet", branch], root)
+        else:
+            run_command(["git", "switch", "--quiet", "-c", branch, step["from"]], root)
+        for relative, content in step.get("files", {}).items():
+            filled = COMMIT_PLACEHOLDER.sub(lambda found: labels[found.group(1)], content)
+            write_fixture_file(root, relative, filled)
+        for relative in step.get("delete", []):
+            target = root / safe_relative_path(relative)
+            if target.is_symlink() or not target.is_file():
+                raise EvalError(f"history step deletes a missing file: {relative}")
+            target.unlink()
+        run_command(["git", "add", "-A"], root)
+        run_command(["git", "commit", "--quiet", "-m", step["message"]], root)
+        if "label" in step:
+            labels[step["label"]] = git_output(["rev-parse", "HEAD"], root).strip()
+    run_command(["git", "switch", "--quiet", checkout], root)
+
+
 def configure_local_origin_main(root: Path, origin: Path) -> None:
     """Add a fixture-local bare origin whose main tip matches the subject HEAD."""
 
@@ -1757,6 +2009,57 @@ def executable_digest(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def trial_opaque_id(run_id: str, case_id: str, trial: int) -> str:
+    return hashlib.sha256(f"{run_id}\0{case_id}\0{trial}".encode("utf-8")).hexdigest()[:20]
+
+
+def pin_subject_executable(subjects: Path, source: Path, sha256: str) -> Path:
+    """Copy the pinned executable into the subjects root once per run, so a
+    session's PATH never names the evaluator's build or checkout."""
+
+    target = subjects / "bin" / "codeflow"
+    refuse_symlink_components(target, subjects)
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".codeflow.{secrets.token_hex(8)}.tmp")
+        shutil.copyfile(source, temporary)
+        os.chmod(temporary, 0o755)
+        os.replace(temporary, target)
+    if executable_digest(target) != sha256:
+        raise EvalError("the subjects root holds another CodeFlow executable")
+    return target
+
+
+# Variables a subject session inherits from the evaluator; everything else,
+# including anything naming the evaluator's files, is left out.
+SUBJECT_INHERITED_ENV = ("LANG", "LC_ALL", "TERM", "USER", "LOGNAME", "SHELL")
+
+
+def subject_environment(trial_dir: Path, subject_codeflow: Path, hidden: list[Path]) -> dict[str, str]:
+    """The environment a harness gives the subject session: the pinned
+    executable's copy first on PATH, its own home and temporary directory, and
+    no PATH entry inside a directory the subject must not read."""
+
+    entries = [str(subject_codeflow.parent)]
+    for entry in os.environ.get("PATH", "/usr/bin:/bin").split(os.pathsep):
+        if not entry or not os.path.isabs(entry):
+            continue
+        resolved = Path(os.path.realpath(entry))
+        if any(nested(resolved, Path(os.path.realpath(path))) for path in hidden):
+            continue
+        if entry not in entries:
+            entries.append(entry)
+    environment = {name: os.environ[name] for name in SUBJECT_INHERITED_ENV if name in os.environ}
+    environment.update(
+        {
+            "PATH": os.pathsep.join(entries),
+            "HOME": str(trial_dir / "home"),
+            "TMPDIR": str(trial_dir / "tmp"),
+        }
+    )
+    return environment
+
+
 def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dict:
     if trial < 1:
         raise EvalError("trial must be at least 1")
@@ -1776,12 +2079,11 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         raise EvalError(f"case {case_id} refers to unknown fixture {fixture_id!r}")
     marker = ensure_run_root(run_root)
     resolved_run_root = run_root.expanduser().resolve()
-    opaque_id = hashlib.sha256(
-        f"{marker['run_id']}\0{case_id}\0{trial}".encode("utf-8")
-    ).hexdigest()[:20]
-    output = resolved_run_root / "workspaces" / opaque_id / "repository"
+    subjects = Path(marker["subjects_root"])
+    opaque_id = trial_opaque_id(marker["run_id"], case_id, trial)
+    output = subjects / opaque_id / "repository"
     record_path = resolved_run_root / "records" / f"{opaque_id}.fixture.json"
-    refuse_symlink_components(output.parent, resolved_run_root)
+    refuse_symlink_components(output.parent, subjects)
     if output.exists():
         raise EvalError(f"trial fixture already exists: {output}")
     if record_path.exists():
@@ -1790,6 +2092,24 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     if not codeflow_path.is_file() or not os.access(codeflow_path, os.X_OK):
         raise EvalError(f"CodeFlow binary is not executable: {codeflow_path}")
     codeflow_sha256 = executable_digest(codeflow_path)
+    subject_codeflow = pin_subject_executable(subjects, codeflow_path, codeflow_sha256)
+    # Register the trial before its workspace exists, so a trial graded
+    # meanwhile counts the new workspace as the evaluator's (grade_boundary).
+    reservation = record_path.with_name(f"{opaque_id}{RESERVATION_SUFFIX}")
+    if any(nested(evaluator_key_path(), root) for root in (resolved_run_root, subjects.resolve())):
+        raise EvalError("the evaluator key lies inside the run or subjects root, where a trial can reach it")
+    if reservation.exists():
+        raise EvalError(f"trial is already registered: {reservation}")
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    with registration_lock(resolved_run_root):
+        write_json(reservation, signed_registration({
+            "schema_version": 1,
+            "run_id": marker["run_id"],
+            "case_id": case_id,
+            "trial": trial,
+            "path": str(output),
+            "state": "materializing",
+        }))
     output.mkdir(parents=True)
     tier_flag = "--full" if fixture["tier"] == "full" else "--standard"
     run_command([str(codeflow_path), "init", "--yes", tier_flag], output)
@@ -1837,15 +2157,30 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         run_command(["git", "add", "-A"], output)
         run_command(["git", "commit", "-m", "chore: add evaluation subject"], output)
     else:
-        reset_fixture_history(output, branch, install_hooks=False)
+        reset_fixture_history(
+            output, state.get("root_branch", branch), install_hooks=False
+        )
+    apply_fixture_history(output, branch, state.get("history", []))
     if state.get("squash_cleanup_worktree") is True:
         configure_squash_cleanup_worktree(output, state)
     elif state.get("local_origin_main") is True:
         configure_local_origin_main(output, output.parent / "origin.git")
+    for remote_only in state.get("remote_only", []):
+        run_command(["git", "branch", "-D", remote_only], output)
+    if state.get("registry") == "seeded":
+        run_command([str(codeflow_path), "ids", "seed"], output)
+        if executable_digest(codeflow_path) != codeflow_sha256:
+            raise EvalError("CodeFlow executable changed during materialization")
     for relative, content in post_history_files.items():
         write_fixture_file(output, relative, content)
     configure_fixture_hooks(output)
     digest = tree_digest(output)
+    for private in ("home", "tmp"):
+        (output.parent / private).mkdir()
+    if any(nested(evaluator_key_path(), root) for root in (resolved_run_root, subjects.resolve())):
+        raise EvalError("the evaluator key lies inside the run or subjects root, where a trial can reach it")
+    hidden = [resolved_run_root, subjects, evaluator_key_path().parent, *([GRADED_SUITE] if GRADED_SUITE is not None else [])]
+    environment = subject_environment(output.parent, subject_codeflow, hidden)
     trial_record = {
         "schema_version": 1,
         "run_id": marker["run_id"],
@@ -1854,27 +2189,2757 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         "fixture_id": fixture["id"],
         "fixture_state": fixture["state"],
         "fixture_digest": digest,
+        "case_digest": case_digest(case, fixture),
         "path": str(output),
+        "branch": branch,
+        "base_commit": git_output(["rev-parse", "HEAD"], output).strip(),
+        "refs": ref_snapshot(output),
         "codeflow_executable": {
             "path": str(codeflow_path),
             "sha256": codeflow_sha256,
         },
+        "subjects_root": str(subjects),
+        "subject_codeflow": str(subject_codeflow),
+        "subject_environment": environment,
     }
     if plan is not None:
         trial_record["session"] = plan
         trial_record["session_digest"] = canonical_digest(plan)
         trial_record["guidance_wiring"] = wiring
-    record_path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(record_path, trial_record)
+    with registration_lock(resolved_run_root):
+        trial_record["settled_trials"] = sorted(settled_trials(resolved_run_root, marker) - {opaque_id})
+        trial_record["boundary"] = boundary_inventory(resolved_run_root, subjects)
+        trial_record = signed_registration(trial_record)
+        write_json(record_path, trial_record)
+        reservation.unlink()
     return trial_record
 
 
-def computed_trial_status(trial: dict, case: dict) -> str:
+# File-state and tool-effect grading (SPC-013 R-105, R-106). A case may carry
+# `expected.files` and `expected.effects`. A graded case lives in an
+# graded suite (set_graded_suite), outside the shipped kit, so no
+# subject can read it from its fixture or recover it through the binary.
+# `grade` evaluates the assertions against the fixture after the session,
+# with the harness's tool-event ledger and any recorded judgements, and
+# records one result per assertion; `score` and `validate-result` recompute
+# the trial status from that grade. Subject code runs only in a confined
+# child, and a shipped checker that did not finish its checks fails the
+# assertion rather than passing it.
+
+GRADE_SCHEMA_VERSION = 1
+BOUNDARY_ASSERTION = "fixture_boundary"
+ASSERTION_ID = re.compile(r"^[a-z][a-z0-9_]*$")
+TRIAL_OUTCOMES = frozenset({"completed", "timed_out", "error", "not_run"})
+# A session that started is graded whatever its outcome; a trial that never
+# started (an infrastructure failure before launch) is `not_run`.
+GRADED_OUTCOMES = frozenset({"completed", "timed_out", "error"})
+EFFECT_KINDS = frozenset(
+    {"refs", "refs_unchanged", "changed_paths", "command", "acceptance", "ci", "git_config", "event"}
+)
+FILE_KEYS = frozenset(
+    {
+        "id",
+        "in",
+        "path",
+        "glob",
+        "new",
+        "frontmatter",
+        "section",
+        "matches",
+        "excludes",
+        "count",
+        "verdict",
+        "judged",
+        "registry_consistent",
+        "via",
+        "safety",
+        "safety_if",
+    }
+)
+EFFECT_KEYS = {
+    "refs": {"in", "new", "count"},
+    "refs_unchanged": {"in"},
+    "changed_paths": {"in", "allowed", "denied"},
+    "command": {"in", "argv", "stdin", "inputs", "env", "exit", "timeout", "stdout", "stdout_lines", "stdout_json", "output_matches"},
+    "acceptance": {"in", "record", "expect", "base"},
+    "ci": {"in", "rules", "base", "pr_body"},
+    "git_config": {"key", "equals"},
+    "event": {"event", "name", "output_matches", "verdict", "count"},
+}
+COMMAND_OUTPUT_KEYS = ("stdout", "stdout_lines", "stdout_json", "output_matches")
+COMMON_EFFECT_KEYS = frozenset({"id", "kind", "safety", "safety_if", "via"})
+# Modes in which a command reports and changes nothing: never an action.
+NON_ACTION_FLAGS = frozenset({"-h", "--help", "-V", "--version", "--dry-run"})
+SCOPE = re.compile(r"^(?:worktree|(?:branch|origin):[A-Za-z0-9*?\[\]/._-]+)$")
+RECORD_ID = re.compile(r"^(?:TSK|EPC|SPC)-[0-9]{3,}$")
+INPUT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# Elapsed times ("Ran 3 tests in 0.06s") would make a grade vary per run.
+ELAPSED = re.compile(r"\b\d+(?:\.\d+)?m?s\b")
+# Files a test run or the host leaves behind; never counted as a change.
+GRADER_IGNORED_PARTS = frozenset({"__pycache__", ".pytest_cache", ".DS_Store"})
+# `codeflow ci` output, which uses an em dash (U+2014) after the marker.
+FINDING = re.compile(
+    r"^codeflow ci(?: commit [0-9a-f]+)?: (BLOCKED|warning) \u2014 "
+    r"[a-z ]+? ([a-z_]+(?:\.[a-z_]+)+) \((block|warn)\)$"
+)
+CI_RANGE = re.compile(r"^codeflow ci: range \S+ \(.*\) \u2014 \d+ non-merge commit", re.MULTILINE)
+CI_CLEAN = re.compile(r"^codeflow ci: clean \u2014 ", re.MULTILINE)
+CI_WARNINGS = re.compile(r"^codeflow ci: (\d+) warning\(s\) only \u2014 proceeding$", re.MULTILINE)
+CI_FAILED = re.compile(r"^codeflow ci: FAILED \u2014 (\d+) blocking, (\d+) warning\(s\)$", re.MULTILINE)
+CI_ACCEPTANCE_RAN = re.compile(r"^codeflow ci: acceptance: ", re.MULTILINE)
+VALIDATE_POLICY = re.compile(
+    r"^validate: (?:\.codeflow/policy\.json clean|no \.codeflow/policy\.json)", re.MULTILINE
+)
+VALIDATE_CLEAN = re.compile(r"^validate --docs: doc graph clean$", re.MULTILINE)
+VALIDATE_FAILED = re.compile(r"^validate --docs: (\d+) workgraph integrity error\(s\)$", re.MULTILINE)
+COMMAND_TIMEOUT_LIMIT = 600
+# The reviewer's verdict format (cf-reviewer "Verdict format").
+REVIEW_VERDICTS = frozenset({"approved", "changes_requested"})
+REVIEW_CRITERION_STATUSES = frozenset({"verified", "not_verified", "failed"})
+REVIEW_SEVERITIES = frozenset({"blocker", "major", "minor"})
+REVIEW_AXES = frozenset({"standards", "spec"})
+REVIEW_LIST_FIELDS = {
+    "criteria": ({"criterion", "status", "evidence"}, {"criterion", "status", "evidence"}),
+    "findings": ({"severity", "axis", "location", "description", "remedy"}, {"severity", "location", "description"}),
+}
+
+
+def graded_case(case: dict) -> bool:
+    expected = case.get("expected")
+    return isinstance(expected, dict) and bool(
+        expected.get("files") or expected.get("effects")
+    )
+
+
+def case_assertions(case: dict) -> list[dict]:
+    """The ordered assertions of a graded case, the fixture boundary first."""
+
+    expected = case["expected"]
+    boundary = {"id": BOUNDARY_ASSERTION, "kind": "boundary", "safety": True}
+    files = [dict(item, kind="file") for item in expected.get("files", [])]
+    return [boundary, *files, *expected.get("effects", [])]
+
+
+def case_digest(case: dict, fixture: dict) -> str:
+    return canonical_digest({"case": case, "fixture": fixture})
+
+
+GRADER_DIGEST = "sha256:" + hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def grader_digest() -> str:
+    """The digest of this grader as loaded; a changed grader requalifies."""
+
+    return GRADER_DIGEST
+
+
+def assertion_errors(case_id: str, case: dict) -> list[str]:
+    """Structural problems in a case's `expected.files` and `expected.effects`."""
+
+    errors: list[str] = []
+    expected = case["expected"]
+    seen: set[str] = set()
+    items: list[tuple[str, Any]] = []
+    for field in ("files", "effects"):
+        value = expected.get(field, [])
+        if not isinstance(value, list):
+            errors.append(f"{case_id}.expected.{field} must be an array")
+            continue
+        items.extend((field, item) for item in value)
+    for field, item in items:
+        label = f"{case_id}.expected.{field}"
+        if not isinstance(item, dict):
+            errors.append(f"{label} entries must be objects")
+            continue
+        assertion_id = item.get("id")
+        if not isinstance(assertion_id, str) or not ASSERTION_ID.fullmatch(assertion_id):
+            errors.append(f"{label}: assertion id must be snake_case")
+            continue
+        label = f"{label}.{assertion_id}"
+        if assertion_id == BOUNDARY_ASSERTION or assertion_id in seen:
+            errors.append(f"{label}: duplicate or reserved assertion id")
+        seen.add(assertion_id)
+        if not isinstance(item.get("safety", False), bool):
+            errors.append(f"{label}.safety must be boolean")
+        if field == "files":
+            errors.extend(file_assertion_errors(label, item))
+        else:
+            errors.extend(effect_assertion_errors(label, item))
+    agents = {
+        item.get("id")
+        for field, item in items
+        if field == "effects" and isinstance(item, dict) and item.get("kind") == "event"
+    }
+    for field, item in items:
+        if isinstance(item, dict) and "safety_if" in item:
+            if item["safety_if"] not in seen or item["safety_if"] == item.get("id"):
+                errors.append(
+                    f"{case_id}.expected.{field}.{item.get('id')}: "
+                    "safety_if must name another assertion of the case"
+                )
+        via = item.get("via") if isinstance(item, dict) else None
+        if isinstance(via, dict) and "after" in via and via["after"] not in agents:
+            errors.append(
+                f"{case_id}.expected.{field}.{item.get('id')}: "
+                "via.after must name an agent event assertion of the case"
+            )
+    return errors
+
+
+def scope_errors(label: str, scopes: Any, *, single: bool = False) -> list[str]:
+    if single:
+        scopes = [scopes] if isinstance(scopes, str) else None
+    if not isinstance(scopes, list) or not scopes or not all(
+        isinstance(scope, str) and SCOPE.fullmatch(scope) for scope in scopes
+    ):
+        return [f"{label}.in must name worktree, branch:<glob> or origin:<glob>"]
+    return []
+
+
+def regex_errors(label: str, patterns: Any) -> list[str]:
+    try:
+        for pattern in string_list(patterns, label):
+            re.compile(pattern)
+    except (EvalError, re.error) as error:
+        return [f"{label}: {error}"]
+    return []
+
+
+def count_errors(label: str, count: Any) -> list[str]:
+    if not isinstance(count, dict) or not count or set(count) - {"min", "max"}:
+        return [f"{label}.count must hold min and/or max"]
+    for bound in count.values():
+        if not isinstance(bound, int) or isinstance(bound, bool) or bound < 0:
+            return [f"{label}.count bounds must be nonnegative integers"]
+    return []
+
+
+def file_assertion_errors(label: str, item: dict) -> list[str]:
+    errors = [f"{label}: unknown key {key!r}" for key in sorted(set(item) - FILE_KEYS)]
+    errors.extend(scope_errors(label, item.get("in", ["worktree"])))
+    if ("path" in item) == ("glob" in item):
+        errors.append(f"{label} needs exactly one of path or glob")
+    selector = item.get("path", item.get("glob"))
+    if not isinstance(selector, str) or not selector or selector.startswith("/") or ".." in selector.split("/"):
+        errors.append(f"{label}: unsafe path or glob")
+    if "new" in item and not isinstance(item["new"], bool):
+        errors.append(f"{label}.new must be boolean")
+    frontmatter = item.get("frontmatter", {})
+    if not isinstance(frontmatter, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in frontmatter.items()
+    ):
+        errors.append(f"{label}.frontmatter must map field names to strings")
+    for field in ("matches", "excludes"):
+        if field in item:
+            errors.extend(regex_errors(f"{label}.{field}", item[field]))
+    if "section" in item:
+        errors.extend(regex_errors(f"{label}.section", [item["section"]]))
+    if "count" in item:
+        errors.extend(count_errors(label, item["count"]))
+    if "verdict" in item:
+        errors.extend(verdict_constraint_errors(label, item["verdict"]))
+    if "via" in item:
+        errors.extend(via_errors(label, item["via"]))
+    if "registry_consistent" in item and item["registry_consistent"] is not True:
+        errors.append(f"{label}.registry_consistent must be true")
+    if "verdict" in item and "judged" in item:
+        errors.append(f"{label}: a verdict is judged for coherence by the kit's own rubric; drop judged")
+    if "judged" in item:
+        judged = item["judged"]
+        if not isinstance(judged, dict) or set(judged) != {"rubric"} or not isinstance(
+            judged.get("rubric"), str
+        ) or not judged["rubric"].strip():
+            errors.append(f"{label}.judged must hold a nonempty rubric")
+        if "path" not in item:
+            errors.append(f"{label}: a judged assertion names one path")
+    return errors
+
+
+def via_errors(label: str, via: Any) -> list[str]:
+    """`via` names the command expected to have made an effect. It is
+    supporting evidence reported beside the grade, never the grade."""
+
+    if not isinstance(via, dict) or set(via) - {"program", "args", "options", "after"}:
+        return [f"{label}.via holds program, args, options and after"]
+    errors: list[str] = []
+    if not isinstance(via.get("program"), str) or not SAFE_ID.fullmatch(via["program"]):
+        errors.append(f"{label}.via.program must name an executable")
+    try:
+        string_list(via.get("args", []), f"{label}.via.args", allow_empty=True)
+    except EvalError as error:
+        errors.append(str(error))
+    options = via.get("options", {})
+    if not isinstance(options, dict) or not all(
+        isinstance(key, str) and key.startswith("-") and isinstance(value, str) for key, value in options.items()
+    ):
+        errors.append(f"{label}.via.options must map flags to value globs")
+    if "after" in via and not isinstance(via["after"], str):
+        errors.append(f"{label}.via.after must name an agent event assertion")
+    return errors
+
+
+def verdict_constraint_errors(label: str, constraint: Any) -> list[str]:
+    """A `verdict` constraint reads a review in the reviewer's verdict format."""
+
+    if not isinstance(constraint, dict) or not constraint or set(constraint) - {
+        "verdict",
+        "criteria",
+        "findings",
+    }:
+        return [f"{label}.verdict must hold verdict, criteria and/or findings"]
+    errors: list[str] = []
+    if "verdict" in constraint and constraint["verdict"] not in REVIEW_VERDICTS:
+        errors.append(f"{label}.verdict.verdict must be one of {sorted(REVIEW_VERDICTS)}")
+    for index, entry in enumerate(constraint.get("criteria", []) if isinstance(constraint.get("criteria", []), list) else [None]):
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"criterion", "status"}
+            or not isinstance(entry["criterion"], str)
+            or not re.fullmatch(r"AC-[0-9]+", entry["criterion"])
+            or not isinstance(entry["status"], list)
+            or not entry["status"]
+            or not set(entry["status"]) <= REVIEW_CRITERION_STATUSES
+        ):
+            errors.append(f"{label}.verdict.criteria[{index}] must name an AC-n and statuses")
+    for index, entry in enumerate(constraint.get("findings", []) if isinstance(constraint.get("findings", []), list) else [None]):
+        if (
+            not isinstance(entry, dict)
+            or not set(entry) <= {"severity", "location", "axis"}
+            or not isinstance(entry.get("severity"), list)
+            or not set(entry["severity"]) <= REVIEW_SEVERITIES
+            or not isinstance(entry.get("location", "*"), str)
+            or not isinstance(entry.get("axis", []), list)
+            or not set(entry.get("axis", [])) <= REVIEW_AXES
+        ):
+            errors.append(f"{label}.verdict.findings[{index}] needs severities and an optional location glob and axes")
+    return errors
+
+
+def effect_assertion_errors(label: str, item: dict) -> list[str]:
+    kind = item.get("kind")
+    if kind not in EFFECT_KINDS:
+        return [f"{label}: unknown effect kind {kind!r}"]
+    allowed = COMMON_EFFECT_KEYS | EFFECT_KEYS[kind]
+    if kind == "event":
+        allowed = allowed - {"via"}
+    errors = [f"{label}: unknown key {key!r}" for key in sorted(set(item) - allowed)]
+    if "via" in item and kind != "event":
+        errors.extend(via_errors(label, item["via"]))
+    if kind in {"refs", "refs_unchanged"}:
+        errors.extend(scope_errors(label, item.get("in")))
+        if any(scope == "worktree" for scope in item.get("in", []) or []):
+            errors.append(f"{label}.in names refs, not the worktree")
+        if kind == "refs":
+            errors.extend(count_errors(label, item.get("count")))
+            if not isinstance(item.get("new", False), bool):
+                errors.append(f"{label}.new must be boolean")
+    elif kind == "changed_paths":
+        errors.extend(scope_errors(label, item.get("in")))
+        if "allowed" not in item and "denied" not in item:
+            errors.append(f"{label} needs allowed and/or denied path globs")
+        for field in ("allowed", "denied"):
+            if field in item:
+                try:
+                    string_list(item[field], f"{label}.{field}")
+                except EvalError as error:
+                    errors.append(str(error))
+    elif kind == "command":
+        errors.extend(scope_errors(label, item.get("in"), single=True))
+        try:
+            string_list(item.get("argv"), f"{label}.argv")
+        except EvalError as error:
+            errors.append(str(error))
+        if not any(key in item for key in COMMAND_OUTPUT_KEYS):
+            # An exit status alone never proves the outcome: subject code can
+            # exit 0 before any check runs.
+            errors.append(f"{label} needs an expected output: {', '.join(COMMAND_OUTPUT_KEYS)}")
+        for field in ("env", "inputs"):
+            mapping = item.get(field, {})
+            if not isinstance(mapping, dict) or not all(
+                isinstance(key, str) and isinstance(value, str) for key, value in mapping.items()
+            ):
+                errors.append(f"{label}.{field} must map names to strings")
+            elif field == "inputs" and not all(INPUT_NAME.fullmatch(key) for key in mapping):
+                errors.append(f"{label}.inputs names must be plain file names")
+        for field in ("stdin", "stdout"):
+            if field in item and not isinstance(item[field], str):
+                errors.append(f"{label}.{field} must be a string")
+        if "stdout_lines" in item:
+            try:
+                string_list(item["stdout_lines"], f"{label}.stdout_lines", allow_empty=True)
+            except EvalError as error:
+                errors.append(str(error))
+        exit_code = item.get("exit", 0)
+        if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+            errors.append(f"{label}.exit must be an integer")
+        timeout = item.get("timeout", 120)
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or not 0 < timeout <= COMMAND_TIMEOUT_LIMIT:
+            errors.append(f"{label}.timeout must be 1 to {COMMAND_TIMEOUT_LIMIT} seconds")
+        if "output_matches" in item:
+            errors.extend(regex_errors(f"{label}.output_matches", item["output_matches"]))
+    elif kind == "event":
+        if item.get("event") != "agent":
+            # A process record proves only that a command ran, not what it
+            # did (`--help`, a stand-in named codeflow); a shell line proves
+            # less. An action is graded by its effect, with `via`.
+            errors.append(f"{label}.event must be agent: grade a command by the effect it leaves, naming it in via")
+        if not isinstance(item.get("name"), str) or not item["name"]:
+            errors.append(f"{label}.name must be an agent name glob")
+        if "output_matches" in item:
+            errors.extend(regex_errors(f"{label}.output_matches", item["output_matches"]))
+        if "verdict" in item:
+            errors.extend(verdict_constraint_errors(label, item["verdict"]))
+            if "count" in item:
+                errors.append(f"{label}: a verdict is read from the last completed review alone; drop count")
+        errors.extend(count_errors(label, item.get("count", {"min": 1})))
+    elif kind in {"acceptance", "ci"}:
+        errors.extend(scope_errors(label, item.get("in"), single=kind == "acceptance"))
+        scopes = item.get("in") if isinstance(item.get("in"), list) else [item.get("in")]
+        if "worktree" in scopes:
+            errors.append(f"{label}.in must name a branch or origin ref")
+        if "base" in item and (not isinstance(item["base"], str) or not SAFE_BRANCH.fullmatch(item["base"])):
+            errors.append(f"{label}.base must be a fixture branch name")
+        if kind == "acceptance":
+            if not isinstance(item.get("record"), str) or not RECORD_ID.fullmatch(item["record"]):
+                errors.append(f"{label}.record must be a record id")
+            if item.get("expect") not in {"accepted", "rejected"}:
+                errors.append(f"{label}.expect must be accepted or rejected")
+        else:
+            try:
+                string_list(item.get("rules"), f"{label}.rules")
+            except EvalError as error:
+                errors.append(str(error))
+            if "pr_body" in item:
+                try:
+                    safe_relative_path(item["pr_body"])
+                except (EvalError, TypeError):
+                    errors.append(f"{label}.pr_body must be a relative path")
+    elif kind == "git_config":
+        if not isinstance(item.get("key"), str) or not re.fullmatch(
+            r"[a-z]+\.[A-Za-z]+|branch\.[A-Za-z0-9/._-]+\.(?:remote|merge)", item["key"]
+        ):
+            errors.append(f"{label}.key must be a git config key")
+        if not isinstance(item.get("equals"), str):
+            errors.append(f"{label}.equals must be a string")
+    return errors
+
+
+# Git runs against the subject's repository with every setting a subject
+# could turn into code execution switched off.
+SAFE_GIT = (
+    "git",
+    "--no-optional-locks",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "log.showSignature=false",
+    "-c",
+    "core.pager=cat",
+)
+
+
+def git_output(args: list[str], cwd: Path, *, check: bool = True) -> str:
+    completed = subprocess.run(
+        [*SAFE_GIT, *args],
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=180,
+        check=False,
+    )
+    if check and completed.returncode != 0:
+        raise EvalError(f"git {' '.join(args)} failed: {completed.stderr.strip()}")
+    return completed.stdout
+
+
+def branch_refs(git_dir_args: list[str], cwd: Path) -> dict[str, str]:
+    output = git_output(
+        [*git_dir_args, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads"],
+        cwd,
+    )
+    refs: dict[str, str] = {}
+    for line in output.splitlines():
+        name, _, sha = line.rpartition(" ")
+        if name:
+            refs[name] = sha
+    return refs
+
+
+def origin_dir(fixture: Path) -> Path | None:
+    candidate = fixture.parent / "origin.git"
+    return candidate if candidate.is_dir() and not candidate.is_symlink() else None
+
+
+def ref_snapshot(fixture: Path) -> dict[str, dict[str, str]]:
+    """Every local and fixture-origin branch with its commit."""
+
+    snapshot = {"branch": branch_refs([], fixture), "origin": {}}
+    origin = origin_dir(fixture)
+    if origin is not None:
+        snapshot["origin"] = branch_refs(["--git-dir", str(origin)], fixture)
+    return snapshot
+
+
+# What a session may change under the subjects root: its own repository,
+# home and temporary directory, and what a push writes into its local origin.
+# Everything else under the run root and the subjects root is inventoried at
+# materialization.
+SUBJECT_WRITABLE = frozenset({"repository", "home", "tmp"})
+ORIGIN_PUSH_PARTS = frozenset({"objects", "refs", "logs", "packed-refs"})
+
+
+def boundary_exempt(parts: tuple[str, ...]) -> bool:
+    if len(parts) >= 2 and parts[1] in SUBJECT_WRITABLE:
+        return True
+    return len(parts) >= 3 and parts[1] == "origin.git" and parts[2] in ORIGIN_PUSH_PARTS
+
+
+def entry_signature(path: Path) -> str:
+    if path.is_symlink():
+        return "l:" + os.readlink(path)
+    mode = path.stat().st_mode
+    if stat.S_ISDIR(mode):
+        return "d"
+    if not stat.S_ISREG(mode):
+        return f"o:{stat.S_IFMT(mode)}"
+    executable = "x" if mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) else "-"
+    return f"f:{executable}:{executable_digest(path)}"
+
+
+def boundary_inventory(run_root: Path, subjects_root: Path) -> dict[str, str]:
+    """Every entry under the run root and the subjects root, recursively,
+    except what a session may change (boundary_exempt)."""
+
+    inventory: dict[str, str] = {}
+    for label, root in (("run", run_root), ("subjects", subjects_root)):
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            base = Path(dirpath)
+            relative = base.relative_to(root).parts
+            descend: list[str] = []
+            for name in sorted([*dirnames, *filenames]):
+                parts = (*relative, name)
+                if label == "subjects" and boundary_exempt(parts):
+                    continue
+                path = base / name
+                try:
+                    inventory[f"{label}/{'/'.join(parts)}"] = entry_signature(path)
+                except (FileNotFoundError, EvalError):
+                    # Gone mid-walk: a lock file of a trial still being made.
+                    if path.exists() or path.is_symlink():
+                        raise
+                    continue
+                if name in dirnames and not path.is_symlink():
+                    descend.append(name)
+            dirnames[:] = descend
+    return inventory
+
+
+@contextlib.contextmanager
+def registration_lock(run_root: Path):
+    """Hold the run's registration lock: an exclusive lock on the run marker,
+    which never changes, so it adds nothing to any inventory. Materialization
+    registers and settles a trial under it, and grading takes its inventory
+    and reads the registrations under it, so a trial finishing in parallel is
+    never half seen. POSIX takes it with flock and Windows with
+    msvcrt.locking on the marker's first byte; a platform with neither is
+    refused, never left to race."""
+
+    if fcntl is None and msvcrt is None:
+        raise EvalError("this platform has no file lock, so trials cannot be materialized or graded safely")
+    with open(run_root.expanduser().resolve() / RUN_MARKER, "rb") as marker:
+        if fcntl is not None:
+            fcntl.flock(marker.fileno(), fcntl.LOCK_EX)
+        else:
+            while True:
+                marker.seek(0)
+                try:
+                    msvcrt.locking(marker.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError as error:
+                    # LK_LOCK gives up after ten one-second tries; keep
+                    # waiting while another process holds the lock.
+                    if error.errno != LOCK_BUSY:
+                        raise
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(marker.fileno(), fcntl.LOCK_UN)
+            else:
+                marker.seek(0)
+                msvcrt.locking(marker.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+# Trial records and reservations are the evaluator's registrations: the
+# baseline a trial is graded against (base commit, refs, boundary inventory,
+# roots, pinned executable) and the later trials whose workspaces a boundary
+# check exempts. Each is signed under the evaluator key when it is written,
+# and a registration that does not verify is not the evaluator's: it is
+# never graded from, and it exempts nothing.
+REGISTRATION_SIGNATURE = "codeflow-eval-registration-v1"
+
+
+def registration_signature(key: bytes, document: dict) -> str:
+    body = {name: value for name, value in document.items() if name != "signature"}
+    message = json.dumps([REGISTRATION_SIGNATURE, body], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "hmac-sha256:" + hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def signed_registration(document: dict) -> dict:
+    """`document` signed under the evaluator key, made on first use."""
+
+    key = evaluator_key(create=True)
+    assert key is not None
+    body = {name: value for name, value in document.items() if name != "signature"}
+    return {**body, "signature": registration_signature(key, body)}
+
+
+def registration_verifies(document: Any) -> bool:
+    key = evaluator_key()
+    signature = document.get("signature") if isinstance(document, dict) else None
+    return key is not None and isinstance(signature, str) and hmac.compare_digest(
+        signature, registration_signature(key, document)
+    )
+
+
+def registered_trials(run_root: Path, marker: dict, *, settled: bool = False) -> set[str]:
+    """Opaque ids of the trials this run's evaluator registered: signed
+    records whose file name, run and workspace path agree. With `settled`,
+    only those whose materialization finished (their record holds a
+    boundary)."""
+
+    found: set[str] = set()
+    records = run_root / "records"
+    if not records.is_dir():
+        return found
+    for path in sorted(records.iterdir()):
+        suffix = next((end for end in (RECORD_SUFFIX, RESERVATION_SUFFIX) if path.name.endswith(end)), None)
+        if suffix is None or (settled and suffix != RECORD_SUFFIX):
+            continue
+        try:
+            record = load_json(path)
+        except EvalError:
+            continue
+        if not isinstance(record, dict) or not registration_verifies(record):
+            continue
+        opaque = path.name[: -len(suffix)]
+        case_id, trial = record.get("case_id"), record.get("trial")
+        if (
+            record.get("run_id") == marker.get("run_id")
+            and isinstance(case_id, str)
+            and isinstance(trial, int)
+            and trial_opaque_id(marker["run_id"], case_id, trial) == opaque
+            and record.get("path") == str(Path(marker["subjects_root"]) / opaque / "repository")
+            and (not settled or "boundary" in record)
+        ):
+            found.add(opaque)
+    return found
+
+
+def settled_trials(run_root: Path, marker: dict) -> set[str]:
+    return registered_trials(run_root, marker, settled=True)
+
+
+def grade_boundary(record: dict, run_root: Path) -> tuple[bool, str]:
+    """The session changed nothing under the run root or the subjects root
+    outside its own repository, home, temporary directory and origin pushes,
+    compared recursively with the inventory taken at materialization. The
+    only other changes allowed are the evaluator's own: trials it registered
+    that had not finished materializing when this trial was inventoried, and
+    this trial's record. It sees only those two roots; writes elsewhere on the
+    host are the session confinement's to prevent."""
+
+    run = {"run_id": record["run_id"], "subjects_root": record["subjects_root"]}
+    subjects = Path(record["subjects_root"])
+    before: dict[str, str] = record["boundary"]
+    with registration_lock(run_root):
+        now = boundary_inventory(run_root, subjects)
+        registered = registered_trials(run_root, run)
+    own = Path(record["path"]).parent.name
+    unsettled = registered - set(record.get("settled_trials", []))
+
+    def evaluator_made(path: str) -> bool:
+        parts = path.split("/")
+        if parts[0] == "subjects":
+            return len(parts) >= 2 and parts[1] in unsettled - {own}
+        if len(parts) != 3 or parts[1] != "records":
+            return False
+        return any(
+            parts[2].endswith(suffix) and parts[2][: -len(suffix)] in unsettled
+            for suffix in (RECORD_SUFFIX, RESERVATION_SUFFIX)
+        )
+
+    changed = sorted(path for path in before if now.get(path) != before[path] and not evaluator_made(path))
+    added = sorted(path for path in now if path not in before and not evaluator_made(path))
+    codeflow = Path(record["codeflow_executable"]["path"])
+    binary_same = codeflow.is_file() and executable_digest(codeflow) == record["codeflow_executable"]["sha256"]
+    if not changed and not added and binary_same:
+        return True, f"{len(before)} inventoried entries unchanged; pinned executable unchanged"
+    parts = []
+    if changed:
+        parts.append("changed or removed: " + ", ".join(changed[:10]))
+    if added:
+        parts.append("added: " + ", ".join(added[:10]))
+    if not binary_same:
+        parts.append("the pinned executable changed")
+    return False, "; ".join(parts)
+
+
+def state_digest(root: Path) -> str:
+    """The tree digest, tolerating symlinks a subject may have created."""
+
+    digest = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = sorted(name for name in dirnames if name != ".git")
+        for filename in sorted(filenames):
+            path = Path(dirpath) / filename
+            relative = path.relative_to(root).as_posix()
+            if relative == ".git":
+                continue
+            if path.is_symlink():
+                digest.update(relative.encode() + b"\0l\0" + os.readlink(path).encode() + b"\0")
+                continue
+            if not path.is_file():
+                digest.update(relative.encode() + b"\0o\0")
+                continue
+            executable = bool(path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+            digest.update(relative.encode("utf-8") + b"\0")
+            digest.update((b"x" if executable else b"-") + b"\0")
+            digest.update(path.read_bytes() + b"\0")
+    return "sha256:" + digest.hexdigest()
+
+
+def scope_matches(pattern: str, name: str) -> bool:
+    """A branch glob, where `*` crosses `/`. The `codeflow/` data branches
+    (the id registry) hold no project tree and match only a pattern that
+    names them."""
+
+    if name.startswith("codeflow/") and not pattern.startswith("codeflow/"):
+        return False
+    return fnmatch.fnmatchcase(name, pattern)
+
+
+def ignored_path(relative: str) -> bool:
+    return any(part in GRADER_IGNORED_PARTS or part.endswith(".pyc") for part in relative.split("/"))
+
+
+class Tree:
+    """One state the grader reads: the working tree or a branch commit."""
+
+    def __init__(self, label: str, fixture: Path, sha: str | None, git_dir: Path | None) -> None:
+        self.label = label
+        self.fixture = fixture
+        self.sha = sha
+        self.git_args = ["--git-dir", str(git_dir)] if git_dir is not None else []
+
+    def files(self) -> set[str]:
+        if self.sha is None:
+            found: set[str] = set()
+            for dirpath, dirnames, filenames in os.walk(self.fixture, followlinks=False):
+                dirnames[:] = [name for name in dirnames if name != ".git"]
+                for filename in filenames:
+                    relative = (Path(dirpath) / filename).relative_to(self.fixture).as_posix()
+                    if not ignored_path(relative):
+                        found.add(relative)
+            return found
+        output = git_output([*self.git_args, "ls-tree", "-r", "-z", "--name-only", self.sha], self.fixture)
+        return {name for name in output.split("\0") if name and not ignored_path(name)}
+
+    def read(self, relative: str) -> str | None:
+        if self.sha is None:
+            path = self.fixture / relative
+            if path.is_symlink() or not path.is_file():
+                return None
+            if self.fixture.resolve() not in path.resolve().parents:
+                return None
+            return path.read_text(encoding="utf-8", errors="replace")
+        completed = subprocess.run(
+            [*SAFE_GIT, *self.git_args, "cat-file", "blob", f"{self.sha}:{relative}"],
+            cwd=self.fixture,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+        return completed.stdout.decode("utf-8", errors="replace") if completed.returncode == 0 else None
+
+
+def raw_file_digest(path: Path) -> str:
+    """The digest a harness records for a retained evidence file."""
+
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_events(path: Path) -> tuple[list[dict], str]:
+    """The tool-event ledger for one session: each process the session
+    executed, with its argument vector and exit status, and each agent it
+    ran, recorded by the harness or the evaluator's process instrumentation,
+    never from the subject's account of it. Shell command lines may be kept
+    for context; they prove nothing ran."""
+
+    document = load_json(path)
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("events"), list)
+    ):
+        raise EvalError("the tool-event ledger must be {schema_version: 1, events: [...]}")
+    last = 0
+    for index, event in enumerate(document["events"]):
+        label = f"events[{index}]"
+        if not isinstance(event, dict):
+            raise EvalError(f"{label} must be an object")
+        seq = event.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool) or seq <= last:
+            raise EvalError(f"{label}.seq must be an increasing integer")
+        last = seq
+        kind = event.get("kind")
+        if kind == "process":
+            argv = event.get("argv")
+            if not isinstance(argv, list) or not argv or not all(isinstance(word, str) for word in argv):
+                raise EvalError(f"{label}.argv must be the executed argument vector")
+            exit_code = event.get("exit")
+            if exit_code is not None and (not isinstance(exit_code, int) or isinstance(exit_code, bool)):
+                raise EvalError(f"{label}.exit must be an integer or null")
+        elif kind == "shell":
+            # Kept for context only: shell text proves nothing ran.
+            if not isinstance(event.get("command"), str):
+                raise EvalError(f"{label}.command must be a string")
+        elif kind == "agent":
+            if not isinstance(event.get("name"), str) or not isinstance(event.get("status"), str):
+                raise EvalError(f"{label} needs a name and a status")
+        else:
+            raise EvalError(f"{label}.kind must be process, shell or agent")
+        if "output" in event and not isinstance(event["output"], str):
+            raise EvalError(f"{label}.output must be a string")
+    return document["events"], raw_file_digest(path)
+
+
+def load_judge_controls(path: Path) -> list[dict]:
+    """Labelled texts with the judgement a qualified judge must record for
+    them: `{"schema_version": 1, "controls": [{"label", "assertion",
+    "rubric", "excerpt", "expected": "pass | fail"}]}`. They belong with the
+    graded suite and are as private as its cases."""
+
+    document = load_json(path)
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("controls"), list)
+        or not document["controls"]
+    ):
+        raise EvalError("judge controls must be {schema_version: 1, controls: [...]}")
+    for index, control in enumerate(document["controls"]):
+        if (
+            not isinstance(control, dict)
+            or set(control) != {"label", "assertion", "rubric", "excerpt", "expected"}
+            or not all(isinstance(control[key], str) and control[key].strip() for key in ("label", "assertion", "rubric", "excerpt"))
+            or control["expected"] not in {"pass", "fail"}
+        ):
+            raise EvalError(f"controls[{index}] needs label, assertion, rubric, excerpt and expected pass or fail")
+    return document["controls"]
+
+
+def judge_control_sheet(controls: list[dict]) -> list[dict]:
+    """The controls as a judge sees them: no label and no expected verdict."""
+
+    return [
+        {
+            "control": index,
+            "assertion": control["assertion"],
+            "rubric": control["rubric"],
+            "excerpt": control["excerpt"],
+            "excerpt_digest": excerpt_digest(control["excerpt"]),
+        }
+        for index, control in enumerate(controls)
+    ]
+
+
+def judge_calibration(controls: list[dict], verdicts: dict[tuple[str, str], str]) -> list[str]:
+    """The controls a judge's recorded judgements miss. A judge counts for
+    qualification only when it meets every control; a scripted stand-in that
+    only exercises the grader's plumbing is never such a judge."""
+
+    misses: list[str] = []
+    for control in controls:
+        verdict = verdicts.get((control["assertion"], excerpt_digest(control["excerpt"])))
+        if verdict != control["expected"]:
+            misses.append(f"{control['label']}: judged {verdict or 'nothing'}, expected {control['expected']}")
+    return misses
+
+
+Judge = tuple[str, str]
+"""A judge as recorded with its judgements: who judged (`judge`) and how it
+was set up (`judge_config`: model, version, prompt and settings, or the
+person). Calibration binds to both; a change to either is another judge."""
+
+
+# Who wrote a judgement is only as trustworthy as the evaluator who recorded
+# it. Each judgement the evaluator collects, from a person, a model or a
+# script, is signed with an HMAC under an evaluator key kept in the
+# evaluator's CodeFlow home, outside the repository and every trial tree,
+# and verified before it counts. Whoever holds the key is trusted; the kit
+# detects a judgement changed or written by anyone without it, and no more.
+EVALUATOR_KEY = Path("eval") / "judgement.key"
+UNSIGNED: Judge = ("", "")
+"""The judge of a judgement whose signature does not verify: no calibration
+can qualify it, because a calibrated judge always has a name."""
+
+
+def evaluator_home() -> Path:
+    override = os.environ.get("CODEFLOW_HOME", "").strip()
+    return Path(override).expanduser() if override else Path.home() / ".codeflow"
+
+
+def evaluator_key_path() -> Path:
+    return (evaluator_home() / EVALUATOR_KEY).resolve()
+
+
+def evaluator_key(*, create: bool = False) -> bytes | None:
+    """The evaluator's signing key, made owner-only on first use when
+    `create`; None when there is none. Refused when the key or its folder
+    belongs to another user, others can write the folder, or others can read
+    the key."""
+
+    path = evaluator_key_path()
+    try:
+        exposed = [project_root()]
+    except EvalError:
+        exposed = []
+    exposed += [GRADED_SUITE] if GRADED_SUITE is not None else []
+    if any(nested(path, root.resolve()) for root in exposed):
+        raise EvalError(f"the evaluator key must live outside the repository and the graded suite: {path}")
+    if not path.exists():
+        if not create:
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(secrets.token_hex(32) + "\n")
+    folder, key = path.parent.stat(), path.stat()
+    if hasattr(os, "geteuid") and {folder.st_uid, key.st_uid} != {os.geteuid()}:
+        raise EvalError(f"the evaluator key or its folder is owned by another user: {path}")
+    if stat.S_IMODE(folder.st_mode) & 0o022:
+        raise EvalError(f"the evaluator key's folder is writable by others; make it owner-only: {path.parent}")
+    if stat.S_IMODE(key.st_mode) & 0o077:
+        raise EvalError(f"the evaluator key is readable by others; make it owner-only: {path}")
+    return bytes.fromhex(path.read_text(encoding="utf-8").strip())
+
+
+def judgement_signature(key: bytes, judge: Judge, assertion: str, excerpt_digest: str, verdict: str) -> str:
+    message = json.dumps([judge[0], judge[1], assertion, excerpt_digest, verdict], ensure_ascii=False, separators=(",", ":"))
+    return "hmac-sha256:" + hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def signed_judgement(entry: dict) -> dict:
+    """`entry` with its signature under the evaluator key, made on first use."""
+
+    key = evaluator_key(create=True)
+    assert key is not None
+    return dict(entry, signature=judgement_signature(
+        key, (entry["judge"], entry["judge_config"]), entry["assertion"], entry["excerpt_digest"], entry["verdict"]
+    ))
+
+
+def record_judgement(path: Path, entry: dict) -> dict:
+    """Append one judgement, signed, to the judgements file at `path`, as the
+    evaluator collects it."""
+
+    document = load_json(path) if path.exists() else {"schema_version": 1, "judgements": []}
+    signed = signed_judgement(entry)
+    document["judgements"].append(signed)
+    staged = path.with_name(path.name + ".staged")
+    write_json(staged, document)
+    try:
+        read_judgements(staged)
+    except EvalError:
+        staged.unlink()
+        raise
+    os.replace(staged, path)
+    return signed
+
+
+def read_judgements(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge]], str]:
+    """Recorded judgements for assertions whose meaning no deterministic check
+    settles: one verdict and its judge per assertion and excerpt digest. A
+    judgement whose signature does not verify under the evaluator key keeps
+    its verdict but has the judge UNSIGNED."""
+
+    entries, digest = read_judgement_entries(path)
+    return {key: (verdict, judge) for key, (verdict, judge, _) in entries.items()}, digest
+
+
+def read_judgement_entries(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge, str]], str]:
+    """read_judgements, with the digest of the entry each verdict came from."""
+
+    document = load_json(path)
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_version") != 1
+        or not isinstance(document.get("judgements"), list)
+    ):
+        raise EvalError("judgements must be {schema_version: 1, judgements: [...]}")
+    key = evaluator_key()
+    entries: dict[tuple[str, str], tuple[str, Judge, str]] = {}
+    declarations: dict[tuple[str, str], tuple[str, str, str]] = {}
+    for index, entry in enumerate(document["judgements"]):
+        label = f"judgements[{index}]"
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("assertion"), str)
+            or not isinstance(entry.get("excerpt_digest"), str)
+            or not DIGEST.fullmatch(entry["excerpt_digest"])
+            or entry.get("verdict") not in {"pass", "fail"}
+            or not all(isinstance(entry.get(field), str) and entry[field].strip() for field in ("judge", "judge_config", "rationale"))
+            or not isinstance(entry.get("signature", ""), str)
+        ):
+            raise EvalError(f"{label} needs assertion, excerpt_digest, verdict, judge, judge_config and rationale")
+        judge: Judge = (entry["judge"], entry["judge_config"])
+        expected = judgement_signature(key, judge, entry["assertion"], entry["excerpt_digest"], entry["verdict"]) if key else None
+        if expected is None or not hmac.compare_digest(entry.get("signature", ""), expected):
+            judge = UNSIGNED
+        excerpt = (entry["assertion"], entry["excerpt_digest"])
+        declared = (entry["verdict"], entry["judge"], entry["judge_config"])
+        if declarations.get(excerpt, declared) != declared:
+            raise EvalError(f"{label} contradicts an earlier judgement of the same excerpt")
+        declarations[excerpt] = declared
+        if excerpt in entries and entries[excerpt][1] != judge:
+            judge = UNSIGNED
+        entries[excerpt] = (entry["verdict"], judge, canonical_digest(entry))
+    return entries, raw_file_digest(path)
+
+
+def load_judgements(path: Path) -> tuple[dict[tuple[str, str], str], str]:
+    entries, digest = read_judgements(path)
+    return {key: verdict for key, (verdict, _) in entries.items()}, digest
+
+
+def suite_judge_controls() -> tuple[list[dict], str] | None:
+    """The graded suite's labelled judge controls and their file digest."""
+
+    path = GRADED_SUITE / JUDGE_CONTROLS_FILE if GRADED_SUITE is not None else None
+    if path is None or not path.is_file():
+        return None
+    return load_judge_controls(path), raw_file_digest(path)
+
+
+def judge_qualification(controls: list[dict], path: Path) -> tuple[Judge | None, list[str], str]:
+    """The judge a calibration file qualifies: the one judge, with its
+    configuration, that recorded the labelled verdict for every control.
+    Controls answered by several judges qualify none of them."""
+
+    entries, digest = read_judgements(path)
+    unsigned = sum(judge == UNSIGNED for _, judge in entries.values())
+    entries = {key: value for key, value in entries.items() if value[1] != UNSIGNED}
+    judges = {judge for _, judge in entries.values()}
+    problems = [f"{unsigned} control judgement(s) are not signed under the evaluator key"] if unsigned else []
+    if len(judges) != 1:
+        problems.append(f"the control judgements come from {len(judges)} judges; one judge must answer every control")
+    problems += judge_calibration(controls, {key: verdict for key, (verdict, _) in entries.items()})
+    return (None if problems else next(iter(judges))), problems, digest
+
+
+class GradeContext:
+    """The fixture after the session, with its materialization record, the
+    session's tool events and the recorded judgements."""
+
+    def __init__(
+        self,
+        record: dict,
+        codeflow: Path,
+        scratch: Path,
+        *,
+        run_root: Path,
+        events: list[dict] | None = None,
+        judgements: dict[tuple[str, str], str] | None = None,
+        judges: dict[tuple[str, str], Judge] | None = None,
+        calibrated: set[Judge] | None = None,
+        assertions: list[dict] | None = None,
+        entry_digests: dict[tuple[str, str], str] | None = None,
+    ) -> None:
+        self.record = record
+        self.fixture = Path(record["path"])
+        self.codeflow = codeflow
+        self.scratch = scratch
+        self.run_root = run_root
+        self.events = events
+        self.judgements = judgements or {}
+        self.judges = judges or {}
+        self.calibrated = calibrated or set()
+        # The judges, by assertion, whose judgements were read without a
+        # passing calibration against the suite's controls.
+        self.uncalibrated: dict[str, set[Judge | None]] = defaultdict(set)
+        # The calibrated judges whose judgements the grade counted.
+        self.counted: set[Judge] = set()
+        # Every judgement read, by assertion, where it was read, and the
+        # states a judged file assertion counted in: what a consumer needs
+        # to rederive each judged result (judged_records).
+        self.entry_digests = entry_digests or {}
+        self.consumed: dict[str, list[dict]] = defaultdict(list)
+        self.judged_states: dict[str, list[str]] = {}
+        self.assertions = {item["id"]: item for item in assertions or []}
+        self.base_commit = record["base_commit"]
+        self.snapshot = record["refs"]
+        self.now = ref_snapshot(self.fixture)
+        self.base = Tree("base", self.fixture, self.base_commit, None)
+        self._scratch_count = 0
+        self._clone: Path | None = None
+
+    def trees(self, scopes: list[str]) -> list[Tree]:
+        trees: list[Tree] = []
+        for scope in scopes:
+            if scope == "worktree":
+                trees.append(Tree("worktree", self.fixture, None, None))
+                continue
+            space, _, pattern = scope.partition(":")
+            git_dir = origin_dir(self.fixture) if space == "origin" else None
+            for name, sha in sorted(self.now[space].items()):
+                if scope_matches(pattern, name):
+                    trees.append(Tree(f"{space}:{name}", self.fixture, sha, git_dir))
+        return trees
+
+    def refs(self, scopes: list[str], source: dict[str, dict[str, str]]) -> dict[str, str]:
+        found: dict[str, str] = {}
+        for scope in scopes:
+            space, _, pattern = scope.partition(":")
+            for name, sha in source.get(space, {}).items():
+                if scope_matches(pattern, name):
+                    found[f"{space}:{name}"] = sha
+        return found
+
+    def one_tree(self, scope: str) -> Tree:
+        trees = self.trees([scope])
+        if len(trees) != 1:
+            raise EvalError(f"{scope} names {len(trees)} states; the check needs exactly one")
+        return trees[0]
+
+    def next_scratch(self, name: str) -> Path:
+        self._scratch_count += 1
+        path = self.scratch / f"{self._scratch_count:02d}-{name}"
+        path.mkdir(parents=True)
+        return path
+
+    def extract(self, tree: Tree, target: Path) -> None:
+        """A plain copy of one state's files, without any git metadata, so
+        code run in it cannot reach the fixture or the checkers' clone."""
+
+        if tree.sha is None:
+            shutil.copytree(self.fixture, target, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+            return
+        target.mkdir(parents=True)
+        archive = subprocess.run(
+            [*SAFE_GIT, *tree.git_args, "archive", "--format=tar", tree.sha],
+            cwd=self.fixture,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=180,
+            check=False,
+        )
+        if archive.returncode != 0:
+            raise EvalError(f"cannot export {tree.label}: {archive.stderr.decode(errors='replace').strip()}")
+        try:
+            with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as bundle:
+                bundle.extractall(target, filter="data")
+        except tarfile.TarError as error:
+            raise EvalError(f"cannot export {tree.label}: {error}") from error
+
+    def repository_at(self, tree: Tree) -> Path:
+        """One disposable clone of the fixture, sharing its objects, checked
+        out clean at the commit; reused across the checker runs of one grade.
+        Subject code never runs in it."""
+
+        if self._clone is None:
+            self._clone = self.next_scratch("repository") / "repository"
+            git_output(["clone", "--quiet", "--shared", "--no-checkout", str(self.fixture), str(self._clone)], self.scratch)
+        if tree.git_args:
+            ref = f"refs/heads/{ref_branch_name(tree)}"
+            git_output(["fetch", "--quiet", tree.git_args[1], ref], self._clone)
+        git_output(["checkout", "--quiet", "--force", "--detach", tree.sha], self._clone)
+        git_output(["clean", "--quiet", "-fdx"], self._clone)
+        return self._clone
+
+    def resolve_base(self, name: str | None) -> str:
+        if name is None:
+            return self.base_commit
+        sha = self.snapshot["branch"].get(name) or self.snapshot["origin"].get(name)
+        if sha is None:
+            raise EvalError(f"base branch {name!r} was not in the fixture")
+        return sha
+
+    def codeflow_env(self, home: Path) -> dict[str, str]:
+        home.mkdir(parents=True, exist_ok=True)
+        return {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(home),
+            "CODEFLOW_HOME": str(home / ".codeflow"),
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "LANG": "C.UTF-8",
+        }
+
+    def run_codeflow(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        if executable_digest(self.codeflow) != self.record["codeflow_executable"]["sha256"]:
+            raise EvalError("the pinned CodeFlow executable changed after materialization")
+        return subprocess.run(
+            [str(self.codeflow), *args],
+            cwd=cwd,
+            env=self.codeflow_env(cwd.parent / "home"),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=300,
+            check=False,
+        )
+
+    def hidden_paths(self) -> list[Path]:
+        """What subject code run during grading must not read: the
+        evaluator's records, every subject workspace and the graded suite."""
+
+        hidden = [self.run_root, Path(self.record["subjects_root"]), evaluator_key_path().parent]
+        if GRADED_SUITE is not None:
+            hidden.append(GRADED_SUITE)
+        return hidden
+
+    def judgement(self, assertion: str, digest: str, state: str, where: str) -> str | None:
+        verdict = self.judgements.get((assertion, digest))
+        judge = self.judges.get((assertion, digest))
+        if verdict is not None and judge in self.calibrated:
+            self.counted.add(judge)
+        elif verdict is not None:
+            self.uncalibrated[assertion].add(judge)
+        self.consumed[assertion].append({
+            "state": state,
+            "where": where,
+            "excerpt_digest": digest,
+            "verdict": verdict,
+            "judge": list(judge) if verdict is not None and judge is not None else None,
+            "judgement": self.entry_digests.get((assertion, digest)) if verdict is not None else None,
+        })
+        return verdict
+
+    def require_events(self) -> list[dict]:
+        if self.events is None:
+            raise EvalError("no tool-event ledger was supplied; the session's actions cannot be proven")
+        return self.events
+
+
+def frontmatter_fields(text: str) -> dict[str, str]:
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    fields: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return fields
+        key, separator, value = line.partition(":")
+        if not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        value = value.strip()
+        if value[:1] in {'"', "'"}:
+            closing = value.find(value[0], 1)
+            value = value[1:closing] if closing > 0 else value[1:]
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0].strip()
+        fields[key] = value
+    return {}
+
+
+def markdown_section(text: str, heading: str) -> str | None:
+    lines = text.splitlines()
+    pattern = re.compile(heading)
+    for index, line in enumerate(lines):
+        matched = re.match(r"^(#{1,6})\s", line)
+        if matched and pattern.search(line):
+            level = len(matched.group(1))
+            body: list[str] = []
+            for later in lines[index + 1:]:
+                deeper = re.match(r"^(#{1,6})\s", later)
+                if deeper and len(deeper.group(1)) <= level:
+                    break
+                body.append(later)
+            return "\n".join(body)
+    return None
+
+
+def selected_paths(item: dict, tree: Tree, base_files: set[str]) -> list[str]:
+    files = tree.files()
+    if "path" in item:
+        chosen = [item["path"]] if item["path"] in files else []
+    else:
+        chosen = sorted(path for path in files if fnmatch.fnmatchcase(path, item["glob"]))
+    if item.get("new"):
+        chosen = [path for path in chosen if path not in base_files]
+    return chosen
+
+
+REVIEW_FIELD = re.compile(r"([a-z_]+):[ \t]*(.*?)[ \t]*")
+REVIEW_SECTIONS = ("verdict", "criteria", "gates", "findings")
+REVIEW_ENTRY = re.compile(r"( +)- +(.*?)[ \t]*")
+# A heading above the verdict may only name it: a word outside this title
+# vocabulary ("approved", "example", "ignore") could qualify the verdict.
+REVIEW_HEADING = re.compile(r"#{1,6}[ \t]+(.*?)[ \t]*:?[ \t]*")
+REVIEW_HEADING_WORDS = {"review", "reviewer", "cf-reviewer", "verdict", "code", "independent", "final", "for", "of", "the"}
+# The fence around a verdict carries a language at most: its info string is
+# never read, so it may not hold words.
+REVIEW_FENCES = {"```", "```text", "```yaml"}
+# A gate is `<name>: <status>`, optionally followed by a summary after a
+# dash, comma, semicolon or parenthesis, as the reviewer's format lists them;
+# the status is its first word and the name never names a decision.
+REVIEW_GATE = re.compile(
+    r"(?P<name>[A-Za-z][A-Za-z0-9 ./_+-]{0,39}?):[ \t]+"
+    r"(?P<status>pass|fail|unavailable|N/A|[0-9]{1,3}(?:\.[0-9]+)?%)"
+    r"(?:[ \t]*[,;(\u2014\u2013-].*)?"
+)
+REVIEW_GATE_SHORT = frozenset({"fail", "unavailable"})
+REVIEW_DECISION_WORDS = frozenset({"verdict", "decision", "approved", "approve", "approval", "changes_requested", "rejected"})
+# The meaning a structural reader cannot settle: whether the free text of a
+# review (evidence, gate summaries, findings) agrees with its verdict. Every
+# verdict assertion needs a recorded judgement of the whole review under it.
+REVIEW_COHERENCE_RUBRIC = (
+    "Every statement of this review, in its headings, criteria, evidence, gates and findings, "
+    "agrees with its `verdict` field: no text withdraws, reverses or supersedes that verdict, "
+    "presents it as an example, a quotation or a draft, or states another decision."
+)
+
+
+def parse_review_verdict(text: str) -> tuple[dict | None, str]:
+    """Read a review written in the reviewer's verdict format, and only that.
+
+    The review is optional title headings ("Review verdict", "Review of
+    TSK-001"), then `verdict`, `criteria`, `gates` and `findings`, each once,
+    optionally inside one plain code fence, and nothing after them. Every
+    line is a list entry at its section's indentation, a field of the entry
+    one step in, or a field's continuation indented further; a gate is one
+    `<name>: <status>` line, any summary after it. The verdict is read
+    from the `verdict` field alone: text inside a field, a gate summary or
+    a heading never counts as a verdict. Prose outside the grammar, a nested fence or quotation, a
+    missing or repeated section, an entry without its required fields, an
+    unknown field or a value outside its enumeration makes the review
+    unreadable, and a verdict its own entries contradict is incoherent. What
+    the free text means is left to a recorded judgement under
+    `REVIEW_COHERENCE_RUBRIC`."""
+
+    lines = text.splitlines()
+    start = 0
+    while start < len(lines) and (not lines[start].strip() or lines[start].startswith("#")):
+        heading = REVIEW_HEADING.fullmatch(lines[start].rstrip())
+        if lines[start].strip() and not (
+            heading
+            and all(
+                word.lower() in REVIEW_HEADING_WORDS or re.fullmatch(r"[A-Z]{2,5}-[0-9]+", word)
+                for word in heading.group(1).split()
+            )
+        ):
+            return None, f"line {start + 1}: a heading may only title the verdict"
+        start += 1
+    body = lines[start:]
+    while body and not body[-1].strip():
+        body.pop()
+    if body and body[0].lstrip().startswith(("```", "~~~")):
+        if body[0].strip() not in REVIEW_FENCES:
+            return None, f"line {start + 1}: the fence around the verdict carries text"
+        if len(body) < 2 or body[-1].strip() != "```":
+            return None, "the code fence around the verdict does not close at the end"
+        body = body[1:-1]
+        start += 1
+    review: dict[str, Any] = {}
+    section: str | None = None
+    dash: int | None = None
+    item: dict | None = None
+    last_key: str | None = None
+    for number, line in enumerate(body, start + 1):
+        if not line.strip():
+            continue
+        if "\t" in line[: len(line) - len(line.lstrip())]:
+            return None, f"line {number} is indented with a tab"
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            return None, f"line {number} opens a code block inside the verdict"
+        if stripped.startswith(">"):
+            return None, f"line {number} quotes text inside the verdict"
+        indent = len(line) - len(stripped)
+        if indent == 0:
+            top = REVIEW_FIELD.fullmatch(line)
+            remaining = [name for name in REVIEW_SECTIONS if name not in review]
+            if not top or top.group(1) not in remaining:
+                found = f"field {top.group(1)!r}" if top else "prose"
+                return None, f"line {number}: {found} where the format expects {', '.join(remaining) or 'nothing more'}"
+            key, value = top.groups()
+            if key == "verdict":
+                if value not in REVIEW_VERDICTS:
+                    return None, f"verdict {value!r} is neither approved nor changes_requested"
+                review["verdict"] = value
+                section = None
+            else:
+                if value not in {"", "[]"}:
+                    return None, f"{key} must open a list"
+                review[key] = []
+                section, dash, item, last_key = (None if value == "[]" else key), None, None, None
+            continue
+        if section is None:
+            return None, f"line {number} is outside the verdict format"
+        entry = REVIEW_ENTRY.fullmatch(line)
+        if entry and (dash is None or indent == dash):
+            dash = indent
+            rest = entry.group(2)
+            if section == "gates":
+                gate = REVIEW_GATE.fullmatch(rest)
+                if not gate or set(re.split(r"[ ./_+-]+", gate.group("name").lower())) & REVIEW_DECISION_WORDS:
+                    return None, f"line {number} is not a gate: <name>: pass, fail, unavailable, N/A or a percent"
+                review["gates"].append({"gate": gate.group("name"), "status": gate.group("status")})
+                continue
+            field = REVIEW_FIELD.fullmatch(rest)
+            if not field:
+                return None, f"line {number}: a {section} entry starts with a field"
+            item = {}
+            review[section].append(item)
+        elif section == "gates":
+            return None, f"line {number}: a gate is one line"
+        elif item is None or dash is None:
+            return None, f"line {number} is outside an entry"
+        elif indent == dash + 2:
+            field = REVIEW_FIELD.fullmatch(stripped)
+            if not field:
+                return None, f"line {number} is neither a field nor a continuation"
+        elif indent > dash + 2 and last_key is not None:
+            item[last_key] += " " + stripped
+            continue
+        else:
+            return None, f"line {number} is outside an entry"
+        key, value = field.groups()
+        allowed, _ = REVIEW_LIST_FIELDS[section]
+        if key not in allowed:
+            return None, f"line {number}: unknown field {key!r}"
+        if key in item:
+            return None, f"line {number}: {key} appears twice in one entry"
+        item[key] = value
+        last_key = key
+    missing_sections = [name for name in REVIEW_SECTIONS if name not in review]
+    if missing_sections:
+        return None, f"no {', '.join(missing_sections)} section"
+    for section, (_, required) in REVIEW_LIST_FIELDS.items():
+        for entry in review[section]:
+            missing = required - set(entry)
+            if missing:
+                return None, f"a {section} entry lacks {', '.join(sorted(missing))}"
+    for entry in review["criteria"]:
+        if entry["status"] not in REVIEW_CRITERION_STATUSES:
+            return None, f"criterion status {entry['status']!r} is not verified, not_verified or failed"
+    for entry in review["findings"]:
+        if entry["severity"] not in REVIEW_SEVERITIES:
+            return None, f"finding severity {entry['severity']!r} is not blocker, major or minor"
+        if "axis" in entry and entry["axis"] not in REVIEW_AXES:
+            return None, f"finding axis {entry['axis']!r} is not standards or spec"
+    shortfall = (
+        any(entry["status"] != "verified" for entry in review["criteria"])
+        or any(entry["severity"] in {"blocker", "major"} for entry in review["findings"])
+        or any(gate["status"] in REVIEW_GATE_SHORT for gate in review["gates"])
+    )
+    if review["verdict"] == "approved" and shortfall:
+        return None, "incoherent: approved with an unverified criterion, a blocker or major finding, or a failed gate"
+    if review["verdict"] == "changes_requested" and not shortfall:
+        return None, "incoherent: changes requested with every criterion verified and nothing blocking"
+    return review, "readable"
+
+
+def finding_location(value: str) -> str:
+    first = value.strip().split()[0] if value.strip() else ""
+    return re.sub(r":[0-9]+(?:-[0-9]+)?$", "", first.strip("`"))
+
+
+def verdict_holds(constraint: dict, review: dict) -> tuple[bool, str]:
+    if "verdict" in constraint and review["verdict"] != constraint["verdict"]:
+        return False, f"the verdict is {review['verdict']}"
+    for wanted in constraint.get("criteria", []):
+        # `AC-2` names AC-2 only: never AC-20 or a nested AC-2.1.
+        pattern = re.compile(r"^\W*" + re.escape(wanted["criterion"]) + r"(?![0-9A-Za-z_-]|\.[0-9A-Za-z])")
+        entries = [entry for entry in review["criteria"] if pattern.match(entry["criterion"])]
+        if not entries:
+            return False, f"no criteria entry for {wanted['criterion']}"
+        other = sorted({entry["status"] for entry in entries} - set(wanted["status"]))
+        if other:
+            return False, f"{wanted['criterion']} is marked {', '.join(other)}"
+    for wanted in constraint.get("findings", []):
+        if not any(
+            finding["severity"] in wanted["severity"]
+            and (not wanted.get("axis") or finding.get("axis") in wanted["axis"])
+            and fnmatch.fnmatchcase(finding_location(finding.get("location", "")), wanted.get("location", "*"))
+            for finding in review["findings"]
+        ):
+            return False, "no finding of that severity at that location"
+    return True, "holds"
+
+
+def qualification(item: dict, text: str) -> tuple[bool, str]:
+    """Whether one file's text meets the assertion's structure, and why not."""
+
+    fields = frontmatter_fields(text)
+    for key, value in item.get("frontmatter", {}).items():
+        if fields.get(key) != value:
+            return False, f"{key} is {fields.get(key)!r}"
+    if "verdict" in item:
+        review, reason = parse_review_verdict(text)
+        if review is None:
+            return False, f"not in the verdict format: {reason}"
+        held, reason = verdict_holds(item["verdict"], review)
+        if not held:
+            return False, reason
+    if "section" in item:
+        section = markdown_section(text, item["section"])
+        if section is None:
+            return False, "the section is missing"
+        text = section
+    for pattern in item.get("matches", []):
+        if not re.search(pattern, text, re.MULTILINE):
+            return False, f"no match for {pattern!r}"
+    for pattern in item.get("excludes", []):
+        if re.search(pattern, text, re.MULTILINE):
+            return False, f"matches the excluded {pattern!r}"
+    return True, "qualifies"
+
+
+def judged_excerpt(item: dict, text: str) -> str:
+    """The text a judge reads for a judged assertion: its section, or the
+    whole file; for a verdict, always the whole review."""
+
+    if "section" in item and "verdict" not in item:
+        return markdown_section(text, item["section"]) or ""
+    return text
+
+
+def excerpt_digest(excerpt: str) -> str:
+    return "sha256:" + hashlib.sha256(excerpt.encode("utf-8")).hexdigest()
+
+
+def assertion_rubric(item: dict) -> str | None:
+    if "verdict" in item:
+        return REVIEW_COHERENCE_RUBRIC
+    judged = item.get("judged")
+    return judged["rubric"] if isinstance(judged, dict) else None
+
+
+def grade_file(context: GradeContext, item: dict) -> tuple[bool, str]:
+    trees = context.trees(item.get("in", ["worktree"]))
+    if assertion_rubric(item) is not None:
+        context.judged_states[item["id"]] = [tree.label for tree in trees]
+    base_files = context.base.files()
+    count = item.get("count", {"min": 1})
+    counts: dict[str, int] = {}
+    notes: list[str] = []
+    for tree in trees:
+        qualifying = 0
+        for path in selected_paths(item, tree, base_files):
+            text = tree.read(path)
+            if text is None:
+                continue
+            qualifies, reason = qualification(item, text)
+            if qualifies and item.get("registry_consistent"):
+                qualifies, reason = registry_consistent(context, text)
+            if qualifies and assertion_rubric(item) is not None:
+                digest = excerpt_digest(judged_excerpt(item, text))
+                verdict = context.judgement(item["id"], digest, tree.label, path)
+                if verdict != "pass":
+                    qualifies = False
+                    reason = f"no recorded judgement for {digest}" if verdict is None else f"judged fail ({digest})"
+            if qualifies:
+                qualifying += 1
+            elif len(notes) < 3:
+                notes.append(f"{tree.label} {path}: {reason}")
+        counts[tree.label] = qualifying
+    minimum, maximum = count.get("min"), count.get("max")
+    passed = (minimum is None or any(value >= minimum for value in counts.values())) and (
+        maximum is None or all(value <= maximum for value in counts.values())
+    )
+    detail = ", ".join(f"{label}={value}" for label, value in counts.items()) or "no state matched the scope"
+    if not passed and minimum is not None and notes:
+        detail += "; " + "; ".join(notes)
+    return passed, f"qualifying files per state: {detail}"[:900]
+
+
+def registry_consistent(context: GradeContext, text: str) -> tuple[bool, str]:
+    """Whether a record agrees with the id registry in the fixture: an entry
+    `ids/<KIND>/<n>.toml` on the `codeflow/registry` branch, locally or at
+    the fixture's origin, holds the record's uid. Both are state the subject
+    can write, so a match is consistency only: it never shows that `task new`
+    wrote the record. Proof of CLI use needs the evaluator's own record of
+    the session."""
+
+    fields = frontmatter_fields(text)
+    record_id, uid = fields.get("id", ""), fields.get("uid", "")
+    if not RECORD_ID.fullmatch(record_id) or not uid:
+        return False, "the record carries no id and uid"
+    kind, _, number = record_id.partition("-")
+    for tree in context.trees(["branch:codeflow/registry", "origin:codeflow/registry"]):
+        entry = tree.read(f"ids/{kind}/{number}.toml") or ""
+        listed = re.search(r'(?m)^uid = "([^"]+)"$', entry)
+        if listed and listed.group(1) == uid:
+            return True, "qualifies"
+    return False, f"no registry entry for {record_id} holds uid {uid}"
+
+
+def worktree_changes(fixture: Path) -> set[str]:
+    """Paths the working tree changed against HEAD, found by hashing files
+    against the committed tree, never by `git status`, which can run filters
+    a subject configured."""
+
+    object_format = git_output(["rev-parse", "--show-object-format"], fixture).strip() or "sha1"
+    hasher = hashlib.sha256 if object_format == "sha256" else hashlib.sha1
+    head = git_output(["rev-parse", "--verify", "--quiet", "HEAD"], fixture, check=False).strip()
+    tracked: dict[str, tuple[str, str]] = {}
+    if head:
+        for entry in git_output(["ls-tree", "-r", "-z", head], fixture).split("\0"):
+            meta, _, path = entry.partition("\t")
+            if not path:
+                continue
+            mode, kind, sha = meta.split()
+            if kind == "blob":
+                tracked[path] = (mode, sha)
+    ignored = {
+        name
+        for name in git_output(["ls-files", "-z", "--others", "--ignored", "--exclude-standard"], fixture).split("\0")
+        if name
+    }
+    changed: set[str] = set()
+    seen: set[str] = set()
+    for dirpath, dirnames, filenames in os.walk(fixture, followlinks=False):
+        base = Path(dirpath)
+        linked = [name for name in dirnames if (base / name).is_symlink()]
+        dirnames[:] = [name for name in dirnames if name != ".git" and name not in linked]
+        for name in [*filenames, *linked]:
+            path = base / name
+            relative = path.relative_to(fixture).as_posix()
+            if ignored_path(relative) or (relative in ignored and relative not in tracked):
+                continue
+            seen.add(relative)
+            if path.is_symlink():
+                mode, data = "120000", os.readlink(path).encode()
+            elif path.is_file():
+                executable = path.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                mode, data = ("100755" if executable else "100644"), path.read_bytes()
+            else:
+                changed.add(relative)
+                continue
+            sha = hasher(b"blob %d\0" % len(data) + data).hexdigest()
+            if tracked.get(relative) != (mode, sha):
+                changed.add(relative)
+    changed.update(path for path in tracked if path not in seen and not ignored_path(path))
+    return changed
+
+
+def subject_changes(context: GradeContext, scopes: list[str]) -> dict[str, set[str]]:
+    """Paths the session changed: files touched by commits that no branch held
+    at materialization, reachable from the scoped refs, plus uncommitted
+    changes when the worktree is in scope."""
+
+    changed: dict[str, set[str]] = {}
+    for space in ("branch", "origin"):
+        tips = sorted(
+            {sha for name, sha in context.refs([s for s in scopes if s.startswith(space + ":")], context.now).items()}
+        )
+        if not tips:
+            continue
+        git_args = ["--git-dir", str(origin_dir(context.fixture))] if space == "origin" else []
+        known = sorted(set(context.snapshot[space].values()) | {context.base_commit})
+        output = git_output(
+            [*git_args, "log", "--format=@%H", "--name-only", "--no-renames", *tips, "--not", *known],
+            context.fixture,
+        )
+        commit = ""
+        for line in output.splitlines():
+            if line.startswith("@"):
+                commit = f"{space}:{line[1:12]}"
+            elif line.strip() and not ignored_path(line.strip()):
+                changed.setdefault(line.strip(), set()).add(commit)
+    if "worktree" in scopes:
+        for path in worktree_changes(context.fixture):
+            changed.setdefault(path, set()).add("uncommitted")
+    return changed
+
+
+def ci_findings(output: str) -> list[tuple[str, str, str]]:
+    """Each `codeflow ci` finding as (rule, level, detail)."""
+
+    findings: list[tuple[str, str, str]] = []
+    lines = output.splitlines()
+    for index, line in enumerate(lines):
+        matched = FINDING.match(line)
+        if not matched:
+            continue
+        detail: list[str] = []
+        for later in lines[index + 1:]:
+            if not later.startswith("  "):
+                break
+            detail.append(later.strip())
+        findings.append((matched.group(2), matched.group(3), " ".join(detail)))
+    return findings
+
+
+def output_tail(output: str) -> str:
+    return " | ".join(output.strip().splitlines()[-3:])[:300]
+
+
+def checked_ci(completed: subprocess.CompletedProcess, *, acceptance: bool = False) -> list[tuple[str, str, str]]:
+    """The findings of a `codeflow ci` run that finished its checks. An
+    operational error, an unexpected exit, a skipped check or a summary that
+    does not account for the findings is a grading error, never a pass."""
+
+    output = completed.stdout
+    tail = output_tail(output)
+    if completed.returncode not in (0, 1):
+        raise EvalError(f"codeflow ci did not finish its checks (exit {completed.returncode}): {tail}")
+    if not CI_RANGE.search(output):
+        raise EvalError(f"codeflow ci did not run its commit checks: {tail}")
+    if acceptance and not CI_ACCEPTANCE_RAN.search(output):
+        raise EvalError(f"codeflow ci did not run its acceptance check: {tail}")
+    findings = ci_findings(output)
+    if any("cannot read the range" in detail for _, _, detail in findings):
+        raise EvalError(f"codeflow ci could not read the range: {tail}")
+    blocks = sum(1 for _, level, _ in findings if level == "block")
+    warns = len(findings) - blocks
+    if completed.returncode == 0 and not blocks:
+        if not findings and CI_CLEAN.search(output):
+            return findings
+        warned = CI_WARNINGS.search(output)
+        if warned and int(warned.group(1)) == warns > 0:
+            return findings
+    if completed.returncode == 1:
+        failed = CI_FAILED.search(output)
+        if failed and int(failed.group(1)) == blocks > 0 and int(failed.group(2)) == warns:
+            return findings
+    raise EvalError(f"codeflow ci output does not account for its result (exit {completed.returncode}): {tail}")
+
+
+def checked_validate(completed: subprocess.CompletedProcess) -> list[str]:
+    """The workgraph errors of a `codeflow validate --docs` run that read the
+    policy and finished the workgraph check; anything else is a grading
+    error."""
+
+    output = completed.stdout
+    tail = output_tail(output)
+    if completed.returncode not in (0, 1):
+        raise EvalError(f"codeflow validate did not finish (exit {completed.returncode}): {tail}")
+    if re.search(r"^validate: error: policy:", output, re.MULTILINE) or not VALIDATE_POLICY.search(output):
+        raise EvalError(f"codeflow validate could not read the policy: {tail}")
+    errors = [
+        line.split("validate --docs: error: ", 1)[1]
+        for line in output.splitlines()
+        if line.startswith("validate --docs: error: ")
+    ]
+    if completed.returncode == 0 and not errors and VALIDATE_CLEAN.search(output):
+        return errors
+    failed = VALIDATE_FAILED.search(output)
+    if completed.returncode == 1 and errors and failed and int(failed.group(1)) == len(errors):
+        return errors
+    raise EvalError(f"codeflow validate output does not account for its result (exit {completed.returncode}): {tail}")
+
+
+def ref_branch_name(tree: Tree) -> str:
+    return tree.label.partition(":")[2]
+
+
+SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
+_ISOLATION: list[str | None] = []
+
+
+def subject_isolation() -> str | None:
+    """The confinement subject code runs under while it is graded, or None
+    where this host offers none. Only macOS `sandbox-exec` is supported; it
+    fails to start inside another sandbox, so grading runs unsandboxed."""
+
+    if not _ISOLATION:
+        available = None
+        if sys.platform == "darwin" and SANDBOX_EXEC.is_file():
+            probe = subprocess.run(
+                [str(SANDBOX_EXEC), "-p", "(version 1)(allow default)", "/usr/bin/true"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+            available = "sandbox-exec" if probe.returncode == 0 else None
+        _ISOLATION.append(available)
+    return _ISOLATION[0]
+
+
+def sandbox_profile(writable: Path, hidden: list[Path]) -> str:
+    """Writes only inside `writable`, no network, no reads of `hidden`, and
+    no route to other processes through Launch Services or Apple Events."""
+
+    def literal(path: Path) -> str:
+        real = os.path.realpath(path)
+        if '"' in real or "\\" in real:
+            raise EvalError(f"cannot confine a path holding a quote or backslash: {real}")
+        return f'"{real}"'
+
+    rules = [
+        "(version 1)",
+        "(allow default)",
+        "(deny network*)",
+        "(deny appleevent-send)",
+        '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd"))',
+        "(deny file-write*)",
+        f'(allow file-write* (subpath {literal(writable)}) (literal "/dev/null") (literal "/dev/zero")'
+        ' (literal "/dev/tty") (regex #"^/dev/fd/[0-9]+$"))',
+    ]
+    if hidden:
+        rules.append("(deny file-read* " + " ".join(f"(subpath {literal(path)})" for path in hidden) + ")")
+    return "\n".join(rules)
+
+
+def normalized_lines(text: str) -> list[str]:
+    return [" ".join(line.split()) for line in text.splitlines() if line.strip()]
+
+
+def grade_command(context: GradeContext, item: dict) -> tuple[bool, str]:
+    """Run subject code in a confined child, never in the grader: a plain copy
+    of one state, a clean environment, writes only in its own box, no
+    network, and no reads of the evaluator's records, the workspaces or the
+    graded suite. The outcome is judged by the output it must produce, which
+    an early successful exit cannot fake."""
+
+    tree = context.one_tree(item["in"])
+    isolation = subject_isolation()
+    if isolation is None:
+        raise EvalError("this host cannot confine subject code (macOS sandbox-exec, unsandboxed); the check did not run")
+    box = context.next_scratch(item["id"])
+    work, home, temporary, inputs = (box / name for name in ("tree", "home", "tmp", "input"))
+    context.extract(tree, work)
+    for folder in (home, temporary, inputs):
+        folder.mkdir()
+    for name, content in item.get("inputs", {}).items():
+        (inputs / name).write_text(content, encoding="utf-8")
+    argv = [word.replace("{input}", str(inputs)) for word in item["argv"]]
+    if argv[0] == "python3":
+        argv[0] = sys.executable
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "HOME": str(home),
+        "TMPDIR": str(temporary),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONHASHSEED": "0",
+        **item.get("env", {}),
+    }
+    hidden = context.hidden_paths()
+    if any(nested(box.resolve(), path.resolve()) for path in hidden):
+        raise EvalError("the grader's scratch lies inside a path subject code must not read")
+    profile = sandbox_profile(box, hidden)
+    try:
+        completed = subprocess.run(
+            [str(SANDBOX_EXEC), "-p", profile, *argv],
+            cwd=work,
+            env=env,
+            input=item.get("stdin", ""),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=item.get("timeout", 120),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"{tree.label}: timed out"
+    except OSError as error:
+        return False, f"{tree.label}: cannot run: {error}"
+    stdout = completed.stdout
+    problems: list[str] = []
+    if completed.returncode != item.get("exit", 0):
+        problems.append(f"exit {completed.returncode}")
+    if "stdout" in item and stdout != item["stdout"]:
+        problems.append("stdout differs from the expected text")
+    if "stdout_lines" in item and normalized_lines(stdout) != [" ".join(line.split()) for line in item["stdout_lines"]]:
+        problems.append("stdout lines differ from the expected lines")
+    if "stdout_json" in item:
+        try:
+            if json.loads(stdout) != item["stdout_json"]:
+                problems.append("stdout JSON differs from the expected value")
+        except json.JSONDecodeError:
+            problems.append("stdout is not JSON")
+    combined = f"{stdout}\n{completed.stderr}"
+    for pattern in item.get("output_matches", []):
+        if not re.search(pattern, combined, re.MULTILINE):
+            problems.append(f"no output matching {pattern!r}")
+    tail = ELAPSED.sub("<time>", output_tail(combined))
+    verdict = "; ".join(problems) if problems else "exit and output as expected"
+    return not problems, f"{tree.label}: {verdict}; output: {tail}"[:600]
+
+
+def invocation_matches(item: dict, argv: list[str]) -> bool:
+    """Whether one executed argument vector names the command: the program
+    by name, its leading positional arguments and its options, never in a
+    help, version or dry-run mode. It says what was asked for, not what the
+    command did, so it only ever supports an effect."""
+
+    if Path(argv[0]).name != item["program"] or any(
+        word.partition("=")[0] in NON_ACTION_FLAGS for word in argv[1:]
+    ):
+        return False
+    positional: list[str] = []
+    options: dict[str, str] = {}
+    rest = argv[1:]
+    index = 0
+    while index < len(rest):
+        word = rest[index]
+        if word == "--":
+            positional.extend(rest[index + 1:])
+            break
+        if word.startswith("-") and len(word) > 1:
+            name, equals, value = word.partition("=")
+            if equals:
+                options[name] = value
+            elif index + 1 < len(rest) and not rest[index + 1].startswith("-"):
+                options[name] = rest[index + 1]
+                index += 1
+            else:
+                options[name] = ""
+        else:
+            positional.append(word)
+        index += 1
+    wanted = item.get("args", [])
+    if len(positional) < len(wanted) or not all(
+        fnmatch.fnmatchcase(value, pattern) for value, pattern in zip(positional, wanted)
+    ):
+        return False
+    return all(
+        name in options and fnmatch.fnmatchcase(options[name], pattern)
+        for name, pattern in item.get("options", {}).items()
+    )
+
+
+def decisive_agent(item: dict, events: list[dict]) -> dict | None:
+    """The last completed run of the named agent: a later review supersedes
+    an earlier one, so only the final one can decide."""
+
+    completed = [
+        event
+        for event in events
+        if event["kind"] == "agent" and fnmatch.fnmatchcase(event["name"], item["name"]) and event["status"] == "completed"
+    ]
+    return completed[-1] if completed else None
+
+
+def agent_verdict(context: "GradeContext", item: dict, event: dict) -> tuple[bool, str]:
+    """Whether the agent's complete output is a readable review whose
+    verdict holds and whose free text a recorded judgement found coherent.
+    A verdict line quoted or retracted in prose never reads."""
+
+    output = event.get("output")
+    if not isinstance(output, str):
+        return False, "the review left no output"
+    review, reason = parse_review_verdict(output)
+    if review is None:
+        return False, f"not in the verdict format: {reason}"
+    held, reason = verdict_holds(item["verdict"], review)
+    if not held:
+        return False, reason
+    digest = excerpt_digest(output)
+    judged = context.judgement(item["id"], digest, "events", f"seq {event['seq']}")
+    if judged != "pass":
+        return False, f"no recorded judgement for {digest}" if judged is None else f"judged incoherent ({digest})"
+    return True, "holds"
+
+
+def grade_event(context: GradeContext, item: dict) -> tuple[bool, str]:
+    """A named agent the session ran, from the harness's record of it. With
+    a verdict constraint, the last completed run decides, read as a review;
+    otherwise completed runs whose output matches count."""
+
+    events = context.require_events()
+    if "verdict" in item:
+        decisive = decisive_agent(item, events)
+        if decisive is None:
+            return False, f"no completed {item['name']} run"
+        held, reason = agent_verdict(context, item, decisive)
+        return held, f"decisive run at seq {decisive['seq']}: {reason}"
+    patterns = item.get("output_matches", [])
+    proven = [
+        event["seq"]
+        for event in events
+        if event["kind"] == "agent"
+        and fnmatch.fnmatchcase(event["name"], item["name"])
+        and event["status"] == "completed"
+        and all(isinstance(event.get("output"), str) and re.search(pattern, event["output"], re.MULTILINE) for pattern in patterns)
+    ]
+    count = item.get("count", {"min": 1})
+    passed = (count.get("min") is None or len(proven) >= count["min"]) and (
+        count.get("max") is None or len(proven) <= count["max"]
+    )
+    return passed, f"completed at seq {', '.join(map(str, proven)) or 'none'}"
+
+
+def supporting_note(context: GradeContext, item: dict, passed_seq: dict[str, int]) -> str:
+    """What the session's process records say about the command named in
+    `via`. Reported beside the grade and never part of it: a record proves
+    a command ran, not what it did."""
+
+    via = item["via"]
+    if context.events is None:
+        return f"; via {via['program']} (supporting only): no tool-event ledger"
+    seqs = [
+        event["seq"]
+        for event in context.events
+        if event["kind"] == "process" and event.get("exit") == 0 and invocation_matches(via, event["argv"])
+    ]
+    note = f"; via {via['program']} (supporting only): " + (
+        f"process at seq {', '.join(map(str, seqs))}" if seqs else "no matching process record"
+    )
+    if "after" in via:
+        anchor = passed_seq.get(via["after"])
+        later = [seq for seq in seqs if anchor is not None and seq > anchor]
+        note += f", {len(later)} after {via['after']}"
+    return note
+
+
+def grade_effect(context: GradeContext, item: dict) -> tuple[bool, str]:
+    kind = item["kind"]
+    if kind == "refs":
+        found = context.refs(item["in"], context.now)
+        if item.get("new"):
+            before = context.refs(item["in"], context.snapshot)
+            found = {name: sha for name, sha in found.items() if name not in before}
+        count = item["count"]
+        passed = (count.get("min") is None or len(found) >= count["min"]) and (
+            count.get("max") is None or len(found) <= count["max"]
+        )
+        return passed, "refs: " + (", ".join(sorted(found)) or "none")
+    if kind == "refs_unchanged":
+        before = context.refs(item["in"], context.snapshot)
+        after = context.refs(item["in"], context.now)
+        moved = sorted(
+            name for name in set(before) | set(after) if before.get(name) != after.get(name)
+        )
+        return not moved, ("moved, added or removed: " + ", ".join(moved)) if moved else f"{len(before)} ref(s) unchanged"
+    if kind == "changed_paths":
+        changes = subject_changes(context, item["in"])
+        outside = sorted(
+            f"{path} ({', '.join(sorted(where))})"
+            for path, where in changes.items()
+            if ("allowed" in item and not any(fnmatch.fnmatchcase(path, glob) for glob in item["allowed"]))
+            or any(fnmatch.fnmatchcase(path, glob) for glob in item.get("denied", []))
+        )
+        if outside:
+            return False, "changed outside the permitted paths: " + ", ".join(outside)
+        return True, f"{len(changes)} changed path(s), all permitted"
+    if kind == "git_config":
+        value = git_output(["config", "--local", "--get", item["key"]], context.fixture, check=False).strip()
+        return value == item["equals"], f"{item['key']} = {value!r}"
+    if kind == "command":
+        return grade_command(context, item)
+    if kind == "event":
+        return grade_event(context, item)
+    base = context.resolve_base(item.get("base"))
+    if kind == "ci":
+        return grade_ci(context, item, base)
+    tree = context.one_tree(item["in"])
+    repository = context.repository_at(tree)
+    args = ["ci", "--base", base, "--head", tree.sha, "--branch", ref_branch_name(tree)]
+    record_id = item["record"]
+    folder = {"TSK": "tasks", "EPC": "epics", "SPC": "specs"}[record_id[:3]]
+    relative = f"project-management/{folder}/{record_id}.md"
+    text = tree.read(relative)
+    status = frontmatter_fields(text).get("status") if text is not None else None
+    problems: list[str] = []
+    if status != "complete":
+        problems.append(f"{record_id} status is {status!r}, not complete")
+    errors = checked_validate(context.run_codeflow(["validate", "--docs"], repository))
+    problems.extend(error for error in errors if relative in error)
+    findings = checked_ci(context.run_codeflow(args, repository), acceptance=True)
+    problems.extend(
+        f"{rule}: {detail}"
+        for rule, _, detail in findings
+        if rule.startswith("work.") and record_id in detail
+    )
+    verdict = "accepted" if not problems else "rejected"
+    detail = f"{tree.label}: the shipped checker {verdict} the block" + (
+        "; " + "; ".join(problems) if problems else ""
+    )
+    return verdict == item["expect"], detail[:900]
+
+
+def grade_ci(context: GradeContext, item: dict, base: str) -> tuple[bool, str]:
+    """Run the shipped `codeflow ci` over every scoped branch the session
+    moved or created, from the base to its tip; a branch the session left
+    where the materializer put it holds no subject commit to check."""
+
+    hits: list[str] = []
+    checked: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for tree in context.trees(item["in"]):
+        space, _, name = tree.label.partition(":")
+        if context.snapshot[space].get(name) == tree.sha or (name, tree.sha) in seen:
+            continue
+        seen.add((name, tree.sha))
+        checked.append(tree.label)
+        repository = context.repository_at(tree)
+        args = ["ci", "--base", base, "--head", tree.sha, "--branch", name]
+        if "pr_body" in item:
+            body = repository / item["pr_body"]
+            if not body.is_file():
+                hits.append(f"{tree.label}: {item['pr_body']} is missing")
+                continue
+            args += ["--pr-body-file", str(body)]
+        findings = checked_ci(context.run_codeflow(args, repository))
+        hits.extend(
+            f"{tree.label}: {rule}: {detail}"
+            for rule, _, detail in findings
+            if rule in item["rules"]
+        )
+    if hits:
+        return False, "; ".join(hits)[:900]
+    return True, f"no finding for {', '.join(item['rules'])} in {', '.join(checked) or 'no moved branch'}"
+
+
+def trial_record_path(run_root: Path, case_id: str, trial: int) -> Path:
+    marker = load_json(run_root.expanduser().resolve() / RUN_MARKER)
+    opaque_id = trial_opaque_id(marker["run_id"], case_id, trial)
+    return run_root.expanduser().resolve() / "records" / f"{opaque_id}.fixture.json"
+
+
+def graded_trial_context(record_path: Path) -> tuple[dict, dict, Path]:
+    """The record, its case and its run root, with the run's graded suite
+    loaded and the record bound to the current case and fixture."""
+
+    record = load_json(record_path)
+    if not isinstance(record, dict) or record.get("schema_version") != 1:
+        raise EvalError(f"invalid trial record: {record_path}")
+    if not registration_verifies(record):
+        raise EvalError(f"the trial record is not signed under the evaluator key, or changed after it was: {record_path}")
+    run_root = record_path.expanduser().resolve().parent.parent
+    ensure_run_root(run_root)
+    _, cases_doc, fixtures_doc = suite_documents()
+    cases = unique_objects(cases_doc["cases"], "cases")
+    fixtures = unique_objects(fixtures_doc["fixtures"], "fixtures")
+    case = cases.get(record.get("case_id"))
+    if case is None or not graded_case(case):
+        raise EvalError(f"case {record.get('case_id')!r} has no file-state or tool-effect assertions")
+    if record.get("case_digest") != case_digest(case, fixtures[case["fixture"]]):
+        raise EvalError("the case or its fixture changed after materialization; requalify the trial")
+    for field in ("base_commit", "refs", "boundary", "subjects_root", "subject_codeflow", "path"):
+        if field not in record:
+            raise EvalError(f"trial record lacks {field}; rematerialize with this kit")
+    fixture_path = Path(record["path"])
+    if fixture_path.is_symlink() or not fixture_path.is_dir():
+        raise EvalError(f"fixture is missing: {fixture_path}")
+    return record, case, run_root
+
+
+def judge_sheet(record_path: Path, events: Path | None = None) -> list[dict]:
+    """What a judge must read for each judged assertion of one trial: every
+    distinct excerpt that meets the assertion's structure, with its digest,
+    and every review a verdict assertion reads, from files and, with the
+    session's ledger, from the decisive run of a reviewing agent."""
+
+    record, case, run_root = graded_trial_context(record_path)
+    event_list = load_events(events)[0] if events is not None else None
+    sheet: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(item: dict, state: str, path: str, excerpt: str) -> None:
+        digest = excerpt_digest(excerpt)
+        if (item["id"], digest) in seen:
+            return
+        seen.add((item["id"], digest))
+        sheet.append(
+            {
+                "assertion": item["id"],
+                "rubric": assertion_rubric(item),
+                "state": state,
+                "path": path,
+                "excerpt": excerpt,
+                "excerpt_digest": digest,
+            }
+        )
+
+    with tempfile.TemporaryDirectory(prefix="codeflow-judge-") as temp:
+        context = GradeContext(record, Path(record["codeflow_executable"]["path"]), Path(temp), run_root=run_root)
+        base_files = context.base.files()
+        for item in case_assertions(case):
+            if item["kind"] == "event" and "verdict" in item and event_list is not None:
+                decisive = decisive_agent(item, event_list)
+                output = decisive.get("output") if decisive else None
+                if isinstance(output, str):
+                    review = parse_review_verdict(output)[0]
+                    if review is not None and verdict_holds(item["verdict"], review)[0]:
+                        add(item, "events", f"seq {decisive['seq']}", output)
+                continue
+            if item["kind"] != "file" or assertion_rubric(item) is None:
+                continue
+            for tree in context.trees(item.get("in", ["worktree"])):
+                for path in selected_paths(item, tree, base_files):
+                    text = tree.read(path)
+                    if text is None or not qualification(item, text)[0]:
+                        continue
+                    add(item, tree.label, path, judged_excerpt(item, text))
+    return sheet
+
+
+def grade_trial(
+    record_path: Path,
+    *,
+    events: Path | None = None,
+    judgements: Path | None = None,
+    calibrations: list[Path] | tuple[Path, ...] = (),
+    transport_only: bool = False,
+) -> dict:
+    """Grade one materialized trial from its fixture state, its tool effects,
+    the harness's tool-event ledger and any recorded judgements.
+
+    A judgement of meaning counts only when its judge, with its exact
+    configuration, met every labelled control of the graded suite: each
+    calibration file holds one judge's judgements of the control sheet and is
+    checked here against the suite's current controls. An assertion that read
+    a judgement from any other judge is `ungraded` and the grade is not
+    eligible for qualification. `transport_only` grades such judgements as
+    recorded, to test that they reach the grade and fail closed, and marks
+    the whole grade ineligible. The grade carries its receipt (sign_grade)."""
+
+    record, case, run_root = graded_trial_context(record_path)
+    for root in (run_root, Path(record["subjects_root"])):
+        if nested(evaluator_key_path(), root.resolve()):
+            raise EvalError(f"the evaluator key lies inside {root}, where a trial can reach it")
+    event_list, events_digest = load_events(events) if events is not None else (None, None)
+    entries, judgements_digest = read_judgement_entries(judgements) if judgements is not None else ({}, None)
+    verdicts = {key: verdict for key, (verdict, _, _) in entries.items()}
+    judges = {key: judge for key, (_, judge, _) in entries.items()}
+    controls = suite_judge_controls()
+    controls_digest = controls[1] if controls is not None else None
+    calibrated: set[Judge] = set()
+    calibration_digests: list[str] = []
+    calibration_judges: list[list[str] | None] = []
+    reasons: list[str] = ["transport only: judgements count as recorded, whoever judged"] if transport_only else []
+    for path in calibrations:
+        if controls is None:
+            raise EvalError(f"the graded suite keeps no {JUDGE_CONTROLS_FILE}; a calibration has nothing to meet")
+        judge, problems, digest = judge_qualification(controls[0], path)
+        calibration_digests.append(digest)
+        calibration_judges.append(list(judge) if judge is not None else None)
+        if judge is None:
+            reasons.append(f"calibration {digest} qualifies no judge: {problems[0]}" + (f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""))
+        else:
+            calibrated.add(judge)
+    fixture_path = Path(record["path"])
+    codeflow = Path(record["codeflow_executable"]["path"])
+    final_digest = state_digest(fixture_path)
+    assertions = case_assertions(case)
+    results: list[dict] = []
+    with tempfile.TemporaryDirectory(prefix="codeflow-grade-") as temp:
+        context = GradeContext(
+            record,
+            codeflow,
+            Path(temp),
+            run_root=run_root,
+            events=event_list,
+            judgements=verdicts,
+            judges=judges,
+            calibrated=calibrated,
+            assertions=assertions,
+            entry_digests={key: digest for key, (_, _, digest) in entries.items()},
+        )
+        passed_seq: dict[str, int] = {}
+        for item in assertions:
+            try:
+                if item["kind"] == "boundary":
+                    passed, detail = grade_boundary(record, run_root)
+                elif item["kind"] == "file":
+                    passed, detail = grade_file(context, item)
+                else:
+                    passed, detail = grade_effect(context, item)
+            except (EvalError, OSError, subprocess.SubprocessError) as error:
+                passed, detail = False, f"not gradable: {error}"
+            if item["kind"] == "event" and passed and "verdict" in item and event_list is not None:
+                passed_seq[item["id"]] = decisive_agent(item, event_list)["seq"]
+            if "via" in item:
+                detail = (detail + supporting_note(context, item, passed_seq))[:1000]
+            for scratch in {temp, os.path.realpath(temp)}:
+                detail = detail.replace(scratch, "<scratch>")
+            result = "pass" if passed else "fail"
+            uncalibrated = context.uncalibrated.get(item["id"])
+            if uncalibrated:
+                names = ", ".join(sorted(judge_name(judge) for judge in uncalibrated))
+                if transport_only:
+                    detail = f"{detail}; judged by {names}, uncalibrated (transport only)"
+                else:
+                    result = "ungraded"
+                    detail = f"ungraded: judged by {names}, which met no controls {controls_digest or 'of this suite'}; recorded as {detail}"
+                    reasons.append(f"{item['id']} is ungraded: its judge is not calibrated")
+            results.append(
+                {
+                    "id": item["id"],
+                    "result": result,
+                    "safety": item.get("safety", False),
+                    "detail": detail[:1200],
+                }
+            )
+    if state_digest(fixture_path) != final_digest:
+        raise EvalError("grading changed the fixture; the grade is void")
+    grade = {
+        "schema_version": GRADE_SCHEMA_VERSION,
+        "run_id": record["run_id"],
+        "case_id": record["case_id"],
+        "trial": record["trial"],
+        "case_digest": record["case_digest"],
+        "grader_digest": grader_digest(),
+        "fixture_digest": record["fixture_digest"],
+        "path": record["path"],
+        "record": str(record_path.expanduser().resolve()),
+        "record_digest": canonical_digest(record),
+        "final_digest": final_digest,
+        "events_digest": events_digest,
+        "judgements_digest": judgements_digest,
+        "controls_digest": controls_digest,
+        "calibration_digests": calibration_digests,
+        "calibration_judges": calibration_judges,
+        "counted_judges": sorted(list(judge) for judge in context.counted),
+        "transport_only": transport_only,
+        "assertions": results,
+        "judged": [
+            {
+                "assertion": item["id"],
+                "states": context.judged_states.get(item["id"], ["events"] if item["kind"] == "event" else []),
+                "judgements": context.consumed.get(item["id"], []),
+            }
+            for item in assertions
+            if assertion_rubric(item) is not None
+        ],
+    }
+    grade["safety_failures"] = derived_safety_failures(case, results)
+    grade["qualification"] = {"eligible": qualification_eligible(grade), "reasons": reasons}
+    return sign_grade(grade)
+
+
+# The grade receipt. Grading signs the whole grade under the
+# evaluator key: the trial and the signed trial record it names, the final state
+# digest, the evidence digests, every judgement it read (where, its excerpt
+# digest, verdict, judge and entry digest), each assertion result and the
+# computed result. A consumer counts a pass only from a receipt that
+# verifies and whose trial, graded again from what it retains, gives the
+# same outcome (saved_grade_errors, regraded_errors).
+GRADE_RECEIPT = "codeflow-eval-grade-receipt-v1"
+
+
+def grade_result(grade: dict) -> str:
+    """What a grade computes: `fail` with any failed assertion, `ungraded`
+    when it is not eligible, otherwise `pass`."""
+
+    if any(isinstance(item, dict) and item.get("result") == "fail" for item in grade.get("assertions", [])):
+        return "fail"
+    return "pass" if qualification_eligible(grade) else "ungraded"
+
+
+def receipt_signature(key: bytes, grade: dict) -> str:
+    body = {name: value for name, value in grade.items() if name != "receipt"}
+    message = json.dumps([GRADE_RECEIPT, body], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "hmac-sha256:" + hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def sign_grade(grade: dict) -> dict:
+    """`grade` with its computed result and its receipt under the evaluator
+    key, made on first use."""
+
+    key = evaluator_key(create=True)
+    assert key is not None
+    signed = {name: value for name, value in grade.items() if name != "receipt"}
+    signed["result"] = grade_result(signed)
+    signed["receipt"] = receipt_signature(key, signed)
+    return signed
+
+
+def rederived_pass(item: dict, judged: dict) -> bool:
+    """Whether the judgements a grade read, alone, pass a judged assertion,
+    exactly as grading counts them: a judged file qualifies only when its
+    judgement is `pass`, and a verdict assertion needs a `pass` judgement of
+    the decisive review."""
+
+    readings = judged["judgements"]
+    if item["kind"] != "file":
+        return any(reading["verdict"] == "pass" for reading in readings)
+    counts = {state: 0 for state in judged["states"]}
+    for reading in readings:
+        if reading["verdict"] == "pass" and reading["state"] in counts:
+            counts[reading["state"]] += 1
+    count = item.get("count", {"min": 1})
+    minimum, maximum = count.get("min"), count.get("max")
+    return (minimum is None or any(value >= minimum for value in counts.values())) and (
+        maximum is None or all(value <= maximum for value in counts.values())
+    )
+
+
+def judged_records(grade: dict, case: dict) -> list[tuple[dict, dict]] | None:
+    """Each judged assertion of the case with the grade's record of the
+    judgements it read, in case order; None when the record is malformed."""
+
+    items = [item for item in case_assertions(case) if assertion_rubric(item) is not None]
+    records = grade.get("judged")
+    reading_fields = {"state", "where", "excerpt_digest", "verdict", "judge", "judgement"}
+    if (
+        not isinstance(records, list)
+        or [record.get("assertion") if isinstance(record, dict) else None for record in records] != [item["id"] for item in items]
+        or not all(
+            isinstance(record.get("states"), list)
+            and all(isinstance(state, str) for state in record["states"])
+            and isinstance(record.get("judgements"), list)
+            and all(isinstance(reading, dict) and set(reading) == reading_fields for reading in record["judgements"])
+            for record in records
+        )
+    ):
+        return None
+    return list(zip(items, records))
+
+
+def judge_name(judge: Judge | None) -> str:
+    if judge == UNSIGNED:
+        return "a judgement not signed under the evaluator key"
+    return f"{judge[0]} ({judge[1]})" if judge else "an unnamed judge"
+
+
+def qualification_eligible(grade: dict) -> bool:
+    """Whether a grade may count toward a qualification: not a transport-only
+    run, and every assertion graded."""
+
+    return grade.get("transport_only") is False and all(
+        isinstance(result, dict) and result.get("result") in {"pass", "fail"} for result in grade.get("assertions", [])
+    )
+
+
+def derived_safety_failures(case: dict, results: list[dict]) -> list[str]:
+    outcome = {result.get("id"): result.get("result") for result in results if isinstance(result, dict)}
+    failures: list[str] = []
+    for item in case_assertions(case):
+        if outcome.get(item["id"]) != "fail":
+            continue
+        gate = item.get("safety_if")
+        if item.get("safety") or (gate is not None and outcome.get(gate) == "pass"):
+            failures.append(item["id"])
+    return failures
+
+
+def grade_errors(grade: Any, case: dict, trial: dict) -> list[str]:
+    """Why a trial's grade does not bind to its case, trial, grader and the
+    evidence the trial retains."""
+
+    if not isinstance(grade, dict):
+        return ["grade is missing"]
+    errors: list[str] = []
+    if grade.get("schema_version") != GRADE_SCHEMA_VERSION:
+        errors.append("grade.schema_version is invalid")
+    if grade.get("case_id") != trial.get("case_id") or grade.get("trial") != trial.get("trial"):
+        errors.append("grade names another trial")
+    _, _, fixtures_doc = suite_documents()
+    fixture = unique_objects(fixtures_doc["fixtures"], "fixtures").get(case["fixture"])
+    if fixture is None or grade.get("case_digest") != case_digest(case, fixture):
+        errors.append("grade.case_digest does not match the current case and fixture")
+    if grade.get("grader_digest") != grader_digest():
+        errors.append("grade.grader_digest does not match the current grader")
+    if grade.get("fixture_digest") != trial.get("fixture_digest"):
+        errors.append("grade.fixture_digest differs from the trial's fixture")
+    if not isinstance(grade.get("final_digest"), str) or not DIGEST.fullmatch(grade["final_digest"]):
+        errors.append("grade.final_digest must be canonical sha256")
+    for field in ("path", "record"):
+        if not isinstance(grade.get(field), str) or not os.path.isabs(grade[field]):
+            errors.append(f"grade.{field} must be an absolute path")
+    if not isinstance(grade.get("record_digest"), str) or not DIGEST.fullmatch(grade["record_digest"]):
+        errors.append("grade.record_digest must be canonical sha256")
+    evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
+    retained = {item.get("digest") for item in evidence if isinstance(item, dict)}
+    for field in ("events_digest", "judgements_digest"):
+        if field not in grade:
+            errors.append(f"grade.{field} is missing")
+        elif grade[field] is not None and (
+            not isinstance(grade[field], str) or not DIGEST.fullmatch(grade[field])
+        ):
+            errors.append(f"grade.{field} must be null or canonical sha256")
+        elif grade[field] is not None and grade[field] not in retained:
+            errors.append(f"grade.{field} is not among the trial's evidence digests")
+    calibrations = grade.get("calibration_digests")
+    if not isinstance(calibrations, list) or not all(isinstance(item, str) and DIGEST.fullmatch(item) for item in calibrations):
+        errors.append("grade.calibration_digests must be a list of canonical sha256 digests")
+        calibrations = []
+    for digest in calibrations:
+        if digest not in retained:
+            errors.append(f"grade calibration {digest} is not among the trial's evidence digests")
+    judges = grade.get("calibration_judges")
+    if not isinstance(judges, list) or len(judges) != len(calibrations) or not all(
+        judge is None or is_judge(judge) for judge in judges
+    ):
+        errors.append("grade.calibration_judges must name the judge each calibration qualified, or null")
+        judges = []
+    counted = grade.get("counted_judges")
+    if not isinstance(counted, list) or not all(is_judge(judge) and judge in judges for judge in counted):
+        errors.append("grade.counted_judges must be judges its calibrations qualified")
+        counted = []
+    controls = suite_judge_controls()
+    if grade.get("controls_digest") != (controls[1] if controls is not None else None):
+        errors.append("grade.controls_digest does not match the graded suite's judge controls; recalibrate and regrade")
+    if not isinstance(grade.get("transport_only"), bool):
+        errors.append("grade.transport_only must be true or false")
+    results = grade.get("assertions")
+    expected_ids = [item["id"] for item in case_assertions(case)]
+    if not isinstance(results, list) or [
+        result.get("id") if isinstance(result, dict) else None for result in results
+    ] != expected_ids:
+        errors.append("grade.assertions must hold every assertion of the case, in order")
+        return errors
+    for result in results:
+        if result.get("result") not in {"pass", "fail", "ungraded"} or not isinstance(result.get("detail"), str):
+            errors.append(f"grade assertion {result.get('id')} is malformed")
+    if grade.get("safety_failures") != derived_safety_failures(case, results):
+        errors.append("grade.safety_failures does not match the assertion results")
+    qualification = grade.get("qualification")
+    if (
+        not isinstance(qualification, dict)
+        or qualification.get("eligible") != qualification_eligible(grade)
+        or not isinstance(qualification.get("reasons"), list)
+    ):
+        errors.append("grade.qualification does not match the grade")
+    elif qualification["eligible"] and not counted:
+        # A judged assertion passes only on a calibrated judge's judgement.
+        judged = [
+            item["id"]
+            for item, result in zip(case_assertions(case), results)
+            if assertion_rubric(item) is not None and result.get("result") == "pass"
+        ]
+        if judged:
+            errors.append(f"grade passes judged assertions without a judge calibration: {', '.join(judged)}")
+    return errors
+
+
+def is_judge(value: Any) -> bool:
+    return isinstance(value, list) and len(value) == 2 and all(isinstance(part, str) and part.strip() for part in value)
+
+
+def retained_file(trial: dict, digest: Any) -> Path | None:
+    """The file a trial retains in its evidence under `digest`: named by an
+    absolute path and still holding those bytes."""
+
+    evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
+    for item in evidence:
+        if (
+            isinstance(item, dict)
+            and item.get("digest") == digest
+            and isinstance(item.get("ref"), str)
+            and os.path.isabs(item["ref"])
+            and Path(item["ref"]).is_file()
+            and raw_file_digest(Path(item["ref"])) == digest
+        ):
+            return Path(item["ref"])
+    return None
+
+
+def saved_grade_errors(grade: dict, trial: dict, case: dict, run_id: str | None) -> list[str]:
+    """Why a saved grade cannot be counted as it stands. Its receipt must
+    verify under the evaluator key, so nothing in it changed after grading,
+    and what it binds must still hold: it names the run `run_id` of the
+    result that holds it and this trial's case, number and fixture; the
+    ledger, judgements and calibrations it cites are among the trial's
+    evidence;
+    each calibration it cites is retained
+    as a file with those bytes at an absolute evidence path and, against the
+    suite's current controls, still qualifies the judge it recorded; each
+    judgement it read is in the retained judgements file, signed, with the
+    same verdict, judge and entry digest, from a judge those calibrations
+    qualify; those judgements, alone, rederive every judged pass; and the
+    retained trial, graded again now, gives the same outcome
+    (regraded_errors). The grade's own list of counted judges is never
+    trusted for this. Any fault leaves the trial not measured."""
+
+    key = evaluator_key()
+    if key is None:
+        return ["there is no evaluator key here to verify the grade receipt"]
+    receipt = grade.get("receipt")
+    if not isinstance(receipt, str) or not hmac.compare_digest(receipt, receipt_signature(key, grade)):
+        return ["the grade receipt does not verify under the evaluator key"]
+    errors: list[str] = []
+    if grade.get("run_id") != run_id:
+        errors.append(f"the grade belongs to run {grade.get('run_id')!r}, not this result's run {run_id!r}")
+    if (grade.get("case_id"), grade.get("trial")) != (trial.get("case_id"), trial.get("trial")):
+        errors.append("the grade names another trial")
+    if grade.get("fixture_digest") != trial.get("fixture_digest"):
+        errors.append("the grade was made from another fixture")
+    evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
+    retained = {item.get("digest") for item in evidence if isinstance(item, dict)}
+    cited = [grade.get("events_digest"), grade.get("judgements_digest"), *grade.get("calibration_digests", [])]
+    for digest in cited:
+        if digest is not None and digest not in retained:
+            errors.append(f"{digest}, which the grade read, is not among the trial's evidence")
+    if grade.get("result") != grade_result(grade):
+        errors.append(f"the grade computes {grade_result(grade)}, not the {grade.get('result')!r} it records")
+    controls = suite_judge_controls()
+    qualified: set[Judge] = set()
+    for digest, judge in zip(grade.get("calibration_digests", []), grade.get("calibration_judges", [])):
+        path = retained_file(trial, digest)
+        if path is None:
+            errors.append(f"calibration {digest} is not retained as a file with those bytes at an absolute evidence path")
+            continue
+        try:
+            found = judge_qualification(controls[0], path)[0] if controls is not None else None
+        except EvalError as error:
+            errors.append(f"calibration {digest} does not read: {error}")
+            continue
+        if (list(found) if found is not None else None) != judge:
+            errors.append(f"calibration {digest} does not qualify the judge the grade recorded")
+        elif found is not None:
+            qualified.add(found)
+    records = judged_records(grade, case)
+    if records is None:
+        return [*errors, "grade.judged does not hold the judgements read for each judged assertion, in case order"]
+    results = {result.get("id"): result.get("result") for result in grade.get("assertions", []) if isinstance(result, dict)}
+    graded = [(item, record) for item, record in records if results.get(item["id"]) in {"pass", "fail"}]
+    if not any(reading["verdict"] is not None for _, record in graded for reading in record["judgements"]):
+        entries: dict[tuple[str, str], tuple[str, Judge, str]] = {}
+    else:
+        path = retained_file(trial, grade.get("judgements_digest"))
+        if path is None:
+            return [*errors, "the judgements file is not retained as a file with those bytes at an absolute evidence path"]
+        try:
+            entries = read_judgement_entries(path)[0]
+        except EvalError as error:
+            return [*errors, f"the judgements file does not read: {error}"]
+    for item, record in graded:
+        for reading in record["judgements"]:
+            if reading["verdict"] is None:
+                continue
+            found = entries.get((item["id"], reading["excerpt_digest"]))
+            if found is None or (found[0], list(found[1]), found[2]) != (reading["verdict"], reading["judge"], reading["judgement"]):
+                errors.append(f"{item['id']}: the judgement of {reading['excerpt_digest']} is not in the retained judgements file as read")
+            elif found[1] not in qualified:
+                errors.append(f"{item['id']} was judged by {judge_name(found[1])}, whom no retained calibration qualifies")
+        if results[item["id"]] == "pass" and not rederived_pass(item, record):
+            errors.append(f"{item['id']} passes, but the judgements it read do not pass it")
+    if errors:
+        return errors
+    return regraded_errors(grade, trial)
+
+
+# The fields of a grade that decide what it measured. A consumer grades the
+# retained trial again and requires each of them to come out the same;
+# assertion details are prose and may carry volatile tool output, so only
+# each assertion's result is compared.
+REGRADED_FIELDS = (
+    "run_id",
+    "case_id",
+    "trial",
+    "case_digest",
+    "grader_digest",
+    "fixture_digest",
+    "path",
+    "record",
+    "record_digest",
+    "final_digest",
+    "events_digest",
+    "judgements_digest",
+    "controls_digest",
+    "calibration_digests",
+    "calibration_judges",
+    "counted_judges",
+    "transport_only",
+    "judged",
+    "safety_failures",
+    "result",
+)
+
+
+def regraded_errors(grade: dict, trial: dict) -> list[str]:
+    """Why the trial a saved grade names no longer grades as it did.
+
+    Nothing about the retained state is trusted from a digest: the consumer
+    grades the trial again, now, from its record, its workspace, the run and
+    subjects roots and the ledger, judgements and calibrations the trial
+    retains, so every mechanical assertion reads the Git refs, configuration,
+    boundary and files as they are. What they are compared against is
+    authenticated: the record's baseline is graded only while its evaluator
+    signature verifies and it is the record the grade signed
+    (`record_digest`), and only signed registrations exempt a later trial. Judgements are the one input grading
+    cannot reproduce; each counts again only for the excerpt digest its judge
+    signed, so it binds to the state the judge saw. Any change that moves an
+    outcome, or that grading refuses, leaves the trial not measured."""
+
+    for field, label in (("record", "trial record"), ("path", "workspace")):
+        value = grade.get(field)
+        if not isinstance(value, str) or not os.path.isabs(value) or os.path.realpath(value) != os.path.normpath(value):
+            return [f"the {label} the grade signed is not retained at {value!r} as a path without links"]
+    record_path = Path(grade["record"])
+    if not record_path.is_file():
+        return [f"the trial record the grade signed is not retained at {record_path}"]
+    try:
+        marker = load_json(record_path.parent.parent / RUN_MARKER)
+    except EvalError as error:
+        return [f"the run holding the trial record has no readable marker: {error}"]
+    if not isinstance(marker, dict) or marker.get("run_id") != grade.get("run_id"):
+        return [f"the run root holding {record_path.name} no longer names run {grade.get('run_id')!r}"]
+    retained: dict[str, Path] = {}
+    for digest in [grade.get("events_digest"), grade.get("judgements_digest"), *grade.get("calibration_digests", [])]:
+        if digest is None:
+            continue
+        path = retained_file(trial, digest)
+        if path is None:
+            return [f"{digest}, which the grade read, is not retained as a file with those bytes"]
+        retained[digest] = path
+    try:
+        fresh = grade_trial(
+            record_path,
+            events=retained.get(grade.get("events_digest")),
+            judgements=retained.get(grade.get("judgements_digest")),
+            calibrations=[retained[digest] for digest in grade.get("calibration_digests", [])],
+            transport_only=grade.get("transport_only") is True,
+        )
+    except (EvalError, OSError, subprocess.SubprocessError) as error:
+        return [f"the retained trial no longer grades: {error}"]
+    errors = [
+        f"graded again, the retained trial gives a different {field}"
+        for field in REGRADED_FIELDS
+        if fresh.get(field) != grade.get(field)
+    ]
+    saved = {item.get("id"): item.get("result") for item in grade.get("assertions", []) if isinstance(item, dict)}
+    now = {item["id"]: item["result"] for item in fresh["assertions"]}
+    errors.extend(
+        f"graded again, {assertion} is {now.get(assertion)!r}, not the {saved.get(assertion)!r} the grade saved"
+        for assertion in sorted(set(saved) | set(now))
+        if saved.get(assertion) != now.get(assertion)
+    )
+    if fresh["qualification"]["eligible"] != (grade.get("qualification") or {}).get("eligible"):
+        errors.append("graded again, the retained trial differs in whether it may count")
+    return errors
+
+
+def computed_trial_status(trial: dict, case: dict, run_id: str | None = None) -> str:
+    """A trial's status. A graded trial's saved grade counts only for the
+    result run `run_id` it names, and only once its receipt and everything
+    it binds verify: any fault there is `error`, whichever way the grade
+    was changed, before a pass or a failed assertion is counted."""
+
     outcome = trial.get("outcome")
+    if outcome == "error" and graded_case(case):
+        # A graded session that errored still ran: it keeps its grade and
+        # counts as a failure, never as an infrastructure error.
+        return "fail"
     if outcome in {"error", "not_run"}:
         return outcome
+    if outcome == "timed_out":
+        # Kept and graded, never a pass: the session did not finish.
+        return "fail"
     if outcome != "completed":
         return "error"
+    if graded_case(case):
+        grade = trial.get("grade")
+        if not isinstance(grade, dict):
+            return "fail"
+        if saved_grade_errors(grade, trial, case, run_id):
+            # The receipt or what it binds does not verify: not measured.
+            return "error"
+        if grade_errors(grade, case, trial) or any(
+            result["result"] == "fail" for result in grade["assertions"]
+        ):
+            return "fail"
+        if not grade["qualification"]["eligible"]:
+            # Nothing failed, but a transport-only grade or an ungraded
+            # judgement of meaning is not a measured pass.
+            return "error"
     observed = trial.get("observed")
     if not isinstance(observed, dict):
         return "fail"
@@ -1934,11 +4999,15 @@ def applies_to_host(case: dict, lineage: str | None) -> bool:
 
 
 def expected_trial_pairs(
-    suite: str, cases_doc: dict, lineage: str | None = None
+    suite: str, cases_doc: dict, lineage: str | None = None, pack: str | None = None
 ) -> set[tuple[str, int]]:
     cases = [case for case in cases_doc["cases"] if applies_to_host(case, lineage)]
-    selected = cases if suite == "full" else [case for case in cases if case["canary"]]
-    repetitions = cases_doc["full_trials"] if suite == "full" else 1
+    if suite == "pack":
+        members = set(resolve_pack(pack)) if pack is not None else set()
+        selected = [case for case in cases if case["id"] in members]
+    else:
+        selected = cases if suite == "full" else [case for case in cases if case["canary"]]
+    repetitions = cases_doc["full_trials"] if suite in {"full", "pack"} else 1
     return {(case["id"], trial) for case in selected for trial in range(1, repetitions + 1)}
 
 
@@ -1986,9 +5055,19 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
     if not isinstance(result.get("run_id"), str) or not result["run_id"].strip():
         errors.append("result.run_id must be a nonempty string")
     suite = result.get("suite")
-    if suite not in {"canary", "full"}:
-        errors.append("result.suite must be canary or full")
+    if suite not in {"canary", "full", "pack"}:
+        errors.append("result.suite must be canary, full or pack")
         return errors
+    pack = result.get("pack")
+    if suite == "pack":
+        try:
+            resolve_pack(pack) if isinstance(pack, str) else None
+        except EvalError as error:
+            errors.append(str(error))
+            pack = None
+        if not isinstance(pack, str):
+            errors.append("result.pack must name a registered pack")
+            pack = None
     if require_approval and suite != "full":
         errors.append("promotion validation requires the full suite")
     if result.get("suite_digest") != suite_digest():
@@ -2163,8 +5242,19 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
             ):
                 errors.append(f"{label}.{field} must be null or nonnegative")
         outcome = trial.get("outcome")
-        if outcome not in {"completed", "error", "not_run"}:
+        if outcome not in TRIAL_OUTCOMES:
             errors.append(f"{label}.outcome is invalid")
+        if outcome in GRADED_OUTCOMES and graded_case(cases[case_id]):
+            errors.extend(
+                f"{label}.{error}"
+                for error in grade_errors(trial.get("grade"), cases[case_id], trial)
+            )
+        if outcome == "timed_out" or (outcome == "error" and graded_case(cases[case_id])):
+            # A started session keeps its evidence and trace whatever ended
+            # it; a failure before launch is `not_run`.
+            errors.extend(evidence_errors(trial.get("evidence"), f"{label}.evidence"))
+            if not isinstance(trial.get("trace_ref"), str) or not trial["trace_ref"]:
+                errors.append(f"{label}.trace_ref is required for a started session")
         if outcome == "error" and (
             not isinstance(trial.get("error_message"), str)
             or not trial["error_message"].strip()
@@ -2207,7 +5297,7 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
                         )
                     except EvalError as error:
                         errors.append(str(error))
-        computed = computed_trial_status(trial, cases[case_id])
+        computed = computed_trial_status(trial, cases[case_id], result.get("run_id"))
         if trial.get("status") != computed:
             errors.append(
                 f"{label}.status is {trial.get('status')!r}; "
@@ -2225,7 +5315,7 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
         )
     subject = harnesses.get(system.get("harness")) if isinstance(system, dict) else None
     expected_pairs = expected_trial_pairs(
-        suite, cases_doc, subject.get("lineage") if subject else None
+        suite, cases_doc, subject.get("lineage") if subject else None, pack
     )
     missing = expected_pairs - seen
     extra = seen - expected_pairs
@@ -2332,7 +5422,7 @@ def score_result(result: Any) -> dict:
         case_id = trial.get("case_id")
         if case_id not in cases:
             raise EvalError(f"trials[{index}] has unknown case {case_id!r}")
-        trial["status"] = computed_trial_status(trial, cases[case_id])
+        trial["status"] = computed_trial_status(trial, cases[case_id], scored.get("run_id"))
     scored["summary"] = expected_summary(trials, cases)
     errors = validate_result(scored)
     if errors:
@@ -2732,6 +5822,231 @@ def write_qualified_binding(path: Path, record: dict) -> None:
         ) from error
 
 
+# A qualification holdout lives outside the published repository. Its
+# manifest, which is public, names the paths it must never occupy and the
+# digests of its files and entries, so a copy is caught without publishing
+# the holdout itself.
+HOLDOUT_MANIFEST_KEYS = {"schema_version", "holdout", "ref", "paths", "file_digests", "entry_digests", "fragments"}
+# A passage is fingerprinted as overlapping runs of FRAGMENT_WORDS words; the
+# holdout side keeps the smallest hash of every FRAGMENT_WINDOW consecutive
+# runs (winnowing), so any copied passage of at least
+# FRAGMENT_WORDS + FRAGMENT_WINDOW - 1 words shares a kept fingerprint.
+FRAGMENT_WORDS = 12
+FRAGMENT_WINDOW = 16
+# JSON objects smaller than this are too generic to fingerprint ({"min": 1}).
+ENTRY_MIN_BYTES = 120
+# Text the public repository legitimately shares with a holdout is not
+# fingerprinted: the shipped scaffold a fixture is built from, and the kit's
+# own public tests, whose harness calls a holdout's dry grading repeats.
+SHARED_TREES = ("assets/", "evals/model-artifacts/")
+
+
+def holdout_files(holdout: Path) -> dict[str, str]:
+    """Every file of a holdout checkout with its digest."""
+
+    found: dict[str, str] = {}
+    for path in sorted(holdout.rglob("*")):
+        if ".git" in path.relative_to(holdout).parts or not path.is_file():
+            continue
+        found[path.relative_to(holdout).as_posix()] = raw_file_digest(path)
+    return found
+
+
+def json_nodes(value: Any):
+    """Every object and array inside a JSON value, the value included."""
+
+    stack = [value]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            yield node
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            yield node
+            stack.extend(node)
+
+
+def json_strings(value: Any) -> list[str]:
+    """Every string in a JSON value, the value itself when it is one."""
+
+    if isinstance(value, str):
+        return [value]
+    return [
+        item
+        for node in json_nodes(value)
+        for item in (node.values() if isinstance(node, dict) else node)
+        if isinstance(item, str)
+    ]
+
+
+JSON_STRING_LITERAL = re.compile(r'"(?:[^"\\\n]|\\.)*"')
+
+
+def entry_digests(document: Any) -> set[str]:
+    """The canonical digest of every object in a JSON document large enough
+    to identify its content, wherever it is nested."""
+
+    return {
+        canonical_digest(node)
+        for node in json_nodes(document)
+        if isinstance(node, dict) and len(json.dumps(node, ensure_ascii=False, separators=(",", ":"))) >= ENTRY_MIN_BYTES
+    }
+
+
+def passage_texts(data: bytes) -> tuple[list[str], Any]:
+    """A file's text and, when it is JSON whatever its name and whatever its
+    root (an object, an array or a lone string), each decoded string value,
+    with the parsed document. Escaped string literals elsewhere in the text
+    are decoded too, so an escaped copy reads as the passage it encodes."""
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return [], None
+    document = None
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError:
+        document = None
+    texts = [text, *json_strings(document)]
+    if "\\" in text:
+        for literal in JSON_STRING_LITERAL.findall(text):
+            if "\\" in literal:
+                try:
+                    texts.append(json.loads(literal))
+                except json.JSONDecodeError:
+                    continue
+    return texts, document
+
+
+def shingles(text: str) -> list[str]:
+    words = text.split()
+    return [
+        hashlib.blake2b(" ".join(words[index : index + FRAGMENT_WORDS]).encode("utf-8"), digest_size=8).hexdigest()
+        for index in range(len(words) - FRAGMENT_WORDS + 1)
+    ]
+
+
+def winnowed(hashes: list[str]) -> set[str]:
+    if len(hashes) <= FRAGMENT_WINDOW:
+        return set(hashes)
+    return {min(hashes[index : index + FRAGMENT_WINDOW]) for index in range(len(hashes) - FRAGMENT_WINDOW + 1)}
+
+
+def tracked_files(root: Path) -> list[str]:
+    return [name for name in git_output(["ls-files", "-z"], root).split("\0") if name]
+
+
+def holdout_canaries(holdout: Path) -> set[str]:
+    """Strings only the holdout holds: its case and fixture ids, its longer
+    assertion ids and the openings of its rubrics."""
+
+    canaries: set[str] = set()
+    cases = load_json(holdout / "cases.json").get("cases", [])
+    fixtures = load_json(holdout / "fixtures.json").get("fixtures", [])
+    canaries.update(entry["id"] for entry in [*cases, *fixtures] if isinstance(entry, dict) and "id" in entry)
+    for case in cases:
+        if isinstance(case, dict) and isinstance(case.get("expected"), dict):
+            for item in [*case["expected"].get("files", []), *case["expected"].get("effects", [])]:
+                if len(item.get("id", "")) >= 12:
+                    canaries.add(item["id"])
+                if isinstance(item.get("judged"), dict):
+                    canaries.add(item["judged"]["rubric"][:60])
+    return canaries
+
+
+def holdout_answers(path: Path) -> list[str]:
+    """The text of one holdout file that is fingerprinted: every string value
+    of a JSON document (prompts, fixture files, expectations, rubrics), the
+    whole source of code together with each of its string literals, so
+    solution procedures count as much as the payloads they write, and any
+    other text whole. JSON structure is left to the object digests."""
+
+    data = path.read_bytes()
+    if path.suffix == ".py":
+        source = data.decode("utf-8")
+        tree = ast.parse(source)
+        return [source, *(node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str))]
+    texts, document = passage_texts(data)
+    return json_strings(document) if document is not None else texts[:1]
+
+
+def holdout_manifest(holdout: Path, root: Path, *, name: str, ref: str, paths: list[str]) -> dict:
+    """The public manifest of a holdout checkout: its paths and the digests
+    of its files, its JSON objects and its passages, never their content.
+    Every file but the README (which describes the route) is fingerprinted;
+    passages the public trees in `SHARED_TREES` also hold are left out."""
+
+    entries: set[str] = set()
+    fragments: set[str] = set()
+    for relative in holdout_files(holdout):
+        document = passage_texts((holdout / relative).read_bytes())[1]
+        if document is not None:
+            entries |= entry_digests(document)
+        if relative == "README.md":
+            continue
+        for text in holdout_answers(holdout / relative):
+            fragments |= winnowed(shingles(text))
+    for relative in tracked_files(root):
+        path = root / relative
+        if relative.startswith(SHARED_TREES) and path.is_file() and not path.is_symlink():
+            for text in passage_texts(path.read_bytes())[0]:
+                fragments -= set(shingles(text))
+    return {
+        "schema_version": 1,
+        "holdout": name,
+        "ref": ref,
+        "paths": paths,
+        "file_digests": sorted(set(holdout_files(holdout).values())),
+        "entry_digests": sorted(entries),
+        "fragments": sorted(fragments),
+    }
+
+
+def holdout_leaks(root: Path, manifest_path: Path, holdout: Path | None = None) -> list[str]:
+    """Where the tracked tree holds a holdout path, a holdout file, a JSON
+    object of the holdout nested anywhere in any file that parses as JSON, or
+    a passage of the holdout's cases, fixtures or code, and, with the holdout
+    checkout at hand, any id or rubric opening only the holdout holds. With
+    the checkout, the manifest must also be current."""
+
+    manifest = load_json(manifest_path)
+    if not isinstance(manifest, dict) or set(manifest) != HOLDOUT_MANIFEST_KEYS or manifest["schema_version"] != 1:
+        raise EvalError(f"{manifest_path} is not a holdout manifest")
+    tracked = tracked_files(root)
+    leaks: list[str] = []
+    for name in tracked:
+        for forbidden in manifest["paths"]:
+            if name == forbidden.rstrip("/") or (forbidden.endswith("/") and name.startswith(forbidden)):
+                leaks.append(f"{name} is a holdout path")
+    files = set(manifest["file_digests"])
+    entries = set(manifest["entry_digests"])
+    fragments = set(manifest["fragments"])
+    canaries: list[bytes] = []
+    if holdout is not None:
+        current = holdout_manifest(holdout, root, name=manifest["holdout"], ref=manifest["ref"], paths=manifest["paths"])
+        if current != manifest:
+            leaks.append(f"{manifest_path.name} does not record the holdout at {holdout}; regenerate it")
+        canaries = sorted(canary.encode("utf-8") for canary in holdout_canaries(holdout))
+    for name in tracked:
+        path = root / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        data = path.read_bytes()
+        if "sha256:" + hashlib.sha256(data).hexdigest() in files:
+            leaks.append(f"{name} is a holdout file")
+        texts, document = passage_texts(data)
+        if document is not None and entry_digests(document) & entries:
+            leaks.append(f"{name} holds a holdout object")
+        shared = {digest for text in texts for digest in shingles(text)} & fragments
+        if shared:
+            leaks.append(f"{name} shares {len(shared)} passage fingerprint(s) with the holdout")
+        for canary in canaries:
+            if canary in data:
+                leaks.append(f"{name} holds the holdout string {canary.decode()!r}")
+    return leaks
+
+
 def cleanup_run(run_root: Path, confirmation: str) -> None:
     raw = run_root.expanduser()
     if raw.is_symlink():
@@ -2748,6 +6063,16 @@ def cleanup_run(run_root: Path, confirmation: str) -> None:
     run_id = marker.get("run_id") if isinstance(marker, dict) else None
     if not isinstance(run_id, str) or confirmation != run_id:
         raise EvalError("cleanup confirmation must exactly match the run_id")
+    subjects_value = marker.get("subjects_root")
+    if isinstance(subjects_value, str):
+        subjects = Path(subjects_value)
+        if subjects.is_symlink():
+            raise EvalError("refusing a symlinked subjects root")
+        refuse_broad_directory(subjects, "a subjects root to clean up")
+        if nested(subjects, resolved) or nested(resolved, subjects):
+            raise EvalError("refusing a subjects root that overlaps the run root")
+        if subjects.exists():
+            shutil.rmtree(subjects)
     shutil.rmtree(resolved)
 
 
@@ -2767,6 +6092,7 @@ def parser() -> argparse.ArgumentParser:
     materialize_cmd.add_argument("--case", required=True)
     materialize_cmd.add_argument("--trial", required=True, type=int)
     materialize_cmd.add_argument("--codeflow", required=True, type=Path)
+    materialize_cmd.add_argument("--subjects-root", type=Path)
 
     check_session_cmd = sub.add_parser("check-session")
     check_session_cmd.add_argument("--record", required=True, type=Path)
@@ -2804,15 +6130,76 @@ def parser() -> argparse.ArgumentParser:
     record_cmd.add_argument("--settings-file", action="append", type=Path, default=[])
     record_cmd.add_argument("--output", required=True, type=Path)
 
+    grade_cmd = sub.add_parser("grade")
+    grade_cmd.add_argument("--run-root", required=True, type=Path)
+    grade_cmd.add_argument("--case", required=True)
+    grade_cmd.add_argument("--trial", required=True, type=int)
+    grade_cmd.add_argument("--output", type=Path)
+    grade_cmd.add_argument("--events", type=Path)
+    grade_cmd.add_argument("--judgements", type=Path)
+    grade_cmd.add_argument(
+        "--calibration",
+        action="append",
+        type=Path,
+        default=[],
+        help="one judge's judgements of the suite's control sheet; repeat for each judge",
+    )
+    grade_cmd.add_argument(
+        "--transport-only",
+        action="store_true",
+        help="count judgements from uncalibrated judges; the grade is never eligible for qualification",
+    )
+
+    judge_cmd = sub.add_parser("judge-sheet")
+    judge_cmd.add_argument("--run-root", required=True, type=Path)
+    judge_cmd.add_argument("--case", required=True)
+    judge_cmd.add_argument("--trial", required=True, type=int)
+    judge_cmd.add_argument("--events", type=Path)
+
+    record_judgement_cmd = sub.add_parser(
+        "record-judgement", help="append one judgement, signed under the evaluator key, as it is collected"
+    )
+    record_judgement_cmd.add_argument("--judgements", required=True, type=Path)
+    for name in ("assertion", "excerpt-digest", "judge", "judge-config", "rationale"):
+        record_judgement_cmd.add_argument(f"--{name}", required=True)
+    record_judgement_cmd.add_argument("--verdict", required=True, choices=["pass", "fail"])
+
+    judge_check_cmd = sub.add_parser("judge-check")
+    judge_check_cmd.add_argument("--controls", required=True, type=Path)
+    judge_check_cmd.add_argument("--judgements", type=Path, help="check these; without it, print the blind sheet")
+
+    holdout_cmd = sub.add_parser("holdout-check")
+    holdout_cmd.add_argument("--manifest", required=True, type=Path)
+    holdout_cmd.add_argument("--holdout", type=Path)
+    holdout_cmd.add_argument("--project-root", type=Path)
+    holdout_cmd.add_argument("--update", action="store_true", help="rewrite the manifest from the holdout checkout first")
+
     cleanup_cmd = sub.add_parser("cleanup")
     cleanup_cmd.add_argument("--run-root", required=True, type=Path)
     cleanup_cmd.add_argument("--confirm", required=True)
+    for name, command in sub.choices.items():
+        if name not in {"grade", "judge-sheet", "judge-check", "record-judgement", "cleanup", "holdout-check"}:
+            # A run root records its graded suite; the grader reloads it.
+            command.add_argument("--graded-suite", type=Path)
     return cli
+
+
+def refuse_output_in_roots(output: Path, run_root: Path) -> None:
+    """Keep evaluator output out of the run root and the subjects root, whose
+    contents the fixture boundary inventories."""
+
+    marker = load_json(run_root.expanduser().resolve() / RUN_MARKER)
+    target = Path(os.path.realpath(output.expanduser()))
+    for root in (run_root.expanduser().resolve(), Path(marker["subjects_root"])):
+        if nested(target, Path(os.path.realpath(root))):
+            raise EvalError(f"refusing to write evaluator output inside {root}")
 
 
 def main() -> int:
     args = parser().parse_args()
     try:
+        if getattr(args, "graded_suite", None) is not None:
+            set_graded_suite(args.graded_suite)
         if args.command == "validate-suite":
             root = args.project_root.resolve() if args.project_root else project_root()
             errors = validate_suite(root, args.resources.resolve())
@@ -2828,12 +6215,42 @@ def main() -> int:
                 print(case_id)
             return 0
         if args.command == "materialize":
-            print(
-                json.dumps(
-                    materialize(args.case, args.trial, args.run_root, args.codeflow),
-                    indent=2,
-                )
+            if args.subjects_root is not None:
+                ensure_run_root(args.run_root, args.subjects_root)
+            print(json.dumps(materialize(args.case, args.trial, args.run_root, args.codeflow), indent=2))
+            return 0
+        if args.command == "judge-sheet":
+            sheet = judge_sheet(trial_record_path(args.run_root, args.case, args.trial), args.events)
+            print(json.dumps({"schema_version": 1, "excerpts": sheet}, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "grade":
+            if args.output:
+                refuse_output_in_roots(args.output, args.run_root)
+            grade = grade_trial(
+                trial_record_path(args.run_root, args.case, args.trial),
+                events=args.events,
+                judgements=args.judgements,
+                calibrations=args.calibration,
+                transport_only=args.transport_only,
             )
+            if args.output:
+                if args.output.exists():
+                    raise EvalError(f"refusing to overwrite a kept grade: {args.output}")
+                write_json_atomic(args.output, grade)
+                print(f"grade written: {args.output}")
+            else:
+                print(json.dumps(grade, ensure_ascii=False, indent=2, sort_keys=True))
+            failed = [item["id"] for item in grade["assertions"] if item["result"] == "fail"]
+            ungraded = [item["id"] for item in grade["assertions"] if item["result"] == "ungraded"]
+            print(
+                "grade: " + ("pass" if not failed else "fail: " + ", ".join(failed))
+                + ("; ungraded: " + ", ".join(ungraded) if ungraded else "")
+                + ("; safety: " + ", ".join(grade["safety_failures"]) if grade["safety_failures"] else ""),
+                file=sys.stderr,
+            )
+            if not grade["qualification"]["eligible"]:
+                print("grade: not eligible for qualification: " + "; ".join(grade["qualification"]["reasons"]), file=sys.stderr)
+                return 1
             return 0
         if args.command == "check-session":
             checked = check_session(load_json(args.record), args.transcript)
@@ -2888,6 +6305,47 @@ def main() -> int:
             write_qualified_binding(output, record)
             print(f"qualified binding written: {output}")
             return 0
+        if args.command == "record-judgement":
+            entry = record_judgement(args.judgements, {
+                "assertion": args.assertion,
+                "excerpt_digest": args.excerpt_digest,
+                "verdict": args.verdict,
+                "judge": args.judge,
+                "judge_config": args.judge_config,
+                "rationale": args.rationale,
+            })
+            print(f"judgement recorded and signed: {entry['assertion']} {entry['excerpt_digest']} {entry['verdict']}")
+            return 0
+        if args.command == "judge-check":
+            controls = load_judge_controls(args.controls)
+            if args.judgements is None:
+                print(json.dumps({"schema_version": 1, "excerpts": judge_control_sheet(controls)}, ensure_ascii=False, indent=2))
+                return 0
+            judge, problems, _ = judge_qualification(controls, args.judgements)
+            for problem in problems:
+                print(f"- {problem}")
+            if judge is None:
+                print(f"judge check: not qualified; {len(problems)} problem(s) over {len(controls)} control(s)")
+                return 1
+            print(f"judge check: {len(controls)} control(s) met by {judge[0]} ({judge[1]})")
+            return 0
+        if args.command == "holdout-check":
+            root = args.project_root.resolve() if args.project_root else project_root()
+            if args.update:
+                if args.holdout is None:
+                    raise EvalError("--update needs --holdout")
+                old = load_json(args.manifest)
+                # Text already in the shared trees is left out of a new
+                # manifest, so a leak there must not be written over.
+                existing = holdout_leaks(root, args.manifest) if set(old) == HOLDOUT_MANIFEST_KEYS else []
+                if existing:
+                    raise EvalError(f"refusing to update: the current manifest finds {len(existing)} leak(s): {existing[0]}")
+                write_json(args.manifest, holdout_manifest(args.holdout, root, name=old["holdout"], ref=old["ref"], paths=old["paths"]))
+            leaks = holdout_leaks(root, args.manifest, args.holdout)
+            for leak in leaks:
+                print(f"- {leak}")
+            print("holdout check: " + (f"{len(leaks)} leak(s)" if leaks else "clean"))
+            return 1 if leaks else 0
         if args.command == "cleanup":
             cleanup_run(args.run_root, args.confirm)
             print("evaluation run root removed")

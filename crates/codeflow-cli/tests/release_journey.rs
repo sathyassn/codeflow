@@ -35,6 +35,9 @@ fn with_env(command: &mut Command) -> &mut Command {
     .expect("joinable PATH");
     command
         .env("CODEFLOW_HOME", isolated_home())
+        // The PR job names the binary that reads the body, as CI does after
+        // building it; pre-push passes its own (TSK-147 F4).
+        .env("CODEFLOW_BIN", &exe)
         .env("PATH", path)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -183,6 +186,9 @@ fn codeflow_release_jobs_live_outside_the_managed_ci_file() {
         "types: [opened, synchronize, reopened, edited]",
         "name: release impact",
         "python3 scripts/release.py check-pr",
+        // The body is read by the codeflow built from the same checkout.
+        "cargo build --release --locked -p codeflow-cli",
+        "--codeflow-bin target/release/codeflow",
         "name: release state",
         "python3 scripts/release.py check-state --ref \"$GITHUB_SHA\"",
     ] {
@@ -318,7 +324,9 @@ impl Adopted {
     fn push(&self, branch: &str, draft: Option<&Path>) -> Output {
         git(&self.root, &["switch", "-q", "main"]);
         let mut command = Command::new("git");
-        with_env(&mut command);
+        // No CODEFLOW_BIN: the hook passes itself to release.py, and the
+        // draft below is read only if it does.
+        with_env(&mut command).env_remove("CODEFLOW_BIN");
         if let Some(draft) = draft {
             command.env("CODEFLOW_PR_DRAFT", draft);
         }

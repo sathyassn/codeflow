@@ -683,7 +683,7 @@ fn spec_state_is_derived_from_its_consumers() {
     assert!(validate_lifecycle(repo.root())
         .warnings
         .iter()
-        .any(|w| w.contains("no delivering consumer")));
+        .any(|w| w.text.contains("no delivering consumer")));
 
     repo.write(TASK_PATH, &consumer("TSK-001", "todo", "SPC-001"));
     assert_eq!(spec_state(&graph(), "SPC-001"), Some(SpecState::Open));
@@ -993,7 +993,7 @@ fn an_unchanged_baseline_blob_is_exempt_and_a_spelling_edit_only_warns() {
     assert!(tree
         .warnings
         .iter()
-        .any(|w| w.contains("needs an acceptance block")));
+        .any(|w| w.text.contains("needs an acceptance block")));
     let range = repo.judge(&baseline);
     assert!(range.is_clean() && !range.warnings.is_empty(), "{range:?}");
 }
@@ -1027,7 +1027,7 @@ fn a_backfilled_uid_keeps_the_baseline_exemption_and_nothing_else_does() {
             && tree
                 .warnings
                 .iter()
-                .any(|w| w.contains("needs an acceptance block")),
+                .any(|w| w.text.contains("needs an acceptance block")),
         "{tree:?}"
     );
     // A uid line in the body is not a backfill.
@@ -1045,7 +1045,7 @@ fn a_backfilled_uid_keeps_the_baseline_exemption_and_nothing_else_does() {
     assert!(validate_lifecycle(repo.root())
         .warnings
         .iter()
-        .any(|w| w.contains("needs an acceptance block")));
+        .any(|w| w.text.contains("needs an acceptance block")));
     // A status change beside the uid is a transition, judged in full.
     repo.write(
         TASK_PATH,
@@ -1082,10 +1082,9 @@ fn a_pre_baseline_completion_accepts_the_historical_form_and_nothing_less() {
         let tree = validate_lifecycle(repo.root());
         assert!(
             tree.is_clean()
-                && tree
-                    .warnings
-                    .iter()
-                    .any(|w| w.contains("- acceptance: historical evidence unavailable")),
+                && tree.warnings.iter().any(|w| w
+                    .text
+                    .contains("- acceptance: historical evidence unavailable")),
             "{incomplete}: {tree:?}"
         );
     }
@@ -1239,11 +1238,11 @@ fn a_baseline_missing_from_history_downgrades_to_warnings() {
     assert!(tree
         .warnings
         .iter()
-        .any(|w| w.contains("not in this clone's history")));
+        .any(|w| w.text.contains("not in this clone's history")));
     assert!(tree
         .warnings
         .iter()
-        .any(|w| w.contains("needs an acceptance block")));
+        .any(|w| w.text.contains("needs an acceptance block")));
 }
 
 // ---------------------------------------------------------------------------
@@ -1272,7 +1271,12 @@ fn stale_words_warn() {
         &consumer("TSK-003", "complete", "SPC-001"),
     );
     repo.commit("records");
-    let warnings = validate_lifecycle(repo.root()).warnings.join("\n");
+    let warnings = validate_lifecycle(repo.root())
+        .warnings
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         warnings.contains("planning epic has complete tasks (TSK-001)"),
         "{warnings}"
@@ -1287,10 +1291,52 @@ fn stale_words_warn() {
     repo.git(&["switch", "-q", "task/TSK-002-work"]);
     repo.commit("work on the branch");
     repo.git(&["switch", "-q", "main"]);
-    let warnings = validate_lifecycle(repo.root()).warnings.join("\n");
+    let warnings = validate_lifecycle(repo.root())
+        .warnings
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         !warnings.contains("TSK-002"),
         "an active branch clears the warning: {warnings}"
+    );
+}
+
+#[test]
+fn the_named_step_clears_a_stale_in_progress_task() {
+    // TSK-147 AC-3, the TSK-013 shape: `in_progress` with no branch warns and
+    // names `codeflow task status <id> todo`; running that step (the status
+    // verb the command drives) clears the warning.
+    let repo = Repo::new();
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &task("TSK-002", "in_progress", CRITERIA, "Pending."),
+    );
+    repo.commit("records");
+    let stale = validate_lifecycle(repo.root());
+    let warning = stale
+        .warnings
+        .iter()
+        .find(|w| {
+            w.text
+                .contains("in_progress with no active branch carrying TSK-002")
+        })
+        .unwrap_or_else(|| panic!("{:?}", stale.warnings));
+    assert!(
+        warning
+            .remedy
+            .contains("`codeflow task status TSK-002 todo`"),
+        "{warning}"
+    );
+
+    set_status(repo.root(), RecordKind::Task, "TSK-002", &change("todo")).unwrap();
+    repo.commit("back to todo");
+    let cleared = validate_lifecycle(repo.root());
+    assert!(
+        !cleared.warnings.iter().any(|w| w.text.contains("TSK-002")),
+        "the named step clears the warning: {:?}",
+        cleared.warnings
     );
 }
 
@@ -1342,7 +1388,12 @@ fn an_unreadable_baseline_treats_no_record_as_new() {
     );
     repo.commit("records");
     repo.set_baseline(&"c".repeat(40));
-    let warnings = validate_lifecycle(repo.root()).warnings.join("\n");
+    let warnings = validate_lifecycle(repo.root())
+        .warnings
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(!warnings.contains("without a checkbox"), "{warnings}");
     assert!(
         !warnings.contains("refused as a written value"),
@@ -1379,7 +1430,7 @@ fn an_approved_spec_with_done_consumers_is_healthy_and_real_mismatches_warn() {
     assert!(validate_lifecycle(repo.root())
         .warnings
         .iter()
-        .any(|w| w.contains("no delivering consumer")));
+        .any(|w| w.text.contains("no delivering consumer")));
 
     // A written `implemented` with an open consumer is refused as ever.
     repo.write(TASK_PATH, &consumer("TSK-001", "todo", "SPC-001"));
@@ -1851,7 +1902,7 @@ fn a_record_the_range_adds_is_new_in_a_shallow_clone() {
             verdict
                 .warnings
                 .iter()
-                .any(|w| w.contains("not in this clone's history")),
+                .any(|w| w.text.contains("not in this clone's history")),
             shallow,
             "{verdict:?}"
         );
@@ -2092,7 +2143,7 @@ fn two_merged_lines_are_each_judged_from_their_own_baseline() {
         verdict
             .notices
             .iter()
-            .any(|n| n.contains("introduces work_records_baseline")),
+            .any(|n| n.text.contains("introduces work_records_baseline")),
         "{verdict:?}"
     );
 
@@ -2146,7 +2197,7 @@ fn a_change_cannot_exempt_its_own_commit_once_the_target_has_a_baseline() {
     assert!(
         ci.notices
             .iter()
-            .any(|n| n.contains(&format!("added {own}")) && n.contains("after it lands")),
+            .any(|n| n.text.contains(&format!("added {own}")) && n.text.contains("after it lands")),
         "{ci:?}"
     );
     assert!(!ci.errors.iter().any(|e| e.contains("TSK-001")), "{ci:?}");
@@ -2313,10 +2364,10 @@ fn a_change_that_introduces_the_baseline_is_judged_by_its_own_list() {
     let notice = ci
         .notices
         .iter()
-        .find(|n| n.contains("introduces work_records_baseline"))
+        .find(|n| n.text.contains("introduces work_records_baseline"))
         .unwrap_or_else(|| panic!("{ci:?}"));
     assert!(
-        notice.contains(&line_a) && notice.contains(&line_b),
+        notice.text.contains(&line_a) && notice.text.contains(&line_b),
         "{notice}"
     );
 
@@ -2365,13 +2416,13 @@ fn a_branch_forked_before_the_target_adopted_a_baseline_is_judged_by_the_target(
     let ci = judge_pull_request(repo.root(), "main", "HEAD").unwrap();
     assert!(refused(&ci), "{ci:?}");
     assert!(
-        !ci.notices.iter().any(|n| n.contains("introduces")),
+        !ci.notices.iter().any(|n| n.text.contains("introduces")),
         "{ci:?}"
     );
     assert!(
         ci.notices
             .iter()
-            .any(|n| n.contains(&format!("added {own}"))),
+            .any(|n| n.text.contains(&format!("added {own}"))),
         "{ci:?}"
     );
     let since = judge_range(repo.root(), "main", None).unwrap();
@@ -2389,7 +2440,7 @@ fn a_branch_forked_before_the_target_adopted_a_baseline_is_judged_by_the_target(
     assert!(ci.errors.iter().any(|e| e.contains(&needle)), "{ci:?}");
     assert!(refused(&ci), "{ci:?}");
     assert!(
-        !ci.notices.iter().any(|n| n.contains("introduces")),
+        !ci.notices.iter().any(|n| n.text.contains("introduces")),
         "{ci:?}"
     );
 }

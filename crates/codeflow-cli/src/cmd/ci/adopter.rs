@@ -138,12 +138,10 @@ pub(super) fn resolve(
                 println!("codeflow ci: {finding}");
             }
         }
-        Err(error) => violations.push(Violation::new(
+        Err(error) => violations.push(Violation::always_blocking(
             "release.backend",
-            PolicyLevel::Block,
             error,
-            "set `[release] backend` in .codeflow/project.toml to none, external or codeflow"
-                .to_string(),
+            "set `[release] backend` in .codeflow/project.toml to none, external or codeflow",
         )),
     }
     Adoption {

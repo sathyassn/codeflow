@@ -21,6 +21,7 @@ pub mod reading;
 pub mod recall;
 pub mod registry;
 pub mod release_local;
+pub mod remedy;
 pub mod remote;
 pub mod scaffold;
 pub mod security;
