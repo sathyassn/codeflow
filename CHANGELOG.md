@@ -45,6 +45,13 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Release integration after landings.** CodeFlow's repository workflow imports
+  verified epic lines after a landing and daily, checking the combined release
+  before pushing. A conflict or finding leaves the release branch unchanged and
+  names its owning task with local reproduction commands. Task pull requests do
+  not wait for integration; adopters receive only conditional shipping guidance.
+
+<!-- codeflow:release-impact minor -->
 - **Guidance retention evaluations.** `cf-evaluate-model` gains a scripted
   multi-turn case kind: the fixture supplies warm-up turns, the case prompt
   is the probe, and only the probe turn is graded. A new

@@ -155,3 +155,21 @@ change gives its consumer and where it stands. It gives the PR URL exactly as
 number or guessed. It lists each required check with its state, any missing
 evidence with its reason, and the next action. For a green PR the next action
 is a human merge.
+
+
+## Release integration after landing
+
+Read the configured integration result after the landing; a task pull request
+never waits for release integration. Find the run for that landing with
+`gh run list --workflow <configured-workflow>`, then use
+`gh run view <run-id> --exit-status` and `gh run view <run-id> --log-failed`
+on failure. A pending run is missing evidence.
+
+Route a failure to the open task with `role: release-integration`; if none
+carries the role, report "no release-integration task to own it". Follow the
+result's local reproduction commands. The CodeFlow-only integration workflow
+and runner are not installed for adopters. For that workflow, reproduce the
+current result without pushing with
+`cargo run -p codeflow-cli --example release_integration -- --release <branch> --line <line>`;
+omit `--line` for the daily entry. Without a configured release argument and
+workflow, the runner reports no configured integration and does nothing.

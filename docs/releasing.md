@@ -36,6 +36,38 @@ contradictions and watched contracts; it does not infer compatibility. Put one
 each new pending entry. A withdrawal removes the affected entry/marker and
 explains in the PR body why the remaining net contract permits the lower target.
 
+### Integration after an epic-line landing
+
+The repository's `codeflow-release.yml` runs release integration after pushes
+onto epic lines and daily at 03:17 UTC. `RELEASE_BRANCH` in that job selects the
+release branch. It must exist and match the default target's release pattern.
+The job builds its runner and judge from the default target, verifies each epic
+line with the core line check, and makes clean merges in a disposable clone.
+It runs `codeflow ci` under R-120 and the reading-structure checks on the combined
+result before one normal push. A daily batch with any failure pushes nothing.
+Reading sizes remain guidelines; structural reading faults block integration.
+
+The result is reported after the landing. Task pull requests do not depend on
+it. Inspect the integration job with `gh run view <run-id> --log-failed`; select
+the run with `gh run list --workflow codeflow-release.yml`. A failure names the
+open task carrying `role: release-integration`, or reports that none owns it.
+TSK-010 resolves conflicts and findings in the release pull request. Automation
+never resolves conflicts or changes a task's status.
+
+Reproduce the current integration locally without pushing, with the current
+`codeflow` binary on PATH:
+
+```sh
+cargo run -p codeflow-cli --example release_integration -- --release integration/release-3-0-0-r2
+```
+
+Add `--line integration/EPC-NNN-slug` for one landing. The workflow alone passes
+`--push`; the runner's default is a check. Without a configured release argument
+and the repository workflow, it reports no configured integration and does
+nothing. The runner and workflow are repository-owned and absent from adopter
+scaffolds. Hosted authentication and scheduling still require a live workflow
+run; fixture tests prove the local merge, judge, failure and push paths.
+
 ### Pending entries, local checks and repairs
 
 A pending entry is identified by its bold label (`- **Label.** text`), which
