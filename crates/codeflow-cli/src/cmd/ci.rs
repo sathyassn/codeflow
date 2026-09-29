@@ -530,8 +530,23 @@ fn work_checks<'a>(
         target: line_target,
     });
     let branch = names.branch;
+    // A release branch (SPC-013 R-120) is judged as a release range.
+    let release_head = branch.starts_with("integration/")
+        && acceptance::release_scope(root, names)
+            .ok()
+            .flatten()
+            .is_some_and(|(_, scope)| scope.head);
     let class = pr_body.and_then(|body| {
-        classification::dispatch(root, git, body, branch, range_parts.as_ref(), tagged, ran)
+        classification::dispatch(
+            root,
+            git,
+            body,
+            branch,
+            range_parts.as_ref(),
+            release_head,
+            tagged,
+            ran,
+        )
     });
     acceptance::dispatch(
         root,

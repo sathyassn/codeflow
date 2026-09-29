@@ -127,7 +127,7 @@ fn judge(
 /// The destination and scope of a release range, asked once per run and
 /// shared by the records rule and the acceptance check; `None` for an
 /// ordinary range.
-fn release_scope<'n>(
+pub(super) fn release_scope<'n>(
     root: &Path,
     names: &'n super::Names<'_>,
 ) -> Result<Option<&'n (release_line::Destination, release_line::Scope)>, &'n str> {

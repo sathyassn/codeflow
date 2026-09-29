@@ -648,7 +648,8 @@ fn ci(root: &Path, branch: &str, body: Option<&str>) -> Output {
 /// moved forward holds a task record. A range on the root branch that
 /// widens that record's criteria and adds code passes `codeflow ci` as the
 /// workspace root branch, with and without a pull request body; the same
-/// commits under another `integration/` name are still refused.
+/// commits under another `integration/` name are still refused, with no
+/// `Task:` line, with `Task: TSK-001` or with no body.
 #[test]
 fn journey_ci_accepts_the_workspace_root_branch_and_no_other_line() {
     let dir = tempfile::tempdir().unwrap();
@@ -716,12 +717,24 @@ fn journey_ci_accepts_the_workspace_root_branch_and_no_other_line() {
     let other = ci(&root, "integration/other", Some(body));
     let said = both(&other);
     assert!(!other.status.success(), "{said}");
-    assert!(said.contains("no `Task:` line"), "{said}");
+    assert!(said.contains(UNVERIFIED_LINE), "{said}");
     let other = ci(&root, "integration/other", None);
     let said = both(&other);
     assert!(!other.status.success(), "{said}");
     assert!(said.contains("work.criteria_frozen"), "{said}");
+
+    // A Task: line naming a real task does not admit an unverified line.
+    let tracked = body.replace("## Changes", "Task: TSK-001\n\n## Changes");
+    let other = ci(&root, "integration/other", Some(&tracked));
+    let said = both(&other);
+    assert!(!other.status.success(), "{said}");
+    assert!(said.contains(UNVERIFIED_LINE), "{said}");
+    assert!(!said.contains("pull request class: tracked"), "{said}");
 }
+
+/// What `codeflow ci` says for an `integration/` head that is neither a
+/// verified epic line nor the root branch.
+const UNVERIFIED_LINE: &str = "not a verified epic line or the workspace root branch";
 
 /// TSK-190 AC-3 (journey): at the minimal tier, where durable tracking is
 /// off and every other pull request names its unit, a range on the root

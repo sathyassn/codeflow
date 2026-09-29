@@ -202,6 +202,36 @@ pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool
     }
 }
 
+/// With durable tracking on, an `integration/*` head that is not a release
+/// branch lands only as a verified epic line or as the root branch the
+/// target's policy names, whatever the body's `Task:` line says. Judged
+/// before any body-specific class, so naming a task cannot admit an
+/// unverified line. Returns whether the head is eligible.
+fn integration_line_eligible(
+    root: &Path,
+    branch: &str,
+    range: &Range<'_>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) -> bool {
+    if !branch.starts_with("integration/")
+        || root_branch_at(root, range.base).as_deref() == Some(branch)
+    {
+        return true;
+    }
+    match check_epic_line(root, branch, range.target, range.base, range.head) {
+        Ok(_) => true,
+        Err(reason) => {
+            push(
+                tagged,
+                RULE,
+                format!("'{branch}' is not a verified epic line or the workspace root branch: {reason}"),
+                "land an integration/ branch as its epic's verified line or as the branch `git.root_branch` names; other work goes on a task or planning branch",
+            );
+            false
+        }
+    }
+}
+
 /// Where durable tracking is off: whether the body names exactly one unit
 /// that matches the branch, or the range is on the root branch the target's
 /// policy names, which carries no `Task:` line.
@@ -229,6 +259,7 @@ pub(super) fn dispatch(
     body: &str,
     branch: &str,
     range: Option<&Range<'_>>,
+    release_head: bool,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
@@ -272,6 +303,9 @@ pub(super) fn dispatch(
             return None;
         }
     };
+    if !release_head && !integration_line_eligible(root, branch, range, tagged) {
+        return None;
+    }
     let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
     selection_check(root, branch, range, &files, tagged);
     let input = Input {
