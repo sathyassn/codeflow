@@ -1626,11 +1626,15 @@ fn a_fully_merged_recompletion_cannot_reuse_review_across_a_reopen() {
     commit(root, "docs: reuse the earlier review");
     land(root, "plan/recomplete");
 
-    assert_blocks(
-        &ci_on(root, "main", LINE, "Task: TSK-001"),
-        "fully merged reopen and recompletion with stale review",
-        &["must lie inside the fix range"],
-    );
+    // No task declaration selects the epic-line class, whose criteria are
+    // amendable; a declared task selects the frozen tracked-task class.
+    for task_line in ["", "Task: TSK-001"] {
+        assert_blocks(
+            &ci_on(root, "main", LINE, task_line),
+            &format!("fully merged stale review with {task_line:?}"),
+            &["must lie inside the fix range"],
+        );
+    }
 }
 
 /// The target checkout has no range base to reveal the completion that the
