@@ -381,8 +381,13 @@ pipeline; an ordinary merge request pipeline leaves that empty, so the job
 fetches `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` from the merge request's
 project and fails when it cannot. It never uses
 `CI_MERGE_REQUEST_DIFF_BASE_SHA`, the diff's base, which stays behind when
-the target advances. Bitbucket uses `BITBUCKET_PR_DESTINATION_COMMIT`, and
-`ci-generic.sh` takes the target commit as its first argument and refuses to
+the target advances. Bitbucket uses `BITBUCKET_PR_DESTINATION_COMMIT`;
+Atlassian does not list that variable, so when it is unset the step fetches
+`BITBUCKET_PR_DESTINATION_BRANCH` from `origin` and fails when it cannot.
+Bitbucket merges the destination branch into the working tree before the
+step, so `codeflow test` and `validate --docs` run on that merge while
+`codeflow ci` judges `BITBUCKET_COMMIT` against the target. `ci-generic.sh`
+takes the target commit as its first argument and refuses to
 run without it. A raised pin's release is installed separately and only
 tested; a lowered pin is judged by the target's binary and then fails the
 job. A branch that started before the target raised its pin, and kept the

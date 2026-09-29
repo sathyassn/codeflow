@@ -23,7 +23,7 @@ it reads from that platform's CI variables (`codeflow ci` auto-detects them):
 |---|---|---|
 | `codeflow-ci.yml` | GitHub Actions | `github.event.pull_request.base.sha` / `.head.sha` / `.head.ref`, body via `CODEFLOW_PR_BODY` |
 | `.gitlab-ci.yml` | GitLab CI | target: `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, else `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` fetched from the merge request's project; `CI_COMMIT_SHA`, `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`, body via `CI_MERGE_REQUEST_DESCRIPTION` |
-| `bitbucket-pipelines.yml` | Bitbucket Pipelines | `BITBUCKET_PR_DESTINATION_COMMIT`, `BITBUCKET_COMMIT`, `BITBUCKET_BRANCH` (supply the body via `CODEFLOW_PR_BODY` or `--pr-body-file`) |
+| `bitbucket-pipelines.yml` | Bitbucket Pipelines | target: `BITBUCKET_PR_DESTINATION_COMMIT`, else `BITBUCKET_PR_DESTINATION_BRANCH` fetched from `origin`; `BITBUCKET_COMMIT`, `BITBUCKET_BRANCH` (supply the body via `CODEFLOW_PR_BODY` or `--pr-body-file`) |
 | `ci-generic.sh` | anything with a working tree and full history (Makefile, other CI) | the target commit as `$1` (required) and the head as `$2` (default `HEAD`), or `BASE`/`HEAD` env; body via `CODEFLOW_PR_BODY` |
 
 The GitLab, Bitbucket and generic wrappers pass the target and head to
@@ -95,8 +95,10 @@ between the `codeflow pinned run` markers is the same in all three). It reads
 the pin from the target branch's current commit (on GitLab the merged
 results pipeline's `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, otherwise the target
 branch fetched from the merge request's project, never the diff base
-`CI_MERGE_REQUEST_DIFF_BASE_SHA`; `BITBUCKET_PR_DESTINATION_COMMIT`; or the
-generic script's first argument),
+`CI_MERGE_REQUEST_DIFF_BASE_SHA`; on Bitbucket
+`BITBUCKET_PR_DESTINATION_COMMIT`, otherwise the destination branch fetched
+from `origin`, failing when it cannot; or the generic script's first
+argument),
 installs that release with the same checksum verification, and runs
 `codeflow ci` from a checkout of the target, so the target's policy judges
 the head as git data; `codeflow test` and `validate --docs` run on the head
@@ -107,6 +109,13 @@ then fails; a head that kept the pin it branched from lowers nothing. An upgrade
 `scaffold_version`, land it, then run `codeflow update`; a head that carries
 new policy keys before the raise lands fails with a message naming that
 order.
+
+A Bitbucket pull request pipeline "merges the destination branch into your
+working branch before it runs"
+([pipeline start conditions](https://support.atlassian.com/bitbucket-cloud/docs/pipeline-start-conditions/)),
+so there `codeflow test` and `validate --docs` run on that merge, while
+`codeflow ci` judges `BITBUCKET_COMMIT`, the source commit, against the
+target.
 
 On GitLab and Bitbucket the job file runs from the merge or pull request
 itself, as a GitHub `pull_request` workflow does, so a change can edit its
