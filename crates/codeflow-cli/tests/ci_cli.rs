@@ -9,6 +9,8 @@
 //! repo (the `policy_cli.rs` pattern), pinning the exit-code and message
 //! contracts a consumer of the binary (no source) relies on.
 
+#[path = "ci_cli/acceptance_fix.rs"]
+mod acceptance_fix;
 #[path = "ci_cli/change_class_probes.rs"]
 mod change_class_probes;
 #[path = "ci_cli/pr_body_fixtures.rs"]

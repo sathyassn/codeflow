@@ -166,6 +166,13 @@ fn init_writes(
             .map_or_else(|| GIT_HOOKS_UNWIRED.to_string(), |s| s.git_hooks.clone()),
         permission_preset: preset.clone(),
         product_one_liner: one_liner.clone(),
+        // The release rule's adoption marker, kept as written when present.
+        release_rules: Some(
+            previous
+                .as_ref()
+                .and_then(|state| state.release_rules)
+                .unwrap_or(1),
+        ),
     };
     state.store(root)?;
 

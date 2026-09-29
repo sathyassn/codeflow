@@ -7,7 +7,7 @@ use std::path::Path;
 
 use codeflow_core::hooks::{PolicyLevel, Violation};
 use codeflow_core::workgraph::durable_work_tracking_enabled;
-use codeflow_core::workgraph::lifecycle::judge_pull_request_under;
+use codeflow_core::workgraph::lifecycle::{judge_pull_request_under, judge_release_range, Brought};
 
 /// Run the check for `codeflow ci`, record its findings and whether it ran,
 /// and print its notices. `authority` is the commit whose baseline list
@@ -17,6 +17,7 @@ pub(super) fn dispatch(
     base_candidates: &[String],
     head: &str,
     authority: Option<&str>,
+    brought: Option<&Brought>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -25,6 +26,7 @@ pub(super) fn dispatch(
         super::resolve_base(root, base_candidates).as_deref(),
         head,
         authority,
+        brought,
     );
     if outcome.ran {
         ran.push("work-records");
@@ -58,12 +60,15 @@ pub(super) struct Outcome {
 }
 
 /// Judge the records changed between the merge-base of `base` and `head`,
-/// and `head`. `base` is `None` when the range could not be resolved.
+/// and `head`. `base` is `None` when the range could not be resolved. On a
+/// release range, `brought` names the records judged where each was
+/// introduced on its line.
 pub(super) fn check(
     root: &Path,
     base: Option<&str>,
     head: &str,
     authority: Option<&str>,
+    brought: Option<&Brought>,
 ) -> Outcome {
     match durable_work_tracking_enabled(root) {
         Ok(true) => {}
@@ -91,7 +96,11 @@ pub(super) fn check(
             ran: false,
         };
     };
-    match judge_pull_request_under(root, base, head, authority.unwrap_or(base)) {
+    let judged = match brought {
+        Some(brought) => judge_release_range(root, base, head, authority.unwrap_or(base), brought),
+        None => judge_pull_request_under(root, base, head, authority.unwrap_or(base)),
+    };
+    match judged {
         Ok(verdict) => {
             let mut violations: Vec<Violation> = verdict.errors.into_iter().map(block).collect();
             violations.extend(verdict.warnings.into_iter().map(|warning| {

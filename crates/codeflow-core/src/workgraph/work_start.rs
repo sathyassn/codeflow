@@ -879,9 +879,31 @@ pub fn check_work_start_anchored(
     if !is_stable_work_target(target) {
         return Err(WorkStartError::UnstableTarget(target.to_string()));
     }
-    let (merge_base, records) = anchored_records(repo_root, target)?;
+    let (merge_base, mut records) = anchored_records(repo_root, target)?;
     let repo = Repository::discover(repo_root)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    // A named fix may reopen a complete task in this range. Only its status
+    // is projected onto the anchored readiness core; every planning input
+    // and dependency still comes from the merge-base.
+    if records
+        .get(task_id)
+        .is_some_and(|task| task.status == "complete")
+    {
+        let base = super::lifecycle::Graph::from_revision(&repo, &merge_base)
+            .map_err(WorkStartError::InvalidGraph)?;
+        let current = super::lifecycle::Graph::from_worktree(repo_root);
+        if let (Some(old), Some(now)) = (base.records.get(task_id), current.records.get(task_id)) {
+            if now.status == "todo" || super::lifecycle::is_recompletion(Some(old), now) {
+                let problems = super::lifecycle::reopen_problems(Some(old), now);
+                if !problems.is_empty() {
+                    return Err(WorkStartError::InvalidGraph(problems.join("; ")));
+                }
+                if let Some(task) = records.get_mut(task_id) {
+                    task.status = "todo".into();
+                }
+            }
+        }
+    }
     let anchored = validate_anchored_task(&repo, &records, task_id, target)?;
 
     Ok(WorkStartReport {

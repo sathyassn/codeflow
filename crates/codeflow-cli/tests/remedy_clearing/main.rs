@@ -100,6 +100,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ID_REGISTRY_UID", Runs),
     ("ACCEPTANCE_BINDING", Runs),
     ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
+    ("RELEASE_LEGACY_RECORD", Excluded(HumanAuthority)),
     ("JOURNEY_CRITERION", Runs),
     ("RECORD_BASELINE_EXEMPT", Runs),
     ("BASELINE_REVIEW", Runs),

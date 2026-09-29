@@ -9,9 +9,14 @@ description: Land finished work — docs and capability updates, then a PR throu
    every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
    After review, a task PR's last commit runs `codeflow task status <id>
    complete --acceptance <file>`; its block names the reviewed code commit
-   (late: the clean landing merge's second parent). After-release criteria
-   stay `deferred`, never verified at build time. When a work item is planned,
-   started, blocked, completed or cancelled, follow
+   (late: the clean landing merge's second parent, or its reviewed ancestor
+   followed only by that record's status and Closeout). A fix of a complete
+   task may use one PR: reopen with a reason and keep the old block under
+   `acceptance_superseded:`, fix the code, then complete again against a
+   reviewed head inside the fix PR. Keep the anchored criteria unchanged;
+   a criterion amendment still lands in a separate planning PR. After-release
+   criteria stay `deferred`, never verified at build time. When a work item is
+   planned, started, blocked, completed or cancelled, follow
    [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle).
    `codeflow test` and `codeflow validate --docs` remain required wherever the
    installed/project ship gate requires them, including for docs-only changes;

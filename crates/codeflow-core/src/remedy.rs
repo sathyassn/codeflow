@@ -243,6 +243,11 @@ catalog! {
     /// rule and covered by its line's cutoff (SPC-013 R-120).
     RELEASE_LEGACY_CHANGE = Step::Edit(".codeflow/project.toml"),
         "an operator confirms the change against the review recorded for its landing, which the release report names; the cutoff in `release_rule_baseline` in .codeflow/project.toml is the 2.x to 3.0 transition record and is never edited, so the notice ends when the release lands";
+    /// A brought complete task without an acceptance block whose record
+    /// last changed on its line at or before the line's records cutoff
+    /// (SPC-013 R-120, TSK-140 AC-13).
+    RELEASE_LEGACY_RECORD = Step::Edit(".codeflow/project.toml"),
+        "an operator confirms the record against its landing, which the release report names; the cutoff in `release_records_baseline` in .codeflow/project.toml is the 2.x to 3.0 transition record and is never edited, and no acceptance block is written for a legacy record, so the notice ends when the release lands";
     /// A task without a journey criterion for an adopter-facing range.
     JOURNEY_CRITERION = Step::Edit("{path}"),
         "add a `(journey)` criterion to {path} by a planning pull request, or serve the epic's journey criterion there with `(serves EPC-NNN AC-n)`";

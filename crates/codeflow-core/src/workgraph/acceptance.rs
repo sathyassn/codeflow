@@ -3,8 +3,8 @@
 //! The structural rules of an acceptance block live in
 //! [`super::record_text`]; this module adds what needs git: the block names
 //! the commit that was reviewed, and nothing but the record's status and
-//! Closeout changed after it, or it landed by a clean merge that only
-//! merges and planning records follow ([`bind_completion`]); `task status
+//! Closeout changed after it. Task landings and release imports identify
+//! the source of that same reviewed span ([`bind_completion`]); `task status
 //! complete` and `codeflow ci` share that judge; a waiver names the planning amendment on the
 //! target that changed that criterion; a task pull request leaves its
 //! record's criteria as the target has them; and a range touching the
@@ -126,24 +126,21 @@ impl Landing<'_> {
     }
 }
 
-/// Bind a completed task's active acceptance block to the reviewed commit
-/// R (R-60), for the completion at `landing` (C). R is accepted when
-///
-/// 1. R is C or an ancestor of C, and R..C touches only this record's
-///    status and Closeout; or
-/// 2. a merge M on C's first-parent chain brought R onto it, and R is M's
-///    second parent or an ancestor of it after which only this record's
-///    status and Closeout changed; M's
-///    tree is the clean re-merge of its parents, every first-parent commit
-///    from M to C is a merge or changes planning records only, and the
-///    completion changes planning records only (several records may
-///    complete together).
-///
-/// Every waiver names a commit, not C, that amended this record's
-/// criterion, is in C's history and is on the task's own integration
-/// target, a local or remote-tracking branch; `default_target` stands in
-/// only for a task that declares no target. A leaf that serves its epic's
-/// journey says what ran (R-53).
+/// Which transport can carry a reviewed task onto the completion's line.
+/// Release imports are attributed by `release_line` before entering this judge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    /// Direct work, including every direct release-line change.
+    Direct,
+    /// An ordinary task line may carry review through a clean task landing.
+    TaskLanding,
+}
+
+/// Bind a completion to its reviewed source. Only this record's status and
+/// Closeout may differ in the reviewed segment. A clean task landing can
+/// transport that segment onto a line; a reopening range always reviews its
+/// own work. `base` pins the range's anchored old review when supplied.
+/// Waivers still require the criterion's planning amendment on its target.
 #[must_use]
 pub fn bind_completion(
     repo: &Repository,
@@ -151,38 +148,69 @@ pub fn bind_completion(
     graph: &Graph,
     landing: Landing<'_>,
     default_target: Option<Oid>,
-) -> Vec<Finding> {
-    bind(repo, task, graph, landing, default_target, true)
-}
-
-/// [`bind_completion`] under its first rule alone: the reviewed commit is
-/// C or an ancestor after which only this record's status and Closeout
-/// changed. A completion made directly on a release line, and the
-/// release-integration task's completion, bind this way to the head both
-/// seats reviewed (SPC-013 R-120); no landing merge carries them.
-#[must_use]
-pub fn bind_completion_at_head(
-    repo: &Repository,
-    task: &RecordView,
-    graph: &Graph,
-    landing: Landing<'_>,
-    default_target: Option<Oid>,
-) -> Vec<Finding> {
-    bind(repo, task, graph, landing, default_target, false)
-}
-
-fn bind(
-    repo: &Repository,
-    task: &RecordView,
-    graph: &Graph,
-    landing: Landing<'_>,
-    default_target: Option<Oid>,
-    landing_merge: bool,
+    transport: Transport,
+    base: Option<Oid>,
 ) -> Vec<Finding> {
     let Some(block) = active_block(task) else {
         return Vec::new();
     };
+    let target = task_target(repo, task, default_target);
+    // On the target itself there is no PR range to anchor. The status verb
+    // still checks the transition and reviewed span, including uncommitted
+    // changes; a named fix branch must instead review inside its range.
+    let anchor =
+        base.or_else(|| target.and_then(|tip| repo.merge_base(tip, landing.commit()).ok()));
+    let on_target = base.is_none()
+        && matches!(landing, Landing::Worktree { .. })
+        && repo
+            .head()
+            .ok()
+            .is_some_and(|head| head.shorthand().ok() == task.integration_target.as_deref());
+    // A reopen landed before this range, by its own pull request (R-119
+    // keeps that valid), is recovered from the history below. The fix then
+    // lands as any task does, so a task landing may carry its review.
+    let mut reopened_earlier = false;
+    let reopen = (!on_target)
+        .then_some(anchor)
+        .flatten()
+        .and_then(|anchor| {
+            let content = blob_at(repo, anchor, &task.path)?;
+            let old = RecordView::parse(RecordKind::Task, &task.path, &content).ok()?;
+            let reopened = old.status == "complete"
+                && (matches!(landing, Landing::Worktree { .. })
+                    || super::lifecycle::is_recompletion(Some(&old), task)
+                    || super::lifecycle::reopened_in_range(
+                        repo,
+                        &anchor.to_string(),
+                        Some(&landing.commit().to_string()),
+                        &Graph::default().with(task.clone()),
+                    )
+                    .contains(&task.id));
+            reopened.then_some((anchor, old))
+        })
+        .or_else(|| {
+            // The recovered completion supplies the archive and the old
+            // review boundary. Its criteria may predate a planning pull
+            // request that amended them on the target after the reopen
+            // (R-52), so the criteria are the anchored record's.
+            let (at, mut old) = previous_completion(repo, task, &block, landing)?;
+            if let Some(anchored) = anchor.and_then(|anchor| {
+                let content = blob_at(repo, anchor, &task.path)?;
+                RecordView::parse(RecordKind::Task, &task.path, &content).ok()
+            }) {
+                old.criteria = anchored.criteria;
+            }
+            reopened_earlier = true;
+            Some((at, old))
+        });
     let mut findings = Vec::new();
+    if let Some((_, old)) = &reopen {
+        findings.extend(
+            super::lifecycle::reopen_problems(Some(old), task)
+                .into_iter()
+                .map(|message| finding(BINDING_RULE, format!("{}: {message}", task.id))),
+        );
+    }
     let mut bind = |message: String| findings.push(finding(BINDING_RULE, message));
     match commit_of(repo, &block.reviewed) {
         None => bind(format!(
@@ -190,10 +218,26 @@ fn bind(
             task.id, block.reviewed
         )),
         Some(reviewed) => {
-            let problem = if landing_merge {
-                unreviewed(repo, task, landing, reviewed)
+            // The review lies after the reopened completion. One exception:
+            // a completion made and reopened inside this range (the range
+            // base holds no completion) stood last at `at`, and a review of
+            // `at` covers every change the range made before the reopen;
+            // the binding below still refuses any later change but this
+            // record's status and Closeout (AC-2).
+            let completed_in_range = |at: Oid| {
+                reopened_earlier
+                    && anchor.is_some_and(|base| base != at && is_ancestor_or_same(repo, base, at))
+            };
+            let problem = if reopen.as_ref().is_some_and(|(at, _)| {
+                (reviewed == *at && !completed_in_range(*at))
+                    || !is_ancestor_or_same(repo, *at, reviewed)
+            }) {
+                Some(format!("a reopened task's reviewed commit {reviewed} must lie inside the fix range, after its anchored base"))
+            } else if transport == Transport::TaskLanding && (reopen.is_none() || reopened_earlier)
+            {
+                binding_problem(repo, task, landing, reviewed, transport)
             } else {
-                direct_problem(repo, task, landing, reviewed)
+                binding_problem(repo, task, landing, reviewed, Transport::Direct)
             };
             if let Some(problem) = problem {
                 bind(format!("{}: {problem}", task.id));
@@ -218,6 +262,46 @@ fn bind(
     findings
 }
 
+/// Find the prior completed record when a range or target checkout starts
+/// after the task was reopened. The range base can be `todo`, so it cannot
+/// itself supply the acceptance block that the reopen must preserve.
+fn previous_completion(
+    repo: &Repository,
+    task: &RecordView,
+    block: &AcceptanceBlock,
+    landing: Landing<'_>,
+) -> Option<(Oid, RecordView)> {
+    let mut at = landing.commit();
+    match landing {
+        Landing::Commit(head) => {
+            let introduced = introduced_at(repo, task, block, head);
+            at = repo.find_commit(introduced).ok()?.parent_id(0).ok()?;
+        }
+        Landing::Worktree { head, .. } => {
+            let current = blob_at(repo, head, &task.path)
+                .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok());
+            if current.as_ref().is_some_and(|record| {
+                record.status == "complete"
+                    && active_block(record).as_ref() == Some(block)
+                    && record.superseded_blocks() == task.superseded_blocks()
+            }) {
+                let introduced = introduced_at(repo, task, block, head);
+                at = repo.find_commit(introduced).ok()?.parent_id(0).ok()?;
+            }
+        }
+    }
+    let mut crossed_reopen = false;
+    loop {
+        let content = blob_at(repo, at, &task.path)?;
+        let record = RecordView::parse(RecordKind::Task, &task.path, &content).ok()?;
+        if record.status == "complete" {
+            return crossed_reopen.then_some((at, record));
+        }
+        crossed_reopen = true;
+        at = repo.find_commit(at).ok()?.parent_id(0).ok()?;
+    }
+}
+
 /// Every path the working tree changes against `HEAD`: staged, unstaged and
 /// untracked, ignored files excepted. The reviewed result is a commit, so
 /// these are what a completion made here adds to it.
@@ -238,26 +322,30 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
         .collect())
 }
 
-/// Why neither rule accepts `reviewed` for the completion at `landing`, if
-/// neither does. When a merge on C's first-parent chain lands `reviewed`,
-/// the second rule's reason is the one reported; otherwise the first's.
-fn unreviewed(
+/// Apply the one reviewed-span check, resolving task-landing transport only
+/// when the source and completion do not share a directly reviewed span.
+fn binding_problem(
     repo: &Repository,
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
+    transport: Transport,
 ) -> Option<String> {
-    let direct = direct_problem(repo, task, landing, reviewed)?;
-    match landed_problem(repo, task, landing, reviewed) {
+    let direct = reviewed_span_problem(repo, task, landing, reviewed)?;
+    if transport == Transport::Direct {
+        return Some(direct);
+    }
+    match task_landing(repo, task, landing, reviewed) {
         Landed::NoMerge => Some(direct),
-        Landed::Accepted => None,
+        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed)
+            .map(|problem| format!("the landing merge {merge} brings {head}, and {problem}; review the result that landed")),
         Landed::Refused(problem) => Some(problem),
     }
 }
 
-/// Rule 1: why `reviewed` is not C or an ancestor after which only this
-/// record's status and Closeout changed, if it is not.
-fn direct_problem(
+/// The only binding predicate: the reviewed commit is the source head or
+/// its ancestor, with only the task's status and Closeout changed afterward.
+fn reviewed_span_problem(
     repo: &Repository,
     task: &RecordView,
     landing: Landing<'_>,
@@ -294,23 +382,21 @@ fn direct_problem(
     })
 }
 
-/// What the second rule found.
+/// Provenance of a possible task landing.
 enum Landed {
     /// No merge on C's first-parent chain has `reviewed` as its second
     /// parent.
     NoMerge,
-    /// The landing merge and everything after it pass.
-    Accepted,
+    /// The clean merge transports this task head; its reviewed span is
+    /// checked by the same predicate as direct work.
+    Span { merge: Oid, head: Oid },
     /// A landing merge exists, and this is why it does not carry the review.
     Refused(String),
 }
 
-/// Rule 2: a merge M on C's first-parent chain brought `reviewed` onto it,
-/// as its second parent or an ancestor of it followed only by this record's
-/// status and Closeout, and M's tree is the clean re-merge of its parents; only merges and
-/// planning-only commits follow M up to C, and the completion itself
-/// changes planning records only.
-fn landed_problem(
+/// Resolve the task-landing provenance. This checks transport structure,
+/// never infers a line's parent and never grants a review verdict itself.
+fn task_landing(
     repo: &Repository,
     task: &RecordView,
     landing: Landing<'_>,
@@ -370,15 +456,6 @@ fn landed_problem(
     let Ok(second) = merge.parent_id(1) else {
         return unreadable("the landing merge");
     };
-    if second != reviewed {
-        let landed = blob_at(repo, second, &task.path).unwrap_or_default();
-        if let Some(problem) = later_change(repo, &task.path, &landed, reviewed, second) {
-            return Landed::Refused(format!(
-                "the landing merge {} brings {second}, and {problem} between the reviewed commit {reviewed} and it; review the result that landed",
-                merge.id()
-            ));
-        }
-    }
     if let Some(path) = completion {
         return Landed::Refused(format!(
             "the completion also changes {path}; a completion after the landing merge {} of the reviewed commit {reviewed} changes planning records only",
@@ -392,7 +469,7 @@ fn landed_problem(
         ));
     }
     match is_clean_remerge(repo, &merge) {
-        Ok(true) => Landed::Accepted,
+        Ok(true) => Landed::Span { merge: merge.id(), head: second },
         Ok(false) => Landed::Refused(format!(
             "the landing merge {} of the reviewed commit {reviewed} is not the clean re-merge of its parents; review the result that landed",
             merge.id()
@@ -655,21 +732,9 @@ pub fn frozen_criteria(head: &Graph, target: &Graph, changed_paths: &[String]) -
         .collect()
 }
 
-/// Where a range's completions are bound: at the head for a task pull
-/// request, or at the commit of the range that introduced each block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BindAt {
-    /// A task pull request: C is the head, so nothing after the completion
-    /// escapes the binding.
-    Head,
-    /// A planning or epic line range: C is the commit that introduced the
-    /// block, found by a first-parent walk from the head that follows a
-    /// merge's second parent when the block came from that side.
-    Introduced,
-}
-
 /// The binding findings of a range: every task record it completes, or
-/// whose active block it changes, bound at the commit `at` chooses.
+/// whose active block or archived review it changes, with provenance read
+/// before applying the shared binding rule.
 /// `default_target` stands in for a task that declares no integration
 /// target when its waivers are judged.
 ///
@@ -682,7 +747,7 @@ pub fn completions_in_range(
     base: &str,
     head: &str,
     default_target: Option<Oid>,
-    at: BindAt,
+    criteria: Criteria,
 ) -> Result<Vec<Finding>, String> {
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -696,6 +761,8 @@ pub fn completions_in_range(
         .map_err(|error| error.message().to_string())?;
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
+    let reopened_in_history =
+        super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after);
     let mut findings = Vec::new();
     for task in after
         .records
@@ -703,25 +770,60 @@ pub fn completions_in_range(
         .filter(|record| record.kind == RecordKind::Task && record.status == "complete")
     {
         let block = active_block(task);
+        let reopened = super::lifecycle::is_recompletion(before.records.get(&task.id), task)
+            || reopened_in_history.contains(&task.id);
         let unchanged = before
             .records
             .get(&task.id)
             .is_some_and(|then| then.status == "complete" && active_block(then) == block);
-        if !unchanged {
-            let landing = match (at, &block) {
-                (BindAt::Introduced, Some(block)) => introduced_at(repo, task, block, head_oid),
-                _ => head_oid,
+        if !unchanged || reopened {
+            // A task range owns all its changes. A planning/line range
+            // carries each completion from its introduction on that line.
+            // Recompletion owns the entire fix range even if its block is
+            // byte-identical to an earlier review.
+            let introduced = block
+                .as_ref()
+                .map_or(head_oid, |block| introduced_at(repo, task, block, head_oid));
+            let source_base = (criteria == Criteria::Amendable)
+                .then(|| source_landing_base(repo, head_oid, introduced))
+                .flatten();
+            let origin = if criteria == Criteria::Amendable && (!reopened || source_base.is_some())
+            {
+                introduced
+            } else {
+                head_oid
             };
             findings.extend(bind_completion(
                 repo,
                 task,
                 &after,
-                Landing::Commit(landing),
+                Landing::Commit(origin),
                 default_target,
+                Transport::TaskLanding,
+                Some(source_base.unwrap_or(anchor)),
             ));
         }
     }
     Ok(findings)
+}
+
+/// The anchored base of the task landing that carried `introduced` onto
+/// the source's first-parent chain. The caller supplies an ordinary line or
+/// an already verified import source; this never qualifies a release import.
+pub(super) fn source_landing_base(repo: &Repository, source: Oid, introduced: Oid) -> Option<Oid> {
+    let mut at = source;
+    while at != introduced {
+        let commit = repo.find_commit(at).ok()?;
+        let first = commit.parent_id(0).ok()?;
+        if !is_ancestor_or_same(repo, introduced, first) {
+            return (commit.parent_count() == 2
+                && is_ancestor_or_same(repo, introduced, commit.parent_id(1).ok()?))
+            .then(|| repo.merge_base(first, introduced).ok())
+            .flatten();
+        }
+        at = first;
+    }
+    None
 }
 
 /// The commit of the range that introduced `task`'s completion with
@@ -739,7 +841,9 @@ pub(super) fn introduced_at(
         blob_at(repo, oid, &task.path)
             .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok())
             .is_some_and(|record| {
-                record.status == "complete" && active_block(&record).as_ref() == Some(block)
+                record.status == "complete"
+                    && active_block(&record).as_ref() == Some(block)
+                    && record.superseded_blocks() == task.superseded_blocks()
             })
     };
     let mut at = head;
@@ -782,8 +886,8 @@ pub enum Criteria {
 /// The findings of a pull request from `base` (the target tip) to `head`:
 /// criteria frozen unless `criteria` is [`Criteria::Amendable`], and every
 /// completion in the range bound. A frozen range is a task pull request and
-/// binds at its head; an amendable one binds each completion where it was
-/// introduced ([`BindAt`]).
+/// owns its changes; an amendable one carries completions from their source
+/// on the line. Both apply the same binding rule.
 ///
 /// # Errors
 ///
@@ -804,7 +908,7 @@ pub fn pull_request_findings(
     };
     let target_tip = oid(base)?;
     let mut found = Vec::new();
-    let at = if criteria == Criteria::Frozen {
+    if criteria == Criteria::Frozen {
         let anchor = repo
             .merge_base(target_tip, oid(head)?)
             .map_err(|error| error.message().to_string())?;
@@ -812,16 +916,13 @@ pub fn pull_request_findings(
         let at_head = Graph::from_revision(&repo, head)?;
         let at_target = Graph::from_revision(&repo, base)?;
         found.extend(frozen_criteria(&at_head, &at_target, &paths));
-        BindAt::Head
-    } else {
-        BindAt::Introduced
-    };
+    }
     found.extend(completions_in_range(
         &repo,
         base,
         head,
         Some(target_tip),
-        at,
+        criteria,
     )?);
     Ok(found)
 }

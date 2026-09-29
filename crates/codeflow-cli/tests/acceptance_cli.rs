@@ -1266,3 +1266,658 @@ fn a_completion_cut_at_the_amendment_merge_binds() {
     assert_passes(&result, "the completion pull request");
     assert!(binding_lines(&result).is_empty(), "{}", result.1);
 }
+
+fn fix_block(reviewed: &str) -> String {
+    block(
+        reviewed,
+        &["AC-1: verified | unit", "AC-2: verified | journey"],
+        "verified | journey",
+        "none: nothing deferred",
+    )
+}
+
+/// A completed task on main, then a fix branch carrying its archived review.
+fn one_pr_fix() -> (tempfile::TempDir, String, String) {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, BRANCH, "pub fn initial() {}\n");
+    let old = fix_block(&reviewed);
+    complete(root, "TSK-001", OWN_JOURNEY, &old);
+    git(root, &["switch", "main"]);
+    git(root, &["merge", "--ff-only", BRANCH]);
+    git(root, &["switch", "-c", "task/TSK-001-fix"]);
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: regression\n",
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &archived),
+    );
+    commit(root, "docs: reopen the task");
+    (dir, old, archived)
+}
+
+#[test]
+fn one_pr_fix_accepts_reopen_fix_and_recompletion() {
+    let (dir, _, archived) = one_pr_fix();
+    let root = dir.path();
+    let start = codeflow()
+        .args(["work", "start", "TSK-001"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        start.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&start.stdout),
+        String::from_utf8_lossy(&start.stderr)
+    );
+    write(root, "src/lib.rs", "pub fn fixed() {}\n");
+    let reviewed = commit(root, "fix: repair the regression");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task(
+            "TSK-001",
+            "todo",
+            OWN_JOURNEY,
+            &format!("{archived}{}", fix_block(&reviewed)),
+        ),
+    );
+    let done = codeflow()
+        .args(["task", "status", "TSK-001", "complete"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        done.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&done.stdout),
+        String::from_utf8_lossy(&done.stderr)
+    );
+    commit(root, "docs: complete the fixed task");
+    assert_passes(
+        &ci(root, "task/TSK-001-fix", "TSK-001"),
+        "one pull request fix",
+    );
+}
+
+#[test]
+fn one_pr_fix_copied_review_is_bound_even_when_unchanged() {
+    let (dir, old, archived) = one_pr_fix();
+    let root = dir.path();
+    write(root, "src/lib.rs", "pub fn unreviewed_fix() {}\n");
+    commit(root, "fix: repair the regression");
+    complete(root, "TSK-001", OWN_JOURNEY, &format!("{archived}{old}"));
+    assert_blocks(
+        &ci(root, "task/TSK-001-fix", "TSK-001"),
+        "copied review",
+        &["work.acceptance_binding", "reviewed commit"],
+    );
+}
+
+#[test]
+fn one_pr_fix_must_preserve_the_anchored_review() {
+    for fault in ["dropped", "edited", "reason", "criteria"] {
+        let (dir, _, archived) = one_pr_fix();
+        let root = dir.path();
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+        let reviewed = commit(root, "fix: repair the regression");
+        let archive = match fault {
+            "dropped" => String::new(),
+            "edited" => archived.replace("verified | unit", "verified | invented"),
+            "reason" => archived.replace("  reason: regression\n", ""),
+            _ => archived,
+        };
+        let criteria = if fault == "criteria" {
+            OWN_JOURNEY.replace("shall work", "may work")
+        } else {
+            OWN_JOURNEY.to_string()
+        };
+        complete(
+            root,
+            "TSK-001",
+            &criteria,
+            &format!("{archive}{}", fix_block(&reviewed)),
+        );
+        let reason = if fault == "criteria" {
+            "criteria"
+        } else {
+            "reopen"
+        };
+        assert_blocks(&ci(root, "task/TSK-001-fix", "TSK-001"), fault, &[reason]);
+    }
+}
+
+fn assert_invalid_fix(fault: &str) {
+    let (dir, old, archived) = one_pr_fix();
+    let root = dir.path();
+    let criteria = if fault.contains("criteria") {
+        OWN_JOURNEY.replace("shall work", "shall work sometimes")
+    } else {
+        OWN_JOURNEY.to_string()
+    };
+    if fault != "records-only-criteria" {
+        write(root, "src/lib.rs", "pub fn fixed() {}\n");
+    }
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &criteria, &archived),
+    );
+    let reviewed = commit(root, "fix: repair the regression");
+    if fault == "later-code" {
+        write(root, "src/lib.rs", "pub fn later() {}\n");
+        commit(root, "fix: change after review");
+    }
+    let archive = match fault {
+        "dropped" => String::new(),
+        "edited" => archived.replace("verified | unit", "verified | invented"),
+        "reason" => archived.replace("  reason: regression\n", ""),
+        _ => archived,
+    };
+    let active = match fault {
+        "copied" => old,
+        "missing" => fix_block(&reviewed).replace("    AC-1: verified | unit\n", ""),
+        "unverified" => fix_block(&reviewed).replace("AC-1: verified", "AC-1: deferred"),
+        "waiver" => {
+            fix_block(&reviewed).replace("verified | unit", &format!("waived | {reviewed}"))
+        }
+        _ => fix_block(&reviewed),
+    };
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &criteria, &format!("{archive}{active}")),
+    );
+    let out = codeflow()
+        .args(["task", "status", "TSK-001", "complete"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let message = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reason = match fault {
+        "copied" => "inside the fix range",
+        "later-code" => "after the reviewed commit",
+        "dropped" | "edited" => "old acceptance block",
+        "reason" => "reason",
+        "missing" | "unverified" => "AC-1",
+        "criteria" | "records-only-criteria" => "anchored criteria",
+        "waiver" => "waiver",
+        _ => unreachable!(),
+    };
+    assert!(
+        !out.status.success() && message.contains(reason),
+        "{fault}: {message}"
+    );
+    complete(root, "TSK-001", &criteria, &format!("{archive}{active}"));
+    assert_blocks(&ci(root, "task/TSK-001-fix", "TSK-001"), fault, &[reason]);
+}
+
+macro_rules! fix_faults {
+    ($($test:ident: $fault:literal),* $(,)?) => {$(
+        #[test]
+        fn $test() { assert_invalid_fix($fault); }
+    )*};
+}
+
+fix_faults! {
+    one_pr_fix_copied_block: "copied",
+    one_pr_fix_code_after_review: "later-code",
+    one_pr_fix_dropped_old_block: "dropped",
+    one_pr_fix_edited_old_block: "edited",
+    one_pr_fix_missing_reason: "reason",
+    one_pr_fix_missing_criterion: "missing",
+    one_pr_fix_unverified_criterion: "unverified",
+    one_pr_fix_changed_criterion: "criteria",
+    one_pr_fix_records_only_criterion: "records-only-criteria",
+    one_pr_fix_waiver_without_amendment: "waiver",
+}
+
+#[test]
+fn one_pr_fix_after_late_completion_cannot_reuse_the_landed_review() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    git(root, &["switch", "-c", "plan/complete", LINE]);
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs: complete the task late");
+    land(root, "plan/complete");
+    git(root, &["switch", "-c", "task/TSK-001-fix", LINE]);
+    let reopen = codeflow()
+        .args([
+            "task",
+            "status",
+            "TSK-001",
+            "todo",
+            "--reason",
+            "regression",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(reopen.status.success());
+    commit(root, "docs: reopen the task");
+    git(root, &["switch", "-c", "fix/implementation"]);
+    write(root, "src/work.rs", "// fixed\n");
+    commit(root, "fix: repair the regression");
+    git(root, &["switch", "task/TSK-001-fix"]);
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the fix",
+            "fix/implementation",
+        ],
+    );
+    let mut record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    record.push_str(&valid_block(&reviewed));
+    write(root, &record_path("TSK-001"), &record);
+    let out = codeflow()
+        .args(["task", "status", "TSK-001", "complete"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "old review accepted after merged fix"
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("inside the fix range"));
+    write(
+        root,
+        &record_path("TSK-001"),
+        &record.replace("status: todo", "status: complete"),
+    );
+    commit(root, "docs: re-complete the task");
+    assert_blocks(
+        &ci_on(root, LINE, "task/TSK-001-fix", "Task: TSK-001"),
+        "late merged fix",
+        &["inside the fix range"],
+    );
+}
+
+#[test]
+fn a_late_completion_carries_an_ancestor_review_past_unrelated_line_work() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", "Reviewed; completion follows landing.\n"),
+    );
+    commit(root, "docs: record the reviewed state");
+    git(root, &["switch", LINE]);
+    write(root, "src/unrelated.rs", "// independent line work\n");
+    commit(root, "feat: add unrelated line work");
+    land(root, "task/TSK-001-work");
+    git(root, &["switch", "-c", "plan/complete", LINE]);
+    write_done(root, "TSK-001", "todo", &reviewed);
+    let out = codeflow()
+        .args(["task", "status", "TSK-001", "complete"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    commit(root, "docs: complete the landed task");
+    assert_passes(&ci_on(root, LINE, "plan/complete", ""), "R C P M D landing");
+}
+
+/// Complete a task after its first reviewed work has landed on its line.
+fn late_completed_line() -> (tempfile::TempDir, String, String) {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    git(root, &["switch", "-c", "plan/complete-first", LINE]);
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs: complete task after landing");
+    land(root, "plan/complete-first");
+    let archived = valid_block(&reviewed).replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: regression\n",
+    );
+    (dir, reviewed, archived)
+}
+
+/// A todo range base can hide the completed record whose review a reopen
+/// must supersede. Every record transition below lands through a merge.
+#[test]
+fn a_fully_merged_recompletion_cannot_reuse_review_across_a_reopen() {
+    let (dir, reviewed, archived) = late_completed_line();
+    let root = dir.path();
+    git(root, &["switch", "-c", "plan/reopen", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", &archived),
+    );
+    commit(root, "docs: reopen task");
+    land(root, "plan/reopen");
+
+    git(root, &["switch", "-c", "fix/implementation", LINE]);
+    write(root, "src/work.rs", "// fixed after review\n");
+    commit(root, "fix: change reviewed work");
+    land(root, "fix/implementation");
+
+    git(root, &["switch", "-c", "plan/recomplete", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task(
+            "TSK-001",
+            "complete",
+            &format!("{archived}{}", valid_block(&reviewed)),
+        ),
+    );
+    commit(root, "docs: reuse the earlier review");
+    land(root, "plan/recomplete");
+
+    // No task declaration selects the epic-line class, whose criteria are
+    // amendable; a declared task selects the frozen tracked-task class.
+    for task_line in ["", "Task: TSK-001"] {
+        assert_blocks(
+            &ci_on(root, "main", LINE, task_line),
+            &format!("fully merged stale review with {task_line:?}"),
+            &["must lie inside the fix range"],
+        );
+    }
+}
+
+/// A separate reopen pull request, then a fix branched after it that lands
+/// by a clean task landing while other work lands on the line, then a late
+/// completion reviewed at the fix: the landing carries that review, as for
+/// any late completion (R-119 keeps a separate reopen pull request valid).
+/// A direct code commit after the landing is still refused. This is
+/// TSK-102's history on EPC-020 (reopen #612, fix #615, completion
+/// `66c995192`).
+#[test]
+fn a_separate_reopen_then_a_landed_fix_binds_a_late_recompletion() {
+    for direct in [false, true] {
+        let (dir, _, archived) = late_completed_line();
+        let root = dir.path();
+        git(root, &["switch", "-c", "plan/reopen", LINE]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task("TSK-001", "todo", &archived),
+        );
+        commit(root, "docs: reopen task");
+        land(root, "plan/reopen");
+
+        git(root, &["switch", "-c", "task/TSK-001-fix", LINE]);
+        write(root, "src/work.rs", "// fixed after the reopen\n");
+        let fixed = commit(root, "fix: repair the reopened work");
+        git(root, &["switch", "-c", "other/change", LINE]);
+        write(root, "src/other.rs", "pub fn other() {}\n");
+        commit(root, "feat: other line work");
+        land(root, "other/change");
+        land(root, "task/TSK-001-fix");
+        if direct {
+            write(root, "src/direct.rs", "pub fn direct() {}\n");
+            commit(root, "feat: straight onto the line");
+        }
+
+        git(root, &["switch", "-c", "plan/recomplete", LINE]);
+        let closeout = format!("{archived}{}", valid_block(&fixed));
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task("TSK-001", "todo", &closeout),
+        );
+        let verb = status_complete(root, "TSK-001");
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task("TSK-001", "complete", &closeout),
+        );
+        commit(root, "docs: complete the fixed task late");
+        let result = ci_on(root, LINE, "plan/recomplete", "");
+        if direct {
+            let needle = "changes src/direct.rs after the landing merge";
+            assert_ne!(verb.0, 0, "the verb after a direct commit: {}", verb.1);
+            assert!(verb.1.contains(needle), "{}", verb.1);
+            assert_blocks(&result, "a direct commit after the fix", &[needle]);
+        } else {
+            assert_passes(&verb, "the verb after a separate reopen");
+            assert_passes(&result, "a late completion after a separate reopen");
+            land(root, "plan/recomplete");
+            assert_passes(
+                &ci_on(root, "main", LINE, ""),
+                "the line carrying the reopen, fix and completion",
+            );
+        }
+    }
+}
+
+/// The twin of the separate reopen: a pull request that reopens the task
+/// itself owns its range (R-119), so a fix merged into it does not carry
+/// its review past other code merged after it.
+#[test]
+fn a_one_pr_reopen_does_not_carry_a_merged_review_past_later_code() {
+    let (dir, _, archived) = late_completed_line();
+    let root = dir.path();
+    git(root, &["switch", "-c", "feat/side", LINE]);
+    write(root, "src/side.rs", "pub fn side() {}\n");
+    commit(root, "feat: side work");
+    git(root, &["switch", "-c", "task/TSK-001-fix", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", &archived),
+    );
+    commit(root, "docs: reopen the task");
+    git(root, &["switch", "-c", "fix/implementation"]);
+    write(root, "src/work.rs", "// fixed in the reopening range\n");
+    let fixed = commit(root, "fix: repair the regression");
+    git(root, &["switch", "task/TSK-001-fix"]);
+    for branch in ["fix/implementation", "feat/side"] {
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                &format!("chore: merge {branch}"),
+                branch,
+            ],
+        );
+    }
+    let closeout = format!("{archived}{}", valid_block(&fixed));
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "complete", &closeout),
+    );
+    commit(root, "docs: re-complete the task");
+    assert_blocks(
+        &ci_on(root, LINE, "task/TSK-001-fix", "Task: TSK-001"),
+        "a merged review carried past later code in a reopening range",
+        &["src/side.rs changed after the reviewed commit"],
+    );
+}
+
+/// TSK-170's history on EPC-020 (pull request 761): a task completed on its
+/// branch, which then takes the line by a merge, is reopened and completed
+/// again reviewed at that merge. The range base holds no completion, and
+/// the review names the range's last change outside the record, so it binds
+/// (AC-2). Naming the first review instead still refuses: the merge came
+/// after it.
+#[test]
+fn a_completion_reopened_inside_its_own_range_binds_at_the_later_merge() {
+    for stale in [false, true] {
+        let dir = line_repo(&["TSK-001"]);
+        let root = dir.path();
+        let first = build(root, "task/TSK-001-work", "src/work.rs");
+        write_done(root, "TSK-001", "complete", &first);
+        commit(root, "docs: complete the task");
+        git(root, &["switch", "-c", "other/change", LINE]);
+        write(root, "src/other.rs", "pub fn other() {}\n");
+        commit(root, "feat: other line work");
+        land(root, "other/change");
+        git(root, &["switch", "task/TSK-001-work"]);
+        git(
+            root,
+            &["merge", "--no-ff", "-m", "chore: take the line", LINE],
+        );
+        let merged = head(root);
+        let archived = valid_block(&first).replace(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: review the line merge\n",
+        );
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task("TSK-001", "todo", &archived),
+        );
+        commit(root, "docs: reopen for the line merge");
+        let reviewed = if stale { &first } else { &merged };
+        write(
+            root,
+            &record_path("TSK-001"),
+            &line_task(
+                "TSK-001",
+                "complete",
+                &format!("{archived}{}", valid_block(reviewed)),
+            ),
+        );
+        commit(root, "docs: complete at the line merge");
+        let result = ci_on(root, LINE, "task/TSK-001-work", "Task: TSK-001");
+        if stale {
+            assert_blocks(
+                &result,
+                "the first review reused after the merge",
+                &["must lie inside the fix range"],
+            );
+        } else {
+            assert_passes(&result, "a review of the line merge");
+        }
+    }
+}
+
+/// The target checkout has no range base to reveal the completion that the
+/// task record reopened before accepting a fresh status transition.
+#[test]
+fn target_checkout_status_cannot_reuse_review_after_a_merged_fix() {
+    let (dir, reviewed, archived) = late_completed_line();
+    let root = dir.path();
+    git(root, &["switch", "-c", "plan/reopen", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", &archived),
+    );
+    commit(root, "docs: reopen task");
+    land(root, "plan/reopen");
+
+    git(root, &["switch", "-c", "fix/implementation", LINE]);
+    write(root, "src/work.rs", "// fixed after review\n");
+    commit(root, "fix: change reviewed work");
+    land(root, "fix/implementation");
+
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task(
+            "TSK-001",
+            "todo",
+            &format!("{archived}{}", valid_block(&reviewed)),
+        ),
+    );
+    let result = status_complete(root, "TSK-001");
+    assert_ne!(result.0, 0, "stale review accepted on target: {}", result.1);
+    assert!(
+        result.1.contains("must lie inside the fix range"),
+        "{}",
+        result.1
+    );
+}
+
+/// A criterion amended by its own planning pull request after the reopen
+/// is the criterion a later completion keeps (R-52), while a completion
+/// that changes it again is still refused.
+#[test]
+fn a_recompletion_keeps_a_criterion_amended_on_the_target() {
+    let (dir, _, archived) = late_completed_line();
+    let root = dir.path();
+    git(root, &["switch", "-c", "plan/reopen", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", &archived),
+    );
+    commit(root, "docs: reopen task");
+    land(root, "plan/reopen");
+
+    let amended = |status: &str, closeout: &str, criterion: &str| {
+        line_task("TSK-001", status, closeout).replace("shall work.", criterion)
+    };
+    git(root, &["switch", "-c", "plan/amend", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended("todo", &archived, "shall work on Linux."),
+    );
+    commit(root, "docs: amend the criterion");
+    assert_passes(&ci_on(root, LINE, "plan/amend", ""), "planning amendment");
+    land(root, "plan/amend");
+
+    git(root, &["switch", "-c", "fix/implementation", LINE]);
+    write(root, "src/work.rs", "// fixed after review\n");
+    commit(root, "fix: change reviewed work");
+    land(root, "fix/implementation");
+
+    git(root, &["switch", "-c", "plan/loosen", LINE]);
+    let fresh = head(root);
+    let closeout = format!("{archived}{}", valid_block(&fresh));
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended("todo", &closeout, "shall mostly work on Linux."),
+    );
+    let loosened = status_complete(root, "TSK-001");
+    assert_ne!(loosened.0, 0, "loosened criterion accepted: {}", loosened.1);
+    assert!(loosened.1.contains("anchored criteria"), "{}", loosened.1);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended("complete", &closeout, "shall mostly work on Linux."),
+    );
+    commit(root, "docs: loosen and complete");
+    assert_blocks(
+        &ci_on(root, LINE, "plan/loosen", ""),
+        "records-only loosening after an amendment",
+        &["anchored criteria"],
+    );
+
+    git(root, &["switch", "-c", "plan/recomplete", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended("todo", &closeout, "shall work on Linux."),
+    );
+    assert_passes(&status_complete(root, "TSK-001"), "amended criterion");
+    commit(root, "docs: re-complete task");
+    assert_passes(
+        &ci_on(root, LINE, "plan/recomplete", ""),
+        "re-completion with the amended criterion",
+    );
+    land(root, "plan/recomplete");
+    assert_passes(
+        &ci_on(root, "main", LINE, ""),
+        "line carrying the amendment and re-completion",
+    );
+}
