@@ -10,7 +10,7 @@ git-client hooks and the Claude git-guard use. That makes the binary the
 way inline shell regex did (CodeFlow ADR-0017).
 
 Every file in this directory is therefore a **thin wrapper**: install the
-`codeflow` binary, then run
+`codeflow` binary the target pins, then run
 
 ```text
 codeflow ci && codeflow test --strict && codeflow validate --docs
@@ -22,16 +22,14 @@ it reads from that platform's CI variables (`codeflow ci` auto-detects them):
 | File | Platform | Range source (verified variables) |
 |---|---|---|
 | `codeflow-ci.yml` | GitHub Actions | `github.event.pull_request.base.sha` / `.head.sha` / `.head.ref`, body via `CODEFLOW_PR_BODY` |
-| `.gitlab-ci.yml` | GitLab CI | `CI_MERGE_REQUEST_DIFF_BASE_SHA`, `CI_COMMIT_SHA`, `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`, body via `CI_MERGE_REQUEST_DESCRIPTION` |
+| `.gitlab-ci.yml` | GitLab CI | target: `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, else `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` fetched from the merge request's project; `CI_COMMIT_SHA`, `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`, body via `CI_MERGE_REQUEST_DESCRIPTION` |
 | `bitbucket-pipelines.yml` | Bitbucket Pipelines | `BITBUCKET_PR_DESTINATION_COMMIT`, `BITBUCKET_COMMIT`, `BITBUCKET_BRANCH` (supply the body via `CODEFLOW_PR_BODY` or `--pr-body-file`) |
-| `ci-generic.sh` | anything (pre-receive hook, Makefile, other CI) | `$1 $2` args, or `BASE`/`HEAD` env, or auto-detect; body via `CODEFLOW_PR_BODY` |
+| `ci-generic.sh` | anything with a working tree and full history (Makefile, other CI) | the target commit as `$1` (required) and the head as `$2` (default `HEAD`), or `BASE`/`HEAD` env; body via `CODEFLOW_PR_BODY` |
 
-On a host `codeflow ci` does not recognize, the range fallback (when no
-explicit base/head is given) is: `CODEFLOW_DEFAULT_BRANCH` (export it to name
-the base branch), then the policy's `git.protected_branches` tried in order
-(`origin/main`, `main`, `origin/master`, `master` by default). When no base
-resolves, the commit checks are skipped with a warning and `codeflow ci` exits
-non-zero — pass `--base`/`--head` explicitly to fix the setup.
+The GitLab, Bitbucket and generic wrappers pass the target and head to
+`codeflow ci` explicitly. `ci-generic.sh` refuses to run without the target
+commit: it never guesses it, because a pin read from the change itself would
+let the change choose the binary that judges it.
 
 ## PR body checks
 
@@ -90,9 +88,30 @@ the `codeflow` release named by `scaffold_version` in the target branch's
 job; nothing unverified is installed. The enforcing jobs run on
 `pull_request_target`, which takes the workflow from the default branch; they
 check out the pull request's base commit, so the target's pin and policy
-apply, and read the pull request head only as git data. The
-GitLab, Bitbucket and generic wrappers still carry a placeholder install step
-that fails red until you wire it.
+apply, and read the pull request head only as git data.
+
+The GitLab, Bitbucket and generic wrappers run one shared script (the text
+between the `codeflow pinned run` markers is the same in all three). It reads
+the pin from the target branch's current commit (on GitLab the merged
+results pipeline's `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, otherwise the target
+branch fetched from the merge request's project, never the diff base
+`CI_MERGE_REQUEST_DIFF_BASE_SHA`; `BITBUCKET_PR_DESTINATION_COMMIT`; or the
+generic script's first argument),
+installs that release with the same checksum verification, and runs
+`codeflow ci` from a checkout of the target, so the target's policy judges
+the head as git data; `codeflow test` and `validate --docs` run on the head
+with the same binary. When the head raises the pin, the head's release is
+installed separately and only tested (`--version`, `validate --docs`). When
+the head lowers it, the target's binary still judges the change and the job
+then fails; a head that kept the pin it branched from lowers nothing. An upgrade takes two pull requests, in order: raise only
+`scaffold_version`, land it, then run `codeflow update`; a head that carries
+new policy keys before the raise lands fails with a message naming that
+order.
+
+On GitLab and Bitbucket the job file runs from the merge or pull request
+itself, as a GitHub `pull_request` workflow does, so a change can edit its
+own install step. The pin does not defend that edit: require review of the
+CI file and `.codeflow/` in the host's rules.
 
 ## Two planes, deliberately
 

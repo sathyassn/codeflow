@@ -12,11 +12,15 @@
 //!   the exec-guard (`hooks/exec_guard.rs`, ADR-0008), which builds the only
 //!   [`CheckContext`].
 //!
+//! - [`actions`]: the action table the permission presets for Claude, Codex
+//!   and Grok are generated from (ADR-0075, TSK-171).
+//!
 //! The unwired v1 modules (`git` command scanning, `path`, `fileops`,
 //! `branch`, `tmp`, `network`) and the `SecurityChecker` orchestrator were
 //! removed (TSK-137, ADR-0008 amendment of 2026-09-27); recover them from git
 //! history if ADR-0008 ever wires one.
 
+pub mod actions;
 pub mod dangerous;
 mod deletion;
 pub mod git;

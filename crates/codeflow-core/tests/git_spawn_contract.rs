@@ -75,6 +75,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "a test re-running its own binary",
     ),
     (
+        "codeflow-core/src/testing/runner/mod.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "a Windows test re-running its own binary as the gate",
+    ),
+    (
         "codeflow-cli/src/cmd/present.rs",
         "executable",
         3,

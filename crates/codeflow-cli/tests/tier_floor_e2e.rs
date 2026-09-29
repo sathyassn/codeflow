@@ -199,6 +199,16 @@ fn init_minimal_installs_the_four_plane_floor_and_not_the_method() {
         exists(&root, ".grok/hooks/codeflow.json"),
         "minimal missing .grok/hooks/codeflow.json"
     );
+    // The command rules and sandbox profiles generated for Codex and Grok
+    // (ADR-0075).
+    assert!(
+        read(&root, ".codex/rules/codeflow.rules").contains("decision = \"forbidden\""),
+        "minimal missing the Codex command rules"
+    );
+    assert!(
+        read(&root, ".grok/sandbox.toml").contains("[profiles.cf-guard-worktree]"),
+        "minimal missing the Grok sandbox profiles"
+    );
     // Plane 4 — the armed policy, at block level.
     let policy = read(&root, ".codeflow/policy.json");
     for rule in [
@@ -814,16 +824,17 @@ fn run_wired(root: &Path, hook: &str, command: &str) -> Output {
 
 #[cfg(unix)]
 #[test]
-fn headless_peer_runs_warn_in_every_harness_wiring_at_every_tier() {
-    // TSK-136 AC-4: a fresh install at every tier ships the guard at `warn`,
-    // and the Claude, Codex and Grok wiring each run it; `block` refuses.
+fn headless_peer_runs_block_in_every_harness_wiring_at_every_tier() {
+    // TSK-136 AC-4 as amended by ADR-0075 D4: a fresh install at every tier
+    // ships the guard at `block`, and the Claude, Codex and Grok wiring each
+    // run it; a project that sets `warn` is advised only.
     for tier in ["--minimal", "--standard", "--full"] {
         let (_tmp, root) = project();
         init(&root, tier);
         let policy: serde_json::Value =
             serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
         assert_eq!(
-            policy["security"]["headless_peer_runs"], "warn",
+            policy["security"]["headless_peer_runs"], "block",
             "{tier}: fresh policy level"
         );
         for wiring in [
@@ -837,7 +848,7 @@ fn headless_peer_runs_warn_in_every_harness_wiring_at_every_tier() {
                 .unwrap_or_else(|| panic!("{tier} {wiring}: exec-guard not wired"));
             let out = run_wired(&root, &hook, "codex exec 'review the diff'");
             let stderr = String::from_utf8_lossy(&out.stderr);
-            assert_eq!(out.status.code(), Some(0), "{tier} {wiring}: {stderr}");
+            assert_eq!(out.status.code(), Some(2), "{tier} {wiring}: {stderr}");
             assert!(
                 stderr.contains("headless peer run"),
                 "{tier} {wiring}: {stderr}"
@@ -847,7 +858,7 @@ fn headless_peer_runs_warn_in_every_harness_wiring_at_every_tier() {
         }
 
         let mut policy = policy;
-        policy["security"]["headless_peer_runs"] = "block".into();
+        policy["security"]["headless_peer_runs"] = "warn".into();
         std::fs::write(
             root.join(".codeflow/policy.json"),
             serde_json::to_string_pretty(&policy).unwrap(),
@@ -863,7 +874,12 @@ fn headless_peer_runs_warn_in_every_harness_wiring_at_every_tier() {
                 .find(|command| command.contains("hook exec-guard"))
                 .unwrap();
             let out = run_wired(&root, &hook, "claude -p 'summarize'");
-            assert_eq!(out.status.code(), Some(2), "{tier} {wiring}: block level");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{tier} {wiring}: warn level");
+            assert!(
+                stderr.contains("headless peer run"),
+                "{tier} {wiring}: {stderr}"
+            );
         }
     }
 }
@@ -923,11 +939,12 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
                     "{tier} {wiring} {help}: {stderr}"
                 );
                 assert!(stderr.is_empty(), "{tier} {wiring} {help}: {stderr}");
+                // A fresh install blocks headless peer runs (ADR-0075 D4).
                 let out = run_wired(&root, &hook, twin);
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 assert_eq!(
                     out.status.code(),
-                    Some(0),
+                    Some(2),
                     "{tier} {wiring} {twin}: {stderr}"
                 );
                 assert!(
