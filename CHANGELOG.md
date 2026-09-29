@@ -1118,6 +1118,16 @@ publication date._
   `codeflow update` to install the script.
 
 <!-- codeflow:release-impact patch -->
+- **The delegated Claude turn rules are read once, before launch.** On a
+  Codex host, the `cf-delegate` lifecycle lane restated the turn adapter's
+  launch sequence, turn detection and sibling Stop-hook preflight, and its
+  copy ran the preflight before delivery, after the session had loaded its
+  hooks. The lane now sends the reader to the adapter before launch, and
+  the adapter states each rule once, with the preflight after `init` and
+  before launch. A contract test fails when the lane states a rule again.
+  `codeflow update` brings both files at the standard and full tiers.
+
+<!-- codeflow:release-impact patch -->
 - **The writing reference carries every reply duty.** The rule map sends an
   agent about to report to `.codeflow/rules/writing.md`, the only reply
   guidance a minimal-tier project installs. It now states each duty of the
