@@ -23,7 +23,8 @@ subcommand when it conflicts with a working interactive session.
 
 CodeFlow's schema-v2 lifecycle proves what a terminal signal alone cannot:
 the session started cleanly, the delivered prompt was accepted as the armed
-turn, and the terminal event belongs to that turn. The sequence, compactly:
+turn, and the terminal event belongs to that turn. This is the one launch
+sequence:
 
 ```sh
 # Read the managed defaults, then any doctor-validated project override.
@@ -35,8 +36,9 @@ tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree \
   "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
 # For consult/no-edit, use the same launch with --permission-mode auto.
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until ready --timeout-seconds 120
-codeflow delegate arm --run-id run-42 --state-dir "$STATE" --turn-id turn-1 --prompt-file "$P"
-tmux load-buffer -b cf-run-42-turn-1 "$P"; tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
+printf '%s' "$PROMPT" > "$RUN_TMP/turn-1.prompt"   # outside the repo
+codeflow delegate arm --run-id run-42 --state-dir "$STATE" --turn-id turn-1 --prompt-file "$RUN_TMP/turn-1.prompt"
+tmux load-buffer -b cf-run-42-turn-1 "$RUN_TMP/turn-1.prompt"; tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
 sleep 0.3  # bounded input-settle; not completion detection
 # Only if the input shows a "[Pasted text" attachment:
 tmux send-keys -l -t cf-run-42 'Carry out the pasted instructions.'; sleep 0.3
@@ -52,35 +54,18 @@ skill names, never `tmux load-buffer`. Lifecycle waits stay the completion
 signal.
 
 - **Turn detection is the lifecycle, not the pane.** `init` creates owner-only
-  state outside every Git worktree and wires `SessionStart`, `UserPromptSubmit`, `Stop`, and
-  `StopFailure` to `codeflow hook delegate-turn --state-dir`. The generated
-  settings file is **immutable** and bound to run id and state-dir spelling;
-  mismatches are rejected. Arming records the SHA-256 of canonical UTF-8 prompt bytes with internal LF line
-  endings, no terminal line break, and no other control characters; `arm` rejects
-  empty or other noncanonical input before durable turn state is created.
-  Normalize once before arming, then
-  deliver that same file exactly
-  (buffer paste, a bounded 300 ms input-settle, the adapter's fixed
-  sentence only when the input shows a paste attachment, then one Enter);
-  acceptance and terminal records bind
-  session and `prompt_id`. Waits are bounded with stable exit states
-  (listed in the adapter). Restarts,
-  mis-correlated events, and interrupted waits after acceptance poison the
-  run; recovery is a new run id in a fresh state directory. Turns are
-  sequential: one outstanding armed turn per run; arm a new id in the same
-  session after each terminal result. On this Codex host lane, use the shipped
-  [turn lifecycle adapter](claude-turn-completion.md) for exact
-  mechanics; never improvise a parser, scrape transcripts, or use pane
-  stability as completion.
-- **Sibling Stop-hook preflight.** Before delivery, enumerate the effective
-  Stop-hook set from every source the session loads (user/project/local
-  settings, enabled plugins, task settings). Reject any sibling Stop hook
-  whose nonblocking behavior you do not deterministically know. The one
-  currently known-safe sibling is the official Codex plugin's
-  `stop-review-gate-hook.mjs`, and only when the operator confirms its
-  effective `stopReviewGate` is off through the plugin's own surface.
-  CodeFlow never reads or infers plugin-private state; an unknown or
-  unverified sibling fails the preflight.
+  state outside every Git worktree and wires `SessionStart`,
+  `UserPromptSubmit`, `Stop`, and `StopFailure` to `codeflow hook
+  delegate-turn --state-dir`; the generated settings file is immutable.
+  Turns are sequential, one outstanding armed turn per run; restarts,
+  mis-correlated events and interrupted waits after acceptance poison the
+  run, and recovery is a new run id in a fresh state directory. On this Codex host
+  lane, use the shipped [turn lifecycle adapter](claude-turn-completion.md)
+  for exact mechanics; never improvise a parser, scrape transcripts, or use
+  pane stability as completion.
+  The adapter holds the correlation contract: exact-byte delivery and
+  acceptance, the sibling Stop-hook preflight to run before delivery, task
+  notices and the stable exit states.
 - **Pane access is diagnosis-only.** Capture only the dedicated task pane,
   and only for bounded diagnosis when a wait times out or a result is
   malformed, to answer an explicit in-turn dialog, or once after a paste to
@@ -97,11 +82,10 @@ signal.
   `autoMode.classifyAllShell` effective at user scope (Claude ignores it at
   project scope, and repeated `--settings` flags are not a supported merge
   contract; the generated task file carries only the lifecycle hooks). On the
-  degraded tmux path, use production `--permission-mode bypassPermissions` (consult: auto) and keep the OS sandbox
+  degraded tmux path, keep the OS sandbox
   enabled with `sandbox.failIfUnavailable: true`, auto-allow sandboxed Bash,
   and permit an auto-classified unsandboxed retry only for a trusted
-  installed tool that requires host state. When `HERDR_ENV=1`, native flags
-  come from `cf-herdr` (production bypass; consult auto). That is not a
+  installed tool that requires host state. That is not a
   write grant and not hook-trust bypass. Never
   `--dangerously-skip-permissions` unless the operator named it, and never
   `--dangerously-bypass-hook-trust`. Consults still edit nothing. See
@@ -129,10 +113,6 @@ signal.
 - **Cleanup:** after harvesting the bounded result and the evidence
   verification needs, kill the task session and remove the state directory
   and private prompt files.
-- **Legacy:** `codeflow hook delegate-turn --result` remains only as
-  byte-compatible compatibility for existing callers until a later major
-  release; the two hook modes are mutually exclusive and never fall back to
-  one another. New work always uses the lifecycle.
 
 ## Evidence on this lane
 

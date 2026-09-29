@@ -13,9 +13,11 @@ created: {{DATE}}
      EPC-NNN|TSK-NNN` allocates this file and links it from the consuming work
      item. Write one only when interfaces, formats, or behavior need pinning
      down before building; many work items need no spec. `approved` requires
-     an empty `open_questions` list and freezes the criteria. `implemented` is
-     derived, never written: every consumer is terminal and at least one is
-     complete. A changed contract is a new spec that lists
+     an empty `open_questions` list. `implemented` is derived, never written:
+     every consumer is terminal and at least one is complete. Before the spec
+     ships, a changed contract is amended in place through reviewed work (the
+     epic's batched amendment), naming each consumer the change binds. Once
+     it ships, it is frozen and a new spec carries the change, listing
      `supersedes: [SPC-old]`; `codeflow spec status SPC-old superseded --by
      SPC-new` records the link. Keep maintained requirements and executable
      schemas current at their declared authority. -->

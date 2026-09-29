@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-28-outcome-first-v1",
+  "cases_version": "2026-09-29-process-round-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -1157,10 +1157,11 @@
         ],
         "signals": [
           "reassignment_detected",
-          "plan_v3_created",
-          "both_approvals_invalidated",
+          "reassignment_recorded",
+          "old_approval_not_carried",
+          "other_lineage_review_of_reassignment",
           "new_cross_lineage_reviewer_required",
-          "reapprove_or_block"
+          "affected_work_waits_for_review_or_blocks"
         ],
         "references": [],
         "must_not": [
@@ -2906,7 +2907,7 @@
           "each_primary_owns_internal_routing",
           "workers_require_verified_native_routing",
           "primary_seats_retain_plan_and_approval",
-          "independent_plans_preserved",
+          "independent_findings_preserved",
           "dual_approval_preserved",
           "task_assignment_by_verified_fit",
           "producer_relative_review_preserved",
@@ -3211,7 +3212,7 @@
         "CF-GOV-001",
         "CF-PM-002"
       ],
-      "prompt": "Plan v1 is dual-approved and implementation has started. Apply the newly discovered dependency and ownership evidence, state whether work may continue under v1, and state how the eventual task closeout must represent the decision.",
+      "prompt": "Plan v1 is dual-approved and implementation has started. Apply the newly discovered dependency and ownership evidence, state whether work may continue under v1, and state how the task's acceptance block and PR body must represent the decision.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
@@ -3222,15 +3223,15 @@
           "old_approvals_invalidated",
           "both_primary_seats_reapprove_or_block",
           "dependent_work_paused",
-          "closeout_cannot_retroactively_approve_change",
-          "task_closeout_names_reapproved_plan"
+          "completion_cannot_retroactively_approve_change",
+          "acceptance_block_or_pr_body_names_reapproved_plan"
         ],
         "references": [],
         "must_not": [
           "silent_node_or_edge_addition",
           "reuse_v1_approvals",
           "treat_shared_owner_change_as_in_node_detail",
-          "closeout_used_as_retroactive_approval"
+          "completion_used_as_retroactive_approval"
         ]
       }
     },
@@ -3277,7 +3278,7 @@
         "CF-GOV-001",
         "CF-PM-002"
       ],
-      "prompt": "Plan v1 is dual-approved. Classify the execution evidence, continue or amend the plan as the contract requires, and state what review-relevant information belongs in eventual task closeout.",
+      "prompt": "Plan v1 is dual-approved. Classify the execution evidence, continue or amend the plan as the contract requires, and state what review-relevant information belongs in the task's acceptance block and PR body.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
@@ -3287,7 +3288,7 @@
           "ledger_evidence_recorded",
           "plan_v1_remains_current",
           "valid_topological_reorder_allowed",
-          "review_relevant_discovery_recorded_at_closeout"
+          "review_relevant_discovery_recorded_in_pr_body"
         ],
         "references": [],
         "must_not": [
@@ -3622,11 +3623,13 @@
         ],
         "signals": [
           "immutable_brief_digest",
-          "claude_complete_plan_before_exchange",
-          "codex_complete_plan_before_exchange",
-          "first_cross_exposure_after_both_plans",
+          "claude_findings_before_exchange",
+          "codex_findings_before_exchange",
+          "first_cross_exposure_after_both_findings",
           "disagreements_preserved",
-          "reconciled_versioned_plan",
+          "claude_drafts_one_plan",
+          "codex_challenges_plan_against_own_findings",
+          "approved_plan_version_named",
           "matching_dual_approval",
           "detailed_tasks_dual_approval"
         ],
@@ -3635,8 +3638,9 @@
           "docs/capabilities.md"
         ],
         "must_not": [
-          "single_plan_then_critique",
-          "codex_critique_only",
+          "plan_drafted_before_findings_exchange",
+          "codex_challenge_without_independent_findings",
+          "second_plan_or_reconciliation_round",
           "approval_version_mismatch",
           "implementation"
         ]
@@ -3664,15 +3668,15 @@
           "supplied_batch_partitioned_by_coherent_outcome_and_dependencies",
           "coherent_clear_multi_task_body_confirmed",
           "routine_integration_shape_selected_without_operator_prompt",
-          "plan_v_next_required_before_target_rewrite",
+          "plan_amended_before_target_rewrite",
           "shared_branch_created_before_allocation_and_declared_by_all_epic_tasks",
           "resource_safe_parallelism_only_for_independent_nodes",
           "topology_drives_task_branch_tips_and_work_start",
           "per_task_producer_verification_and_cross_lineage_review_before_landing",
-          "graph_order_landings_are_serialized",
-          "aggregate_gates_and_both_family_review_on_combined_diff",
+          "reviewed_heads_land_in_dependency_ordered_batch_candidates",
+          "one_full_gate_on_exact_candidate_with_integration_seams_inspected",
           "one_final_human_reviewed_pr_to_protected_target",
-          "different_landing_shape_requires_plan_rationale_and_dual_approval"
+          "different_landing_shape_requires_recorded_rationale_in_approved_plan"
         ],
         "references": [
           "PLAN.md",
@@ -4201,7 +4205,7 @@
           "only_consequential_operator_choice_escalates",
           "independent_duo_settles_exact_plan_version",
           "existing_stable_target_precedes_task_allocation",
-          "plan_branch_records_validate_dual_review_and_merge",
+          "plan_branch_records_validate_other_lineage_review_and_merge",
           "read_only_work_start_precedes_product_edits",
           "producer_cross_lineage_review_and_integrated_judgment",
           "ship_and_proven_cleanup_close_the_loop",
@@ -4220,7 +4224,7 @@
           "ask_operator_for_discoverable_fact",
           "plan_on_task_branch",
           "start_before_anchor",
-          "retrospective_closeout_approval",
+          "retrospective_completion_approval",
           "unchanged_retry_loop",
           "cancelled_called_complete",
           "fabricated_model_review"
@@ -5118,7 +5122,7 @@
         ],
         "signals": [
           "semantic_clause_trace",
-          "independent_plan_dilution_found",
+          "independent_discovery_dilution_found",
           "coverage_dilution_found",
           "security_lens_dilution_found",
           "reject_despite_lower_tokens"

@@ -1,15 +1,11 @@
 ## Responsible authority and data
 
-Apply authority to effects, not tool verbs. Before an action with material
-effects, bind its legitimate purpose, action, resource, necessary data,
-destination/recipient, timing when relevant, and side effects. Possessing
-access, credentials, urgency, or peer agreement grants nothing. Reading or
-drafting does not authorize sending, publishing, committing, purchasing,
-changing settings, or another consequential effect; a changed scope,
-recipient, data class, or side effect needs fresh explicit authority. Continue
-the authorized instance/count of unchanged safe steps without re-asking; an
-identical tuple is not a standing grant. Documented idempotent recovery within
-that authorized action remains allowed.
+Apply authority to effects, not tool verbs. The binding of purpose, action,
+resource, data, recipient and effects before a material effect, and the rule
+that access, credentials, urgency or agreement grant nothing, are stated once
+in the workflow discipline rules (acting within legitimate intent and bounded
+authority). Documented idempotent recovery within an authorized action remains
+allowed.
 
 Use personal or confidential data only when necessary and authorized. Minimize
 it before any prompt or tool call and prefer synthetic or redacted fixtures.

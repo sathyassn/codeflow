@@ -16,8 +16,9 @@ records the required interactive seat unavailable and the reduced assurance.
    planning, never a bypass. When a work item is planned, started, blocked,
    completed or cancelled, follow
    [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle).
-2. Consult `docs/capabilities.md` and `docs/architecture.md` before touching
-   code; name the bounded impact set (quality contract). For a material
+2. Reuse the current evidence set; consult `docs/capabilities.md` and
+   `docs/architecture.md` for what it lacks, then name the bounded impact
+   set (quality contract). For a material
    product, UX, interaction, or visual-design change, require the plan's
    settled `DESIGN_INTENT`; if it is absent, apply `cf-design` before
    implementation. A valid `N/A` or `conform` record does not add ceremony.
@@ -47,10 +48,11 @@ records the required interactive seat unavailable and the reduced assurance.
       not a merge; `--force-with-lease` after a rewrite).
       At every multi-task node transition, verify predecessor/decision evidence
       against the approved graph. Stop for Plan vN+1 on a material graph
-      mutation; do not replan ordinary work inside the approved node. Persist
-      that in-node classification and its supporting evidence in the execution
-      ledger before continuing.
-   b. **Review**: get an *independent* review against the criteria — in Claude
+      mutation; do not replan ordinary work inside the approved node. Log
+      only a material dependency or decision change in the task.
+   b. **Review**: first merge the current integration line into the task
+      branch and resolve conflicts there. Then get an *independent* review
+      against the criteria: in Claude
       Code, spawn the `cf-reviewer` subagent; in another harness, run a separate
       read-only review pass (self-review is not review). Claude Code unattended/
       batch runs use `.claude/workflows/pipeline.workflow.js` for the same
@@ -61,14 +63,17 @@ records the required interactive seat unavailable and the reduced assurance.
       review.
    c. On `changes_requested`, act on the round's findings as
       `cf-model-orchestrator/resources/quality/findings.md` sets out: one
-      batch, one apply-and-verify cycle, confirmed by each finder. Maximum 2
-      evidence-moving cycles for code; docs and records follow that section's
-      bound. At the bound, take a strategic route that keeps the approved
-      outcome or surface the external dependency or operator-owned decision.
-   d. **Verify**: `codeflow test` and `codeflow validate --docs` green. Apply
-      the orchestrator's verification-selection resource: run any property,
-      mutation, or architecture fitness check earned by the plan's trigger
-      evidence, and report `none selected` rather than inventing ceremony.
+      batch, fixed in this PR, each material fix confirmed by its finder. No
+      cycle count decides: continue while repairs produce relevant evidence;
+      diagnose a stalled mechanism, an invalid assumption or a materially
+      changed scope (split, redesign, or surface the operator-owned
+      decision).
+   d. **Verify**: targeted tests (for example `cargo test -p <crate>`),
+      `codeflow test --mode quick` (the pre-push run counts for the same
+      tree) and `codeflow validate --docs`, each cited with revision and
+      command. The full gate runs once on the landing candidate. Run a
+      property, mutation or fitness check only where verification-selection
+      earns it.
 6. Report completion: first the result for its consumer and what still
    depends on other work, then the evidence (test output, review verdict,
    file:line for each criterion). Write the report plainly: simple,

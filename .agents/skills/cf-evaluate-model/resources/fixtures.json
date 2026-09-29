@@ -519,7 +519,7 @@
         "candidate/orchestrator.md": "Both models inspect the brief. Claude supplies options and a recommendation; Codex supplies the implementation challenge. The host settles one plan.\n",
         "candidate/quality.md": "Use the repository configured coverage gate; where none exists, use an 80 percent adoption floor.\n",
         "candidate/security.md": "Run a security review. If the attacker seat is missing, record an informational note and continue.\n",
-        "ORIGINAL_INTENT.md": "Both models independently research, analyze risks, and draft complete plans before cross-exposure. Coverage has a hard 80 percent floor. Security unions Claude defender and Codex attacker lenses.\n"
+        "ORIGINAL_INTENT.md": "Both models independently research, analyze risks, and return their findings before cross-exposure; Claude then drafts the one plan and Codex challenges it against its own findings. Coverage has a hard 80 percent floor. Security unions Claude defender and Codex attacker lenses.\n"
       }
     },
     {

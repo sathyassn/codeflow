@@ -1,7 +1,7 @@
 ## Review findings and repair
 
 Read this section when a change fixes a defect, when a review is briefed, and
-when review findings are written or acted on. Its review rounds are the
+when review findings are written or acted on. Its review rules are the
 working method for every route.
 
 ### Repair
@@ -52,36 +52,36 @@ contract.
 
 ### Review rounds
 
-A review round runs every assigned reviewer in parallel on one revision. The
-builder collects the round's findings into one dependency-ordered batch with
-provenance preserved, deduplicates them by mechanism, evaluates each proposed
-remedy against the diagnosed mechanism and the impact set, and records accept,
-modify or reject with the reason. Rejecting a remedy never closes the finding
-or waives a gate; a disputed finding returns with evidence to the reviewer who
-raised it. Conflicting remedies are investigated against the mechanism, the
-impact evidence and the accepted contract. One consolidated decision goes to
-the operator in the departure form under
+Review is one holistic pass per revision: every assigned reviewer reviews the
+whole change in parallel on that revision, with no minimum or maximum number
+of passes. The builder collects the findings into one dependency-ordered batch
+with provenance preserved, deduplicates them by mechanism, evaluates each
+proposed remedy against the diagnosed mechanism and the impact set, and
+records accept, modify or reject with the reason. Rejecting a remedy never
+closes the finding or waives a gate; a disputed finding returns with evidence
+to the reviewer who raised it. Conflicting remedies are investigated against
+the mechanism, the impact evidence and the accepted contract. One consolidated
+decision goes to the operator in the departure form under
 [blocker navigation](blockers-and-gates.md) only when resolution needs
-operator-owned intent, authority or risk acceptance.
+operator-owned intent, authority or risk acceptance. Material findings are
+fixed in the open task's PR; nits are recorded with a disposition and never
+start another pass.
 
 Apply the accepted batch as one apply-and-verify cycle (stacked dependents from
-Change impact stay separate) and re-verify the impact set. Each reviewer whose
-blocker or major finding was fixed confirms that finding on the affected scope,
-widened when the impact or the prior evidence is uncertain. A fix for a minor
-finding or a nit needs no confirmation round. A round that introduces an
-attributable regression is a failed round. The required gates and the
-[completion gate](completion.md) are unchanged.
+Change impact stay separate) and re-verify the impact set. The finder confirms
+each material fix on the affected scope, widened when the impact or the prior
+evidence is uncertain. A small fix whose finding came with a failing probe is
+confirmed by rerunning that probe and the affected tests, with no new model
+turn; a judgment-dependent or widened fix goes back to the finder. Nits need
+no confirmation. A cycle that introduces an attributable regression is a
+failed cycle. The required gates and the [completion](completion.md) section
+are unchanged.
 
-Rounds are bounded by change class. One cycle is repair plus its affected
-verification and review.
-
-- Code, configuration and other executable changes: post-review repair is
-  bounded to two evidence-moving cycles, and the count carries across route
-  changes.
-- Docs and records: two review rounds per submitted version; the count resets
-  once when an edit changes the duties or claims the text states.
-
-A repeated attempt without a new hypothesis or changed evidence is not another
-round. At the bound, diagnose the persistent constraint and take an
-approved-outcome-preserving strategic route or surface the genuine external or
-owner block, never a third tactical repair.
+Review ends on evidence: every criterion not marked deferred has evidence on
+the reviewed revision, the needed checks are green, no material finding is
+open and every nit has a disposition. Continue while repairs produce relevant
+evidence; diagnose a stalled mechanism, an invalid assumption or a materially
+changed scope, then split, redesign or take the intent question to the
+operator. That decision is never made by a round counter and never by
+automatic acceptance. A repeated attempt without a new hypothesis or changed
+evidence is not progress.

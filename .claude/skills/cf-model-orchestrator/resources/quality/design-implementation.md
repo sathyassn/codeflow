@@ -1,12 +1,10 @@
 ## Design and implementation quality
 
-Approve the smallest coherent solution that fully satisfies the accepted
-behavior, not the fewest lines. Every material abstraction, public interface,
-configuration surface, dependency, compatibility path, and operational concept
-must map to a current requirement, observed constraint, or evidenced risk; if it
-does not, remove or simplify it. Reject speculative generality, duplicate or
-dead paths, cleverness that obscures control flow, and architecture that fights
-the repository's established patterns.
+The smallest coherent solution, complexity mapped to a current requirement,
+constraint or evidenced risk, and calibration to the operating context are
+stated once in the workflow discipline rules, "Write only what earns its
+keep". Reject cleverness that obscures control flow and architecture that
+fights the repository's established patterns.
 
 Before selecting a fix or a design, name the bounded impact set (callers,
 consumers, inputs, effects, same-mechanism siblings, data, configuration,
@@ -35,14 +33,6 @@ explicitly. Reuse established schemas and parsers. Do not add wrapper layers,
 duplicate domain models, validation everywhere, dependencies, stricter-compiler
 or language migrations merely to satisfy this rule. Trusted internal values do
 not need redundant runtime validation when their invariant is evidenced.
-
-Calibrate structure to the accepted operating context: expected lifetime,
-scale, rate and shape of change, contributor and integration breadth,
-operational or security risk, and cost of reversal. No factor, especially size
-alone, proves an abstraction. If missing context would materially change the
-settled design, clarify it before approval; if clarification is unavailable,
-state the assumption and prefer established safe practices with reversible
-boundaries, without speculative generality.
 
 Both seats grade design proportionality before approval. Each actual executor
 first-verifies its implementation for necessity, clarity, idiomatic structure,
