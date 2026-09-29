@@ -586,7 +586,9 @@ function renderPage(page, bindings, routesById, previews, referencedMedia, ancho
   const withFigures = insertPanelFigures(sourceMarkdown, panelBlocks, page.source_path);
   const lookupBody = page.page_class === PAGE_CLASSES.derivedLookup.id && Object.hasOwn(LOOKUP_COLUMNS, page.derive) ? wrapLookupTables(withFigures, page.derive, page.source_path) : withFigures;
   const safeBody = decorateAltitude(page.source_path === CAPABILITY_REGISTRY ? renderCapabilityRegistry(lookupBody, page.source_path) : lookupBody);
-  return `${pageFrontmatter(page)}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}">\n\n${safeBody}${recordContextFor(page, routesById)}\n\n</div>\n`;
+  // The search root carries the page class, as an as-is page's source
+  // region does, so the built page names its class.
+  return `${pageFrontmatter(page)}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}" data-cf-page-class="${page.page_class}">\n\n${safeBody}${recordContextFor(page, routesById)}\n\n</div>\n`;
 }
 
 function renderStaleStub(page) {

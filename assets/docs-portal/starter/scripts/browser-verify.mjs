@@ -959,7 +959,7 @@ export function observePortalPage(page) {
     const headersOf = (table) => [...table.querySelectorAll("thead th")].map((cell) => cell.textContent.trim());
     const folderTable = tables.find((table) => headersOf(table).join("\u0000") === columns.join("\u0000")) ?? null;
     return {
-      pageClassMarker: document.querySelector(".portal-source")?.getAttribute("data-cf-page-class") ?? null,
+      pageClassMarker: document.querySelector("[data-cf-page-class]")?.getAttribute("data-cf-page-class") ?? null,
       headings: [...document.querySelectorAll("h1")].filter(shown).length,
       provenance: [...document.querySelectorAll(".portal-provenance")].some(shown),
       displayControls: [...document.querySelectorAll('[data-testid="portal-display-btn"]')].filter(shown).length,
