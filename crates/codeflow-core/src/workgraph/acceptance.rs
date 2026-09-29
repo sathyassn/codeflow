@@ -184,7 +184,20 @@ pub fn bind_completion(
                     .contains(&task.id));
             reopened.then_some((anchor, old))
         })
-        .or_else(|| previous_completion(repo, task, &block, landing));
+        .or_else(|| {
+            // The recovered completion supplies the archive and the old
+            // review boundary. Its criteria may predate a planning pull
+            // request that amended them on the target after the reopen
+            // (R-52), so the criteria are the anchored record's.
+            let (at, mut old) = previous_completion(repo, task, &block, landing)?;
+            if let Some(anchored) = anchor.and_then(|anchor| {
+                let content = blob_at(repo, anchor, &task.path)?;
+                RecordView::parse(RecordKind::Task, &task.path, &content).ok()
+            }) {
+                old.criteria = anchored.criteria;
+            }
+            Some((at, old))
+        });
     let mut findings = Vec::new();
     if let Some((_, old)) = &reopen {
         findings.extend(

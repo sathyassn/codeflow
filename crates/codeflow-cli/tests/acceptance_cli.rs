@@ -1674,3 +1674,79 @@ fn target_checkout_status_cannot_reuse_review_after_a_merged_fix() {
         result.1
     );
 }
+
+/// A criterion amended by its own planning pull request after the reopen
+/// is the criterion a later completion keeps (R-52), while a completion
+/// that changes it again is still refused.
+#[test]
+fn a_recompletion_keeps_a_criterion_amended_on_the_target() {
+    let (dir, _, archived) = late_completed_line();
+    let root = dir.path();
+    git(root, &["switch", "-c", "plan/reopen", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", &archived),
+    );
+    commit(root, "docs: reopen task");
+    land(root, "plan/reopen");
+
+    let amended = |status: &str, closeout: &str, criterion: &str| {
+        line_task("TSK-001", status, closeout).replace("shall work.", criterion)
+    };
+    git(root, &["switch", "-c", "plan/amend", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended("todo", &archived, "shall work on Linux."),
+    );
+    commit(root, "docs: amend the criterion");
+    assert_passes(&ci_on(root, LINE, "plan/amend", ""), "planning amendment");
+    land(root, "plan/amend");
+
+    git(root, &["switch", "-c", "fix/implementation", LINE]);
+    write(root, "src/work.rs", "// fixed after review\n");
+    commit(root, "fix: change reviewed work");
+    land(root, "fix/implementation");
+
+    git(root, &["switch", "-c", "plan/loosen", LINE]);
+    let fresh = head(root);
+    let closeout = format!("{archived}{}", valid_block(&fresh));
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended("todo", &closeout, "shall mostly work on Linux."),
+    );
+    let loosened = status_complete(root, "TSK-001");
+    assert_ne!(loosened.0, 0, "loosened criterion accepted: {}", loosened.1);
+    assert!(loosened.1.contains("anchored criteria"), "{}", loosened.1);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended("complete", &closeout, "shall mostly work on Linux."),
+    );
+    commit(root, "docs: loosen and complete");
+    assert_blocks(
+        &ci_on(root, LINE, "plan/loosen", ""),
+        "records-only loosening after an amendment",
+        &["anchored criteria"],
+    );
+
+    git(root, &["switch", "-c", "plan/recomplete", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended("todo", &closeout, "shall work on Linux."),
+    );
+    assert_passes(&status_complete(root, "TSK-001"), "amended criterion");
+    commit(root, "docs: re-complete task");
+    assert_passes(
+        &ci_on(root, LINE, "plan/recomplete", ""),
+        "re-completion with the amended criterion",
+    );
+    land(root, "plan/recomplete");
+    assert_passes(
+        &ci_on(root, "main", LINE, ""),
+        "line carrying the amendment and re-completion",
+    );
+}
