@@ -22,6 +22,7 @@ impl Project {
             .current_dir(&self.root)
             .env("PATH", path)
             .env("CODEFLOW_HOME", &self.home)
+            .env("HOME", &self.home)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_AUTHOR_NAME", "Test")
@@ -182,6 +183,15 @@ fn success(output: &Output) {
 #[test]
 fn installed_minimal_hooks_refuse_each_family_and_allow_real_ordinary_work() {
     let project = Project::new();
+    assert_eq!(
+        project
+            .command("codeflow")
+            .get_envs()
+            .find(|(key, _)| *key == "HOME")
+            .unwrap()
+            .1,
+        Some(project.home.as_os_str())
+    );
     shell_refusal_pairs(&project);
     ordinary_and_discard_journey(&project);
 }
@@ -194,6 +204,21 @@ fn shell_refusal_pairs(project: &Project) {
             ("xargs gh gist create notes.txt", "security.outward_actions"),
             ("gh -R o/r release create v1", "security.outward_actions"),
             ("git push origin v1.2.3", "security.outward_actions"),
+            (
+                "git tag v9 && git push origin v9",
+                "security.outward_actions",
+            ),
+            ("echo 'cargo publish' | sh", "security.outward_actions"),
+            (
+                "git -c push.followTags=true push origin task/x",
+                "security.outward_actions",
+            ),
+            (
+                "perl -le 'system(\"cargo publish\")'",
+                "security.outward_actions",
+            ),
+            ("crontab", "security.outward_actions"),
+            ("cat $HOME/.codex/auth.json", "security.secret_reads"),
             (
                 "git push origin HEAD:refs/tags/v2",
                 "security.outward_actions",
@@ -336,7 +361,10 @@ fn installed_documented_edit_hook_payloads_protect_paths() {
             include_str!("../../codeflow-core/tests/fixtures/edit-hooks/grok-search-replace.json"),
         ),
     ] {
-        let protected = data.replace("/fixture/project", project.root.to_str().unwrap());
+        let protected = data
+            .replace("/fixture/project", project.root.to_str().unwrap())
+            .replace("hello.txt", ".codex/config.toml")
+            .replace("notes.txt", ".codeflow/policy.json");
         let payload = serde_json::from_str(&protected).unwrap();
         let denied = project.replay_payload(harness, tool, &payload);
         assert!(

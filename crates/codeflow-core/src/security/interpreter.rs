@@ -87,6 +87,11 @@ pub(crate) fn evaluate(
 }
 
 fn secret_path(word: &str, home: Option<&Path>) -> bool {
+    let expanded_word = word
+        .strip_prefix("$HOME/")
+        .or_else(|| word.strip_prefix("${HOME}/"))
+        .map(|suffix| format!("~/{suffix}"));
+    let word = expanded_word.as_deref().unwrap_or(word);
     actions::table().sandbox_read_denies.iter().any(|pattern| {
         let expanded = pattern
             .strip_prefix("~/")
@@ -131,6 +136,25 @@ mod tests {
             Some(Path::new("/fixture-home")),
         )
     }
+
+    #[test]
+    fn f15_home_variable_secret_spellings() {
+        for command in [
+            r"cat $HOME/.codex/auth.json",
+            r"cat ${HOME}/.codex/auth.json",
+            r#"python3 -c 'open("$HOME/.codex/auth.json")'"#,
+            r#"python3 -c 'open("${HOME}/.codex/auth.json")'"#,
+        ] {
+            assert!(
+                check(command, &SecuritySection::default())
+                    .iter()
+                    .any(|v| v.rule == "security.secret_reads"),
+                "{command}"
+            );
+        }
+        assert!(check("cat $HOME/notes.md", &SecuritySection::default()).is_empty());
+    }
+
     #[test]
     fn interpreter_headless_paths_and_secret_pairs() {
         for command in [

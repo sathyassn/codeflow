@@ -6,7 +6,7 @@ date: 2026-09-28
 status: proposed          # proposed | accepted | superseded
 supersedes: [ADR-0066]
 superseded_by: null       # ADR id, set on supersession
-architecture_impact: "the permission presets for Claude, Codex and Grok become deny-only and generated from one action table; guard hooks fail closed, take their policy from an operator-approved enforcement baseline outside the repository that an operator-written binding ties to each repository, and show at a guard-readiness preflight that they ran before a seat is briefed; one argument-bound sandbox exit remains for the primary session, plus a named Herdr list; every step that needs the operator goes on one operator-actions list. Updated in the PR that accepts this record (TSK-175)"
+architecture_impact: "The 2026-09-29 amendment defines the shipped action-table refusals, native edit guards and seat postures; TSK-189 owns policy authority and fail-closed hooks"
 ---
 
 # ADR-0075: Agent sessions refuse instead of prompting, under a guarded floor

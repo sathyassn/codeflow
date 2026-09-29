@@ -135,7 +135,7 @@ fn clean_paths(
     paths: &[String],
     directories: bool,
 ) -> Result<Option<String>, String> {
-    let candidates = untracked_paths(repo)?;
+    let candidates = untracked_paths(repo, directories || !paths.is_empty())?;
     let specs: Vec<String> = if paths.is_empty() {
         vec![portable(prefix)?]
     } else {
@@ -146,14 +146,9 @@ fn clean_paths(
     };
     for path in candidates {
         if specs.iter().any(|spec| under(&path, spec)) {
-            let base = portable(prefix)?;
-            let within = if base.is_empty() {
-                path.as_str()
-            } else {
-                path.strip_prefix(&(base + "/")).unwrap_or(&path)
-            };
-            // Without -d or an explicit pathspec, clean skips directories.
-            if directories || !paths.is_empty() || !within.contains('/') {
+            // libgit2 collapses only wholly untracked directories when not
+            // recursing. Files below tracked directories remain candidates.
+            if !path.ends_with('/') {
                 return Ok(Some(format!(
                     "clean would discard untracked non-ignored work: {path}"
                 )));
@@ -248,11 +243,11 @@ fn status_paths(repo: &Repository, untracked: bool) -> Result<Vec<String>, Strin
         .map(|e| e.path().map(str::to_owned).map_err(|e| e.to_string()))
         .collect()
 }
-fn untracked_paths(repo: &Repository) -> Result<Vec<String>, String> {
+fn untracked_paths(repo: &Repository, recurse: bool) -> Result<Vec<String>, String> {
     let mut options = StatusOptions::new();
     options
         .include_untracked(true)
-        .recurse_untracked_dirs(true)
+        .recurse_untracked_dirs(recurse)
         .include_ignored(false);
     repo.statuses(Some(&mut options))
         .map_err(|e| e.to_string())?
@@ -344,6 +339,21 @@ mod tests {
         .unwrap()
         .is_none());
     }
+
+    #[test]
+    fn f4_clean_files_in_tracked_directories() {
+        let (dir, _repo) = fixture();
+        let intent = Intent::CleanNonIgnored {
+            paths: vec![],
+            directories: false,
+        };
+        std::fs::create_dir(dir.path().join("untracked")).unwrap();
+        std::fs::write(dir.path().join("untracked/notes"), "keep").unwrap();
+        assert!(inspect(dir.path(), None, &intent).unwrap().is_none());
+        std::fs::write(dir.path().join("src/notes"), "keep").unwrap();
+        assert!(inspect(dir.path(), None, &intent).unwrap().is_some());
+    }
+
     #[test]
     fn clean_ignored_and_nonignored_pair() {
         let (dir, _repo) = fixture();

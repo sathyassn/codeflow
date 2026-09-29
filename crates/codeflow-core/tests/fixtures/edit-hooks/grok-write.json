@@ -1,23 +1,30 @@
 {
-  "_fixture": {
-    "provenance": "constructed from documented schema, not a native capture",
-    "source": "https://github.com/xai-org/grok-build/blob/f0e3be1100ef5252488e3be8bb0e91cf68d8c305/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md#input",
-    "tool_schema": "https://github.com/xai-org/grok-build/blob/f0e3be1100ef5252488e3be8bb0e91cf68d8c305/crates/codegen/xai-grok-tools/src/implementations/opencode/write/mod.rs",
-    "checked": "2026-09-29"
-  },
   "hookEventName": "pre_tool_use",
-  "hook_event_name": "PreToolUse",
   "sessionId": "fixture-session",
   "cwd": "/fixture/project",
-  "workspaceRoot": "/fixture/project",
-  "permissionMode": "default",
-  "promptId": "fixture-turn",
-  "toolUseId": "fixture-call",
-  "toolInputTruncated": false,
+  "workspaceRoot": "/fixture/project/",
+  "timestamp": "2026-09-29T23:09:23.893251+00:00",
+  "transcriptPath": "/fixture/home/.grok/sessions/fixture-session/updates.jsonl",
+  "permissionMode": "bypassPermissions",
   "toolName": "write",
+  "toolUseId": "fixture-call",
   "toolInput": {
-    "file_path": "/fixture/project/.codex/config.toml",
-    "content": "fixture"
+    "file_path": "/fixture/project/hello.txt",
+    "content": "hello from grok\n"
   },
-  "timestamp": "2026-09-29T00:00:00Z"
+  "toolInputTruncated": false,
+  "hook_event_name": "PreToolUse",
+  "session_id": "fixture-session",
+  "transcript_path": "/fixture/home/.grok/sessions/fixture-session/updates.jsonl",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "write",
+  "tool_input": {
+    "file_path": "/fixture/project/hello.txt",
+    "content": "hello from grok\n"
+  },
+  "tool_use_id": "fixture-call",
+  "_fixture": {
+    "provenance": "native capture, grok 1.0.44",
+    "checked": "2026-09-29"
+  }
 }

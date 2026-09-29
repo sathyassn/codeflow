@@ -2248,7 +2248,7 @@ fn unclassifiable_violation(
 /// Git's builtin commands (`git --list-cmds=builtins`, Git 2.53). Git runs a
 /// builtin even when an alias of the same name exists, so only another name
 /// is looked up as an alias.
-const GIT_BUILTINS: &[&str] = &[
+pub(crate) const GIT_BUILTINS: &[&str] = &[
     "add",
     "am",
     "annotate",
@@ -7360,10 +7360,16 @@ fn discard_intent(
     }
     let no_vars = HashMap::new();
     let vars = moved.vars.unwrap_or(&no_vars);
+    let mut operands_only = false;
     let rest: Vec<String> = rest
         .iter()
         .map(|s| {
-            if has_substitution(s) {
+            if s == "--" || s == END_OF_OPTIONS {
+                operands_only = true;
+            }
+            if operands_only && matches!(sub, "branch" | "switch") {
+                Ok(s.clone())
+            } else if has_substitution(s) {
                 Err("a generated argument can change what would be discarded".into())
             } else {
                 expand_word(s, vars)
@@ -7385,6 +7391,12 @@ fn discard_intent(
     match sub {
         "reset" => Ok(parsed.has_long("--hard").then_some(Intent::HardReset)),
         "restore" | "checkout" | "switch" => {
+            if sub == "restore"
+                && (parsed.has_long("--staged") || parsed.has_short(&['S']))
+                && !(parsed.has_long("--worktree") || parsed.has_short(&['W']))
+            {
+                return Ok(None);
+            }
             if parsed.has_long("--pathspec-from-file")
                 || parsed.has_short(&['p'])
                 || parsed.has_long("--patch")
@@ -7443,6 +7455,16 @@ fn discard_intent(
             let force = parsed.has_short(&['D'])
                 || ((parsed.has_short(&['d']) || parsed.has_long("--delete"))
                     && (parsed.has_short(&['f']) || parsed.has_long("--force")));
+            if force
+                && parsed
+                    .operands
+                    .iter()
+                    .any(|s| has_substitution(s) || s.contains('$'))
+            {
+                return Err(
+                    "cannot resolve the branch whose unique work would be discarded".into(),
+                );
+            }
             Ok(force.then(|| Intent::ForceDeleteBranches(paths())))
         }
         "worktree" => {
@@ -7838,6 +7860,31 @@ mod discard_integration_tests {
         ctx.alias_lookup = Some(&alias);
         discard_only(command, &ctx)
     }
+
+    #[test]
+    fn f12_branch_operands_after_separator_are_not_options() {
+        let (temp, _repo) = fixture();
+        for command in [r#"git branch -d -- "$name""#, r#"git switch -- "$BRANCH""#] {
+            assert!(actual(temp.path(), command).is_empty(), "{command}");
+        }
+        for command in [
+            r#"git branch -d "$name""#,
+            r#"git switch "$BRANCH""#,
+            r#"git branch -D -- "$name""#,
+        ] {
+            assert!(!actual(temp.path(), command).is_empty(), "{command}");
+        }
+    }
+
+    #[test]
+    fn f13_unstage_keeps_worktree_changes() {
+        let (temp, _repo) = fixture();
+        std::fs::write(temp.path().join("src/a"), "dirty").unwrap();
+        assert!(actual(temp.path(), "git restore --staged .").is_empty());
+        assert!(actual(temp.path(), "git restore -S .").is_empty());
+        assert!(!actual(temp.path(), "git restore --staged --worktree .").is_empty());
+    }
+
     #[test]
     fn real_dirty_clean_file_restore_and_alias_pairs() {
         let (temp, repo) = fixture();

@@ -1,5 +1,5 @@
 //! Enforcement-path protection for native file-edit tools.
-//! Documented-schema fixtures and synthetic edge cases await native capture qualification.
+//! Native Grok captures, a documented Codex schema, and synthetic path edge cases.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -40,7 +40,7 @@ pub struct EditContext<'a> {
 }
 
 /// Parse explicitly supported hook forms. Unknown tools are outside this hook.
-/// The accepted edit forms remain provisional until native captures qualify them.
+/// Grok edit forms have native captures; Codex still awaits native qualification.
 ///
 /// # Errors
 /// Returns an error for malformed or ambiguous supported edit payloads.
@@ -49,6 +49,13 @@ pub fn parse_payload(input: &str) -> Result<Option<EditRequest>, EditError> {
     let object = value
         .as_object()
         .ok_or_else(|| EditError("expected hook object".into()))?;
+    for field in ["toolInputTruncated", "tool_input_truncated"] {
+        if object.get(field) == Some(&Value::Bool(true)) {
+            return Err(EditError(format!(
+                "{field} is true; cannot inspect a truncated edit input"
+            )));
+        }
+    }
     let tool = alias(object, &["tool_name", "toolName"])?
         .and_then(Value::as_str)
         .ok_or_else(|| EditError("tool_name must be a string".into()))?;
@@ -263,6 +270,7 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
 
 fn enforcement_patterns(ctx: &EditContext<'_>) -> Result<Vec<String>, EditError> {
     let mut result = BTreeSet::new();
+    let mut reduced = BTreeSet::new();
     for rule in &actions::table().claude_edit_denies {
         let pattern = rule
             .strip_prefix("Edit(")
@@ -289,21 +297,42 @@ fn enforcement_patterns(ctx: &EditContext<'_>) -> Result<Vec<String>, EditError>
             {
                 continue;
             }
-            let base = normalized(base, resolve)?;
             // Patterns name literal enforcement directories followed by globs.
             // Resolve their literal prefix as well, so a protected directory or
             // file which is a symlink cannot be edited through its other spelling.
-            result.insert(resolved_pattern(&base, relative, resolve)?);
+            match resolved_pattern(base, relative, resolve) {
+                Ok(pattern) => {
+                    result.insert(pattern);
+                }
+                Err(error) if resolve => {
+                    reduced.insert(error.to_string());
+                }
+                Err(error) => return Err(error),
+            }
         }
         if base == ctx.root {
             if let (Some(common), Some(relative)) =
                 (ctx.git_common_dir, relative.strip_prefix(".git/"))
             {
                 for resolve in [false, true] {
-                    result.insert(resolved_pattern(common, relative, resolve)?);
+                    match resolved_pattern(common, relative, resolve) {
+                        Ok(pattern) => {
+                            result.insert(pattern);
+                        }
+                        Err(error) if resolve => {
+                            reduced.insert(error.to_string());
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
             }
         }
+    }
+    if !reduced.is_empty() {
+        eprintln!(
+            "codeflow edit-guard: reduced alias coverage; lexical enforcement remains active: {}",
+            reduced.into_iter().collect::<Vec<_>>().join("; ")
+        );
     }
     Ok(result.into_iter().collect())
 }
@@ -345,6 +374,37 @@ fn path_text(path: &Path) -> Result<String, EditError> {
     Ok(text.to_string())
 }
 
+// APFS realpath retains the caller's case. Recover the directory entry's
+// spelling only when its identity matches, so suffix rules stay precise.
+#[cfg(target_os = "macos")]
+fn normalize_case(path: &mut PathBuf, metadata: &std::fs::Metadata) {
+    use std::os::unix::fs::MetadataExt;
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case(name))
+            && std::fs::symlink_metadata(entry.path())
+                .is_ok_and(|m| m.dev() == metadata.dev() && m.ino() == metadata.ino())
+        {
+            *path = entry.path();
+            return;
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn normalize_case(_path: &mut PathBuf, _metadata: &std::fs::Metadata) {}
+
 // Resolve one component at a time. Lexically deleting `alias/..` before
 // following `alias` is wrong when alias is a symlink into another directory.
 // Missing suffixes are kept, so adding a new file beneath an existing symlink
@@ -369,7 +429,9 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
                                 EditError(format!("cannot resolve {}: {e}", result.display()))
                             })?;
                         }
-                        Ok(_) => {}
+                        Ok(metadata) => {
+                            normalize_case(&mut result, &metadata);
+                        }
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                         Err(e) => {
                             return Err(EditError(format!(
@@ -427,6 +489,74 @@ mod tests {
     }
 
     #[test]
+    fn f9_truncated_inputs_are_refused() {
+        for field in ["toolInputTruncated", "tool_input_truncated"] {
+            let mut payload = json!({"toolName":"write","toolInput":{"file_path":"notes.md"}});
+            payload[field] = json!(true);
+            assert!(parse_payload(&payload.to_string())
+                .unwrap_err()
+                .to_string()
+                .contains(field));
+            payload[field] = json!(false);
+            assert!(parse_payload(&payload.to_string()).unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn f10_native_fixtures_keep_duplicate_aliases() {
+        for data in [
+            include_str!("../../tests/fixtures/edit-hooks/grok-write.json"),
+            include_str!("../../tests/fixtures/edit-hooks/grok-search-replace.json"),
+        ] {
+            let mut payload: Value = serde_json::from_str(data).unwrap();
+            assert_eq!(
+                payload["_fixture"]["provenance"],
+                "native capture, grok 1.0.44"
+            );
+            assert_eq!(payload["toolInput"], payload["tool_input"]);
+            assert!(parse_payload(&payload.to_string()).unwrap().is_some());
+            payload["tool_input"]["file_path"] = json!("different.md");
+            assert!(parse_payload(&payload.to_string()).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn f8_uninspectable_pattern_does_not_block_unrelated_targets() {
+        let f = Fixture::new();
+        // A symlink loop gives deterministic metadata failure, even under root.
+        std::os::unix::fs::symlink(".claude", f.home.join(".claude")).unwrap();
+        assert!(!f.refused("notes.md"));
+        assert!(!enforcement_path("src/lib.rs", &f.root, &f.root, Some(&f.home)).unwrap());
+        assert!(evaluate(
+            &synthetic(
+                "write",
+                json!({"path":f.home.join(".claude/settings.json")})
+            ),
+            &f.ctx()
+        )
+        .is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn f7_case_aliases_preserve_the_protected_suffix() {
+        let f = Fixture::new();
+        std::fs::create_dir(f.root.join(".codeflow")).unwrap();
+        std::fs::write(f.root.join(".codeflow/policy.json"), "{}").unwrap();
+        // The fixture must actually exercise a case-insensitive volume.
+        assert!(f.root.join(".CODEFLOW/POLICY.JSON").exists());
+        for path in [".CODEFLOW/policy.json", ".CODEFLOW/POLICY.JSON"] {
+            assert!(f.refused(path), "{path}");
+            assert!(enforcement_path(path, &f.root, &f.root, Some(&f.home)).unwrap());
+        }
+        assert!(!f.refused(".CODEFLOW/notes.md"));
+        assert!(!f.refused(".CODEFLOW/policy.json.example"));
+        std::fs::create_dir(f.root.join(".codex")).unwrap();
+        assert!(f.refused(".CODEX/new.json"));
+    }
+
+    #[test]
     fn documented_hook_fixtures_protect_paths_and_allow_ordinary_edits() {
         let fixture = Fixture::new();
         for data in [
@@ -434,7 +564,10 @@ mod tests {
             include_str!("../../tests/fixtures/edit-hooks/grok-write.json"),
             include_str!("../../tests/fixtures/edit-hooks/grok-search-replace.json"),
         ] {
-            let protected = data.replace("/fixture/project", fixture.root.to_str().unwrap());
+            let protected = data
+                .replace("/fixture/project", fixture.root.to_str().unwrap())
+                .replace("hello.txt", ".codex/config.toml")
+                .replace("notes.txt", ".codeflow/policy.json");
             let request = parse_payload(&protected).unwrap().unwrap();
             assert!(!evaluate(&request, &fixture.ctx()).unwrap().is_empty());
             let ordinary = protected

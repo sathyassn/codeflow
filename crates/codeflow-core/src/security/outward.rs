@@ -4,10 +4,12 @@ use super::headless::{
     after_runner_options, package_bin, shell_command_string, skip_assignments, skip_env,
     skip_options,
 };
-use crate::hooks::git_guard::{command_argv, expand_commands, strip_reserved_words};
+use crate::hooks::git_guard::{
+    command_argv, expand_commands, strip_launchers, strip_reserved_words,
+};
 use crate::hooks::policy::SecuritySection;
 use crate::hooks::Violation;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 pub(crate) fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
@@ -69,6 +71,7 @@ struct Parsed {
     code: Vec<String>,
     stdin_interpreter: usize,
     commands: Vec<Vec<String>>,
+    created_tags: Vec<(PathBuf, String)>,
 }
 
 pub(crate) fn unwrapped_commands(command: &str) -> Vec<Vec<String>> {
@@ -84,18 +87,21 @@ pub(crate) fn interpreter_bodies(command: &str) -> Vec<String> {
 }
 
 pub(crate) fn literal_words(code: &str) -> Vec<String> {
-    code.split(|c: char| {
-        !(c.is_alphanumeric() || matches!(c, '_' | '.' | '/' | '~' | '+' | '-' | '@' | '=' | ':'))
-    })
-    .filter(|word| !word.is_empty())
-    .map(str::to_string)
-    .collect()
+    code.replace("${HOME}", "$HOME")
+        .split(|c: char| {
+            !(c.is_alphanumeric()
+                || matches!(c, '_' | '.' | '/' | '~' | '+' | '-' | '@' | '=' | ':' | '$'))
+        })
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 16 {
         return;
     }
+    shell_inputs(command, out);
     let mut directories = vec![cwd.map(Path::to_path_buf)];
     for segment in expand_commands(command) {
         let mut words = command_argv(&segment);
@@ -136,6 +142,9 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     let rest = &args[1..];
     record_interpreter(name, rest, out);
     direct_family(name, rest, cwd, out);
+    if name == "git" {
+        git_alias(rest, cwd, depth, out);
+    }
     let inner = match name {
         "env" => {
             if let Some(at) = rest
@@ -234,7 +243,22 @@ fn record_interpreter(name: &str, rest: &[String], out: &mut Parsed) {
         };
         let mut found = false;
         for (at, arg) in rest.iter().enumerate() {
-            if arg == flag
+            let cluster = arg
+                .strip_prefix('-')
+                .filter(|s| !s.starts_with('-'))
+                .is_some_and(|s| {
+                    s.chars().all(|c| c.is_ascii_alphabetic())
+                        && (!arg.starts_with(flag)
+                            || arg == flag
+                            || (name.starts_with("node") && s == "ep"))
+                        && match name {
+                            "perl" | "ruby" => s.contains(['e', 'E']),
+                            "node" | "nodejs" => s.contains(['e', 'p']),
+                            _ => s.ends_with('c'),
+                        }
+                });
+            if cluster
+                || arg == flag
                 || (name.starts_with("node") && matches!(arg.as_str(), "--eval" | "-p" | "--print"))
             {
                 if let Some(code) = rest.get(at + 1) {
@@ -269,13 +293,33 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
     }
     let sub = canonical.get(1).map_or("", String::as_str);
     let body = canonical.get(2..).unwrap_or_default();
+    if name == "git" && sub == "tag" {
+        let tag_args = skip_options(
+            body,
+            &["-m", "--message", "-F", "--file", "-u", "--local-user"],
+        );
+        if !body.iter().any(|a| {
+            matches!(
+                a.as_str(),
+                "-d" | "--delete" | "-l" | "--list" | "-v" | "--verify"
+            )
+        }) {
+            if let (Some(dir), Some(tag)) = (git_directory(cwd, rest), tag_args.first()) {
+                out.created_tags.push((dir, tag.clone()));
+            }
+        }
+    }
+    if name == "git" && sub == "config" && enables_follow_tags(body) {
+        out.families.push("release");
+    }
     if name == "git" && sub == "push" {
         if body.iter().any(|a| a == "--mirror") {
             out.families.push("account");
         }
         if body.iter().any(|a| {
             matches!(a.as_str(), "--tags" | "--follow-tags" | "tag") || a.contains("refs/tags/")
-        }) || tag_push(body, cwd, rest)
+        }) || tag_push(body, cwd, rest, &out.created_tags)
+            || follow_tags(cwd, rest)
         {
             out.families.push("release");
         }
@@ -314,8 +358,7 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
         || (name == "crontab"
             && !rest
                 .iter()
-                .any(|a| matches!(a.as_str(), "-l" | "--help" | "-h"))
-            && !rest.is_empty())
+                .any(|a| matches!(a.as_str(), "-l" | "--help" | "-h")))
     {
         out.families.push("persistence");
     }
@@ -409,32 +452,344 @@ fn prefix(args: &[String], pattern: &[PatternToken]) -> bool {
         })
 }
 
-fn tag_push(args: &[String], cwd: Option<&Path>, globals: &[String]) -> bool {
-    let Some(cwd) = cwd else {
-        return false;
-    };
-    let mut dir = cwd.to_path_buf();
-    for pair in globals.windows(2) {
+fn git_directory(cwd: Option<&Path>, globals: &[String]) -> Option<PathBuf> {
+    let mut dir = cwd?.to_path_buf();
+    let args = global_args("git", globals);
+    let end = globals.len() - args.len();
+    for pair in globals[..end].windows(2) {
         if pair[0] == "-C" {
             dir = dir.join(&pair[1]);
         }
     }
-    let Ok(repo) = git2::Repository::discover(dir) else {
+    let repo = git2::Repository::discover(dir).ok()?;
+    repo.commondir().canonicalize().ok()
+}
+
+fn tag_push(
+    args: &[String],
+    cwd: Option<&Path>,
+    globals: &[String],
+    created: &[(PathBuf, String)],
+) -> bool {
+    let Some(dir) = git_directory(cwd, globals) else {
         return false;
     };
-    // A refspec's source and destination can both name a tag; a leading +
-    // changes force semantics, not the reference namespace.
+    let Ok(repo) = git2::Repository::open(&dir) else {
+        return false;
+    };
     args.iter().filter(|arg| !arg.starts_with('-')).any(|arg| {
         arg.trim_start_matches('+').split(':').any(|part| {
-            !part.is_empty() && repo.find_reference(&format!("refs/tags/{part}")).is_ok()
+            !part.is_empty()
+                && (repo.find_reference(&format!("refs/tags/{part}")).is_ok()
+                    || created.iter().any(|(at, tag)| at == &dir && tag == part))
         })
     })
+}
+
+fn truthy(value: &str) -> bool {
+    !matches!(
+        value.to_ascii_lowercase().as_str(),
+        "false" | "no" | "off" | "0"
+    )
+}
+
+fn enables_follow_tags(args: &[String]) -> bool {
+    if args.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "--get"
+                | "--get-all"
+                | "--get-regexp"
+                | "--list"
+                | "-l"
+                | "--unset"
+                | "--unset-all"
+                | "get"
+                | "list"
+                | "unset"
+        )
+    }) {
+        return false;
+    }
+    args.windows(2)
+        .any(|p| p[0].eq_ignore_ascii_case("push.followTags") && truthy(&p[1]))
+}
+
+fn follow_tags(cwd: Option<&Path>, globals: &[String]) -> bool {
+    let sub = global_args("git", globals);
+    if let Some(option) = sub
+        .iter()
+        .rev()
+        .find(|s| matches!(s.as_str(), "--follow-tags" | "--no-follow-tags"))
+    {
+        return option == "--follow-tags";
+    }
+    let end = globals.len() - sub.len();
+    let override_value = globals[..end]
+        .windows(2)
+        .filter(|p| p[0] == "-c")
+        .filter_map(|p| p[1].split_once('='))
+        .filter(|(key, _)| key.eq_ignore_ascii_case("push.followTags"))
+        .map(|(_, value)| truthy(value))
+        .next_back();
+    override_value.unwrap_or_else(|| {
+        git_directory(cwd, globals)
+            .and_then(|dir| git2::Repository::open(dir).ok())
+            .and_then(|repo| repo.config().ok())
+            .and_then(|config| config.get_bool("push.followTags").ok())
+            .unwrap_or(false)
+    })
+}
+
+fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
+    let sub = global_args("git", rest);
+    let Some(name) = sub.first() else {
+        return;
+    };
+    if crate::hooks::git_guard::GIT_BUILTINS.contains(&name.as_str()) {
+        return;
+    }
+    let Some(dir) = git_directory(cwd, rest) else {
+        return;
+    };
+    let end = rest.len() - sub.len();
+    let inline = rest[..end]
+        .windows(2)
+        .filter(|p| p[0] == "-c")
+        .filter_map(|p| p[1].split_once('='))
+        .rfind(|(key, _)| *key == format!("alias.{name}"))
+        .map(|(_, value)| value.to_string());
+    let value = inline.or_else(|| {
+        git2::Repository::open(&dir)
+            .ok()?
+            .config()
+            .ok()?
+            .get_string(&format!("alias.{name}"))
+            .ok()
+    });
+    if let Some(value) = value.filter(|v| !v.starts_with('!')) {
+        let mut args = vec!["git".to_string()];
+        args.extend_from_slice(&rest[..end]);
+        args.extend(command_argv(&value));
+        args.extend_from_slice(&sub[1..]);
+        argv(&args, cwd, depth + 1, out);
+    }
+}
+
+// Keep pipeline boundaries and quoted producer text. Only a shell that reads
+// stdin makes that text code; ordinary pipes and separate commands stay data.
+fn shell_inputs(command: &str, out: &mut Parsed) {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut start = 0;
+    let mut producers = String::new();
+    for (at, ch) in command
+        .char_indices()
+        .chain(std::iter::once((command.len(), ';')))
+    {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            continue;
+        }
+        if !matches!(ch, '|' | ';' | '&' | '\n') {
+            continue;
+        }
+        let segment = &command[start..at];
+        let words = command_argv(segment);
+        if let Some((program, rest)) = strip_launchers(&words) {
+            let name = program.rsplit('/').next().unwrap_or(program);
+            if matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash") {
+                if let Some(script) = shell_command_string(rest) {
+                    if script.contains("$(") || script.contains('`') {
+                        out.code.push(script.to_string());
+                    }
+                } else if !producers.is_empty()
+                    && (rest.iter().all(|a| a.starts_with('-'))
+                        || rest.iter().take_while(|a| a.as_str() != "--").any(|a| {
+                            a.strip_prefix('-')
+                                .is_some_and(|flags| !flags.starts_with('-') && flags.contains('s'))
+                        }))
+                {
+                    out.code.push(producers.clone());
+                }
+            }
+        }
+        if ch == '|' && !command[at..].starts_with("||") {
+            producers.push_str(segment);
+            producers.push(' ');
+        } else {
+            producers.clear();
+        }
+        start = at + ch.len_utf8();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::security::actions::{table, PatternToken};
+
+    #[test]
+    fn f1_tags_created_earlier_are_release_refspecs() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        repo.config().unwrap().set_str("alias.mark", "tag").unwrap();
+        for command in [
+            "git tag v9 && git push origin v9",
+            "git tag -a v9 -m x && git push origin +v9",
+            "git mark v9 && git push origin v9",
+            "git -c alias.mark=tag mark v9 && git push origin v9",
+            "git tag v9 && bash -c 'git push origin v9'",
+        ] {
+            assert!(
+                !evaluate_at(command, &SecuritySection::default(), Some(temp.path())).is_empty(),
+                "{command}"
+            );
+        }
+        assert!(evaluate_at(
+            "git tag v9 && git push origin task/x",
+            &SecuritySection::default(),
+            Some(temp.path())
+        )
+        .is_empty());
+        let other = temp.path().join("other");
+        git2::Repository::init(&other).unwrap();
+        for command in [
+            "git -C other tag v9 && git -C other push origin v9",
+            "cd other && git tag v9 && git push origin v9",
+        ] {
+            assert!(
+                !evaluate_at(command, &SecuritySection::default(), Some(temp.path())).is_empty(),
+                "{command}"
+            );
+        }
+        assert!(evaluate_at(
+            "git -C other tag v9 && git push origin v9",
+            &SecuritySection::default(),
+            Some(temp.path())
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn f2_shell_code_from_stdin_and_substitution() {
+        for command in [
+            "echo 'cargo publish' | sh",
+            "printf 'npm publish' | bash",
+            "echo 'cargo publish' | env sh -s arg",
+            r#"bash -c "$(printf 'cargo publish')""#,
+        ] {
+            assert!(
+                !evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+        for command in [
+            "echo hello | sh -c 'cat'",
+            "echo 'cargo publish' | cat",
+            "echo 'cargo publish'; sh",
+            "echo 'cargo publish' | sh script.sh",
+        ] {
+            assert!(
+                evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn f3_follow_tags_configuration() {
+        for command in [
+            "git -c push.followTags=true push origin task/x",
+            "git -c PUSH.FOLLOWTAGS=on push origin task/x",
+            "git config push.followTags true",
+            "git config --global push.followTags true",
+        ] {
+            assert!(
+                !evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+        for command in [
+            "git -c push.followTags=false push origin task/x",
+            "git config --get push.followTags",
+            "git config push.followTags",
+            "git config push.followTags false",
+        ] {
+            assert!(
+                evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_bool("push.followTags", true)
+            .unwrap();
+        assert!(!evaluate_at(
+            "git push origin task/x",
+            &SecuritySection::default(),
+            Some(temp.path())
+        )
+        .is_empty());
+        assert!(evaluate_at(
+            "git -c push.followTags=false push origin task/x",
+            &SecuritySection::default(),
+            Some(temp.path())
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn f5_interpreter_clusters() {
+        for flag in [
+            "perl -le",
+            "perl -E",
+            "perl -ne",
+            "perl -pe",
+            "ruby -ne",
+            "node -pe",
+            "python3 -Ic",
+        ] {
+            let command = format!("{flag} 'run(\"cargo publish\")'");
+            assert!(
+                !evaluate(&command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+        assert!(evaluate("perl -ne 'print' file", &SecuritySection::default()).is_empty());
+    }
+
+    #[test]
+    fn f6_crontab_stdin_and_read_controls() {
+        for command in ["crontab", "echo '* * * * * x' | crontab"] {
+            assert!(
+                !evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+        for command in ["crontab -l", "crontab -h", "crontab --help"] {
+            assert!(
+                evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+    }
 
     const WRAPPERS: &[&str] = &[
         "{}",
