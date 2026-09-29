@@ -867,3 +867,74 @@ fn headless_peer_runs_warn_in_every_harness_wiring_at_every_tier() {
         }
     }
 }
+
+#[path = "../../codeflow-core/src/security/guard_forms.rs"]
+#[allow(dead_code)]
+mod guard_forms;
+
+#[cfg(unix)]
+#[test]
+fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
+    // TSK-141 AC-5: at every tier, the Claude, Codex and Grok wiring refuse
+    // each composed deletion, pass each project deletion, and judge each
+    // help invocation and its data twin as the unit tests do. The guard
+    // only judges; nothing here runs the commands.
+    for tier in ["--minimal", "--standard", "--full"] {
+        let (_tmp, root) = project();
+        init(&root, tier);
+        for wiring in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".grok/hooks/codeflow.json",
+        ] {
+            let hook = pretooluse_commands(&root, wiring)
+                .into_iter()
+                .find(|command| command.contains("hook exec-guard"))
+                .unwrap_or_else(|| panic!("{tier} {wiring}: exec-guard not wired"));
+            for (form, _) in guard_forms::COMPOSED_PAIRS {
+                let out = run_wired(&root, &hook, form);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(
+                    out.status.code(),
+                    Some(2),
+                    "{tier} {wiring} {form}: {stderr}"
+                );
+                assert!(
+                    stderr.contains("security.dangerous_commands"),
+                    "{tier} {wiring} {form}: {stderr}"
+                );
+            }
+            for command in guard_forms::PROJECT_DELETIONS {
+                let out = run_wired(&root, &hook, command);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{tier} {wiring} {command}: {stderr}"
+                );
+                assert!(stderr.is_empty(), "{tier} {wiring} {command}: {stderr}");
+            }
+            for (help, twin) in guard_forms::HELP_PAIRS {
+                let out = run_wired(&root, &hook, help);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{tier} {wiring} {help}: {stderr}"
+                );
+                assert!(stderr.is_empty(), "{tier} {wiring} {help}: {stderr}");
+                let out = run_wired(&root, &hook, twin);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{tier} {wiring} {twin}: {stderr}"
+                );
+                assert!(
+                    stderr.contains("headless peer run"),
+                    "{tier} {wiring} {twin}: {stderr}"
+                );
+            }
+        }
+    }
+}

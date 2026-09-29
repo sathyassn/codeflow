@@ -176,6 +176,95 @@ mod tests {
         assert!(evaluate("codex --version", &block).is_empty());
     }
 
+    /// A help or version invocation raises nothing at `warn` or `block`; the
+    /// same tokens given as data still raise the headless rule (TSK-141 AC-3).
+    #[test]
+    fn a_help_invocation_passes_and_its_data_twin_is_reported_at_every_level() {
+        for level in [PolicyLevel::Warn, PolicyLevel::Block] {
+            let section = SecuritySection {
+                headless_peer_runs: level,
+                ..SecuritySection::default()
+            };
+            for (help, twin) in crate::security::guard_forms::HELP_PAIRS {
+                assert!(evaluate(help, &section).is_empty(), "{level:?}: {help}");
+                let v = evaluate(twin, &section);
+                assert_eq!(v.len(), 1, "{level:?}: {twin}");
+                assert_eq!(v[0].rule, "security.headless_peer_runs", "{twin}");
+                assert_eq!(v[0].level, level, "{twin}");
+                assert_eq!(any_blocking(&v), level == PolicyLevel::Block, "{twin}");
+            }
+        }
+    }
+
+    /// A peer run through a package runner is reported as its direct form
+    /// at `warn` and `block`, and its help passes (TSK-141 AC-6).
+    #[test]
+    fn a_package_runner_peer_run_is_reported_as_its_direct_form_at_every_level() {
+        for level in [PolicyLevel::Warn, PolicyLevel::Block] {
+            let section = SecuritySection {
+                headless_peer_runs: level,
+                ..SecuritySection::default()
+            };
+            for (direct, runner) in crate::security::guard_forms::PACKAGE_RUNNER_PAIRS {
+                let expected = evaluate(direct, &section);
+                let v = evaluate(runner, &section);
+                assert_eq!(v.len(), expected.len(), "{level:?}: {runner}");
+                for (got, want) in v.iter().zip(&expected) {
+                    assert_eq!(got.rule, want.rule, "{runner}");
+                    assert_eq!(got.level, level, "{runner}");
+                }
+                assert_eq!(any_blocking(&v), any_blocking(&expected), "{runner}");
+            }
+        }
+    }
+
+    /// Each composed deletion is refused under `security.dangerous_commands`
+    /// with the message its `rm -rf` equivalent gets, alone and nested; a
+    /// project deletion raises nothing (TSK-141 AC-1, AC-2).
+    #[test]
+    fn a_composed_deletion_is_refused_as_its_rm_equivalent() {
+        use crate::security::guard_forms::{COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS};
+        let section = SecuritySection::default();
+        for (form, equivalent) in COMPOSED_PAIRS {
+            let expected = evaluate(equivalent, &section);
+            assert_eq!(expected.len(), 1, "{equivalent}");
+            assert_eq!(expected[0].rule, "security.dangerous_commands");
+            for nesting in NESTINGS {
+                let nested = nesting.replace("{}", form);
+                let v = evaluate(&nested, &section);
+                let refused: Vec<_> = v
+                    .iter()
+                    .filter(|v| v.rule == "security.dangerous_commands")
+                    .collect();
+                assert_eq!(refused.len(), 1, "{nested}");
+                assert!(any_blocking(&v), "{nested}");
+                if *nesting == "{}" {
+                    // A target reached on only some paths says so; the
+                    // pattern it names is the equivalent's either way.
+                    let pattern = |m: &str| m.rfind("(pattern").map(|at| m[at..].to_string());
+                    if refused[0].message.contains("one of several values") {
+                        assert_eq!(
+                            pattern(&refused[0].message),
+                            pattern(&expected[0].message),
+                            "{form} as {equivalent}"
+                        );
+                    } else {
+                        assert_eq!(
+                            refused[0].message, expected[0].message,
+                            "{form} as {equivalent}"
+                        );
+                    }
+                }
+            }
+        }
+        for command in PROJECT_DELETIONS {
+            for nesting in NESTINGS {
+                let nested = nesting.replace("{}", command);
+                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+            }
+        }
+    }
+
     #[test]
     fn test_default_levels_are_block_and_warn() {
         let s = SecuritySection::default();

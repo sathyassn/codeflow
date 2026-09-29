@@ -1349,31 +1349,31 @@
     ".codeflow/git-hooks/commit-msg": {
       "src": "git-hooks/commit-msg",
       "ownership": "managed",
-      "sha256": "ae9c2afdb749983c96a835b5747f1eac07a0f6c7905326d46b30d2db576fb737",
+      "sha256": "7dfbad63e97efb1f9455104aeaf8a2a2eaad46ba138aec302b3d93bb0b7be4f5",
       "exec": true
     },
     ".codeflow/git-hooks/pre-commit": {
       "src": "git-hooks/pre-commit",
       "ownership": "managed",
-      "sha256": "5c3fe97c39d658820ad46bb771080ac2c2a058bc89fcc6ee6201f30739169f44",
+      "sha256": "1fca895e3e2f01ef2ab6ba907a518244405e7834d39f4c2faa05711573d5860e",
       "exec": true
     },
     ".codeflow/git-hooks/pre-merge-commit": {
       "src": "git-hooks/pre-merge-commit",
       "ownership": "managed",
-      "sha256": "aa9c35a07219d00ff034a8d19bfdd9cfa64af5abd58d86384c3a46e8f8f7a773",
+      "sha256": "b4fb0637203e59db1161debbe8bcf0140a4ca383822fb81e820caa19668467fd",
       "exec": true
     },
     ".codeflow/git-hooks/pre-push": {
       "src": "git-hooks/pre-push",
       "ownership": "managed",
-      "sha256": "c7a980c93ab22184645afe95e2eec2317bac1bc1666d39242e47ca24c49bc29d",
+      "sha256": "0fc38e5da849e88931759e498f3801f8b4dc508dcdf5016d09765ad9d4813548",
       "exec": true
     },
     ".codeflow/git-hooks/reference-transaction": {
       "src": "git-hooks/reference-transaction",
       "ownership": "managed",
-      "sha256": "5ec12ea5079b861885596fa49dba8c6b88b9d3e890cc9b91166c4f3a249b0b04",
+      "sha256": "e303d546e054081bb3e8a131dc6e0c7b83ad7eef81d51cfc7bf1014bc2914dee",
       "exec": true
     },
     ".codeflow/model-selection.json": {

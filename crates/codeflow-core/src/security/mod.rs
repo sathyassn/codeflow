@@ -18,7 +18,10 @@
 //! history if ADR-0008 ever wires one.
 
 pub mod dangerous;
+mod deletion;
 pub mod git;
+#[cfg(test)]
+pub(crate) mod guard_forms;
 pub mod headless;
 pub mod pattern;
 pub mod policy;

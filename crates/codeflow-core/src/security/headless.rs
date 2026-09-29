@@ -19,7 +19,10 @@
 //! wrappers are unwrapped (`nice`, `timeout`, `nohup`, `sudo`, `xargs`,
 //! `find -exec`, a nested shell `-c`, `grok wrap`, …), and the peer's own
 //! arguments are parsed by role: an option's value and anything after `--`
-//! are never read as the headless flag. A line whose commands cannot be
+//! are never read as the headless flag. A help or version flag in an option
+//! position (`claude --help -p`, `codex exec --help`) is no run, since the
+//! CLI prints and exits (TSK-141); the same word as a value, a prompt or
+//! after `--` is data. A line whose commands cannot be
 //! resolved (a here-string, a substitution or variable as the program, an
 //! alias, a shell reading its script from stdin) is judged on its raw text:
 //! a peer name followed by one of its headless markers is flagged. That can
@@ -156,10 +159,245 @@ fn classify(argv: &[String], depth: usize) -> Found {
                 ],
             ),
             "find" => return find_exec(rest, depth),
+            // A package runner starts the package's binary (TSK-141 AC-6).
+            // pnpm 11 also answers to `pn` and `pnx`.
+            "npx" | "bunx" | "pnpx" | "pnx" => return package_run(rest, depth),
+            "pn" => return runner("pnpm", rest, depth),
+            "npm" | "pnpm" | "yarn" | "bun" => return runner(&name, rest, depth),
             _ => return Found::Nothing,
         };
     }
     Found::Unresolved
+}
+
+/// Options package runners take without a value.
+const RUNNER_FLAGS: &[&str] = &[
+    "-y",
+    "--yes",
+    "--no",
+    "-q",
+    "--quiet",
+    "-s",
+    "--silent",
+    "--bun",
+    "--ignore-existing",
+    "--prefer-offline",
+    "--prefer-online",
+    "--offline",
+    "--no-install",
+    "--workspaces",
+    "--ws",
+    "--include-workspace-root",
+    "--legacy-peer-deps",
+    "--foreground-scripts",
+    "--verbose",
+    "--stream",
+];
+
+/// Options package runners take with a value in the next word.
+const RUNNER_VALUES: &[&str] = &[
+    "--cache",
+    "--cache-folder",
+    "--workspace",
+    "--prefix",
+    "--userconfig",
+    "--globalconfig",
+    "--registry",
+    "--node-options",
+    "--script-shell",
+    "--loglevel",
+    "--cwd",
+    "--dir",
+    "-C",
+    "--filter",
+    "-F",
+    "--reporter",
+];
+
+/// The runner's own help or version: it prints and exits.
+fn runner_exits(arg: &str) -> bool {
+    matches!(arg, "-h" | "--help" | "-v" | "--version")
+}
+
+/// Where the first word after a runner's options may be. An option the
+/// grammar does not know may or may not take the next word, so both are
+/// kept, though never an option word, which it does not take (npm reads
+/// `--unknown --help` as help); a help or version option ends the run.
+fn after_runner_options(args: &[String]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut stack = vec![0];
+    let mut steps = 0;
+    while let Some(at) = stack.pop() {
+        steps += 1;
+        if steps > 64 {
+            break;
+        }
+        match args.get(at) {
+            None => {}
+            Some(arg) if arg == "--" => out.push(at + 1),
+            Some(arg) if !arg.starts_with('-') || arg == "-" => out.push(at),
+            Some(arg) if runner_exits(arg) => {}
+            Some(arg) if arg.contains('=') || RUNNER_FLAGS.contains(&arg.as_str()) => {
+                stack.push(at + 1);
+            }
+            Some(arg) if RUNNER_VALUES.contains(&arg.as_str()) => stack.push(at + 2),
+            Some(_) => {
+                stack.push(at + 1);
+                if takes_next(args, at) {
+                    stack.push(at + 2);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `npm`, `pnpm`, `yarn` or `bun` with a subcommand that runs a package or
+/// a local binary: `npm exec`/`npm x`, `pnpm dlx`/`yarn dlx`, `bun x`, and
+/// `pnpm exec`/`yarn exec` or `pnpm BIN`/`yarn BIN` for an installed peer.
+fn runner(name: &str, args: &[String], depth: usize) -> Found {
+    let mut found = Found::Nothing;
+    for at in after_runner_options(args) {
+        let Some((sub, tail)) = args.get(at..).and_then(<[String]>::split_first) else {
+            continue;
+        };
+        let next = match (name, sub.as_str()) {
+            ("npm", "exec" | "x") | ("pnpm" | "yarn", "dlx") | ("bun", "x") => {
+                package_run(tail, depth)
+            }
+            ("pnpm" | "yarn", "exec") => after_runner_options(tail)
+                .into_iter()
+                .map(|start| classify(tail.get(start..).unwrap_or_default(), depth + 1))
+                .fold(Found::Nothing, strongest),
+            ("pnpm" | "yarn", "claude" | "codex" | "grok") => classify(&args[at..], depth + 1),
+            _ => Found::Nothing,
+        };
+        found = strongest(found, next);
+        if matches!(found, Found::Run(_)) {
+            break;
+        }
+    }
+    found
+}
+
+/// Whether an option the grammar does not know may take the word after
+/// it as its value: not when that word is an option itself.
+fn takes_next(args: &[String], at: usize) -> bool {
+    args.get(at + 1)
+        .is_some_and(|next| !next.starts_with('-') || next == "-")
+}
+
+/// A run over an unresolved command over nothing.
+fn strongest(a: Found, b: Found) -> Found {
+    match (a, b) {
+        (Found::Run(run), _) | (_, Found::Run(run)) => Found::Run(run),
+        (Found::Unresolved, _) | (_, Found::Unresolved) => Found::Unresolved,
+        _ => Found::Nothing,
+    }
+}
+
+/// A package runner's command (`npx`, `bunx`, `npm exec`, `pnpm dlx`,
+/// `yarn dlx`, `bun x`): after its options, the package's binary, or with
+/// `--package` the command named after it; `-c` or `--call` runs a shell
+/// string. An option the grammar does not know is read both with and
+/// without a value, and the runner's help or version runs nothing.
+fn package_run(args: &[String], depth: usize) -> Found {
+    if depth > 4 {
+        return Found::Unresolved;
+    }
+    let call = |script: &str| find(script, depth + 1).map_or(Found::Nothing, Found::Run);
+    let mut found = Found::Nothing;
+    let mut stack = vec![(0usize, false)];
+    let mut steps = 0;
+    while let Some((at, package_given)) = stack.pop() {
+        steps += 1;
+        if steps > 64 {
+            return strongest(found, Found::Unresolved);
+        }
+        let Some(arg) = args.get(at) else {
+            continue;
+        };
+        let next = if arg == "--" {
+            launch(args, at + 1, package_given, depth)
+        } else if !arg.starts_with('-') || arg == "-" {
+            launch(args, at, package_given, depth)
+        } else if let Some((option, value)) = arg.split_once('=') {
+            match option {
+                "-c" | "--call" => call(value),
+                "-p" | "--package" => {
+                    stack.push((at + 1, true));
+                    continue;
+                }
+                _ => {
+                    stack.push((at + 1, package_given));
+                    continue;
+                }
+            }
+        } else {
+            match arg.as_str() {
+                "-c" | "--call" => match args.get(at + 1) {
+                    Some(script) => call(script),
+                    None => continue,
+                },
+                "-p" | "--package" => {
+                    stack.push((at + 2, true));
+                    continue;
+                }
+                flag if runner_exits(flag) => continue,
+                flag if RUNNER_FLAGS.contains(&flag) => {
+                    stack.push((at + 1, package_given));
+                    continue;
+                }
+                option if RUNNER_VALUES.contains(&option) => {
+                    stack.push((at + 2, package_given));
+                    continue;
+                }
+                _ => {
+                    stack.push((at + 1, package_given));
+                    if takes_next(args, at) {
+                        stack.push((at + 2, package_given));
+                    }
+                    continue;
+                }
+            }
+        };
+        found = strongest(found, next);
+        if matches!(found, Found::Run(_)) {
+            return found;
+        }
+    }
+    found
+}
+
+/// The package (or, with `--package`, the command) at `args[at]`, run with
+/// the words after it.
+fn launch(args: &[String], at: usize, package_given: bool, depth: usize) -> Found {
+    let Some((spec, rest)) = args.get(at..).and_then(<[String]>::split_first) else {
+        return Found::Nothing;
+    };
+    let program = if package_given {
+        spec.clone()
+    } else {
+        package_bin(spec)
+    };
+    let mut command = vec![program];
+    command.extend(rest.iter().cloned());
+    classify(&command, depth + 1)
+}
+
+/// The binary a package spec runs: its name without scope or version,
+/// with the peers' package names read as their commands.
+fn package_bin(spec: &str) -> String {
+    let unversioned = match spec.strip_prefix('@') {
+        Some(scoped) => format!("@{}", scoped.split('@').next().unwrap_or(scoped)),
+        None => spec.split('@').next().unwrap_or(spec).to_string(),
+    };
+    let name = unversioned.rsplit('/').next().unwrap_or(&unversioned);
+    match name {
+        "claude-code" => "claude".to_string(),
+        "grok-cli" => "grok".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// The commands `find` runs with `-exec`, `-execdir`, `-ok` or `-okdir`.
@@ -249,8 +487,13 @@ fn shell_command_string(args: &[String]) -> Option<&str> {
 /// How a peer CLI reads its arguments, from its `--help`.
 struct Cli {
     peer: &'static str,
-    /// Boolean short flags that mean a headless run.
+    /// Short flags that mean a headless run.
     headless_short: &'static str,
+    /// Whether the headless short flag takes a value (`grok -p <PROMPT>`).
+    headless_short_value: bool,
+    /// Short flags that print help or the version and exit, as
+    /// `--help` and `--version` do.
+    help_short: &'static str,
     /// Long flags (boolean or taking a value) that mean a headless run, with
     /// the form reported.
     headless_long: &'static [(&'static str, &'static str)],
@@ -275,6 +518,8 @@ struct Cli {
 const CLAUDE: Cli = Cli {
     peer: "claude",
     headless_short: "p",
+    headless_short_value: false,
+    help_short: "hv",
     headless_long: &[("--print", "claude -p")],
     short_value: "n",
     short_optional: "drw",
@@ -357,8 +602,10 @@ const CLAUDE: Cli = Cli {
 const CODEX: Cli = Cli {
     peer: "codex",
     headless_short: "",
+    headless_short_value: false,
+    help_short: "hV",
     headless_long: &[],
-    short_value: "cimpsCa",
+    short_value: "cimpsCao",
     short_optional: "",
     long_value: &[
         "--config",
@@ -374,6 +621,14 @@ const CODEX: Cli = Cli {
         "--cd",
         "--add-dir",
         "--ask-for-approval",
+        // `codex exec` and `codex review` options.
+        "--output-schema",
+        "--color",
+        "--output-last-message",
+        "--thread-source",
+        "--base",
+        "--commit",
+        "--title",
     ],
     long_optional: &[],
     long_variadic: &[],
@@ -416,6 +671,8 @@ const CODEX: Cli = Cli {
 const GROK: Cli = Cli {
     peer: "grok",
     headless_short: "p",
+    headless_short_value: true,
+    help_short: "hv",
     headless_long: &[
         ("--single", "grok -p"),
         ("--prompt-file", "grok --prompt-file"),
@@ -424,6 +681,9 @@ const GROK: Cli = Cli {
     short_value: "ms",
     short_optional: "rw",
     long_value: &[
+        "--single",
+        "--prompt-file",
+        "--prompt-json",
         "--agent",
         "--agents",
         "--allow",
@@ -483,55 +743,63 @@ const GROK: Cli = Cli {
     ],
 };
 
+/// Long flags that print help or the version and exit, in every peer CLI.
+const HELP_LONG: &[&str] = &["--help", "--version"];
+
+/// Judge a peer's arguments by role (TSK-136, TSK-141 AC-3). A headless
+/// flag or subcommand makes a run, unless the line also asks for help or
+/// the version in an option position: each CLI's parser (commander for
+/// Claude Code, clap for Codex and Grok) then prints and exits before any
+/// session starts. An option's value, anything after `--`, and a prompt are
+/// data, never help.
 fn peer_run(name: &str, args: &[String], depth: usize) -> Found {
     let cli = match name {
         "claude" => &CLAUDE,
         "codex" => &CODEX,
         _ => &GROK,
     };
-    let run = |form| {
-        Found::Run(HeadlessRun {
-            peer: cli.peer,
-            form,
-            parsed: true,
-        })
-    };
     let short_form = cli.headless_long.first().map_or("", |(_, form)| *form);
+    let mut headless: Option<&'static str> = None;
+    let mut help = false;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         at += 1;
         if arg == "--" {
-            return Found::Nothing; // the rest is positional
+            break; // the rest is positional
         }
-        if let Some(long) = arg.strip_prefix("--").map(|_| arg.as_str()) {
-            let (flag, inline) = long
+        if arg.starts_with("--") {
+            let (flag, inline) = arg
                 .split_once('=')
-                .map_or((long, None), |(flag, value)| (flag, Some(value)));
-            if let Some((_, form)) = cli.headless_long.iter().find(|(f, _)| *f == flag) {
-                return run(form);
-            }
-            if inline.is_some() {
+                .map_or((arg.as_str(), None), |(flag, value)| (flag, Some(value)));
+            if HELP_LONG.contains(&flag) && inline.is_none() {
+                help = true;
                 continue;
             }
-            if cli.long_value.contains(&flag) {
-                at += 1;
-            } else if cli.long_optional.contains(&flag) {
-                if args.get(at).is_some_and(|next| !next.starts_with('-')) {
-                    at += 1;
-                }
-            } else if cli.long_variadic.contains(&flag) {
-                while args.get(at).is_some_and(|next| !next.starts_with('-')) {
-                    at += 1;
-                }
+            if let Some((_, form)) = cli.headless_long.iter().find(|(f, _)| *f == flag) {
+                headless = headless.or(Some(form));
+            }
+            if inline.is_none() {
+                at = after_long_value(cli, flag, args, at);
             }
             continue;
         }
         if let Some(cluster) = arg.strip_prefix('-').filter(|c| !c.is_empty()) {
             for (index, flag) in cluster.char_indices() {
-                if cli.headless_short.contains(flag) {
-                    return run(short_form);
-                }
                 let rest = &cluster[index + flag.len_utf8()..];
+                if cli.help_short.contains(flag) {
+                    help = true;
+                    continue;
+                }
+                if cli.headless_short.contains(flag) {
+                    headless = headless.or(Some(short_form));
+                    if cli.headless_short_value {
+                        if rest.is_empty() {
+                            at += 1;
+                        }
+                        break;
+                    }
+                    continue;
+                }
                 if cli.short_value.contains(flag) {
                     if rest.is_empty() {
                         at += 1;
@@ -542,7 +810,7 @@ fn peer_run(name: &str, args: &[String], depth: usize) -> Found {
                     // An attached value could as well be more flags to
                     // another parser: judge it conservatively.
                     if rest.chars().any(|c| cli.headless_short.contains(c)) {
-                        return run(short_form);
+                        headless = headless.or(Some(short_form));
                     }
                     if rest.is_empty() && args.get(at).is_some_and(|n| !n.starts_with('-')) {
                         at += 1;
@@ -552,19 +820,52 @@ fn peer_run(name: &str, args: &[String], depth: usize) -> Found {
             }
             continue;
         }
-        // A positional: a subcommand, or the prompt.
+        // A positional: a subcommand, or the prompt. Options after it are
+        // still parsed, so a later `--help` still prints help.
         let word = arg.as_str();
+        if headless.is_some() {
+            continue;
+        }
         if let Some((_, form)) = cli.headless_subcommands.iter().find(|(s, _)| *s == word) {
-            return run(form);
+            headless = Some(form);
+            continue;
         }
         if cli.wrap_subcommands.contains(&word) {
-            return classify(&args[at..], depth);
+            return if help {
+                Found::Nothing
+            } else {
+                classify(&args[at..], depth)
+            };
         }
         if cli.subcommands.contains(&word) {
             return Found::Nothing;
         }
     }
-    Found::Nothing
+    match headless {
+        Some(form) if !help => Found::Run(HeadlessRun {
+            peer: cli.peer,
+            form,
+            parsed: true,
+        }),
+        _ => Found::Nothing,
+    }
+}
+
+/// Where the arguments resume after long option `flag`, whose value (if it
+/// takes one) starts at `at`.
+fn after_long_value(cli: &Cli, flag: &str, args: &[String], mut at: usize) -> usize {
+    if cli.long_value.contains(&flag) {
+        at += 1;
+    } else if cli.long_optional.contains(&flag) {
+        if args.get(at).is_some_and(|next| !next.starts_with('-')) {
+            at += 1;
+        }
+    } else if cli.long_variadic.contains(&flag) {
+        while args.get(at).is_some_and(|next| !next.starts_with('-')) {
+            at += 1;
+        }
+    }
+    at
 }
 
 /// The raw-text judgement for a line that could not be resolved: a peer
@@ -624,6 +925,7 @@ fn is_assignment(token: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::guard_forms::{HELP_PAIRS, PACKAGE_RUNNER_PAIRS};
     use super::*;
 
     fn found(command: &str) -> Option<HeadlessRun> {
@@ -673,7 +975,6 @@ mod tests {
             "codex --model demo exec x",
             "codex --model=demo exec x",
             "codex -c model=\"demo\" exec x",
-            "claude --help -p",
             // Beyond the probes: further wrappers and documented forms.
             "! claude -p x",
             "sudo -u me claude --print x",
@@ -732,6 +1033,14 @@ mod tests {
     }
 
     #[test]
+    fn a_help_or_version_invocation_is_not_a_run_and_its_data_twin_is() {
+        for (help, twin) in HELP_PAIRS {
+            assert_eq!(found(help), None, "{help}");
+            assert!(found(twin).is_some(), "{twin}");
+        }
+    }
+
+    #[test]
     fn unresolved_lines_say_they_were_not_parsed() {
         let run = found("alias peer='claude -p'\npeer x").unwrap();
         assert!(!run.parsed);
@@ -743,5 +1052,25 @@ mod tests {
         // An unresolved line without a peer marker is not a run.
         assert_eq!(found("$(printf ls) -la"), None);
         assert_eq!(found("bash <<< 'echo claude'"), None);
+    }
+
+    /// TSK-141 AC-6: a peer started through `npx`, `bunx`, `pnpm dlx` or
+    /// `yarn dlx` is judged as its direct invocation, headless run and help
+    /// alike.
+    #[test]
+    fn a_package_runner_is_judged_as_its_direct_invocation() {
+        for (direct, runner) in PACKAGE_RUNNER_PAIRS {
+            assert_eq!(
+                headless_peer_run(runner),
+                headless_peer_run(direct),
+                "{runner} as {direct}"
+            );
+        }
+        assert_eq!(package_bin("@anthropic-ai/claude-code@2.1.283"), "claude");
+        assert_eq!(package_bin("@openai/codex"), "codex");
+        assert_eq!(package_bin("grok@latest"), "grok");
+        // A runner of anything else is no peer run.
+        assert_eq!(headless_peer_run("npx prettier -p x"), None);
+        assert_eq!(headless_peer_run("pnpm install -p"), None);
     }
 }

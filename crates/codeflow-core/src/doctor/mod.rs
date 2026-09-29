@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -151,7 +151,7 @@ impl Options {
         if let Some(f) = self.exec_command {
             f(cmd, args)
         } else {
-            let output = std::process::Command::new(cmd)
+            let output = crate::git::process(cmd)
                 .args(args)
                 .output()
                 .map_err(|e| e.to_string())?;
@@ -180,7 +180,7 @@ impl Options {
         if let Some(f) = self.exec_command_stdin {
             f(cmd, args, stdin)
         } else {
-            let mut child = std::process::Command::new(cmd)
+            let mut child = crate::git::process(cmd)
                 .args(args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -1522,7 +1522,7 @@ struct ProbeCapture {
 }
 
 fn run_bounded_command(cmd: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
-    let mut command = Command::new(cmd);
+    let mut command = crate::git::process(cmd);
     command
         .args(args)
         .stdout(Stdio::piped())
@@ -1592,7 +1592,7 @@ fn terminate_process_tree(child: &mut std::process::Child) {
     {
         // Spawn without waiting so an unavailable or wedged helper cannot
         // extend the probe deadline. The direct-child kill below is immediate.
-        let _ = Command::new("taskkill.exe")
+        let _ = std::process::Command::new("taskkill.exe")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -4115,7 +4115,7 @@ mod tests {
     /// git in a tempdir, isolated from the host config (mirrors orient's
     /// test helper — both surfaces resolve hook wiring the same way).
     fn git(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

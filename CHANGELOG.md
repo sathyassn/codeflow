@@ -1011,6 +1011,58 @@ publication date._
   or `case` bodies is judged too. This also blocks a commit written inside a
   subshell such as `(cd <repo> && git commit)`.
 
+<!-- codeflow:release-impact patch -->
+- **exec-guard refuses a protected deletion however it is composed.** The
+  catastrophic floor refused `rm -rf /` and `rm -rf ~` but let the same
+  deletion through as `find / -delete`, `find / -exec rm -rf {} +`,
+  `ls / | xargs rm -rf`, `rm -rf /Users/<name>`, `cd ~ && rm -rf *` or
+  `D=/; rm -rf $D`, or inside a subshell, group, `if`, `for`, `while` or
+  `case` body. The same holds for `rsync --delete` into a protected
+  directory, `${HOME:-/}` and `~user`, a link that lands on one, and a
+  deletion behind `command`, `env`, `nice` or a here-string. A `find` rooted
+  at a protected directory with `-delete` or an `-exec` remover is refused
+  whatever its tests, so `find ~ -name .DS_Store -delete` is now refused.
+  Each is refused as its `rm -rf` equivalent is. A variable or directory
+  that may hold a protected value on any path is refused too, and the
+  message then says so. Functions, `local`, positional parameters, arrays,
+  `read`, `IFS`, aliases, `eval`, `command cd` and `builtin cd` are
+  followed as the shell runs them, and so are traps, zsh hook functions,
+  `coproc`, arithmetic and a `cd` that may fail. exec-guard allows only the
+  shell it models: after anything else, such as a sourced file,
+  `declare -n`, `enable`, `emulate`, `set -k`, a trap it cannot read, an
+  assignment to `CDPATH` or `BASH_ENV`, zsh-only syntax, or a command named
+  by a value it cannot see, a deletion whose target depends on the state
+  is refused as unproven, and the message asks for the project path written
+  literally. A deletion inside the project, such as
+  `find . -name '*.o' -delete`, still runs.
+
+<!-- codeflow:release-impact patch -->
+- **A peer CLI's help no longer counts as a headless run.** `claude --help
+  -p` and `codex exec --help` print help and exit, so exec-guard no longer
+  reports them under `security.headless_peer_runs`; at the `block` level
+  they were refused. The same word as a prompt, an option's value or after
+  `--`, as in `codex exec -- --help`, is still reported.
+
+<!-- codeflow:release-impact patch -->
+- **A peer CLI started through a package runner counts as a headless run.**
+  `npx @anthropic-ai/claude-code -p`, `bunx @openai/codex exec`, and the
+  same through `npm exec`, `npm x`, `bun x`, `pnpm dlx`, `yarn dlx`, pnpm
+  11's `pnx` and `pn dlx`, or an installed peer through `pnpm exec` or
+  `pn exec`, are now judged as the direct
+  `claude -p` or `codex exec` is, under `security.headless_peer_runs` at
+  both `warn` and `block`; before, they passed unreported. The runner's own
+  `--help` or `--version` runs nothing and passes.
+
+<!-- codeflow:release-impact patch -->
+- **A git hook runs the codeflow that started git.** When a `codeflow`
+  command ran git, such as `task new` pushing its reservation to the
+  registry, the hook git fired ran whichever `codeflow` was first on PATH;
+  an older one there refused the registry push. codeflow now names its own
+  binary in `CODEFLOW_HOOK_BINARY` for its git children only, and the hook
+  shims run that binary, failing the hook when it is missing or not
+  executable. Git run outside codeflow still uses the `codeflow` on PATH.
+  Run `codeflow update` to install the new shims.
+
 ### Changed
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
