@@ -3,7 +3,7 @@
 //! A thin adapter over two existing security modules — [`DangerousModule`] and
 //! [`PrivilegeModule`] — that runs them against a Bash command, plus the
 //! headless peer run check (`claude -p`, `codex exec`, `grok -p`; TSK-136) at
-//! the level `security.headless_peer_runs` sets, `warn` by default. Catastrophic
+//! the level `security.headless_peer_runs` sets, `block` by default. Catastrophic
 //! commands are a non-relaxable block; privilege escalation maps to the level
 //! configured in `policy.json`'s `security` section. It sits alongside
 //! `git-guard` on the `PreToolUse` (Bash/PowerShell) event and
@@ -20,14 +20,14 @@
 //!   `dd` to a block device; `mkfs`; fork bombs; recursive chmod/chown on system
 //!   paths. None of these is ever a legitimate project operation, so there is no
 //!   sanctioned path to offer — a hard block is the whole point.
-//! - **`privilege_escalation` = warn, deliberately NOT block.** sudo/su/doas/
-//!   pkexec, shell `-c` chains, `LD_PRELOAD`/PATH injection. A hook that exited 2
-//!   here would override even an explicit human approval, because a `PreToolUse`
-//!   deny wins unconditionally. The guard therefore advises on stderr; the agent
-//!   obtains applicable task authority in the authenticated conversation and
-//!   observes effective harness controls. Some production modes show no
-//!   permission prompt. Set `block` in `policy.json` to harden a specific repo;
-//!   authorization never relaxes the catastrophic floor above.
+//! - **`privilege_escalation` = block** (operator decision D5, ADR-0075,
+//!   amending ADR-0008's warn). sudo/su/doas/pkexec, shell `-c` chains,
+//!   `LD_PRELOAD`/PATH injection. Agent sessions no longer prompt for these:
+//!   the presets deny the plain forms and this guard refuses the rest, and
+//!   the operator runs privileged commands personally. A project may set
+//!   `warn` in `policy.json`; `codeflow update` keeps a value that differs
+//!   from the shipped default. Authorization never relaxes the catastrophic
+//!   floor above.
 //!
 //! These two are the only scanner modules; the unwired v1 modules were
 //! removed (TSK-137). The live git protections are `hooks/git_guard.rs`.
@@ -85,7 +85,7 @@ fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Violation {
     let enforcement = if level == PolicyLevel::Block {
         "configured policy refuses it"
     } else {
-        "the default warn level lets a script outside a delegation run"
+        "the configured warn level lets a script outside a delegation run"
     };
     Violation::new(
         "security.headless_peer_runs",
@@ -120,9 +120,9 @@ fn dangerous_violation(verdict: &Verdict) -> Violation {
 
 fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
     let enforcement = if level == PolicyLevel::Block {
-        "configured policy denies this action"
+        "policy refuses it; the operator runs privileged commands"
     } else {
-        "the default warn policy advises only"
+        "the configured warn level advises only"
     };
     Violation::new(
         "security.privilege_escalation",
@@ -147,26 +147,28 @@ mod tests {
             dangerous_commands: dangerous,
             privilege_escalation: privilege,
             headless_peer_runs: PolicyLevel::Warn,
+            ..SecuritySection::default()
         }
     }
 
     #[test]
-    fn test_headless_peer_run_warns_by_default_and_blocks_when_set() {
+    fn test_headless_peer_run_blocks_by_default_and_warns_when_set() {
         let v = evaluate("codex exec 'fix it'", &SecuritySection::default());
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "security.headless_peer_runs");
-        assert_eq!(v[0].level, PolicyLevel::Warn);
-        assert!(!any_blocking(&v));
+        assert_eq!(v[0].level, PolicyLevel::Block);
+        assert!(any_blocking(&v));
         assert!(v[0].message.contains("`codex exec`"));
         assert!(v[0].remedy.contains("codeflow delegate"));
 
-        let block = SecuritySection {
-            headless_peer_runs: PolicyLevel::Block,
+        let warn = SecuritySection {
+            headless_peer_runs: PolicyLevel::Warn,
             ..SecuritySection::default()
         };
-        let v = evaluate("claude -p 'review'", &block);
-        assert_eq!(v[0].level, PolicyLevel::Block);
-        assert!(any_blocking(&v));
+        let v = evaluate("claude -p 'review'", &warn);
+        assert_eq!(v[0].level, PolicyLevel::Warn);
+        assert!(!any_blocking(&v));
+        let block = SecuritySection::default();
 
         let off = SecuritySection {
             headless_peer_runs: PolicyLevel::Off,
@@ -177,10 +179,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_levels_are_block_and_warn() {
+    fn test_default_levels_block() {
         let s = SecuritySection::default();
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
-        assert_eq!(s.privilege_escalation, PolicyLevel::Warn);
+        assert_eq!(s.privilege_escalation, PolicyLevel::Block);
     }
 
     #[test]
@@ -211,18 +213,25 @@ mod tests {
     }
 
     #[test]
-    fn test_privilege_warns_not_blocks_by_default() {
-        // sudo produces advice, not a veto; task authority and technical harness
-        // prompting are separate, and some production modes show no prompt.
+    fn test_privilege_blocks_by_default_and_can_be_set_to_warn() {
+        // D5 (ADR-0075): the operator runs privileged commands; a project
+        // may still set warn, which only advises.
         let v = evaluate("sudo apt-get install foo", &SecuritySection::default());
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "security.privilege_escalation");
-        assert_eq!(v[0].level, PolicyLevel::Warn);
-        assert!(
-            !any_blocking(&v),
-            "privilege escalation must not block by default"
+        assert_eq!(v[0].level, PolicyLevel::Block);
+        assert!(any_blocking(&v));
+        assert!(v[0]
+            .remedy
+            .contains("the operator runs privileged commands"));
+
+        let v = evaluate(
+            "sudo apt-get install foo",
+            &levels(PolicyLevel::Block, PolicyLevel::Warn),
         );
-        assert!(v[0].remedy.contains("default warn policy advises only"));
+        assert_eq!(v[0].level, PolicyLevel::Warn);
+        assert!(!any_blocking(&v));
+        assert!(v[0].remedy.contains("configured warn level advises only"));
         assert!(v[0].remedy.contains("may show no permission prompt"));
         assert!(!v[0].remedy.contains("approve it there"));
     }
@@ -236,7 +245,7 @@ mod tests {
         assert_eq!(v[0].rule, "security.privilege_escalation");
         assert_eq!(v[0].level, PolicyLevel::Block);
         assert!(any_blocking(&v));
-        assert!(v[0].remedy.contains("configured policy denies"));
+        assert!(v[0].remedy.contains("policy refuses it"));
         assert!(!v[0].remedy.contains("advises only"));
     }
 
