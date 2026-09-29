@@ -838,7 +838,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
     // 2026-09-26); the map states it, CLAUDE.md carries the stage detail.
     let agents = normalize_whitespace(&agents);
     for required in [
-        "Orchestration entry is decided by touched paths",
+        "Before any research or edit, decide entry by touched paths",
         "`/cf-model-orchestrator`",
         "when unsure, route",
     ] {
@@ -863,8 +863,12 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         ),
         "orchestrator lost the research-only exit"
     );
+    // The routing gate is the first section after the import: the Claude
+    // trigger (invoke before you inspect) for the map's route rule.
     let claude_normalized = normalize_whitespace(&claude);
     for required in [
+        "@AGENTS.md ## Routing gate Invoke `/cf-model-orchestrator` (the Skill tool) before you inspect.",
+        "Do not inspect first and route later",
         "`/cf-model-orchestrator` once per brief",
         "are supporting or solo flows, not alternate entry points",
         "when unsure, route",
