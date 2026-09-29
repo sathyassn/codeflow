@@ -4,7 +4,7 @@ use std::path::Path;
 
 /// git in a directory, isolated from the host's config.
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
+    let out = crate::git::command()
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -749,7 +749,7 @@ fn repo_integrity(dir: &Path) -> crate::doctor::CheckResult {
     let opts = crate::doctor::Options {
         project_dir: dir.to_string_lossy().into_owned(),
         exec_command: Some(|program, args| {
-            let out = std::process::Command::new(program)
+            let out = crate::git::process(program)
                 .args(args)
                 .output()
                 .map_err(|e| e.to_string())?;

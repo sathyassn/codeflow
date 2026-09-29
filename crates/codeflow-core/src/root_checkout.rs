@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::hooks::policy::{GitPolicy, PolicyLevel};
 use crate::hooks::{Violation, HUMAN_OVERRIDE_ENV};
@@ -559,7 +559,7 @@ impl NestedRepo {
 
 /// Run git in `root` with `input` on stdin; stdout on success.
 fn git_stdin(root: &Path, args: &[&str], input: &[u8]) -> Option<Vec<u8>> {
-    let mut child = Command::new("git")
+    let mut child = crate::git::command()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -1255,7 +1255,7 @@ fn stop(message: String, next_step: String) -> WorkspaceError {
 }
 
 fn git_run(root: &Path, args: &[&str]) -> Result<(), String> {
-    let out = Command::new("git")
+    let out = crate::git::command()
         .arg("-C")
         .arg(root)
         .args(args)
