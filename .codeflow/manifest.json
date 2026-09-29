@@ -23,7 +23,7 @@
     ".agents/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "9be8f3a59f9aaf71da5e849df2ee2601668e4524f20a801013760a9e5a83c77a",
+      "sha256": "2652ce44befb496eebec60e531f6efc6a4cc61c7206c6b2fe6e6a64181897072",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/agy.md": {
@@ -35,7 +35,7 @@
     ".agents/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "789a71152813e51d86cfd0d9e7cf08d2d4bdd8ad2deb48cc225765360c6461ed",
+      "sha256": "8d814313aa021a03022442cb9470289b64c107f0498d601ad6056a0a87c5fe83",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/edit-access.md": {
@@ -47,7 +47,7 @@
     ".agents/skills/cf-delegate/resources/lane-lifecycle.md": {
       "src": "claude/skills/cf-delegate/resources/lane-lifecycle.md",
       "ownership": "managed",
-      "sha256": "e0f14831228e319f25361628ae825560c9071b9f20443f041b7ea9ef25681043",
+      "sha256": "d2fa5669bc8e63feda1169966a01c329f43e0c19ce04bf9b9dafce800f76a868",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/lane-plugin.md": {
@@ -647,13 +647,13 @@
     ".agents/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "e58f18adbf140e040372d4fe794df5775a9e978b4913212c4ac8877ca9720859",
+      "sha256": "e0856aaf299d4c7cf617f49298dd613b1724513bd78f1467353e10f7be21145e",
       "exec": false
     },
     ".agents/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "32d449dd1a8ceb972f5ec3674b42310115eabc5ec81a61b58191a75843dcb867",
+      "sha256": "245722f625dbe6cfbab2980ee483ffc50ec3fdc3ef4b65d2f7e5b37824e31ad7",
       "exec": false
     },
     ".agents/skills/cf-ship/references/release-policy.md": {
@@ -707,7 +707,7 @@
     ".claude/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "9be8f3a59f9aaf71da5e849df2ee2601668e4524f20a801013760a9e5a83c77a",
+      "sha256": "2652ce44befb496eebec60e531f6efc6a4cc61c7206c6b2fe6e6a64181897072",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/agy.md": {
@@ -719,7 +719,7 @@
     ".claude/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "789a71152813e51d86cfd0d9e7cf08d2d4bdd8ad2deb48cc225765360c6461ed",
+      "sha256": "8d814313aa021a03022442cb9470289b64c107f0498d601ad6056a0a87c5fe83",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/edit-access.md": {
@@ -731,7 +731,7 @@
     ".claude/skills/cf-delegate/resources/lane-lifecycle.md": {
       "src": "claude/skills/cf-delegate/resources/lane-lifecycle.md",
       "ownership": "managed",
-      "sha256": "e0f14831228e319f25361628ae825560c9071b9f20443f041b7ea9ef25681043",
+      "sha256": "d2fa5669bc8e63feda1169966a01c329f43e0c19ce04bf9b9dafce800f76a868",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/lane-plugin.md": {
@@ -1331,13 +1331,13 @@
     ".claude/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "e58f18adbf140e040372d4fe794df5775a9e978b4913212c4ac8877ca9720859",
+      "sha256": "e0856aaf299d4c7cf617f49298dd613b1724513bd78f1467353e10f7be21145e",
       "exec": false
     },
     ".claude/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "32d449dd1a8ceb972f5ec3674b42310115eabc5ec81a61b58191a75843dcb867",
+      "sha256": "245722f625dbe6cfbab2980ee483ffc50ec3fdc3ef4b65d2f7e5b37824e31ad7",
       "exec": false
     },
     ".claude/skills/cf-ship/references/release-policy.md": {
@@ -1397,13 +1397,13 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "46055e483ed8b0e33048dd614d38717d7345c4c659d9e7ec9a55a8bec75240c7",
+      "sha256": "693885298fc5962ba8b4c25c4cf39c5bb4206a34e3668101771f50530edcdcc8",
       "exec": false
     },
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "c02b6068728693d89fed32b367765f4171e0e96325bae693f33f7242721b38f6",
+      "sha256": "3da24b6ab2215cac5ce70bb00f6d21bba8c8375bca5f144fb8eb61634ea5f1e1",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {

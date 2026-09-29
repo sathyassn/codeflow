@@ -384,6 +384,75 @@ fn clears_session_summary_unwritten() {
     }
 }
 
+#[test]
+fn clears_refusal_unrecorded() {
+    // TSK-149: a directory where the refusals ledger writes its data file.
+    // The guard still refuses; the warning names the path and its repair,
+    // and after the repair the next refusal is recorded.
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    let blocker = ".git/codeflow/ledger/refusals/refusals.jsonl";
+    std::fs::create_dir_all(root.join(blocker)).unwrap();
+    let repair = "remove the directory that stands where the ledger writes a file: ";
+    prove(
+        "REFUSAL_UNRECORDED",
+        "refusal not recorded",
+        || guard(root, "git-guard", "git push origin main"),
+        |printed| {
+            let named = printed
+                .split(repair)
+                .nth(1)
+                .and_then(|rest| rest.split("; the refusals ledger").next())
+                .unwrap_or_else(|| panic!("no repair named:\n{printed}"));
+            let named = Path::new(named);
+            assert!(named.ends_with(blocker), "{printed}");
+            std::fs::remove_dir(named).unwrap();
+        },
+    );
+    assert!(
+        read(root, blocker).contains(r#""event":"refusal""#),
+        "the refusal after the repair is recorded"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn clears_refusal_unrecorded_behind_a_held_lock() {
+    // TSK-149 review round 1: another process holds the ledger's lock past
+    // the bounded wait. The guard still refuses; the warning names the lock
+    // file, and once its holder ends the next refusal is recorded.
+    use std::os::unix::io::AsRawFd;
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    let ledger = ".git/codeflow/ledger/refusals/refusals.jsonl";
+    let lock = root.join(format!("{ledger}.lock"));
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let holder = std::fs::File::create(&lock).unwrap();
+    // SAFETY: flock on a descriptor this test owns.
+    assert_eq!(unsafe { libc::flock(holder.as_raw_fd(), libc::LOCK_EX) }, 0);
+    let holder = std::cell::RefCell::new(Some(holder));
+    let repair = "end the process that holds the lock on the ledger file, or wait for it: ";
+    prove(
+        "REFUSAL_UNRECORDED",
+        "refusal not recorded",
+        || guard(root, "git-guard", "git push origin main"),
+        |printed| {
+            let named = printed
+                .split(repair)
+                .nth(1)
+                .and_then(|rest| rest.split("; the refusals ledger").next())
+                .unwrap_or_else(|| panic!("no repair named:\n{printed}"));
+            assert!(
+                Path::new(named).ends_with(format!("{ledger}.lock")),
+                "{printed}"
+            );
+            // The holder ends.
+            holder.borrow_mut().take();
+        },
+    );
+    assert!(read(root, ledger).contains(r#""event":"refusal""#));
+}
+
 /// Run the `.claude/settings.json` entry that wires `hook <guard>` the way
 /// Claude Code does: its command in a shell, the tool payload on stdin.
 fn wired_guard(root: &Path, guard: &str, payload: &str) -> String {

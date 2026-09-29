@@ -340,9 +340,22 @@ pub struct GitPolicy {
     /// when a kept template's headings do not match the required sections.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_section_mapping: Option<PrSectionMapping>,
+    /// The glob naming release branches (SPC-013 R-120). Read only from the
+    /// policy at the default target's tip at the destination, never from a
+    /// local ref or the range being judged; absent there, the built-in
+    /// `integration/release-*` applies. A pattern that could match the
+    /// default target or an epic line (`integration/EPC-*`) is refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_branch_pattern: Option<String>,
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
+    /// Unresolved conflict markers on the lines a change adds to a text
+    /// file (TSK-170): the pre-commit hook judges the staged diff and
+    /// `codeflow ci` the range. Level (off/warn/allow/block); default
+    /// `block`. A file that must hold markers sets `conflict-marker-size`
+    /// for its path in `.gitattributes`. Suspended by bootstrap grace.
+    pub conflict_markers: PolicyLevel,
     pub test_gate_on_push: PolicyLevel,
     pub security_review: PolicyLevel,
     pub dep_audit: PolicyLevel,
@@ -406,6 +419,7 @@ impl Default for GitPolicy {
             direct_changes: "allow".to_string(),
             automation_profiles: Vec::new(),
             pr_section_mapping: None,
+            release_branch_pattern: None,
             branch_naming: PolicyLevel::Block,
             branch_prefixes: [
                 "feat/",
@@ -426,6 +440,7 @@ impl Default for GitPolicy {
             .map(ToString::to_string)
             .collect(),
             secret_scan: PolicyLevel::Block,
+            conflict_markers: PolicyLevel::Block,
             test_gate_on_push: PolicyLevel::Block,
             security_review: PolicyLevel::Warn,
             dep_audit: PolicyLevel::Warn,
@@ -831,6 +846,7 @@ impl GitPolicy {
         self.pr_sections = PolicyLevel::Off;
         self.pr_release_impact = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
+        self.conflict_markers = PolicyLevel::Off;
         self.test_gate_on_push = PolicyLevel::Off;
         self.security_review = PolicyLevel::Off;
         self.dep_audit = PolicyLevel::Off;
@@ -1313,6 +1329,18 @@ mod tests {
         let mut g = GitPolicy::default();
         g.suspend_for_bootstrap();
         assert_eq!(g.hook_integrity, PolicyLevel::Off);
+    }
+
+    #[test]
+    fn test_conflict_markers_default_block_and_suspended_by_grace() {
+        // TSK-170 AC-5.
+        assert_eq!(GitPolicy::default().conflict_markers, PolicyLevel::Block);
+        let mut g = GitPolicy::default();
+        g.suspend_for_bootstrap();
+        assert_eq!(g.conflict_markers, PolicyLevel::Off);
+        let shipped: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../assets/base/policy.json")).unwrap();
+        assert_eq!(shipped["git"]["conflict_markers"], "block");
     }
 
     #[test]

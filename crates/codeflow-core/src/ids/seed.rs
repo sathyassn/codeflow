@@ -417,6 +417,7 @@ pub fn backfill(root: &Path) -> Result<BackfillReport, IdsError> {
     };
     let ledger = Ledger::read(&git, &registry)?;
     let mut report = BackfillReport::default();
+    let mut intros = inventory::Introductions::default();
     for (id, paths) in worktree_records(root) {
         for path in paths {
             let text = std::fs::read_to_string(&path)?;
@@ -429,7 +430,7 @@ pub fn backfill(root: &Path) -> Result<BackfillReport, IdsError> {
                     .push(format!("{id}: no registry entry; seed or admit it first"));
                 continue;
             };
-            if !inventory::is_replica(&git, entry, "HEAD", &id)? {
+            if !inventory::is_replica(&git, &mut intros, entry, "HEAD", &id)? {
                 report.refused.push(format!(
                     "{id}: this line's copy is not the registered record (provenance differs); retarget it"
                 ));

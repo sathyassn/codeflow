@@ -23,6 +23,7 @@ mod acceptance;
 mod adopter;
 mod change_class;
 mod classification;
+mod conflict_markers;
 mod id_registry;
 mod pr_body;
 mod work_records;
@@ -89,6 +90,12 @@ pub struct CiArgs {
     #[arg(long, value_name = "LEVEL", hide = true, value_parser = parse_level)]
     pub run_level: Option<PolicyLevel>,
 
+    /// Write the rule id of each blocking finding, one per line, to this
+    /// existing file: the pre-push hook names them in its refusal record
+    /// (TSK-149) without reading them back from the printed findings.
+    #[arg(long, value_name = "FILE", hide = true)]
+    pub blocking_rules_out: Option<PathBuf>,
+
     /// Read PR bodies for `scripts/release.py`, the one reader both use:
     /// a JSON array of body strings on stdin, and on stdout
     /// `{"protocol": READ_PROTOCOL, "readings": [...]}`, each reading the
@@ -98,6 +105,27 @@ pub struct CiArgs {
     /// range.
     #[arg(long, hide = true, exclusive = true)]
     pub read_release_impact: bool,
+
+    /// The branch a pull request merges into (default: the CI-provided
+    /// target branch, else the branch an explicit `--base` names). A range
+    /// whose head or target matches the release pattern is judged as a
+    /// release range (SPC-013 R-120).
+    #[arg(long, value_name = "BRANCH")]
+    pub into: Option<String>,
+
+    /// Where the judged branch lives: the URL or path whose default target
+    /// supplies the release pattern (default: `origin`'s URL). The pre-push
+    /// hook passes the location pushed to.
+    #[arg(long, value_name = "URL", hide = true)]
+    pub destination: Option<String>,
+
+    /// Read the destination's advertisement (`git ls-remote --symref` of
+    /// its HEAD, branches and tags) from stdin instead of asking it again.
+    /// The pre-push hook passes what it already asked. It is the hook's
+    /// hand-off, not an authority: a run given it is advisory only, and
+    /// hosted CI never passes it.
+    #[arg(long, hide = true, requires = "destination")]
+    pub advertisement_stdin: bool,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -266,6 +294,14 @@ pub fn run(args: &CiArgs) -> i32 {
         Some(false) => skipped.push("added-lines"),
         None => {}
     }
+    conflict_markers::dispatch(
+        &root,
+        git,
+        range.base_sha.as_deref(),
+        &head,
+        &mut tagged,
+        &mut ran,
+    );
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
     record_checks(
@@ -296,11 +332,34 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
+    let into = args
+        .into
+        .clone()
+        .or_else(|| detect_target(|k| std::env::var(k).ok().filter(|v| !v.is_empty())))
+        .or_else(|| args.base.as_deref().and_then(named_branch));
+    let destination = args.destination.clone().or_else(|| origin_url(&root));
+    let advertisement = if args.advertisement_stdin {
+        let mut listed = String::new();
+        if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
+            eprintln!(
+                "codeflow ci: cannot read the destination's advertisement from stdin: {error}"
+            );
+            return 2;
+        }
+        Some(listed)
+    } else {
+        None
+    };
     let tracked_claim = work_checks(
         &root,
         git,
         pr_body.as_deref(),
-        &branch,
+        &Names {
+            branch: &branch,
+            into: into.as_deref(),
+            destination: destination.as_deref(),
+            advertisement: advertisement.as_deref(),
+        },
         &base_candidates,
         &head,
         &mut tagged,
@@ -346,7 +405,33 @@ pub fn run(args: &CiArgs) -> i32 {
     if let Some(running) = args.run_level {
         run_under(&root, running, &mut tagged);
     }
+    if let Some(out) = &args.blocking_rules_out {
+        write_blocking_rules(out, &tagged);
+    }
     report(&tagged, &ran, &skipped)
+}
+
+/// The blocking findings' rule ids, one per line, for the pre-push hook's
+/// refusal record. Best effort: the hook then names only its own rule.
+fn write_blocking_rules(out: &Path, tagged: &[TaggedViolation]) {
+    let mut rules: Vec<&str> = Vec::new();
+    for t in tagged
+        .iter()
+        .filter(|t| t.violation.level == PolicyLevel::Block)
+    {
+        if !rules.contains(&t.violation.rule.as_str()) {
+            rules.push(&t.violation.rule);
+        }
+    }
+    let mut text = rules.join("\n");
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(out)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes()));
 }
 
 /// The contract-surface findings under the pull request's Release impact
@@ -409,7 +494,7 @@ fn work_checks<'a>(
     root: &Path,
     git: &GitPolicy,
     pr_body: Option<&str>,
-    branch: &str,
+    names: &Names<'_>,
     base_candidates: &'a [String],
     head: &str,
     tagged: &mut Vec<TaggedViolation>,
@@ -423,6 +508,7 @@ fn work_checks<'a>(
         base,
         head,
     });
+    let branch = names.branch;
     let class = pr_body.and_then(|body| {
         classification::dispatch(root, git, body, branch, range_parts.as_ref(), tagged, ran)
     });
@@ -430,7 +516,7 @@ fn work_checks<'a>(
         root,
         git,
         range_parts.as_ref(),
-        branch,
+        names,
         class.as_ref(),
         tagged,
         ran,
@@ -1219,6 +1305,53 @@ fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> 
     }
 }
 
+/// The branch names a range is judged under (SPC-013 R-120): its head, the
+/// branch a pull request merges into, and the destination that holds them.
+pub(super) struct Names<'a> {
+    pub branch: &'a str,
+    pub into: Option<&'a str>,
+    pub destination: Option<&'a str>,
+    /// The destination's advertisement, when the caller already asked it.
+    pub advertisement: Option<&'a str>,
+}
+
+/// Auto-detect the target branch NAME of a pull request. Verified variable
+/// names: GitHub `GITHUB_BASE_REF`; GitLab
+/// `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`; Bitbucket
+/// `BITBUCKET_PR_DESTINATION_BRANCH`.
+fn detect_target<F: Fn(&str) -> Option<String>>(env: F) -> Option<String> {
+    env("GITHUB_BASE_REF")
+        .or_else(|| env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME"))
+        .or_else(|| env("BITBUCKET_PR_DESTINATION_BRANCH"))
+}
+
+/// The branch an explicit `--base` names (`origin/main` names `main`); a
+/// commit id names none.
+fn named_branch(base: &str) -> Option<String> {
+    let hex = base.len() >= 7 && base.chars().all(|c| c.is_ascii_hexdigit());
+    let name = base
+        .strip_prefix("refs/heads/")
+        .or_else(|| {
+            base.strip_prefix("refs/remotes/")
+                .and_then(|rest| rest.split_once('/').map(|(_, branch)| branch))
+        })
+        .or_else(|| base.strip_prefix("origin/"))
+        .unwrap_or(base);
+    (!hex && !name.is_empty() && !name.contains(['~', '^', ':', '@'])).then(|| name.to_string())
+}
+
+/// `origin`'s fetch URL, when the repository has that remote.
+fn origin_url(root: &Path) -> Option<String> {
+    let out = codeflow_core::git::command()
+        .arg("-C")
+        .arg(root)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()?;
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !url.is_empty()).then_some(url)
+}
+
 /// Auto-detect the head branch NAME to name-check. Verified variable names:
 /// GitHub `GITHUB_HEAD_REF`; GitLab `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` then
 /// `CI_COMMIT_REF_NAME`; Bitbucket `BITBUCKET_BRANCH`.
@@ -1304,9 +1437,15 @@ fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRe
     }
     let mut records = parse_log(&String::from_utf8_lossy(&out.stdout));
     // Populate each commit's touched files for the contract-surface tripwire
-    // (ADR-0020); a per-commit call keeps the -z log parse unambiguous.
+    // (ADR-0020), read apart from the log so its -z parse stays unambiguous.
+    let singles: Vec<&str> = records
+        .iter()
+        .filter(|rec| !rec.is_merge)
+        .map(|rec| rec.sha.as_str())
+        .collect();
+    let mut files = commit_files(root, &singles);
     for rec in records.iter_mut().filter(|rec| !rec.is_merge) {
-        rec.files = commit_files(root, &rec.sha);
+        rec.files = files.remove(&rec.sha).unwrap_or_default();
     }
     Ok(records)
 }
@@ -1352,17 +1491,28 @@ fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, St
     let blobs: BTreeSet<&str> = lines.iter().filter_map(|l| l.blob.as_deref()).collect();
     let contents = read_blobs(root, &blobs.into_iter().collect::<Vec<_>>())?;
     let shipped = shipped_scaffold();
+    // Decided once per file, not per line: the shipped asset is read and
+    // compared once.
+    let mut scanned: BTreeMap<(String, String), bool> = BTreeMap::new();
     // A line without a blob id cannot be classified, so it is scanned.
     Ok(lines
         .into_iter()
         .filter(|added| {
-            let Some(content) = added.blob.as_ref().and_then(|b| contents.get(b)) else {
+            let Some((blob, content)) = added
+                .blob
+                .as_ref()
+                .and_then(|b| contents.get(b).map(|content| (b, content)))
+            else {
                 return true;
             };
-            !is_binary(content)
-                && !shipped
-                    .as_ref()
-                    .is_some_and(|m| m.installs_verbatim(&EmbeddedAssets, &added.path, content))
+            *scanned
+                .entry((added.path.clone(), blob.clone()))
+                .or_insert_with(|| {
+                    !is_binary(content)
+                        && !shipped.as_ref().is_some_and(|m| {
+                            m.installs_verbatim(&EmbeddedAssets, &added.path, content)
+                        })
+                })
         })
         .collect())
 }
@@ -1400,31 +1550,43 @@ fn read_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeMap<String, Vec<u8>>, 
     if blobs.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let mut child = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["cat-file", "--batch"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let mut stdin = child.stdin.take().ok_or("git cat-file: no stdin")?;
     let mut input = String::new();
     for blob in blobs {
         input.push_str(blob);
         input.push('\n');
     }
+    let out = git_with_stdin(root, &["cat-file", "--batch"], input)?;
+    parse_batch(&out, blobs)
+}
+
+/// Run `git <args>` in `root` with `input` on stdin and return its stdout.
+/// The input is written from its own thread, so a large output cannot
+/// deadlock the pipes.
+fn git_with_stdin(root: &Path, args: &[&str], input: String) -> Result<Vec<u8>, String> {
+    let name = args.first().copied().unwrap_or_default();
+    let mut child = codeflow_core::git::command()
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("git {name}: no stdin"))?;
     let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     writer
         .join()
-        .map_err(|_| "git cat-file: input writer panicked".to_string())?
+        .map_err(|_| format!("git {name}: input writer panicked"))?
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    parse_batch(&out.stdout, blobs)
+    Ok(out.stdout)
 }
 
 /// Read `git cat-file --batch` output for `queried` blob ids, in order.
@@ -1590,25 +1752,42 @@ fn hunk_header(header: &str) -> Option<(usize, usize, usize)> {
     Some((old_count, new_start, new_count))
 }
 
-/// Files a single commit touches (`git diff-tree --no-commit-id --name-only -r`).
-/// Empty on any error — the tripwire is advisory, so an unavailable list means
-/// no nudge.
-fn commit_files(root: &Path, sha: &str) -> Vec<String> {
-    codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["diff-tree", "--no-commit-id", "--name-only", "-r", sha])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+/// Files each of `shas` (non-merge commits) touches against its parent, read
+/// in one `git diff-tree --stdin -r` instead of a process per commit. A root
+/// commit, as before, lists none. `--raw -z` keeps the parse unambiguous: a
+/// path always follows a `:` status field, so any other field is the next
+/// commit's id. Empty on any error: the tripwire is advisory, so an
+/// unavailable list means no nudge.
+fn commit_files(root: &Path, shas: &[&str]) -> BTreeMap<String, Vec<String>> {
+    let mut files: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if shas.is_empty() {
+        return files;
+    }
+    let mut input = String::new();
+    for sha in shas {
+        input.push_str(sha);
+        input.push('\n');
+    }
+    let Ok(out) = git_with_stdin(root, &["diff-tree", "--stdin", "-r", "--raw", "-z"], input)
+    else {
+        return files;
+    };
+    let text = String::from_utf8_lossy(&out);
+    let mut fields = text.split('\0');
+    let mut commit: Option<&str> = None;
+    while let Some(field) = fields.next() {
+        if field.starts_with(':') {
+            if let (Some(path), Some(sha)) = (fields.next(), commit) {
+                files
+                    .entry(sha.to_string())
+                    .or_default()
+                    .push(path.to_string());
+            }
+        } else if !field.trim().is_empty() {
+            commit = Some(field.trim());
+        }
+    }
+    files
 }
 
 /// Parse the NUL-delimited `git log --format=%H %P%n%B` output into records;
@@ -2711,6 +2890,62 @@ mod tests {
     fn parse_log_empty_is_empty() {
         assert!(parse_log("").is_empty());
         assert!(parse_log("\0").is_empty());
+    }
+
+    /// One batched read gives each commit its own files: a root commit and
+    /// an empty commit list none, a deletion and an unusual name are kept,
+    /// and a file named like another commit's id stays a file.
+    #[test]
+    fn commit_files_reads_every_commit_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let out = codeflow_core::git::command()
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.test"])
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let write = |path: &str| {
+            let file = dir.path().join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, path).unwrap();
+        };
+        run(&["init", "-q", "-b", "main"]);
+        write("a.md");
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "root"]);
+        let root = run(&["rev-parse", "HEAD"]);
+        write("d/b.md");
+        write("sp ace.md");
+        run(&["rm", "-q", "a.md"]);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "one"]);
+        let one = run(&["rev-parse", "HEAD"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "empty"]);
+        let empty = run(&["rev-parse", "HEAD"]);
+        write(&one);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "named"]);
+        let named = run(&["rev-parse", "HEAD"]);
+
+        let files = commit_files(dir.path(), &[&named, &empty, &one, &root]);
+        assert_eq!(files.get(&named), Some(&vec![one.clone()]));
+        assert_eq!(
+            files.get(&one),
+            Some(&vec![
+                "a.md".to_string(),
+                "d/b.md".to_string(),
+                "sp ace.md".to_string()
+            ])
+        );
+        assert_eq!(files.get(&empty), None);
+        assert_eq!(files.get(&root), None);
+        assert_eq!(files.len(), 2);
     }
 
     #[test]
