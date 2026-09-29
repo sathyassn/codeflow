@@ -4,9 +4,9 @@
     "id": "adoption-daily",
     "family": "sequence",
     "binding": "authored",
-    "question": "What are the steps from a commit to a merged pull request?",
-    "idea": "The hooks check each commit and push, the pull request shows green checks, and only a human merges it.",
-    "title": "The daily flow from commit to merge",
+    "question": "What are the steps from a commit to a landed pull request?",
+    "idea": "The hooks check each commit and push, the pull request names its task and shows green checks after one review, and only a human merges into a protected branch.",
+    "title": "The daily flow from commit to landing",
     "kicker": "How-to",
     "caption": "Every step is checked on the way, and the last one belongs to a person: an agent's merge into a protected base is refused.",
     "states": [
@@ -178,7 +178,7 @@
           "id": "m5"
         },
         {
-          "text": "open from the template",
+          "text": "open with a Task: line",
           "x": 215,
           "y": 236,
           "anchor": "middle",
@@ -194,7 +194,7 @@
           "id": "m6"
         },
         {
-          "text": "required checks green",
+          "text": "one review, checks green",
           "x": 215,
           "y": 282,
           "anchor": "middle",
@@ -432,7 +432,7 @@
           ]
         },
         {
-          "text": "open from the template",
+          "text": "open with a Task: line",
           "x": 8,
           "y": 292,
           "for": [
@@ -466,7 +466,7 @@
           ]
         },
         {
-          "text": "required checks green",
+          "text": "one review, checks green",
           "x": 8,
           "y": 352,
           "style": "mute",
@@ -565,7 +565,7 @@
         [
           "1",
           "commit",
-          "`pre-commit` and `commit-msg`: secrets, format"
+          "`pre-commit` and `commit-msg`: secrets, conflict markers, format"
         ],
         [
           "2",
@@ -574,8 +574,8 @@
         ],
         [
           "3",
-          "open the pull request from the template",
-          "the required CI checks"
+          "open one pull request for the whole task, with a `Task:` line",
+          "`codeflow ci`: the task or epic named, the template sections, the record rules; then one review by the other lineage"
         ],
         [
           "4",
@@ -584,8 +584,8 @@
         ],
         [
           "5",
-          "a human merges",
-          "the person, once checks are green"
+          "a human merges, or the reviewed head lands with the next batch on the integration line",
+          "the person, once checks are green; the primary, with one full gate on the batch"
         ]
       ]
     }

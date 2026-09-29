@@ -280,16 +280,18 @@ Tell `codeflow test` which commands to run for each part of the project.
 ### Organize durable work
 
 At the full tier, durable work lives in `project-management/` as records with
-stable IDs.
+stable ids. How they move to `main` is on
+[how work moves to main](delivery.md); this table is the mechanics.
 
 | Record or step | How |
 |---|---|
-| Epic (EPC) | `codeflow epic new` |
-| Spec (SPC) | `codeflow spec new --for <epic-or-task>` |
-| Task (TSK) | `codeflow task new` |
-| Plan | Plan them on a `plan/` branch, and merge the planning PR into each task's `integration_target` |
-| Start a task | Run `codeflow work start TSK-NNN` on `task/TSK-NNN-<slug>` before editing |
-| A team tracker already owns the portfolio | Link its IDs in `external_refs`; do not mirror its status, specs or task trees |
+| Epic (EPC) | `codeflow epic new`, in the one planning PR that breaks a brief or spec into the epic, every task with its criteria, and the edges |
+| Spec (SPC) | `codeflow spec new --for <epic-or-task>`, when a contract consumers rely on must be pinned; approved once it has no open questions |
+| Task (TSK) in an epic | `codeflow task new` on the epic's `plan/` branch; the record is anchored in that planning change |
+| Standalone task | `codeflow task new --standalone-reason <why>` on the task's own branch; the record and the code land in the same reviewed PR |
+| Start a task | `codeflow work claim TSK-NNN`, then `codeflow work start TSK-NNN` on `task/TSK-NNN-<slug>` before editing. Add `--on TSK-NNN@<sha>` to build on a predecessor's reviewed head before it lands |
+| A later change of scope | One batched epic amendment on a `plan/` branch, reviewed once; a task changes only its own criteria, in its own PR, and CI prints the change for the reviewer |
+| A team tracker already owns the portfolio | Link its ids in `external_refs`; do not mirror its status, specs or task trees |
 
 ### Update
 
@@ -377,70 +379,59 @@ set is kept.
 
 ### The daily flow
 
-Every task follows the same loop, and a gate checks each step.
+One task, one pull request, and a check at every step.
 
 1. **Orient and route.** Read the SessionStart digest, or run `codeflow orient`,
    for branch and worktree state, work counts, recent ADR titles, gate status
-   and pointers. Read the pointed docs for depth. Begin every non-trivial task
-   with `/cf-model-orchestrator`, which runs only the stages the outcome needs
-   and says so when a native peer seat is unavailable.
-2. **Branch in a worktree.** Work on a `{prefix}/{kebab-name}` branch in a
-   worktree, never on the root protected-branch checkout.
+   and pointers. Read the pointed docs for depth. The paths a change touches
+   decide its entry: an adopter-facing path (product code, managed
+   instructions, hooks, policy, CI, shipped templates, watched contracts), or
+   plan, design, security or irreversible work, starts with
+   `/cf-model-orchestrator`, which says so when a native peer seat is
+   unavailable; other edits go direct.
+2. **Attach to a task and branch in a worktree.** Every change names a task
+   before substantive work starts, an existing one or a new one. Work on a
+   `task/TSK-NNN-<slug>` branch, or another `{prefix}/{kebab-name}`, in a
+   worktree, never on the root checkout.
 3. **Commit small.** The hooks in the table below check every commit, merge and
-   push. Keep `codeflow test` and `codeflow validate --docs` green before push.
-4. **Land by PR, merged by a human.** Push the branch and open a PR from the
-   template (summary, changes, testing, reviews, release impact). A human merges
-   it when the required checks are evidenced green. An infrastructure-killed
-   duplicate CI job is not a failed check. An agent's `gh pr merge` into a
-   protected base is blocked.
-5. **With no remote**, land with `codeflow integrate <branch> --into <target>`.
+   push. Keep `codeflow test --mode quick` and `codeflow validate --docs` green
+   before push, and merge the current integration line into the branch before
+   asking for review, so conflicts surface in the task.
+4. **Open one PR for the whole task.** Its body carries a `Task:` line naming
+   the task, or the epic for a planning-only change, the template sections,
+   and the test evidence with revision and command. `codeflow ci` refuses a PR
+   that names no task and no epic. The Release impact section is required
+   only into a protected branch or with a breaking commit.
+5. **One review, then land.** A seat of the other model lineage reviews the
+   whole change once, and a material finding is fixed in the same PR. The
+   reviewed head lands with the next batch on the integration line, or, when
+   the PR targets `main`, a human merges it when the required checks are
+   evidenced green. An infrastructure-killed duplicate CI job is not a failed
+   check. An agent's `gh pr merge` into a protected base is blocked.
+6. **With no remote**, land with `codeflow integrate <branch> --into <target>`.
    A human can override the git layer for a local merge with
    `CODEFLOW_HUMAN_OVERRIDE=1`.
 
 | Hook | Checks |
 |---|---|
-| `pre-commit` | Commit on a protected branch, secret scan, and the read-only durable-work preflight |
+| `pre-commit` | Commit on a protected branch, secret scan, and unresolved conflict markers on added lines |
 | `commit-msg` | Conventional format, description of at most 50 characters, subject of at most 72, bullet-only body (ADR-0020), no AI attribution, no emoji |
 | `pre-merge-commit`, `reference-transaction` | Protected-branch merge and ref rules; `reference-transaction` also catches fast-forward merges, `reset --hard` and `branch -D` |
 | `pre-push` | Branch naming, protected-branch rules, test gate |
 
-The PR shows green required checks, and a human merges it.
-
-### A body of work: the integration branch
-
-A multi-task epic lands on one shared integration branch, and only the finished
-body reaches `main`.
-
-1. Branch `integration/<epic>` off `main`. It is not protected, so agents merge
-   tasks into it. Every other gate still applies.
-2. Parallelize only independent tasks whose isolation pays for the
-   coordination. Give each one owner, branch and worktree, give shared contracts
-   and conflict hotspots one owner, and cap concurrency by memory, CPU, disk,
-   model contexts and browser or tool capacity.
-3. Land tasks one at a time with `codeflow integrate <task> --into
-   integration/<epic>` or a PR based on the integration branch, and rerun the
-   affected gates after each landing.
-4. Run the ship flow, the aggregate suite and both-model review on the
-   combined integration diff.
-5. Raise one human-reviewed PR from the integration branch into `main`.
-
-- Never run two writers in one worktree, and never rebase the shared
-  integration branch.
-- The integration branch is never a backdoor to `main`, which stays
-  human-merge-only.
-- A different landing shape needs a recorded Plan vN rationale and approval
-  from both primary model seats before allocation.
-
-The integration worktree is green, and `main` changes only through the one
-human-merged PR. The full procedure is in cf-method's "Managing a body of work".
+The PR shows green required checks, and a human merges it. How a batch of
+reviewed tasks lands with one full gate, how an epic closes into `main`, and
+what happens when something changes midway are on
+[how work moves to main](delivery.md).
 
 ### Related guides
 
 | Topic | Guide |
 |---|---|
+| How work moves from a request to `main`: one PR per task, batches, epic close | [how work moves to main](delivery.md) |
 | The opt-in repository guide portal, and reading this guide locally | [opt-in documentation portal](capabilities/CAP-015-opt-in-documentation-portal.md) |
 | Second opinions and edit handoffs to the other model family | [delegation](delegation.md) |
 | Interactive review documents for complex results | [interactive review documents](present-guide.md) |
-| Task graphs, stronger verification techniques and choosing a code analyzer | [duo model orchestration](capabilities/CAP-010-duo-model-orchestration.md) |
+| The record rules, stronger verification techniques and choosing a code analyzer | [duo model orchestration](capabilities/CAP-010-duo-model-orchestration.md) |
 | What each of the four enforcement planes catches | [enforcement planes](architecture/enforcement-planes.md) |
 | Where durable work belongs next to an external tracker | [duo model orchestration](capabilities/CAP-010-duo-model-orchestration.md) |

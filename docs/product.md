@@ -38,7 +38,7 @@ What CodeFlow is not. Planning is checked against each row.
 ## Architecture
 
 The record CodeFlow maintains is six layers, one per question a later reader
-asks, and each changes at its own pace.
+asks: WHY, RULES, WHAT, WORK, HOW and TRACE.
 
 - The first five layers are committed Markdown. Structured records carry YAML
   frontmatter; the capability registry carries one YAML fence per capability.

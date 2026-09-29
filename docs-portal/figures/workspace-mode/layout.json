@@ -1,0 +1,536 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "workspace-layout",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What does an umbrella repository hold, and where does each nested project's work happen?",
+    "idea": "The umbrella tracks its shared files and worktrees on its root branch, and each nested project is its own repository that the umbrella ignores and never commits.",
+    "title": "An umbrella repository and the projects inside it",
+    "kicker": "Workspace mode",
+    "caption": "Sessions start at the umbrella's root and read its settings, while every nested project keeps its own policy, root branch and worktrees.",
+    "states": [
+      {
+        "name": "umbrella",
+        "mark": "layer-remote",
+        "means": "The umbrella repository, its root checkout on integration/workspace"
+      },
+      {
+        "name": "worktrees",
+        "mark": "optional",
+        "means": "Worktrees for larger or parallel work"
+      },
+      {
+        "name": "project",
+        "mark": "layer",
+        "means": "A nested project: its own repository, ignored by the umbrella"
+      },
+      {
+        "name": "never",
+        "mark": "blocked",
+        "means": "Never done"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the umbrella's root checkout stays on integration/workspace",
+        "source": "docs/workspace-mode.md#the-layout",
+        "derive": "the first bullet",
+        "check": {
+          "kind": "contains",
+          "text": "The umbrella's root checkout stays on `integration/workspace`. Never"
+        },
+        "value": true
+      },
+      {
+        "claim": "a nested project does its task work in worktrees under its own .worktrees/",
+        "source": "docs/workspace-mode.md#the-layout",
+        "derive": "the second bullet",
+        "check": {
+          "kind": "contains",
+          "text": "does all task work in worktrees under its own `.worktrees/`."
+        },
+        "value": true
+      },
+      {
+        "claim": "the umbrella never commits nested files",
+        "source": "docs/workspace-mode.md#how-a-change-lands",
+        "derive": "the nested repository bullet",
+        "check": {
+          "kind": "contains",
+          "text": "The umbrella never commits nested"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 260,
+      "draw": [
+        {
+          "state": "umbrella",
+          "shape": "rect",
+          "x": 16,
+          "y": 16,
+          "w": 688,
+          "h": 232,
+          "rx": 8,
+          "cap": "end",
+          "id": "um"
+        },
+        {
+          "text": "umbrella/",
+          "x": 32,
+          "y": 40,
+          "style": "strong",
+          "for": [
+            "um"
+          ]
+        },
+        {
+          "text": "root checkout on integration/workspace",
+          "x": 112,
+          "y": 40,
+          "style": "mute",
+          "for": [
+            "um"
+          ]
+        },
+        {
+          "text": "AGENTS.md and shared records",
+          "x": 32,
+          "y": 76,
+          "style": "mono",
+          "for": [
+            "um"
+          ]
+        },
+        {
+          "text": ".claude/ .codex/ .grok/ settings",
+          "x": 32,
+          "y": 98,
+          "style": "mono",
+          "for": [
+            "um"
+          ]
+        },
+        {
+          "text": ".codeflow/policy.json, .gitignore",
+          "x": 32,
+          "y": 120,
+          "style": "mono",
+          "for": [
+            "um"
+          ]
+        },
+        {
+          "state": "worktrees",
+          "shape": "rect",
+          "x": 32,
+          "y": 140,
+          "w": 300,
+          "h": 40,
+          "rx": 8,
+          "id": "wt"
+        },
+        {
+          "text": ".worktrees/<slug>/",
+          "x": 44,
+          "y": 165,
+          "style": "mono",
+          "for": [
+            "wt",
+            "um"
+          ]
+        },
+        {
+          "text": "parallel work",
+          "x": 236,
+          "y": 165,
+          "style": "mute",
+          "for": [
+            "wt",
+            "um"
+          ]
+        },
+        {
+          "state": "project",
+          "shape": "rect",
+          "x": 346,
+          "y": 56,
+          "w": 192,
+          "h": 156,
+          "rx": 8,
+          "id": "pa"
+        },
+        {
+          "text": "project-a/",
+          "x": 358,
+          "y": 80,
+          "style": "strong",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": "its own repository",
+          "x": 358,
+          "y": 100,
+          "style": "mute",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": "root on main",
+          "x": 358,
+          "y": 120,
+          "style": "mute",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": ".codeflow/",
+          "x": 358,
+          "y": 148,
+          "style": "mono",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": ".worktrees/<slug>/",
+          "x": 358,
+          "y": 174,
+          "style": "mono",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": "task worktrees",
+          "x": 358,
+          "y": 196,
+          "style": "mute",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "state": "project",
+          "shape": "rect",
+          "x": 552,
+          "y": 56,
+          "w": 136,
+          "h": 156,
+          "rx": 8,
+          "id": "pb"
+        },
+        {
+          "text": "project-b/",
+          "x": 564,
+          "y": 80,
+          "style": "strong",
+          "for": [
+            "pb",
+            "um"
+          ]
+        },
+        {
+          "text": "a plain repository",
+          "x": 564,
+          "y": 100,
+          "style": "mute",
+          "for": [
+            "pb",
+            "um"
+          ]
+        },
+        {
+          "text": "root on main",
+          "x": 564,
+          "y": 120,
+          "style": "mute",
+          "for": [
+            "pb",
+            "um"
+          ]
+        },
+        {
+          "state": "never",
+          "shape": "path",
+          "d": "M180 190V228H440",
+          "cross": {
+            "cx": 310,
+            "cy": 228,
+            "size": 12
+          },
+          "id": "bl"
+        },
+        {
+          "text": "never commits a nested file",
+          "x": 452,
+          "y": 236,
+          "style": "mute",
+          "for": [
+            "bl",
+            "um"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 352,
+      "draw": [
+        {
+          "state": "umbrella",
+          "shape": "rect",
+          "x": 8,
+          "y": 8,
+          "w": 344,
+          "h": 336,
+          "rx": 8,
+          "cap": "end",
+          "id": "um"
+        },
+        {
+          "text": "umbrella/",
+          "x": 20,
+          "y": 30,
+          "style": "strong",
+          "for": [
+            "um"
+          ]
+        },
+        {
+          "text": "on integration/workspace",
+          "x": 96,
+          "y": 30,
+          "style": "mute",
+          "for": [
+            "um"
+          ]
+        },
+        {
+          "text": "AGENTS.md, shared records",
+          "x": 20,
+          "y": 56,
+          "style": "mono",
+          "for": [
+            "um"
+          ]
+        },
+        {
+          "text": "harness settings and policy",
+          "x": 20,
+          "y": 76,
+          "style": "mute",
+          "for": [
+            "um"
+          ]
+        },
+        {
+          "state": "worktrees",
+          "shape": "rect",
+          "x": 20,
+          "y": 92,
+          "w": 320,
+          "h": 36,
+          "rx": 8,
+          "id": "wt"
+        },
+        {
+          "text": ".worktrees/<slug>/",
+          "x": 32,
+          "y": 115,
+          "style": "mono",
+          "for": [
+            "wt",
+            "um"
+          ]
+        },
+        {
+          "text": "umbrella worktrees",
+          "x": 210,
+          "y": 115,
+          "style": "mute",
+          "for": [
+            "wt",
+            "um"
+          ]
+        },
+        {
+          "state": "project",
+          "shape": "rect",
+          "x": 20,
+          "y": 146,
+          "w": 150,
+          "h": 140,
+          "rx": 8,
+          "id": "pa"
+        },
+        {
+          "text": "project-a/",
+          "x": 32,
+          "y": 168,
+          "style": "strong",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": "own repository",
+          "x": 32,
+          "y": 188,
+          "style": "mute",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": "root on main",
+          "x": 32,
+          "y": 208,
+          "style": "mute",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": ".codeflow/",
+          "x": 32,
+          "y": 232,
+          "style": "mono",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": ".worktrees/",
+          "x": 32,
+          "y": 254,
+          "style": "mono",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "text": "task worktrees",
+          "x": 32,
+          "y": 274,
+          "style": "mute",
+          "for": [
+            "pa",
+            "um"
+          ]
+        },
+        {
+          "state": "project",
+          "shape": "rect",
+          "x": 190,
+          "y": 146,
+          "w": 150,
+          "h": 140,
+          "rx": 8,
+          "id": "pb"
+        },
+        {
+          "text": "project-b/",
+          "x": 202,
+          "y": 168,
+          "style": "strong",
+          "for": [
+            "pb",
+            "um"
+          ]
+        },
+        {
+          "text": "plain repository",
+          "x": 202,
+          "y": 188,
+          "style": "mute",
+          "for": [
+            "pb",
+            "um"
+          ]
+        },
+        {
+          "text": "root on main",
+          "x": 202,
+          "y": 208,
+          "style": "mute",
+          "for": [
+            "pb",
+            "um"
+          ]
+        },
+        {
+          "state": "never",
+          "shape": "path",
+          "d": "M60 300V322H120",
+          "cross": {
+            "cx": 90,
+            "cy": 322,
+            "size": 12
+          },
+          "id": "bl"
+        },
+        {
+          "text": "never commits a nested file",
+          "x": 132,
+          "y": 327,
+          "style": "mute",
+          "for": [
+            "bl",
+            "um"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "What it is",
+        "Branch and worktrees"
+      ],
+      "rows": [
+        [
+          "`umbrella/`",
+          "the umbrella repository: AGENTS.md, shared records, harness settings and its own policy",
+          "root checkout on `integration/workspace`; larger or parallel work in `umbrella/.worktrees/<slug>`"
+        ],
+        [
+          "`project-a/`",
+          "a CodeFlow project, its own repository, ignored by the umbrella",
+          "root on `main`; task work in `project-a/.worktrees/<slug>`, landed by pull request"
+        ],
+        [
+          "`project-b/`",
+          "a plain git repository, also ignored",
+          "root on `main`"
+        ],
+        [
+          "never",
+          "the umbrella committing a nested file, or an agent merging into any `main`",
+          ""
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,463 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "delivery-task-states",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state is a task in, and what moves it?",
+    "idea": "A task goes from todo to in progress at work start and to complete when its acceptance block lands on a green batch; it waits in blocked, and a defect found after landing reopens it for one pull request.",
+    "title": "The states of a task",
+    "kicker": "Delivery",
+    "caption": "Review, fixes and confirmation all happen inside the one pull request while the task stays in progress.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "State of the task"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Normal move"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Reopened after landing"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "work start checks that the record exists and is anchored",
+        "source": "docs/delivery.md#technical",
+        "derive": "the Start row",
+        "check": {
+          "kind": "contains",
+          "text": "| Start | The task record exists and is anchored"
+        },
+        "value": true
+      },
+      {
+        "claim": "a completion is bound to its reviewed commit and predecessors are complete at the merge base",
+        "source": "docs/delivery.md#technical",
+        "derive": "the Landing row",
+        "check": {
+          "kind": "contains",
+          "text": "Predecessors are complete at the merge base"
+        },
+        "value": true
+      },
+      {
+        "claim": "a red batch gate is diagnosed before any member is dropped",
+        "source": "docs/delivery.md#technical",
+        "derive": "the Batch gate row",
+        "check": {
+          "kind": "contains",
+          "text": "A red gate is diagnosed before any member is dropped"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 232,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 20,
+          "y": 72,
+          "w": 80,
+          "h": 36,
+          "rx": 8,
+          "id": "td"
+        },
+        {
+          "text": "todo",
+          "x": 60,
+          "y": 95,
+          "anchor": "middle",
+          "for": [
+            "td"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M102 90H198",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "work start",
+          "x": 150,
+          "y": 76,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 72,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "ip"
+        },
+        {
+          "text": "in progress",
+          "x": 265,
+          "y": 95,
+          "anchor": "middle",
+          "for": [
+            "ip"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M332 90H470",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "acceptance block as the last commit,",
+          "x": 401,
+          "y": 30,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "text": "landed on a green batch",
+          "x": 401,
+          "y": 54,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 472,
+          "y": 72,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "cp"
+        },
+        {
+          "text": "complete",
+          "x": 532,
+          "y": 95,
+          "anchor": "middle",
+          "for": [
+            "cp"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M246 110V188",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M284 188V110",
+          "head": "end",
+          "id": "t4"
+        },
+        {
+          "text": "waits on the operator",
+          "x": 236,
+          "y": 136,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "t3"
+          ]
+        },
+        {
+          "text": "or an outside party",
+          "x": 236,
+          "y": 160,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "t3"
+          ]
+        },
+        {
+          "text": "unblocked",
+          "x": 296,
+          "y": 160,
+          "style": "mute",
+          "for": [
+            "t4"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 190,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "bk"
+        },
+        {
+          "text": "blocked",
+          "x": 265,
+          "y": 213,
+          "anchor": "middle",
+          "for": [
+            "bk"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M532 112C532 156 420 156 332 100",
+          "head": "end",
+          "id": "r1"
+        },
+        {
+          "text": "reopened: a defect after landing, one PR",
+          "x": 400,
+          "y": 172,
+          "style": "mute",
+          "for": [
+            "r1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 326,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 40,
+          "y": 10,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "td"
+        },
+        {
+          "text": "todo",
+          "x": 105,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "td"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M105 48V88",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "work start",
+          "x": 92,
+          "y": 74,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 40,
+          "y": 90,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "ip"
+        },
+        {
+          "text": "in progress",
+          "x": 105,
+          "y": 113,
+          "anchor": "middle",
+          "for": [
+            "ip"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 214,
+          "y": 90,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "bk"
+        },
+        {
+          "text": "blocked",
+          "x": 279,
+          "y": 113,
+          "anchor": "middle",
+          "for": [
+            "bk"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M172 100H212",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M212 116H172",
+          "head": "end",
+          "id": "t4"
+        },
+        {
+          "text": "waits",
+          "x": 192,
+          "y": 72,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t3"
+          ]
+        },
+        {
+          "text": "unblocked",
+          "x": 192,
+          "y": 154,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M105 128V238",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "acceptance block",
+          "x": 116,
+          "y": 190,
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "text": "landed on a green batch",
+          "x": 116,
+          "y": 214,
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 40,
+          "y": 240,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "cp"
+        },
+        {
+          "text": "complete",
+          "x": 105,
+          "y": 263,
+          "anchor": "middle",
+          "for": [
+            "cp"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M40 258C8 258 8 108 38 108",
+          "head": "end",
+          "id": "r1"
+        },
+        {
+          "text": "reopened after landing, one PR",
+          "x": 40,
+          "y": 312,
+          "style": "mute",
+          "for": [
+            "r1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "By"
+      ],
+      "rows": [
+        [
+          "todo",
+          "in progress",
+          "`codeflow work claim` and `codeflow work start`, after the record is anchored and predecessors are complete or pinned"
+        ],
+        [
+          "in progress",
+          "in progress",
+          "review, fixes and the finder's confirmation, all inside the one pull request"
+        ],
+        [
+          "in progress",
+          "blocked",
+          "waiting on the operator or an outside party, with reason, owner and revisit recorded"
+        ],
+        [
+          "blocked",
+          "in progress",
+          "the block is lifted"
+        ],
+        [
+          "in progress",
+          "complete",
+          "the acceptance block as the pull request's last commit, bound to the reviewed commit, landed on a green batch"
+        ],
+        [
+          "complete",
+          "in progress",
+          "a defect found after landing; reopened and fixed in one pull request"
+        ]
+      ]
+    }
+  }
+}
