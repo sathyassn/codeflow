@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -3018,7 +3018,7 @@ fn hardened_git(
     args: &[&str],
     piped_stdin: bool,
 ) -> std::io::Result<std::process::Child> {
-    let mut command = Command::new("git");
+    let mut command = crate::git::command();
     command
         .arg("--no-pager")
         .args(["-C"])
@@ -3818,7 +3818,7 @@ mod tests {
             &["add", "."][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(temp.path())
                 .args(args)
@@ -3919,7 +3919,7 @@ mod tests {
             &["add", "docs", "portal/portal.config.json"][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(temp.path())
                 .args(args)
@@ -4394,7 +4394,7 @@ mod tests {
             &["add", "docs", "portal/portal.config.json"][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(temp.path())
                 .args(args)
@@ -4713,7 +4713,7 @@ mod tests {
             &["add", "docs"][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(temp.path())
                 .args(args)
@@ -4819,7 +4819,7 @@ mod tests {
             &["add", "large.bin"][..],
             &["commit", "-q", "-m", "large fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(repository.path())
                 .args(args)
@@ -4837,7 +4837,7 @@ mod tests {
     #[test]
     fn git_authority_accepts_sha256_repositories_when_supported() {
         let repository = tempfile::tempdir().unwrap();
-        let initialized = Command::new("git")
+        let initialized = crate::git::command()
             .args(["-C"])
             .arg(repository.path())
             .args(["init", "-q", "--object-format=sha256"])
@@ -4853,7 +4853,7 @@ mod tests {
             &["add", "page.md"][..],
             &["commit", "-q", "-m", "sha256 fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(repository.path())
                 .args(args)
@@ -4892,7 +4892,7 @@ mod tests {
             &["add", "docs/guide.md"][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(crate::git::command()
                 .args(["-C"])
                 .arg(repository.path())
                 .args(args)

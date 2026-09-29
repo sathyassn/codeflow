@@ -1,8 +1,14 @@
-//! Detects and blocks privilege escalation attempts.
+//! Detects privilege escalation attempts.
 //!
-//! Checks for: Unix and Windows privilege launchers, shell chaining to
-//! privilege commands, script bypass (bash -c, eval), and environment
-//! manipulation (`LD_PRELOAD`).
+//! Checks for: Unix and Windows privilege launchers, run directly, chained,
+//! piped to, or wrapped in a quoted shell `-c` string or an `eval`; and
+//! environment manipulation (`LD_PRELOAD`, a `PATH` through `/tmp`).
+//!
+//! A shell `-c` string or `eval` that reaches no launcher, a leading
+//! `source` or `.`, and `LD_LIBRARY_PATH` are ordinary work and are not
+//! reported here: `security.privilege_escalation` blocks by default
+//! (ADR-0075 D5), and these forms are script findings for
+//! `security.script_bypass`, which TSK-172 reads.
 
 use std::sync::OnceLock;
 
@@ -28,34 +34,37 @@ fn elevated_start_process_re() -> &'static Regex {
 
 fn bash_c_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"bash\s+-c\s+["']"#).expect("valid"))
+    RE.get_or_init(|| Regex::new(r#"bash\s+-[a-z]*c\s+["']"#).expect("valid"))
 }
 
 fn sh_c_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // Anchor to start-of-string or whitespace so the "sh" tail of "zsh -c"
     // is not misclassified as "sh -c" (which would shadow zsh_c_re below).
-    RE.get_or_init(|| Regex::new(r#"(?:^|\s)sh\s+-c\s+["']"#).expect("valid"))
+    RE.get_or_init(|| Regex::new(r#"(?:^|\s)sh\s+-[a-z]*c\s+["']"#).expect("valid"))
 }
 
 fn zsh_c_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"zsh\s+-c\s+["']"#).expect("valid"))
+    RE.get_or_init(|| Regex::new(r#"zsh\s+-[a-z]*c\s+["']"#).expect("valid"))
 }
 
 fn eval_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"eval\s+.*(rm|sudo|su|doas|pkexec|runuser)").expect("valid"))
+    RE.get_or_init(|| Regex::new(r"(?:^|[\s;&|(])eval\s").expect("valid"))
 }
 
-fn source_cmd_re() -> &'static Regex {
+/// A privilege launcher as a whole word, optionally path-qualified, inside
+/// a wrapped command string: `sudo` in `bash -c "sudo id"`, but not in
+/// `sudoku` or `pseudo`.
+fn launcher_word_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^source\s").expect("valid"))
-}
-
-fn dot_source_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\.\s+").expect("valid"))
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?:^|[\s;&|("'`])(?:[^\s;&|("'`]*[\\/])?(sudo|su|doas|pkexec|runuser|gsudo|runas)(?:\.exe)?(?:$|[\s;&|)"'`])"#,
+        )
+        .expect("valid")
+    })
 }
 
 fn path_tmp_re() -> &'static Regex {
@@ -66,11 +75,6 @@ fn path_tmp_re() -> &'static Regex {
 fn ld_preload_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"LD_PRELOAD=").expect("valid"))
-}
-
-fn ld_lib_path_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"LD_LIBRARY_PATH=").expect("valid"))
 }
 
 /// Build pipe-to-privilege patterns lazily.
@@ -104,7 +108,7 @@ impl SecurityModule for PrivilegeModule {
             return Some(v);
         }
 
-        if let Some(v) = check_script_bypass(cmd) {
+        if let Some(v) = check_wrapped_launcher(cmd) {
             return Some(v);
         }
 
@@ -175,38 +179,23 @@ fn check_direct_priv_esc(cmd: &str) -> Option<Verdict> {
     None
 }
 
-fn check_script_bypass(cmd: &str) -> Option<Verdict> {
-    if bash_c_re().is_match(cmd) {
-        return Some(block("Script Bypass", "bash -c execution", "bash -c"));
-    }
-    if sh_c_re().is_match(cmd) {
-        return Some(block("Script Bypass", "sh -c execution", "sh -c"));
-    }
-    if zsh_c_re().is_match(cmd) {
-        return Some(block("Script Bypass", "zsh -c execution", "zsh -c"));
-    }
-    if eval_re().is_match(cmd) {
-        return Some(block(
-            "Script Bypass",
-            "eval with dangerous command",
-            "eval",
-        ));
-    }
-    if source_cmd_re().is_match(cmd) {
-        return Some(block(
-            "Script Bypass",
-            "source command not permitted",
-            "source",
-        ));
-    }
-    if dot_source_re().is_match(cmd) {
-        return Some(block(
-            "Script Bypass",
-            "dot source command not permitted",
-            ". (dot source)",
-        ));
-    }
-    None
+/// A launcher reached through a quoted shell `-c` string or an `eval`.
+fn check_wrapped_launcher(cmd: &str) -> Option<Verdict> {
+    let wrapper = [
+        (bash_c_re(), "bash -c"),
+        (sh_c_re(), "sh -c"),
+        (zsh_c_re(), "zsh -c"),
+        (eval_re(), "eval"),
+    ]
+    .into_iter()
+    .find(|(re, _)| re.is_match(cmd))
+    .map(|(_, name)| name)?;
+    let launcher = launcher_word_re().captures(cmd)?.get(1)?.as_str();
+    Some(block(
+        "Privilege Escalation",
+        &format!("{launcher} wrapped in {wrapper}"),
+        wrapper,
+    ))
 }
 
 fn check_env_manipulation(cmd: &str) -> Option<Verdict> {
@@ -222,13 +211,6 @@ fn check_env_manipulation(cmd: &str) -> Option<Verdict> {
             "Environment Manipulation",
             "LD_PRELOAD injection attempt",
             "LD_PRELOAD",
-        ));
-    }
-    if ld_lib_path_re().is_match(cmd) {
-        return Some(block(
-            "Environment Manipulation",
-            "LD_LIBRARY_PATH injection attempt",
-            "LD_LIBRARY_PATH",
         ));
     }
     None
@@ -322,16 +304,22 @@ mod tests {
     }
 
     #[test]
-    fn test_bash_c() {
-        assert!(PrivilegeModule.check(&ctx("bash -c 'echo test'")).is_some());
+    fn test_bash_c_reaching_a_launcher() {
+        let v = PrivilegeModule.check(&ctx("bash -c 'sudo id'")).unwrap();
+        assert_eq!(v.category, "Privilege Escalation");
+        assert_eq!(v.reason, "sudo wrapped in bash -c");
+        assert!(PrivilegeModule
+            .check(&ctx("bash -c \"echo x && /usr/bin/doas true\""))
+            .is_some());
+        assert!(PrivilegeModule.check(&ctx("bash -lc 'sudo id'")).is_some());
     }
 
     #[test]
     fn test_sh_c() {
-        let v = PrivilegeModule.check(&ctx("sh -c 'x'")).unwrap();
+        let v = PrivilegeModule.check(&ctx("sh -c 'su -'")).unwrap();
         assert!(!v.allow);
-        assert_eq!(v.category, "Script Bypass");
-        assert_eq!(v.reason, "sh -c execution");
+        assert_eq!(v.category, "Privilege Escalation");
+        assert_eq!(v.reason, "su wrapped in sh -c");
         assert_eq!(v.pattern, "sh -c");
     }
 
@@ -339,39 +327,42 @@ mod tests {
     fn test_zsh_c() {
         // Regression: the "sh" tail of "zsh -c" must not be mislabeled as
         // "sh -c" — zsh_c_re owns this input and reports the zsh label.
-        let v = PrivilegeModule.check(&ctx("zsh -c 'x'")).unwrap();
+        let v = PrivilegeModule.check(&ctx("zsh -c 'pkexec x'")).unwrap();
         assert!(!v.allow);
-        assert_eq!(v.category, "Script Bypass");
-        assert_eq!(v.reason, "zsh -c execution");
+        assert_eq!(v.reason, "pkexec wrapped in zsh -c");
         assert_eq!(v.pattern, "zsh -c");
     }
 
     #[test]
-    fn test_eval_with_rm() {
-        assert!(PrivilegeModule.check(&ctx("eval rm -rf /")).is_some());
+    fn test_eval_reaching_a_launcher() {
+        assert!(PrivilegeModule.check(&ctx("eval sudo rm -rf /")).is_some());
     }
 
+    /// D5 blocks escalation, including wrapped forms; a wrapper that reaches
+    /// no launcher, `source`, `.` and `LD_LIBRARY_PATH` are ordinary work.
     #[test]
-    fn test_source_command() {
-        assert!(PrivilegeModule.check(&ctx("source /etc/profile")).is_some());
-    }
-
-    #[test]
-    fn test_dot_source() {
-        assert!(PrivilegeModule.check(&ctx(". /etc/profile")).is_some());
+    fn test_ordinary_wrappers_and_library_paths_are_not_escalation() {
+        for cmd in [
+            "bash -c 'printf ok'",
+            "bash -lc 'cargo test --workspace'",
+            "sh -c 'echo sudoku'",
+            "zsh -c 'echo pseudo'",
+            "eval \"$(direnv export bash)\"",
+            "eval rm -rf build",
+            "source .venv/bin/activate",
+            ". ./env.sh",
+            "LD_LIBRARY_PATH=/opt/lib cargo test",
+            "sudoku --help",
+            "grep -rn sudo docs/",
+        ] {
+            assert!(PrivilegeModule.check(&ctx(cmd)).is_none(), "{cmd}");
+        }
     }
 
     #[test]
     fn test_ld_preload() {
         assert!(PrivilegeModule
             .check(&ctx("LD_PRELOAD=/tmp/evil.so ls"))
-            .is_some());
-    }
-
-    #[test]
-    fn test_ld_library_path() {
-        assert!(PrivilegeModule
-            .check(&ctx("LD_LIBRARY_PATH=/tmp ls"))
             .is_some());
     }
 

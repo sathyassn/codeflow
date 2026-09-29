@@ -99,7 +99,9 @@ limits of catalog support in consuming scaffolds.
 7. **Grade in layers.** Run deterministic validation first. Have the other
    vendor independently grade qualitative evidence with the case rubric, then
    reconcile. A human reviews every hard failure, disagreement, security case,
-   and promotion decision. Do not majority-vote away divergent evidence.
+   and promotion decision. Write grader notes plainly: simple,
+   straightforward and clear, no mannered prose (see
+   `.codeflow/rules/writing.md`). Do not majority-vote away divergent evidence.
 8. **Compare and decide.** Compare the candidate result with the pinned baseline.
    For a controlled promotion, declare one variable and use `compare --variable`.
    Promotion requires no hard-case regression, no unresolved validity threat,

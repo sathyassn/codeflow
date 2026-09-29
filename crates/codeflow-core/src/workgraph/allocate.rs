@@ -621,7 +621,6 @@ fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     const EPIC_TEMPLATE: &str = "---\nid: EPC-{{NNN}}\ntitle: {{TITLE_YAML}}\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: {{DATE}}\n---\n\n# EPC-{{NNN}} — {{TITLE}}\n";
     const TASK_TEMPLATE: &str = "---\nid: TSK-{{NNN}}\nepic_id: {{EPIC_ID}}\nstandalone_reason: {{STANDALONE_REASON}}\ntitle: {{TITLE_YAML}}\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: {{TARGET_BRANCH}}\ncreated: {{DATE}}\n---\n\n# TSK-{{NNN}} — {{TITLE}}\n";
@@ -643,7 +642,7 @@ mod tests {
 
     fn git(root: &Path, args: &[&str]) {
         assert!(
-            Command::new("git")
+            crate::git::command()
                 .arg("-C")
                 .arg(root)
                 .args(args)
