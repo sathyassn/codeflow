@@ -67,7 +67,7 @@ produced them (ADR-0007).
 
 | Shim | What it holds | Notes |
 |---|---|---|
-| `pre-commit` | commits on a protected branch; the secret scan | also runs the read-only `work start` preflight that the CLI and detached CI share |
+| `pre-commit` | commits on a protected branch; the secret scan | also refuses staged conflict markers, and a commit in the root checkout while it is off its root branch |
 | `commit-msg` | commit format, no-attribution, no-emoji | the same checks `codeflow ci` runs server-side |
 | `pre-merge-commit` | non-fast-forward merge commits onto protected | |
 | `reference-transaction` | fast-forward merges, `reset --hard`, `branch -D` on protected | the harness-agnostic backstop; needs git ≥ 2.28 |

@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "What can the binary do, and which commands are never typed by hand?",
-    "idea": "Twenty-two subcommands sit in six jobs, and three of them are run for you by the settings presets, the git hooks and CI.",
+    "idea": "Twenty-six subcommands sit in six jobs, and three of them are run for you by the settings presets, the git hooks and CI.",
     "title": "The command surface, by job",
     "kicker": "Command reference",
-    "caption": "You type nineteen of the commands; hook, git-hook and ci are called by the wiring that init installs.",
+    "caption": "You type twenty-three of the commands; hook, git-hook and ci are called by the wiring that init installs.",
     "states": [
       {
         "name": "typed",
@@ -55,7 +55,7 @@
     ],
     "wide": {
       "width": 720,
-      "height": 270,
+      "height": 298,
       "draw": [
         {
           "text": "Scaffold",
@@ -157,7 +157,7 @@
           "id": "g0c5"
         },
         {
-          "text": "estimate",
+          "text": "adr",
           "x": 577,
           "y": 24,
           "style": "mono",
@@ -166,31 +166,65 @@
           ]
         },
         {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 636,
+          "cy": 19,
+          "r": 7,
+          "id": "g0c6"
+        },
+        {
+          "text": "ids",
+          "x": 652,
+          "y": 24,
+          "style": "mono",
+          "for": [
+            "g0c6"
+          ]
+        },
+        {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 124,
+          "cy": 47,
+          "r": 7,
+          "id": "g0c7"
+        },
+        {
+          "text": "estimate",
+          "x": 140,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "g0c7"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 16,
-          "y1": 42,
+          "y1": 70,
           "x2": 704,
-          "y2": 42
+          "y2": 70
         },
         {
           "text": "Enforce",
           "x": 16,
-          "y": 70,
+          "y": 98,
           "style": "strong"
         },
         {
           "state": "invoked",
           "shape": "circle",
           "cx": 124,
-          "cy": 65,
+          "cy": 93,
           "r": 7,
           "id": "g1c0"
         },
         {
           "text": "hook",
           "x": 140,
-          "y": 70,
+          "y": 98,
           "style": "mono",
           "for": [
             "g1c0"
@@ -200,14 +234,14 @@
           "state": "invoked",
           "shape": "circle",
           "cx": 208,
-          "cy": 65,
+          "cy": 93,
           "r": 7,
           "id": "g1c1"
         },
         {
           "text": "git-hook",
           "x": 224,
-          "y": 70,
+          "y": 98,
           "style": "mono",
           "for": [
             "g1c1"
@@ -217,14 +251,14 @@
           "state": "invoked",
           "shape": "circle",
           "cx": 326,
-          "cy": 65,
+          "cy": 93,
           "r": 7,
           "id": "g1c2"
         },
         {
           "text": "ci",
           "x": 342,
-          "y": 70,
+          "y": 98,
           "style": "mono",
           "for": [
             "g1c2"
@@ -234,14 +268,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 393,
-          "cy": 65,
+          "cy": 93,
           "r": 7,
           "id": "g1c3"
         },
         {
           "text": "policy",
           "x": 409,
-          "y": 70,
+          "y": 98,
           "style": "mono",
           "for": [
             "g1c3"
@@ -251,14 +285,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 494,
-          "cy": 65,
+          "cy": 93,
           "r": 7,
           "id": "g1c4"
         },
         {
           "text": "remote",
           "x": 510,
-          "y": 70,
+          "y": 98,
           "style": "mono",
           "for": [
             "g1c4"
@@ -268,28 +302,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 16,
-          "y1": 88,
+          "y1": 116,
           "x2": 704,
-          "y2": 88
+          "y2": 116
         },
         {
           "text": "Verify",
           "x": 16,
-          "y": 116,
+          "y": 144,
           "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
           "cx": 124,
-          "cy": 111,
+          "cy": 139,
           "r": 7,
           "id": "g2c0"
         },
         {
           "text": "test",
           "x": 140,
-          "y": 116,
+          "y": 144,
           "style": "mono",
           "for": [
             "g2c0"
@@ -299,14 +333,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 208,
-          "cy": 111,
+          "cy": 139,
           "r": 7,
           "id": "g2c1"
         },
         {
           "text": "validate",
           "x": 224,
-          "y": 116,
+          "y": 144,
           "style": "mono",
           "for": [
             "g2c1"
@@ -316,14 +350,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 326,
-          "cy": 111,
+          "cy": 139,
           "r": 7,
           "id": "g2c2"
         },
         {
           "text": "integrate",
           "x": 342,
-          "y": 116,
+          "y": 144,
           "style": "mono",
           "for": [
             "g2c2"
@@ -333,14 +367,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 452,
-          "cy": 111,
+          "cy": 139,
           "r": 7,
           "id": "g2c3"
         },
         {
           "text": "doctor",
           "x": 468,
-          "y": 116,
+          "y": 144,
           "style": "mono",
           "for": [
             "g2c3"
@@ -350,14 +384,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 553,
-          "cy": 111,
+          "cy": 139,
           "r": 7,
           "id": "g2c4"
         },
         {
           "text": "work",
           "x": 569,
-          "y": 116,
+          "y": 144,
           "style": "mono",
           "for": [
             "g2c4"
@@ -367,28 +401,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 16,
-          "y1": 134,
+          "y1": 162,
           "x2": 704,
-          "y2": 134
+          "y2": 162
         },
         {
           "text": "Remember",
           "x": 16,
-          "y": 162,
+          "y": 190,
           "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
           "cx": 124,
-          "cy": 157,
+          "cy": 185,
           "r": 7,
           "id": "g3c0"
         },
         {
           "text": "orient",
           "x": 140,
-          "y": 162,
+          "y": 190,
           "style": "mono",
           "for": [
             "g3c0"
@@ -398,14 +432,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 225,
-          "cy": 157,
+          "cy": 185,
           "r": 7,
           "id": "g3c1"
         },
         {
           "text": "status",
           "x": 241,
-          "y": 162,
+          "y": 190,
           "style": "mono",
           "for": [
             "g3c1"
@@ -415,76 +449,110 @@
           "state": "typed",
           "shape": "circle",
           "cx": 326,
-          "cy": 157,
+          "cy": 185,
           "r": 7,
           "id": "g3c2"
         },
         {
           "text": "recall",
           "x": 342,
-          "y": 162,
+          "y": 190,
           "style": "mono",
           "for": [
             "g3c2"
           ]
         },
         {
-          "deco": "rule",
-          "shape": "line",
-          "x1": 16,
-          "y1": 180,
-          "x2": 704,
-          "y2": 180
-        },
-        {
-          "text": "Delegate",
-          "x": 16,
-          "y": 208,
-          "style": "strong"
-        },
-        {
           "state": "typed",
           "shape": "circle",
-          "cx": 124,
-          "cy": 203,
+          "cx": 427,
+          "cy": 185,
           "r": 7,
-          "id": "g4c0"
+          "id": "g3c3"
         },
         {
-          "text": "delegate",
-          "x": 140,
-          "y": 208,
+          "text": "report",
+          "x": 443,
+          "y": 190,
           "style": "mono",
           "for": [
-            "g4c0"
+            "g3c3"
           ]
         },
         {
           "deco": "rule",
           "shape": "line",
           "x1": 16,
-          "y1": 226,
+          "y1": 208,
           "x2": 704,
-          "y2": 226
+          "y2": 208
         },
         {
-          "text": "Present",
+          "text": "Delegate",
           "x": 16,
-          "y": 254,
+          "y": 236,
           "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
           "cx": 124,
-          "cy": 249,
+          "cy": 231,
+          "r": 7,
+          "id": "g4c0"
+        },
+        {
+          "text": "delegate",
+          "x": 140,
+          "y": 236,
+          "style": "mono",
+          "for": [
+            "g4c0"
+          ]
+        },
+        {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 242,
+          "cy": 231,
+          "r": 7,
+          "id": "g4c1"
+        },
+        {
+          "text": "models",
+          "x": 258,
+          "y": 236,
+          "style": "mono",
+          "for": [
+            "g4c1"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 254,
+          "x2": 704,
+          "y2": 254
+        },
+        {
+          "text": "Present",
+          "x": 16,
+          "y": 282,
+          "style": "strong"
+        },
+        {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 124,
+          "cy": 277,
           "r": 7,
           "id": "g5c0"
         },
         {
           "text": "portal",
           "x": 140,
-          "y": 254,
+          "y": 282,
           "style": "mono",
           "for": [
             "g5c0"
@@ -494,14 +562,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 225,
-          "cy": 249,
+          "cy": 277,
           "r": 7,
           "id": "g5c1"
         },
         {
           "text": "present",
           "x": 241,
-          "y": 254,
+          "y": 282,
           "style": "mono",
           "for": [
             "g5c1"
@@ -515,7 +583,7 @@
       "marks": "same",
       "reason": "Each job stays one row of the same marks at phone width; its subcommands wrap under the job name instead of changing form.",
       "width": 360,
-      "height": 370,
+      "height": 398,
       "draw": [
         {
           "text": "Scaffold",
@@ -617,7 +685,7 @@
           "id": "g0c5"
         },
         {
-          "text": "estimate",
+          "text": "adr",
           "x": 272,
           "y": 52,
           "style": "mono",
@@ -626,31 +694,65 @@
           ]
         },
         {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 110,
+          "cy": 75,
+          "r": 7,
+          "id": "g0c6"
+        },
+        {
+          "text": "ids",
+          "x": 124,
+          "y": 80,
+          "style": "mono",
+          "for": [
+            "g0c6"
+          ]
+        },
+        {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 176,
+          "cy": 75,
+          "r": 7,
+          "id": "g0c7"
+        },
+        {
+          "text": "estimate",
+          "x": 190,
+          "y": 80,
+          "style": "mono",
+          "for": [
+            "g0c7"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 66,
+          "y1": 94,
           "x2": 352,
-          "y2": 66
+          "y2": 94
         },
         {
           "text": "Enforce",
           "x": 8,
-          "y": 90,
+          "y": 118,
           "style": "strong"
         },
         {
           "state": "invoked",
           "shape": "circle",
           "cx": 110,
-          "cy": 85,
+          "cy": 113,
           "r": 7,
           "id": "g1c0"
         },
         {
           "text": "hook",
           "x": 124,
-          "y": 90,
+          "y": 118,
           "style": "mono",
           "for": [
             "g1c0"
@@ -660,14 +762,14 @@
           "state": "invoked",
           "shape": "circle",
           "cx": 184,
-          "cy": 85,
+          "cy": 113,
           "r": 7,
           "id": "g1c1"
         },
         {
           "text": "git-hook",
           "x": 198,
-          "y": 90,
+          "y": 118,
           "style": "mono",
           "for": [
             "g1c1"
@@ -677,14 +779,14 @@
           "state": "invoked",
           "shape": "circle",
           "cx": 292,
-          "cy": 85,
+          "cy": 113,
           "r": 7,
           "id": "g1c2"
         },
         {
           "text": "ci",
           "x": 306,
-          "y": 90,
+          "y": 118,
           "style": "mono",
           "for": [
             "g1c2"
@@ -694,14 +796,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 110,
-          "cy": 113,
+          "cy": 141,
           "r": 7,
           "id": "g1c3"
         },
         {
           "text": "policy",
           "x": 124,
-          "y": 118,
+          "y": 146,
           "style": "mono",
           "for": [
             "g1c3"
@@ -711,14 +813,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 201,
-          "cy": 113,
+          "cy": 141,
           "r": 7,
           "id": "g1c4"
         },
         {
           "text": "remote",
           "x": 215,
-          "y": 118,
+          "y": 146,
           "style": "mono",
           "for": [
             "g1c4"
@@ -728,28 +830,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 132,
+          "y1": 160,
           "x2": 352,
-          "y2": 132
+          "y2": 160
         },
         {
           "text": "Verify",
           "x": 8,
-          "y": 156,
+          "y": 184,
           "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
           "cx": 110,
-          "cy": 151,
+          "cy": 179,
           "r": 7,
           "id": "g2c0"
         },
         {
           "text": "test",
           "x": 124,
-          "y": 156,
+          "y": 184,
           "style": "mono",
           "for": [
             "g2c0"
@@ -759,14 +861,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 184,
-          "cy": 151,
+          "cy": 179,
           "r": 7,
           "id": "g2c1"
         },
         {
           "text": "validate",
           "x": 198,
-          "y": 156,
+          "y": 184,
           "style": "mono",
           "for": [
             "g2c1"
@@ -776,14 +878,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 110,
-          "cy": 179,
+          "cy": 207,
           "r": 7,
           "id": "g2c2"
         },
         {
           "text": "integrate",
           "x": 124,
-          "y": 184,
+          "y": 212,
           "style": "mono",
           "for": [
             "g2c2"
@@ -793,14 +895,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 226,
-          "cy": 179,
+          "cy": 207,
           "r": 7,
           "id": "g2c3"
         },
         {
           "text": "doctor",
           "x": 240,
-          "y": 184,
+          "y": 212,
           "style": "mono",
           "for": [
             "g2c3"
@@ -810,14 +912,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 110,
-          "cy": 207,
+          "cy": 235,
           "r": 7,
           "id": "g2c4"
         },
         {
           "text": "work",
           "x": 124,
-          "y": 212,
+          "y": 240,
           "style": "mono",
           "for": [
             "g2c4"
@@ -827,28 +929,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 226,
+          "y1": 254,
           "x2": 352,
-          "y2": 226
+          "y2": 254
         },
         {
           "text": "Remember",
           "x": 8,
-          "y": 250,
+          "y": 278,
           "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
           "cx": 110,
-          "cy": 245,
+          "cy": 273,
           "r": 7,
           "id": "g3c0"
         },
         {
           "text": "orient",
           "x": 124,
-          "y": 250,
+          "y": 278,
           "style": "mono",
           "for": [
             "g3c0"
@@ -858,14 +960,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 201,
-          "cy": 245,
+          "cy": 273,
           "r": 7,
           "id": "g3c1"
         },
         {
           "text": "status",
           "x": 215,
-          "y": 250,
+          "y": 278,
           "style": "mono",
           "for": [
             "g3c1"
@@ -875,76 +977,110 @@
           "state": "typed",
           "shape": "circle",
           "cx": 110,
-          "cy": 273,
+          "cy": 301,
           "r": 7,
           "id": "g3c2"
         },
         {
           "text": "recall",
           "x": 124,
-          "y": 278,
+          "y": 306,
           "style": "mono",
           "for": [
             "g3c2"
           ]
         },
         {
-          "deco": "rule",
-          "shape": "line",
-          "x1": 8,
-          "y1": 292,
-          "x2": 352,
-          "y2": 292
-        },
-        {
-          "text": "Delegate",
-          "x": 8,
-          "y": 316,
-          "style": "strong"
-        },
-        {
           "state": "typed",
           "shape": "circle",
-          "cx": 110,
-          "cy": 311,
+          "cx": 201,
+          "cy": 301,
           "r": 7,
-          "id": "g4c0"
+          "id": "g3c3"
         },
         {
-          "text": "delegate",
-          "x": 124,
-          "y": 316,
+          "text": "report",
+          "x": 215,
+          "y": 306,
           "style": "mono",
           "for": [
-            "g4c0"
+            "g3c3"
           ]
         },
         {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 330,
+          "y1": 320,
           "x2": 352,
-          "y2": 330
+          "y2": 320
         },
         {
-          "text": "Present",
+          "text": "Delegate",
           "x": 8,
-          "y": 354,
+          "y": 344,
           "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
           "cx": 110,
-          "cy": 349,
+          "cy": 339,
+          "r": 7,
+          "id": "g4c0"
+        },
+        {
+          "text": "delegate",
+          "x": 124,
+          "y": 344,
+          "style": "mono",
+          "for": [
+            "g4c0"
+          ]
+        },
+        {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 218,
+          "cy": 339,
+          "r": 7,
+          "id": "g4c1"
+        },
+        {
+          "text": "models",
+          "x": 232,
+          "y": 344,
+          "style": "mono",
+          "for": [
+            "g4c1"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 358,
+          "x2": 352,
+          "y2": 358
+        },
+        {
+          "text": "Present",
+          "x": 8,
+          "y": 382,
+          "style": "strong"
+        },
+        {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 110,
+          "cy": 377,
           "r": 7,
           "id": "g5c0"
         },
         {
           "text": "portal",
           "x": 124,
-          "y": 354,
+          "y": 382,
           "style": "mono",
           "for": [
             "g5c0"
@@ -954,14 +1090,14 @@
           "state": "typed",
           "shape": "circle",
           "cx": 201,
-          "cy": 349,
+          "cy": 377,
           "r": 7,
           "id": "g5c1"
         },
         {
           "text": "present",
           "x": 215,
-          "y": 354,
+          "y": 382,
           "style": "mono",
           "for": [
             "g5c1"
@@ -978,7 +1114,7 @@
       "rows": [
         [
           "Scaffold",
-          "`init`, `update`, `epic`, `spec`, `task`, `estimate`",
+          "`init`, `update`, `epic`, `spec`, `task`, `adr`, `ids`, `estimate`",
           "none"
         ],
         [
@@ -993,12 +1129,12 @@
         ],
         [
           "Remember",
-          "`orient`, `status`, `recall`",
+          "`orient`, `status`, `recall`, `report`",
           "none"
         ],
         [
           "Delegate",
-          "`delegate`",
+          "`delegate`, `models`",
           "none"
         ],
         [

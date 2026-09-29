@@ -24,12 +24,11 @@ presentation renderer embedded.
 
 - `codeflow-core` owns the discipline engine and `codeflow-present` owns
   bounded local review sessions.
-- `codeflow-cli` is a thin dispatcher: `main.rs` is a clap command surface
-  over 22 subcommands (`init`, `update`, `hook`, `git-hook`, `orient`, `test`,
-  `validate`, `ci`, `status`, `integrate`, `doctor`, `policy`, `recall`,
-  `remote`, `epic`, `task`, `spec`, `work`, `delegate`, `estimate`, `present`,
-  `portal`), most a small handler in `cmd/` that calls into core, while
-  `init` and `update` dispatch inline in `main.rs` to the scaffold module.
+- `codeflow-cli` is a thin dispatcher: `main.rs` is the clap command
+  surface over every subcommand, most a small handler in `cmd/` that calls
+  into core, while `init` and `update` dispatch inline in `main.rs` to the
+  scaffold module. The [command reference](cli.md) lists each subcommand and
+  flag, generated from those clap definitions.
 - `embedded.rs` embeds `assets/` via rust-embed; debug builds read `assets/`
   from disk for instant scaffold iteration.
 
