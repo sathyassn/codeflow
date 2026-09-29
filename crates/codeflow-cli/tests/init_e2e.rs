@@ -614,7 +614,10 @@ fn fresh_scaffolds_install_the_rule_map_at_every_tier() {
         ] {
             assert_eq!(
                 read(&root, &format!(".codeflow/rules/{reference}")),
-                read(&repo_root(), &format!("assets/base/rules/{reference}")),
+                read(&repo_root(), &format!("assets/base/rules/{reference}")).replace(
+                    "{{WORKSPACE_ROOT_BRANCH}}",
+                    codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH
+                ),
                 "{flag}: reference {reference} not installed"
             );
         }
@@ -1901,6 +1904,9 @@ fn a_fresh_standard_project_prints_steps_that_clear_each_finding() {
         serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
     policy["git"]["commit_format"] = "warn".into();
     policy["git"]["breaking_watch_paths"] = serde_json::json!(["src/api.rs"]);
+    // The journey commits at its root checkout on feature branches; the
+    // root-checkout rule (TSK-165) has its own journey, so it is off here.
+    policy["git"]["root_checkout_commits"] = "off".into();
     std::fs::write(
         &policy_path,
         format!("{}\n", serde_json::to_string_pretty(&policy).unwrap()),

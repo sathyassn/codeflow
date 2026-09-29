@@ -128,6 +128,13 @@ fn write_policy(dir: &Path, json: &str) {
     std::fs::write(cf.join("policy.json"), json).unwrap();
 }
 
+/// The protected-branch policy of the retargeting fixtures. Their scratch
+/// repositories commit at a root checkout on a feature branch on purpose,
+/// to probe protected-branch targeting, so the root-checkout rule
+/// (TSK-165, judged in its own tests) is off.
+const TARGETING_POLICY: &str =
+    r#"{"git":{"protected_branches":["main","master"],"root_checkout_commits":"off"}}"#;
+
 fn wire_reference_transaction_hook(dir: &Path) {
     let hook = dir.join(".git/hooks/reference-transaction");
     std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
@@ -313,14 +320,8 @@ fn git_guard_judges_the_repository_a_command_targets() {
         std::fs::create_dir_all(dir).unwrap();
         init_repo(dir, branch);
     }
-    write_policy(
-        &session,
-        r#"{"git":{"protected_branches":["main","master"]}}"#,
-    );
-    write_policy(
-        &scratch,
-        r#"{"git":{"protected_branches":["main","master"]}}"#,
-    );
+    write_policy(&session, TARGETING_POLICY);
+    write_policy(&scratch, TARGETING_POLICY);
     let s = scratch.to_string_lossy();
     let b = bare.to_string_lossy();
     let sg = session.join(".git");
@@ -384,6 +385,8 @@ fn git_guard_blocks_targets_it_cannot_prove() {
         std::fs::create_dir_all(dir).unwrap();
         init_repo(dir, branch);
     }
+    write_policy(&session, TARGETING_POLICY);
+    write_policy(&feature, TARGETING_POLICY);
     // A directory literally named `$R` inside the session, a repository on main.
     let literal = session.join("$R");
     std::fs::create_dir_all(&literal).unwrap();
@@ -537,7 +540,7 @@ fn git_guard_resolves_aliases_and_rebase_branches() {
     for (dir, branch) in [(&main, "main"), (&feat, "feat/x")] {
         std::fs::create_dir_all(dir).unwrap();
         init_repo(dir, branch);
-        write_policy(dir, r#"{"git":{"protected_branches":["main","master"]}}"#);
+        write_policy(dir, TARGETING_POLICY);
     }
     let inc = tmp.path().join("aliases.ini");
     std::fs::write(&inc, "[alias]\n    x = commit\n").unwrap();
@@ -615,7 +618,7 @@ fn git_guard_round_5_boundaries() {
         if on != "main" {
             git(&dir, &["checkout", "-q", on]);
         }
-        write_policy(&dir, r#"{"git":{"protected_branches":["main","master"]}}"#);
+        write_policy(&dir, TARGETING_POLICY);
         dir
     };
     let commit = "commit --allow-empty -m \"fix: probe\"";
