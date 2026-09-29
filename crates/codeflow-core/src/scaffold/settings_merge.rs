@@ -7,8 +7,13 @@
 //!   update (stale codeflow hooks not present in the shipped preset are
 //!   removed); user hooks are never touched;
 //! - **permission entries** (`permissions.deny` / `ask` / `allow` arrays) —
-//!   union-added, never removed; scalar permission keys (`defaultMode`) are
-//!   set only when absent.
+//!   merged three ways on update against the prior shipped baseline
+//!   (ADR-0075, TSK-171): an entry the preset retired is removed, an entry
+//!   the project removed stays removed and is reported, a project-only entry
+//!   stays, and a new entry is added; shipped entries keep the preset's
+//!   order, since a `!` carve-out narrows only the rules before it. Without a
+//!   baseline the arrays are union-added and nothing is removed. Scalar permission keys
+//!   (`defaultMode`) are set only when absent.
 //! - **sandbox entries** — recursively add missing keys and union shipped array
 //!   entries, while preserving every explicit user scalar. On update, the prior
 //!   shipped baseline also identifies retired managed array entries; those are
@@ -27,6 +32,10 @@ use super::ScaffoldError;
 /// Commands with this prefix (or exactly equal to the binary name) are
 /// codeflow-managed hook entries.
 const COMMAND_PREFIX: &str = "codeflow ";
+
+/// The report wording for a permission entry the project removed and update
+/// keeps removed.
+pub const KEPT_REMOVAL: &str = "kept the project's removal of";
 
 fn is_codeflow_command(cmd: &str) -> bool {
     cmd == "codeflow" || cmd.starts_with(COMMAND_PREFIX)
@@ -56,8 +65,9 @@ pub fn merge_settings(
 }
 
 /// Merges settings during update, using the prior shipped baseline to retire
-/// only CodeFlow-managed sandbox array entries that the new preset removed.
-/// User-only entries are preserved.
+/// the CodeFlow-managed permission and sandbox array entries the new preset
+/// removed, and to keep a permission entry the project removed from coming
+/// back. User-only entries are preserved.
 ///
 /// # Errors
 ///
@@ -89,7 +99,12 @@ pub fn merge_settings_from_baseline(
     for (key, inc_val) in inc {
         match key.as_str() {
             "hooks" => merge_hooks(cur, inc_val, report),
-            "permissions" => merge_permissions(cur, inc_val, report),
+            "permissions" => merge_permissions(
+                cur,
+                previous.as_ref().and_then(|value| value.get("permissions")),
+                inc_val,
+                report,
+            ),
             "sandbox" => merge_sandbox(
                 cur,
                 previous.as_ref().and_then(|value| value.get("sandbox")),
@@ -343,10 +358,16 @@ fn retire_codeflow_hooks(
     }
 }
 
-fn merge_permissions(cur: &mut Map<String, Value>, inc_perms: &Value, report: &mut Vec<String>) {
+fn merge_permissions(
+    cur: &mut Map<String, Value>,
+    previous_perms: Option<&Value>,
+    inc_perms: &Value,
+    report: &mut Vec<String>,
+) {
     let Some(inc_perms) = inc_perms.as_object() else {
         return;
     };
+    let previous = previous_perms.and_then(Value::as_object);
     let cur_perms = cur
         .entry("permissions")
         .or_insert_with(|| Value::Object(Map::new()));
@@ -355,9 +376,38 @@ fn merge_permissions(cur: &mut Map<String, Value>, inc_perms: &Value, report: &m
         return;
     };
 
+    // An array the preset dropped entirely (the 2.x `ask` array) retires
+    // every entry it shipped; a project-only entry keeps the array alive.
+    if let Some(previous) = previous {
+        for (key, prev_val) in previous {
+            if inc_perms.contains_key(key) {
+                continue;
+            }
+            let (Some(prev_arr), Some(Value::Array(cur_arr))) =
+                (prev_val.as_array(), cur_perms.get_mut(key))
+            else {
+                continue;
+            };
+            retire_entries(key, cur_arr, prev_arr, &[], report);
+            if cur_arr.is_empty() {
+                cur_perms.remove(key);
+                report.push(format!(
+                    "settings: removed permissions.{key}: the preset no longer ships it"
+                ));
+            }
+        }
+    }
+
     for (key, inc_val) in inc_perms {
+        let prev_arr = previous
+            .and_then(|previous| previous.get(key))
+            .and_then(Value::as_array);
         match (cur_perms.get_mut(key), inc_val) {
             (Some(Value::Array(cur_arr)), Value::Array(inc_arr)) => {
+                if let Some(prev_arr) = prev_arr {
+                    merge_array_three_ways(key, cur_arr, prev_arr, inc_arr, report);
+                    continue;
+                }
                 for item in inc_arr {
                     if !cur_arr.contains(item) {
                         cur_arr.push(item.clone());
@@ -373,11 +423,72 @@ fn merge_permissions(cur: &mut Map<String, Value>, inc_perms: &Value, report: &m
                 }
             }
             (None, _) => {
+                if prev_arr.is_some() && inc_val.is_array() {
+                    report.push(format!(
+                        "settings: {KEPT_REMOVAL} permissions.{key}; update does not restore it"
+                    ));
+                    continue;
+                }
                 cur_perms.insert(key.clone(), inc_val.clone());
                 report.push(format!("settings: added permissions.{key}"));
             }
         }
     }
+}
+
+/// Merge one permission array against the prior shipped baseline. The
+/// result lists the shipped entries in the new preset's order, since a `!`
+/// carve-out narrows only the rules before it, then the project's own
+/// entries in their order. A shipped entry the project removed stays
+/// removed and is reported; an entry the preset retired is removed.
+fn merge_array_three_ways(
+    key: &str,
+    current: &mut Vec<Value>,
+    previous: &[Value],
+    incoming: &[Value],
+    report: &mut Vec<String>,
+) {
+    retire_entries(key, current, previous, incoming, report);
+    let mut next: Vec<Value> = Vec::with_capacity(incoming.len() + current.len());
+    for item in incoming {
+        if current.contains(item) {
+            next.push(item.clone());
+        } else if previous.contains(item) {
+            report.push(format!(
+                "settings: {KEPT_REMOVAL} permissions.{key} entry {item}; \
+                 update does not restore it"
+            ));
+        } else {
+            next.push(item.clone());
+            report.push(format!("settings: added permissions.{key} entry {item}"));
+        }
+    }
+    for item in current.iter() {
+        if !incoming.contains(item) && !next.contains(item) {
+            next.push(item.clone());
+        }
+    }
+    *current = next;
+}
+
+/// Remove each entry the prior shipped preset carried and the new one does
+/// not; entries the project added itself are never in `previous`.
+fn retire_entries(
+    key: &str,
+    current: &mut Vec<Value>,
+    previous: &[Value],
+    incoming: &[Value],
+    report: &mut Vec<String>,
+) {
+    current.retain(|entry| {
+        let retired = previous.contains(entry) && !incoming.contains(entry);
+        if retired {
+            report.push(format!(
+                "settings: removed retired permissions.{key} entry {entry}"
+            ));
+        }
+        !retired
+    });
 }
 
 #[cfg(test)]

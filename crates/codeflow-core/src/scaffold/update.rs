@@ -14,7 +14,9 @@
 //!   codeflow-owned keys (settings JSON) are regenerated.
 //! - **user-owned**: never mutated; schema-versioned JSON (policy.json) gains
 //!   NEW default keys (absent from both the user file and the old shipped
-//!   default), added with defaults and reported.
+//!   default), added with defaults and reported, and a scalar that still
+//!   equals the old shipped default moves to a changed new default, reported
+//!   (ADR-0075); a value that differs from the old default is kept.
 //!
 //! Manifest invariant: a managed file's recorded `sha256` is the hash of the
 //! pristine shipped version (== the `.baseline/` copy), NEVER the hash of a
@@ -48,7 +50,7 @@ use super::init::{build_context, render_entry};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
-use super::settings_merge::merge_settings_from_baseline;
+use super::settings_merge::{merge_settings_from_baseline, KEPT_REMOVAL};
 use super::state::{
     guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file,
     write_record, Baseline, InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
@@ -475,7 +477,10 @@ fn update_entry(
                 record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;
                 if merged == current {
-                    report.file(&entry.dest, Action::Unchanged);
+                    // A kept removal is reported on every run: the project
+                    // still runs without a shipped rule.
+                    lines.retain(|line| line.contains(KEPT_REMOVAL));
+                    report.file_with_notes(&entry.dest, Action::Unchanged, lines);
                 } else {
                     write_dest(root, entry, &merged)?;
                     push_diff(diffs, &entry.dest, &current, &merged);
@@ -582,9 +587,11 @@ fn sync_user_owned_json(
         Baseline::read(root, &entry.dest).and_then(|t| serde_json::from_str(&t).ok());
 
     let mut added: Vec<String> = vec![];
+    let mut moved: Vec<MovedDefault> = vec![];
     let mut recommended: Vec<String> = vec![];
     if let Some(old) = old_default.as_ref() {
         add_new_keys(&mut user, Some(old), &new_default, "", &mut added);
+        move_unchanged_defaults(&mut user, old, &new_default, "", &mut moved);
         recommended = recommend_defaults(&user, old, &new_default);
     }
 
@@ -599,7 +606,7 @@ fn sync_user_owned_json(
     Baseline::write(root, &entry.dest, rendered)?;
     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
 
-    if added.is_empty() && migrated.is_empty() {
+    if added.is_empty() && migrated.is_empty() && moved.is_empty() {
         let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
         notes.extend(recommended);
         if old_default.is_none() {
@@ -621,6 +628,7 @@ fn sync_user_owned_json(
             None => format!("added key {k}"),
         })
         .collect();
+    notes.extend(moved.iter().map(MovedDefault::note));
     let migrated_any = !migrated.is_empty();
     notes.extend(migrated);
     notes.extend(recommended);
@@ -644,7 +652,7 @@ fn sync_user_owned_json(
     let preserved = if migrated_any {
         None
     } else {
-        preserving_edit(&current_text, &user, &added, schema_advanced)
+        preserving_edit(&current_text, &user, &added, &moved, schema_advanced)
     };
     let next = if let Some(text) = preserved {
         text
@@ -667,9 +675,14 @@ fn preserving_edit(
     current: &str,
     user: &serde_json::Value,
     added: &[String],
+    moved: &[MovedDefault],
     schema_advanced: bool,
 ) -> Option<String> {
     let mut text = current.to_string();
+    for change in moved {
+        let parts: Vec<&str> = change.path.split('.').collect();
+        text = super::json_edit::replace_value(&text, &parts, &change.new.to_string())?;
+    }
     for path in added {
         // A `-` marks a deprecated key the sync removed.
         if let Some(gone) = path.strip_prefix('-') {
@@ -694,9 +707,76 @@ fn preserving_edit(
     super::json_edit::verified(text, user)
 }
 
+/// A policy scalar that still held the prior shipped default and moved to
+/// the new one (ADR-0075, TSK-171).
+struct MovedDefault {
+    path: String,
+    old: serde_json::Value,
+    new: serde_json::Value,
+}
+
+impl MovedDefault {
+    fn note(&self) -> String {
+        format!(
+            "moved {} from {} to {}: it held the previous shipped default. \
+             To keep {}, set it again in .codeflow/policy.json; update keeps a \
+             value that differs from the shipped default",
+            self.path, self.old, self.new, self.old
+        )
+    }
+}
+
+/// Move every scalar leaf whose value equals the prior shipped default to
+/// the new default, when the default changed. A value that differs from the
+/// prior default is the project's choice and is kept; arrays and objects are
+/// never replaced here.
+fn move_unchanged_defaults(
+    user: &mut serde_json::Value,
+    old_default: &serde_json::Value,
+    new_default: &serde_json::Value,
+    path: &str,
+    moved: &mut Vec<MovedDefault>,
+) {
+    let (Some(user_obj), Some(new_obj)) = (user.as_object_mut(), new_default.as_object()) else {
+        return;
+    };
+    for (key, new_val) in new_obj {
+        let Some(old_val) = old_default.get(key) else {
+            continue;
+        };
+        let Some(user_val) = user_obj.get_mut(key) else {
+            continue;
+        };
+        let key_path = if path.is_empty() {
+            key.clone()
+        } else {
+            format!("{path}.{key}")
+        };
+        if new_val.is_object() {
+            move_unchanged_defaults(user_val, old_val, new_val, &key_path, moved);
+            continue;
+        }
+        let scalar = |value: &serde_json::Value| !value.is_object() && !value.is_array();
+        if key_path != "schema_version"
+            && scalar(new_val)
+            && scalar(old_val)
+            && old_val != new_val
+            && *user_val == *old_val
+        {
+            *user_val = new_val.clone();
+            moved.push(MovedDefault {
+                path: key_path,
+                old: old_val.clone(),
+                new: new_val.clone(),
+            });
+        }
+    }
+}
+
 /// Changed shipped defaults that `codeflow update` recommends to an existing
-/// install: `(dotted key path, reason)`. The value is never changed: equality
-/// with the old default cannot show whether the adopter chose it.
+/// install whose value differs from both the old and the new default:
+/// `(dotted key path, reason)`. A value equal to the old default moves to
+/// the new one ([`move_unchanged_defaults`]).
 const RECOMMENDED_DEFAULTS: &[(&str, &str)] = &[(
     "git.test_gate_on_push",
     "the push set now finishes in seconds and blocks a failed push (TSK-132)",
