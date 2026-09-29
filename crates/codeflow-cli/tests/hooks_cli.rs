@@ -2528,7 +2528,13 @@ fn session_orient_adds_the_guidance_block_after_compact_resume_and_fork() {
             assert_eq!(head, digest, "{tier} {source}: the digest changed");
             let block = format!("{GUIDANCE_HEADING}{block}");
             assert!(block.contains(&format!("({tier} tier)")), "{block}");
-            assert!(block.contains("Always: Work to the outcome."), "{block}");
+            // The route rule leads the map at standard and full only.
+            let always = if tier == "minimal" {
+                "Always: Work to the outcome."
+            } else {
+                "Always: Route by touched paths. Work to the outcome."
+            };
+            assert!(block.contains(always), "{block}");
             assert!(
                 block.contains("- give a duration, date or effort:"),
                 "{block}"

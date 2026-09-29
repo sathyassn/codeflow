@@ -11,10 +11,9 @@ description: Land finished work — docs and capability updates, then a PR throu
    complete --acceptance <file>`; its block names the reviewed code commit
    (late: the clean landing merge's second parent, or its reviewed ancestor
    followed only by that record's status and Closeout), and CI binds it. A
-   fix of a complete task may use one PR: reopen with a reason and keep the
-   old block under `acceptance_superseded:`, fix the code, then complete
-   again against a reviewed head inside the fix PR. A reopened task keeps
-   its criteria; their amendment lands in a separate planning PR.
+   one-PR fix of a complete task reopens it (the old block kept as
+   superseded) and completes it again in that PR; its criteria change only
+   through a separate planning PR.
    After-release criteria stay `deferred`, never verified at build time.
    When a work item is planned, started, blocked, completed or cancelled,
    follow
@@ -102,9 +101,5 @@ description: Land finished work — docs and capability updates, then a PR throu
     `git cherry origin/<target> <branch>` to contain no unapplied `+` entry.
     Then remove the clean worktree (never use `git worktree remove --force`)
     and delete the branch with `git branch -d`, or `-D` only after the squash
-    proof. Delete the pushed branch with `git push origin --delete <branch>`
-    only when the PR is `MERGED` and `git ls-remote origin
-    refs/heads/<branch>` shows its recorded head SHA. Remove the task's build
-    output: its `target/`, any `CARGO_TARGET_DIR` made for it outside the
-    worktree, and its review builds; a folder another active task uses
-    stays. Retain anything unproven.
+    proof. Delete the pushed branch and remove the task's build output as
+    those rules set out. Retain anything unproven.
