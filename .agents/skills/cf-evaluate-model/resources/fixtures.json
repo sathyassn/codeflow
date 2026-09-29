@@ -1496,7 +1496,7 @@
       "files": {
         "BRIEF.md": "# Cache consistency\n\nPlan how reads remain coherent after writes across two service instances. Preserve the public API described in `docs/architecture.md`. Do not implement.\n",
         "docs/product.md": "# Product\n\nA configuration service where correctness is more important than stale-read latency.\n",
-        "docs/capabilities.md": "# Capabilities\n\n## CAP-001 — coherent reads\n\nReads must not return a value older than the most recently acknowledged write.\n",
+        "docs/capabilities.md": "# Capabilities\n\n## CAP-001: coherent reads\n\nReads must not return a value older than the most recently acknowledged write.\n",
         "docs/architecture.md": "# Architecture\n\nTwo stateless service instances run behind one load balancer. Both read and\nwrite one shared PostgreSQL database, the source of truth for configuration\nvalues. Each instance keeps an in-process read cache.\n\n## Public API\n\nClients depend on these two endpoints; their paths, bodies and status codes\nmust not change.\n\n- `GET /config/{key}` returns `200` with `{\"key\", \"value\", \"version\"}`, or\n  `404` for an unknown key.\n- `PUT /config/{key}` with `{\"value\"}` returns `200` with the new `version`\n  once the write is acknowledged.\n"
       }
     },
