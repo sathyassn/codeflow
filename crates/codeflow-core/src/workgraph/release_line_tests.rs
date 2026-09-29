@@ -225,6 +225,27 @@ impl Fx {
         let published = self.git(&["rev-parse", &format!("origin/{RELEASE}")]);
         judge(&self.root, &destination, &published, "HEAD", approved)
     }
+
+    /// The records rule on the same release push, fed what `judged`
+    /// brought, as `codeflow ci` runs it with main as the authority.
+    fn records(&self, judged: &Judgement) -> super::super::lifecycle::Verdict {
+        let published = self.git(&["rev-parse", &format!("origin/{RELEASE}")]);
+        super::super::lifecycle::judge_release_range(
+            &self.root,
+            &published,
+            "HEAD",
+            "main",
+            &judged.brought,
+        )
+        .unwrap()
+    }
+}
+
+/// Whether the records rule refuses TSK-003 for its missing block.
+fn missing_block(verdict: &super::super::lifecycle::Verdict) -> bool {
+    verdict.errors.iter().any(|error| {
+        error.contains("TSK-003") && error.contains("a complete record needs an acceptance block")
+    })
 }
 
 fn frozen(judgement: &Judgement, landing: &str) -> bool {
@@ -435,8 +456,10 @@ fn an_approved_cutoff_comes_from_the_line_the_task_targets() {
 
 /// AC-13: a brought complete task without an acceptance block, last
 /// changed on its line at or before the approved records cutoff, is a
-/// legacy record; after the cutoff, or from an old base landed after it,
-/// it is not; unapproved, the table refuses every release check.
+/// legacy record, which the records rule passes with its notice; after the
+/// cutoff, or from an old base landed after it, it is not, and the records
+/// rule refuses it for the missing block; unapproved, the table refuses
+/// every release check.
 #[test]
 fn an_approved_records_cutoff_lists_only_covered_legacy_records() {
     let key = RECORDS_BASELINE_KEY;
@@ -458,6 +481,13 @@ fn an_approved_records_cutoff_lists_only_covered_legacy_records() {
         )),
         "{legacy}"
     );
+    let verdict = fx.records(&judged);
+    assert!(!missing_block(&verdict), "{:?}", verdict.errors);
+    assert!(
+        verdict.notices.iter().any(|notice| notice.text == *legacy),
+        "the notice reaches the records rule: {:?}",
+        verdict.notices
+    );
     let refused = fx.judged(&[]).unwrap_err();
     assert!(
         refused.contains("which is not one of CodeFlow's approved cutoffs"),
@@ -476,6 +506,8 @@ fn an_approved_records_cutoff_lists_only_covered_legacy_records() {
         "{:?}",
         judged.brought.legacy
     );
+    let verdict = fx.records(&judged);
+    assert!(missing_block(&verdict), "{:?}", verdict.errors);
 
     // A topic branched from an old base, landed after the cutoff.
     let fx = Fx::new();
@@ -500,4 +532,6 @@ fn an_approved_records_cutoff_lists_only_covered_legacy_records() {
         "{:?}",
         judged.brought.legacy
     );
+    let verdict = fx.records(&judged);
+    assert!(missing_block(&verdict), "{:?}", verdict.errors);
 }
