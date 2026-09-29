@@ -19,7 +19,13 @@
 //   it, and one the store could not take (a typed 503) are resent with the
 //   same request id and stored once;
 // - a correction is an amendment naming the original answer;
-// - a decline carries its reason;
+// - a reload shows the last sent values of every field kind, read back
+//   from the service, never from browser storage, and a correction after
+//   it starts from them (TSK-176);
+// - a decline carries its reason, which the form shows read only once
+//   stored, after a reload too; Amend on a decline corrects the decline
+//   with its reason as edited, and answering instead is a separate,
+//   explicit choice that sends nothing by itself (TSK-176);
 // - a session_closed refusal of an answer closes every form and the chrome,
 //   which drops the review draft; closure while answers are in flight stays
 //   closed when their replies arrive, stored or failed.
@@ -134,15 +140,15 @@ try {
   await field("keep-days").locator("input").fill("30");
   await field("channels").locator("input[value='rail']").check();
   await field("contact").locator("input").fill("reviewer@example.org");
-  const storage = async (where) => {
-    const kept = await page.evaluate(async () => ({
+  const storage = async (where, tab = page, texts = []) => {
+    const kept = await tab.evaluate(async () => ({
       local: Object.entries(localStorage),
       session: Object.entries(sessionStorage),
       databases: typeof indexedDB.databases === "function" ? (await indexedDB.databases()).map((database) => database.name) : [],
       cookie: document.cookie,
     }));
     const all = JSON.stringify(kept);
-    for (const text of [DRAFT_TEXT, "reviewer@example.org", "\"30\""]) assert.ok(!all.includes(text), `${where}: browser storage holds ${text}: ${all}`);
+    for (const text of [DRAFT_TEXT, "reviewer@example.org", "\"30\"", ...texts]) assert.ok(!all.includes(text), `${where}: browser storage holds ${text}: ${all}`);
     assert.deepEqual(kept.session, [], `${where}: sessionStorage is not empty`);
     assert.deepEqual(kept.databases, [], `${where}: an IndexedDB database exists`);
     assert.ok(kept.local.every(([key]) => /^cf-present-(theme|mode|typeface|scale|appearance)/u.test(key) || !key.includes("draft")), `${where}: localStorage ${JSON.stringify(kept.local)}`);
@@ -227,6 +233,72 @@ try {
   assert.equal(lines[1].values["keep-days"], 7);
   passed.push("amendment: 'Correct this answer' stores an amendment naming the original answer, both lines stay; a refused confirmation of a stale correction leaves 'Send correction', which stores it against revision 3");
 
+  // A reload shows the last sent values (TSK-176). A second tab, loaded at
+  // revision 3, sends a correction with a value in every field kind, then
+  // reloads: each control shows what was sent, read only, beside the state
+  // words, and no browser storage holds any of it. Amend starts from those
+  // values, so changing one field sends the others unchanged.
+  {
+    const tab = await context.newPage();
+    tab.on("pageerror", (error) => errors.push(error.message));
+    await tab.goto(page.url(), { waitUntil: "domcontentloaded" });
+    await tab.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    const copy = tab.locator("article[data-cf-form='store-choice']");
+    const at = (id) => copy.locator(`[data-cf-field='${id}']`);
+    const RELOAD_WHY = "Sent before the reload";
+    const RELOAD_NOTES = "First line of the notes\nSecond line, sent before the reload";
+    await tab.waitForFunction(() => document.querySelector("article[data-cf-form='store-choice']")?.getAttribute("data-cf-form-state") === "stored");
+    await copy.locator("[data-cf-form-action='amend']").click();
+    await at("home").locator("input[value='repo']").check();
+    await at("home").locator("[data-cf-rationale-input]").fill(RELOAD_WHY);
+    await at("keep-days").locator("input").fill("45");
+    await at("share").locator("input[value='true']").check();
+    await at("channels").locator("input[value='rail']").check();
+    await at("channels").locator("input[value='form']").check();
+    await at("contact").locator("input").fill("reload@example.org");
+    await at("notes").locator("textarea").fill(RELOAD_NOTES);
+    await copy.locator("[data-cf-form-action='submit']").click();
+    await tab.waitForFunction(() => document.querySelector("article[data-cf-form='store-choice']")?.getAttribute("data-cf-form-state") === "stored");
+    const sentValues = { home: "repo", "keep-days": 45, share: true, channels: ["rail", "form"], contact: "reload@example.org", notes: RELOAD_NOTES };
+    const correction = (await ledger()).at(-1);
+    assert.equal(correction.event, "amendment", "reload: the correction was not stored");
+    assert.deepEqual(correction.values, sentValues);
+    const shownValues = () => copy.evaluate((article) => {
+      const field = (id) => article.querySelector(`[data-cf-field='${id}']`);
+      const checked = (id) => [...field(id).querySelectorAll("input[data-cf-value]:checked")].map((input) => input.value);
+      return {
+        home: checked("home"),
+        why: field("home").querySelector("[data-cf-rationale-input]").value,
+        "keep-days": field("keep-days").querySelector("[data-cf-value]").value,
+        share: checked("share"),
+        channels: checked("channels"),
+        contact: field("contact").querySelector("[data-cf-value]").value,
+        notes: field("notes").querySelector("[data-cf-value]").value,
+        disabled: [...article.querySelectorAll("[data-cf-value], [data-cf-rationale-input]")].every((control) => control.disabled),
+      };
+    });
+    const expected = { home: ["repo"], why: RELOAD_WHY, "keep-days": "45", share: ["true"], channels: ["rail", "form"], contact: "reload@example.org", notes: RELOAD_NOTES };
+    await tab.reload({ waitUntil: "domcontentloaded" });
+    await tab.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    const reloaded = { state: await copy.getAttribute("data-cf-form-state"), says: (await copy.locator("[data-cf-form-state]").innerText()).trim() };
+    assert.deepEqual(reloaded, { state: "stored", says: "Stored, waiting for agent" }, "reload: the state words");
+    assert.deepEqual(await shownValues(), { ...expected, disabled: true }, "reload: the controls do not show the sent answer, read only");
+    await storage("after the reload", tab, [RELOAD_WHY, "reload@example.org", "First line of the notes", "\"45\""]);
+    await copy.locator("[data-cf-form-action='amend']").click();
+    assert.deepEqual(await shownValues(), { ...expected, disabled: false }, "reload, Amend: the correction does not start from the sent answer");
+    await at("keep-days").locator("input").fill("46");
+    await copy.locator("[data-cf-form-action='submit']").click();
+    await tab.waitForFunction(() => document.querySelector("article[data-cf-form='store-choice']")?.getAttribute("data-cf-form-state") === "stored");
+    const amended = (await ledger()).at(-1);
+    assert.equal(amended.event, "amendment");
+    assert.equal(amended.amends, lines[0].answer_id, "reload, Amend: the correction names another answer");
+    assert.deepEqual(amended.values, { ...sentValues, "keep-days": 46 }, "reload, Amend: the other fields did not go unchanged");
+    assert.deepEqual(amended.rationales, { home: RELOAD_WHY });
+    await storage("after the correction", tab, [RELOAD_WHY, "reload@example.org", "First line of the notes", "\"46\""]);
+    await tab.close();
+    passed.push("reload: after a reload each field kind (choice and its reason, integer, boolean, choices, email text, multiline text) shows the sent value read only beside \"Stored, waiting for agent\", no browser storage holds it, and Amend starts from it, so changing one field sends the rest unchanged");
+  }
+
   // The page refuses before sending what the server would refuse.
   {
     const before = sent.length;
@@ -247,7 +319,7 @@ try {
     await form.locator("[data-cf-form-action='submit']").click();
     assert.match(await field("keep-days").locator(".cf-field__error").innerText(), /whole number/u);
     assert.equal(sent.length, before, "page check: a request was sent");
-    assert.equal((await ledger()).length, 2);
+    assert.equal((await ledger()).length, 4);
     passed.push("page checks: a missing required choice, a bad email and a fraction are refused on the page with the field's message marking only the answer, and nothing is sent");
   }
 
@@ -378,9 +450,11 @@ try {
     assert.equal(line.outcome, "decline");
     assert.equal(line.reason, "Not my call.");
     assert.deepEqual(line.values, {});
-    assert.equal(await reason.isVisible(), false, "decline: the reason shows after the decline is stored");
+    assert.equal(await reason.isVisible(), true, "decline: the sent reason is hidden once the decline is stored");
+    assert.ok(await reason.isDisabled(), "decline: the sent reason is editable once stored");
+    assert.equal(await reason.inputValue(), "Not my call.");
     assert.deepEqual(await hiddenShown(), [], "decline: a hidden part of a form shows");
-    passed.push("decline: the reason box shows only after Decline, is stored with no values, and hides once stored");
+    passed.push("decline: the reason box shows only after Decline, is stored with no values, and stays in sight, read only, once stored");
   }
 
   // Revision 4 relabels an option under the same value: the question the
@@ -427,9 +501,37 @@ try {
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
     await page.getByTestId("toast").getByText(/Restored 1 unsent note/u).waitFor({ timeout: 20_000 });
-    // The reload shows the stored decline; a new choice starts from Amend.
+    // The reload shows the stored decline and its reason, read only. Amend
+    // corrects the decline: the reason is editable and the main action sends
+    // it as a decline naming the original. Answering instead is its own
+    // button, which sends nothing and hides the reason.
     assert.equal((await stateOf(decision)).state, "stored", "reload: the stored decline is not shown");
+    const declineReason = decision.locator("[data-cf-decline-reason]");
+    const reasonShown = async () => [await declineReason.isVisible(), await declineReason.isDisabled(), await declineReason.inputValue()];
+    const actions = () => decision.locator("[data-cf-form-action]:visible").evaluateAll((buttons) => buttons.map((button) => [button.dataset.cfFormAction, button.textContent, button.classList.contains("cf-form__submit")]));
+    assert.deepEqual(await reasonShown(), [true, true, "Not my call."], "reload: the sent decline reason is not shown read only");
+    const declined = (await ledger()).at(-1);
     await decision.locator("[data-cf-form-action='amend']").click();
+    assert.deepEqual(await reasonShown(), [true, false, "Not my call."], "reload, Amend: the sent decline reason is not offered for correction");
+    assert.deepEqual(await actions(), [["submit", "Answer instead", false], ["decline", "Send corrected decline", true]], "reload, Amend: the actions of a decline correction");
+    await declineReason.fill("Need the evidence first");
+    await decision.locator("[data-cf-form-action='decline']").click();
+    await waitState(decision, "stored");
+    const reasonOnly = (await ledger()).at(-1);
+    assert.deepEqual(
+      [reasonOnly.event, reasonOnly.form_id, reasonOnly.outcome, reasonOnly.reason, reasonOnly.values, reasonOnly.amends],
+      ["amendment", "d-scope", "decline", "Need the evidence first", {}, declined.answer_id],
+      "reload, Amend: the edited decline reason was not sent as a corrected decline",
+    );
+    assert.deepEqual(await reasonShown(), [true, true, "Need the evidence first"], "corrected decline: the sent reason is not shown read only");
+    // Answering instead is explicit: it sends nothing, hides the reason and
+    // restores the ordinary correction.
+    const count = sent.length;
+    await decision.locator("[data-cf-form-action='amend']").click();
+    await decision.locator("[data-cf-form-action='submit']").click();
+    assert.equal(sent.length, count, "Answer instead: a request was sent");
+    assert.equal(await declineReason.isVisible(), false, "Answer instead: the discarded reason is still editable");
+    assert.deepEqual(await actions(), [["submit", "Send correction", true], ["decline", "Decline to answer", false], ["cancel", "Dismiss for now", false]], "Answer instead: the actions of an answer correction");
     await decision.locator("input[value='a']").check();
     await page.route(`**${ANSWERS}`, (route) => route.fulfill({
       status: 410,
@@ -442,6 +544,7 @@ try {
     await page.getByTestId("toast").getByText(/This review session is closed\./u).waitFor({ timeout: 20_000 });
     await page.waitForFunction((key) => sessionStorage.getItem(key) === null, draftKey, { timeout: 10_000 });
     assert.ok(await field("keep-days").locator("input").isDisabled(), "answer 410: a sibling form is editable");
+    passed.push("decline correction: after a reload, Amend on a decline sends the edited reason as a corrected decline naming the original, and Answer instead sends nothing and hides the reason");
     passed.push("answer 410: a session_closed refusal closes the form, its sibling and the chrome, and drops the restored review draft");
   }
 
@@ -455,6 +558,7 @@ try {
     await field("channels").locator("input[value='rail']").check();
     await field("contact").locator("input").fill("reviewer@example.org");
     await decision.locator("[data-cf-form-action='amend']").click();
+    await decision.locator("[data-cf-form-action='submit']").click();
     await decision.locator("input[value='a']").check();
     const before = (await ledger()).length;
     let release;
