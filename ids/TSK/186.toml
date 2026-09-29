@@ -1,0 +1,11 @@
+id = "TSK-186"
+uid = "5ce0766e-24f6-46af-b670-ee41422176a0"
+kind = "TSK"
+title = "Count both new policy keys after the batch 2 landings"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T10:30:27Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
