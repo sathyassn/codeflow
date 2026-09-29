@@ -1,0 +1,11 @@
+id = "TSK-189"
+uid = "1aaa5092-83f6-48c8-a5a4-b743f2da372e"
+kind = "TSK"
+title = "guards judge by the landed policy and never go missing"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T20:06:36Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
