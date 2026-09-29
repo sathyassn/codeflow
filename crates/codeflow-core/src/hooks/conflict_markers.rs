@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use super::policy::PolicyLevel;
 use super::Violation;
@@ -231,7 +231,7 @@ pub fn marker_sizes(
     if paths.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let mut command = Command::new("git");
+    let mut command = crate::git::command();
     command.arg("-C").arg(root);
     let from = match source {
         AttrSource::Index {
@@ -627,7 +627,7 @@ mod tests {
     }
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
