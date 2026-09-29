@@ -50,8 +50,8 @@ tracking decision.
 
 Use [the verification-selection contract](../verification-selection.md) to decide
 whether evidence earns property/generative tests, targeted mutation testing, or
-project-owned architecture fitness checks. Record the trigger or `none
-selected`; these techniques strengthen the normal checks and never replace
+project-owned architecture fitness checks. Name a selected technique with
+its trigger; these techniques strengthen the normal checks and never replace
 them.
 
 A skipped category is explicitly `N/A` with the reason and evidence that the
