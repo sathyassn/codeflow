@@ -23,9 +23,8 @@ caption line, every line printable ASCII and under 78 columns.
 
 The YAML beside each specimen sketches its intent; the module loads only the
 JSON declarations of `figure-grammar.md` section 6, and the complete ones for
-these specimens are the portal starter's `tests/fixtures/figures/*.json`. The
-gate still fails two of them: derivation on rule 8 and graph on rules 3 and 8,
-so check a figure built from those against the gate.
+these specimens are the portal starter's `tests/fixtures/figures/*.json`.
+Check each rendered figure against the gate at both widths and in both modes.
 
 ## 1. flow
 
@@ -163,8 +162,8 @@ figure:
   family: layering
   binding: authored
   question: "Which plane covers which moment, and which one is the boundary?"
-  idea: "Four planes cover a change in order, and only the remote one is a boundary."
-  states: [layer, layer-remote, act, done]
+  idea: "Four planes cover different moments; verified remote protection is required."
+  states: [layer, layer-remote, act]
   facts:
     - claim: "four planes: git hooks, session git-guard, CI, remote branch protection"
       source: "AGENTS.md#git-rules"
@@ -176,29 +175,27 @@ figure:
 <p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">Four enforcement planes along the life of one change</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 248" role="img" aria-labelledby="fg-layer-t fg-layer-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-layer-t">Four enforcement planes along the life of one change</title>
-<desc id="fg-layer-d">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane drawn with an end cap, meaning remote and required. One change crosses all four planes in that order.</desc>
+<desc id="fg-layer-d">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and can stop both. The session git-guard covers edit to merge and can stop commit, push, pull request and merge. CI covers push and pull request and can stop at the pull request. Verified remote branch protection covers push to merge and can stop push and merge; its end cap means remote and required.</desc>
 <g fill="var(--cf-fig-line-mid)" text-anchor="middle"><text x="240" y="22">Edit</text><text x="340" y="22">Commit</text><text x="440" y="22">Push</text><text x="540" y="22">Pull request</text><text x="640" y="22">Merge</text></g>
 <line x1="190" y1="42" x2="690" y2="42" stroke="var(--cf-fig-rule)" stroke-width="1"/>
 <g stroke="var(--cf-fig-line-soft)" stroke-width="1.5" stroke-linecap="round"><line x1="240" y1="36" x2="240" y2="42"/><line x1="340" y1="36" x2="340" y2="42"/><line x1="440" y1="36" x2="440" y2="42"/><line x1="540" y1="36" x2="540" y2="42"/><line x1="640" y1="36" x2="640" y2="42"/></g>
 <text x="0" y="89">Git hooks</text><text x="0" y="137">Session git-guard</text><text x="0" y="185">CI</text><text x="0" y="233" font-weight="600">Remote branch protection</text>
-<g data-state="layer" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line-soft)" stroke-width="1.5"><rect x="290" y="72" width="200" height="24" rx="6"/><rect x="190" y="120" width="300" height="24" rx="6"/><rect x="390" y="168" width="200" height="24" rx="6"/></g>
-<g data-state="layer-remote"><rect x="490" y="216" width="186" height="24" rx="6" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line)" stroke-width="2"/><path d="M662 216H670A6 6 0 0 1 676 222V234A6 6 0 0 1 670 240H662Z" fill="var(--cf-fig-line)"/></g>
-<polyline data-state="done" points="340,84 440,132 540,180 640,228" fill="none" stroke="var(--cf-fig-accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-<g data-state="act" fill="var(--cf-fig-accent)" stroke="var(--cf-fig-ground)" stroke-width="2.5"><circle cx="340" cy="84" r="8"/><circle cx="440" cy="132" r="8"/><circle cx="540" cy="180" r="8"/><circle cx="640" cy="228" r="8"/></g>
+<g data-state="layer" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line-soft)" stroke-width="1.5"><rect x="290" y="72" width="200" height="24" rx="6"/><rect x="190" y="120" width="500" height="24" rx="6"/><rect x="390" y="168" width="200" height="24" rx="6"/></g>
+<g data-state="layer-remote"><rect x="390" y="216" width="286" height="24" rx="6" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line)" stroke-width="2"/><path d="M662 216H670A6 6 0 0 1 676 222V234A6 6 0 0 1 670 240H662Z" fill="var(--cf-fig-line)"/></g>
+<g data-state="act" fill="var(--cf-fig-accent)" stroke="var(--cf-fig-ground)" stroke-width="2.5"><circle cx="340" cy="84" r="8"/><circle cx="440" cy="84" r="8"/><circle cx="340" cy="132" r="8"/><circle cx="440" cy="132" r="8"/><circle cx="540" cy="132" r="8"/><circle cx="640" cy="132" r="8"/><circle cx="540" cy="180" r="8"/><circle cx="440" cy="228" r="8"/><circle cx="640" cy="228" r="8"/></g>
 </svg>
 <ul class="cf-legend" aria-label="Legend">
 <li data-state="layer"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="2" y="3" width="24" height="10" rx="3" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line-soft)" stroke-width="1.5"/></svg>Plane covers this moment, local and editable</li>
 <li data-state="layer-remote"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="2" y="3" width="24" height="10" rx="3" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line)" stroke-width="2"/><path d="M20 3H23A3 3 0 0 1 26 6V10A3 3 0 0 1 23 13H20Z" fill="var(--cf-fig-line)"/></svg>Plane covers this moment, remote and required</li>
 <li data-state="act"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle cx="14" cy="8" r="6.5" fill="var(--cf-fig-accent)"/></svg>Plane acts here</li>
-<li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M3 13L25 3" fill="none" stroke="var(--cf-fig-accent)" stroke-width="3" stroke-linecap="round"/></svg>One change</li>
 </ul>
-<figcaption class="cf-fig-caption">Local planes give fast feedback and can be edited, and only the remote plane at merge is a boundary.</figcaption>
-<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane drawn with an end cap, meaning remote and required. One change crosses all four planes in that order.</p>
+<figcaption class="cf-fig-caption">Hooks and the guard stop changes before push; CI blocks the pull request; verified remote protection stops push and merge.</figcaption>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and can stop both. The session git-guard covers edit to merge and can stop commit, push, pull request and merge. CI covers push and pull request and can stop at the pull request. Verified remote branch protection covers push to merge and can stop push and merge; its end cap means remote and required.</p>
 <table><thead><tr><th>Plane</th><th>Moments</th><th>Shared source</th><th>Can be bypassed locally</th></tr></thead>
 <tbody><tr><td>Git hooks</td><td>commit, push</td><td><code>.codeflow/policy.json</code></td><td>yes, hooks can be edited</td></tr>
-<tr><td>Session git-guard</td><td>edit to push</td><td><code>.codeflow/policy.json</code></td><td>yes, the session setup can be edited</td></tr>
+<tr><td>Session git-guard</td><td>edit to merge</td><td><code>.codeflow/policy.json</code></td><td>yes, the session setup can be edited</td></tr>
 <tr><td>CI</td><td>push, pull request</td><td><code>.codeflow/policy.json</code> through <code>codeflow ci</code></td><td>yes, unless the remote requires its result</td></tr>
-<tr><td>Remote branch protection</td><td>pull request, merge</td><td>rules derived from <code>.codeflow/policy.json</code></td><td>no, it is the boundary at merge</td></tr></tbody></table>
+<tr><td>Remote branch protection</td><td>push to merge</td><td>rules derived from <code>.codeflow/policy.json</code></td><td>no, when the remote requires it</td></tr></tbody></table>
 </details>
 </figure>
 
@@ -212,13 +209,12 @@ remote protection draws the three planes it has and says so in the caption.
 
 ```text
               edit    commit  push    PR      merge
- Git hooks           [*--------]
- git-guard   [----------------*]
+ Git hooks           [*----*---]
+ git-guard   [--------*---*---*---*]
  CI                          [--------*]
- Remote                              [########*]|
- One change   o=======o=======o=======o=======o
-Legend: [--] local plane  [##]| remote plane  * acts here  o==o one change
-Caption: Local planes give fast feedback, and only Remote is a boundary.
+ Remote                     [#*######*]|
+Legend: [--] local plane  [##]| remote plane  * can stop here
+Caption: Verified Remote stops push and merge; Guard spans edit to merge.
 ```
 
 ## 4. sequence
@@ -596,20 +592,20 @@ figure:
 <p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">The nine tasks of EPC-016 and their sixteen dependencies</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 320" role="img" aria-labelledby="fg-graph-t fg-graph-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-graph-t">The nine tasks of EPC-016 and their sixteen dependencies</title>
-<desc id="fg-graph-d">Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy accent arcs mark the critical path 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.</desc>
+<desc id="fg-graph-d">Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy headless accent arcs mark the critical path, with direction from ranks; ordinary arcs have heads. The critical path runs 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.</desc>
 <defs><marker id="fg-graph-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10Z" fill="var(--cf-fig-line)"/></marker><marker id="fg-graph-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10Z" fill="var(--cf-fig-accent)"/></marker></defs>
 <g data-state="trans" fill="none" stroke="var(--cf-fig-line)" stroke-width="1.75" marker-end="url(#fg-graph-a)"><path d="M75 171L155 229"/><path d="M78 157L502 83"/><path d="M78 162L502 208"/><path d="M307 154L503 86"/><path d="M308 164L502 206"/><path d="M306 169L504 281"/><path d="M417 167L503 203"/><path d="M412 173L508 277"/><path d="M188 237L642 163"/><path d="M537 204L643 166"/><path d="M533 278L647 172"/></g>
-<g data-state="done" fill="none" stroke="var(--cf-fig-accent)" stroke-width="3" stroke-linecap="round" marker-end="url(#fg-graph-c)"><path d="M76 151L154 109"/><path d="M186 108L274 152"/><path d="M308 160H382"/><path d="M415 150L505 90"/><path d="M536 89L644 151"/></g>
+<g data-state="done" fill="none" stroke="var(--cf-fig-accent)" stroke-width="3" stroke-linecap="round"><path d="M76 151L154 109"/><path d="M186 108L274 152"/><path d="M308 160H382"/><path d="M415 150L505 90"/><path d="M536 89L644 151"/></g>
 <g data-state="node" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line)" stroke-width="1.5"><circle cx="60" cy="160" r="17"/><circle cx="170" cy="100" r="17"/><circle cx="170" cy="240" r="17"/><circle cx="290" cy="160" r="17"/><circle cx="400" cy="160" r="17"/><circle cx="520" cy="80" r="17"/><circle cx="520" cy="210" r="17"/><circle cx="520" cy="290" r="17"/><circle cx="660" cy="160" r="17"/></g>
 <g text-anchor="middle"><text x="60" y="165">058</text><text x="170" y="105">070</text><text x="170" y="245">062</text><text x="290" y="165">059</text><text x="400" y="165">060</text><text x="520" y="85">061</text><text x="520" y="215">063</text><text x="520" y="295">071</text><text x="660" y="165">064</text></g>
 </svg>
 <ul class="cf-legend" aria-label="Legend">
 <li data-state="node"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle cx="14" cy="8" r="6.5" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line)" stroke-width="1.5"/></svg>Task, labelled inside</li>
-<li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H19" fill="none" stroke="var(--cf-fig-accent)" stroke-width="3" stroke-linecap="round"/><path d="M19 4L26 8L19 12Z" fill="var(--cf-fig-accent)"/></svg>Critical path</li>
+<li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H19" fill="none" stroke="var(--cf-fig-accent)" stroke-width="3" stroke-linecap="round"/></svg>Critical path</li>
 <li data-state="trans"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H20" fill="none" stroke="var(--cf-fig-line)" stroke-width="1.75"/><path d="M19 4L26 8L19 12Z" fill="var(--cf-fig-line)"/></svg>Depends on</li>
 </ul>
 <figcaption class="cf-fig-caption">The doctrine, the kit, the runtime, the chrome, the pages and the closeout are the critical path; the evaluation cases, Agent OS and the annotation fixes run beside it. Ids are TSK-058 to TSK-071.</figcaption>
-<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy accent arcs mark the critical path 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.</p>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy headless accent arcs mark the critical path, with direction from ranks; ordinary arcs have heads. The critical path runs 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.</p>
 <table><thead><tr><th>Task</th><th>Depends on</th><th>On the critical path</th></tr></thead>
 <tbody><tr><td>TSK-058</td><td>none</td><td>yes</td></tr><tr><td>TSK-070</td><td>058</td><td>yes</td></tr><tr><td>TSK-062</td><td>058</td><td>no</td></tr><tr><td>TSK-059</td><td>070</td><td>yes</td></tr><tr><td>TSK-060</td><td>059</td><td>yes</td></tr><tr><td>TSK-061</td><td>058, 059, 060</td><td>yes</td></tr><tr><td>TSK-063</td><td>058, 059, 060</td><td>no</td></tr><tr><td>TSK-071</td><td>059, 060</td><td>no</td></tr><tr><td>TSK-064</td><td>061, 062, 063, 071</td><td>yes</td></tr></tbody></table>
 </details>
@@ -622,7 +618,7 @@ critical path rows marked with the heavy accent rule, no arcs drawn.
 
 ```text
  rank 1     2          3          4          5          6
- (058)====>(070)====>(059)====>(060)====>(061)====>(064)
+ (058)====(070)====(059)====(060)====(061)====(064)
                                          <-058      <-062
                                          <-059      <-063
                                                     <-071
@@ -630,6 +626,6 @@ critical path rows marked with the heavy accent rule, no arcs drawn.
            <-058                         <-058 <-059 <-060
                                          (071)
                                          <-059 <-060
-Legend: (n) task TSK-n  ==> critical path  <-n depends on task n
+Legend: (n) task TSK-n  == critical path  <-n depends on task n
 Caption: The critical path runs 058, 070, 059, 060, 061 and 064.
 ```

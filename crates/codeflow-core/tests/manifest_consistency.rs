@@ -2151,12 +2151,12 @@ fn chat_form_measures(family: &str) -> &'static [(&'static str, usize)] {
     match family {
         "flow" => &[("|", 2), ("(H)", 1)],
         "structure" => &[("[ .", 4)],
-        "layering" => &[("*", 4)],
+        "layering" => &[("*", 9)],
         "sequence" => &[("->|", 3), ("<==", 2)],
         "state" => &[("[", 7)],
         "coverage" => &[("#", 12), ("X", 1)],
         "derivation" => &[("<~>", 2)],
-        "graph" => &[("==>", 5), ("<-", 11)],
+        "graph" => &[("====", 5), ("<-", 11)],
         _ => &[],
     }
 }
