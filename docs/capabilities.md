@@ -662,14 +662,26 @@ tree entry is brought, and its completions bind where they were introduced
 (only a later completion from the task's own line that binds there, and
 that the line landed after the earlier ones, supersedes them; a direct
 completion is judged as it was made);
-a brought criteria change is judged again where it landed on its line,
-unless that landing is at or before the cutoff of the line the task
-targets, on that line's first-parent chain, in the project-config table
-`release_rule_baseline` read at the default target, which lists it as
-information. The adoption marker `release_rules = 1` in project config
-never decides whether these rules apply; once the default target carries
-it, removing it or changing its value, there or in the judged range,
-makes every release check refuse. The marker's history is read from the
+a brought criteria change is judged again where it landed on its line.
+The records rule judges a brought record where it was introduced too: a
+spec approved on its line counts where it landed there, which must have
+been planning-only, and a record whose only change is a `uid` backfill
+landed on its line is not judged again. Two project-config tables, read
+at the default target, exist only for the 2.x to 3.0 transition: a
+brought criteria change landed at or before the cutoff in
+`release_rule_baseline`, and a brought complete task without an
+acceptance block whose record last changed at or before the cutoff in
+`release_records_baseline`, each for the line the task targets and on its
+first-parent chain, are listed as information. `codeflow init` and
+`update` write the adoption marker `release_rules = 1` in project config
+and never a table. The marker never decides whether these rules apply;
+once the default target carries it, removing it or changing its value,
+there or in the judged range, makes every release check refuse. A table
+is honoured only as a one-time bridge: added in one commit and never
+changed, at or before the marker's first commit on the default target,
+after project config without the marker, with cutoffs from before the
+rule; otherwise every release check refuses. No flag, variable or policy
+key skips the rule or a table. The marker's history is read from the
 parents each commit records. History the check needs that it cannot read
 in full, cut by a shallow boundary or missing a config object, refuses as
 well: adoption is never inferred absent from it. A graft file or a replace
