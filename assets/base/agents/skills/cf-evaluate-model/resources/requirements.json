@@ -763,7 +763,7 @@
     {
       "id": "CF-GIT-002",
       "level": "hard",
-      "statement": "A landed task's worktree and branch are removed only after dirty-state inspection and proof of merge; a squash merge requires MERGED PR state with a matching head SHA or no unapplied git-cherry entry before branch force-delete, and worktree force-removal is prohibited.",
+      "statement": "A landed task's worktree and branch are removed only after dirty-state inspection and proof of merge; a squash merge requires MERGED PR state with a matching head SHA or no unapplied git-cherry entry before branch force-delete, and worktree force-removal is prohibited. Whoever landed the work cleans up after every landing, onto an integration branch or main, and also removes the pushed branch only when the PR is MERGED and the remote tip equals its recorded head SHA, and the task's build output, keeping a folder another active task uses.",
       "sources": [
         {
           "path": ".codeflow/rules/worktrees.md",
@@ -772,13 +772,16 @@
             "require PR state `MERGED`",
             "no unapplied `+` entry",
             "Never force-remove a dirty worktree",
-            "Unproven work is retained"
+            "Unproven work is retained",
+            "Cleanup runs after every landing",
+            "equals the PR's recorded head SHA",
+            "A folder another active task still uses stays"
           ]
         },
         {
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
-            "Clean up after the human merge, with proof",
+            "Clean up after every landing, with proof",
             "never use `git worktree remove --force`",
             "to report `MERGED` and the branch-tip SHA",
             "no unapplied `+` entry",

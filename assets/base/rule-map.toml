@@ -535,8 +535,8 @@ see = [{ target = ".codeflow/rules/git-rules.md", section = "Enforcement", note 
 key = "cleanup"
 group = "delivery"
 when = "clean up after a landing"
-action = "cleanup needs merge proof, an inactive owner and a clean worktree; never force-remove a dirty one"
-see = [{ target = ".codeflow/rules/worktrees.md", section = "Cleanup", note = "before removing anything", must_open = true, reason = "what counts as proof" }]
+action = "whoever landed it cleans up in the same step, after every landing; cleanup needs merge proof, an inactive owner and a clean worktree; it also removes the pushed branch and the task's build output; never force-remove a dirty one"
+see = [{ target = ".codeflow/rules/worktrees.md", section = "Cleanup", note = "before removing anything", must_open = true, reason = "what counts as proof and what to remove" }]
 
 [[moment]]
 key = "status"
