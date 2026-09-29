@@ -72,6 +72,9 @@ effective `stopReviewGate` is off through the plugin's own surface; then it
 may be treated as nonblocking. CodeFlow does not read or infer plugin-private
 state — this check is the operator's, made against the plugin's own
 configuration, and an unknown or unverified sibling fails the preflight.
+A session loads its hooks when it starts, so the preflight runs after
+`init` writes the task settings file and before launch; a check at
+delivery comes too late.
 
 ## Launch and drive one turn
 
@@ -81,6 +84,7 @@ CLAUDE_MODEL="<claude-primary native selector>"
 CLAUDE_EFFORT="<default effort>"
 codeflow delegate init --run-id run-42 --state-dir "$STATE" \
   --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT"
+# Run the sibling Stop-hook preflight above now; launch only when it passes.
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /absolute/worktree \
   "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
 # For consult/no-edit, use the same launch with --permission-mode auto.

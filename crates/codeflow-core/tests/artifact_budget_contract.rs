@@ -712,11 +712,15 @@ const TURN_ADAPTER_READ_EDGES: &[(&str, &str)] = &[
          through the delegated lifecycle, **read and follow** \
          `.claude/skills/cf-delegate/resources/claude-turn-completion.md`.",
     ),
+    // TSK-163: the lane reaches the adapter before launch, where the launch
+    // sequence, turn detection and sibling Stop-hook preflight now live.
     (
         "claude/skills/cf-delegate/resources/lane-lifecycle.md",
-        "On this Codex host lane, use the shipped [turn lifecycle \
-         adapter](claude-turn-completion.md) for exact mechanics; never improvise \
-         a parser, scrape transcripts, or use pane stability as completion.",
+        "On this Codex host lane, before launching Claude, read and follow the \
+         shipped [turn lifecycle adapter](claude-turn-completion.md), which states \
+         the launch sequence, turn detection and the sibling Stop-hook preflight; \
+         never improvise a parser, scrape transcripts, or use pane stability as \
+         completion.",
     ),
 ];
 
