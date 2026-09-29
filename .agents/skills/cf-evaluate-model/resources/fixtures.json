@@ -1320,10 +1320,10 @@
       },
       "files": {
         "PLAN.md": "# Plan v1\n\nDeliver one reporting outcome through two independent producers and one dependent integration task. The proposed landing shape sends each task through a separate PR to `main` because all three changes are small. No integration branch rationale or exception approval is recorded.\n\nTASK_GRAPH v1\nSTART -> TSK-081\nSTART -> TSK-082\nTSK-081 -> TSK-083\nTSK-082 -> TSK-083\n\nCLAUDE_APPROVAL: v1\nCODEX_APPROVAL: v1\n",
-        "project-management/epics/EPC-021.md": "---\nid: EPC-021\ntitle: Reporting outcome\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-08-01\n---\n\n## Summary\n\nDeliver the reporting outcome as one reviewed body.\n\n## Acceptance Criteria\n\n- [ ] The API and interface ship as one verified reporting flow.\n",
-        "project-management/tasks/TSK-081.md": "---\nid: TSK-081\nepic_id: EPC-021\nstandalone_reason: null\ntitle: Reporting API\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Description\n\nBuild the reporting API boundary.\n\n## Acceptance Criteria\n\n- [ ] The approved report contract is served with focused evidence.\n",
-        "project-management/tasks/TSK-082.md": "---\nid: TSK-082\nepic_id: EPC-021\nstandalone_reason: null\ntitle: Reporting interface\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Description\n\nBuild the reporting interface against the approved contract.\n\n## Acceptance Criteria\n\n- [ ] The representative reporting journey is rendered and verified.\n",
-        "project-management/tasks/TSK-083.md": "---\nid: TSK-083\nepic_id: EPC-021\nstandalone_reason: null\ntitle: Integrate reporting flow\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: [TSK-081, TSK-082]\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Description\n\nIntegrate the API and interface as one reporting flow.\n\n## Acceptance Criteria\n\n- [ ] The end-to-end reporting journey passes on the combined diff.\n"
+        "project-management/epics/EPC-021.md": "---\nid: EPC-021\ntitle: Reporting outcome\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-08-01\n---\n\n## Summary\n\nDeliver the reporting outcome as one reviewed body.\n\n## Acceptance Criteria\n\n- AC-1 The API and interface ship as one verified reporting flow.\n",
+        "project-management/tasks/TSK-081.md": "---\nid: TSK-081\nepic_id: EPC-021\nstandalone_reason: null\ntitle: Reporting API\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Description\n\nBuild the reporting API boundary.\n\n## Acceptance Criteria\n\n- AC-1 The approved report contract is served with focused evidence.\n",
+        "project-management/tasks/TSK-082.md": "---\nid: TSK-082\nepic_id: EPC-021\nstandalone_reason: null\ntitle: Reporting interface\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Description\n\nBuild the reporting interface against the approved contract.\n\n## Acceptance Criteria\n\n- AC-1 The representative reporting journey is rendered and verified.\n",
+        "project-management/tasks/TSK-083.md": "---\nid: TSK-083\nepic_id: EPC-021\nstandalone_reason: null\ntitle: Integrate reporting flow\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: [TSK-081, TSK-082]\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Description\n\nIntegrate the API and interface as one reporting flow.\n\n## Acceptance Criteria\n\n- AC-1 The end-to-end reporting journey passes on the combined diff.\n"
       }
     },
     {
@@ -1365,7 +1365,7 @@
       "files": {
         "BRIEF.md": "# Audit events\n\nDesign durable audit-event storage. Requirements: ordered per account, queryable for 90 days, recoverable after partial failure. No architecture is prescribed.\n",
         "docs/architecture.md": "# Architecture\n\nThe service currently uses a relational primary store and an asynchronous worker boundary.\n",
-        "docs/decisions/ADR-0002-storage.md": "# ADR-0002\n\nstatus: accepted\n\nThe relational store is authoritative for current configuration only; audit storage remains undecided.\n"
+        "docs/decisions/ADR-0002-storage.md": "---\nid: ADR-0002\ntitle: Storage authority\ndate: 2026-07-29\nstatus: accepted\nsuperseded_by: null\narchitecture_impact: none\n---\n\n# ADR-0002: Storage authority\n\n## Decision\n\nThe relational store is authoritative for current configuration only; audit storage remains undecided.\n"
       }
     },
     {
@@ -1732,7 +1732,7 @@
       },
       "files": {
         "BRIEF.md": "# Parser diagnostic label\n\nAdd one internal diagnostic label to the existing parser error. The change is independently reviewable, has no shared interface or follow-on work, and is expected to finish in one task.\n",
-        "project-management/tasks/TSK-084.md": "---\nid: TSK-084\nepic_id: null\nstandalone_reason: One independently reviewable parser diagnostic with no broader durable outcome.\ntitle: Add parser diagnostic label\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Description\n\nAdd one internal label to the existing parser diagnostic.\n\n## Acceptance Criteria\n\n- [ ] The existing parser behavior is preserved and the label is verified.\n"
+        "project-management/tasks/TSK-084.md": "---\nid: TSK-084\nepic_id: null\nstandalone_reason: One independently reviewable parser diagnostic with no broader durable outcome.\ntitle: Add parser diagnostic label\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\nintegration_target: main\ncreated: 2026-08-01\n---\n\n## Description\n\nAdd one internal label to the existing parser diagnostic.\n\n## Acceptance Criteria\n\n- AC-1 The existing parser behavior is preserved and the label is verified.\n"
       }
     },
     {
