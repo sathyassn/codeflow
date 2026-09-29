@@ -219,3 +219,80 @@ fn user_prompt_submit_wires_the_stable_advisory_entry() {
     collect_hook_commands(&v["hooks"], &mut all);
     assert!(!all.iter().any(|c| c.contains("prompt-reminder")));
 }
+
+#[path = "../../codeflow-core/src/security/guard_forms.rs"]
+#[allow(dead_code)]
+mod guard_forms;
+
+/// Run the shipped Codex exec-guard wiring through the shell, as Codex
+/// does, with a Bash tool call for `command` on stdin.
+#[cfg(unix)]
+fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::Output {
+    use std::io::Write as _;
+    let mut commands = Vec::new();
+    collect_hook_commands(&hooks_json()["hooks"]["PreToolUse"], &mut commands);
+    let hook = commands
+        .into_iter()
+        .find(|c| c.ends_with("exec-guard"))
+        .expect("exec-guard wired");
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(
+        exe.parent()
+            .map(std::path::Path::to_path_buf)
+            .into_iter()
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+    )
+    .unwrap();
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": root,
+    });
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", &hook])
+        .current_dir(root)
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", root.join(".home"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// TSK-141 AC-5: the Codex wiring refuses each composed deletion, passes a
+/// project deletion, and lets a help invocation through while its data twin
+/// is reported.
+#[cfg(unix)]
+#[test]
+fn the_codex_exec_guard_wiring_judges_composed_deletions_and_help() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for (form, _) in guard_forms::COMPOSED_PAIRS {
+        let out = run_codex_exec_guard(root, form);
+        assert_eq!(out.status.code(), Some(2), "{form}");
+    }
+    for command in guard_forms::PROJECT_DELETIONS {
+        let out = run_codex_exec_guard(root, command);
+        assert_eq!(out.status.code(), Some(0), "{command}");
+        assert!(out.stderr.is_empty(), "{command}");
+    }
+    for (help, twin) in guard_forms::HELP_PAIRS {
+        let out = run_codex_exec_guard(root, help);
+        assert!(out.stderr.is_empty(), "{help}");
+        let out = run_codex_exec_guard(root, twin);
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("headless peer run"),
+            "{twin}"
+        );
+    }
+}

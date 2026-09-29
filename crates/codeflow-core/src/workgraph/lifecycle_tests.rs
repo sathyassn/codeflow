@@ -4,7 +4,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use super::*;
 use crate::workgraph::status_verb::{set_status, StatusChange, VerbError};
@@ -30,7 +29,7 @@ impl Repo {
     }
 
     fn git(&self, args: &[&str]) -> String {
-        let output = Command::new("git")
+        let output = crate::git::command()
             .arg("-C")
             .arg(self.root())
             .args(args)
@@ -73,7 +72,7 @@ impl Repo {
     /// Add a bare `origin` and return it (keep it alive for the test).
     fn origin(&self) -> tempfile::TempDir {
         let bare = tempfile::tempdir().unwrap();
-        let status = Command::new("git")
+        let status = crate::git::command()
             .args(["init", "-q", "--bare"])
             .arg(bare.path())
             .status()
@@ -1879,7 +1878,7 @@ fn a_record_the_range_adds_is_new_in_a_shallow_clone() {
 
     let clone = tempfile::tempdir().unwrap();
     let url = format!("file://{}", source.root().display());
-    let status = Command::new("git")
+    let status = crate::git::command()
         .args(["clone", "--quiet", "--depth", "2", &url])
         .arg(clone.path())
         .status()

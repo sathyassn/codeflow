@@ -1431,6 +1431,76 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
     }
 }
 
+/// Run the stub delivery cases of `evals/herdr-delivery` against the
+/// `cf-herdr` installed at `skill`.
+fn run_herdr_delivery_cases(skill: &Path) -> Output {
+    Command::new("python3")
+        .arg("-B")
+        .arg(repo_root().join("evals/herdr-delivery/test_delivery.py"))
+        .arg("StubDeliveryTests")
+        .env("CF_HERDR_SKILL_DIR", skill)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env_remove("HERDR_ENV")
+        .output()
+        .expect("python3 runs the herdr delivery cases")
+}
+
+/// TSK-144 AC-5 (journey): a fresh standard and full project carries the
+/// confirmed Herdr delivery, the installed script passes the AC-1 and AC-2
+/// stub cases, and `codeflow update` brings it to a project installed before
+/// it.
+#[test]
+fn fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it() {
+    const SCRIPT: &str = "skills/cf-herdr/scripts/deliver.py";
+    const SKILL: &str = "skills/cf-herdr/SKILL.md";
+    let assets = repo_root().join("assets/base/agents");
+    for tier in ["--standard", "--full"] {
+        let (_tmp, root) = fresh(tier);
+        for tree in [".claude", ".agents"] {
+            for rel in [SCRIPT, SKILL] {
+                assert_eq!(
+                    normalize_crlf(&read(&root, &format!("{tree}/{rel}"))),
+                    normalize_crlf(&std::fs::read_to_string(assets.join(rel)).unwrap()),
+                    "{tier}: {tree}/{rel} differs from its asset"
+                );
+            }
+            let cases = run_herdr_delivery_cases(&root.join(tree).join("skills/cf-herdr"));
+            assert!(
+                cases.status.success(),
+                "{tier}: installed {tree} cf-herdr fails the delivery cases:\n{}",
+                output_text(&cases)
+            );
+        }
+        let fresh_skills = skill_tree_snapshot(&root);
+
+        // A project installed before TSK-144: no script, and the skill's
+        // delivery section as it read then, recorded as unmodified.
+        for tree in [".claude", ".agents"] {
+            record_as_installed(&root, &format!("{tree}/{SCRIPT}"), None);
+            let skill = read(&root, &format!("{tree}/{SKILL}"));
+            let older = skill.replace("scripts/deliver.py", "scripts/deliver-older.py");
+            record_as_installed(&root, &format!("{tree}/{SKILL}"), Some(&older));
+        }
+        assert!(!root.join(".agents").join(SCRIPT).exists());
+
+        let update = codeflow(&root, &["update"]);
+        let report = output_text(&update);
+        assert!(update.status.success(), "{tier}: update failed: {report}");
+        assert!(!report.contains("CONFLICT"), "{tier}: {report}");
+        assert_eq!(
+            skill_tree_snapshot(&root),
+            fresh_skills,
+            "{tier}: update left the skill trees different from a fresh scaffold"
+        );
+        let cases = run_herdr_delivery_cases(&root.join(".agents/skills/cf-herdr"));
+        assert!(
+            cases.status.success(),
+            "{tier}: updated cf-herdr fails the delivery cases:\n{}",
+            output_text(&cases)
+        );
+    }
+}
+
 /// Run one wired hook command (`codeflow hook <name>`) in `dir` with `payload`
 /// on stdin, the way a harness does, with `exe` standing in for `codeflow`.
 fn run_wired_hook_with(exe: &Path, dir: &Path, command: &str, payload: &str) -> Output {
@@ -2060,4 +2130,114 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
             && err.contains("codeflow pre-push: push not stopped"),
         "{err}"
     );
+}
+
+/// TSK-177 AC-8 (journey): through the built binary at every tier, `init`
+/// installs the plain-writing rule in `AGENTS.md` and at the top of the
+/// writing reference, `update` brings both (and a skill's short form) to a
+/// project installed before the rule, and `doctor --check reading` reports
+/// a fresh install within its guidelines.
+#[test]
+fn init_and_update_bring_the_plain_writing_rule_at_every_tier() {
+    const RULE_LINE: &str =
+        "- **Write plainly.** Everything you write, replies and status updates included";
+    const LEAD: &str = "**Write plainly.** Everything you write, replies and status updates";
+    const SHORT: &str = "Write the synthesis plainly:";
+    for tier in ["--minimal", "--standard", "--full"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir(&root).unwrap();
+        let init = codeflow(&root, &["init", "--yes", tier]);
+        assert!(init.status.success(), "{tier}: {}", output_text(&init));
+
+        let doctor = codeflow(&root, &["doctor", "--check", "reading"]);
+        let reading = output_text(&doctor);
+        assert_eq!(doctor.status.code(), Some(0), "{tier}: {reading}");
+        assert!(!reading.contains("above guideline"), "{tier}: {reading}");
+
+        let agents = read(&root, "AGENTS.md");
+        let writing = read(&root, ".codeflow/rules/writing.md");
+        assert!(
+            agents.contains(RULE_LINE),
+            "{tier}: AGENTS.md lacks the rule"
+        );
+        let lead = writing
+            .find(LEAD)
+            .expect("writing reference states the rule");
+        assert!(
+            lead < writing.find("\n## ").unwrap(),
+            "{tier}: rule does not lead"
+        );
+        let skill_trees = tier != "--minimal";
+        let consult = ".claude/skills/cf-consult/SKILL.md";
+        let fresh_consult = skill_trees.then(|| read(&root, consult));
+        if let Some(text) = &fresh_consult {
+            assert!(
+                text.contains(SHORT),
+                "{tier}: cf-consult lacks the short form"
+            );
+        }
+
+        // A project installed before the rule: the map without its line, the
+        // writing reference without its lead, and cf-consult without its
+        // short form, each recorded as unmodified.
+        let line = agents
+            .lines()
+            .find(|line| line.starts_with(RULE_LINE))
+            .unwrap()
+            .to_string();
+        let older_agents = agents.replace(&format!("{line}\n"), "");
+        std::fs::write(root.join("AGENTS.md"), &older_agents).unwrap();
+        let block = codeflow_core::scaffold::rule_map::managed_block(&older_agents)
+            .expect("managed block")
+            .to_string();
+        std::fs::write(root.join(".codeflow/.baseline/AGENTS.md"), &block).unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/manifest.json")).unwrap();
+        manifest["files"]["AGENTS.md"]["sha256"] =
+            codeflow_core::scaffold::sha256_hex(block.as_bytes()).into();
+        std::fs::write(
+            root.join(".codeflow/manifest.json"),
+            format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
+        )
+        .unwrap();
+        let (head, tail) = writing.split_at(lead);
+        let rest = &tail[tail.find("\n## ").unwrap() + 1..];
+        record_as_installed(
+            &root,
+            ".codeflow/rules/writing.md",
+            Some(&format!("{head}{rest}")),
+        );
+        if let Some(text) = &fresh_consult {
+            let older = text.replace(SHORT, "Then");
+            for tree in [".claude", ".agents"] {
+                record_as_installed(
+                    &root,
+                    &format!("{tree}/skills/cf-consult/SKILL.md"),
+                    Some(&older),
+                );
+            }
+        }
+        assert!(!read(&root, "AGENTS.md").contains(RULE_LINE));
+
+        let update = codeflow(&root, &["update"]);
+        let report = output_text(&update);
+        assert!(update.status.success(), "{tier}: update failed: {report}");
+        assert!(!report.contains("CONFLICT"), "{tier}: {report}");
+        assert_eq!(read(&root, "AGENTS.md"), agents, "{tier}: map not brought");
+        assert_eq!(
+            read(&root, ".codeflow/rules/writing.md"),
+            writing,
+            "{tier}: writing reference not brought"
+        );
+        if let Some(text) = &fresh_consult {
+            for tree in [".claude", ".agents"] {
+                assert_eq!(
+                    &read(&root, &format!("{tree}/skills/cf-consult/SKILL.md")),
+                    text,
+                    "{tier}: {tree} cf-consult not brought"
+                );
+            }
+        }
+    }
 }

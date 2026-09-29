@@ -56,6 +56,9 @@ implementation stage for an analysis-only request.
 
 - **Host coordinates.** The model running in the user's active harness owns the
   brief, task ledger, bounded reconciliation, durable evidence, and escalation.
+- **Plain writing.** Write every brief, status update and report plainly:
+  simple, straightforward and clear, no mannered prose (see
+  `.codeflow/rules/writing.md`).
 - **Both think independently.** Claude and Codex research, analyze, identify
   risks, and draft a plan in parallel before seeing the other's conclusions.
 - **Claude leads design.** The qualified Claude judgment primary **produces**
