@@ -105,7 +105,7 @@ fault = ["codeflow-cli --test record_lifecycle_journey every_transition_runs_thr
 text = "criteria changed on a task branch"
 control = ["codeflow-cli --test acceptance_journey a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project"]
 fault = [
-  "codeflow-cli --test acceptance_cli criteria_are_frozen_on_a_task_branch",
+  "codeflow-cli --test acceptance_cli own_task_criteria_delta_is_printed_and_other_records_stay_frozen",
   "codeflow-cli --test acceptance_cli the_freeze_follows_the_class_not_the_prefix",
 ]
 
