@@ -89,7 +89,7 @@ fn task_branch_ci(dir: &Path, branch: &str, valid_body: bool) -> Output {
     if valid_body {
         command.args([
             "--pr-body",
-            "## Summary\nBounded task.\n\n## Changes\n- implementation\n\n## Testing\n- focused test\nNot tested: Windows.\n\n## Reviews\nNone: pending review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve the public contract.\n- Migration: none",
+            "## Summary\nBounded task.\n\nTask: TSK-001\n\n## Changes\n- implementation\n\n## Testing\n- focused test\nNot tested: Windows.\n\n## Reviews\nNone: pending review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve the public contract.\n- Migration: none",
         ]);
     }
     command.output().unwrap()
@@ -2873,7 +2873,7 @@ fn pre_commit_leaves_the_planning_anchor_to_work_start_and_ci() {
     std::fs::create_dir_all(&task_dir).unwrap();
     std::fs::write(
         task_dir.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nBranch-only planning must not authorize itself.\n\n## Acceptance Criteria\n- AC-1 planning is anchored\n",
+        "---\nid: TSK-001\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nBranch-only epic planning must not authorize itself.\n\n## Acceptance Criteria\n- AC-1 planning is anchored\n",
     )
     .unwrap();
     git(dir.path(), &["add", "project-management"]);
