@@ -1,0 +1,11 @@
+id = "TSK-179"
+uid = "1155aa00-b98a-45d8-ad61-beaf9e0c1cde"
+kind = "TSK"
+title = "Codex is woken by each present answer"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-29T00:22:19Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
