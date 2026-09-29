@@ -1,6 +1,8 @@
 //! codeflow — the AI-development discipline layer CLI.
 
 mod cmd;
+#[cfg(test)]
+mod command_reference;
 mod embedded;
 mod prompts;
 
