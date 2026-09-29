@@ -26,11 +26,10 @@ pub(super) fn dispatch(
         Ok(true) => {}
         Ok(false) => return,
         Err(error) => {
-            push(
-                tagged,
-                PolicyLevel::Block,
-                format!("cannot determine durable-work tracking: {error}"),
-            );
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
             ran.push("id-registry");
             return;
         }

@@ -2465,3 +2465,27 @@ fn the_single_string_baseline_still_works() {
     assert_eq!(recorded_baseline(repo.root()), vec![commit]);
     assert!(validate_lifecycle(repo.root()).is_clean());
 }
+
+#[test]
+fn spec_approval_beside_template_edit_is_not_planning_only() {
+    let before = RecordView::parse(RecordKind::Spec, SPC_1, &spec("SPC-001", "draft", "")).unwrap();
+    let after =
+        RecordView::parse(RecordKind::Spec, SPC_1, &spec("SPC-001", "approved", "")).unwrap();
+    for (path, allowed) in [
+        ("project-management/templates/task.md", false),
+        ("project-management/tasks/TSK-001.md", true),
+        ("docs/plan/next.md", true),
+    ] {
+        assert_eq!(super::super::classify::is_planning_path(path), allowed);
+        let paths = vec![path.to_string()];
+        let problems = context_problems(
+            Some(&before),
+            &after,
+            ChangeContext {
+                changed_paths: Some(&paths),
+                ..ChangeContext::default()
+            },
+        );
+        assert_eq!(problems.is_empty(), allowed, "{path}: {problems:?}");
+    }
+}

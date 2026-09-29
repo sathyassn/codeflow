@@ -712,9 +712,6 @@ pub struct ChangeContext<'a> {
     pub reopened: Option<&'a BTreeSet<String>>,
 }
 
-/// Paths a planning-only change may touch (R-70).
-const PLANNING_PATHS: [&str; 2] = ["project-management/", "docs/plan/"];
-
 /// A change that re-applies the rules in full (R-83): a status change, a
 /// criteria change or a changed acceptance block.
 fn significant_change(before: &RecordView, after: &RecordView) -> bool {
@@ -848,7 +845,7 @@ fn spec_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
         ("draft", "approved") | ("approved" | "implemented", "superseded") => Ok(()),
         (_, "implemented") => Err("implemented is derived from the consumers and never written"),
         ("approved" | "implemented", "draft") => {
-            Err("approved never returns to draft; a changed contract is a new spec")
+            Err("approved never returns to draft; a shipped contract is not reopened; a new spec carries changes")
         }
         ("draft", "superseded") => Err("only an approved spec is superseded"),
         ("superseded", _) => Err("a superseded spec is final"),
@@ -1281,7 +1278,7 @@ fn relationship_problems(record: &RecordView, graph: &Graph) -> Vec<String> {
     }
     if record.superseded_by.as_deref() == Some(record.id.as_str()) {
         problems
-            .push("a spec cannot be superseded by itself; a changed contract is a new spec".into());
+            .push("a spec cannot be superseded by itself; a shipped contract is not reopened; a new spec carries changes".into());
     } else if supersession_cycle(record, graph) {
         problems.push(
             "the `superseded_by` chain returns to this spec; supersession cannot cycle".into(),
@@ -1360,7 +1357,7 @@ fn context_problems(
         let product: Vec<&str> = paths
             .iter()
             .map(String::as_str)
-            .filter(|path| !PLANNING_PATHS.iter().any(|prefix| path.starts_with(prefix)))
+            .filter(|path| !super::classify::is_planning_path(path))
             .collect();
         if !product.is_empty() {
             problems.push(format!(

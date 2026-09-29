@@ -1,12 +1,8 @@
 //! Pull request classification (TSK-104, SPC-013 R-64, R-70 to R-72, R-78).
 //!
-//! Every product pull request into a project with durable work tracking has
-//! exactly one class: tracked (`Task: TSK-NNN`, or the task id its branch
-//! carries), a direct change (`Task: none: <reason>`), planning-only (records
-//! and plans only), an epic's integration line landing on its target, or a
-//! trusted automation profile (the slot TSK-107 fills). An unclassified pull
-//! request blocks. The paths come from one table plus the project's own
-//! policy, so the same rule holds in every project that installs it.
+//! A tracked range names its task, a planning range names its epic, and an
+//! integration line names the epic verified by its history. Every PR names
+//! exactly one unit, including projects without durable tracking.
 
 use std::path::Path;
 
@@ -16,9 +12,8 @@ use codeflow_core::workgraph::classify::{
     is_planning_path, is_spike_path, path_sets, ProjectPaths,
 };
 use codeflow_core::workgraph::{
-    check_epic_line, check_work_start_anchored, declared_work_target,
-    durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
-    task_id_from_branch,
+    check_epic_line, declared_work_target, durable_work_tracking_enabled,
+    durable_work_tracking_enabled_at, resolve_work_target_checked, task_id_from_branch,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -26,8 +21,10 @@ use codeflow_core::workgraph::{
 pub(super) enum TaskLine {
     /// `Task: TSK-NNN`.
     Tracked(String),
-    /// `Task: none: <reason>`.
-    Direct(String),
+    /// An epic for a planning change or a verified integration line.
+    Epic(String),
+    /// A named unit where durable tracking is inactive.
+    Unit(String),
     /// Anything else after `Task:`.
     Malformed(String),
 }
@@ -51,19 +48,31 @@ pub(super) fn task_lines(body: &str) -> Vec<TaskLine> {
         let Some(value) = line.strip_prefix("Task:") else {
             continue;
         };
-        let value = value.trim().trim_matches('`').trim();
-        lines.push(if let Some(reason) = value.strip_prefix("none:") {
-            let reason = reason.trim();
-            if reason.is_empty() {
+        let value = value.trim();
+        let value = value
+            .strip_prefix('`')
+            .and_then(|value| value.strip_suffix('`'))
+            .unwrap_or(value)
+            .trim();
+        lines.push(
+            if value.is_empty()
+                || value.eq_ignore_ascii_case("none")
+                || value.to_ascii_lowercase().starts_with("none:")
+                || value.contains(['|', '<', '>', '`'])
+                || value == "TSK-NNN"
+                || value == "EPC-NNN"
+            {
+                TaskLine::Malformed(value.to_string())
+            } else if codeflow_core::workgraph::is_valid_task_format_id(value) {
+                TaskLine::Tracked(value.to_string())
+            } else if codeflow_core::workgraph::is_valid_epic_format_id(value) {
+                TaskLine::Epic(value.to_string())
+            } else if value.starts_with("TSK-") || value.starts_with("EPC-") {
                 TaskLine::Malformed(value.to_string())
             } else {
-                TaskLine::Direct(reason.to_string())
-            }
-        } else if codeflow_core::workgraph::is_valid_task_format_id(value) {
-            TaskLine::Tracked(value.to_string())
-        } else {
-            TaskLine::Malformed(value.to_string())
-        });
+                TaskLine::Unit(value.to_string())
+            },
+        );
     }
     lines
 }
@@ -71,17 +80,13 @@ pub(super) fn task_lines(body: &str) -> Vec<TaskLine> {
 /// The class a pull request resolved to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Class {
-    /// Tracked work for one task; `derived` when the id came from the branch.
-    Tracked { task_id: String, derived: bool },
-    /// A direct change with its stated reason.
-    Direct { reason: String },
+    /// Tracked work for the task named in the body.
+    Tracked { task_id: String },
     /// The range touches only records and plans.
     PlanningOnly,
     /// An epic's integration line landing on its target; each task on it was
     /// classified when it landed on the line.
     EpicLine(String),
-    /// A trusted automation profile (TSK-107 supplies the match).
-    Automation { profile: String },
 }
 
 /// What the classifier reads.
@@ -92,8 +97,6 @@ pub(super) struct Input<'a> {
     pub files: &'a [String],
     /// The task id the branch carries on a work prefix, if any.
     pub branch_task: Option<String>,
-    /// The automation profile the workflow's actor and branch matched, if any.
-    pub automation: Option<&'a str>,
     /// For an `integration/` head: the epic it lands, or why it is not a
     /// verified epic line.
     pub epic_line: Option<Result<String, String>>,
@@ -118,59 +121,36 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                     ));
                 }
             }
-            Ok(Class::Tracked {
-                task_id,
-                derived: false,
-            })
+            Ok(Class::Tracked { task_id })
         }
-        Some(TaskLine::Direct(reason)) => {
-            if let Some(carried) = input.branch_task.as_deref() {
-                return Err(format!(
-                    "`Task: none` on branch '{}', which carries {carried}; the branch's task is the class",
-                    input.branch
-                ));
-            }
-            if input.branch.starts_with("spike/") {
-                return Err(format!(
-                    "`Task: none` on spike branch '{}'; a spike is tracked work, so name its task",
-                    input.branch
-                ));
-            }
-            Ok(Class::Direct { reason })
-        }
-        Some(TaskLine::Malformed(value)) => Err(format!(
-            "`Task: {value}` is neither `TSK-NNN` nor `none: <reason>`"
-        )),
-        None => {
-            if let Some(profile) = input.automation {
-                return Ok(Class::Automation {
-                    profile: profile.to_string(),
-                });
+        Some(TaskLine::Epic(epic)) => {
+            if input.branch_task.is_some() {
+                return Err("a task branch must name its own task".into());
             }
             if input.branch.starts_with("integration/") {
                 return match &input.epic_line {
-                    Some(Ok(epic)) => Ok(Class::EpicLine(epic.clone())),
+                    Some(Ok(actual)) if actual == &epic => Ok(Class::EpicLine(epic)),
+                    Some(Ok(actual)) => {
+                        Err(format!("Task: {epic} does not match the line's {actual}"))
+                    }
                     Some(Err(reason)) => Err(reason.clone()),
                     None => Err(format!("'{}' is not a verified epic line", input.branch)),
                 };
             }
-            if let Some(task_id) = input.branch_task.clone() {
-                return Ok(Class::Tracked {
-                    task_id,
-                    derived: true,
-                });
-            }
-            if let Some(product) = input.files.iter().find(|path| !is_planning_path(path)) {
-                return Err(if input.branch.starts_with("plan/") {
-                    format!("a planning-only pull request touches a product path: {product}")
-                } else {
-                    format!(
-                        "no `Task:` line and the range is not planning-only (it touches {product})"
-                    )
-                });
+            if let Some(path) = input.files.iter().find(|path| !is_planning_path(path)) {
+                return Err(format!(
+                    "a planning-only pull request touches a product path: {path}"
+                ));
             }
             Ok(Class::PlanningOnly)
         }
+        Some(TaskLine::Malformed(value) | TaskLine::Unit(value)) => Err(format!(
+            "`Task: {value}` is neither `TSK-NNN` nor `EPC-NNN`"
+        )),
+        None => Err(
+            "no `Task:` line; name the task, or the epic for a planning change or integration line"
+                .into(),
+        ),
     }
 }
 
@@ -209,14 +189,28 @@ pub(super) fn dispatch(
 ) -> Option<Class> {
     match tracking_on(root, range) {
         Ok(true) => {}
-        Ok(false) => return None,
+        Ok(false) => {
+            ran.push("classification");
+            let lines = task_lines(body);
+            let valid = match lines.as_slice() {
+                [TaskLine::Tracked(id)] => {
+                    task_id_from_branch(root, branch).is_none_or(|carried| carried == *id)
+                }
+                [TaskLine::Epic(_) | TaskLine::Unit(_)] => {
+                    task_id_from_branch(root, branch).is_none()
+                }
+                _ => false,
+            };
+            if !valid {
+                push(tagged, RULE, "the PR must have exactly one non-empty, non-placeholder Task: unit name matching its branch".into(), HINT);
+            }
+            return None;
+        }
         Err(error) => {
-            push(
-                tagged,
-                "work.tracking_state",
-                format!("cannot determine durable-work tracking: {error}"),
-                "repair CodeFlow state or task-home access before classifying work",
-            );
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
             ran.push("classification");
             return None;
         }
@@ -250,7 +244,6 @@ pub(super) fn dispatch(
         branch,
         files: &files,
         branch_task: task_id_from_branch(root, branch),
-        automation: None,
         epic_line: branch
             .starts_with("integration/")
             .then(|| check_epic_line(root, branch, range.base_ref, range.base, range.head)),
@@ -268,15 +261,8 @@ pub(super) fn dispatch(
         }
     };
     match &class {
-        Class::Tracked { task_id, derived } => {
-            println!(
-                "codeflow ci: pull request class: tracked {task_id} ({})",
-                if *derived {
-                    "from the branch"
-                } else {
-                    "from the Task: line"
-                }
-            );
+        Class::Tracked { task_id } => {
+            println!("codeflow ci: pull request class: tracked {task_id} (from the Task: line)");
             let own_branch = input.branch_task.as_deref() == Some(task_id.as_str());
             let added: Vec<&str> = changes
                 .iter()
@@ -288,16 +274,9 @@ pub(super) fn dispatch(
             tracked(root, task_id, anchor, branch, &files, &added, tagged);
             journey(root, git, task_id, range.head, &files, tagged);
         }
-        Class::Direct { reason } => {
-            println!("codeflow ci: pull request class: direct change ({reason})");
-            direct(root, git, &files, tagged);
-        }
         Class::PlanningOnly => println!("codeflow ci: pull request class: planning-only"),
         Class::EpicLine(epic) => {
             println!("codeflow ci: pull request class: epic integration line of {epic}");
-        }
-        Class::Automation { profile } => {
-            println!("codeflow ci: pull request class: automation profile {profile}");
         }
     }
     Some(class)
@@ -339,9 +318,7 @@ fn selection_check(
 }
 
 const RULE: &str = "work.classification";
-const HINT: &str = "add one line `Task: TSK-NNN` for tracked work or `Task: none: <reason>` for a \
-     direct change; a pull request touching only project-management/ records and docs/plan/ is \
-     planning-only";
+const HINT: &str = "add exactly one Task: TSK-NNN, or Task: EPC-NNN for the epic's planning change or integration line; where durable tracking is inactive, name the tracked unit";
 
 fn push(tagged: &mut Vec<super::TaggedViolation>, rule: &str, message: String, hint: &str) {
     tagged.push(super::TaggedViolation {
@@ -386,12 +363,26 @@ fn tracked(
     added: &[&str],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
-    if let Some(record) = added.iter().find(|path| is_record_of(path, task_id)) {
+    let added_records: Vec<_> = added
+        .iter()
+        .filter(|path| {
+            path.starts_with("project-management/")
+                && Path::new(path)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                && !path.starts_with("project-management/templates/")
+        })
+        .collect();
+    if added_records
+        .iter()
+        .any(|path| !is_record_of(path, task_id))
+        || (added_records.len() > 1)
+    {
         push(
             tagged,
             RULE,
-            format!("the pull request adds {record} and claims `Task: {task_id}`; a record cannot authorise itself"),
-            "land the task record by its own planning pull request, then open the work pull request",
+            "a task PR may add only its own standalone task record".into(),
+            "put the other records in the epic amendment",
         );
     }
     let declared = declared_work_target(root, task_id);
@@ -410,7 +401,8 @@ fn tracked(
             return;
         }
     };
-    match check_work_start_anchored(root, task_id, &target) {
+    match codeflow_core::workgraph::work_start::check_work_admission(root, task_id, &target, branch)
+    {
         Ok(report) => {
             let spike =
                 report.work_type.as_deref() == Some("spike") || branch.starts_with("spike/");
@@ -433,56 +425,6 @@ fn tracked(
             codeflow_core::remedy::WORK_START_MERGE_PLANNING
                 .with(&[("target", &target), ("id", task_id)]),
         ),
-    }
-}
-
-/// A direct change is refused on the floor of R-71; a project may forbid
-/// direct changes entirely.
-fn direct(
-    root: &Path,
-    git: &GitPolicy,
-    files: &[String],
-    tagged: &mut Vec<super::TaggedViolation>,
-) {
-    if git.direct_changes == "forbid" {
-        push(
-            tagged,
-            RULE,
-            "this project forbids direct changes (git.direct_changes = forbid)".to_string(),
-            "name the task with `Task: TSK-NNN`",
-        );
-        return;
-    }
-    let project = ProjectPaths::load(root);
-    let sets = path_sets();
-    let refused = files
-        .iter()
-        .filter_map(|path| {
-            sets.direct_change_refusal(path, &project)
-                .map(|member| format!("{path} ({member})"))
-        })
-        .collect::<Vec<_>>();
-    if !refused.is_empty() {
-        let shown = refused
-            .iter()
-            .take(5)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        let more = refused.len().saturating_sub(5);
-        push(
-            tagged,
-            RULE,
-            format!(
-                "a direct change touches protected surfaces: {shown}{}",
-                if more > 0 {
-                    format!(" and {more} more")
-                } else {
-                    String::new()
-                }
-            ),
-            "track the work with `Task: TSK-NNN`; product code, managed instructions, policy, hooks, CI files, manifests and the record schema are never direct changes",
-        );
     }
 }
 
@@ -587,7 +529,6 @@ mod tests {
             branch,
             files,
             branch_task: None,
-            automation: None,
             epic_line: None,
         }
     }
@@ -597,108 +538,36 @@ mod tests {
     }
 
     #[test]
-    fn task_lines_skip_comments_and_fences_and_read_every_form() {
-        let body = "<!-- Task: TSK-001 -->\n```\nTask: TSK-002\n```\n- Task: `TSK-003`\n";
-        assert_eq!(task_lines(body), [TaskLine::Tracked("TSK-003".into())]);
-        assert_eq!(
-            task_lines("Task: none: typo in the guide"),
-            [TaskLine::Direct("typo in the guide".into())]
-        );
-        assert_eq!(
-            task_lines("Task: none:"),
-            [TaskLine::Malformed("none:".into())]
-        );
-        assert_eq!(
-            task_lines("Task: TSK-NNN | none: <reason>"),
-            [TaskLine::Malformed("TSK-NNN | none: <reason>".into())]
-        );
-    }
-
-    #[test]
-    fn each_class_resolves() {
+    fn task_grammar_requires_one_named_matching_class() {
         let code = paths(&["src/lib.rs"]);
-        let records = paths(&["project-management/tasks/TSK-009.md", "docs/plan/v3.md"]);
+        let records = paths(&["docs/plan/next.md"]);
         assert_eq!(
-            classify(&input("Task: TSK-004", "fix/typo", &code)),
-            Ok(Class::Tracked {
-                task_id: "TSK-004".into(),
-                derived: false
-            })
+            task_lines("<!-- Task: TSK-001 -->\n```\nTask: TSK-002\n```\n- Task: `TSK-003`"),
+            [TaskLine::Tracked("TSK-003".into())]
         );
         assert_eq!(
-            classify(&input("Task: none: typo", "fix/typo", &code)),
-            Ok(Class::Direct {
-                reason: "typo".into()
-            })
-        );
-        assert_eq!(
-            classify(&input("", "plan/next", &records)),
+            classify(&input("Task: EPC-001", "plan/next", &records)),
             Ok(Class::PlanningOnly)
         );
-        let mut line = input("", "integration/EPC-001-x", &code);
+        assert!(classify(&input("Task: EPC-001", "plan/next", &code)).is_err());
+        for body in [
+            "",
+            "Task:",
+            "Task: none: typo",
+            "Task: TSK-001\nTask: TSK-002",
+            "Task: `TSK-NNN | EPC-NNN | <unit name>`",
+        ] {
+            assert!(
+                classify(&input(body, "fix/change", &records)).is_err(),
+                "{body}"
+            );
+        }
+        let mut mismatch = input("Task: TSK-002", "task/TSK-001-work", &code);
+        mismatch.branch_task = Some("TSK-001".into());
+        assert!(classify(&mismatch).is_err());
+        let mut line = input("Task: EPC-001", "integration/EPC-001-work", &code);
         line.epic_line = Some(Ok("EPC-001".into()));
         assert_eq!(classify(&line), Ok(Class::EpicLine("EPC-001".into())));
-        let mut bot = input("", "chore/deps-bump", &code);
-        bot.automation = Some("dependabot");
-        assert_eq!(
-            classify(&bot),
-            Ok(Class::Automation {
-                profile: "dependabot".into()
-            })
-        );
-        let mut branch = input("", "task/TSK-004-x", &code);
-        branch.branch_task = Some("TSK-004".into());
-        assert_eq!(
-            classify(&branch),
-            Ok(Class::Tracked {
-                task_id: "TSK-004".into(),
-                derived: true
-            })
-        );
-    }
-
-    #[test]
-    fn unclassified_mismatched_and_ambiguous_bodies_are_refused() {
-        let code = paths(&["src/lib.rs"]);
-        assert!(classify(&input("", "fix/typo", &code))
-            .unwrap_err()
-            .contains("not planning-only"));
-        assert!(classify(&input("", "plan/next", &code))
-            .unwrap_err()
-            .contains("planning-only pull request touches a product path: src/lib.rs"));
-        let mut mismatch = input("Task: TSK-005", "task/TSK-004-x", &code);
-        mismatch.branch_task = Some("TSK-004".into());
-        assert!(classify(&mismatch)
-            .unwrap_err()
-            .contains("names another task"));
-        assert!(
-            classify(&input("Task: TSK-004\nTask: TSK-005", "fix/x", &code))
-                .unwrap_err()
-                .contains("2 `Task:` lines")
-        );
-        let templates = paths(&["project-management/templates/task.md"]);
-        assert!(classify(&input("", "plan/next", &templates)).is_err());
-    }
-
-    #[test]
-    fn a_prefix_or_a_direct_line_grants_no_lighter_class() {
-        let code = paths(&["src/lib.rs"]);
-        // An integration/ head is an epic line only when verified.
-        assert!(classify(&input("", "integration/not-an-epic", &code))
-            .unwrap_err()
-            .contains("not a verified epic line"));
-        let mut line = input("", "integration/EPC-009-x", &code);
-        line.epic_line = Some(Err("no task of EPC-009 targets it".into()));
-        assert!(classify(&line).unwrap_err().contains("no task of EPC-009"));
-        // `Task: none` cannot drop the task a branch carries, or a spike.
-        let mut carried = input("Task: none: small edit", "spike/TSK-002-probe", &code);
-        carried.branch_task = Some("TSK-002".into());
-        assert!(classify(&carried).unwrap_err().contains("carries TSK-002"));
-        assert!(
-            classify(&input("Task: none: small edit", "spike/probe", &code))
-                .unwrap_err()
-                .contains("spike is tracked work")
-        );
     }
 
     #[test]

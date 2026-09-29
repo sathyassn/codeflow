@@ -2,14 +2,15 @@
 //! through the real binary. Each fixture requires the shipped section list
 //! with Release impact at block, and offers a body with only Summary and
 //! Changes: exit 0 means the range was classified light, exit 1 with a
-//! Release impact finding means it was checked in full.
+//! Reviews finding means it was checked in full. Release impact follows the base and commits.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use super::{codeflow, git};
 
-const LIGHT: &str = "## Summary\n\nUpdate the contract.\n\n## Changes\n\n- Update one file.\n";
+const LIGHT: &str =
+    "Task: TSK-001\n## Summary\n\nUpdate the contract.\n\n## Changes\n\n- Update one file.\n";
 
 /// A repository on `main` with the shipped required sections, Release
 /// impact at block, the `extra` policy keys and `files`, then a
@@ -30,6 +31,7 @@ fn repo(dir: &Path, extra: &str, files: &[(&str, &str)]) {
         write(dir, path, text);
     }
     commit(dir, "chore: initialize fixture");
+    git(dir, &["branch", "integration/line", "main"]);
     git(dir, &["switch", "-q", "-c", "feat/probe"]);
 }
 
@@ -53,7 +55,7 @@ fn ci_with(dir: &Path, body: &str, path_env: Option<&std::ffi::OsStr>) -> Output
     cmd.args([
         "ci",
         "--base",
-        "main",
+        "integration/line",
         "--head",
         "HEAD",
         "--branch",
@@ -82,7 +84,7 @@ fn assert_full(out: &Output, what: &str) {
     let err = stderr(out);
     assert_eq!(out.status.code(), Some(1), "{what} should be full: {err}");
     assert!(
-        err.contains("git.pr_release_impact") && err.contains("'## Reviews'"),
+        err.contains("'## Reviews'"),
         "{what} was not checked in full: {err}"
     );
 }

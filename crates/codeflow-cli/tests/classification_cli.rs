@@ -1,5 +1,5 @@
 //! Pull request classification in `codeflow ci` (TSK-104, SPC-013 R-64,
-//! R-70 to R-72, R-78): CI fixtures per class, per direct-change surface, per
+//! R-70 to R-72, R-78): CI fixtures per class, per unnamed surface, per
 //! work prefix, the mismatched `Task:` line, the self-authorising record and
 //! the spike path. Each test runs the Cargo-built binary in a tempdir
 //! repository with durable work tracking on.
@@ -183,11 +183,10 @@ fn each_class_passes_and_an_unclassified_pull_request_blocks() {
         "docs/typo",
         &body("Task: none: fix a typo in the guide"),
     );
-    assert_passes(&direct, "direct");
-    assert!(direct.1.contains("class: direct change"));
+    assert_blocks(&direct, "unnamed docs", "is neither");
 
     branch_with(root, "plan/next", &[("docs/plan/next.md", "# Next\n")]);
-    let planning = ci(root, "plan/next", &body(""));
+    let planning = ci(root, "plan/next", &body("Task: EPC-001"));
     assert_passes(&planning, "planning-only");
     assert!(planning.1.contains("class: planning-only"));
 
@@ -208,7 +207,7 @@ fn each_class_passes_and_an_unclassified_pull_request_blocks() {
         &[("src/lib.rs", "pub fn sneaky() {}\n")],
     );
     assert_blocks(
-        &ci(root, "plan/sneaky", &body("")),
+        &ci(root, "plan/sneaky", &body("Task: EPC-001")),
         "planning PR with product code",
         "planning-only pull request touches a product path: src/lib.rs",
     );
@@ -221,14 +220,13 @@ fn each_class_passes_and_an_unclassified_pull_request_blocks() {
     );
 }
 
-/// AC-3: a direct change touching each protected surface blocks; the
-/// project can forbid direct changes but cannot narrow the floor.
+/// Naming a task is required on every surface, regardless of legacy policy.
 #[test]
-fn a_direct_change_blocks_on_every_protected_surface() {
+fn an_unnamed_change_blocks_on_every_surface() {
     let dir = tracked_repo(DEFAULT_POLICY);
     let root = dir.path();
     let direct = body("Task: none: small change");
-    for (path, member) in [
+    for (path, _member) in [
         ("src/feature.rs", "product_paths"),
         ("api/schema.json", "watched_contract_paths"),
         (".codeflow/policy.json", "policy"),
@@ -250,11 +248,7 @@ fn a_direct_change_blocks_on_every_protected_surface() {
             "x\n"
         };
         branch_with(root, "fix/direct", &[(path, content)]);
-        assert_blocks(
-            &ci(root, "fix/direct", &direct),
-            path,
-            &format!("{path} ({member})"),
-        );
+        assert_blocks(&ci(root, "fix/direct", &direct), path, "is neither");
     }
 
     let forbid = tracked_repo("\"direct_changes\": \"forbid\"");
@@ -266,10 +260,10 @@ fn a_direct_change_blocks_on_every_protected_surface() {
     assert_blocks(
         &ci(forbid.path(), "docs/typo", &direct),
         "forbidden",
-        "forbids direct changes",
+        "is neither",
     );
 
-    // An empty product list cannot narrow the fixed floor.
+    // An empty product list does not exempt unnamed work.
     let narrowed = tracked_repo("\"product_paths\": []");
     branch_with(
         narrowed.path(),
@@ -279,7 +273,7 @@ fn a_direct_change_blocks_on_every_protected_surface() {
     assert_blocks(
         &ci(narrowed.path(), "ci/tweak", &direct),
         "narrowed",
-        ".github/workflows/ci.yml (ci_workflows)",
+        "is neither",
     );
 }
 
@@ -296,12 +290,12 @@ fn the_preflight_runs_on_any_branch_and_a_mismatch_blocks() {
         "feat/TSK-001-thing",
     ] {
         branch_with(root, branch, &[("src/lib.rs", "pub fn work() {}\n")]);
-        let result = ci(root, branch, &body(""));
+        let result = ci(root, branch, &body("Task: TSK-001"));
         assert_passes(&result, branch);
         assert!(
             result
                 .1
-                .contains("class: tracked TSK-001 (from the branch)"),
+                .contains("class: tracked TSK-001 (from the Task: line)"),
             "{}",
             result.1
         );
@@ -343,8 +337,8 @@ fn the_preflight_runs_on_any_branch_and_a_mismatch_blocks() {
     );
     assert_blocks(
         &ci(done.path(), "fix/late", &body("Task: TSK-001")),
-        "cancelled task",
-        "work.stable_planning_anchor",
+        "cancelled task without closeout",
+        "work.valid_graph",
     );
 
     // A branch claiming an id with no visible record blocks too.
@@ -354,9 +348,9 @@ fn the_preflight_runs_on_any_branch_and_a_mismatch_blocks() {
         &[("src/lib.rs", "pub fn g() {}\n")],
     );
     assert_blocks(
-        &ci(root, "fix/TSK-404-ghost", &body("Task: none: ghost")),
+        &ci(root, "fix/TSK-404-ghost", &body("Task: TSK-404")),
         "ghost id",
-        "does not identify a visible task record",
+        "not present at the merge-base",
     );
 }
 
@@ -379,7 +373,7 @@ fn a_record_cannot_authorise_itself() {
     assert_blocks(
         &ci(root, "feat/self", &body("Task: TSK-003")),
         "self-authorising",
-        "a record cannot authorise itself",
+        "not present at the merge-base",
     );
 }
 
@@ -401,7 +395,7 @@ fn a_spike_lands_only_findings_and_its_record() {
         ],
     );
     assert_passes(
-        &ci(root, "spike/TSK-002-probe", &body("")),
+        &ci(root, "spike/TSK-002-probe", &body("Task: TSK-002")),
         "spike findings",
     );
 
@@ -414,7 +408,7 @@ fn a_spike_lands_only_findings_and_its_record() {
         ],
     );
     assert_blocks(
-        &ci(root, "spike/TSK-002-probe", &body("")),
+        &ci(root, "spike/TSK-002-probe", &body("Task: TSK-002")),
         "spike with code",
         "spike TSK-002 changes src/cache.rs",
     );
@@ -424,7 +418,7 @@ fn a_spike_lands_only_findings_and_its_record() {
     assert_blocks(
         &ci(root, "spike/TSK-002-probe", &body("Task: none: small edit")),
         "spike with a direct line",
-        "which carries TSK-002",
+        "is neither",
     );
 }
 
@@ -481,7 +475,7 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     git(root, &["switch", "-q", line]);
     merge(root, "task/TSK-003-work");
 
-    let landed = ci(root, line, &body(""));
+    let landed = ci(root, line, &body("Task: EPC-001"));
     assert_passes(&landed, "verified epic line");
     assert!(
         landed.1.contains("class: epic integration line of EPC-001"),
@@ -508,7 +502,7 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     ] {
         git(root, &["branch", "-f", name, line]);
         git(root, &["switch", "-q", name]);
-        assert_blocks(&ci(root, name, &body("")), name, needle);
+        assert_blocks(&ci(root, name, &body("Task: EPC-001")), name, needle);
     }
 
     // An epic cancelled on the target after the line forked is closed.
@@ -523,7 +517,7 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     merge(root, "plan/cancel");
     git(root, &["switch", "-q", line]);
     assert_blocks(
-        &ci(root, line, &body("")),
+        &ci(root, line, &body("Task: EPC-001")),
         "cancelled after fork",
         "EPC-001 is cancelled",
     );
@@ -535,7 +529,7 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     git(root, &["branch", "release/next", "main"]);
     git(root, &["switch", "-q", line]);
     assert_blocks(
-        &ci_into(root, "release/next", line, &body("")),
+        &ci_into(root, "release/next", line, &body("Task: EPC-001")),
         "wrong target",
         "lands on 'main', not 'release/next'",
     );
@@ -544,7 +538,7 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     std::fs::write(root.join("src/lib.rs"), "pub fn untracked() {}\n").unwrap();
     git(root, &["commit", "-qam", "feat: slip one in"]);
     assert_blocks(
-        &ci(root, line, &body("")),
+        &ci(root, line, &body("Task: EPC-001")),
         "untracked addition",
         "a commit made directly on the line",
     );
@@ -563,14 +557,14 @@ fn the_whole_range_is_classified_whatever_its_shape() {
     git(root, &["add", "-A"]);
     git(root, &["commit", "-qm", "Merge side"]);
     assert_blocks(
-        &ci(root, "plan/merged", &body("")),
+        &ci(root, "plan/merged", &body("Task: EPC-001")),
         "merge resolution",
         "planning-only pull request touches a product path: src/lib.rs",
     );
     assert_blocks(
         &ci(root, "plan/merged", &body("Task: none: merge")),
         "merge resolution, direct",
-        "src/lib.rs (product_paths)",
+        "is neither",
     );
 
     // A product change in an earlier commit of the range still counts.
@@ -581,10 +575,10 @@ fn the_whole_range_is_classified_whatever_its_shape() {
     assert_blocks(
         &ci(root, "fix/two", &body("Task: none: two commits")),
         "earlier commit",
-        "src/lib.rs (product_paths)",
+        "is neither",
     );
 
-    for (path, member) in [
+    for (path, _member) in [
         ("src/\u{3c0}.rs", "product_paths"),
         (".claude/a\tb.md", "managed_instructions"),
     ] {
@@ -592,7 +586,7 @@ fn the_whole_range_is_classified_whatever_its_shape() {
         assert_blocks(
             &ci(root, "fix/quoted", &body("Task: none: quoted")),
             path,
-            &format!("{path} ({member})"),
+            "is neither",
         );
     }
 }
@@ -646,5 +640,115 @@ fn a_pull_request_cannot_switch_tracking_off_for_itself() {
         &ci(root, "chore/unstate", &body("")),
         "state removed",
         "unclassified pull request",
+    );
+}
+
+#[test]
+fn a_pr_that_names_no_task_or_epic_is_refused_whatever_it_touches() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    for path in ["docs/plan/next.md", "docs/guide.md", "src/new.rs"] {
+        branch_with(dir.path(), "plan/next", &[(path, "change\n")]);
+        for line in ["", "Task:", "Task: none: small work"] {
+            assert_blocks(
+                &ci(dir.path(), "plan/next", &body(line)),
+                path,
+                "work.classification",
+            );
+        }
+    }
+}
+
+#[test]
+fn tracking_inactive_requires_a_named_unit_and_rejects_placeholders() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["commit", "--allow-empty", "-m", "chore: start"]);
+    branch_with(root, "docs/unit", &[("docs/guide.md", "guide\n")]);
+    assert_passes(
+        &ci(root, "docs/unit", &body("Task: clarify installation")),
+        "named unit",
+    );
+    for line in [
+        "",
+        "Task:",
+        "Task: none",
+        "Task: none: typo",
+        "Task: `TSK-NNN | EPC-NNN | <unit name>`",
+        "Task: TSK-NNN",
+        "Task: one\nTask: two",
+        "Task: `unclosed unit",
+        "Task: unclosed unit`",
+    ] {
+        assert_blocks(
+            &ci(root, "docs/unit", &body(line)),
+            line,
+            "work.classification",
+        );
+    }
+}
+
+#[test]
+fn standalone_record_and_code_are_admitted_together_at_completion() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    let own = task("TSK-003", "feat", "todo")
+        .replace("epic_id: EPC-001", "epic_id: null")
+        .replace(
+            "standalone_reason: null",
+            "standalone_reason: one bounded outcome",
+        );
+    branch_with(
+        root,
+        "task/TSK-003-work",
+        &[
+            ("project-management/tasks/TSK-003.md", &own),
+            ("src/new.rs", "pub fn work() {}\n"),
+        ],
+    );
+    let seeded = codeflow()
+        .args(["ids", "seed"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        seeded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seeded.stderr)
+    );
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let reviewed = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let complete = format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/1\n  criteria:\n    AC-1: verified | test ran\n    AC-2: verified | journey ran\n  journey: verified | CLI fixture\n  not_verified: none\n  follow_ups: none: done\n  verdict: approved\n```\n", own.replace("status: todo", "status: complete"));
+    std::fs::write(root.join("project-management/tasks/TSK-003.md"), complete).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "docs: complete standalone"]);
+    assert_passes(
+        &ci(root, "task/TSK-003-work", &body("Task: TSK-003")),
+        "standalone completion",
+    );
+    let out = codeflow()
+        .args(["work", "start", "TSK-003"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot start from status"));
+    std::fs::write(
+        root.join("project-management/tasks/TSK-004.md"),
+        task("TSK-004", "feat", "todo"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "docs: add unrelated task"]);
+    assert_blocks(
+        &ci(root, "task/TSK-003-work", &body("Task: TSK-003")),
+        "second record",
+        "only its own standalone task record",
     );
 }

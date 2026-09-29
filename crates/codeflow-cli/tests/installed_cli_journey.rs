@@ -119,6 +119,10 @@ fn body(root: &Path, task: &str) -> String {
     std::fs::read_to_string(root.join(".github/pull_request_template.md"))
         .unwrap()
         .replace("Task: `TSK-NNN | none: <reason>`", &format!("Task: {task}"))
+        .replace(
+            "Task: `TSK-NNN | EPC-NNN | <unit name>`",
+            &format!("Task: {task}"),
+        )
         .replace("## Summary\n", "## Summary\n\nBuild the task.\n")
         .replace("\n-\n", "\n- Build the task.\n")
         .replace(

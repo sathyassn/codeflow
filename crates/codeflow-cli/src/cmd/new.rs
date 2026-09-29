@@ -110,7 +110,7 @@ pub enum TaskCommand {
         /// Parent epic id. Mutually exclusive with --standalone-reason.
         #[arg(long, short, value_name = "EPC-NNN")]
         epic: Option<String>,
-        /// Why this durable task does not belong to an epic.
+        /// Why this durable task does not belong to an epic; may run on its task branch.
         #[arg(long, value_name = "REASON")]
         standalone_reason: Option<String>,
         /// Existing local or remote-tracking non-task branch this task will integrate into.
@@ -519,7 +519,10 @@ impl<'a> Issuer<'a> {
         let registry = match durable_work_tracking_enabled(root) {
             Ok(tracked) => tracked,
             Err(error) => {
-                eprintln!("error: cannot determine durable-work tracking: {error}");
+                eprintln!(
+                    "error: {}",
+                    codeflow_core::workgraph::work_start::tracking_state_message(error)
+                );
                 return None;
             }
         };

@@ -6,8 +6,9 @@
 //! Closeout changed after it, or it landed by a clean merge that only
 //! merges and planning records follow ([`bind_completion`]); `task status
 //! complete` and `codeflow ci` share that judge; a waiver names the planning amendment on the
-//! target that changed that criterion; a task pull request leaves its
-//! record's criteria as the target has them; and a range touching the
+//! target or in its own reviewed range that changed that criterion. The
+//! task may amend its own criteria until complete; reopened criteria stay
+//! frozen. A range touching the
 //! adopter-facing path set belongs to a task with a journey criterion.
 //!
 //! The checker proves structure and binding only ([`SCOPE_NOTE`]). It does
@@ -19,15 +20,16 @@ use git2::{Oid, Repository};
 use super::classify::is_planning_path;
 use super::lifecycle::{Graph, RecordView};
 use super::record_text::{
-    frontmatter_len, outcome_word, scan_record, section_span, AcceptanceBlock, Criterion,
+    acceptance_blocks, frontmatter_len, outcome_word, scan_record, section_span, AcceptanceBlock,
+    Criterion,
 };
 use super::work_start::RecordKind;
 
 /// The acceptance block names the reviewed commit, and waivers name their
 /// amendment (R-60). Level: `git.work_records`.
 pub const BINDING_RULE: &str = "work.acceptance_binding";
-/// A task pull request leaves its record's criteria as the target has them
-/// (R-52). Always blocks.
+/// Criteria changes outside the own-task or planning allowance, including
+/// changes to reopened criteria (R-52). Always blocks.
 pub const FROZEN_RULE: &str = "work.criteria_frozen";
 /// An adopter-facing range belongs to a task with a journey criterion, and a
 /// leaf serving the epic's journey says what ran (R-53). Level:
@@ -43,10 +45,16 @@ pub const SCOPE_NOTE: &str = "the acceptance check proves structure and binding 
 pub struct Finding {
     pub rule: &'static str,
     pub message: String,
+    /// Informational evidence, never a refusal.
+    pub note: bool,
 }
 
 pub(super) fn finding(rule: &'static str, message: String) -> Finding {
-    Finding { rule, message }
+    Finding {
+        rule,
+        message,
+        note: false,
+    }
 }
 
 /// The active (not superseded) acceptance block of a record, when exactly
@@ -62,10 +70,22 @@ pub(super) fn active_block(record: &RecordView) -> Option<AcceptanceBlock> {
 
 /// A commit named by its object id, never by a ref name: a branch named like
 /// the id cannot stand in for the reviewed commit or the amendment.
-fn commit_of(repo: &Repository, value: &str) -> Option<Oid> {
+pub(crate) fn commit_of(repo: &Repository, value: &str) -> Option<Oid> {
     super::work_start::commit_by_object_id(repo, value.trim())
         .ok()
         .map(|commit| commit.id())
+}
+
+fn is_first_parent_ancestor(repo: &Repository, ancestor: Oid, mut tip: Oid) -> bool {
+    loop {
+        if tip == ancestor {
+            return true;
+        }
+        let Ok(parent) = repo.find_commit(tip).and_then(|commit| commit.parent_id(0)) else {
+            return false;
+        };
+        tip = parent;
+    }
 }
 
 fn is_ancestor_or_same(repo: &Repository, ancestor: Oid, of: Oid) -> bool {
@@ -152,7 +172,30 @@ pub fn bind_completion(
     landing: Landing<'_>,
     default_target: Option<Oid>,
 ) -> Vec<Finding> {
-    bind(repo, task, graph, landing, default_target, true)
+    bind(repo, task, graph, landing, default_target, true, None)
+}
+
+/// [`bind_completion`] with the own-task waiver allowance (TSK-184): a
+/// waiver may also name a record-only amendment commit in the task pull
+/// request's own range, after `own_range_base` and before the reviewed
+/// commit. `None` keeps the landed-amendment rule alone.
+pub(crate) fn bind_completion_with_amendment(
+    repo: &Repository,
+    task: &RecordView,
+    graph: &Graph,
+    landing: Landing<'_>,
+    default_target: Option<Oid>,
+    own_range_base: Option<Oid>,
+) -> Vec<Finding> {
+    bind(
+        repo,
+        task,
+        graph,
+        landing,
+        default_target,
+        true,
+        own_range_base,
+    )
 }
 
 /// [`bind_completion`] under its first rule alone: the reviewed commit is
@@ -168,7 +211,7 @@ pub fn bind_completion_at_head(
     landing: Landing<'_>,
     default_target: Option<Oid>,
 ) -> Vec<Finding> {
-    bind(repo, task, graph, landing, default_target, false)
+    bind(repo, task, graph, landing, default_target, false, None)
 }
 
 fn bind(
@@ -178,6 +221,7 @@ fn bind(
     landing: Landing<'_>,
     default_target: Option<Oid>,
     landing_merge: bool,
+    own_range_base: Option<Oid>,
 ) -> Vec<Finding> {
     let Some(block) = active_block(task) else {
         return Vec::new();
@@ -209,6 +253,7 @@ fn bind(
                 &result.evidence,
                 landing,
                 task_target(repo, task, default_target),
+                own_range_base,
             ) {
                 bind(format!("{}: {id} waiver {problem}", task.id));
             }
@@ -289,9 +334,41 @@ fn direct_problem(
             "reviewed commit {reviewed} is not the head or an ancestor of it; review the result that lands"
         ));
     }
-    later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
-        format!("{problem} after the reviewed commit {reviewed}; review the result again")
-    })
+    let target = task_target(repo, task, None);
+    let mut cursor = at;
+    while cursor != reviewed {
+        let Ok(commit) = repo.find_commit(cursor) else {
+            return Some("the completion history cannot be read".into());
+        };
+        let Ok(parent) = commit.parent_id(0) else {
+            return Some("the review is not on the task's first-parent history".into());
+        };
+        if commit.parent_count() == 2 {
+            let from_target = target.is_some_and(|tip| {
+                commit
+                    .parent_id(1)
+                    .is_ok_and(|side| is_first_parent_ancestor(repo, side, tip))
+            });
+            if !from_target || !is_clean_remerge(repo, &commit).unwrap_or(false) {
+                return Some(format!("merge {cursor} is not a clean re-merge from the task's integration target; review the result again"));
+            }
+        } else if let Some(problem) = blob_at(repo, cursor, &task.path)
+            .and_then(|content| later_change(repo, &task.path, &content, parent, cursor))
+        {
+            return Some(format!(
+                "{problem} after the reviewed commit {reviewed}; review the result again"
+            ));
+        }
+        cursor = parent;
+    }
+    let Some(then) = blob_at(repo, reviewed, &task.path) else {
+        return Some(format!(
+            "{} is not in the reviewed commit, so its scope was never reviewed",
+            task.path
+        ));
+    };
+    (reviewed_part(&then) != reviewed_part(&completed))
+        .then(|| "the record changed outside its status and Closeout after the reviewed commit; review the result again".into())
 }
 
 /// What the second rule found.
@@ -482,6 +559,7 @@ fn waiver_problem(
     evidence: &str,
     landing: Landing<'_>,
     target_tip: Option<Oid>,
+    own_range_base: Option<Oid>,
 ) -> Option<String> {
     let Some(amendment) = commit_of(repo, evidence.trim()) else {
         return Some(format!(
@@ -499,11 +577,32 @@ fn waiver_problem(
     let Some(tip) = target_tip else {
         return Some("cannot be checked: the target does not resolve here".into());
     };
-    if !is_ancestor_or_same(repo, amendment, tip) {
-        return Some(format!(
-            "names {}, which is not on the target",
-            evidence.trim()
-        ));
+    let own_range = !is_ancestor_or_same(repo, amendment, tip);
+    if own_range {
+        let reviewed = active_block(task).and_then(|block| commit_of(repo, &block.reviewed));
+        if own_range_base.is_none_or(|base| is_ancestor_or_same(repo, amendment, base))
+            || reviewed.is_none_or(|reviewed| {
+                amendment == reviewed || !is_ancestor_or_same(repo, amendment, reviewed)
+            })
+        {
+            return Some("is not on the target or a record-only amendment strictly before the reviewed revision in this task's range".into());
+        }
+        let Ok(commit) = repo.find_commit(amendment) else {
+            return Some("amendment cannot be read".into());
+        };
+        let paths = super::lifecycle::changed_paths(
+            repo,
+            &commit
+                .parent_id(0)
+                .map_or_else(|_| String::new(), |p| p.to_string()),
+            Some(&amendment.to_string()),
+        );
+        if paths.is_err()
+            || paths
+                .is_ok_and(|paths| paths.is_empty() || paths.iter().any(|path| path != &task.path))
+        {
+            return Some("must change only this task's record".into());
+        }
     }
     if !is_ancestor_or_same(repo, amendment, landing.commit()) {
         return Some(format!(
@@ -635,24 +734,133 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
 
 /// Records of the range whose criteria differ from the target's (R-52).
 #[must_use]
-pub fn frozen_criteria(head: &Graph, target: &Graph, changed_paths: &[String]) -> Vec<Finding> {
-    head.records
+pub fn frozen_criteria(
+    head: &Graph,
+    target: &Graph,
+    changed_paths: &[String],
+    exempt: Option<&str>,
+) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for record in head
+        .records
+        .values()
+        .filter(|record| record.kind == RecordKind::Task && changed_paths.contains(&record.path))
+    {
+        let before = target.records.get(&record.id);
+        let old = before
+            .map(|r| r.criteria.items.as_slice())
+            .unwrap_or_default();
+        let new = &record.criteria.items;
+        if before.is_some_and(|r| r.criteria.signature() == record.criteria.signature()) {
+            continue;
+        }
+        if exempt == Some(record.id.as_str()) {
+            let mut delta = Vec::new();
+            for item in old {
+                match new.iter().find(|next| next.id == item.id) {
+                    None => delta.push(format!(
+                        "{} removed: {} (give the reason in the PR body)",
+                        item.id, item.text
+                    )),
+                    Some(next) if next.text != item.text => delta.push(format!(
+                        "{} changed: {} -> {}",
+                        item.id, item.text, next.text
+                    )),
+                    _ => {}
+                }
+            }
+            for item in new
+                .iter()
+                .filter(|item| !old.iter().any(|prior| prior.id == item.id))
+            {
+                delta.push(format!("{} added: {}", item.id, item.text));
+            }
+            if !delta.is_empty() {
+                found.push(Finding {
+                    rule: FROZEN_RULE,
+                    message: format!("{} criteria delta: {}", record.id, delta.join("; ")),
+                    note: true,
+                });
+            }
+        } else if before.is_some() {
+            found.push(finding(FROZEN_RULE, format!("{} changes its criteria on this branch; another task's criteria change by its own PR or the epic amendment", record.id)));
+        }
+    }
+    found
+}
+
+/// Enforce reopen equality before any range-class amendment exemption.
+/// The prospective graph may include an uncommitted status transition.
+///
+/// # Errors
+/// Returns an error if the range cannot be read.
+pub fn reopened_criteria(
+    repo: &Repository,
+    base: &str,
+    head: &str,
+    after: &Graph,
+) -> Result<Vec<Finding>, String> {
+    let target = Graph::from_revision(repo, base)?;
+    let candidates: Vec<_> = after
+        .records
         .values()
         .filter(|record| record.kind == RecordKind::Task)
-        .filter(|record| changed_paths.contains(&record.path))
-        .filter_map(|record| {
-            let there = target.records.get(&record.id)?;
-            (there.criteria.signature() != record.criteria.signature()).then(|| {
-                finding(
-                    FROZEN_RULE,
-                    format!(
-                        "{} changes its criteria on this branch; criteria change only by a planning pull request on the target, then this branch rebases",
-                        record.id
-                    ),
-                )
+        .filter(|record| {
+            target.records.get(&record.id).is_some_and(|old| {
+                old.status == "complete" && old.criteria.signature() != record.criteria.signature()
             })
         })
-        .collect()
+        .collect();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let oid = |rev: &str| {
+        repo.revparse_single(rev)
+            .and_then(|o| o.peel_to_commit())
+            .map(|c| c.id())
+            .map_err(|e| e.to_string())
+    };
+    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    walk.push(oid(head)?).map_err(|e| e.to_string())?;
+    walk.hide(oid(base)?).map_err(|e| e.to_string())?;
+    let mut reopened = std::collections::BTreeSet::new();
+    for record in &candidates {
+        let old = &target.records[&record.id];
+        if record.status != "complete"
+            || acceptance_blocks(&record.body)
+                .iter()
+                .filter(|block| block.is_superseded())
+                .count()
+                > acceptance_blocks(&old.body)
+                    .iter()
+                    .filter(|block| block.is_superseded())
+                    .count()
+        {
+            reopened.insert(record.id.clone());
+        }
+    }
+    for oid in walk {
+        let oid = oid.map_err(|e| e.to_string())?;
+        for record in &candidates {
+            if let Some(content) = blob_at(repo, oid, &record.path) {
+                let then = RecordView::parse(RecordKind::Task, &record.path, &content)?;
+                if then.status != "complete" {
+                    let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+                    let transitioned = commit.parent_ids().any(|parent| {
+                        blob_at(repo, parent, &record.path)
+                            .and_then(|text| {
+                                RecordView::parse(RecordKind::Task, &record.path, &text).ok()
+                            })
+                            .is_some_and(|prior| prior.status == "complete")
+                    });
+                    if transitioned {
+                        reopened.insert(record.id.clone());
+                    }
+                }
+            }
+        }
+    }
+    Ok(reopened.into_iter().map(|id| finding(FROZEN_RULE, format!("{id}: a reopened task keeps its criteria; change them in the epic's batched amendment"))).collect())
 }
 
 /// Where a range's completions are bound: at the head for a task pull
@@ -684,6 +892,17 @@ pub fn completions_in_range(
     default_target: Option<Oid>,
     at: BindAt,
 ) -> Result<Vec<Finding>, String> {
+    completions_with_amendment(repo, base, head, default_target, at, None)
+}
+
+fn completions_with_amendment(
+    repo: &Repository,
+    base: &str,
+    head: &str,
+    default_target: Option<Oid>,
+    at: BindAt,
+    own_task: Option<&str>,
+) -> Result<Vec<Finding>, String> {
     let oid = |revision: &str| {
         repo.revparse_single(revision)
             .and_then(|object| object.peel_to_commit())
@@ -712,12 +931,20 @@ pub fn completions_in_range(
                 (BindAt::Introduced, Some(block)) => introduced_at(repo, task, block, head_oid),
                 _ => head_oid,
             };
-            findings.extend(bind_completion(
+            if at == BindAt::Introduced {
+                findings.push(Finding {
+                    rule: BINDING_RULE,
+                    message: format!("{} completion bound at {landing}", task.id),
+                    note: true,
+                });
+            }
+            findings.extend(bind_completion_with_amendment(
                 repo,
                 task,
                 &after,
                 Landing::Commit(landing),
                 default_target,
+                (own_task == Some(task.id.as_str())).then_some(anchor),
             ));
         }
     }
@@ -771,12 +998,38 @@ pub fn journey_requirement_at(
 /// Whether a range may change task criteria (R-52): a planning-only change
 /// or a validated epic integration line. The caller decides it from the
 /// pull request's validated class, never from the branch prefix alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Criteria {
     /// Criteria stay as the target has them.
     Frozen,
+    /// Only the named, not previously complete task may amend its criteria.
+    OwnTask(String),
     /// A planning-only range or a validated epic line may change them.
     Amendable,
+}
+
+/// Select the own-task amendment only for a task not complete at the target.
+///
+/// # Errors
+/// Returns an error when the target records cannot be read.
+pub fn task_criteria(
+    root: &std::path::Path,
+    base: &str,
+    task_id: &str,
+) -> Result<Criteria, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let graph = Graph::from_revision(&repo, base)?;
+    Ok(
+        if graph
+            .records
+            .get(task_id)
+            .is_some_and(|record| record.status == "complete")
+        {
+            Criteria::Frozen
+        } else {
+            Criteria::OwnTask(task_id.to_string())
+        },
+    )
 }
 
 /// The findings of a pull request from `base` (the target tip) to `head`:
@@ -803,25 +1056,34 @@ pub fn pull_request_findings(
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
     let target_tip = oid(base)?;
-    let mut found = Vec::new();
-    let at = if criteria == Criteria::Frozen {
+    let at_head = Graph::from_revision(&repo, head)?;
+    let mut found = reopened_criteria(&repo, base, head, &at_head)?;
+    let at = if criteria == Criteria::Amendable {
+        BindAt::Introduced
+    } else {
         let anchor = repo
             .merge_base(target_tip, oid(head)?)
             .map_err(|error| error.message().to_string())?;
         let paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
-        let at_head = Graph::from_revision(&repo, head)?;
         let at_target = Graph::from_revision(&repo, base)?;
-        found.extend(frozen_criteria(&at_head, &at_target, &paths));
+        let exempt = match &criteria {
+            Criteria::OwnTask(id) => Some(id.as_str()),
+            _ => None,
+        };
+        found.extend(frozen_criteria(&at_head, &at_target, &paths, exempt));
         BindAt::Head
-    } else {
-        BindAt::Introduced
     };
-    found.extend(completions_in_range(
+    let own_task = match criteria {
+        Criteria::OwnTask(id) => Some(id),
+        _ => None,
+    };
+    found.extend(completions_with_amendment(
         &repo,
         base,
         head,
         Some(target_tip),
         at,
+        own_task.as_deref(),
     )?);
     Ok(found)
 }

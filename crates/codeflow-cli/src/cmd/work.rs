@@ -2,14 +2,15 @@
 //! read the one readiness core (SPC-013 R-40, R-110); only `work claim`
 //! writes, and what it writes is a branch.
 
+use std::fmt::Write as _;
+
 use clap::{Args, Subcommand};
 use codeflow_core::hooks::policy::Policy;
 use codeflow_core::hooks::PolicyLevel;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::readiness::{self, Backlog, Entry, State};
 use codeflow_core::workgraph::{
-    check_work_start, declared_work_target, durable_work_tracking_enabled,
-    resolve_work_target_checked,
+    declared_work_target, durable_work_tracking_enabled, resolve_work_target_checked,
 };
 use serde_json::json;
 
@@ -22,7 +23,7 @@ pub struct WorkArgs {
 #[derive(Debug, Subcommand)]
 pub enum WorkCommand {
     /// List ready tasks first, then waiting and blocked ones with their
-    /// reasons, from the refs as last fetched (no network call).
+    /// reasons, from the refs as last fetched. Checks review evidence for stack hints.
     Next {
         /// Only tasks of this epic.
         #[arg(long, value_name = "EPC-NNN")]
@@ -37,6 +38,9 @@ pub enum WorkCommand {
     Claim {
         /// Stable task id.
         task_id: String,
+        /// Reviewed predecessor pin, repeat once per code dependency.
+        #[arg(long, value_name = "TSK-NNN@SHA")]
+        on: Vec<String>,
     },
     /// Verify that a durable task was planned and anchored before implementation.
     Start {
@@ -45,6 +49,9 @@ pub enum WorkCommand {
         /// Non-task branch/ref this task will merge into.
         #[arg(long = "into", value_name = "REF")]
         target: Option<String>,
+        /// Reviewed predecessor pin already contained in HEAD.
+        #[arg(long, value_name = "TSK-NNN@SHA")]
+        on: Vec<String>,
     },
 }
 
@@ -52,8 +59,12 @@ pub enum WorkCommand {
 pub fn run(args: &WorkArgs) -> i32 {
     match &args.command {
         WorkCommand::Next { epic, json } => next(epic.as_deref(), *json),
-        WorkCommand::Claim { task_id } => claim(task_id),
-        WorkCommand::Start { task_id, target } => start(task_id, target.as_deref()),
+        WorkCommand::Claim { task_id, on } => claim(task_id, on),
+        WorkCommand::Start {
+            task_id,
+            target,
+            on,
+        } => start(task_id, target.as_deref(), on),
     }
 }
 
@@ -70,6 +81,27 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
         backlog
             .entries
             .retain(|entry| entry.epic_id.as_deref() == Some(epic));
+    }
+    for entry in &mut backlog.entries {
+        if entry.state != State::Waiting {
+            continue;
+        }
+        if let Ok(pins) =
+            readiness::reviewed_stack_hint(&root, &entry.task_id, &entry.target, &|branch, sha| {
+                reviewed(&root, branch, sha)
+            })
+        {
+            let noun = if pins.len() == 1 {
+                "that pin is"
+            } else {
+                "those pins are"
+            };
+            let _ = write!(
+                entry.reason,
+                "; startable on {} once {noun} named",
+                pins.join(", ")
+            );
+        }
     }
     if as_json {
         println!("{}", next_json(&backlog));
@@ -137,9 +169,22 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
     })
 }
 
-fn claim(task_id: &str) -> i32 {
+fn claim(task_id: &str, on: &[String]) -> i32 {
     let root = super::repo_root();
-    match readiness::claim(&root, task_id) {
+    if !on.is_empty() {
+        if let Err(error) = readiness::refresh_claim(&root, task_id) {
+            eprintln!("work claim: error: {error}");
+            return 1;
+        }
+    }
+    let pins = match resolve_pins(&root, on) {
+        Ok(pins) => pins,
+        Err(error) => {
+            eprintln!("work claim: error: {error}");
+            return 1;
+        }
+    };
+    match readiness::claim_on(&root, task_id, &pins) {
         Ok(claim) => {
             println!(
                 "work claim: {task_id} -> {} from {}",
@@ -167,12 +212,15 @@ fn claim(task_id: &str) -> i32 {
 /// `git.work_planning` level (TSK-133). At `warn` a finding is reported and
 /// the command succeeds; CI reports the same finding at the same level. An
 /// unreadable tracking state always blocks.
-fn start(task_id: &str, target: Option<&str>) -> i32 {
+fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     let root = super::repo_root();
     // An undeterminable tracking state blocks whatever the level says, as in
     // CI's `work.tracking_state`.
     if let Err(error) = durable_work_tracking_enabled(&root) {
-        eprintln!("work start: error: cannot determine durable-work tracking: {error}");
+        eprintln!(
+            "work start: error: {}",
+            codeflow_core::workgraph::work_start::tracking_state_message(error)
+        );
         eprintln!(
             "work start: repair CodeFlow state or task-home access; this blocks whatever git.work_planning says"
         );
@@ -180,7 +228,7 @@ fn start(task_id: &str, target: Option<&str>) -> i32 {
     }
     let (policy, _armed) = Policy::load_effective(&root);
     let level = policy.git.work_planning_level();
-    let Err(findings) = plan_check(&root, task_id, target) else {
+    let Err(findings) = plan_check(&root, task_id, target, on) else {
         return 0;
     };
     let warn = level == PolicyLevel::Warn;
@@ -204,6 +252,7 @@ fn plan_check(
     root: &std::path::Path,
     task_id: &str,
     target: Option<&str>,
+    on: &[String],
 ) -> Result<(), Vec<String>> {
     let workgraph = validate_workgraph(root);
     if !workgraph.is_clean() {
@@ -229,8 +278,10 @@ fn plan_check(
         }
         Err(error) => return Err(vec![error.to_string()]),
     };
+    let pins = resolve_pins(root, on).map_err(|error| vec![error])?;
     let report =
-        check_work_start(root, task_id, &target).map_err(|error| vec![error.to_string()])?;
+        codeflow_core::workgraph::work_start::check_work_start_on(root, task_id, &target, &pins)
+            .map_err(|error| vec![error.to_string()])?;
     println!(
         "work start: {} anchored at {} for {} -> {}",
         report.task_id, report.merge_base, report.branch, report.target
@@ -254,4 +305,111 @@ fn plan_check(
         );
     }
     Ok(())
+}
+
+fn resolve_pins(
+    root: &std::path::Path,
+    on: &[String],
+) -> Result<Vec<codeflow_core::workgraph::work_start::ReviewedPin>, String> {
+    codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha| {
+        reviewed(root, branch, sha)
+    })
+}
+
+fn reviewed(root: &std::path::Path, branch: &str, sha: &str) -> Result<bool, String> {
+    let repository = codeflow_core::workgraph::work_start::review_repository(root, branch)?;
+    let proof = pr_review(root, branch, &repository)?;
+    if proof["headRefName"].as_str() != Some(branch)
+        || proof["headRefOid"].as_str() != Some(sha)
+        || proof["isCrossRepository"].as_bool() != Some(false)
+        || proof["headRepository"]["nameWithOwner"].as_str()
+            != repository.split_once('/').map(|(_, repo)| repo)
+    {
+        return Err("predecessor PR identity or tip differs from the pin; rebase on its new reviewed head and recheck".into());
+    }
+    let (policy, _) = Policy::load_effective(root);
+    let headings =
+        codeflow_core::hooks::adoption::mapped_sections(&policy.git, &["Reviews".into()]);
+    Ok(super::ci::pr_body::review_names_revision(
+        proof["body"].as_str().unwrap_or_default(),
+        &headings[0],
+        sha,
+    ))
+}
+
+/// Bound provider lifetime and response size; a regular output file means a
+/// descendant retaining stdout cannot hold an output-reader thread open.
+fn pr_review(
+    root: &std::path::Path,
+    branch: &str,
+    repository: &str,
+) -> Result<serde_json::Value, String> {
+    use std::io::{Read as _, Seek as _};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let mut output = tempfile::tempfile().map_err(|error| error.to_string())?;
+    let mut command = Command::new("gh");
+    command
+        .args([
+            "pr",
+            "view",
+            branch,
+            "--repo",
+            repository,
+            "--json",
+            "body,headRefName,headRefOid,isCrossRepository,headRepository",
+        ])
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(output.try_clone().map_err(|error| error.to_string())?)
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("cannot verify review for this pin: {error}"))?;
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None)
+                if start.elapsed() < Duration::from_secs(5)
+                    && output.metadata().is_ok_and(|m| m.len() <= 1_048_576) =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => break Err(
+                "cannot verify review for this pin: provider unavailable, too large or timed out"
+                    .to_string(),
+            ),
+        }
+    };
+    // Terminate descendants too, including those holding the output file open.
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    if !status?.success() {
+        return Err("cannot verify review for this pin: provider failed".into());
+    }
+    output.rewind().map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    output
+        .take(1_048_577)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > 1_048_576 {
+        return Err("review response too large".into());
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("cannot parse predecessor review: {error}"))
 }

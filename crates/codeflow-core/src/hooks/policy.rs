@@ -317,16 +317,14 @@ pub struct GitPolicy {
     /// its target. Accepts `block` or `warn`; default `block`. Read it
     /// through [`GitPolicy::work_planning_level`].
     pub work_planning: PolicyLevel,
-    /// Globs naming the project's product code (SPC-013 R-71, R-114). A
-    /// range touching one is tracked work, never a direct change
-    /// (`Task: none`). `codeflow init` writes the default for the detected
+    /// Globs naming the project's product code (SPC-013 R-70, R-114). A
+    /// range touching one needs a journey criterion. Every PR names its
+    /// task or epic. `codeflow init` writes the default for the detected
     /// stack and `codeflow update` adds it once, keeping any value the
     /// project set. Absent (`null`), the binary assumes the stack default
     /// recorded in `.codeflow/project.toml`.
     pub product_paths: Option<Vec<String>>,
-    /// Whether a pull request may be a direct change (`Task: none: <reason>`)
-    /// at all: `allow` (default) or `forbid`. Forbidding never narrows the
-    /// surfaces a direct change is refused on (R-71).
+    /// Retired compatibility key, accepted and ignored (R-70).
     pub direct_changes: String,
     /// Trusted automation profiles (SPC-013 R-82). A profile applies in
     /// `codeflow ci` only when the actor the workflow passes and the head
@@ -993,11 +991,18 @@ mod tests {
         assert_eq!(from_asset.git.pr_sections, defaults.pr_sections);
         assert_eq!(from_asset.git.pr_release_impact, defaults.pr_release_impact);
         assert_eq!(from_asset.git.pr_breaking_level, defaults.pr_breaking_level);
-        // Deliberate divergence: fresh installs require the approved template
-        // sections, while the built-in default keeps the pre-3.0 list.
+        // Release impact is conditional even in an older installed four-section
+        // policy. WP2 removes it from the scaffold; the unconditional list is
+        // the same with either scaffold version.
         assert_eq!(
-            from_asset.git.pr_required_sections,
-            ["Summary", "Changes", "Reviews", "Release impact"]
+            from_asset
+                .git
+                .pr_required_sections
+                .iter()
+                .filter(|section| section.as_str() != "Release impact")
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["Summary", "Changes", "Reviews"]
         );
         assert_eq!(defaults.pr_required_sections, ["Summary", "Changes"]);
         assert_eq!(from_asset.git.pr_code_sections, defaults.pr_code_sections);

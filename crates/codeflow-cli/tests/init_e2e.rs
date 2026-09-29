@@ -1042,12 +1042,36 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
     // A docs-only pull request: Summary and Changes suffice.
     let target = git_stdout(&root, &["branch", "--show-current"]);
     let target = target.trim().to_string();
+    git_with_binary(&root, &["branch", "integration/guide", &target]);
+    let target = "integration/guide".to_string();
     git_with_binary(&root, &["switch", "-q", "-c", "docs/guide"]);
     std::fs::create_dir_all(root.join("docs")).unwrap();
     std::fs::write(root.join("docs/guide.md"), "# Guide\n\nHow to start.\n").unwrap();
     git_with_binary(&root, &["add", "docs/guide.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: add a starting guide"]);
-    let body = "Task: none: a new guide\n\n## Summary\n\nAdds a starting guide.\n\n\
+    let allocated = codeflow(
+        &root,
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "bounded guide",
+            "--into",
+            &target,
+            "guide",
+        ],
+    );
+    assert!(allocated.status.success(), "{}", output_text(&allocated));
+    let task_path = root.join("project-management/tasks/TSK-001.md");
+    let task = std::fs::read_to_string(&task_path).unwrap().replace(
+        "- AC-1\n",
+        "- AC-1 When read, the guide shall explain setup.\n",
+    );
+    std::fs::write(&task_path, task).unwrap();
+    git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
+    git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
+    let body = "Task: TSK-001\n\n## Summary\n\nAdds a starting guide.\n\n\
                 ## Changes\n\n- a guide for new readers\n";
     let ci = codeflow(
         &root,
@@ -1058,7 +1082,7 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
             "--head",
             "HEAD",
             "--branch",
-            "docs/guide",
+            "task/TSK-001-guide",
             "--pr-body",
             body,
         ],
@@ -1210,7 +1234,29 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
     std::fs::write(root.join("docs/guide.md"), "# Guide\n").unwrap();
     git_with_binary(&root, &["add", "docs/guide.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: add a guide"]);
-    let body = "Task: none: a new guide\n\n## Description\n\nAdds a guide.\n\n\
+    let allocated = codeflow(
+        &root,
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "bounded guide",
+            "--into",
+            "chore/adopt",
+            "guide",
+        ],
+    );
+    assert!(allocated.status.success(), "{}", output_text(&allocated));
+    let task_path = root.join("project-management/tasks/TSK-001.md");
+    let task = std::fs::read_to_string(&task_path).unwrap().replace(
+        "- AC-1\n",
+        "- AC-1 When read, the guide shall explain setup.\n",
+    );
+    std::fs::write(&task_path, task).unwrap();
+    git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
+    git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
+    let body = "Task: TSK-001\n\n## Description\n\nAdds a guide.\n\n\
                 ## Changes\n\n- a guide\n";
     let ci = codeflow(
         &root,
@@ -1221,7 +1267,7 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
             "--head",
             "HEAD",
             "--branch",
-            "docs/guide",
+            "task/TSK-001-guide",
             "--pr-body",
             body,
         ],
@@ -2102,7 +2148,7 @@ fn watched_path_settles_by_release_impact(root: &Path, tmp: &Path, base: &str) {
     let body = tmp.join("body.md");
     std::fs::write(
         &body,
-        "Task: none: a new api function\n\n## Summary\n\nAdds the api.\n\n\
+        "Task: a new api function\n\n## Summary\n\nAdds the api.\n\n\
          ## Changes\n\n- the api\n\n## Testing\n\n- `codeflow ci` over the range\n\
          - Not tested: nothing else\n\n## Reviews\n\n- none yet\n\n\
          ## Release impact\n\n- Impact: minor\n- Breaking: no\n\

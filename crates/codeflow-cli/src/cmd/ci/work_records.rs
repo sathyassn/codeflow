@@ -76,9 +76,7 @@ pub(super) fn check(
         }
         Err(error) => {
             return Outcome {
-                violations: vec![block(format!(
-                    "cannot determine durable-work tracking: {error}"
-                ))],
+                violations: vec![super::tracking_state_violation(error)],
                 notices: Vec::new(),
                 ran: true,
             }

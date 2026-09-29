@@ -46,11 +46,20 @@ pub(super) fn dispatch(
             .and_then(|criteria| pull_request_findings(root, range.base, range.head, criteria)),
     };
     match found {
-        Ok(found) => tagged.extend(found.into_iter().map(|found| violation(git, found))),
+        Ok(found) => {
+            for found in found {
+                if found.note {
+                    println!("codeflow ci: note: {}: {}", found.rule, found.message);
+                } else {
+                    tagged.push(violation(git, found));
+                }
+            }
+        }
         Err(error) => tagged.push(violation(
             git,
             Finding {
                 rule: FROZEN_RULE,
+                note: false,
                 message: format!("cannot read the range to check acceptance: {error}"),
             },
         )),
@@ -135,6 +144,9 @@ fn criteria(
     branch: &str,
     class: Option<&Class>,
 ) -> Result<Criteria, String> {
+    if let Some(Class::Tracked { task_id, .. }) = class {
+        return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, task_id);
+    }
     let amendable = match class {
         Some(Class::PlanningOnly | Class::EpicLine(_)) => true,
         Some(_) => false,
@@ -163,7 +175,7 @@ fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
         Violation::always_blocking(
             found.rule,
             found.message,
-            "change criteria by a planning pull request on the target, then rebase",
+            "another task's criteria change by its own PR or the epic amendment; a reopened task keeps its criteria",
         )
     } else {
         Violation::new(

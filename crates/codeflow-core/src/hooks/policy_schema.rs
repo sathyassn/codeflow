@@ -418,21 +418,18 @@ pub const SCHEMA: [KeySpec; 61] = [
         path: "git.product_paths",
         kind: KeyKind::StringList,
         valid: "an array of path globs (e.g. src/**)",
-        purpose: "The project's product code: a pull request touching it is tracked work, never a direct change (SPC-013 R-71, R-114).",
+        purpose: "The project's product code extends the adopter-facing paths requiring a journey criterion (SPC-013 R-114); every PR names its task or epic (R-70).",
         notes: "`codeflow init` writes the default for the detected stack and \
                 `codeflow update` adds it once; a value the project sets is \
-                kept. Absent, the binary assumes the stack default. It extends \
-                the fixed floor (policy, hooks, managed instructions, CI files, \
-                manifests, record schema); it cannot narrow it.",
+                kept. Absent, the binary assumes the stack default. The shared \
+                adopter-facing paths continue to require journey coverage.",
     },
     KeySpec {
         path: "git.direct_changes",
         kind: KeyKind::Enum(&["allow", "forbid"]),
         valid: "allow | forbid",
-        purpose: "Whether a pull request may be a direct change (`Task: none: <reason>`) at all.",
-        notes: "Default allow. `forbid` makes every product pull request tracked \
-                or planning-only; no value narrows the surfaces a direct change \
-                is refused on.",
+        purpose: "Retired compatibility key; accepted and ignored.",
+        notes: "Every pull request names its task or epic (R-70), regardless of this retained key.",
     },
     KeySpec {
         path: "git.release_branch_pattern",
@@ -745,7 +742,8 @@ pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
     let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&data) else {
         return Vec::new();
     };
-    obj.keys()
+    let mut warnings: Vec<_> = obj
+        .keys()
         .filter_map(|key| {
             deprecated_key(key).map(|why| {
                 crate::remedy::Finding::new(
@@ -754,7 +752,18 @@ pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
                 )
             })
         })
-        .collect()
+        .collect();
+    if obj
+        .get("git")
+        .and_then(Value::as_object)
+        .is_some_and(|git| git.contains_key("direct_changes"))
+    {
+        warnings.push(crate::remedy::Finding::new(
+            "policy key git.direct_changes is retired and ignored; every PR names its task or epic",
+            crate::remedy::POLICY_DEPRECATED.with(&[("key", "git.direct_changes")]),
+        ));
+    }
+    warnings
 }
 
 /// Strictly validate `<root>/.codeflow/policy.json`. See [`validate_policy_file`].

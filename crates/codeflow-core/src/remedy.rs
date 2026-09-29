@@ -217,10 +217,10 @@ catalog! {
         "reconcile the target branch, then run `codeflow work start {id}`";
     /// A task whose planning record has not reached the target.
     WORK_START_MERGE_PLANNING = Step::Codeflow("codeflow work start"),
-        "merge the validated planning record into '{target}', then run `codeflow work start {id}`";
+        "merge the epic's planning change into '{target}', or for a standalone task commit its record on this branch, then run `codeflow work start {id}`";
     /// A task branch without a visible task record.
     TASK_RECORD_MISSING = Step::Codeflow("codeflow task new"),
-        "create the durable task record with `codeflow task new` on a planning branch and merge it into the target before implementation";
+        "create the record with `codeflow task new`: land an epic task in its batched planning amendment, or use `--standalone-reason` on the task branch";
     /// A workgraph that does not validate.
     WORKGRAPH_INVALID = Step::Codeflow("codeflow validate"),
         "repair the workgraph until `codeflow validate --docs` passes";
@@ -245,7 +245,7 @@ catalog! {
         "an operator confirms the change against the review recorded for its landing, which the release report names; the cutoff in `release_rule_baseline` in .codeflow/project.toml is the 2.x to 3.0 transition record and is never edited, so the notice ends when the release lands";
     /// A task without a journey criterion for an adopter-facing range.
     JOURNEY_CRITERION = Step::Edit("{path}"),
-        "add a `(journey)` criterion to {path} by a planning pull request, or serve the epic's journey criterion there with `(serves EPC-NNN AC-n)`";
+        "add a `(journey)` criterion to {path} in the task's PR, or the epic amendment, or serve the epic's journey criterion there with `(serves EPC-NNN AC-n)`";
     /// An older record that breaks a rule its baseline exempts.
     RECORD_BASELINE_EXEMPT = Step::Edit("{path}"),
         "an older record keeps its baseline exemption, so this only warns; fix it in {path}, since its next status change applies the rules in full";

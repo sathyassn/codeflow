@@ -5,13 +5,32 @@ use codeflow_core::scaffold::{
 };
 use serde_json::{json, Value};
 
-const BODY: &str = "## Summary\nMake the command easier to use.\n\n## Changes\n- Explain the command's result.\n\n## Testing\nAt fixture HEAD, ran python -m unittest:\n```text\nRan 3 tests\nOK\n```\nCoverage: not measured; this fixture has no coverage tool.\nNot tested: Windows.\n\n## Reviews\nNone: awaiting the maintainer's review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify output; this project has no release automation.\n- Migration: none\n- Package: fictional-tool\n";
+const BODY: &str = "Task: TSK-001\n## Summary\nMake the command easier to use.\n\n## Changes\n- Explain the command's result.\n\n## Testing\nAt fixture HEAD, ran python -m unittest:\n```text\nRan 3 tests\nOK\n```\nCoverage: not measured; this fixture has no coverage tool.\nNot tested: Windows.\n\n## Reviews\nNone: awaiting the maintainer's review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify output; this project has no release automation.\n- Migration: none\n- Package: fictional-tool\n";
 
 fn source() -> DirSource {
     DirSource::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets"))
 }
 
 fn install(root: &Path, tier: Tier, source: &dyn AssetSource) {
+    if tier == Tier::Full {
+        let branch = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let branch = String::from_utf8(branch.stdout).unwrap();
+        git(root, &["switch", "main"]);
+        let path = root.join("project-management/tasks/TSK-001.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "---\nid: TSK-001\nepic_id: null\nstandalone_reason: command clarity\nintegration_target: main\ntitle: clarify result\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-09-29\n---\n\n## Description\nClarify the command.\n\n## Acceptance Criteria\n- AC-1 When run, the command shall explain the result (journey).\n").unwrap();
+        git(root, &["add", "project-management/tasks/TSK-001.md"]);
+        git(root, &["commit", "-m", "docs: plan command clarity"]);
+        git(root, &["switch", branch.trim()]);
+        git(
+            root,
+            &["merge", "--no-ff", "-m", "chore: merge planning", "main"],
+        );
+    }
     scaffold::init(
         source,
         root,
@@ -88,9 +107,17 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
         let policy = read_policy(dir.path());
         assert_eq!(policy["git"]["pr_release_impact"], "warn");
         assert_eq!(policy["git"]["pr_breaking_level"], "major");
+        // An older installed list may still name the conditional release
+        // section. The checker supports both it and WP2's shorter list.
         assert_eq!(
-            policy["git"]["pr_required_sections"],
-            json!(["Summary", "Changes", "Reviews", "Release impact"])
+            policy["git"]["pr_required_sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|section| *section != "Release impact")
+                .collect::<Vec<_>>(),
+            ["Summary", "Changes", "Reviews"]
         );
         let headings: Vec<_> = std::str::from_utf8(&template)
             .unwrap()
@@ -104,12 +131,17 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
         for section in policy["git"]["pr_required_sections"].as_array().unwrap() {
             assert!(headings.contains(&section.as_str().unwrap()));
         }
-        // The template carries the class line (TSK-104): full tier tracks
-        // work, so its pull request names its class; the line is inert where
-        // tracking is off.
-        assert!(std::str::from_utf8(&template)
+        // Fill both the previously installed template and WP4's named-unit
+        // template; neither placeholder is itself an acceptable Task value.
+        let task_line = std::str::from_utf8(&template)
             .unwrap()
-            .contains("\nTask: `TSK-NNN | none: <reason>`\n"));
+            .lines()
+            .find(|line| line.starts_with("Task: "))
+            .unwrap();
+        assert!(matches!(
+            task_line,
+            "Task: `TSK-NNN | none: <reason>`" | "Task: `TSK-NNN | EPC-NNN | <unit name>`"
+        ));
         assert_clean(
             dir.path(),
             &fill_installed_template(std::str::from_utf8(&template).unwrap()),
@@ -121,10 +153,7 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             template
         );
         assert_eq!(read_policy(dir.path()), policy);
-        assert_clean(
-            dir.path(),
-            &format!("Task: none: clarify the result\n\n{BODY}"),
-        );
+        assert_clean(dir.path(), BODY);
     }
 }
 
@@ -377,12 +406,12 @@ fn template_update_merges_custom_prose_and_adds_template_to_old_minimal() {
 }
 
 #[test]
-fn rendered_budget_detects_epic_target_and_markdown_failures_reach_cli() {
+fn presentation_keeps_defect_warnings_without_size_budgets() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
     let body = format!("{BODY}\n{}", "record\n".repeat(45));
     let task = ci_with_body(dir.path(), &body);
-    assert!(String::from_utf8_lossy(&task.stderr).contains("aim for 65"));
+    assert!(!String::from_utf8_lossy(&task.stderr).contains("aim for 65"));
     let epic = run_in(
         dir.path(),
         &[
@@ -416,10 +445,8 @@ fn rendered_budget_detects_epic_target_and_markdown_failures_reach_cli() {
 /// missing heading: that would hide a template/default-policy mismatch.
 fn fill_installed_template(template: &str) -> String {
     template
-        .replace(
-            "Task: `TSK-NNN | none: <reason>`",
-            "Task: none: clarify the result",
-        )
+        .replace("Task: `TSK-NNN | none: <reason>`", "Task: TSK-001")
+        .replace("Task: `TSK-NNN | EPC-NNN | <unit name>`", "Task: TSK-001")
         .replace(
             "## Summary\n",
             "## Summary\n\nClarify the command's result.\n",
@@ -603,4 +630,114 @@ fn bitbucket_missing_channel_warns_but_explicit_empty_bodies_fail() {
     let supplied = run(Some(BODY), &[]);
     assert_eq!(supplied.status.code(), Some(0));
     assert!(!String::from_utf8_lossy(&supplied.stderr).contains("was not supplied"));
+}
+
+#[test]
+fn release_impact_depends_on_base_or_breaking_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let mut policy = json!({"schema_version": 1, "git": {}});
+    policy["git"]["pr_required_sections"] =
+        json!(["Summary", "Changes", "Reviews", "Release impact"]);
+    policy["git"]["pr_release_impact"] = json!("block");
+    policy["git"]["protected_branches"] = json!(["main", "release/*"]);
+    write_policy(dir.path(), &policy);
+    git(dir.path(), &["branch", "integration/line", "main"]);
+    let body = BODY.split("## Release impact").next().unwrap();
+    git(dir.path(), &["branch", "integration/main", "main"]);
+    git(dir.path(), &["branch", "release/stable", "main"]);
+    for (base, accepted) in [
+        ("integration/line", true),
+        ("integration/main", true),
+        ("main", false),
+        ("refs/heads/main", false),
+        ("release/stable", false),
+    ] {
+        let out = run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                base,
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/test",
+                "--pr-body",
+                body,
+            ],
+        );
+        assert_eq!(
+            out.status.success(),
+            accepted,
+            "{base}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    git(
+        dir.path(),
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "feat!: change the interface",
+            "-m",
+            "BREAKING CHANGE: use the new interface",
+        ],
+    );
+    let out = run_in(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "integration/line",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/test",
+            "--pr-body",
+            body,
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Release impact"));
+}
+
+#[test]
+fn mapped_release_heading_is_optional_on_line_but_validated_when_present() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    git(dir.path(), &["branch", "integration/line", "main"]);
+    let policy = json!({"schema_version":1,"git":{
+        "pr_required_sections":["Summary","Changes","Reviews","Release notes"],
+        "pr_release_impact":"block",
+        "pr_section_mapping":{"state":"accepted","headings":{"Release impact":"Release notes"},"decided":"2026-09-29"}
+    }});
+    write_policy(dir.path(), &policy);
+    let run = |body: &str, base: &str| {
+        run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                base,
+                "--branch",
+                "feat/test",
+                "--pr-body",
+                body,
+            ],
+        )
+    };
+    let absent = BODY.split("## Release impact").next().unwrap();
+    assert!(run(absent, "integration/line").status.success());
+    let valid = BODY.replace("## Release impact", "## Release notes");
+    let out = run(&valid, "main");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let invalid = valid.replace("Impact: patch", "Impact: invalid");
+    assert!(!run(&invalid, "integration/line").status.success());
+    assert!(!run(absent, "main").status.success());
 }
