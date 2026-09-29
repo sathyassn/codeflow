@@ -3506,6 +3506,52 @@ fn push_set_checks_only_the_own_commits_of_a_branch_rebased_onto_a_moved_line() 
 }
 
 #[test]
+fn push_set_checks_only_the_own_commits_of_a_branch_that_merged_the_line_twice() {
+    // TSK-165: a pushed task branch merges its moved line, the line moves
+    // again, and the branch merges it once more before the next push. Both
+    // line tips border the range; the older one's successors are history the
+    // destination holds through the line, so they are never checked again.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
+    let merge = |message: &str| {
+        git(
+            local.path(),
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                message,
+                "dest/integration/line",
+            ],
+        );
+    };
+    merge("chore: take the line");
+    git(local.path(), &["checkout", "-q", "line"]);
+    commit_file(
+        local.path(),
+        "line3.txt",
+        "line3\n",
+        "Legacy line subject three.",
+    );
+    receive(bare.path(), local.path(), "line:integration/line");
+    git(local.path(), &["fetch", "-q", "dest"]);
+    git(local.path(), &["checkout", "-q", "task/t"]);
+    merge("chore: take the line again");
+    let head = commit_file(local.path(), "u.txt", "u\n", "feat: add u");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &head, &old);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("Legacy line subject"), "{err}");
+
+    // A bad own commit after the second merge still blocks.
+    let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject"), "{err}");
+}
+
+#[test]
 fn push_set_blocks_a_rewrite_that_drops_a_commit_and_adds_a_bad_one() {
     // The rewrite drops the branch's second commit, adds a bad one and moves
     // onto the line's new tip. The dropped commit's history does not hide

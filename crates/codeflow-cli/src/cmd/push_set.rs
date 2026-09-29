@@ -653,7 +653,7 @@ fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option
     }
     let note = match destination.advertised(root) {
         Advertised::Tips(tips) if !tips.is_empty() => {
-            return bounded_by(root, &r.local_sha, tips.iter())
+            return bounded_by(root, &r.local_sha, tips.iter(), None)
                 .map(|base| RangeBase { base, note: None });
         }
         Advertised::Tips(_) => None,
@@ -711,8 +711,13 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
     let old = &r.remote_sha;
     let (base, failed) = match destination.advertised(root) {
         Advertised::Tips(tips) => (
-            bounded_by(root, &r.local_sha, std::iter::once(old).chain(tips))
-                .unwrap_or_else(|| old.clone()),
+            bounded_by(
+                root,
+                &r.local_sha,
+                std::iter::once(old).chain(tips),
+                Some(old),
+            )
+            .unwrap_or_else(|| old.clone()),
             None,
         ),
         Advertised::Failed(why) => (old.clone(), Some(why)),
@@ -755,22 +760,78 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
     RangeBase { base, note }
 }
 
-/// The base of the commits in `local_sha` not reachable from `known`: see
-/// [`boundary`]. `None` when git fails or no boundary exists (no shared
-/// history).
+/// The base of the commits in `local_sha` not reachable from `known`: the
+/// pushed sha itself when nothing is new, else the boundary [`narrowest`]
+/// picks, where `own` (the branch's own advertised sha) is not another ref.
+/// `None` when git fails or no boundary exists (no shared history).
 fn bounded_by<'a>(
     root: &Path,
     local_sha: &str,
     known: impl Iterator<Item = &'a String>,
+    own: Option<&str>,
 ) -> Option<String> {
+    let known: Vec<&String> = known.collect();
     let mut input = format!("{local_sha}\n");
-    for sha in known {
+    for sha in &known {
         input.push('^');
         input.push_str(sha);
         input.push('\n');
     }
     let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
-    boundary(&listed, local_sha, None).map(|found| found.base)
+    if listed.trim().is_empty() {
+        return Some(local_sha.to_string());
+    }
+    let boundaries: Vec<&str> = listed
+        .lines()
+        .filter_map(|line| line.strip_prefix('-'))
+        .collect();
+    let others: Vec<&String> = known
+        .into_iter()
+        .filter(|sha| Some(sha.as_str()) != own)
+        .collect();
+    narrowest(root, local_sha, &boundaries, own, &others).map(str::to_string)
+}
+
+/// The boundary to take as the range base. One base cannot leave out every
+/// known tip, so take the one whose range holds the fewest foreign commits,
+/// then the fewest commits. A foreign commit is one another destination ref
+/// holds and the branch's own history (`own`) does not: the branch's own
+/// earlier commits may be checked again, another line's history never is
+/// when a boundary avoids it. A branch that merged its moved line twice
+/// borders both line tips, and the older one would bring in the newer
+/// one's commits (TSK-165).
+fn narrowest<'b>(
+    root: &Path,
+    local_sha: &str,
+    boundaries: &[&'b str],
+    own: Option<&str>,
+    others: &[&String],
+) -> Option<&'b str> {
+    if boundaries.len() < 2 {
+        return boundaries.first().copied();
+    }
+    let count = |input: &str| {
+        git_input(root, &["rev-list", "--count", "--stdin"], input)
+            .and_then(|n| n.trim().parse::<usize>().ok())
+            .unwrap_or(usize::MAX)
+    };
+    boundaries.iter().copied().min_by_key(|base| {
+        let range = format!("{local_sha}\n^{base}\n");
+        let all = count(&range);
+        let mut not_own = range;
+        if let Some(own) = own {
+            not_own.push('^');
+            not_own.push_str(own);
+            not_own.push('\n');
+        }
+        let mut fresh = not_own.clone();
+        for sha in others {
+            fresh.push('^');
+            fresh.push_str(sha);
+            fresh.push('\n');
+        }
+        (count(&not_own).saturating_sub(count(&fresh)), all)
+    })
 }
 
 /// The base from `rev-list --boundary` output: its first boundary commit, or
