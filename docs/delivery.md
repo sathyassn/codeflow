@@ -25,8 +25,10 @@ a person merges there.
 
 It is for the operator who runs agents and wants to know what to approve and
 merge, and for a contributor landing a change. It is not a plan per task, a
-review capped at a number of rounds, or a full gate per pull request; those
-were retired by ADR-0076 without lowering any quality floor. Where durable
+review capped at a number of rounds, or a full gate for each pull request in
+a batch; those were retired by ADR-0076 without lowering any quality floor,
+and a standalone pull request still runs its own gate as its own candidate.
+Where durable
 tracking is inactive (the standard and minimal tiers), the same flow runs with
 the harness's tracked unit in place of the task record.
 
