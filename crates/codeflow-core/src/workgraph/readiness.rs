@@ -743,83 +743,124 @@ pub fn claim(repo_root: &Path, task_id: &str) -> Result<Claim, String> {
     claim_on(repo_root, task_id, &[])
 }
 
-/// A prospective reviewed stack for a waiting task, without mutating refs.
-///
-/// # Errors
-/// Refuses missing review evidence, ambiguous tips or ordinary readiness failures.
-pub fn reviewed_stack_hint(
-    root: &Path,
-    task_id: &str,
-    target: &str,
-    lookup: &dyn Fn(&str, &str) -> Result<bool, String>,
-) -> Result<Vec<String>, String> {
-    use super::work_start::{reviewed_pins, stack_base, task_id_from_branch};
-    let repo = Repository::discover(root).map_err(|error| error.to_string())?;
-    let (_, target_tip) = resolve_target(root, &repo, target)?.ok_or("target is unavailable")?;
-    let records = records_from_tree(
-        &repo,
-        &repo
-            .find_commit(target_tip)
-            .and_then(|c| c.tree())
-            .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    let task = records.get(task_id).ok_or("task not on target")?;
-    let mut values = Vec::new();
-    for dependency in &task.depends_on {
-        if dependency.kind != super::deps::DependencyKind::Code
-            || records
-                .get(&dependency.id)
-                .is_some_and(|r| r.status == "complete")
-        {
-            continue;
-        }
-        let mut tips = BTreeSet::new();
-        for branch in repo.branches(None).map_err(|error| error.to_string())? {
-            let (branch, kind) = branch.map_err(|error| error.to_string())?;
-            let Some(name) = branch.name().map_err(|error| error.to_string())? else {
+/// The reads behind `work next`'s reviewed-stack hints, made once per
+/// invocation and shared by every waiting task: the branches by the task id
+/// they carry, each target and tree's records, and each review answer.
+pub struct StackHints {
+    repo: Repository,
+    branches: Option<super::work_start::PinBranches>,
+    targets: BTreeMap<String, Result<git2::Oid, String>>,
+    records: BTreeMap<git2::Oid, Result<Rc<BTreeMap<String, Record>>, String>>,
+    reviews: std::cell::RefCell<BTreeMap<(String, String), Result<bool, String>>>,
+}
+
+impl StackHints {
+    /// Open the repository at `root`.
+    ///
+    /// # Errors
+    /// Returns the reason the repository cannot be opened.
+    pub fn new(root: &Path) -> Result<Self, String> {
+        Ok(Self {
+            repo: Repository::discover(root).map_err(|error| error.to_string())?,
+            branches: None,
+            targets: BTreeMap::new(),
+            records: BTreeMap::new(),
+            reviews: std::cell::RefCell::default(),
+        })
+    }
+
+    fn target_tip(&mut self, root: &Path, target: &str) -> Result<git2::Oid, String> {
+        let repo = &self.repo;
+        self.targets
+            .entry(target.to_string())
+            .or_insert_with(|| {
+                resolve_target(root, repo, target)?
+                    .map(|(_, tip)| tip)
+                    .ok_or_else(|| "target is unavailable".to_string())
+            })
+            .clone()
+    }
+
+    fn records_at(&mut self, tip: git2::Oid) -> Result<Rc<BTreeMap<String, Record>>, String> {
+        let repo = &self.repo;
+        self.records
+            .entry(tip)
+            .or_insert_with(|| {
+                let tree = repo
+                    .find_commit(tip)
+                    .and_then(|c| c.tree())
+                    .map_err(|error| error.to_string())?;
+                records_from_tree(repo, &tree)
+                    .map(Rc::new)
+                    .map_err(|error| error.to_string())
+            })
+            .clone()
+    }
+
+    /// A prospective reviewed stack for a waiting task, without mutating
+    /// refs: the `TSK-NNN@<sha>` pins that would start it. `lookup` is asked
+    /// once per branch and revision.
+    ///
+    /// # Errors
+    /// Refuses missing review evidence, ambiguous tips or ordinary readiness failures.
+    pub fn hint(
+        &mut self,
+        root: &Path,
+        task_id: &str,
+        target: &str,
+        lookup: &dyn Fn(&str, &str) -> Result<bool, String>,
+    ) -> Result<Vec<String>, String> {
+        use super::work_start::{reviewed_pins_in, stack_base_in, PinBranches};
+        let target_tip = self.target_tip(root, target)?;
+        let records = self.records_at(target_tip)?;
+        let task = records.get(task_id).ok_or("task not on target")?;
+        let mut values = Vec::new();
+        for dependency in &task.depends_on {
+            if dependency.kind != super::deps::DependencyKind::Code
+                || records
+                    .get(&dependency.id)
+                    .is_some_and(|r| r.status == "complete")
+            {
                 continue;
-            };
-            let name = if kind == BranchType::Remote {
-                name.split_once('/').map_or(name, |(_, name)| name)
-            } else {
-                name
-            };
-            if task_id_from_branch(root, name).as_deref() == Some(dependency.id.as_str()) {
-                tips.insert(
-                    branch
-                        .get()
-                        .peel_to_commit()
-                        .map_err(|error| error.to_string())?
-                        .id(),
-                );
             }
+            let tips =
+                PinBranches::once(&mut self.branches, &self.repo)?.tips_of(&dependency.id)?;
+            if tips.len() != 1 {
+                return Err("predecessor has no unique visible tip".into());
+            }
+            values.push(format!(
+                "{}@{}",
+                dependency.id,
+                tips.first().ok_or("predecessor has no tip")?
+            ));
         }
-        if tips.len() != 1 {
-            return Err("predecessor has no unique visible tip".into());
+        if values.is_empty() {
+            return Err("no unlanded code dependencies".into());
         }
-        values.push(format!(
-            "{}@{}",
-            dependency.id,
-            tips.first().ok_or("predecessor has no tip")?
-        ));
-    }
-    if values.is_empty() {
-        return Err("no unlanded code dependencies".into());
-    }
-    let pins = reviewed_pins(root, &values, lookup)?;
-    let tip = stack_base(root, &pins)?.ok_or("no prospective base")?;
-    let records = records_from_tree(
-        &repo,
-        &repo
-            .find_commit(tip)
-            .and_then(|c| c.tree())
-            .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    super::work_start::validate_anchored_task_on(&repo, &records, task_id, target, &pins)
+        let reviewed = |branch: &str, sha: &str| {
+            self.reviews
+                .borrow_mut()
+                .entry((branch.to_string(), sha.to_string()))
+                .or_insert_with(|| lookup(branch, sha))
+                .clone()
+        };
+        // Only whether every pin holds matters here, so review evidence,
+        // asked once per pin, is checked before the pinned tree is read.
+        let pins = reviewed_pins_in(&self.repo, &mut self.branches, &values, &reviewed, true)?;
+        let tip =
+            stack_base_in(&self.repo, &mut self.branches, &pins)?.ok_or("no prospective base")?;
+        let records = self.records_at(tip)?;
+        super::work_start::validate_anchored_task_in(
+            &self.repo,
+            &records,
+            task_id,
+            target,
+            &pins,
+            &mut self.branches,
+        )
         .map_err(|error| error.to_string())?;
-    Ok(values)
+        Ok(values)
+    }
 }
 
 /// Refresh the refs used to resolve a claim before looking up review pins.

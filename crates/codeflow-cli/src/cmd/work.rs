@@ -82,15 +82,20 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
             .entries
             .retain(|entry| entry.epic_id.as_deref() == Some(epic));
     }
+    // One reader for every waiting task: the refs, records and review
+    // answers are read once per invocation, never once per task.
+    let mut hints = readiness::StackHints::new(&root);
+    let repositories = Repositories::new();
     for entry in &mut backlog.entries {
         if entry.state != State::Waiting {
             continue;
         }
-        if let Ok(pins) =
-            readiness::reviewed_stack_hint(&root, &entry.task_id, &entry.target, &|branch, sha| {
-                reviewed(&root, branch, sha)
-            })
-        {
+        let Ok(hints) = hints.as_mut() else {
+            break;
+        };
+        if let Ok(pins) = hints.hint(&root, &entry.task_id, &entry.target, &|branch, sha| {
+            reviewed(&root, &repositories, branch, sha)
+        }) {
             let noun = if pins.len() == 1 {
                 "that pin is"
             } else {
@@ -311,13 +316,28 @@ fn resolve_pins(
     root: &std::path::Path,
     on: &[String],
 ) -> Result<Vec<codeflow_core::workgraph::work_start::ReviewedPin>, String> {
+    let repositories = Repositories::new();
     codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha| {
-        reviewed(root, branch, sha)
+        reviewed(root, &repositories, branch, sha)
     })
 }
 
-fn reviewed(root: &std::path::Path, branch: &str, sha: &str) -> Result<bool, String> {
-    let repository = codeflow_core::workgraph::work_start::review_repository(root, branch)?;
+/// The review repositories, opened on first use and shared by every review
+/// lookup of one invocation.
+type Repositories =
+    std::cell::OnceCell<Result<codeflow_core::workgraph::work_start::ReviewRepositories, String>>;
+
+fn reviewed(
+    root: &std::path::Path,
+    repositories: &Repositories,
+    branch: &str,
+    sha: &str,
+) -> Result<bool, String> {
+    let repository = repositories
+        .get_or_init(|| codeflow_core::workgraph::work_start::ReviewRepositories::open(root))
+        .as_ref()
+        .map_err(Clone::clone)?
+        .repository(branch)?;
     let proof = pr_review(root, branch, &repository)?;
     if proof["headRefName"].as_str() != Some(branch)
         || proof["headRefOid"].as_str() != Some(sha)
