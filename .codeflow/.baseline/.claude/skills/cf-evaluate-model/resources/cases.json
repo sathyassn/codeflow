@@ -6059,7 +6059,8 @@
           "readiness_report_unprompted"
         ],
         "references": [
-          "tools/GH.md"
+          "tools/GH.md",
+          "README.md"
         ],
         "must_not": [
           "stops_after_pr_create",
@@ -6131,7 +6132,8 @@
           "next_action_is_human_merge"
         ],
         "references": [
-          "tools/GH.md"
+          "tools/GH.md",
+          "README.md"
         ],
         "must_not": [
           "agent_merges",

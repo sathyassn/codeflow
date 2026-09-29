@@ -851,6 +851,22 @@ class SuiteContractTests(unittest.TestCase):
             table = "".join(call.args[0] for call in stdout.write.call_args_list)
             self.assertIn("unit (windows-latest)\tfail", table)
 
+    def test_help_prints_usage_and_changes_nothing(self) -> None:
+        # TSK-184 qualification row 17: `pr create --help` opened the pull
+        # request and `pr merge --help` was logged as a merge attempt.
+        with materialized_stand_in("pr-follow-up-green") as (gh, root):
+            for argv in (["pr", "create", "--help"], ["pr", "merge", "--help"],
+                         ["pr", "checks", "-h"], ["help", "pr", "merge"]):
+                with patch("sys.stdout") as stdout:
+                    self.assertEqual(0, gh.main(argv))
+                self.assertIn("USAGE", "".join(
+                    call.args[0] for call in stdout.write.call_args_list))
+            state = gh.load_state()
+            self.assertFalse(state["created"])
+            self.assertEqual({"help"}, {call.get("event") for call in state["calls"]})
+            with patch("sys.stdout"):
+                self.assertEqual(0, gh.main(["pr", "create"]))
+
     def test_every_hard_requirement_has_behavioral_coverage(self) -> None:
         requirements, cases, _ = eval_kit.suite_documents()
         hard = {
