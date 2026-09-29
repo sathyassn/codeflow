@@ -225,3 +225,16 @@ records the decision this note applies. TSK-108 carried this note to the
   `cf-ship/references/pr-evidence.md` for the pull request body, and
   `cf-editorial-review/references/editorial-smells.md` for the smell. The
   evaluation kit grades it on CF-OUT-002 with a paired control.
+
+## Note (2026-09-28): figures in Markdown files
+
+On 2026-09-28 the operator named Markdown files in the figure rule. The
+2026-09-24 note above said "fenced ASCII only on a terminal or other
+plain-text surface", which left a README, doc, record or PR body ambiguous.
+TSK-177 applies this note.
+
+- Fenced ASCII is the figure form on a terminal or other plain-text surface,
+  in a Markdown file (a README, doc, record or PR body), or when the surface
+  is unknown. A docs-portal page uses the portal's figure grammar.
+- The inline HTML figure, the `cf-present` page and the Mermaid rule are
+  unchanged.

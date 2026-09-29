@@ -12,6 +12,13 @@ commands in `.codeflow/test-config.json` (what local `codeflow test` and the CI
 `codeflow gates` job run). It runs as a `codeflow test` target, so it fires both
 locally and in CI.
 
+It also holds two local-gate pins to CI (TSK-142). Each target that runs
+Node does so through `scripts/with-node.py` and a version file, and every
+`actions/setup-node` step for that directory, including one in the job that
+runs the full gate, pins the same version (AC-1). The present real-browser
+check is handed the `codeflow` binary the gate built, wherever
+`CARGO_TARGET_DIR` points (AC-2).
+
 Scope note: only the `rust` job is compared. Other jobs (coverage llvm-cov and
 doc-graph validation) run different tooling by design and are out of scope here.
 The local full gate runs the suite once under coverage plus the doctests; that
@@ -110,7 +117,154 @@ def ci_rust_job_commands(workflow: str) -> set[str]:
     return out
 
 
+# TSK-142 AC-1: a Node target names its version file to the launcher.
+WITH_NODE = re.compile(r"^python3 -B scripts/with-node\.py (\S+) '([^']+)'$")
+RUNS_NODE = re.compile(r"(^|[\s;&|(])(npm|npx|node)\s")
+EXACT_VERSION = re.compile(r"^v?(\d+\.\d+\.\d+)$")
+FULL_GATE = re.compile(r"^\s*run:\s*codeflow test --mode full\b", re.M)
+
+
+def with_node_parts(cmd: str) -> tuple[str | None, str]:
+    """(version file, inner command) of a target command; no file when the
+    command does not run through the launcher."""
+    match = WITH_NODE.match(norm(cmd))
+    return (match.group(1), match.group(2)) if match else (None, cmd)
+
+
+def node_pin(cmd: str) -> str | None:
+    return with_node_parts(cmd)[0]
+
+
+def workflow_jobs(workflow: str) -> dict[str, str]:
+    """Each top-level job's text, keyed by job id."""
+    jobs: dict[str, list[str]] = {}
+    current = None
+    for line in workflow.splitlines():
+        job = re.match(r"^ {2}([A-Za-z0-9_-]+):\s*$", line)
+        if job:
+            current = job.group(1)
+            jobs[current] = []
+        elif re.match(r"^\S", line):
+            current = None
+        elif current:
+            jobs[current].append(line)
+    return {name: "\n".join(lines) for name, lines in jobs.items()}
+
+
+def setup_node_steps(job: str) -> list[tuple[str, list[str]]]:
+    """(node-version, lock files) of each setup-node step in a job."""
+    steps = re.split(r"\n(?= {6}- )", job)
+    found = []
+    for step in steps:
+        if "uses: actions/setup-node@" not in step:
+            continue
+        version = re.search(r"node-version:\s*['\"]?([^\s'\"]+)", step)
+        locks = re.findall(r"[\w./-]*package-lock\.json", step)
+        found.append((version.group(1) if version else "", locks))
+    return found
+
+
+def version_file_problems(root: Path, pin: str) -> tuple[str | None, list[str]]:
+    path = root / pin
+    if not path.is_file():
+        return None, [f"{pin} does not exist; it must hold the Node version "
+                      "its target runs on"]
+    text = path.read_text(encoding="utf-8").strip()
+    match = EXACT_VERSION.match(text)
+    if not match:
+        return None, [f"{pin} must hold one exact Node version such as 24.18.0; "
+                      f"it holds {text!r}"]
+    return match.group(1), []
+
+
+def node_pin_problems(cfg: dict, workflow: str, root: Path = ROOT) -> list[str]:
+    """Node targets whose local pin and CI pins disagree (TSK-142 AC-1)."""
+    problems: list[str] = []
+    jobs = workflow_jobs(workflow)
+    gate_jobs = [name for name, text in jobs.items() if FULL_GATE.search(text)]
+    for target in cfg.get("targets", []):
+        name = target.get("name")
+        cmd = norm(target.get("modes", {}).get("full", {}).get("command", ""))
+        if not cmd or not applicable(target):
+            continue
+        pin, inner = with_node_parts(cmd)
+        if pin is None:
+            if RUNS_NODE.search(cmd):
+                problems.append(
+                    f"target '{name}' runs Node without a Node pin; run it as "
+                    "python3 -B scripts/with-node.py <version file> '<command>'")
+            continue
+        version, found = version_file_problems(root, pin)
+        problems += [f"target '{name}': {p}" for p in found]
+        if version is None:
+            continue
+        directory = str(Path(pin).parent).replace("\\", "/")
+        package = root / directory / "package.json"
+        if package.is_file():
+            engines = json.loads(package.read_text()).get("engines", {}).get("node", "")
+            exact = EXACT_VERSION.match(engines)
+            if exact and exact.group(1) != version:
+                problems.append(
+                    f"target '{name}': {directory}/package.json engines pins Node "
+                    f"{exact.group(1)} but {pin} pins {version}")
+        installed_for_gate = False
+        for job, text in jobs.items():
+            for ci_version, locks in setup_node_steps(text):
+                if not any(lock.startswith(f"{directory}/") for lock in locks):
+                    continue
+                if ci_version != version:
+                    problems.append(
+                        f"target '{name}': CI job '{job}' pins Node {ci_version} "
+                        f"for {directory}, but {pin} pins {version}")
+                elif job in gate_jobs:
+                    installed_for_gate = True
+        if not installed_for_gate:
+            problems.append(
+                f"target '{name}': the CI job that runs the full gate "
+                f"({', '.join(gate_jobs) or 'none found'}) does not install Node "
+                f"{version} for {directory} (an actions/setup-node step with "
+                f"{directory}/package-lock.json in cache-dependency-path)")
+    return problems
+
+
+# TSK-142 AC-2: the real-browser check runs the binary this gate built. The
+# directory is resolved from the repository root, where the gate runs cargo,
+# so a relative or absolute CARGO_TARGET_DIR both work.
+REAL_BROWSER = "npm run check:real-browser --prefix crates/codeflow-present/web"
+GATE_BINARY = ('CF_PRESENT_CODEFLOW="$(cd "${CARGO_TARGET_DIR:-target}" && pwd -P)'
+               '/debug/codeflow"')
+
+
+def gate_binary_problems(cfg: dict) -> list[str]:
+    problems = []
+    for target in cfg.get("targets", []):
+        cmd = norm(target.get("modes", {}).get("full", {}).get("command", ""))
+        if not re.search(r"check:real-browser(\s|$)", cmd):
+            continue
+        if f"{GATE_BINARY} {REAL_BROWSER}" not in cmd:
+            problems.append(
+                f"target '{target.get('name')}' runs the real-browser check without "
+                "the binary the gate built; prefix it with "
+                f"{GATE_BINARY} so it follows CARGO_TARGET_DIR")
+    return problems
+
+
 def main() -> int:
+    cfg = json.loads(CONFIG.read_text())
+    workflow = WORKFLOW.read_text()
+    pins = node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
+    for problem in pins:
+        print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
+    status = rust_parity()
+    if pins:
+        return 1
+    if status == 0:
+        print("gate-parity OK: Node targets run on their CI pins, and the "
+              "real-browser check runs the gate's binary")
+    return status
+
+
+def rust_parity() -> int:
     notes: list[str] = []
     local = local_rust_commands(json.loads(CONFIG.read_text()), notes)
     ci = ci_rust_job_commands(WORKFLOW.read_text())

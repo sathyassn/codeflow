@@ -1230,11 +1230,13 @@ const HEADLESS_PROBES: &[&str] = &[
     "codex --model demo exec x",
     "codex --model=demo exec x",
     "codex -c model=\"demo\" exec x",
-    "claude --help -p",
 ];
 
 /// The same review's controls: commands that are not headless runs.
 const HEADLESS_CONTROLS: &[&str] = &[
+    // Prints help and exits; a headless run until TSK-141 AC-3.
+    "claude --help -p",
+    "codex exec --help",
     "claude --help",
     "codex login",
     "grok --version",
@@ -1288,8 +1290,9 @@ fn exec_guard_classifies_every_review_probe() {
 
 #[test]
 fn exec_guard_flags_headless_peer_runs_per_level() {
-    // TSK-136 AC-1: each headless form warns by default with the rule and the
-    // interactive path, is refused at block, and nothing else is touched.
+    // TSK-136 AC-1 as amended by ADR-0075 D4: each headless form is refused
+    // by default and at block, warns with the rule and the interactive path
+    // at warn, and nothing else is touched.
     let runs = [
         "claude -p 'review this'",
         "codex exec 'fix it'",
@@ -1323,7 +1326,7 @@ fn exec_guard_flags_headless_peer_runs_per_level() {
             let out = guard(command);
             let err = String::from_utf8_lossy(&out.stderr).to_string();
             match level {
-                "block" => {
+                "block" | "default" => {
                     assert_eq!(out.status.code(), Some(2), "{level}: {command}: {err}");
                     assert!(err.contains("security.headless_peer_runs"), "{err}");
                 }
@@ -3636,6 +3639,140 @@ fn push_set_checks_only_the_own_commits_of_a_new_branch_off_a_line() {
     assert!(!err.contains("Legacy line subject."), "{err}");
 }
 
+/// A valid task record on the advertised line, before the task's own work.
+fn declared_line(bare: &Path, local: &Path) -> String {
+    integration_line(bare, local);
+    std::fs::create_dir_all(local.join("project-management/tasks")).unwrap();
+    let tip = commit_file(
+        local,
+        "project-management/tasks/TSK-001.md",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: integration/line\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
+        "docs: declare the task target",
+    );
+    receive(bare, local, "line:integration/line");
+    git(local, &["fetch", "-q", "dest"]);
+    git(local, &["branch", "-f", "integration/line", "line"]);
+    tip
+}
+
+fn declared_task_on_moved_line(bare: &Path, local: &Path, own: &[(&str, &str)]) -> String {
+    declared_line(bare, local);
+    git(
+        local,
+        &["checkout", "-q", "-b", "task/TSK-001-change", "line"],
+    );
+    for (file, message) in own {
+        commit_file(local, file, "t\n", message);
+    }
+    let old = rev(local, "HEAD");
+    receive(bare, local, "task/TSK-001-change:task/TSK-001-change");
+    git(local, &["checkout", "-q", "line"]);
+    commit_file(local, "line2.txt", "line2\n", "Legacy line subject two.");
+    receive(bare, local, "line:integration/line");
+    git(local, &["fetch", "-q", "dest"]);
+    git(local, &["branch", "-f", "integration/line", "line"]);
+    git(local, &["checkout", "-q", "task/TSK-001-change"]);
+    old
+}
+
+#[test]
+fn push_set_declared_target_rebase_checks_only_own_commits() {
+    // TSK-115: a task branch rebased onto its moved integration line and
+    // force-pushed. The line's new commit is on the destination through the
+    // line's own ref, so only the task's commit is checked.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let old = declared_task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
+    git(local.path(), &["rebase", "-q", "dest/integration/line"]);
+    let rebased = rev(local.path(), "HEAD");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &rebased, &old);
+    assert!(
+        err.contains("uses advertised target 'integration/line'"),
+        "{err}"
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("'task/TSK-001-change' rewrites the destination's")
+            && err.contains("checks 1 commit(s), leaving out history"),
+        "{err}"
+    );
+    assert!(!err.contains("Legacy line subject two."), "{err}");
+
+    // A bad own commit in the rebased branch still blocks.
+    let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &bad, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject two."), "{err}");
+}
+
+#[test]
+fn push_set_declared_target_rewrite_checks_the_added_bad_commit() {
+    // The rewrite drops the branch's second commit, adds a bad one and moves
+    // onto the line's new tip. The dropped commit's history does not hide
+    // the bad one, and the line's commit is not checked again.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let old = declared_task_on_moved_line(
+        bare.path(),
+        local.path(),
+        &[("a.txt", "feat: add a"), ("b.txt", "feat: add b")],
+    );
+    git(
+        local.path(),
+        &[
+            "rebase",
+            "-q",
+            "--onto",
+            "dest/integration/line",
+            "line~1",
+            "HEAD~1",
+        ],
+    );
+    let bad = commit_file(local.path(), "c.txt", "c\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &bad, &old);
+    assert!(
+        err.contains("uses advertised target 'integration/line'"),
+        "{err}"
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject two."), "{err}");
+    assert!(
+        err.contains("checks 2 commit(s), leaving out history"),
+        "{err}"
+    );
+}
+
+#[test]
+fn push_set_declared_target_new_branch_checks_only_own_commits() {
+    // The task record anchors the target on the line before the branch starts.
+    // The clean target selection reports its base without a failure remedy.
+    let (bare, local) = stable_destination("chore: legacy base");
+    declared_line(bare.path(), local.path());
+    git(
+        local.path(),
+        &["checkout", "-q", "-b", "task/TSK-001-change", "line"],
+    );
+    let good = commit_file(local.path(), "n.txt", "n\n", "feat: add new work");
+    let (code, err) = push_hook(local.path(), "dest", &[("task/TSK-001-change", &good)]);
+    assert!(
+        err.contains("uses advertised target 'integration/line'"),
+        "{err}"
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("fix the findings above"), "{err}");
+    assert!(
+        !err.contains("did not run for 'task/TSK-001-change'"),
+        "{err}"
+    );
+    assert!(!err.contains("ls-remote"), "{err}");
+
+    let bad = commit_file(local.path(), "m.txt", "m\n", "Not conventional.");
+    let (code, err) = push_hook(local.path(), "dest", &[("task/TSK-001-change", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject."), "{err}");
+}
+
 #[test]
 fn push_set_ignores_a_tracking_ref_the_destination_deleted() {
     // A sibling branch held a bad commit, then was deleted on the
@@ -4184,8 +4321,7 @@ fn release_of_both_lines(local: &Path, a: &str, b: &str) -> String {
 #[test]
 fn push_to_an_existing_branch_without_a_list_is_judged_by_its_own_list() {
     // The release branch exists on the destination at the list-less seed.
-    // The range is bounded by every destination tip, so its base is a line
-    // tip whose list lacks the other line's records; the branch's own old
+    // The range starts at the release branch's advertised old tip. That
     // tip has no list, so the push introduces the migration and the head's
     // list governs, every entry printed.
     let (bare, local, a, b) = two_lines_with_lists();
@@ -4206,9 +4342,9 @@ fn push_to_an_existing_branch_without_a_list_is_judged_by_its_own_list() {
 fn push_to_an_existing_branch_with_a_list_is_judged_by_that_list() {
     // The release branch already holds line a with list [a]. The push merges
     // line b, adds a record of its own and lists everything. The old tip's
-    // list governs: line a's record stays legacy although the range's base
-    // is line b's tip (whose list lacks it), and the push's own record is
-    // new, since a list edit takes effect only after it lands.
+    // list governs: line a's record stays legacy. Line b's record and the
+    // push's own record are both new to this target and must satisfy its
+    // rules, since a list edit takes effect only after it lands.
     let (bare, local, a, b) = two_lines_with_lists();
     git(local.path(), &["checkout", "-q", "-b", "release", "main"]);
     merge_line(local.path(), "a");
@@ -4229,7 +4365,10 @@ fn push_to_an_existing_branch_with_a_list_is_judged_by_that_list() {
         "{err}"
     );
     assert!(!err.contains("TSK-001.md"), "{err}");
-    assert!(!err.contains("TSK-002.md"), "{err}");
+    assert!(
+        err.contains("TSK-002.md: a complete record needs an acceptance block"),
+        "{err}"
+    );
     assert!(
         err.contains("edits work_records_baseline") && err.contains(&own),
         "{err}"
@@ -4655,4 +4794,338 @@ fn a_held_ledger_lock_neither_stalls_nor_changes_a_verdict() {
     let refused = guard_run("git push origin main", dir.path());
     assert_eq!(refused.status.code(), Some(2));
     assert_eq!(refusal_events(dir.path()).len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// TSK-141 AC-4 (SPC-013 R-85 as amended): a hook that git fires while a
+// codeflow command runs dispatches to that same codeflow binary, never to
+// another `codeflow` found first on PATH.
+
+/// A `codeflow` stub for PATH. `refuse` answers the capability probe as an
+/// older binary and fails every hook; otherwise it records each call in
+/// `called` and succeeds.
+#[cfg(unix)]
+fn path_stub(dir: &Path, refuse: bool) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).unwrap();
+    let marker = dir.join("called");
+    let body = if refuse {
+        "if [ \"$1 $2\" = \"git-hook capabilities\" ]; then echo 'hooks 1'; exit 0; fi\n\
+         echo \"stub codeflow on PATH refused: $*\" >&2\nexit 1\n"
+            .to_string()
+    } else {
+        format!("echo \"$*\" >> '{}'\nexit 0\n", marker.display())
+    };
+    let stub = dir.join("codeflow");
+    std::fs::write(&stub, format!("#!/bin/sh\n{body}")).unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    marker
+}
+
+/// PATH with `first` ahead of the built binary's directory.
+fn path_with(first: &[&Path]) -> std::ffi::OsString {
+    let exe = Path::new(env!("CARGO_BIN_EXE_codeflow"));
+    std::env::join_paths(
+        first
+            .iter()
+            .map(|dir| dir.to_path_buf())
+            .chain(exe.parent().map(Path::to_path_buf))
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+    )
+    .unwrap()
+}
+
+/// Run `binary` with PATH set to `path` and the test's isolation.
+fn codeflow_at(binary: &Path, dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> Output {
+    let mut cmd = Command::new(binary);
+    cmd.env("CODEFLOW_HOME", isolated_home())
+        .env("PATH", path)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Hooks")
+        .env("GIT_AUTHOR_EMAIL", "hooks@example.test")
+        .env("GIT_COMMITTER_NAME", "Hooks")
+        .env("GIT_COMMITTER_EMAIL", "hooks@example.test")
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .args(args)
+        .current_dir(dir);
+    cmd.output().unwrap()
+}
+
+/// Git with PATH set to `path`, outside any codeflow command.
+fn git_at(dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> Output {
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Hooks")
+        .env("GIT_AUTHOR_EMAIL", "hooks@example.test")
+        .env("GIT_COMMITTER_NAME", "Hooks")
+        .env("GIT_COMMITTER_EMAIL", "hooks@example.test")
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .unwrap()
+}
+
+fn both(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+const REGISTRY_LINE: &str = "integration/EPC-001-dispatch";
+
+/// A full-tier project on a line pushed to a bare remote, its registry
+/// seeded. Returns (tempdir, project).
+#[cfg(unix)]
+fn registry_project() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = path_with(&[]);
+    let exe = Path::new(env!("CARGO_BIN_EXE_codeflow"));
+    let bare = dir.path().join("remote.git");
+    let ok = |out: Output, what: &str| assert!(out.status.success(), "{what}: {}", both(&out));
+    ok(
+        git_at(
+            dir.path(),
+            &plain,
+            &["init", "-q", "--bare", "-b", "main", "remote.git"],
+        ),
+        "bare",
+    );
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        codeflow_at(exe, &root, &plain, &["init", "--yes", "--full"]),
+        "init",
+    );
+    ok(
+        git_at(&root, &plain, &["switch", "-q", "-c", REGISTRY_LINE]),
+        "line",
+    );
+    ok(
+        git_at(
+            &root,
+            &plain,
+            &["remote", "add", "origin", bare.to_str().unwrap()],
+        ),
+        "remote",
+    );
+    ok(
+        git_at(&root, &plain, &["push", "-q", "origin", REGISTRY_LINE]),
+        "push",
+    );
+    ok(
+        codeflow_at(exe, &root, &plain, &["ids", "seed"]),
+        "ids seed",
+    );
+    ok(
+        codeflow_at(exe, &root, &plain, &["epic", "new", "dispatch outcome"]),
+        "epic new",
+    );
+    (dir, root)
+}
+
+/// `task new` pushes its reservation to the registry, and the pre-push hook
+/// git fires runs the calling binary, although an older `codeflow` that
+/// refuses the registry push is first on PATH. The control shows that stub
+/// does refuse when a hook is dispatched by PATH.
+#[cfg(unix)]
+#[test]
+fn task_new_issues_through_the_registry_push_with_an_older_codeflow_first_on_path() {
+    let (dir, root) = registry_project();
+    let older = dir.path().join("older");
+    path_stub(&older, true);
+    let path = path_with(&[&older]);
+    let exe = Path::new(env!("CARGO_BIN_EXE_codeflow"));
+
+    // Control: the same hook dispatched by PATH, outside codeflow, runs the
+    // stub and fails.
+    let control = git_at(&root, &path, &["push", "-q", "origin", REGISTRY_LINE]);
+    assert!(!control.status.success(), "{}", both(&control));
+    assert!(
+        both(&control).contains("stub codeflow on PATH refused"),
+        "{}",
+        both(&control)
+    );
+
+    let out = codeflow_at(
+        exe,
+        &root,
+        &path,
+        &[
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            REGISTRY_LINE,
+            "dispatched",
+        ],
+    );
+    assert!(out.status.success(), "{}", both(&out));
+    assert!(both(&out).contains("TSK-001"), "{}", both(&out));
+    assert!(!both(&out).contains("stub codeflow"), "{}", both(&out));
+}
+
+/// The designated binary is the caller's, whatever the environment offers:
+/// a poisoned inherited value, another build first on PATH, a launcher
+/// shim on PATH, or a caller whose path holds a space.
+#[cfg(unix)]
+#[test]
+fn a_hook_runs_the_calling_binary_and_never_another_codeflow() {
+    let (dir, root) = registry_project();
+    let exe = Path::new(env!("CARGO_BIN_EXE_codeflow"));
+    let other_build = dir.path().join("other-worktree/target/debug");
+    let other_called = path_stub(&other_build, false);
+    let launcher = dir.path().join("shims");
+    let launcher_called = path_stub(&launcher, false);
+    let refusing = dir.path().join("older");
+    path_stub(&refusing, true);
+
+    // A poisoned inherited value names the refusing stub.
+    let path = path_with(&[&other_build]);
+    let mut cmd = Command::new(exe);
+    cmd.env("CODEFLOW_HOME", isolated_home())
+        .env("PATH", &path)
+        .env("CODEFLOW_HOOK_BINARY", refusing.join("codeflow"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Hooks")
+        .env("GIT_AUTHOR_EMAIL", "hooks@example.test")
+        .env("GIT_COMMITTER_NAME", "Hooks")
+        .env("GIT_COMMITTER_EMAIL", "hooks@example.test")
+        .args([
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            REGISTRY_LINE,
+            "poisoned",
+        ])
+        .current_dir(&root);
+    let out = cmd.output().unwrap();
+    assert!(out.status.success(), "poisoned value: {}", both(&out));
+    assert!(!both(&out).contains("stub codeflow"), "{}", both(&out));
+
+    // A launcher shim first on PATH.
+    let out = codeflow_at(
+        exe,
+        &root,
+        &path_with(&[&launcher]),
+        &[
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            REGISTRY_LINE,
+            "launcher",
+        ],
+    );
+    assert!(out.status.success(), "launcher: {}", both(&out));
+
+    // A caller whose path holds a space, with the refusing stub on PATH.
+    let spaced = dir.path().join("bin dir");
+    std::fs::create_dir_all(&spaced).unwrap();
+    let copy = spaced.join("codeflow");
+    std::fs::copy(exe, &copy).unwrap();
+    let out = codeflow_at(
+        &copy,
+        &root,
+        &path_with(&[&refusing]),
+        &[
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            REGISTRY_LINE,
+            "spaced",
+        ],
+    );
+    assert!(out.status.success(), "spaced path: {}", both(&out));
+
+    assert!(!other_called.exists(), "another build ran a hook");
+    assert!(!launcher_called.exists(), "a launcher shim ran a hook");
+}
+
+/// A designated binary that is missing or not executable fails the hook;
+/// it never falls back to PATH or to a no-op.
+#[cfg(unix)]
+#[test]
+fn a_missing_or_non_executable_designated_binary_fails_the_hook() {
+    let (dir, root) = registry_project();
+    let plain = path_with(&[]);
+    let not_executable = dir.path().join("codeflow-not-executable");
+    std::fs::write(&not_executable, "#!/bin/sh\nexit 0\n").unwrap();
+    for designated in [dir.path().join("missing/codeflow"), not_executable] {
+        let out = Command::new("git")
+            .args(["push", "-q", "origin", REGISTRY_LINE])
+            .current_dir(&root)
+            .env("PATH", &plain)
+            .env("CODEFLOW_HOME", isolated_home())
+            .env("CODEFLOW_HOOK_BINARY", &designated)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "{}: {}",
+            designated.display(),
+            both(&out)
+        );
+        assert!(
+            both(&out).contains("missing or not executable"),
+            "{}: {}",
+            designated.display(),
+            both(&out)
+        );
+    }
+}
+
+/// The value is set only in the calling binary's git children: a child
+/// that is not git, such as a test target, inherits neither the value the
+/// caller set nor one it inherited.
+#[cfg(unix)]
+#[test]
+fn a_child_that_is_not_git_never_inherits_the_designated_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_repo(root, "feat/dispatch");
+    let seen = root.join("seen.txt");
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(
+        root.join(".codeflow/test-config.json"),
+        format!(
+            r#"{{"schema_version":"1.0","targets":[{{"name":"probe","enabled":true,"runner":"custom","modes":{{"full":{{"command":"if [ -n \"${{CODEFLOW_HOOK_BINARY+set}}\" ]; then echo set > '{}'; else echo unset > '{}'; fi"}}}}}}]}}"#,
+            seen.display(),
+            seen.display()
+        ),
+    )
+    .unwrap();
+    let out = codeflow()
+        .args(["test"])
+        .current_dir(root)
+        .env("CODEFLOW_HOOK_BINARY", "/poisoned/codeflow")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", both(&out));
+    assert_eq!(std::fs::read_to_string(&seen).unwrap().trim(), "unset");
 }

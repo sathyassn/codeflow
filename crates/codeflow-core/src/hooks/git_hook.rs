@@ -1117,13 +1117,12 @@ pub fn over_budget_note(
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::process::Command;
 
     use super::super::policy::PolicyLevel;
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -2229,7 +2228,7 @@ mod tests {
             let _ = p;
         };
         let git_try = |args: &[&str]| {
-            Command::new("git")
+            crate::git::command()
                 .args(args)
                 .current_dir(dir.path())
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -2488,7 +2487,7 @@ mod tests {
     }
 
     fn rev_parse(dir: &Path, what: &str) -> String {
-        let out = Command::new("git")
+        let out = crate::git::command()
             .args(["rev-parse", what])
             .current_dir(dir)
             .output()
