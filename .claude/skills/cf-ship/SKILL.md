@@ -82,7 +82,11 @@ description: Land finished work — docs and capability updates, then a PR throu
    (step 10 deletes the pushed branch after proof).
    Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 9. Confirm the landed state with `codeflow status`; report the final epic and
-   capability state.
+   capability state. After an epic-line landing, only when the project
+   configures a release branch matching its release pattern, R-120, and a
+   workflow integrating into it, follow
+   [release integration](references/pr-evidence.md#release-integration-after-landing).
+   Otherwise skip that step.
 10. Clean up after every landing, with proof, in the same step: whoever
     landed it runs cleanup, the primary after an integration-line landing
     and the session confirming a human merge into `main`, from outside the

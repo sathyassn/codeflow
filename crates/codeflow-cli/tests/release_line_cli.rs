@@ -3360,3 +3360,499 @@ fn the_policy_and_the_validator_refuse_what_would_blur_scope() {
         result.1
     );
 }
+
+#[allow(dead_code)]
+#[path = "../examples/release_integration.rs"]
+mod automation;
+
+/// Locate the repository-owned integration job without assuming its filename.
+fn integration_workflow() -> serde_yaml::Value {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");
+    let jobs: Vec<_> = std::fs::read_dir(root)
+        .unwrap()
+        .map(Result::unwrap)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "yml"))
+        .filter_map(|entry| {
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            let parsed: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
+            (!parsed["jobs"]["release-integration"].is_null()).then_some(parsed)
+        })
+        .collect();
+    assert_eq!(jobs.len(), 1, "one repository-owned integration job");
+    jobs.into_iter().next().unwrap()
+}
+
+#[test]
+fn automation_privileged_job_uses_default_branch_events() {
+    let workflow = integration_workflow();
+    let events = workflow["on"].as_mapping().unwrap();
+    assert!(
+        events
+            .keys()
+            .all(|key| matches!(key.as_str(), Some("workflow_run" | "schedule"))),
+        "write-token YAML must not be loaded from a pushed line or a task PR: {events:?}"
+    );
+    assert_eq!(
+        workflow["on"]["workflow_run"]["workflows"][0].as_str(),
+        Some("codeflow-release")
+    );
+    assert_eq!(
+        workflow["on"]["workflow_run"]["types"][0].as_str(),
+        Some("completed")
+    );
+    assert_eq!(
+        workflow["on"]["workflow_run"]["branches"][0].as_str(),
+        Some("integration/EPC-*")
+    );
+    let job = &workflow["jobs"]["release-integration"];
+    let condition = job["if"].as_str().unwrap();
+    for boundary in [
+        "github.event.workflow_run.event == 'push'",
+        "github.event.workflow_run.head_repository.full_name == github.repository",
+    ] {
+        assert!(
+            condition.contains(boundary),
+            "missing source boundary: {condition}"
+        );
+    }
+    assert_eq!(job["permissions"]["contents"].as_str(), Some("write"));
+    assert_eq!(
+        job["steps"][0]["with"]["ref"].as_str(),
+        Some("${{ github.sha }}")
+    );
+    assert_eq!(
+        job["steps"][0]["with"]["persist-credentials"].as_bool(),
+        Some(false)
+    );
+    let integrate = job["steps"].as_sequence().unwrap().last().unwrap();
+    assert_eq!(
+        integrate["env"]["LANDED_LINE"].as_str(),
+        Some("${{ github.event.workflow_run.head_branch }}")
+    );
+    assert!(
+        !integrate["run"].as_str().unwrap().contains("${{"),
+        "upstream metadata must not be interpolated into shell source"
+    );
+}
+
+/// Execute the actual workflow shell with capture-only auth/runner stand-ins.
+/// The resulting arguments drive the real integration runner below.
+#[cfg(unix)]
+fn workflow_landing_args(line: &str) -> (Vec<String>, String) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let workflow = integration_workflow();
+    let step = workflow["jobs"]["release-integration"]["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|step| step["name"].as_str() == Some("Integrate verified epic lines"))
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let runner = dir.path().join("target/debug/examples/release_integration");
+    std::fs::create_dir_all(runner.parent().unwrap()).unwrap();
+    std::fs::write(
+        &runner,
+        "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$CAPTURE_ARGS\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let gh = dir.path().join("gh");
+    std::fs::write(&gh, "#!/bin/sh\n[ \"$*\" = 'auth setup-git' ]\n").unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let args = dir.path().join("args");
+    let out = clean_env(&mut Command::new("sh"))
+        .args(["-eu", "-c", step["run"].as_str().unwrap()])
+        .current_dir(dir.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                dir.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .env("CAPTURE_ARGS", &args)
+        .env("EVENT_NAME", "push")
+        .env("LANDED_LINE", line)
+        .env("RELEASE_BRANCH", RELEASE)
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!dir.path().join("injected").exists());
+    let args = std::fs::read_to_string(args)
+        .unwrap()
+        .split_terminator('\0')
+        .map(str::to_owned)
+        .collect();
+    (args, String::from_utf8(out.stdout).unwrap())
+}
+
+#[cfg(unix)]
+#[test]
+fn automation_landing_metadata_stays_data() {
+    let line = "integration/EPC-003-$(touch${IFS}injected)";
+    let (args, log) = workflow_landing_args(line);
+    assert_eq!(args, ["--release", RELEASE, "--push"]);
+    assert!(log.contains(line), "landing metadata stays literal: {log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn automation_surviving_landing_catches_up_pending_lines() {
+    let fx = Fx::new(true);
+    fx.configure_automation();
+    // No job for A survives the queue. The job for B must import both tips.
+    for (line, id, file) in [
+        (LINE_A, "TSK-001", "src/a.rs"),
+        (LINE_B, "TSK-002", "src/b.rs"),
+    ] {
+        fx.build_and_complete(line, id, file);
+        fx.land(line, &format!("task/{id}-work"));
+    }
+    let (args, log) = workflow_landing_args(LINE_B);
+    assert_eq!(
+        args,
+        ["--release", RELEASE, "--push"],
+        "every surviving job catches up all verified lines"
+    );
+    assert!(
+        log.contains(LINE_B),
+        "the triggering landing remains visible: {log}"
+    );
+    let (code, report) = fx.automate(Some(&args[1]), None);
+    assert_eq!(code, 0, "{report}");
+    fx.git(&["fetch", "-q", "origin"]);
+    for line in [LINE_A, LINE_B] {
+        fx.git(&[
+            "merge-base",
+            "--is-ancestor",
+            line,
+            &format!("origin/{RELEASE}"),
+        ]);
+    }
+    let tip = fx.remote_release();
+    assert_eq!(fx.automate(Some(&args[1]), None).0, 0);
+    assert_eq!(tip, fx.remote_release(), "a later queued run is idempotent");
+}
+
+#[test]
+fn automation_uses_default_target_owner_before_conflicting_merge() {
+    let fx = Fx::new(false);
+    fx.configure_automation();
+    fx.build_and_complete(LINE_A, "TSK-001", "src/clash.rs");
+    fx.land(LINE_A, "task/TSK-001-work");
+    assert_eq!(fx.automate(Some(RELEASE), Some(LINE_A)).0, 0);
+    fx.build_and_complete(LINE_B, "TSK-002", "src/clash.rs");
+    fx.land(LINE_B, "task/TSK-002-work");
+    // Only the destination's default branch gains the owner. The caller and
+    // release checkouts still predate that planning record.
+    fx.git(&["switch", "-q", "main"]);
+    fx.write(
+        &path(HOLDER),
+        &record(HOLDER, "todo", CRITERIA, "Pending.\n"),
+    );
+    fx.commit("docs: assign the release owner");
+    fx.git(&["push", "-q", "origin", "main"]);
+    fx.git(&["switch", "-q", RELEASE]);
+    assert!(!fx.root.join(path(HOLDER)).exists());
+    let before = fx.remote_release();
+    let (code, report) = fx.automate(Some(RELEASE), Some(LINE_B));
+    assert_ne!(code, 0, "{report}");
+    assert!(report.contains("CONFLICT"), "{report}");
+    assert!(report.contains(&format!("Owner: {HOLDER}")), "{report}");
+    assert!(!report.contains(NO_OWNER), "{report}");
+    assert_eq!(before, fx.remote_release());
+}
+
+impl Fx {
+    fn configure_automation(&self) {
+        self.git(&["switch", "-q", "main"]);
+        self.write(
+            ".github/workflows/codeflow-release-integration.yml",
+            "jobs:\n  release-integration:\n",
+        );
+        self.commit("ci: configure release integration");
+        // The configuration exists before the lines fork.
+        for line in [LINE_A, LINE_B] {
+            self.git(&["branch", "-f", line, "main"]);
+        }
+        self.git(&["push", "-q", "origin", "main", LINE_A, LINE_B]);
+        self.cut_release();
+    }
+
+    fn automate(&self, release: Option<&str>, line: Option<&str>) -> (i32, String) {
+        match automation::integrate(
+            &self.root,
+            release,
+            line,
+            true,
+            Path::new(env!("CARGO_BIN_EXE_codeflow")),
+        ) {
+            Ok(report) => (0, report),
+            Err(report) => (1, report),
+        }
+    }
+
+    fn remote_release(&self) -> String {
+        self.git(&["ls-remote", "origin", &format!("refs/heads/{RELEASE}")])
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_string()
+    }
+}
+
+#[test]
+fn automation_integrates_each_landing_and_daily_catches_up() {
+    let fx = Fx::new(true);
+    fx.configure_automation();
+    for (line, id, file) in [
+        (LINE_A, "TSK-001", "src/a.rs"),
+        (LINE_B, "TSK-002", "src/b.rs"),
+    ] {
+        let before = fx.remote_release();
+        fx.build_and_complete(line, id, file);
+        let landed = fx.land(line, &format!("task/{id}-work"));
+        let (code, report) = fx.automate(Some(RELEASE), Some(line));
+        assert_eq!(code, 0, "{report}");
+        let after = fx.remote_release();
+        assert_ne!(before, after);
+        fx.git(&["fetch", "-q", "origin"]);
+        assert_eq!(fx.git(&["rev-parse", &format!("{after}^1")]), before);
+        assert_eq!(fx.git(&["rev-parse", &format!("{after}^2")]), landed);
+    }
+    fx.build_and_complete(LINE_A, "TSK-003", "src/c.rs");
+    fx.land(LINE_A, "task/TSK-003-work");
+    fx.build_and_complete(LINE_B, "TSK-004", "src/d.rs");
+    fx.land(LINE_B, "task/TSK-004-work");
+    let (code, report) = fx.automate(Some(RELEASE), None);
+    assert_eq!(code, 0, "{report}");
+    fx.git(&["fetch", "-q", "origin"]);
+    for line in [LINE_A, LINE_B] {
+        fx.git(&[
+            "merge-base",
+            "--is-ancestor",
+            line,
+            &format!("origin/{RELEASE}"),
+        ]);
+    }
+    let tip = fx.remote_release();
+    assert_eq!(fx.automate(Some(RELEASE), None).0, 0);
+    assert_eq!(tip, fx.remote_release(), "daily reruns must be idempotent");
+}
+
+#[test]
+fn automation_conflict_reports_owner_and_reproduction_without_push() {
+    for holder in [true, false] {
+        let fx = Fx::new(holder);
+        fx.configure_automation();
+        fx.build_and_complete(LINE_A, "TSK-001", "src/clash.rs");
+        fx.land(LINE_A, "task/TSK-001-work");
+        assert_eq!(fx.automate(Some(RELEASE), Some(LINE_A)).0, 0);
+        fx.build_and_complete(LINE_B, "TSK-002", "src/clash.rs");
+        fx.land(LINE_B, "task/TSK-002-work");
+        let before = fx.remote_release();
+        let (code, report) = fx.automate(Some(RELEASE), Some(LINE_B));
+        assert_ne!(code, 0, "{report}");
+        assert!(report.contains("CONFLICT"), "{report}");
+        assert!(
+            report.contains(if holder {
+                HOLDER
+            } else {
+                "no release-integration task to own it"
+            }),
+            "{report}"
+        );
+        assert!(
+            report.contains("cargo run") && report.contains("--release") && report.contains(LINE_B),
+            "{report}"
+        );
+        assert_eq!(before, fx.remote_release());
+    }
+}
+
+#[test]
+fn automation_binding_and_frozen_findings_push_nothing() {
+    for frozen in [false, true] {
+        let fx = Fx::new(true);
+        fx.configure_automation();
+        fx.build_and_complete(LINE_A, "TSK-001", "src/a.rs");
+        if frozen {
+            fx.write(
+                &path("TSK-001"),
+                &record("TSK-001", "complete", LOOSER, &block(&fx.head())),
+            );
+        } else {
+            fx.write(
+                &path("TSK-001"),
+                &record(
+                    "TSK-001",
+                    "complete",
+                    CRITERIA,
+                    &block(&fx.git(&["rev-parse", "main"])),
+                ),
+            );
+        }
+        fx.commit("docs: change the completion");
+        fx.land(LINE_A, "task/TSK-001-work");
+        let before = fx.remote_release();
+        let (code, report) = fx.automate(Some(RELEASE), Some(LINE_A));
+        assert_ne!(code, 0, "{report}");
+        assert!(
+            report.contains(if frozen { "frozen" } else { "binding" }),
+            "{report}"
+        );
+        assert!(report.contains(HOLDER), "{report}");
+        assert_eq!(before, fx.remote_release());
+    }
+}
+
+#[test]
+fn automation_without_configuration_is_a_noop() {
+    let fx = Fx::new(true);
+    assert_eq!(
+        fx.automate(None, Some(LINE_A)),
+        (0, "no release integration configured\n".into())
+    );
+}
+
+#[test]
+fn automation_workflow_and_release_owner_contract() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read_workflow =
+        std::fs::read_to_string(root.join(".github/workflows/codeflow-release.yml")).unwrap();
+    assert!(read_workflow.contains("github.event_name == 'push'"));
+    assert!(!read_workflow.contains("contents: write"));
+    let parsed = integration_workflow();
+    let job = &parsed["jobs"]["release-integration"];
+    assert!(job["if"]
+        .as_str()
+        .unwrap()
+        .contains("github.event_name == 'schedule'"));
+    assert!(
+        job["needs"].is_null(),
+        "post-landing integration has no task-PR dependency"
+    );
+    assert_eq!(
+        parsed["on"]["schedule"][0]["cron"].as_str(),
+        Some("17 3 * * *")
+    );
+    assert_eq!(
+        job["steps"][0]["with"]["ref"].as_str(),
+        Some("${{ github.sha }}")
+    );
+    assert_eq!(
+        job["concurrency"]["cancel-in-progress"].as_bool(),
+        Some(false)
+    );
+
+    let record = std::fs::read_to_string(root.join(path("TSK-010"))).unwrap();
+    assert!(
+        record.contains("role: release-integration"),
+        "AC-4 role missing"
+    );
+    assert!(
+        record.contains("nine other-line")
+            && record.contains("TSK-150")
+            && record.contains("within the release pull request")
+    );
+}
+
+#[test]
+fn automation_reading_finding_and_unverified_line_push_nothing() {
+    for reading in [true, false] {
+        let fx = Fx::new(true);
+        fx.configure_automation();
+        let before = fx.remote_release();
+        if reading {
+            fx.git(&["switch", "-q", "-c", "task/TSK-001-work", LINE_A]);
+            fx.write(
+                ".agents/skills/cf-ship/SKILL.md",
+                "# Ship\n\nRead [missing](missing.md).\n",
+            );
+            let reviewed = fx.commit("feat: change shipping guidance");
+            fx.write(
+                &path("TSK-001"),
+                &record("TSK-001", "complete", CRITERIA, &block(&reviewed)),
+            );
+            fx.commit("docs: complete the task");
+            fx.land(LINE_A, "task/TSK-001-work");
+        } else {
+            fx.git(&["switch", "-q", LINE_A]);
+            fx.write("src/direct.rs", "// direct\n");
+            fx.commit("feat: bypass the line landing");
+            fx.git(&["push", "-q", "origin", LINE_A]);
+        }
+        let (code, report) = fx.automate(Some(RELEASE), Some(LINE_A));
+        assert_ne!(code, 0, "{report}");
+        assert!(
+            report.contains(if reading {
+                "reading-check finding"
+            } else {
+                "directly on the line"
+            }),
+            "{report}"
+        );
+        assert_eq!(before, fx.remote_release());
+    }
+}
+
+#[test]
+fn automation_daily_failure_is_atomic_and_preview_never_pushes() {
+    let fx = Fx::new(true);
+    fx.configure_automation();
+    let before = fx.remote_release();
+    for (line, id) in [(LINE_A, "TSK-001"), (LINE_B, "TSK-002")] {
+        fx.build_and_complete(line, id, "src/conflict.rs");
+        fx.land(line, &format!("task/{id}-work"));
+    }
+    let preview = automation::integrate(
+        &fx.root,
+        Some(RELEASE),
+        Some(LINE_A),
+        false,
+        Path::new(env!("CARGO_BIN_EXE_codeflow")),
+    );
+    assert!(preview.is_ok(), "{preview:?}");
+    assert_eq!(before, fx.remote_release());
+    let (code, report) = fx.automate(Some(RELEASE), None);
+    assert_ne!(code, 0, "{report}");
+    assert!(report.contains("CONFLICT"), "{report}");
+    assert_eq!(before, fx.remote_release());
+}
+
+#[test]
+fn automation_rechecks_the_existing_combined_release() {
+    let fx = Fx::new(true);
+    fx.configure_automation();
+    fx.build_and_complete(LINE_A, "TSK-001", "src/a.rs");
+    fx.write(
+        &path("TSK-001"),
+        &record(
+            "TSK-001",
+            "complete",
+            CRITERIA,
+            &block(&fx.git(&["rev-parse", "main"])),
+        ),
+    );
+    fx.commit("docs: change the completion");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.import(LINE_A);
+    fx.git(&["push", "-q", "origin", RELEASE]);
+    let before = fx.remote_release();
+    fx.build_and_complete(LINE_B, "TSK-002", "src/b.rs");
+    fx.land(LINE_B, "task/TSK-002-work");
+    let (code, report) = fx.automate(Some(RELEASE), Some(LINE_B));
+    assert_ne!(
+        code, 0,
+        "an earlier bad binding still blocks the combined release: {report}"
+    );
+    assert!(report.contains("binding"), "{report}");
+    assert_eq!(before, fx.remote_release());
+}

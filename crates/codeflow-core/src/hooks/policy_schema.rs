@@ -94,7 +94,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 61] = [
+pub const SCHEMA: [KeySpec; 62] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
