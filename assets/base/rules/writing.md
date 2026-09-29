@@ -77,9 +77,10 @@ Match the form to the surface:
   say why you opened it. Formatting preference alone never opens one.
 - On docs-portal pages, use the portal's figure grammar, a `cf-stage` fence
   (standard and full tiers).
-- Markdown files (READMEs, docs, records), PR bodies, terminal output and
-  any other plain-text surface are ASCII surfaces: use a fenced ASCII
-  figure there, and when unsure what the surface renders.
+- Markdown files, PR bodies and records are ASCII surfaces. Use fenced
+  ASCII in other Markdown files (READMEs, docs, records, PR bodies), in
+  terminal output and on any other plain-text surface, or when unsure what
+  the surface renders.
 - Never use Mermaid. A simple answer stays simple and carries no figure.
 
 ## Shape the deliverable
@@ -206,7 +207,7 @@ when three or more items share the same fields, with nouns as its headers.
 
 Example, from CodeFlow's `project-management/specs/SPC-013.md`:
 
-> | Path | Owner | Later editors, in landing order | Rule |
+> | Rule | Plane | Default | Adjustable |
 
 ### Microcopy
 
