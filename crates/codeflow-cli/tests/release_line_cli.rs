@@ -3940,3 +3940,39 @@ fn an_own_task_criteria_change_landed_without_completion_is_frozen() {
         ],
     );
 }
+
+/// A line judged for its pull request to main (TSK-184 AC-4): tasks land
+/// by merges only, and a product commit made directly on the line is
+/// refused, since the line is then no epic line and the completions are
+/// judged at its head, where the unreviewed file shows.
+#[test]
+fn a_direct_product_commit_on_a_line_is_refused_into_main() {
+    let fx = Fx::new(false);
+    fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.build_and_complete(LINE_A, "TSK-002", "src/two.rs");
+    fx.land(LINE_A, "task/TSK-002-work");
+    let line_to_main = |what: &str| {
+        let out = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+            .args([
+                "ci", "--base", "main", "--head", "HEAD", "--branch", LINE_A, "--into", "main",
+            ])
+            .current_dir(&fx.root)
+            .output()
+            .unwrap();
+        let result = output(&out);
+        println!("{what}:\n{}", result.1);
+        result
+    };
+    passes(
+        &line_to_main("merges only"),
+        "a line built from landings only",
+    );
+    fx.write("src/direct.rs", "// never reviewed\n");
+    fx.commit("feat: direct product change");
+    blocks(
+        &line_to_main("direct product change"),
+        "a direct product change on the line",
+        &["work.acceptance_binding", "also changes src/direct.rs"],
+    );
+}
