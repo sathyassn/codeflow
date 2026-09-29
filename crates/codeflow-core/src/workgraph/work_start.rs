@@ -783,8 +783,12 @@ pub(crate) fn work_suffix<'b>(prefixes: &[String], branch: &'b str) -> Option<&'
 #[must_use]
 pub fn task_id_from_branch(repo_root: &Path, branch: &str) -> Option<String> {
     let suffix = work_branch_suffix(repo_root, branch)?;
-    let pm_root = repo_root.join("project-management");
-    crate::workgraph::layout::task_record_files(&pm_root)
+    carried_task_id(suffix, &visible_task_ids(repo_root))
+}
+
+/// The task ids of the record files visible in the checkout.
+fn visible_task_ids(repo_root: &Path) -> std::collections::BTreeSet<String> {
+    crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
         .into_iter()
         .filter_map(|path| {
             path.file_stem()
@@ -792,8 +796,185 @@ pub fn task_id_from_branch(repo_root: &Path, branch: &str) -> Option<String> {
                 .map(str::to_owned)
         })
         .filter(|id| is_valid_task_format_id(id))
-        .filter(|id| suffix.starts_with(&format!("{id}-")))
-        .max_by_key(String::len)
+        .collect()
+}
+
+/// The longest of `ids` that `suffix` starts with, followed by `-`.
+fn carried_task_id(suffix: &str, ids: &std::collections::BTreeSet<String>) -> Option<String> {
+    suffix
+        .match_indices('-')
+        .map(|(end, _)| &suffix[..end])
+        .filter(|candidate| ids.contains(*candidate))
+        .max_by_key(|candidate| candidate.len())
+        .map(str::to_owned)
+}
+
+/// The visible work branches, local and remote-tracking, grouped by the task
+/// id each carries: read once, so a caller judging many pins or tasks never
+/// walks the refs and the record files again per branch.
+pub(crate) struct PinBranches {
+    /// Task id, then branch name without its remote, then the tips it has.
+    tips: BTreeMap<String, BTreeMap<String, std::collections::BTreeSet<Oid>>>,
+    /// A branch of the task whose tip could not be read.
+    unreadable: BTreeMap<String, String>,
+    /// Whether the tree at a revision holds a task's record.
+    holds: std::cell::RefCell<std::collections::HashMap<(Oid, String), Result<bool, String>>>,
+}
+
+impl PinBranches {
+    /// Read every branch of `repo`, resolving task ids from `root`'s policy
+    /// and record files.
+    ///
+    /// # Errors
+    /// Returns the reason the branches cannot be listed.
+    pub(crate) fn read(repo: &Repository, root: &Path) -> Result<Self, String> {
+        let prefixes = work_prefixes(root);
+        let ids = visible_task_ids(root);
+        let mut tips = BTreeMap::<String, BTreeMap<String, std::collections::BTreeSet<Oid>>>::new();
+        let mut unreadable = BTreeMap::new();
+        for branch in repo.branches(None).map_err(|e| e.to_string())? {
+            let (branch, kind) = branch.map_err(|e| e.to_string())?;
+            let Some(name) = branch.name().map_err(|e| e.to_string())? else {
+                continue;
+            };
+            let name = if kind == git2::BranchType::Remote {
+                name.split_once('/').map_or(name, |(_, name)| name)
+            } else {
+                name
+            };
+            let Some(task_id) =
+                work_suffix(&prefixes, name).and_then(|suffix| carried_task_id(suffix, &ids))
+            else {
+                continue;
+            };
+            match branch.get().peel_to_commit() {
+                Ok(commit) => {
+                    tips.entry(task_id)
+                        .or_default()
+                        .entry(name.to_string())
+                        .or_default()
+                        .insert(commit.id());
+                }
+                Err(error) => {
+                    unreadable
+                        .entry(task_id)
+                        .or_insert_with(|| error.to_string());
+                }
+            }
+        }
+        Ok(Self {
+            tips,
+            unreadable,
+            holds: std::cell::RefCell::default(),
+        })
+    }
+
+    /// The branches in `slot`, read from `repo`'s working tree on first use.
+    ///
+    /// # Errors
+    /// Returns the reason the working tree or its branches cannot be read.
+    pub(crate) fn once<'s>(
+        slot: &'s mut Option<Self>,
+        repo: &Repository,
+    ) -> Result<&'s Self, String> {
+        if slot.is_none() {
+            let root = repo
+                .workdir()
+                .ok_or_else(|| "no working tree".to_string())?;
+            *slot = Some(Self::read(repo, root)?);
+        }
+        slot.as_ref().ok_or_else(|| "no working tree".to_string())
+    }
+
+    /// Each branch carrying `task_id`, with its tips.
+    fn of(
+        &self,
+        task_id: &str,
+    ) -> Result<impl Iterator<Item = (&String, &std::collections::BTreeSet<Oid>)>, String> {
+        if let Some(error) = self.unreadable.get(task_id) {
+            return Err(error.clone());
+        }
+        Ok(self.tips.get(task_id).into_iter().flatten())
+    }
+
+    /// Every tip of a branch carrying `task_id`.
+    pub(crate) fn tips_of(&self, task_id: &str) -> Result<std::collections::BTreeSet<Oid>, String> {
+        Ok(self
+            .of(task_id)?
+            .flat_map(|(_, tips)| tips.iter().copied())
+            .collect())
+    }
+
+    /// The one branch whose tip is the pin, the branch not advanced past it.
+    ///
+    /// # Errors
+    /// Refuses a pin that is not the unique predecessor branch tip.
+    pub(crate) fn pin_name(&self, pin: &ReviewedPin) -> Result<String, String> {
+        let matching: Vec<_> = self
+            .of(&pin.task_id)?
+            .filter(|(_, tips)| tips.contains(&pin.revision))
+            .collect();
+        let [(name, tips)] = matching.as_slice() else {
+            return Err(format!("{} pin is not the unique predecessor branch tip; rebase on its new reviewed head and recheck", pin.task_id));
+        };
+        if tips.len() != 1 {
+            return Err(format!(
+                "{} predecessor branch has advanced; rebase on its new reviewed head and recheck",
+                pin.task_id
+            ));
+        }
+        Ok((*name).clone())
+    }
+
+    /// Whether the pinned revision holds the pinned task's record, read once
+    /// per revision and task.
+    ///
+    /// # Errors
+    /// Refuses a pin whose tree cannot be read or lacks the record.
+    pub(crate) fn pin_holds_record(
+        &self,
+        repo: &Repository,
+        pin: &ReviewedPin,
+    ) -> Result<(), String> {
+        let key = (pin.revision, pin.task_id.clone());
+        let holds = self
+            .holds
+            .borrow_mut()
+            .entry(key)
+            .or_insert_with(|| {
+                super::lifecycle::Graph::from_revision(repo, &pin.revision.to_string()).map(
+                    |graph| {
+                        graph
+                            .records
+                            .get(&pin.task_id)
+                            .is_some_and(|r| r.kind == RecordKind::Task)
+                    },
+                )
+            })
+            .clone()?;
+        if !holds {
+            return Err(format!(
+                "{} pin does not hold that task's record",
+                pin.task_id
+            ));
+        }
+        Ok(())
+    }
+
+    /// The branch a reviewed pin names: [`Self::pin_name`], then
+    /// [`Self::pin_holds_record`].
+    ///
+    /// # Errors
+    /// Refuses as those two do.
+    pub(crate) fn pin_branch(
+        &self,
+        repo: &Repository,
+        pin: &ReviewedPin,
+    ) -> Result<String, String> {
+        let name = self.pin_name(pin)?;
+        self.pin_holds_record(repo, pin)?;
+        Ok(name)
+    }
 }
 
 /// The task id a work branch carries, read from the records at `head`
@@ -850,6 +1031,20 @@ pub fn reviewed_pins(
     lookup: &dyn Fn(&str, &str) -> Result<bool, String>,
 ) -> Result<Vec<ReviewedPin>, String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let mut branches = None;
+    reviewed_pins_in(&repo, &mut branches, values, lookup, false)
+}
+
+/// [`reviewed_pins`] over branches read at most once. `review_first` asks
+/// for review evidence before the pinned tree is read, for a caller that
+/// needs only whether every pin holds, not which refusal comes first.
+pub(crate) fn reviewed_pins_in(
+    repo: &Repository,
+    branches: &mut Option<PinBranches>,
+    values: &[String],
+    lookup: &dyn Fn(&str, &str) -> Result<bool, String>,
+    review_first: bool,
+) -> Result<Vec<ReviewedPin>, String> {
     let mut pins = Vec::new();
     for value in values {
         let (task_id, sha) = value
@@ -869,11 +1064,18 @@ pub fn reviewed_pins(
             task_id: task_id.into(),
             revision,
         };
-        let branch = pin_branch(&repo, &pin)?;
+        let branches = PinBranches::once(branches, repo)?;
+        let branch = branches.pin_name(&pin)?;
+        if !review_first {
+            branches.pin_holds_record(repo, &pin)?;
+        }
         if !lookup(&branch, &revision.to_string())? {
             return Err(format!(
                 "no review names {task_id}@{sha}; cannot verify review for this pin"
             ));
+        }
+        if review_first {
+            branches.pin_holds_record(repo, &pin)?;
         }
         pins.push(pin);
     }
@@ -881,56 +1083,7 @@ pub fn reviewed_pins(
 }
 
 fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<String, String> {
-    let root = repo
-        .workdir()
-        .ok_or_else(|| "no working tree".to_string())?;
-    let mut branches =
-        std::collections::BTreeMap::<String, std::collections::BTreeSet<git2::Oid>>::new();
-    for branch in repo.branches(None).map_err(|e| e.to_string())? {
-        let (branch, kind) = branch.map_err(|e| e.to_string())?;
-        let Some(name) = branch.name().map_err(|e| e.to_string())? else {
-            continue;
-        };
-        let name = if kind == git2::BranchType::Remote {
-            name.split_once('/').map_or(name, |(_, name)| name)
-        } else {
-            name
-        };
-        if task_id_from_branch(root, name).as_deref() != Some(pin.task_id.as_str()) {
-            continue;
-        }
-        let tip = branch
-            .get()
-            .peel_to_commit()
-            .map_err(|e| e.to_string())?
-            .id();
-        branches.entry(name.to_string()).or_default().insert(tip);
-    }
-    let matching: Vec<_> = branches
-        .iter()
-        .filter(|(_, tips)| tips.contains(&pin.revision))
-        .collect();
-    let [(name, tips)] = matching.as_slice() else {
-        return Err(format!("{} pin is not the unique predecessor branch tip; rebase on its new reviewed head and recheck", pin.task_id));
-    };
-    if tips.len() != 1 {
-        return Err(format!(
-            "{} predecessor branch has advanced; rebase on its new reviewed head and recheck",
-            pin.task_id
-        ));
-    }
-    let graph = super::lifecycle::Graph::from_revision(repo, &pin.revision.to_string())?;
-    if !graph
-        .records
-        .get(&pin.task_id)
-        .is_some_and(|r| r.kind == RecordKind::Task)
-    {
-        return Err(format!(
-            "{} pin does not hold that task's record",
-            pin.task_id
-        ));
-    }
-    Ok((*name).clone())
+    PinBranches::once(&mut None, repo)?.pin_branch(repo, pin)
 }
 
 /// The prospective base is the reviewed pin that contains all other pins.
@@ -939,8 +1092,17 @@ fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<String, String> {
 /// Refuses advanced or incomparable pins before a claim creates anything.
 pub fn stack_base(root: &Path, pins: &[ReviewedPin]) -> Result<Option<git2::Oid>, String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    stack_base_in(&repo, &mut None, pins)
+}
+
+/// [`stack_base`] over branches read at most once.
+pub(crate) fn stack_base_in(
+    repo: &Repository,
+    branches: &mut Option<PinBranches>,
+    pins: &[ReviewedPin],
+) -> Result<Option<git2::Oid>, String> {
     for pin in pins {
-        pin_branch(&repo, pin)?;
+        PinBranches::once(branches, repo)?.pin_branch(repo, pin)?;
     }
     if pins.is_empty() {
         return Ok(None);
@@ -1133,7 +1295,7 @@ fn check_task_anchor(
     let (merge_base, mut records) = anchored_records(&repo, target, head_id)?;
     let at_base = records.contains_key(task_id);
     standalone_at_head(&repo, &mut records, task_id, branch, admission, head_id)?;
-    let anchored = validate_task_structure(&repo, &records, task_id, target, pins)?;
+    let anchored = validate_task_structure(&repo, &records, task_id, target, pins, &mut None)?;
     // The start gate judges the record as the merge base has it: a task
     // already complete or cancelled there takes no further change. A
     // standalone record arriving with its code (admission) has no base
@@ -1319,7 +1481,19 @@ pub(crate) fn validate_anchored_task_on(
     target: &str,
     pins: &[ReviewedPin],
 ) -> Result<AnchoredTask, WorkStartError> {
-    let result = validate_task_structure(repo, records, task_id, target, pins)?;
+    validate_anchored_task_in(repo, records, task_id, target, pins, &mut None)
+}
+
+/// [`validate_anchored_task_on`] over pin branches read at most once.
+pub(crate) fn validate_anchored_task_in(
+    repo: &Repository,
+    records: &BTreeMap<String, Record>,
+    task_id: &str,
+    target: &str,
+    pins: &[ReviewedPin],
+    branches: &mut Option<PinBranches>,
+) -> Result<AnchoredTask, WorkStartError> {
+    let result = validate_task_structure(repo, records, task_id, target, pins, branches)?;
     start_gate(&records[task_id], task_id)?;
     Ok(result)
 }
@@ -1330,6 +1504,7 @@ fn validate_task_structure(
     task_id: &str,
     target: &str,
     pins: &[ReviewedPin],
+    branches: &mut Option<PinBranches>,
 ) -> Result<AnchoredTask, WorkStartError> {
     let task = records
         .get(task_id)
@@ -1398,7 +1573,15 @@ fn validate_task_structure(
             "--on pin does not name a code dependency of this task".into(),
         ));
     }
-    validate_dependencies(repo, records, task_id, target, &task.depends_on, pins)?;
+    validate_dependencies(
+        repo,
+        records,
+        task_id,
+        target,
+        &task.depends_on,
+        pins,
+        branches,
+    )?;
     Ok(AnchoredTask {
         epic_id: task.epic_id.clone(),
         specs,
@@ -1438,12 +1621,15 @@ fn validate_dependencies(
     target: &str,
     dependencies: &[Dependency],
     pins: &[ReviewedPin],
+    branches: &mut Option<PinBranches>,
 ) -> Result<(), WorkStartError> {
     for dependency in dependencies {
         match dependency.kind {
             DependencyKind::Code => {
                 if let Some(pin) = pins.iter().find(|pin| pin.task_id == dependency.id) {
-                    pin_branch(repo, pin).map_err(WorkStartError::InvalidGraph)?;
+                    PinBranches::once(branches, repo)
+                        .and_then(|branches| branches.pin_branch(repo, pin))
+                        .map_err(WorkStartError::InvalidGraph)?;
                 } else {
                     code_dependency(repo, records, task_id, target, &dependency.id)?;
                 }
@@ -1883,41 +2069,77 @@ fn blocker_reason(content: &str) -> Option<String> {
 /// # Errors
 /// Refuses missing or ambiguous hosted repository identity.
 pub fn review_repository(root: &std::path::Path, branch: &str) -> Result<String, String> {
-    let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
-    let config = repo.config().map_err(|error| error.to_string())?;
-    let mut names = std::collections::BTreeSet::new();
-    if let Ok(name) = config.get_string(&format!("branch.{branch}.remote")) {
-        names.insert(name);
+    ReviewRepositories::open(root)?.repository(branch)
+}
+
+/// [`review_repository`] for many branches in one invocation: the
+/// remote-tracking branch names are listed once, not once per branch.
+pub struct ReviewRepositories {
+    repo: Repository,
+    remote_branches: Result<Vec<String>, String>,
+}
+
+impl ReviewRepositories {
+    /// Open the repository at `root` and list its remote-tracking branches.
+    ///
+    /// # Errors
+    /// Returns the reason the repository cannot be opened.
+    pub fn open(root: &std::path::Path) -> Result<Self, String> {
+        let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
+        let remote_branches = (|| {
+            let mut names = Vec::new();
+            for candidate in repo
+                .branches(Some(git2::BranchType::Remote))
+                .map_err(|error| error.to_string())?
+            {
+                let (candidate, _) = candidate.map_err(|error| error.to_string())?;
+                if let Some(name) = candidate.name().map_err(|error| error.to_string())? {
+                    names.push(name.to_string());
+                }
+            }
+            Ok(names)
+        })();
+        Ok(Self {
+            repo,
+            remote_branches,
+        })
     }
-    for candidate in repo
-        .branches(Some(git2::BranchType::Remote))
-        .map_err(|error| error.to_string())?
-    {
-        let (candidate, _) = candidate.map_err(|error| error.to_string())?;
-        if let Some(name) = candidate
-            .name()
-            .map_err(|error| error.to_string())?
-            .and_then(|name| name.strip_suffix(&format!("/{branch}")))
-        {
-            names.insert(name.to_string());
+
+    /// The hosted repository `branch`'s review lives in, as
+    /// [`review_repository`] resolves it.
+    ///
+    /// # Errors
+    /// Refuses missing or ambiguous hosted repository identity.
+    pub fn repository(&self, branch: &str) -> Result<String, String> {
+        let repo = &self.repo;
+        let config = repo.config().map_err(|error| error.to_string())?;
+        let mut names = std::collections::BTreeSet::new();
+        if let Ok(name) = config.get_string(&format!("branch.{branch}.remote")) {
+            names.insert(name);
         }
+        let suffix = format!("/{branch}");
+        for candidate in self.remote_branches.as_ref().map_err(Clone::clone)? {
+            if let Some(name) = candidate.strip_suffix(&suffix) {
+                names.insert(name.to_string());
+            }
+        }
+        if names.is_empty() {
+            names.insert("origin".into());
+        }
+        let identities = names
+            .into_iter()
+            .map(|name| hosted_remote(repo, &name))
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        if identities.len() != 1 {
+            return Err(
+                "cannot verify review for this pin: conflicting predecessor repositories".into(),
+            );
+        }
+        identities
+            .into_iter()
+            .next()
+            .ok_or_else(|| "predecessor has no repository identity".into())
     }
-    if names.is_empty() {
-        names.insert("origin".into());
-    }
-    let identities = names
-        .into_iter()
-        .map(|name| hosted_remote(&repo, &name))
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-    if identities.len() != 1 {
-        return Err(
-            "cannot verify review for this pin: conflicting predecessor repositories".into(),
-        );
-    }
-    identities
-        .into_iter()
-        .next()
-        .ok_or_else(|| "predecessor has no repository identity".into())
 }
 
 fn hosted_remote(repo: &Repository, remote_name: &str) -> Result<String, String> {
