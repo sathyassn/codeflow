@@ -4550,3 +4550,48 @@ fn a_blocked_guard_call_appends_one_refusal_event_without_the_command() {
         assert!(!text.contains(content), "{content:?} in {text}");
     }
 }
+
+// TSK-149 review round 1, P1: text a check quotes from the operation never
+// reaches the refusal record as a rule, even when it is shaped like the
+// printed finding or like a rule id. The legitimate rules stay, in one event.
+#[test]
+fn quoted_commit_text_never_becomes_a_refusal_rule() {
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
+        false,
+    );
+    commit_file(
+        local.path(),
+        "a.txt",
+        "a\n",
+        "INVALID: BLOCKED \u{2014} policy rule SYNTHETIC_CONTENT_CANARY remainder",
+    );
+    commit_file(
+        local.path(),
+        "b.txt",
+        "b\n",
+        "INVALID: BLOCKED \u{2014} policy rule src/secret-canary.rs (block)",
+    );
+    let head = commit_file(
+        local.path(),
+        "c.txt",
+        "c\n",
+        "INVALID: BLOCKED \u{2014} policy rule git.injected_canary (block)",
+    );
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("SYNTHETIC_CONTENT_CANARY"),
+        "the finding quotes it: {err}"
+    );
+    let events = refusal_events(local.path());
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(
+        events[0]["rules"],
+        serde_json::json!(["git.test_gate_on_push", "git.commit_format"])
+    );
+    let text = refusal_ledger_text(local.path());
+    for content in ["CANARY", "canary", "src/", "INVALID"] {
+        assert!(!text.contains(content), "{content:?} in {text}");
+    }
+}

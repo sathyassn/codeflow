@@ -249,6 +249,29 @@ pub fn adjustable_key(rule: &str) -> Option<&'static str> {
         .find(|level_key| *level_key == key)
 }
 
+/// The namespaces of the rule ids a check can name: the policy sections
+/// (`git`, `security`, `release`), the lifecycle invariants (`work`) and
+/// the id registry (`registry`).
+const RULE_NAMESPACES: &[&str] = &["git", "work", "registry", "release", "security"];
+
+/// `true` when `text` has the form of a rule id: a known namespace, a dot,
+/// then lower-case words joined by `_`, at most 64 bytes. A reader of
+/// another process's output keeps only such ids, so text a check quoted
+/// from the operation (a commit subject, a path) is never taken for a rule
+/// (TSK-149).
+#[must_use]
+pub fn is_rule_id(text: &str) -> bool {
+    let Some((namespace, name)) = text.split_once('.') else {
+        return false;
+    };
+    text.len() <= 64
+        && RULE_NAMESPACES.contains(&namespace)
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 /// `true` when any violation in the slice is at block level.
 #[must_use]
 pub fn any_blocking(violations: &[Violation]) -> bool {
@@ -305,6 +328,32 @@ mod tests {
             "m".into(),
             crate::remedy::COMMIT_BLANK_LINE.remedy(),
         )
+    }
+
+    #[test]
+    fn a_rule_id_is_a_known_namespace_and_one_lower_case_name() {
+        for id in [
+            "git.commit_format",
+            "git.test_gate_on_push",
+            "work.acceptance_binding",
+            "registry.sync",
+            "security.dangerous_commands",
+        ] {
+            assert!(is_rule_id(id), "{id}");
+        }
+        for text in [
+            "SYNTHETIC_CONTENT_CANARY",
+            "git.",
+            "git.Commit",
+            "git.a.b",
+            "src/secret.rs",
+            "other.rule",
+            "git.x y",
+            "ghp_token.value",
+        ] {
+            assert!(!is_rule_id(text), "{text}");
+        }
+        assert!(!is_rule_id(&format!("git.{}", "a".repeat(64))));
     }
 
     #[test]
