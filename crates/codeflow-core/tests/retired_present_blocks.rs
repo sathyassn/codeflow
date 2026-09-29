@@ -28,7 +28,7 @@ const ROOTS: [(&str, &str); 4] = [
 /// Mermaid is unsupported or forbidden; a faulty control that names it
 /// belongs here too, with the case that fails on it. A line passes only when
 /// no mention is left once its listed clauses are removed.
-const ALLOWED: [(&str, &str); 17] = [
+const ALLOWED: [(&str, &str); 16] = [
     (
         "cf-present/references/document-authoring.md",
         "The `diagram` block was removed with its Mermaid renderer, and Mermaid is",
@@ -38,10 +38,6 @@ const ALLOWED: [(&str, &str); 17] = [
         "Mermaid is unsupported: present refuses a `diagram` block and names its",
     ),
     (
-        "cf-method/references/workflow-lifecycle.md",
-        "- Never use Mermaid for a reply figure.",
-    ),
-    (
         "cf-ship/references/pr-evidence.md",
         "Mermaid is never used.",
     ),
@@ -49,9 +45,11 @@ const ALLOWED: [(&str, &str); 17] = [
         "cf-evaluate-model/resources/requirements.json",
         "and never a Mermaid block;",
     ),
+    // TSK-184: the figure rule moved to the writing reference; its marker
+    // quotes that rule.
     (
         "cf-evaluate-model/resources/requirements.json",
-        "Never use Mermaid for a reply figure",
+        "\"Never use Mermaid.\"",
     ),
     (
         "cf-evaluate-model/resources/fixtures.json",
