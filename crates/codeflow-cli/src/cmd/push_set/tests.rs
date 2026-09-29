@@ -60,8 +60,12 @@ impl History {
     }
 
     fn range(&self, branch: &str, head: &str, old: &str) -> SelectedRange {
+        let listing = OnceCell::new();
         let advertised = OnceCell::new();
+        let answer = OnceCell::new();
         let destination = Destination {
+            listing: &listing,
+            answer: &answer,
             url: self.remote.path().to_str(),
             advertised: &advertised,
             namespace: None,
@@ -395,8 +399,12 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
             &["update-ref", "-d", &format!("refs/heads/{branch}")],
         );
     }
+    let listing = OnceCell::new();
     let advertised = OnceCell::new();
+    let answer = OnceCell::new();
     let destination = Destination {
+        listing: &listing,
+        answer: &answer,
         url: h.remote.path().to_str(),
         advertised: &advertised,
         namespace: None,

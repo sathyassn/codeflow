@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 
 pub mod ci;
 pub mod conflict;
+pub mod remote_query;
 
 /// The variable a codeflow git-hook shim reads to run the codeflow binary
 /// whose command started git, instead of the `codeflow` first on PATH

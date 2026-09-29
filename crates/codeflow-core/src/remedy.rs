@@ -239,6 +239,10 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
+    /// A release-line legacy criteria change, landed before the release
+    /// rule and covered by its line's cutoff (SPC-013 R-120).
+    RELEASE_LEGACY_CHANGE = Step::Edit(".codeflow/project.toml"),
+        "an operator confirms the change against the review recorded for its landing, which the release report names; the cutoff in `release_rule_baseline` in .codeflow/project.toml is the 2.x to 3.0 transition record and is never edited, so the notice ends when the release lands";
     /// A task without a journey criterion for an adopter-facing range.
     JOURNEY_CRITERION = Step::Edit("{path}"),
         "add a `(journey)` criterion to {path} by a planning pull request, or serve the epic's journey criterion there with `(serves EPC-NNN AC-n)`";

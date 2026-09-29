@@ -1603,14 +1603,11 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
         .expect("git rev-parse");
     let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
     let stdin = format!("refs/heads/feat/x {head} refs/heads/feat/x {ZERO}\n");
+    answering_destination(dir.path(), "origin");
+    let url = push_url(dir.path(), "origin");
     let out = run_with_stdin(
         codeflow()
-            .args([
-                "git-hook",
-                "pre-push",
-                "origin",
-                "https://example.com/r.git",
-            ])
+            .args(["git-hook", "pre-push", "origin", &url])
             .current_dir(dir.path()),
         &stdin,
     );
@@ -3204,6 +3201,17 @@ fn rev(dir: &Path, rev: &str) -> String {
 
 /// The location git passes a pre-push hook for `remote`: its push URL (a
 /// `pushurl` when set), or the argument itself for a URL or path.
+/// Configure `name` as an empty bare destination inside `dir`'s git
+/// directory, so the pre-push hook can ask it what it holds (nothing).
+fn answering_destination(dir: &Path, name: &str) {
+    let bare = dir.join(".git").join(format!("{name}-destination.git"));
+    git(
+        dir,
+        &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+    );
+    git(dir, &["remote", "add", name, bare.to_str().unwrap()]);
+}
+
 fn push_url(dir: &Path, remote: &str) -> String {
     Command::new("git")
         .args(["remote", "get-url", "--push", remote])
@@ -3260,6 +3268,7 @@ fn sibling_repo() -> tempfile::TempDir {
     std::fs::write(dir.path().join("good.txt"), "good\n").unwrap();
     git(dir.path(), &["add", "good.txt"]);
     git(dir.path(), &["commit", "-m", "feat: add a good file"]);
+    answering_destination(dir.path(), "upstream");
     dir
 }
 
@@ -3539,10 +3548,10 @@ fn push_set_blocks_a_rewrite_that_drops_a_commit_and_adds_a_bad_one() {
 }
 
 #[test]
-fn push_set_falls_back_to_the_old_sha_when_ls_remote_fails_for_a_rewrite() {
-    // The destination cannot be asked: a rewrite of an existing branch is
-    // bounded by its advertised sha alone, the line's new commit is checked
-    // again, and the hook says so.
+fn push_set_refuses_a_rewrite_when_ls_remote_fails() {
+    // The destination cannot be asked, so whether the release rules apply
+    // cannot be read there (SPC-013 R-120, Codex R145-R4-1): the rewrite is
+    // refused, never judged from its advertised sha alone.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
     git(local.path(), &["rebase", "-q", "dest/integration/line"]);
@@ -3554,15 +3563,13 @@ fn push_set_falls_back_to_the_old_sha_when_ls_remote_fails_for_a_rewrite() {
     );
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &rebased, &old);
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("Legacy line subject two."), "{err}");
     assert!(
-        err.contains("asking the destination for its branches failed")
-            && err.contains(&format!(
-                "the range of 'task/t' is bounded by its advertised {} alone",
-                &old[..9]
-            ))
-            && err.contains("checks all 2 commit(s) not on it"),
+        err.contains("the destination did not answer, so whether 'task/t' is a release branch cannot be read"),
         "{err}"
+    );
+    assert!(
+        !err.contains("`codeflow ci --base"),
+        "no range is judged: {err}"
     );
 }
 
@@ -3641,6 +3648,13 @@ fn push_set_checks_only_the_own_commits_of_a_new_branch_off_a_line() {
 
 /// A valid task record on the advertised line, before the task's own work.
 fn declared_line(bare: &Path, local: &Path) -> String {
+    // The task record makes the project tracked, and a tracked default
+    // target carries its policy: the release scope is read there, and an
+    // unreadable one refuses (SPC-013 R-120).
+    git(local, &["add", ".codeflow/policy.json"]);
+    git(local, &["commit", "-q", "-m", "chore: commit the policy"]);
+    receive(bare, local, "main:stable");
+    git(local, &["fetch", "-q", "dest"]);
     integration_line(bare, local);
     std::fs::create_dir_all(local.join("project-management/tasks")).unwrap();
     let tip = commit_file(
@@ -3803,9 +3817,10 @@ fn push_set_ignores_a_tracking_ref_the_destination_deleted() {
 }
 
 #[test]
-fn push_set_falls_back_to_protected_refs_when_ls_remote_fails() {
-    // The destination cannot be asked: the range of a new branch is bounded
-    // by the tracked protected branches, and the hook says so.
+fn push_set_refuses_a_new_branch_when_ls_remote_fails() {
+    // The destination cannot be asked: a new branch is refused rather than
+    // bounded by the tracked protected branches, since whether the release
+    // rules apply there cannot be read (Codex R145-R4-1).
     let (bare, local) = stable_destination("Legacy subject.");
     integration_line(bare.path(), local.path());
     let gone = local.path().join("no-such-destination");
@@ -3820,20 +3835,12 @@ fn push_set_falls_back_to_protected_refs_when_ls_remote_fails() {
     );
     let good = commit_file(local.path(), "f.txt", "f\n", "feat: add f");
     let (code, err) = push_hook(local.path(), "dest", &[("feat/f", &good)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.contains("asking the destination for its branches failed")
-            && err.contains("the range of new branch 'feat/f' is bounded by its tracked"),
+        err.contains("the destination did not answer, so whether 'feat/f' is a release branch cannot be read"),
         "{err}"
     );
-    assert!(!err.contains("range unresolved"), "{err}");
-
-    // Bounded by `stable` alone, the line's legacy commit is in range.
-    git(local.path(), &["checkout", "-q", "-b", "feat/g", "line"]);
-    let head = commit_file(local.path(), "g.txt", "g\n", "feat: add g");
-    let (code, err) = push_hook(local.path(), "dest", &[("feat/g", &head)]);
-    assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("Legacy line subject."), "{err}");
+    assert!(!err.contains("is bounded by its tracked"), "{err}");
 }
 
 #[test]
@@ -3871,7 +3878,8 @@ fn push_set_asks_the_push_location_not_the_fetch_location() {
     assert!(err.contains("Not conventional."), "{err}");
 
     // The push location cannot be asked, and the tracking refs describe the
-    // fetch location: the range is unresolved, never bounded by them.
+    // fetch location: the range is unresolved, never bounded by them, and
+    // with no answer the push is refused (SPC-013 R-120).
     let gone = local.path().join("no-such-destination");
     git(
         local.path(),
@@ -3884,10 +3892,10 @@ fn push_set_asks_the_push_location_not_the_fetch_location() {
         ],
     );
     let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &head)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.contains("`codeflow ci` did not run for 'feat/new': range unresolved")
-            && err.contains("asking it: `git ls-remote` failed"),
+        err.contains("the destination did not answer, so whether 'feat/new' is a release branch cannot be read")
+            && err.contains("`git ls-remote` failed"),
         "{err}"
     );
 }
@@ -3948,7 +3956,7 @@ fn push_hook_over_http(
 fn push_set_never_prompts_and_bounds_the_destination_query() {
     // NB-2: a destination asking for credentials gets no askpass prompt, and
     // one that never answers is abandoned at the deadline; either way the
-    // hook says why and leaves the range to CI.
+    // hook says why, and refuses the unjudged push (SPC-013 R-120).
     use std::os::unix::fs::PermissionsExt;
     let scratch = tempfile::tempdir().unwrap();
     let marker = scratch.path().join("askpass-called");
@@ -3966,19 +3974,19 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
     let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(true), &askpass);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(!marker.exists(), "askpass was invoked: {err}");
     assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
     assert!(
-        err.contains("range unresolved") && err.contains("asking it: `git ls-remote` failed"),
+        err.contains("the destination did not answer") && err.contains("`git ls-remote` failed"),
         "{err}"
     );
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
     let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(false), &askpass);
-    assert_eq!(code, Some(0), "{err}");
-    assert!(err.contains("asking it: no answer within 10s"), "{err}");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("no answer within 10s"), "{err}");
     assert!(took < std::time::Duration::from_secs(30), "{took:?}");
 }
 
@@ -4039,6 +4047,8 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
     let main = rev(dir.path(), "main");
+    answering_destination(dir.path(), "origin");
+    git(dir.path(), &["push", "-q", "origin", "main"]);
     git(dir.path(), &["checkout", "-q", "--orphan", "feat/orphan"]);
     let orphan = commit_file(dir.path(), "o.txt", "o\n", "chore: start an orphan");
     let (code, err) = push_hook_onto(dir.path(), "origin", "feat/orphan", &orphan, &main);
@@ -4049,6 +4059,7 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     // No destination sha and no tracking history: a note, never a pass.
     let lone = tempfile::tempdir().unwrap();
     init_repo(lone.path(), "feat/lone");
+    answering_destination(lone.path(), "origin");
     let head = rev(lone.path(), "HEAD");
     let (code, err) = push_hook(lone.path(), "origin", &[("feat/lone", &head)]);
     assert_eq!(code, Some(0), "{err}");
@@ -4056,6 +4067,12 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
         err.contains("`codeflow ci` did not run for 'feat/lone': range unresolved"),
         "{err}"
     );
+
+    // A destination that does not answer cannot say whether the name is a
+    // release branch under its policy: refused, whatever the name.
+    let (code, err) = push_hook(lone.path(), "nowhere", &[("feat/lone", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("the destination did not answer"), "{err}");
 }
 
 /// A repo on `feat/t` whose quick target is `command`, committed.
@@ -4076,6 +4093,7 @@ fn quick_repo(command: &str) -> tempfile::TempDir {
         dir.path(),
         &["commit", "-q", "-m", "chore: add a lint target"],
     );
+    answering_destination(dir.path(), "upstream");
     dir
 }
 
@@ -4250,6 +4268,8 @@ fn set_records_baseline(dir: &Path, commits: &[&str]) -> String {
 /// with no baseline list, and two lines, each adding a legacy task and then
 /// a list naming that commit. Returns (bare, local, line a's record commit,
 /// line b's record commit); the local checkout is on `stable`'s seed.
+const TWO_LINES_POLICY: &str = r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block", "work_records": "block"}}"#;
+
 fn two_lines_with_lists() -> (tempfile::TempDir, tempfile::TempDir, String, String) {
     let bare = tempfile::tempdir().unwrap();
     git(bare.path(), &["init", "--bare", "-q", "-b", "stable"]);
@@ -4257,7 +4277,14 @@ fn two_lines_with_lists() -> (tempfile::TempDir, tempfile::TempDir, String, Stri
     init_repo(local.path(), "main");
     std::fs::create_dir_all(local.path().join(".codeflow")).unwrap();
     std::fs::write(local.path().join(".codeflow/project.toml"), RECORDS_STATE).unwrap();
-    git(local.path(), &["add", ".codeflow/project.toml"]);
+    // The default target carries the policy, so its release pattern can be
+    // read (SPC-013 R-120: a tracked project whose default target has no
+    // policy fails closed).
+    write_policy(local.path(), TWO_LINES_POLICY);
+    git(
+        local.path(),
+        &["add", ".codeflow/project.toml", ".codeflow/policy.json"],
+    );
     git(local.path(), &["commit", "-q", "-m", "chore: full tier"]);
     receive(bare.path(), local.path(), "main:stable");
     git(
@@ -4283,10 +4310,6 @@ fn two_lines_with_lists() -> (tempfile::TempDir, tempfile::TempDir, String, Stri
         records.push(record);
     }
     git(local.path(), &["checkout", "-q", "main"]);
-    write_policy(
-        local.path(),
-        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block", "work_records": "block"}}"#,
-    );
     let b = records.pop().unwrap();
     let a = records.pop().unwrap();
     (bare, local, a, b)
@@ -4411,7 +4434,10 @@ fn gate_destination(policy: &str, tracking: bool) -> (tempfile::TempDir, tempfil
     if tracking {
         std::fs::create_dir_all(local.path().join(".codeflow")).unwrap();
         std::fs::write(local.path().join(".codeflow/project.toml"), RECORDS_STATE).unwrap();
-        git(local.path(), &["add", ".codeflow/project.toml"]);
+        // A tracked default target carries its policy: the release scope
+        // is read there, and an unreadable one refuses (SPC-013 R-120).
+        write_policy(local.path(), policy);
+        git(local.path(), &["add", ".codeflow"]);
         git(local.path(), &["commit", "-q", "-m", "chore: full tier"]);
     }
     receive(bare.path(), local.path(), "main:stable");
