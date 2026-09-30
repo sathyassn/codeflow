@@ -69,18 +69,37 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
         return Ok(finish(root, policy, project, format!("HEAD ({reason})")));
     }
     let remote = remote.ok_or("populated tracking namespace has no configured remote")?;
-    let (source, fallback) = default_source(&repo, remote)?;
-    let (mut policy, mut project) = at(&repo, &source)?;
+    let (defaults, fallback) = default_sources(&repo, remote)?;
+    let source = &defaults[0];
+    let (mut policy, mut project) = at(&repo, source)?;
     let branch = super::repo::current_branch(&repo);
-    let target = declared_target(&repo, remote, &branch, &policy, &source)?;
-    let mut sources = if fallback {
-        format!("{source} (remote HEAD not set)")
-    } else {
-        source.clone()
-    };
-    if let Some(target) = target {
+    let mut targets = std::collections::BTreeSet::new();
+    targets.extend(declared_target(&repo, remote, &branch, &policy, source)?);
+    for source in defaults.iter().skip(1) {
+        let (candidate, candidate_project) = at(&repo, source)?;
+        // Resolve each candidate's declaration before merging levels: adding
+        // another default candidate must not hide an existing stricter target.
+        targets.extend(declared_target(&repo, remote, &branch, &candidate, source)?);
+        policy = stricter(policy, &candidate)?;
+        if project.is_some() && candidate_project.is_some() && project != candidate_project {
+            return Err("fallback policy sources have conflicting project settings; the operator reconciles them or establishes remote HEAD".into());
+        }
+        project = project.or(candidate_project);
+    }
+    let mut sources = defaults
+        .iter()
+        .map(|source| {
+            if fallback {
+                format!("{source} (remote HEAD not set)")
+            } else {
+                source.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" + ");
+    for target in targets {
         let target_ref = format!("refs/remotes/{remote}/{target}");
-        if target_ref != source {
+        if !defaults.contains(&target_ref) {
             let (line, line_project) = at(&repo, &target_ref)
                 .map_err(|error| format!("{error}; run git fetch {remote}"))?;
             policy = stricter(policy, &line)?;
@@ -91,13 +110,13 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
     let mut authority = finish(root, policy, project, sources);
     if fallback {
         authority.remote_head_advice = Some(format!(
-            "operator advice: git remote set-head {remote} --auto"
+            "operator advice: git remote set-head {remote} --auto; without remote HEAD the default is assumed to be main or master; custom defaults need set-head"
         ));
     }
     Ok(authority)
 }
 
-fn default_source(repo: &Repository, remote: &str) -> Result<(String, bool), String> {
+fn default_sources(repo: &Repository, remote: &str) -> Result<(Vec<String>, bool), String> {
     let head = format!("refs/remotes/{remote}/HEAD");
     let recovery = |error| {
         format!("cannot read policy source {head}: {error}; run git fetch {remote}; the operator can repair the default with git remote set-head {remote} --auto")
@@ -106,7 +125,7 @@ fn default_source(repo: &Repository, remote: &str) -> Result<(String, bool), Str
         Ok(reference) => {
             // An existing HEAD names authority even if its target needs fetching.
             let reference = reference.resolve().map_err(recovery)?;
-            Ok((reference.name().map_err(recovery)?.to_owned(), false))
+            Ok((vec![reference.name().map_err(recovery)?.to_owned()], false))
         }
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             // Never let a local policy choose which tracking branch is trusted.
@@ -114,9 +133,18 @@ fn default_source(repo: &Repository, remote: &str) -> Result<(String, bool), Str
                 format!("refs/remotes/{remote}/main"),
                 format!("refs/remotes/{remote}/master"),
             ];
-            let source = tried.iter().find(|name| repo.find_reference(name).is_ok())
-                .ok_or_else(|| format!("missing policy source {head}; tried {} and {}; run git fetch {remote}; for another default branch the operator runs git remote set-head {remote} --auto", tried[0], tried[1]))?;
-            Ok((source.clone(), true))
+            let mut sources = Vec::new();
+            for name in &tried {
+                match repo.find_reference(name) {
+                    Ok(_) => sources.push(name.clone()),
+                    Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+                    Err(error) => return Err(recovery(error)),
+                }
+            }
+            if sources.is_empty() {
+                return Err(format!("missing policy source {head}; tried {} and {}; run git fetch {remote}; for another default branch the operator runs git remote set-head {remote} --auto", tried[0], tried[1]));
+            }
+            Ok((sources, true))
         }
         Err(error) => Err(recovery(error)),
     }

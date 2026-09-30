@@ -1183,7 +1183,7 @@ fn r4_custom_default_without_remote_head_names_tried_refs_and_recovery() {
 }
 
 #[test]
-fn r4_remote_head_fallback_order_ignores_local_branch_selection() {
+fn r4_remote_head_fallback_ignores_local_branch_selection() {
     let repo = Repo::new();
     repo.remote();
     repo.git(&["push", "-q", "origin", "HEAD:master"]);
@@ -1234,6 +1234,7 @@ fn r4_an_existing_remote_head_with_a_missing_target_does_not_fall_back() {
 fn r4_fallback_default_record_still_requires_the_declared_target() {
     let repo = Repo::new();
     repo.remote();
+    repo.git(&["push", "-q", "origin", "HEAD:main"]);
     std::fs::create_dir_all(repo.root().join("project-management/tasks")).unwrap();
     std::fs::write(
         repo.root().join("project-management/tasks/TSK-001.md"),
@@ -1242,7 +1243,7 @@ fn r4_fallback_default_record_still_requires_the_declared_target() {
     .unwrap();
     repo.git(&["add", "project-management"]);
     repo.git(&["commit", "-qm", "chore: declare policy target"]);
-    repo.git(&["push", "-q", "origin", "HEAD:main"]);
+    repo.git(&["push", "-q", "origin", "HEAD:master"]);
     repo.git(&["switch", "-qc", "task/TSK-001-impl"]);
     let out = repo.check("git-guard", "git status", 2);
     assert!(String::from_utf8_lossy(&out.stderr).contains("refs/remotes/origin/integration/test"));
@@ -1255,7 +1256,420 @@ fn r4_fallback_default_record_still_requires_the_declared_target() {
     let text = String::from_utf8_lossy(&out.stderr);
     assert!(
         text.contains("refs/remotes/origin/main (remote HEAD not set)")
+            && text.contains("refs/remotes/origin/master (remote HEAD not set)")
             && text.contains("refs/remotes/origin/integration/test (stricter policy levels)"),
         "{text}"
     );
+}
+
+fn fetch_cannot_weaken_missing_head_authority(selective: bool) {
+    let repo = Repo::new();
+    repo.remote();
+    // Keep the fallback case on Git versions that set remote HEAD during fetch.
+    repo.git(&["config", "remote.origin.followRemoteHEAD", "never"]);
+    repo.policy("block");
+    repo.git(&["add", ".codeflow/policy.json"]);
+    repo.git(&["commit", "-qm", "chore: strict master"]);
+    repo.git(&["push", "-q", "origin", "HEAD:master"]);
+    repo.policy("off");
+    repo.git(&["add", ".codeflow/policy.json"]);
+    repo.git(&["commit", "-qm", "chore: weaker main"]);
+    // Model another checkout publishing main, without creating its tracking ref.
+    repo.git(&["push", "-q", "./remote.git", "HEAD:main"]);
+    repo.check("exec-guard", "claude -p hello", 2);
+    let fetch = if selective {
+        "git fetch origin main"
+    } else {
+        "git fetch origin"
+    };
+    repo.check("git-guard", fetch, 0);
+    repo.git(&fetch.split_whitespace().skip(1).collect::<Vec<_>>());
+    let out = repo.check("exec-guard", "claude -p hello", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    for source in ["refs/remotes/origin/main", "refs/remotes/origin/master"] {
+        assert!(text.contains(source), "{text}");
+    }
+}
+
+#[test]
+fn r4_fetch_adding_weaker_main_keeps_strict_master() {
+    fetch_cannot_weaken_missing_head_authority(false);
+}
+
+#[test]
+fn r4_selective_fetch_adding_weaker_main_keeps_strict_master() {
+    fetch_cannot_weaken_missing_head_authority(true);
+}
+
+#[test]
+fn r4_fallback_candidates_merge_each_policy_key() {
+    let repo = Repo::new();
+    repo.remote();
+    for (branch, headless, force) in [("main", "off", "block"), ("master", "block", "allow")] {
+        std::fs::write(
+            repo.root().join(".codeflow/policy.json"),
+            json!({"security":{"headless_peer_runs":headless},"git":{"force_push_unprotected":force}}).to_string(),
+        ).unwrap();
+        repo.git(&["add", ".codeflow/policy.json"]);
+        repo.git(&["commit", "-qm", "chore: candidate policy"]);
+        repo.git(&["push", "-q", "origin", &format!("HEAD:{branch}")]);
+    }
+    repo.policy("off");
+    let authority = codeflow_core::hooks::landed_policy::load(repo.root()).unwrap();
+    let policy = serde_json::to_value(authority.policy).unwrap();
+    assert_eq!(policy["security"]["headless_peer_runs"], "block");
+    assert_eq!(policy["git"]["force_push_unprotected"], "block");
+    repo.check("exec-guard", "claude -p hello", 2);
+    repo.check("git-guard", "git push --force origin task/x", 2);
+    let doctor = repo
+        .command(&binary())
+        .args(["doctor", "--check", "policy-source"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&doctor.stdout);
+    for part in [
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/master",
+        "remote HEAD not set",
+        "custom default",
+        "git remote set-head origin --auto",
+    ] {
+        assert!(text.contains(part), "missing {part}: {text}");
+    }
+}
+
+fn publish_policy(repo: &Repo, branch: &str, policy: &serde_json::Value) {
+    std::fs::write(
+        repo.root().join(".codeflow/policy.json"),
+        policy.to_string(),
+    )
+    .unwrap();
+    repo.git(&["add", ".codeflow"]);
+    repo.git(&["commit", "--allow-empty", "-qm", "chore: candidate control"]);
+    repo.git(&["push", "-q", "origin", &format!("HEAD:{branch}")]);
+}
+
+#[test]
+fn r4_review_candidate_order_equal_levels_and_protected_sets() {
+    for reverse in [false, true] {
+        let repo = Repo::new();
+        repo.remote();
+        let policies = [
+            json!({"security":{"headless_peer_runs":"block"},"git":{"protected_branches":["one"],"force_push_unprotected":"allow"}}),
+            json!({"security":{"headless_peer_runs":"warn"},"git":{"protected_branches":["two"],"force_push_unprotected":"block"}}),
+        ];
+        for (i, branch) in ["main", "master"].iter().enumerate() {
+            publish_policy(&repo, branch, &policies[if reverse { 1 - i } else { i }]);
+        }
+        let p = codeflow_core::hooks::landed_policy::load(repo.root())
+            .unwrap()
+            .policy;
+        let p = serde_json::to_value(p).unwrap();
+        assert_eq!(p["security"]["headless_peer_runs"], "block");
+        assert_eq!(p["git"]["force_push_unprotected"], "block");
+        for protected in ["one", "two"] {
+            assert!(p["git"]["protected_branches"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(protected)));
+        }
+        publish_policy(&repo, "master", &policies[usize::from(reverse)]);
+        repo.check("exec-guard", "claude -p hello", if reverse { 0 } else { 2 });
+    }
+}
+
+#[test]
+fn r4_review_reverse_and_stricter_candidate_additions() {
+    for (existing, added, level, before, after) in [
+        ("main", "master", "off", 2, 2),
+        ("main", "master", "block", 0, 2),
+        ("master", "main", "block", 0, 2),
+    ] {
+        let repo = Repo::new();
+        repo.remote();
+        repo.git(&["config", "remote.origin.followRemoteHEAD", "never"]);
+        publish_policy(
+            &repo,
+            existing,
+            &json!({"security":{"headless_peer_runs":if before == 2 { "block" } else { "off" }}}),
+        );
+        let original = repo.git(&["rev-parse", &format!("refs/remotes/origin/{existing}")]);
+        repo.policy(level);
+        repo.git(&["add", ".codeflow/policy.json"]);
+        repo.git(&["commit", "-qm", "chore: additional candidate"]);
+        repo.git(&["push", "-q", "./remote.git", &format!("HEAD:{added}")]);
+        repo.check("exec-guard", "claude -p hello", before);
+        repo.check("git-guard", "git fetch origin", 0);
+        repo.git(&["fetch", "-q", "origin"]);
+        assert_eq!(
+            original,
+            repo.git(&["rev-parse", &format!("refs/remotes/origin/{existing}")])
+        );
+        repo.check("exec-guard", "claude -p hello", after);
+    }
+}
+
+#[test]
+fn r4_review_all_candidates_and_target_keys_survive_local_hints() {
+    let repo = Repo::new();
+    repo.remote();
+    publish_policy(
+        &repo,
+        "integration/strict",
+        &json!({"git":{"force_push_unprotected":"block","pr_merge_to_protected":"allow"},"security":{"headless_peer_runs":"off"}}),
+    );
+    publish_policy(
+        &repo,
+        "integration/weak",
+        &json!({"git":{"force_push_unprotected":"allow","pr_merge_to_protected":"allow"},"security":{"headless_peer_runs":"off"}}),
+    );
+    publish_policy(
+        &repo,
+        "master",
+        &json!({"git":{"root_branch":"integration/strict","protected_branches":["special"],"force_push_unprotected":"allow","pr_merge_to_protected":"allow"},"security":{"headless_peer_runs":"block"}}),
+    );
+    publish_policy(
+        &repo,
+        "main",
+        &json!({"git":{"root_branch":"integration/weak","pr_merge_to_protected":"block","force_push_unprotected":"allow"},"security":{"headless_peer_runs":"off"}}),
+    );
+    let weak = json!({"git":{"protected_branches":[],"root_branch":"task/x","branch_prefixes":[]},"security":{"headless_peer_runs":"off"}});
+    std::fs::write(repo.root().join(".codeflow/policy.json"), weak.to_string()).unwrap();
+    std::fs::write(
+        repo.root().join(".codeflow/project.toml"),
+        "[git]\nroot_branch = 'task/x'\n",
+    )
+    .unwrap();
+    for state in 0..4 {
+        match state {
+            1 => {
+                repo.git(&["add", ".codeflow"]);
+            }
+            2 => {
+                repo.git(&["commit", "-qm", "chore: weak local hints"]);
+            }
+            3 => {
+                repo.git(&["switch", "-qc", "feat/local-hints"]);
+            }
+            _ => {}
+        }
+        let authority = codeflow_core::hooks::landed_policy::load(repo.root()).unwrap();
+        let p = serde_json::to_value(authority.policy).unwrap();
+        for key in ["force_push_unprotected", "pr_merge_to_protected"] {
+            assert_eq!(p["git"][key], "block");
+        }
+        assert_eq!(p["security"]["headless_peer_runs"], "block");
+        assert!(p["git"]["protected_branches"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("special")));
+        assert!(authority.source.contains("integration/strict"));
+        repo.check("exec-guard", "claude -p hello", 2);
+    }
+}
+
+#[test]
+fn r4_review_conflicting_candidate_project_settings_refuse() {
+    let repo = Repo::new();
+    repo.remote();
+    for branch in ["main", "master"] {
+        std::fs::write(
+            repo.root().join(".codeflow/project.toml"),
+            format!("[git]\nroot_branch = '{branch}'\n"),
+        )
+        .unwrap();
+        publish_policy(&repo, branch, &json!({}));
+    }
+    repo.check("git-guard", "git status", 2);
+}
+
+#[test]
+fn r4_review_broken_candidates_and_remote_head_refuse() {
+    for broken in ["policy", "project", "object", "cycle", "head"] {
+        let repo = Repo::new();
+        repo.remote();
+        publish_policy(&repo, "main", &json!({}));
+        match broken {
+            "policy" | "project" => {
+                let path = if broken == "policy" {
+                    ".codeflow/policy.json"
+                } else {
+                    ".codeflow/project.toml"
+                };
+                std::fs::write(repo.root().join(path), "{broken").unwrap();
+                repo.git(&["add", ".codeflow"]);
+                repo.git(&["commit", "-qm", "chore: malformed candidate"]);
+                repo.git(&["push", "-q", "origin", "HEAD:master"]);
+            }
+            "object" => {
+                std::fs::write(
+                    repo.root().join(".git/refs/remotes/origin/master"),
+                    "1111111111111111111111111111111111111111\n",
+                )
+                .unwrap();
+            }
+            "cycle" => {
+                repo.git(&[
+                    "symbolic-ref",
+                    "refs/remotes/origin/HEAD",
+                    "refs/remotes/origin/loop",
+                ]);
+                repo.git(&[
+                    "symbolic-ref",
+                    "refs/remotes/origin/loop",
+                    "refs/remotes/origin/HEAD",
+                ]);
+            }
+            _ => {
+                std::fs::write(
+                    repo.root().join(".git/refs/remotes/origin/HEAD"),
+                    "broken\n",
+                )
+                .unwrap();
+            }
+        }
+        repo.check("git-guard", "git status", 2);
+    }
+}
+
+#[test]
+fn r4_review_custom_default_beside_main_and_head_transition() {
+    for mode in ["never", "create", "warn", "always"] {
+        let repo = Repo::new();
+        repo.remote();
+        publish_policy(
+            &repo,
+            "integration/strict",
+            &json!({"git":{"force_push_unprotected":"block"},"security":{"headless_peer_runs":"off"}}),
+        );
+        publish_policy(
+            &repo,
+            "master",
+            &json!({"git":{"root_branch":"integration/strict"},"security":{"headless_peer_runs":"off"}}),
+        );
+        publish_policy(
+            &repo,
+            "main",
+            &json!({"git":{"root_branch":"integration/strict"},"security":{"headless_peer_runs":"off"}}),
+        );
+        publish_policy(
+            &repo,
+            "trunk",
+            &json!({"git":{"root_branch":"integration/strict"},"security":{"headless_peer_runs":"block"}}),
+        );
+        repo.git(&[
+            "--git-dir",
+            "remote.git",
+            "symbolic-ref",
+            "HEAD",
+            "refs/heads/trunk",
+        ]);
+        repo.git(&["config", "remote.origin.followRemoteHEAD", mode]);
+        let diagnostic = codeflow_core::hooks::landed_policy::diagnostic(repo.root()).unwrap();
+        assert!(
+            diagnostic.contains("custom defaults")
+                && diagnostic.contains("git remote set-head origin --auto")
+        );
+        let authority = codeflow_core::hooks::landed_policy::load(repo.root()).unwrap();
+        assert!(!authority.source.contains("trunk"));
+        for source in ["origin/main", "origin/master", "origin/integration/strict"] {
+            assert!(authority.source.contains(source), "{}", authority.source);
+        }
+        repo.check("exec-guard", "claude -p hello", 0);
+        repo.check("git-guard", "git fetch origin", 0);
+        repo.git(&["fetch", "-q", "origin"]);
+        if mode == "never" {
+            repo.check("exec-guard", "claude -p hello", 0);
+            repo.git(&["remote", "set-head", "origin", "--auto"]);
+        }
+        let diagnostic = codeflow_core::hooks::landed_policy::diagnostic(repo.root()).unwrap();
+        assert!(
+            diagnostic.contains("refs/remotes/origin/trunk")
+                && !diagnostic.contains("remote HEAD not set"),
+            "{mode}: {diagnostic}"
+        );
+        assert!(diagnostic.contains("origin/integration/strict"));
+        repo.check("exec-guard", "claude -p hello", 2);
+        // A trusted server default change follows the operator's configured mode.
+        repo.git(&[
+            "--git-dir",
+            "remote.git",
+            "symbolic-ref",
+            "HEAD",
+            "refs/heads/main",
+        ]);
+        repo.git(&["fetch", "-q", "origin"]);
+        let canonical = repo.git(&["symbolic-ref", "refs/remotes/origin/HEAD"]);
+        assert_eq!(
+            canonical,
+            if mode == "always" {
+                "refs/remotes/origin/main"
+            } else {
+                "refs/remotes/origin/trunk"
+            }
+        );
+        repo.check(
+            "exec-guard",
+            "claude -p hello",
+            if mode == "always" { 0 } else { 2 },
+        );
+        repo.check("git-guard", "git push --force origin task/x", 2);
+    }
+}
+
+#[test]
+fn r4_review_head_follow_config_and_pruning_authority_routes() {
+    let repo = Repo::new();
+    repo.remote();
+    publish_policy(
+        &repo,
+        "master",
+        &json!({"security":{"headless_peer_runs":"block"}}),
+    );
+    for command in [
+        "git config fetch.followRemoteHEAD always",
+        "git config --global fetch.followRemoteHEAD always",
+        "git -c fetch.followRemoteHEAD=always fetch origin",
+        "git config remote.origin.followRemoteHEAD always",
+        "git update-ref refs/remotes/origin/main HEAD",
+        "git update-ref -d refs/remotes/origin/master",
+        "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main",
+        "git branch -Dr origin/master",
+        "git remote set-head origin main",
+        "git fetch --prune origin :refs/remotes/origin/master",
+        "git fetch --prune --refmap= origin",
+        "rm -rf .git/refs/remotes/origin/master",
+    ] {
+        repo.check("git-guard", command, 2);
+    }
+    for command in [
+        "git fetch --prune origin",
+        "git remote prune origin",
+        "git status",
+        "git log",
+        "git config --get fetch.followRemoteHEAD",
+    ] {
+        repo.check("git-guard", command, 0);
+    }
+    repo.git(&["fetch", "-q", "--prune", "origin"]);
+    repo.check("exec-guard", "claude -p hello", 2);
+}
+
+#[test]
+fn r4_review_remote_prune_checks_transport_authority() {
+    let repo = Repo::new();
+    repo.landed();
+    repo.check("git-guard", "git remote prune origin", 0);
+    repo.check(
+        "git-guard",
+        "GIT_CONFIG_GLOBAL=weak.conf git remote prune origin",
+        2,
+    );
+    repo.git(&[
+        "config",
+        "--global",
+        "url./elsewhere.insteadOf",
+        repo.root().join("remote.git").to_str().unwrap(),
+    ]);
+    repo.check("git-guard", "git remote prune origin", 2);
 }

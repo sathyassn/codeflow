@@ -62,7 +62,7 @@ publication date._
   older binary. Install the new binary before `codeflow update`; configure
   the remote HEAD with operator `git remote set-head origin --auto` when
   needed. Doctor and orient report policy sources and local drift.
-  Without remote HEAD, guards try main then master; custom defaults need operator set-head.
+  Without remote HEAD, guards merge main and master by the stricter levels; custom defaults need operator set-head.
 
 <!-- codeflow:release-impact minor -->
 - **Fetched work targets.** Work claims discover records on fetched target
