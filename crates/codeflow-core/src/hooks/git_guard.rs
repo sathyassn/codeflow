@@ -889,10 +889,11 @@ fn integrity_write_in_dirs(
 /// The integrity path a single argument token names, when any. The token is
 /// normalized first so equivalent spellings match.
 fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
-    if super::edit_guard::repository_authority_target(&cwd.join(token), payload_cwd, true) {
+    let path = integrity_shell_path(token, cwd);
+    if super::edit_guard::repository_authority_target(&path, payload_cwd, true) {
         return Some(super::edit_guard::AUTHORITY_PATH);
     }
-    if super::edit_guard::repository_enforcement_target(&cwd.join(token), payload_cwd, true) {
+    if super::edit_guard::repository_enforcement_target(&path, payload_cwd, true) {
         return Some("repository enforcement files");
     }
     integrity_target(&normalize_path(token)).or_else(|| {
@@ -909,6 +910,25 @@ fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&
             .or_else(|| Path::new(token).is_absolute().then_some(path.as_path()))?;
         integrity_target(&normalize_path(&target.to_string_lossy()))
     })
+}
+
+fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
+    if let Some(relative) = token.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(relative);
+        }
+    }
+    for name in ["HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL"] {
+        let relative = token
+            .strip_prefix(&format!("${name}"))
+            .or_else(|| token.strip_prefix(&format!("${{{name}}}")));
+        if let Some(relative) = relative.filter(|s| s.is_empty() || s.starts_with('/')) {
+            if let Some(value) = std::env::var_os(name) {
+                return cwd.join(value).join(relative.trim_start_matches('/'));
+            }
+        }
+    }
+    cwd.join(token)
 }
 
 // Only explicit dot-patterns at a repository root can reach these hidden
@@ -2115,7 +2135,7 @@ fn check_authority(
     violations: &mut Vec<Violation>,
 ) {
     if moved.transport_env
-        && git_subcommand(args).is_some_and(|(sub, _)| matches!(sub, "fetch" | "push"))
+        && git_subcommand(args).is_some_and(|(sub, _)| matches!(sub, "fetch" | "pull" | "push"))
     {
         violations.push(Violation::always_blocking(
             "git.policy_authority",

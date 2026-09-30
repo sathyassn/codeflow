@@ -458,8 +458,42 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
 
 pub(crate) const AUTHORITY_PATH: &str = "remote-tracking policy metadata";
 
+// File edits cannot establish which config keys are safe. The Git command
+// checker still permits ordinary `git config --global user.name ...` updates.
+fn global_git_config_target(target: &Path, root: &Path) -> bool {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let mut paths = Vec::new();
+    if let Some(home) = &home {
+        paths.push(home.join(".gitconfig"));
+    }
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.map(|home| home.join(".config")));
+    if let Some(xdg) = xdg {
+        paths.push(xdg.join("git/config"));
+    }
+    // /dev/null deliberately disables global config; writes cannot change its contents.
+    if let Some(path) = std::env::var_os("GIT_CONFIG_GLOBAL")
+        .filter(|s| !s.is_empty() && s != std::ffi::OsStr::new("/dev/null"))
+    {
+        paths.push(root.join(path));
+    }
+    [false, true].into_iter().any(|resolve| {
+        normalized(target, resolve).is_ok_and(|target| {
+            paths
+                .iter()
+                .any(|path| normalized(path, resolve).is_ok_and(|path| path == target))
+        })
+    })
+}
+
 /// Authority metadata cannot be relaxed by a policy read from that metadata.
 pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors: bool) -> bool {
+    if global_git_config_target(target, root) {
+        return true;
+    }
     let Ok(repo) = git2::Repository::discover(root) else {
         return false;
     };

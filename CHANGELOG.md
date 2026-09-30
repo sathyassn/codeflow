@@ -45,6 +45,13 @@ publication date._
 > 6. A project that adopted the bundled portal follows the ownership table
 >    in `docs/releasing.md` before its next portal update.
 
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **Tracking authority transport checks.** Fetch and pull reject URL rewrites
+  and arbitrary tracking-ref destinations. Direct writes to global Git config
+  files are refused while ordinary config reads and user-name updates pass.
+
 ### Added
 
 <!-- codeflow:release-impact major -->

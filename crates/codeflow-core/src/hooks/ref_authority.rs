@@ -76,9 +76,9 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
         {
             Some("the operator manages remote identity and default-branch authority".into())
         }
-        "fetch" => fetch(root, rest),
+        "fetch" | "pull" => fetch(root, rest, sub == "pull"),
         "push" => {
-            let operands = operands(rest);
+            let operands = operands(rest, false);
             let destination = rest
                 .iter()
                 .enumerate()
@@ -111,7 +111,7 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
     }
 }
 
-fn operands(args: &[String]) -> Vec<String> {
+fn operands(args: &[String], pull: bool) -> Vec<String> {
     let mut result = Vec::new();
     let mut skip = false;
     for arg in args {
@@ -131,7 +131,12 @@ fn operands(args: &[String]) -> Vec<String> {
                 | "--shallow-exclude"
                 | "-j"
                 | "--jobs"
-        ) {
+        ) || (pull
+            && matches!(
+                arg.as_str(),
+                "-s" | "--strategy" | "-X" | "--strategy-option"
+            ))
+        {
             skip = true;
             continue;
         }
@@ -142,7 +147,7 @@ fn operands(args: &[String]) -> Vec<String> {
     result
 }
 
-fn fetch(root: &Path, args: &[String]) -> Option<String> {
+fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
     if args
         .iter()
         .any(|arg| arg.starts_with("--refmap") || arg.contains(":refs/") || arg.contains(":+refs/"))
@@ -150,7 +155,7 @@ fn fetch(root: &Path, args: &[String]) -> Option<String> {
         return Some("fetch must use the configured remote's own mapping, without a destination ref or --refmap".into());
     }
     let repo = git2::Repository::discover(root).ok()?;
-    let operands = operands(args);
+    let operands = operands(args, pull);
     let names = repo.remotes().ok()?;
     let names: Vec<_> = names.iter().flatten().flatten().collect();
     let requested = operands.first().map(String::as_str);
@@ -172,7 +177,11 @@ fn fetch(root: &Path, args: &[String]) -> Option<String> {
         return Some("fetch source is not a configured remote or its URL".into());
     };
     let name = remote.name().ok()??;
-    let raw = remote.url().ok()?;
+    // Remote::url already expands insteadOf. Config retains the literal URL.
+    let raw = match repo.config().and_then(|config| config.get_string(&format!("remote.{name}.url"))) {
+        Ok(raw) => raw,
+        Err(error) => return Some(format!("cannot read raw remote.{name}.url: {error}; the operator inspects git config --show-origin --get remote.{name}.url")),
+    };
     // Git applies includes and insteadOf at every scope; compare its resolved URL.
     let effective = Command::new("git")
         .current_dir(root)

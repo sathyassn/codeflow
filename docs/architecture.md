@@ -171,6 +171,11 @@ writes, including per-worktree config files, cannot replace the tracking
 authority, even when local-edit relief lowers hook integrity. Missing authority
 after a tracking ref exists refuses the call and names fetch or operator set-head
 recovery. Doctor and orient report the source, drift and the bootstrap residual.
+Fetch and pull compare the effective Git URL with the raw configured remote URL.
+Direct shell and native writes to `~/.gitconfig`, the XDG Git config and the
+`GIT_CONFIG_GLOBAL` file are authority edits; shell config reads and
+`git config --global user.name` remain allowed. A global config set to
+`/dev/null` stays an ordinary output sink.
 Contract-3 git shims exit 1 and harness wrappers exit 2 when their binary is
 missing or older; they print the installer and `codeflow update`. The wrappers
 require a POSIX shell (macOS, Linux, WSL or Git Bash); native PowerShell as the

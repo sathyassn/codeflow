@@ -48,6 +48,7 @@ impl Repo {
         let mut c = Command::new(program);
         c.current_dir(self.root())
             .env("HOME", self.root())
+            .env("XDG_CONFIG_HOME", self.root().join(".config"))
             .env(
                 "PATH",
                 std::env::join_paths(
@@ -108,21 +109,7 @@ impl Repo {
         self.policy("off");
     }
     fn hook(&self, hook: &str, command: &str) -> Output {
-        let mut child = self
-            .command(&binary())
-            .args(["hook", hook])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        write!(
-            child.stdin.take().unwrap(),
-            "{}",
-            json!({"tool_name":"Bash","cwd":self.root(),"tool_input":{"command":command}})
-        )
-        .unwrap();
-        child.wait_with_output().unwrap()
+        run_hook(self.command(&binary()), self.root(), hook, command)
     }
     fn check(&self, hook: &str, cmd: &str, code: i32) -> Output {
         let out = self.hook(hook, cmd);
@@ -768,4 +755,192 @@ fn ac2_worktree_configuration_cannot_redirect_authority_fetch() {
         2,
     );
     repo.check("git-guard", "cat .git/config.worktree", 0);
+}
+
+fn run_hook(mut process: Command, cwd: &Path, hook: &str, command: &str) -> Output {
+    let mut child = process
+        .args(["hook", hook])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(
+        child.stdin.take().unwrap(),
+        "{}",
+        json!({"tool_name":"Bash","cwd":cwd,"tool_input":{"command":command}})
+    )
+    .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn r2_f1_prefix_rewrites_from_global_config_cannot_replace_authority() {
+    for scope in ["home", "xdg", "explicit"] {
+        let repo = Repo::new();
+        repo.landed();
+        let weak = Repo::new();
+        weak.remote();
+        weak.git(&["push", "-q", "origin", "HEAD:main"]);
+        let config = match scope {
+            "home" => repo.root().join(".gitconfig"),
+            "xdg" => repo.root().join(".config/git/config"),
+            _ => repo.root().join("selected.gitconfig"),
+        };
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let process = |program: &str| {
+            let mut process = repo.command(program);
+            process.env("XDG_CONFIG_HOME", repo.root().join(".config"));
+            if scope == "explicit" {
+                process.env("GIT_CONFIG_GLOBAL", &config);
+            } else {
+                process.env_remove("GIT_CONFIG_GLOBAL");
+            }
+            process
+        };
+        let prefix = format!("{}/", repo.root().display());
+        let replacement = format!("{}/", weak.root().display());
+        let raw = repo.git(&["config", "--get", "remote.origin.url"]);
+        let original = repo.git(&["rev-parse", "refs/remotes/origin/main"]);
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&config)
+            .unwrap();
+        writeln!(
+            file,
+            "[url \"{replacement}\"]\ninsteadOf = {prefix}\npushInsteadOf = {prefix}"
+        )
+        .unwrap();
+        drop(file);
+        let effective = process("git")
+            .args(["remote", "get-url", "origin"])
+            .output()
+            .unwrap();
+        assert!(effective.status.success());
+        assert_ne!(String::from_utf8_lossy(&effective.stdout).trim(), raw);
+        let out = run_hook(
+            process(&binary()),
+            repo.root(),
+            "git-guard",
+            "git fetch origin",
+        );
+        let text = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{scope}: {text}");
+        assert!(
+            text.contains("git.policy_authority") && text.contains("effective URL"),
+            "{text}"
+        );
+        assert!(
+            text.contains("operator") && text.contains("--show-origin"),
+            "{text}"
+        );
+        assert_eq!(
+            repo.git(&["rev-parse", "refs/remotes/origin/main"]),
+            original
+        );
+        // A push-only rewrite does not redirect a fetch, nor do user preferences.
+        std::fs::write(
+            &config,
+            format!("[user]\nname = Test\n[url \"{replacement}\"]\npushInsteadOf = {prefix}\n"),
+        )
+        .unwrap();
+        let out = run_hook(
+            process(&binary()),
+            repo.root(),
+            "git-guard",
+            "git fetch origin",
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{scope}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn r2_f2_linked_worktree_pull_uses_fetch_authority_checks() {
+    let repo = Repo::new();
+    repo.landed();
+    repo.git(&["worktree", "add", "-q", "-b", "task/linked", "linked"]);
+    let linked = repo.root().join("linked");
+    let weak = Repo::new();
+    weak.remote();
+    let url = weak.root().join("remote.git");
+    for command in [
+        format!("git pull '{}' main:refs/remotes/origin/main", url.display()),
+        format!(
+            "git pull --no-rebase '{}' main:refs/remotes/origin/main",
+            url.display()
+        ),
+        format!("git pull '{}' main", url.display()),
+        "git pull origin main:refs/remotes/origin/main".into(),
+        "git pull --refmap= origin main".into(),
+        "GIT_CONFIG_GLOBAL=other.conf git pull origin main".into(),
+    ] {
+        let mut process = repo.command(&binary());
+        process.current_dir(&linked);
+        let out = run_hook(process, &linked, "git-guard", &command);
+        let text = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {text}");
+        assert!(
+            text.contains("git.policy_authority") && text.contains("sanctioned:"),
+            "{text}"
+        );
+    }
+    for command in [
+        "git pull",
+        "git pull origin main",
+        "git pull --no-rebase origin main",
+        "git pull --strategy recursive origin main",
+    ] {
+        let mut process = repo.command(&binary());
+        process.current_dir(&linked);
+        let out = run_hook(process, &linked, "git-guard", command);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn r2_f1_direct_git_config_writes_are_authority_edits() {
+    let repo = Repo::new();
+    repo.landed();
+    for path in [
+        "~/.gitconfig".to_string(),
+        "$HOME/.gitconfig".to_string(),
+        "${HOME}/.config/git/config".to_string(),
+        repo.root().join("global.config").display().to_string(),
+    ] {
+        repo.check("git-guard", &format!("printf x >> {path}"), 2);
+        repo.check("git-guard", &format!("cat {path}"), 0);
+    }
+    repo.check(
+        "git-guard",
+        "printf x >> ~/.gitconfig && git fetch origin",
+        2,
+    );
+    repo.check("git-guard", "git config --global user.name Test", 0);
+    let mut process = repo.command(&binary());
+    process.env("GIT_CONFIG_GLOBAL", "/dev/null");
+    let out = run_hook(process, repo.root(), "git-guard", "printf x >/dev/null");
+    assert_eq!(out.status.code(), Some(0), "null redirect: {out:?}");
+    let path = repo.root().join(".gitconfig");
+    let mut child = repo
+        .command(&binary())
+        .args(["hook", "edit-guard"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(child.stdin.take().unwrap(), "{}", json!({"tool_name":"Write", "cwd":repo.root(), "tool_input":{"file_path":path,"content":"x"}})).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "native edit: {out:?}");
 }
