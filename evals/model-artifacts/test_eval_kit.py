@@ -4275,8 +4275,7 @@ class ProcessRepairTests(unittest.TestCase):
                     runner.codex_hook_preflight(env, repo)
                 forbidden.unlink()
             (home / "plugins/cache/market/plugin").mkdir(parents=True)
-            with self.assertRaisesRegex(runner.Refused, "plugins"):
-                runner.codex_hook_preflight(env, repo)
+            self.assertEqual([], runner.codex_hook_preflight(env, repo)["plugins"])
             shutil.rmtree(home / "plugins")
             original = json.loads(shipped)
             variants = []
@@ -4301,6 +4300,76 @@ class ProcessRepairTests(unittest.TestCase):
             hooks.unlink()
             hooks.symlink_to(ROOT / "assets/base/codex/hooks.json")
             with self.assertRaisesRegex(runner.Refused, "symlink"):
+                runner.codex_hook_preflight(env, repo)
+
+    def test_codex_cached_plugins_are_inspected_and_recorded(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            home = Path(temp) / ".codeflow-eval/codex"
+            plugin = home / "plugins/cache/openai-curated-remote/example/1.2.3"
+            manifest = plugin / ".codex-plugin/plugin.json"
+            manifest.parent.mkdir(parents=True)
+            clean = {"name": "example", "version": "1.2.3", "skills": "./skills", "apps": "./.app.json"}
+            manifest.write_text(json.dumps(clean))
+            repo = Path(temp) / "repository"
+            (repo / ".codex").mkdir(parents=True)
+            (repo / ".codex/hooks.json").write_bytes((ROOT / "assets/base/codex/hooks.json").read_bytes())
+            env = {"CODEX_HOME": str(home)}
+            result = runner.codex_hook_preflight(env, repo)
+            entry = result["plugins"][0]
+            self.assertEqual("example", entry["name"])
+            self.assertEqual("1.2.3", entry["version"])
+            self.assertEqual("remote curated", entry["source"])
+            self.assertTrue(entry["skills"])
+            self.assertTrue(entry["apps"])
+            self.assertEqual("sha256:" + hashlib.sha256(manifest.read_bytes()).hexdigest(), entry["manifest_sha256"])
+            for value in [None, {}, "./external.json"]:
+                manifest.write_text(json.dumps({**clean, "hooks": value}))
+                with self.subTest(hooks=value), self.assertRaisesRegex(runner.Refused, "hooks"):
+                    runner.codex_hook_preflight(env, repo)
+            manifest.write_text(json.dumps(clean))
+            for name in ["hooks.json", "nested/hooks.json", "hooks"]:
+                path = plugin / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.mkdir() if name == "hooks" else path.write_text("{}")
+                with self.subTest(path=name), self.assertRaisesRegex(runner.Refused, "hooks"):
+                    runner.codex_hook_preflight(env, repo)
+                path.rmdir() if path.is_dir() else path.unlink()
+            alias = home / "plugins/alias"
+            alias.symlink_to(plugin, target_is_directory=True)
+            with self.assertRaisesRegex(runner.Refused, "symlink"):
+                runner.codex_hook_preflight(env, repo)
+            alias.unlink()
+            manifest.chmod(0)
+            try:
+                with self.assertRaisesRegex(runner.Refused, "unreadable|Permission"):
+                    runner.codex_hook_preflight(env, repo)
+            finally:
+                manifest.chmod(0o644)
+            config = home / "config.toml"
+            config.write_text('[plugins."example@openai-curated-remote"]\nenabled = true\n')
+            self.assertEqual(1, len(runner.codex_hook_preflight(env, repo)["plugins"]))
+            for text in ['[plugins."missing@openai-curated-remote"]\nenabled = true\n',
+                         '[marketplaces.missing]\nsource_type = "git"\nsource = "https://example.invalid/plugins"\n']:
+                config.write_text(text)
+                with self.subTest(config=text), self.assertRaisesRegex(runner.Refused, "on disk|inspect"):
+                    runner.codex_hook_preflight(env, repo)
+            config.write_text('[plugins."missing@unused"]\nenabled = false\n')
+            self.assertEqual(1, len(runner.codex_hook_preflight(env, repo)["plugins"]))
+            config.write_text('[marketplaces.personal]\nsource_type = "local"\nsource = "' + str(Path(temp).resolve()) + '"\n')
+            with self.assertRaisesRegex(runner.Refused, "personal harness"):
+                runner.codex_hook_preflight(env, repo)
+            # A local marketplace must be present and scanned too.
+            local = home / "local-market"
+            local_manifest = local / "tool/.codex-plugin/plugin.json"
+            local_manifest.parent.mkdir(parents=True)
+            local_manifest.write_text('{"name":"tool","version":"local"}')
+            config.write_text('[marketplaces.local]\nsource_type = "local"\nsource = "' + str(local.resolve()) + '"\n'
+                              '[plugins."tool@local"]\nenabled = true\n')
+            plugins = runner.codex_hook_preflight(env, repo)["plugins"]
+            self.assertEqual({"remote curated", "local"}, {p["source"] for p in plugins})
+            (local / "tool/hooks").mkdir()
+            with self.assertRaisesRegex(runner.Refused, "hooks"):
                 runner.codex_hook_preflight(env, repo)
 
     def test_codex_hook_trust_cli_is_opt_in(self):
@@ -4532,6 +4601,9 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual("bypass", refused["hook_trust"]["option"])
             self.assertFalse(refused["hook_trust"]["flag_used"])
             args.output = evidence_root / "codex-verified-delivery-opt-in"
+            cached = Path(environment["CODEX_HOME"]) / "plugins/cache/openai-curated-remote/example/1/.codex-plugin/plugin.json"
+            cached.parent.mkdir(parents=True)
+            cached.write_text('{"name":"example","version":"1","apps":"./.app.json"}')
             frames = iter([self.codex_frame(repository), self.codex_frame(repository, "› Reply ok.")])
             def codex_transport(*argv, **kwargs):
                 if argv[:2] == ("pane", "read"):
@@ -4554,8 +4626,10 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual(1, delivered["native_args"].count(flag))
             self.assertEqual("true", delivered["permission_flags"][flag])
             trust = delivered["hook_trust"]
-            self.assertEqual({"option", "flag_used", "evaluator_home", "hooks_sha256", "checks"}, set(trust))
+            self.assertEqual({"option", "flag_used", "evaluator_home", "hooks_sha256", "checks", "plugins"}, set(trust))
             self.assertEqual("bypass", trust["option"])
+            self.assertEqual("example", trust["plugins"][0]["name"])
+            self.assertEqual("sha256:" + hashlib.sha256(cached.read_bytes()).hexdigest(), trust["plugins"][0]["manifest_sha256"])
             self.assertTrue(trust["flag_used"])
             self.assertEqual(str(Path(environment["CODEX_HOME"]).resolve()), trust["evaluator_home"])
             self.assertEqual("sha256:" + hashlib.sha256((repository / ".codex/hooks.json").read_bytes()).hexdigest(), trust["hooks_sha256"])

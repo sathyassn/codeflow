@@ -2241,8 +2241,9 @@ Setup directories are disposable; close the seat before removing its printed set
 The qualification runner defaults to manual hook review; it never adds a bypass
 unless the person running the evaluation chooses --codex-hook-trust=bypass on that
 launch. That option skips per-folder review for this evaluation trial only, using
-the dedicated Codex evaluator home after refusing user hooks/plugins and verifying
-the shipped contract-3 fixture commands. No trust is written or preference saved.
+the dedicated Codex evaluator home after refusing user and plugin hooks and verifying
+the shipped contract-3 fixture commands. Hook-free plugins are inspected and recorded;
+curated plugins can add skills and apps. No trust is written or preference saved.
 This setup helper and an operator's own interactive Codex still use /hooks review.
 Manual trust is keyed by absolute hooks-file path and a per-hook hash; a review in
 one fixture does not carry to another. Setup grants no trust.

@@ -88,20 +88,35 @@ resolving to `~/.codeflow-eval/codex`. A caller-supplied native bypass flag
 also requires that choice; another home or harness refuses. Before a bypass
 launch, the runner checks:
 
-- The dedicated home has no `hooks.json`, TOML hooks entries (including old
-  `hooks.state` trust records), plugin or marketplace configuration, or
-  populated `plugins`/`.plugins` directory. Empty plugin directories are
-  harmless; files or links in their place refuse. Malformed or unreadable
-  config refuses. Config in profiles receives the same checks.
+- The dedicated home has no `hooks.json` or TOML hooks entries (including old
+  `hooks.state` trust records). Malformed or unreadable config refuses.
+  Config in profiles receives the same checks.
+- Installed and cached plugins under `plugins`/`.plugins`, plus configured
+  local marketplace sources, are inspected. A `hooks` key in a plugin's
+  `.codex-plugin/plugin.json`, a `hooks.json` anywhere in the tree, or any
+  `hooks` directory refuses, even for a disabled plugin. Symlinked,
+  unreadable or non-regular paths and invalid manifests refuse. Inspection
+  is capped at 100,000 entries and ten seconds per tree; either cap refuses.
+  Enabled plugins must match an inspected name and marketplace. A configured
+  marketplace must have an inspectable local source or cached plugins on
+  disk; unresolved sources refuse without fetching them.
 - The fixture's `.codex/hooks.json` matches the complete shipped definition
   in `assets/base/codex/hooks.json`, including matchers, handlers and the
   `codeflow hook <name> --contract 3` wrappers. Missing, extra or changed
-  definitions refuse. Fixture TOML hooks, plugin configuration and plugin
-  directories also refuse. Symlinked hook/config sources refuse.
+  definitions refuse. Fixture TOML hooks refuse; fixture plugin sources
+  receive the same inspection. Symlinked hook/config sources refuse.
 
-These checks restrict bypass to the reviewed shipped commands and exclude
-user hooks and plugins that could otherwise run without review. The runner never writes trust grants,
-removes existing trust records, or touches the operator's personal `~/.codex`.
+Hook-free plugins are allowed. Account-managed curated plugins add skills
+and apps to the subject's context; that contribution is recorded rather than
+refused. `hook_trust.plugins` in `launch.json` lists each inspected plugin's
+name, declared version (null if absent), source, marketplace, path, skills
+and apps presence, and manifest SHA-256. This is a disk inventory, not proof
+that each plugin was enabled or used. Trace review must account for it.
+
+These checks restrict bypass to the reviewed shipped hook commands and
+exclude user and plugin hooks that could otherwise run without review.
+The runner never writes trust grants, deletes plugin caches, removes
+existing trust records, or touches the operator's personal `~/.codex`.
 An unexpected "Hooks need review" screen still refuses without a key.
 Existing exact-path workspace-trust checks remain in force; trial paths
 stay fresh. No stable path or archive lifecycle is used.

@@ -640,29 +640,113 @@ def hook_settings_bytes(path: Path) -> bytes:
     return content
 
 
-def reject_extra_hook_sources(root: Path) -> None:
+def inspect_plugins(root: Path, *, marketplace: str | None = None) -> list[dict]:
+    """Inspect disk content without loading plugins or following links."""
+    for parent in (root, *root.parents):
+        if parent.is_symlink():
+            raise Refused(f"plugin path contains a symlink: {parent}", CODEX_HOOK_TRUST_FLAG)
+    if not root.is_dir():
+        raise Refused(f"plugin source is not a directory on disk: {root}", CODEX_HOOK_TRUST_FLAG)
+    pending, manifests = [root], []
+    count, deadline = 0, time.monotonic() + 10
+    while pending:
+        path = pending.pop()
+        count += 1
+        if count > 100_000 or time.monotonic() > deadline:
+            raise Refused(f"plugin inspection cap reached: {root}", CODEX_HOOK_TRUST_FLAG)
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise Refused(f"plugin path contains a symlink: {path}", CODEX_HOOK_TRUST_FLAG)
+        directory = stat.S_ISDIR(mode)
+        if not (directory or stat.S_ISREG(mode)) or not os.access(path, os.R_OK | (os.X_OK if directory else 0)):
+            raise Refused(f"plugin path is unreadable or not regular: {path}", CODEX_HOOK_TRUST_FLAG)
+        if path.name == "hooks.json" or (directory and path.name == "hooks"):
+            raise Refused(f"plugin contains hooks: {path}", CODEX_HOOK_TRUST_FLAG)
+        if directory:
+            if path.name == ".codex-plugin" and not (path / "plugin.json").is_file():
+                raise Refused(f"plugin manifest missing: {path}", CODEX_HOOK_TRUST_FLAG)
+            pending.extend(sorted(path.iterdir(), reverse=True))
+        elif path.name == "plugin.json" and path.parent.name == ".codex-plugin":
+            manifests.append(path)
+
+    plugins = []
+    for manifest in sorted(manifests):
+        content = hook_settings_bytes(manifest)
+        document = json.loads(content)
+        if not isinstance(document, dict) or not isinstance(document.get("name"), str) or not document["name"]:
+            raise Refused(f"invalid plugin manifest: {manifest}", CODEX_HOOK_TRUST_FLAG)
+        if "hooks" in document:
+            raise Refused(f"plugin manifest declares hooks: {manifest}", CODEX_HOOK_TRUST_FLAG)
+        plugin = manifest.parent.parent
+        parts = plugin.relative_to(root).parts
+        market = marketplace or (parts[1] if len(parts) >= 4 and parts[0] == "cache" else None)
+        source = ("remote curated" if market == "openai-curated-remote" else
+                  "local" if marketplace or not market or parts[-1] == "local" else "cached marketplace")
+        plugins.append({"name": document["name"], "version": document.get("version"),
+                        "source": source,
+                        "marketplace": market, "path": str(plugin),
+                        "skills": bool(document.get("skills")) or (plugin / "skills").is_dir(),
+                        "apps": bool(document.get("apps")) or (plugin / ".app.json").is_file(),
+                        "manifest_sha256": "sha256:" + hashlib.sha256(content).hexdigest()})
+    return plugins
+
+
+def reject_extra_hook_sources(root: Path, plugins: list[dict]) -> None:
     config = root / "config.toml"
+    declarations = {"plugins": [], "marketplaces": []}
     if config.exists() or config.is_symlink():
         document = tomllib.loads(hook_settings_bytes(config).decode("utf-8"))
         def visit(table: dict, features: bool = False) -> None:
             for key, value in table.items():
-                # [features].hooks enables the shipped mechanism, not a handler.
-                if key in {"hooks", "plugins", "marketplaces"} and not (features and isinstance(value, bool)):
-                    raise Refused(f"hooks or plugins are not allowed in {config} ({key})", CODEX_HOOK_TRUST_FLAG)
+                # Feature booleans enable mechanisms, not handler definitions.
+                if features and isinstance(value, bool):
+                    continue
+                if key == "hooks":
+                    raise Refused(f"hooks are not allowed in {config}", CODEX_HOOK_TRUST_FLAG)
+                if key in declarations:
+                    if not isinstance(value, dict):
+                        raise Refused(f"cannot inspect {key} configuration in {config}", CODEX_HOOK_TRUST_FLAG)
+                    declarations[key].extend(value.items())
                 if isinstance(value, dict):
                     visit(value, key == "features")
         visit(document)
     for name in ("plugins", ".plugins"):
         path = root / name
-        if path.is_symlink() or (path.exists() and (not path.is_dir() or any(path.iterdir()))):
-            raise Refused(f"plugins are not allowed in the trial hook sources: {path}", CODEX_HOOK_TRUST_FLAG)
-
+        if path.exists() or path.is_symlink():
+            plugins.extend(inspect_plugins(path))
+    for name, settings in declarations["marketplaces"]:
+        if not isinstance(settings, dict):
+            raise Refused(f"cannot inspect marketplace: {name}", CODEX_HOOK_TRUST_FLAG)
+        if settings.get("enabled") is False:
+            continue
+        if settings.get("source_type") == "local":
+            if not isinstance(settings.get("source"), str) or not settings["source"]:
+                raise Refused(f"cannot inspect local marketplace: {name}", CODEX_HOOK_TRUST_FLAG)
+            source = Path(settings["source"]).expanduser()
+            if not source.is_absolute():
+                source = root / source
+            personal = [Path.home() / entry for entry in (".claude", ".claude.json", ".codex", ".grok")]
+            if any(source.resolve().is_relative_to(path.resolve()) or path.resolve().is_relative_to(source.resolve())
+                   for path in personal):
+                raise Refused("personal harness plugin sources are refused", CODEX_HOOK_TRUST_FLAG)
+            plugins.extend(inspect_plugins(source, marketplace=name))
+        elif not any(plugin["marketplace"] == name for plugin in plugins):
+            raise Refused(f"marketplace is not on disk to inspect: {name}", CODEX_HOOK_TRUST_FLAG)
+    for name, settings in declarations["plugins"]:
+        if not isinstance(settings, dict):
+            raise Refused(f"cannot inspect plugin configuration: {name}", CODEX_HOOK_TRUST_FLAG)
+        if settings.get("enabled") is False:
+            continue
+        if not any(name == f"{plugin['name']}@{plugin['marketplace']}" for plugin in plugins):
+            raise Refused(f"enabled plugin is not on disk to inspect: {name}", CODEX_HOOK_TRUST_FLAG)
+    # One disk manifest can be both cached and explicitly configured.
+    plugins[:] = list({plugin["path"]: plugin for plugin in plugins}.values())
 
 def codex_hook_preflight(environment: dict[str, str], repository: Path,
                          evidence: dict | None = None) -> dict:
     """Inspect only non-secret settings; never grant trust or change config."""
     result = evidence if evidence is not None else {}
-    result.update(flag_used=False, evaluator_home=None, hooks_sha256=None,
+    result.update(flag_used=False, evaluator_home=None, hooks_sha256=None, plugins=[],
                   checks={"evaluator_home": "not_checked", "fixture_hooks": "not_checked"})
     stage = "evaluator_home"
     try:
@@ -672,11 +756,11 @@ def codex_hook_preflight(environment: dict[str, str], repository: Path,
             raise Refused("dedicated evaluator home is missing, unreadable or contains symlinks", CODEX_HOOK_TRUST_FLAG)
         if (home / "hooks.json").exists() or (home / "hooks.json").is_symlink():
             raise Refused("user-level hooks.json is not allowed in the dedicated evaluator home", CODEX_HOOK_TRUST_FLAG)
-        reject_extra_hook_sources(home)
+        reject_extra_hook_sources(home, result["plugins"])
         result["checks"][stage] = "passed"
         stage = "fixture_hooks"
         kit.refuse_symlink_components(repository / ".codex", repository)
-        reject_extra_hook_sources(repository / ".codex")
+        reject_extra_hook_sources(repository / ".codex", result["plugins"])
         content = hook_settings_bytes(repository / ".codex/hooks.json")
         result["hooks_sha256"] = "sha256:" + hashlib.sha256(content).hexdigest()
         expected = json.loads(hook_settings_bytes(ROOT / "assets/base/codex/hooks.json"))
@@ -796,7 +880,7 @@ def launch(args) -> None:
             raise Refused("runner evidence must live outside declared directories")
     if args.output.exists():
         raise Refused("output already exists; never reuse a trial launch")
-    hook_trust = {"option": args.codex_hook_trust, "flag_used": False, "evaluator_home": None, "hooks_sha256": None,
+    hook_trust = {"option": args.codex_hook_trust, "flag_used": False, "evaluator_home": None, "hooks_sha256": None, "plugins": [],
                   "checks": {"evaluator_home": "not_checked", "fixture_hooks": "not_checked"}}
     try:
         if args.codex_hook_trust not in {"review", "bypass"}:
