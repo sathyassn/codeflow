@@ -3564,6 +3564,38 @@ class ProcessRepairTests(unittest.TestCase):
         choices = "1. Yes, try it\n❯ 2. Not now" if selected else "❯ 1. Yes, try it\n2. Not now"
         return "Native banner\n────────────────\nTry the new fullscreen renderer?\n\n· Flicker-free output\n· Mouse support — click to move your cursor or expand results\n· Selected text auto-copies to your clipboard\n\n" + choices + "\n\nEnter to confirm · Esc to cancel\n"
 
+    def test_harness_tmp_is_unobserved_but_planted_watch_write_flags(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); scratch = root / "tmp"; watched = root / "watch"
+            scratch.mkdir(); watched.mkdir()
+            environment = {"TMPDIR": str(scratch)}
+            roots = runner.watch_directories(environment, [str(watched)])
+            self.assertEqual([str(watched)], roots)
+            before = runner.snapshot(roots)
+            (scratch / "node-compile-cache").mkdir()
+            (scratch / "node-compile-cache/file").write_text("native cache")
+            self.assertEqual([], runner.compare(before, runner.snapshot(roots))["validity_flags"])
+            (watched / "planted").write_text("planted control")
+            observed = runner.compare(before, runner.snapshot(roots))
+            self.assertEqual(["declared_directory_changed"], observed["validity_flags"])
+            self.assertEqual([str(watched / "planted")], observed["added"])
+            for bad in [[], [str(scratch)], [str(scratch / "control")], [str(root)]]:
+                with self.subTest(roots=bad), self.assertRaises(runner.Refused):
+                    runner.watch_directories(environment, bad)
+            (root / "scratch-alias").symlink_to(scratch, target_is_directory=True)
+            with self.assertRaises(runner.Refused):
+                runner.watch_directories(environment, [str(root / "scratch-alias")])
+
+    def test_renderer_is_answered_at_most_once_per_trial(self):
+        runner = self.runner(); displays = []; trusts = []; screen = self.renderer_screen()
+        event = {"harness": "claude", "choice": "Not now", "screen_sha256": "sha256:test", "time": 1}
+        with patch.object(runner, "decline_renderer", return_value=event) as choose:
+            for _ in range(2):
+                self.assertTrue(runner.handle_startup("own", "claude", Path("/fixture"), screen, trusts, displays))
+            choose.assert_called_once_with("own", screen)
+        self.assertEqual([event], displays)
+
     def test_grok_exact_trust_accepts_but_near_misses_refuse(self):
         runner = self.runner(); path = Path("/disposable/subject/repository")
         screen = self.grok_trust(path)
@@ -3574,6 +3606,8 @@ class ProcessRepairTests(unittest.TestCase):
         self.assertEqual("sha256:" + hashlib.sha256(screen.encode()).hexdigest(), event["screen_sha256"])
         self.assertIsInstance(event["time"], float)
         for bad in [screen.replace(str(path), str(path) + "-other"),
+                    screen.replace(str(path), "/d/s/repository"),
+                    screen.replace(str(path), "/disposable/subject/\nrepository"),
                     screen.replace("posing security risks.", "also imports personal settings."),
                     screen.replace("Yes, proceed", "Yes, import"),
                     screen + "Import settings?\n"]:
@@ -4116,13 +4150,17 @@ class ProcessRepairTests(unittest.TestCase):
         import argparse
         runner = self.runner()
         (ROOT / "target").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp) / "operator"):
+        with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory(dir=ROOT / "target") as evidence_temp, \
+             patch.object(Path, "home", return_value=Path(temp) / "operator"):
             root = Path(temp).resolve()
+            evidence_root = Path(evidence_temp).resolve()
+            (root / "watched").mkdir()
             repository = root / "subjects/trial/repository"
             repository.mkdir(parents=True)
             (repository / "TASK.md").write_text("Reply ok.\n")
             (repository.parent / "tmp").mkdir()
-            (repository.parent / "home").mkdir()
+            with patch.object(runner.kit.sys, "platform", "darwin"):
+                runner.kit.prepare_subject_home(repository.parent / "home")
             binary = root / "subjects/bin/codeflow"
             binary.parent.mkdir()
             binary.write_text("fixture executable")
@@ -4162,8 +4200,8 @@ class ProcessRepairTests(unittest.TestCase):
                 return 1
 
             native = ["--model", "chosen-selector", "--permission-mode", "auto"]
-            args = argparse.Namespace(record=record_path, output=root / "evidence", harness="claude",
-                                      native=["--", *native], workspace="owned-workspace", watch_dir=[], start_timeout=1, max_entries=100_000, snapshot_seconds=10)
+            args = argparse.Namespace(record=record_path, output=evidence_root / "evidence", harness="claude",
+                                      native=["--", *native], workspace="owned-workspace", watch_dir=[str(root / "watched")], start_timeout=1, max_entries=100_000, snapshot_seconds=10)
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
                  patch.object(runner, "herdr", side_effect=herdr), \
                  patch.object(runner, "wait_ready", side_effect=ready), \
@@ -4175,6 +4213,8 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual("started", saved["status"])
             self.assertEqual(native, saved["native_args"])
             self.assertEqual(["/private/tmp"], saved["observation"]["shallow"])
+            self.assertEqual([str(root / "watched")], saved["declared_directories"])
+            self.assertNotIn(environment["TMPDIR"], saved["declared_directories"])
             self.assertEqual(100_000, saved["observation"]["max_entries"])
             self.assertEqual(10, saved["observation"]["max_seconds"])
             self.assertEqual({"--permission-mode": "auto"}, saved["permission_flags"])
@@ -4182,7 +4222,7 @@ class ProcessRepairTests(unittest.TestCase):
             for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]:
                 self.assertIn(f"{key}={environment[key]}", create)
             self.assertEqual(native, list(next(c for c in calls if c[:2] == ("agent", "start"))[-len(native):]))
-            args.output = root / "native-start-trust"
+            args.output = evidence_root / "native-start-trust"
             starts = []
             trust = self.trust_screen("claude", repository)
             frames = iter([trust, trust, "idle editor"])
@@ -4215,7 +4255,7 @@ class ProcessRepairTests(unittest.TestCase):
                 ("grok", self.grok_trust(repository), self.grok_trust(repository)),
                 ("claude", self.renderer_screen(), self.renderer_screen(True)),
             ]:
-                args.output = root / (harness + "-startup-record")
+                args.output = evidence_root / (harness + "-startup-record")
                 args.harness = harness
                 args.native = ["--", "--always-approve"] if harness == "grok" else ["--", *native]
                 frames = iter([screen, screen, selected, "idle"] if harness == "claude" else [screen, screen, "idle"])
@@ -4246,16 +4286,20 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertIn("CODEX_HOME=" + environment["CODEX_HOME"], printed)
             for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "USER", "LOGNAME"]:
                 self.assertIn(key + "=" + environment[key], printed)
-            self.assertIn('cli_auth_credentials_store="file"', printed)
+            self.assertIn("-c 'cli_auth_credentials_store=\"file\"'", printed)
+            link = Path(environment["HOME"]) / "Library/Keychains"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(str(Path.home() / "Library/Keychains"), os.readlink(link))
+            self.assertEqual(["Keychains"], [p.name for p in link.parent.iterdir()])
             self.assertIn("review the hooks", printed)
             self.assertNotIn("TASK.md'", printed)
             (root / "AGENTS.md").write_text("new ancestor instructions")
-            args.output = root / "ancestor-refusal"
+            args.output = evidence_root / "ancestor-refusal"
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.kit.EvalError, "ancestor instructions"):
                 runner.launch(args)
             transport.assert_not_called()
             (root / "AGENTS.md").unlink()
-            args.output = root / "failed-readiness"
+            args.output = evidence_root / "failed-readiness"
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
                  patch.object(runner, "herdr", side_effect=herdr), \
                  patch.object(runner, "wait_ready", side_effect=runner.Refused("not ready")), \
@@ -4264,13 +4308,13 @@ class ProcessRepairTests(unittest.TestCase):
                 runner.launch(args)
             capture.assert_not_called()
             self.assertFalse((args.output / "before.json").exists())
-            args.output = root / "unsigned-seat"
+            args.output = evidence_root / "unsigned-seat"
             with patch.object(runner, "check_evaluator_auth", side_effect=runner.Refused(runner.AUTH_REFUSAL)), \
                  patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, runner.AUTH_REFUSAL):
                 runner.launch(args)
             transport.assert_not_called()
             self.assertFalse(args.output.exists())
-            args.output = root / "refused-flags"
+            args.output = evidence_root / "refused-flags"
             args.native = ["--settings", "/outside/settings.json"]
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "--settings"):
                 runner.launch(args)
@@ -4278,7 +4322,7 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual("--settings", json.loads((args.output / "launch.json").read_text())["refused_flag"])
             args.native = ["--", *native]
             args.harness = "grok"
-            args.output = root / "grok-login"
+            args.output = evidence_root / "grok-login"
             calls.clear()
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": False}), \
                  patch.object(runner, "herdr", side_effect=lambda *a, **k: "Approve in your browser to finish signing in." if a[:2] == ("pane", "read") else herdr(*a, **k)), \

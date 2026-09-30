@@ -17,12 +17,14 @@ directories are refused.
 ```sh
 kit=assets/base/agents/skills/cf-evaluate-model/scripts
 run_parent=$(mktemp -d /private/tmp/codeflow-eval.XXXXXX)
+mkdir "$run_parent/watch"
 python3 "$kit/eval_kit.py" materialize \
   --run-root "$run_parent/run" --case model-independent-plans \
   --trial 1 --codeflow "$PWD/target/release/codeflow"
 python3 evals/qualification/runner.py launch \
   --record <printed-fixture-record> \
   --output "$PWD/target/qualification/trial-1" \
+  --watch-dir "$run_parent/watch" \
   --workspace <Herdr-workspace-id> --harness codex -- \
   --model <qualified-selector> -c 'model_reasoning_effort="high"' \
   --ask-for-approval never --sandbox danger-full-access
@@ -80,7 +82,8 @@ No configuration or credential link receives that exception. Checks
 are bounded to 100,000 entries and ten seconds per home; an incomplete check
 refuses. Executable symlinks under `~/.local/bin` may resolve to harness
 installation folders; this executes the installed binary without importing
-personal configuration. Credentials are managed only by the harness: on macOS Claude
+personal configuration. Credentials are managed only by the harness:
+on macOS Claude
 may use a Keychain entry scoped to its dedicated config directory; Codex is
 explicitly set to the file credential store in its dedicated folder.
 
@@ -89,6 +92,8 @@ operator's real `~/Library/Keychains`. Nothing else in Library is linked.
 This lets macOS locate the login keychain; Claude uses the evaluator's own
 entry keyed to its dedicated config folder. The kit does not read or copy
 keychain contents, reset a keychain, or reference personal harness config.
+This exposes the login keychain's presence to the subject's `security`
+commands; individual entries remain governed by macOS access controls.
 The printed setup helper creates the same link. Both `USER` and `LOGNAME`
 are populated in the subject environment and passed unchanged to the native
 status command, since Claude's keychain account uses the username.
@@ -196,13 +201,21 @@ fixture state, and requested versus observed model and settings evidence.
 Then close the recorded tab with `herdr tab close <tab-id>` and verify it
 closed. A `started` launch record is not a completed or graded trial.
 
-The subject's TMPDIR is observed recursively in full. At the `/private/tmp`
-top level, every direct entry is observed by name and type. Regular files
-and symlinks also retain their modification times; directory mtimes are
-ignored. A new or removed top-level entry, a type change, or a changed file
-or symlink mtime invalidates the trial. Symlinks are never followed.
+Only directories named with `--watch-dir` are observed, including any
+planted-control root. At least one root is required. There are no implicit
+TMPDIR or `/private/tmp` watches. The subject's TMPDIR is harness-owned
+scratch and is completely unobserved: runtime caches, sockets and other
+writes there do not raise `declared_directory_changed`. No filename
+allowlist is used. A watch root equal to, inside, or containing TMPDIR
+refuses, including aliases resolved through symlinks. Planted controls must
+never be placed under TMPDIR. Choose a separate directory for them.
 
-`--watch-dir` adds recursively observed directories. Recursive snapshots
+If `/private/tmp` is explicitly watched and does not overlap the trial
+TMPDIR, it retains the top-level-only observation: names and types, plus
+mtimes for regular files and symlinks. Directory mtimes are ignored.
+Symlinks are never followed. Other watch roots are recursive.
+
+Recursive snapshots
 retain mode, size, modification and change times without reading file
 contents. New, changed or removed observed entries invalidate the trial.
 An entry unreadable in both snapshots with unchanged readable metadata is
@@ -218,15 +231,16 @@ The time cap is cooperative between metadata calls; a blocking OS call may
 overrun it. Entry count and elapsed time are retained with each snapshot.
 
 Writes inside pre-existing top-level directories of `/private/tmp` are
-unobserved, except within separately watched roots such as the subject's
-TMPDIR. Writes outside declared directories, startup writes before readiness,
+unobserved, except within separately watched roots. Harness TMPDIR is
+unobserved in its entirety. Writes outside declared directories, startup writes before readiness,
 and transient entries gone before the final snapshot are also unobserved.
 The comparison records these limits. Changes are not attributed to the subject.
 This is a bounded diagnostic, not host confinement or a tamper-resistant
 audit. Run trials sequentially when attribution would otherwise be ambiguous.
 
 For the planted-write control, take the launch snapshot, write a uniquely
-named benign file under a declared test directory with the native subject,
+named benign file under a declared test directory outside TMPDIR with the
+native subject,
 then run `finish`. Its path must appear in `added` and the trial must carry
 `declared_directory_changed`. Preserve this intentionally invalid trial as a
 control, separate from clean behavioral reruns. Remove only that owned file

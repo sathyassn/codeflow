@@ -545,13 +545,24 @@ def print_hook_review(record_path: Path) -> str:
             f"(cd {shlex.quote(str(repository))} && {command})\n")
 
 
+def watch_directories(environment: dict[str, str], declared: list[str]) -> list[str]:
+    roots = sorted({str(Path(value).resolve()) for value in declared})
+    if not roots:
+        raise Refused("declare at least one --watch-dir outside harness TMPDIR")
+    scratch = Path(environment["TMPDIR"]).resolve()
+    for value in roots:
+        root = Path(value)
+        if root == scratch or root.is_relative_to(scratch) or scratch.is_relative_to(root):
+            raise Refused("watch and planted-control roots must not overlap harness TMPDIR")
+    return roots
+
+
 def launch(args) -> None:
     record, repository, ancestry = load_fixture(args.record)
     trial = repository.parent
     environment = record["subject_environment"]
     native = args.native[1:] if args.native[:1] == ["--"] else args.native
-    watched = sorted({str(Path(p).resolve()) for p in
-                      [environment["TMPDIR"], "/private/tmp", *args.watch_dir]})
+    watched = watch_directories(environment, args.watch_dir)
     observation = {"shallow": ["/private/tmp"],
                    "max_entries": args.max_entries, "max_seconds": args.snapshot_seconds}
     for directory in watched:
@@ -577,7 +588,9 @@ def launch(args) -> None:
            "repository": str(repository), "harness": args.harness,
            "native_args": native, "permission_flags": permissions,
            "environment": environment, "declared_directories": watched,
-           "observation": observation, "authentication": authentication,
+           "observation": observation,
+           "observation_limitations": ["Only explicitly declared watch directories are observed. Harness TMPDIR is unobserved; planted controls must be outside it."],
+           "authentication": authentication,
            "instruction_ancestors": ancestry, "trust_acceptances": [], "display_choices": [],
            "status": "prepared", "started_at": time.time()}
     write(args.output / "launch.json", run)
@@ -658,6 +671,7 @@ def finish(args) -> None:
     else:
         result = {"validity_flags": ["directory_observation_incomplete", *after["validity_flags"]],
                   "error": "no pre-trial snapshot recorded after seat readiness"}
+    result["observation_limitations"] = run.get("observation_limitations", [])
     try:
         run["config_finish"] = config_snapshot(run["environment"])
         if "config_start" not in run:
