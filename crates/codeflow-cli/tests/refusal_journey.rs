@@ -724,6 +724,20 @@ fn q4_plain_pushd_tracks_integrity_directory() {
 #[test]
 fn r5_n2_root_dot_patterns_match_protected_names_only() {
     let project = Project::new();
+    let src = project.root.join("src");
+    let nested = src.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    for command in ["rm -rf ../.*", "rm -rf ../.c*", "cd .. && rm -rf .*"] {
+        project.check_shell(&src, command, true);
+    }
+    for command in ["rm -rf ../../.*", "cd ../.. && rm -rf .*"] {
+        project.check_shell(&nested, command, true);
+    }
+    for cwd in [&src, &nested] {
+        for command in ["rm -rf .*", "rm -rf .c*", "rm -rf .??*"] {
+            project.check_shell(cwd, command, false);
+        }
+    }
     for command in [
         "rm -rf .*",
         "rm -rf .c*",

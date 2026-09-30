@@ -865,14 +865,16 @@ fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&
     })
 }
 
-// Only explicit dot-patterns at the payload root can reach these hidden
+// Only explicit dot-patterns at the project root can reach these hidden
 // directories; ordinary root globs and patterns below other paths stay ordinary.
 fn root_dot_pattern_target(path: &Path, payload_cwd: &Path) -> Option<&'static str> {
     let pattern = path.file_name()?.to_str()?;
     if !pattern.starts_with('.') || !pattern.contains(['*', '?', '[', '{']) {
         return None;
     }
-    if path.parent()?.canonicalize().ok()? != payload_cwd.canonicalize().ok()? {
+    let project_root = super::RepoInfo::discover(payload_cwd)
+        .map_or_else(|| payload_cwd.to_path_buf(), |repo| repo.root);
+    if path.parent()?.canonicalize().ok()? != project_root.canonicalize().ok()? {
         return None;
     }
     INTEGRITY_PREFIXES
