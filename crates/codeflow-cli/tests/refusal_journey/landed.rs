@@ -1534,7 +1534,7 @@ fn r4_review_broken_candidates_and_remote_head_refuse() {
 
 #[test]
 fn r4_review_custom_default_beside_main_and_head_transition() {
-    for mode in ["never", "create", "warn", "always"] {
+    for mode in ["never", "create", "warn", "always", "warn-if-not-main"] {
         let repo = Repo::new();
         repo.remote();
         publish_policy(
