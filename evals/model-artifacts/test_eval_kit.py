@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import importlib.util
 import json
 import os
@@ -4302,6 +4303,16 @@ class ProcessRepairTests(unittest.TestCase):
             with self.assertRaisesRegex(runner.Refused, "symlink"):
                 runner.codex_hook_preflight(env, repo)
 
+    def test_codex_hook_trust_cli_is_opt_in(self):
+        runner = self.runner()
+        base = ["runner.py", "launch", "--record", "fixture.json", "--output", "evidence",
+                "--workspace", "owned", "--harness", "codex"]
+        for extra, expected in [([], "review"), (["--codex-hook-trust=bypass"], "bypass")]:
+            with self.subTest(option=expected), patch.object(runner.sys, "argv", [*base, *extra]), \
+                 patch.object(runner, "launch") as launch:
+                self.assertEqual(0, runner.main())
+                self.assertEqual(expected, launch.call_args.args[0].codex_hook_trust)
+
     def test_codex_hook_flag_allowlist_is_scoped_to_the_dedicated_home(self):
         runner = self.runner()
         flag = "--dangerously-bypass-hook-trust"
@@ -4309,16 +4320,18 @@ class ProcessRepairTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
             home = Path(temp) / ".codeflow-eval/codex"
             environment = {"CODEX_HOME": str(home)}
-            self.assertEqual("true", runner.permission_flags("codex", native, environment=environment)[flag])
+            with self.assertRaisesRegex(runner.Refused, "--codex-hook-trust=bypass"):
+                runner.permission_flags("codex", native, environment=environment)
+            self.assertEqual("true", runner.permission_flags("codex", native, environment=environment, codex_hook_trust="bypass")[flag])
             for env in [None, {"CODEX_HOME": str(Path(temp) / ".codex")}, {"CODEX_HOME": str(home) + "-other"}]:
                 with self.subTest(env=env), self.assertRaisesRegex(runner.Refused, "dedicated evaluator home"):
-                    runner.permission_flags("codex", native, environment=env)
+                    runner.permission_flags("codex", native, environment=env, codex_hook_trust="bypass")
             for harness, args in [("claude", ["--permission-mode", "auto"]), ("grok", ["--always-approve"])]:
                 with self.subTest(harness=harness), self.assertRaisesRegex(runner.Refused, "only.*Codex"):
-                    runner.permission_flags(harness, [*args, flag], environment=environment)
+                    runner.permission_flags(harness, [*args, flag], environment=environment, codex_hook_trust="bypass")
             for extra in [[flag], [flag + "=true"]]:
                 with self.assertRaises(runner.Refused):
-                    runner.permission_flags("codex", [*native, *extra], environment=environment)
+                    runner.permission_flags("codex", [*native, *extra], environment=environment, codex_hook_trust="bypass")
 
     def test_permission_flags_are_explicit_and_headless_is_refused(self):
         runner = self.runner()
@@ -4391,7 +4404,7 @@ class ProcessRepairTests(unittest.TestCase):
 
             native = ["--model", "chosen-selector", "--permission-mode", "auto"]
             args = argparse.Namespace(record=record_path, output=evidence_root / "evidence", harness="claude",
-                                      native=["--", *native], workspace="owned-workspace", watch_dir=[str(root / "watched")], start_timeout=1, max_entries=100_000, snapshot_seconds=10)
+                                      native=["--", *native], codex_hook_trust="review", workspace="owned-workspace", watch_dir=[str(root / "watched")], start_timeout=1, max_entries=100_000, snapshot_seconds=10)
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
                  patch.object(runner, "herdr", side_effect=herdr), \
                  patch.object(runner, "wait_ready", side_effect=ready), \
@@ -4476,6 +4489,49 @@ class ProcessRepairTests(unittest.TestCase):
             args.harness = "codex"
             args.native = ["--", "--model", "gpt-6-astra", "-c", 'model_reasoning_effort="high"',
                            "--ask-for-approval", "never", "--sandbox", "workspace-write"]
+            # Default launches retain manual review and never add the native bypass.
+            flag = "--dangerously-bypass-hook-trust"
+            config = Path(environment["CODEX_HOME"]) / "config.toml"
+            original_config = config.read_text()
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_codex", return_value=1), patch.object(runner.time, "sleep"), \
+                 patch("sys.stdout", new_callable=io.StringIO) as output:
+                runner.launch(args)
+            default = json.loads((args.output / "launch.json").read_text())
+            self.assertNotIn(flag, default["native_args"])
+            self.assertNotIn(flag, default["permission_flags"])
+            self.assertNotIn(flag, next(c for c in reversed(calls) if c[:2] == ("agent", "start")))
+            self.assertEqual("review", default["hook_trust"]["option"])
+            self.assertFalse(default["hook_trust"]["flag_used"])
+            self.assertEqual({"evaluator_home": "not_checked", "fixture_hooks": "not_checked"}, default["hook_trust"]["checks"])
+            self.assertIn("/hooks", output.getvalue())
+            self.assertIn(environment["CODEX_HOME"], output.getvalue())
+            config.write_text(original_config + '\n[hooks.state.previous]\ntrusted_hash = "sha256:previous"\n')
+            args.output = evidence_root / "codex-existing-manual-review"
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_codex", return_value=1), patch.object(runner.time, "sleep"), \
+                 patch("sys.stdout", new_callable=io.StringIO):
+                runner.launch(args)
+            self.assertNotIn(flag, json.loads((args.output / "launch.json").read_text())["native_args"])
+            config.write_text(original_config)
+            # Explicit opt-in still refuses another evaluator home before transport.
+            args.codex_hook_trust = "bypass"
+            args.output = evidence_root / "codex-other-home"
+            other_record = {**record, "subject_environment": {**environment, "CODEX_HOME": str(root / "other-codex")}}
+            with patch.object(runner, "load_fixture", return_value=(other_record, repository, [])), \
+                 patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "dedicated evaluator home"):
+                runner.launch(args)
+            transport.assert_not_called()
+            refused = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual("bypass", refused["hook_trust"]["option"])
+            self.assertFalse(refused["hook_trust"]["flag_used"])
+            args.output = evidence_root / "codex-verified-delivery-opt-in"
             frames = iter([self.codex_frame(repository), self.codex_frame(repository, "› Reply ok.")])
             def codex_transport(*argv, **kwargs):
                 if argv[:2] == ("pane", "read"):
@@ -4498,7 +4554,8 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual(1, delivered["native_args"].count(flag))
             self.assertEqual("true", delivered["permission_flags"][flag])
             trust = delivered["hook_trust"]
-            self.assertEqual({"flag_used", "evaluator_home", "hooks_sha256", "checks"}, set(trust))
+            self.assertEqual({"option", "flag_used", "evaluator_home", "hooks_sha256", "checks"}, set(trust))
+            self.assertEqual("bypass", trust["option"])
             self.assertTrue(trust["flag_used"])
             self.assertEqual(str(Path(environment["CODEX_HOME"]).resolve()), trust["evaluator_home"])
             self.assertEqual("sha256:" + hashlib.sha256((repository / ".codex/hooks.json").read_bytes()).hexdigest(), trust["hooks_sha256"])
@@ -4519,7 +4576,7 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertTrue(caller["hook_trust"]["flag_used"])
             args.native.pop()
             self.assertEqual(["before-paste", "pending"], [f["stage"] for f in delivered["verified_frames"]])
-            self.assertTrue((evidence_root / "codex-verified-delivery/editor-pasted.txt").is_file())
+            self.assertTrue((evidence_root / "codex-verified-delivery-opt-in/editor-pasted.txt").is_file())
             # A user hook prevents all transport and leaves a refusal record.
             user_hooks = Path(environment["CODEX_HOME"]) / "hooks.json"
             user_hooks.write_text("{}")
@@ -4539,6 +4596,11 @@ class ProcessRepairTests(unittest.TestCase):
             transport.assert_not_called()
             self.assertEqual("--model", json.loads((args.output / "launch.json").read_text())["refused_flag"])
             args.harness = "claude"; args.native = ["--", *native]
+            args.output = evidence_root / "claude-bypass-refused"
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "only.*Codex"):
+                runner.launch(args)
+            transport.assert_not_called()
+            args.codex_hook_trust = "review"
             with patch.object(runner, "herdr") as transport:
                 printed = runner.print_hook_review(record_path)
             transport.assert_not_called()

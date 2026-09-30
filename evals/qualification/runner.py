@@ -556,7 +556,8 @@ def grok_authenticated_editor(screen: str) -> bool:
 
 
 def permission_flags(harness: str, native: list[str], cwd: Path | None = None,
-                     *, environment: dict[str, str] | None = None) -> dict[str, str]:
+                     *, environment: dict[str, str] | None = None,
+                     codex_hook_trust: str = "review") -> dict[str, str]:
     allowed = {"claude": {"--model", "--effort", "--permission-mode"},
                "codex": {"--model", "-c", "--ask-for-approval", "--sandbox"},
                "grok": {"--model", "--reasoning-effort", "--permission-mode", "--always-approve"}}[harness]
@@ -568,6 +569,8 @@ def permission_flags(harness: str, native: list[str], cwd: Path | None = None,
         if flag == CODEX_HOOK_TRUST_FLAG:
             if harness != "codex":
                 raise Refused(f"{flag} is only authorized for Codex trials", flag)
+            if codex_hook_trust != "bypass":
+                raise Refused(f"{flag} requires explicit --codex-hook-trust=bypass", flag)
             dedicated_codex_home(environment or {})
             allowed.add(flag)
         if flag not in allowed or flag in values:
@@ -793,12 +796,17 @@ def launch(args) -> None:
             raise Refused("runner evidence must live outside declared directories")
     if args.output.exists():
         raise Refused("output already exists; never reuse a trial launch")
-    hook_trust = {"flag_used": False, "evaluator_home": None, "hooks_sha256": None,
+    hook_trust = {"option": args.codex_hook_trust, "flag_used": False, "evaluator_home": None, "hooks_sha256": None,
                   "checks": {"evaluator_home": "not_checked", "fixture_hooks": "not_checked"}}
     try:
-        permissions = permission_flags(args.harness, native, repository, environment=environment)
+        if args.codex_hook_trust not in {"review", "bypass"}:
+            raise Refused("unknown Codex hook-trust option", "--codex-hook-trust")
+        if args.codex_hook_trust == "bypass" and args.harness != "codex":
+            raise Refused("--codex-hook-trust=bypass is only authorized for Codex trials", "--codex-hook-trust")
+        permissions = permission_flags(args.harness, native, repository, environment=environment,
+                                       codex_hook_trust=args.codex_hook_trust)
         codex = codex_expectation(native, repository) if args.harness == "codex" else None
-        if args.harness == "codex":
+        if args.harness == "codex" and args.codex_hook_trust == "bypass":
             codex_hook_preflight(environment, repository, hook_trust)
             environment["CODEX_HOME"] = hook_trust["evaluator_home"]
     except Refused as exc:
@@ -811,11 +819,13 @@ def launch(args) -> None:
     # Validate all config roots before a native process could follow a link.
     config_snapshot(environment)
     native = [*native, *kit.trial_native_args(args.harness, environment)]
-    if args.harness == "codex":
+    if args.harness == "codex" and args.codex_hook_trust == "bypass":
         if CODEX_HOOK_TRUST_FLAG not in native:
             native.append(CODEX_HOOK_TRUST_FLAG)
         permissions[CODEX_HOOK_TRUST_FLAG] = "true"
         hook_trust["flag_used"] = True
+    elif args.harness == "codex":
+        print(print_hook_review(args.record), end="")
     args.output.mkdir(parents=True)
     run = {"schema_version": 1, "fixture_record": str(args.record.resolve()),
            "repository": str(repository), "harness": args.harness,
@@ -942,6 +952,8 @@ def main() -> int:
     start.add_argument("--output", type=Path, required=True)
     start.add_argument("--workspace", required=True)
     start.add_argument("--harness", choices=["claude", "codex", "grok"], required=True)
+    start.add_argument("--codex-hook-trust", choices=["review", "bypass"], default="review",
+                       help="Codex evaluation hook review: review (default), or explicitly bypass after verifying hook sources")
     start.add_argument("--watch-dir", action="append", default=[])
     start.add_argument("--max-entries", type=int, default=100_000)
     start.add_argument("--snapshot-seconds", type=float, default=10)

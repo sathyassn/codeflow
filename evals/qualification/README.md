@@ -74,11 +74,19 @@ Codex keys manual hook trust by the hooks file's absolute path and a per-hook
 hash. A review in one fixture does not carry to another. The printed helper
 and an operator's own interactive Codex still review hooks through `/hooks`.
 
-For qualification trials only, the operator authorized
-`--dangerously-bypass-hook-trust` on 2026-09-30. The runner appends it once
-only for Codex with `CODEX_HOME` resolving to `~/.codeflow-eval/codex`.
-Caller requests for that flag are accepted only in this same scope; another
-home or harness refuses. Before any seat is launched, the runner checks:
+Hook-review bypass is **off by default**. Without an option, the runner
+prints the operator's hook-review command and never passes the native bypass
+flag. The person running the evaluation may choose
+`--codex-hook-trust=bypass` on each `runner.py launch` command, before the
+native-argument `--` separator. This skips Codex's per-folder hook review
+for that evaluation trial only; it is not a saved preference or permission
+for adopters' ordinary sessions. `--codex-hook-trust=review` is the default.
+
+With that explicit choice, the runner appends
+`--dangerously-bypass-hook-trust` once, only for Codex with `CODEX_HOME`
+resolving to `~/.codeflow-eval/codex`. A caller-supplied native bypass flag
+also requires that choice; another home or harness refuses. Before a bypass
+launch, the runner checks:
 
 - The dedicated home has no `hooks.json`, TOML hooks entries (including old
   `hooks.state` trust records), plugin or marketplace configuration, or
@@ -91,16 +99,18 @@ home or harness refuses. Before any seat is launched, the runner checks:
   definitions refuse. Fixture TOML hooks, plugin configuration and plugin
   directories also refuse. Symlinked hook/config sources refuse.
 
-These checks let the dedicated evaluator launch bypass per-folder hook
-review for verified shipped commands. The runner never writes trust grants,
+These checks restrict bypass to the reviewed shipped commands and exclude
+user hooks and plugins that could otherwise run without review. The runner never writes trust grants,
 removes existing trust records, or touches the operator's personal `~/.codex`.
 An unexpected "Hooks need review" screen still refuses without a key.
 Existing exact-path workspace-trust checks remain in force; trial paths
 stay fresh. No stable path or archive lifecycle is used.
 
-`launch.json` records `hook_trust.flag_used`, the resolved `evaluator_home`,
-`hooks_sha256`, and both `checks` results (`passed`, `refused` or
-`not_checked`). Exact `native_args` and `permission_flags` include the flag.
+`launch.json` records `hook_trust.option` (`review` or `bypass`),
+`flag_used`, the resolved `evaluator_home`, `hooks_sha256`, and both
+`checks` results (`passed`, `refused` or `not_checked`). For bypass launches,
+exact `native_args` and `permission_flags` include the flag. Default review
+launches record no flag use and leave bypass-specific checks `not_checked`.
 A failed preflight records its results and launches no seat. This is a
 startup check, not a filesystem barrier: changes after the check and
 system-managed hook sources are not ruled out. Existing config-drift and
