@@ -17,12 +17,21 @@ use std::{
 #[path = "support/json_schema.rs"]
 mod json_schema;
 
+use codeflow_present::service::OWNER_PID_ENV;
+
+/// Runs `codeflow` for a test. A service it starts exits once this test
+/// process is gone, so a stopped or killed test run leaves no server behind.
 fn codeflow(project: &Path, home: &Path, args: &[&str]) -> Output {
+    codeflow_owned_by(project, home, args, std::process::id())
+}
+
+fn codeflow_owned_by(project: &Path, home: &Path, args: &[&str], owner: u32) -> Output {
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
         .args(args)
         .current_dir(project)
         .env("HOME", home)
         .env("XDG_STATE_HOME", home.join("state"))
+        .env(OWNER_PID_ENV, owner.to_string())
         .output()
         .unwrap()
 }
@@ -130,6 +139,215 @@ fn crashed_service_close_then_selected_clear_converges() {
         &["present", "clear", &session_id, "--older-than", "0h"],
     ));
     assert!(cleared.contains(&format!("removed {session_id}")));
+}
+
+/// Opens a presentation whose service follows `owner` and returns the session
+/// id and the service's process id once the service is serving.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_owned_by(fixture: &TestProject, owner: u32) -> (String, i32) {
+    let opened = require_success(&codeflow_owned_by(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "open",
+            fixture.project.join("first.json").to_str().unwrap(),
+            "--no-launch",
+        ],
+        owner,
+    ));
+    let session_id = opened.split_whitespace().nth(1).unwrap().to_string();
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    assert_eq!(listed[0]["id"], session_id.as_str());
+    let pid = i32::try_from(listed[0]["service_pid"].as_u64().unwrap()).unwrap();
+    thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "the service stopped while its owner runs"
+    );
+    (session_id, pid)
+}
+
+/// Asserts that the service `pid` exits within ten seconds and that it
+/// closed `session_id` on the way out.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_service_follows_owner(fixture: &TestProject, session_id: &str, pid: i32) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    let outlived = unsafe { libc::kill(pid, 0) } == 0;
+    if outlived {
+        require_success(&codeflow(
+            &fixture.project,
+            &fixture.home,
+            &["present", "close", session_id],
+        ));
+    }
+    assert!(!outlived, "the service outlived its owner");
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    assert_eq!(listed[0]["id"], session_id);
+    assert_eq!(listed[0]["status"], "closed", "{listed}");
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn service_exits_once_its_owner_process_is_gone() {
+    let fixture = setup_project();
+    let mut owner = Command::new("sleep").arg("60").spawn().unwrap();
+    let (session_id, pid) = open_owned_by(&fixture, owner.id());
+
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    assert_service_follows_owner(&fixture, &session_id, pid);
+
+    let refused = codeflow_owned_by(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "open",
+            fixture.project.join("first.json").to_str().unwrap(),
+            "--no-launch",
+        ],
+        0,
+    );
+    assert!(!refused.status.success(), "an owner of 0 was accepted");
+}
+
+/// An owner that has exited but that no parent has reaped still holds its
+/// process id. The service must follow the exit, not the id.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn service_exits_when_its_owner_exits_unreaped() {
+    let fixture = setup_project();
+    let mut owner = Command::new("sh")
+        .args(["-c", "read line"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (session_id, pid) = open_owned_by(&fixture, owner.id());
+
+    drop(owner.stdin.take());
+    let owner_pid = libc::id_t::from(owner.id());
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let waited = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            owner_pid,
+            &raw mut info,
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    };
+    assert_eq!(waited, 0, "the owner did not exit");
+
+    assert_service_follows_owner(&fixture, &session_id, pid);
+    owner.wait().unwrap();
+}
+
+/// Forks a child that exits at once and reaps it, returning its process id.
+#[cfg(target_os = "macos")]
+fn spend_process_id() -> i32 {
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0, "fork failed");
+    if child == 0 {
+        unsafe { libc::_exit(0) };
+    }
+    unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
+    child
+}
+
+/// Forks children until one takes `target`, which then blocks until the
+/// returned pipe end is dropped. Returns `None` when another process took
+/// the id first.
+#[cfg(target_os = "macos")]
+fn hold_process_id(target: i32) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd as _;
+    let mut ends = [0; 2];
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    let (read_end, write_end) = unsafe {
+        (
+            std::os::fd::OwnedFd::from_raw_fd(ends[0]),
+            std::os::fd::OwnedFd::from_raw_fd(ends[1]),
+        )
+    };
+    for _ in 0..256 {
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            use std::os::fd::AsRawFd as _;
+            if unsafe { libc::getpid() } == target {
+                unsafe { libc::close(write_end.as_raw_fd()) };
+                let mut byte = 0_u8;
+                unsafe { libc::read(read_end.as_raw_fd(), (&raw mut byte).cast(), 1) };
+            }
+            unsafe { libc::_exit(0) };
+        }
+        if child == target {
+            return Some(write_end);
+        }
+        unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
+        if child > target {
+            return None;
+        }
+    }
+    None
+}
+
+/// A process that reuses the owner's id must not keep the service alive.
+/// macOS hands out ids in order up to 99999, so the test cycles through the
+/// id space until the next id is the owner's, stops the owner and takes its
+/// id at once. That spends about 100000 forks, so the test is opt-in; run it
+/// alone, since other tests widen the gap between the owner's exit and reuse.
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "slow: cycles the process id space to force a real reuse"]
+fn service_ignores_a_process_that_reuses_its_owner_id() {
+    let fixture = setup_project();
+    for _ in 0..3 {
+        let mut owner = Command::new("sleep").arg("600").spawn().unwrap();
+        let target = i32::try_from(owner.id()).unwrap();
+        let (session_id, pid) = open_owned_by(&fixture, owner.id());
+        let deadline = Instant::now() + Duration::from_secs(600);
+        loop {
+            let spent = spend_process_id();
+            if spent < target && target - spent <= 8 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "could not cycle the id space");
+        }
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        let Some(holder) = hold_process_id(target) else {
+            require_success(&codeflow(
+                &fixture.project,
+                &fixture.home,
+                &["present", "close", &session_id],
+            ));
+            continue;
+        };
+        assert_eq!(
+            unsafe { libc::kill(target, 0) },
+            0,
+            "the reused owner id is not live"
+        );
+        assert_service_follows_owner(&fixture, &session_id, pid);
+        drop(holder);
+        unsafe { libc::waitpid(target, std::ptr::null_mut(), 0) };
+        return;
+    }
+    panic!("another process took the owner id three times");
 }
 
 fn start_profile_writer(
@@ -2838,4 +3056,228 @@ fn a_large_retired_session_exports_its_whole_document() {
         "an older document leaked"
     );
     close_and_clear(&fixture, &session_id);
+}
+
+#[test]
+fn tsk193_reply_and_thread_transitions_are_revision_bound() {
+    let fixture = setup_project();
+    let running = open_recover_and_bootstrap(&fixture);
+    verify_runtime_boundaries(&fixture, &running);
+    let event = "019f9b53-a341-7fa7-84c2-5f198ceea099";
+    let note = "019f9b53-a341-7fa7-84c2-5f198ceea100";
+    let reply = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "reply",
+            &running.session_id,
+            event,
+            "--note",
+            note,
+            "I changed this.",
+        ],
+    ));
+    assert!(reply.contains("reply"));
+    for route in ["threads/reopen", "notes/tombstone"] {
+        let body = serde_json::json!({"session_id": running.session_id, "target": event, "note_id": note, "revision":1}).to_string();
+        let response = http(running.port, &format!("POST /app/api/{route} HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.authority, running.cookie, body.len()));
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    let history = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", &running.session_id],
+    ));
+    assert!(!history.contains("Keep the quote"));
+    assert!(history.contains("tombstone"));
+    let history_json: serde_json::Value = serde_json::from_str(&history).unwrap();
+    assert_eq!(
+        schema_registry().errors(
+            "urn:codeflow:schema:present:session-history:2",
+            &history_json
+        ),
+        Vec::<String>::new()
+    );
+
+    let feedback = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "feedback", &running.session_id, "--format", "v2"],
+    ));
+    assert!(feedback.contains("reopen"));
+    assert!(feedback.contains("tombstone"));
+    assert!(!feedback.contains("I changed this."));
+    close_and_clear(&fixture, &running.session_id);
+}
+
+#[test]
+fn tsk193_diff_reports_edited_added_and_removed_blocks() {
+    let fixture = setup_project();
+    let first = fixture.project.join("first.json");
+    let doc = |blocks: serde_json::Value| {
+        serde_json::json!({"schema_version":2,"title":"Diff","summary":"One line for the list","blocks": blocks}).to_string()
+    };
+    fs::write(
+        &first,
+        doc(serde_json::json!([
+        {"type":"narrative","id":"edited","markdown":"before"},
+        {"type":"narrative","id":"removed","markdown":"gone"}])),
+    )
+    .unwrap();
+    fs::write(
+        &fixture.second,
+        doc(serde_json::json!([
+        {"type":"narrative","id":"edited","markdown":"after"},
+        {"type":"narrative","id":"added","markdown":"new"}])),
+    )
+    .unwrap();
+    let (id, _) = open_no_launch(&fixture, &first);
+    let listed = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    ));
+    assert!(listed.contains("One line for the list"));
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "update", &id, fixture.second.to_str().unwrap()],
+    ));
+    let diff = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "diff", &id, "--from", "1", "--to", "2"],
+    ));
+    let value: serde_json::Value = serde_json::from_str(&diff).unwrap();
+    let kinds: Vec<_> = value["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| (b["id"].as_str().unwrap(), b["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("edited", "changed"),
+            ("added", "added"),
+            ("removed", "removed")
+        ]
+    );
+    close_and_clear(&fixture, &id);
+}
+
+#[test]
+fn tsk193_check_names_faults_and_accepts_a_clean_session() {
+    let fixture = setup_project();
+    let (id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
+    let checked = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "check", &id],
+    ));
+    assert!(checked.contains("\"faults\":0"));
+    let bad = fixture.project.join("bad.json");
+    fs::write(&bad, r#"{"schema_version":2,"title":"Faulty","blocks":[{"type":"table","id":"bad-table","columns":["A"],"rows":[["B"]]},{"type":"narrative","id":"bad-anchor","markdown":"See [table:missing]"},{"type":"form","id":"bad-form","title":"Question","fields":[],"required":["missing"]}]}"#).unwrap();
+    let output = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "check", "--file", bad.to_str().unwrap()],
+    );
+    assert_eq!(output.status.code(), Some(9));
+    let faults = String::from_utf8(output.stdout).unwrap();
+    for id in ["bad-table", "bad-anchor", "bad-form"] {
+        assert!(faults.contains(id), "{faults}");
+    }
+    close_and_clear(&fixture, &id);
+}
+
+#[test]
+fn tsk193_revision_context_and_opt_in_export() {
+    let fixture = setup_project();
+    for args in [
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&fixture.project)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let running = open_recover_and_bootstrap(&fixture);
+    verify_runtime_boundaries(&fixture, &running);
+    let history: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", &running.session_id],
+    )))
+    .unwrap();
+    assert!(history["revisions"][0]["context"]["commit"]
+        .as_str()
+        .is_some());
+    assert_eq!(history["revisions"][0]["context"]["dirty"], false);
+    for with_notes in [false, true] {
+        let out = fixture.project.join(format!("notes-{with_notes}.html"));
+        let mut args = vec![
+            "present",
+            "export",
+            &running.session_id,
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        if with_notes {
+            args.push("--with-notes");
+        }
+        require_success(&codeflow(&fixture.project, &fixture.home, &args));
+        assert_eq!(
+            fs::read_to_string(out).unwrap().contains("Keep the quote"),
+            with_notes
+        );
+    }
+    close_and_clear(&fixture, &running.session_id);
+}
+
+#[test]
+fn tsk193_capture_io_failure_warns_but_open_and_update_succeed() {
+    let fixture = setup_project();
+    fs::write(fixture.project.join("blocked"), "not a directory").unwrap();
+    let input = fixture.project.join("optional-context.json");
+    fs::write(&input, r#"{"schema_version":2,"title":"Optional context","blocks":[{"type":"code","id":"code","language":"rust","code":"fn main() {}","source":{"path":"blocked/child.rs"}}]}"#).unwrap();
+    let opened = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "open", input.to_str().unwrap(), "--no-launch"],
+    );
+    let output = require_success(&opened);
+    let id = between(&output, "session ", " ready");
+    assert!(String::from_utf8_lossy(&opened.stderr).contains("warning: revision metadata omitted"));
+    let updated = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "update", id, input.to_str().unwrap()],
+    );
+    require_success(&updated);
+    assert!(String::from_utf8_lossy(&updated.stderr).contains("warning: revision metadata omitted"));
+    let history: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", id],
+    )))
+    .unwrap();
+    assert_eq!(history["revisions"].as_array().unwrap().len(), 2);
+    for revision in history["revisions"].as_array().unwrap() {
+        assert!(revision.get("context").is_none());
+        assert!(revision.get("snapshots").is_none());
+    }
+    close_and_clear(&fixture, id);
 }

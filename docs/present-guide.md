@@ -57,7 +57,10 @@ repository's sessions.
 | `codeflow present feedback <SESSION_ID>` | Delivers pending reviews as JSON lines to whoever runs it, usually the agent. `--follow` keeps delivering until the session closes |
 | `codeflow present resolve <SESSION_ID> <EVENT_ID>` | Marks one delivered review as handled. Needs `--event-version <N>` and `--status addressed` or `--status dismissed` |
 | `codeflow present history <SESSION_ID>` | Prints the session's full feedback history as JSON |
-| `codeflow present export <SESSION_ID> --out <FILE>` | Writes a self-contained, read-only HTML copy of the document. `--theme` takes `slate`, `graphite` or `sage`, or the aliases `editorial` (the default, shown as slate), `instrument`, `technical` and `ink`. `--mode` is `system` (default), `light` or `dark` |
+| `codeflow present reply <SESSION_ID> <EVENT_ID> [--note <NOTE_ID>] "text"` | Adds an agent reply to the rail; it is not delivered back to the agent |
+| `codeflow present diff <SESSION_ID> --from N --to M` | Compares blocks and carries notes and answers to the target revision |
+| `codeflow present check <SESSION_ID>` | Reports framing, anchor and form faults without a browser; exit 9 means faults |
+| `codeflow present export <SESSION_ID> --out <FILE>` | Writes a self-contained, read-only HTML copy of the document. Notes, answers and replies require `--with-notes`. `--theme` takes `slate`, `graphite` or `sage`, or the aliases `editorial` (the default, shown as slate), `instrument`, `technical` and `ink`. `--mode` is `system` (default), `light` or `dark` |
 | `codeflow present close <SESSION_ID>` | Ends the session and closes its browser window. Repeating it is safe |
 | `codeflow present clear [SESSION_ID]` | Removes closed sessions older than `--older-than` (default `30d`). `--dry-run` lists what it would remove |
 

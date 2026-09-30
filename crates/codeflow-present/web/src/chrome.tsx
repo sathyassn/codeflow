@@ -8,7 +8,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import type {
   AppearanceMode,
   ChromeConfig,
-  FeedbackAnchor,
   FeedbackKind,
   PendingFeedback,
   ReviewRequest,
@@ -21,6 +20,7 @@ import type {
 } from "./contracts";
 import { parseServiceError } from "./contracts";
 import type { EntitySelector } from "./contracts";
+import { ThreadRail, THREAD_EVENT } from "./threads";
 import { followSessionEvents } from "./events";
 import { ANSWER_STATE_EVENT, FORM_ANSWERS_EVENT, SESSION_EVENT, type AnswerStateDetail, type FormAnswersDetail, type SessionEventDetail } from "./forms";
 import { postJson, PresentRequestError } from "./http";
@@ -72,6 +72,7 @@ interface PendingPin {
   readonly captured: CapturedTarget;
   readonly clientX: number;
   readonly clientY: number;
+  readonly targetRect?: DOMRect;
   /** The element an element pin resolved to, for "select enclosing". */
   readonly element?: Element;
   /** The top of the selected line, where a text note's marker points. */
@@ -173,6 +174,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const [eventMessage, setEventMessage] = useState<string | null>(null);
   const [commentMode, setCommentMode] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [sheetExpanded, setSheetExpanded] = useState(false);
   const [captureMode, setCaptureMode] = useState<CaptureMode>(null);
   const [regionDraft, setRegionDraft] = useState<RegionDraft | null>(null);
   const [markerEpoch, setMarkerEpoch] = useState(0);
@@ -247,6 +249,23 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   useLayoutEffect(() => {
     const float = floatRef.current;
     if (!float) return;
+    const target = pendingPin?.targetRect;
+    if (target) {
+      const width = float.offsetWidth;
+      const height = float.offsetHeight;
+      const clampTop = (top: number) => Math.min(Math.max(8, top), window.innerHeight - height - 8);
+      let left = Math.min(Math.max(8, target.left), window.innerWidth - width - 8);
+      let top = target.top - height - 8;
+      if (top < 8 && target.right + width + 8 <= window.innerWidth - 8) {
+        left = target.right + 8;
+        top = clampTop(target.top);
+      } else if (top < 8 && target.left - width - 8 >= 8) {
+        left = target.left - width - 8;
+        top = clampTop(target.top);
+      } else if (top < 8) top = clampTop(target.bottom + 8);
+      float.style.left = `${left}px`;
+      float.style.top = `${top}px`;
+    }
     const overflow = float.getBoundingClientRect().right - (window.innerWidth - 8);
     if (overflow > 0) float.style.left = `${Math.max(8, float.offsetLeft - overflow)}px`;
   }, [pendingPin, composerOpen]);
@@ -319,9 +338,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       window.getSelection()?.removeAllRanges();
       setStatus(notesCountRef.current ? `${notesCountRef.current} note${notesCountRef.current === 1 ? "" : "s"} queued · Comment off` : "Ready for review.");
     } else {
-      // Where the rail is a bottom sheet it would cover half the document;
-      // the Comment button opens it on request (QA defect 7).
-      setPanelOpen(!sheetLayout());
+      setPanelOpen(true);
+      setSheetExpanded(!sheetLayout() || notesCountRef.current > 0);
       setHintMode("element");
       setStatus(COMMENT_INSTRUCTION);
     }
@@ -921,10 +939,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     }
     if (!commentModeRef.current) armComment(true);
     else if (!sheetLayout()) setPanelOpen(true);
+    setSheetExpanded(true);
+    // The chip is placed off the pinned part's box: the element, or the
+    // selected text.
+    const selection = captured.selector ? getSelection() : null;
+    const targetRect = opts?.element?.getBoundingClientRect()
+      ?? (selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : undefined);
     setPendingPin({
       captured,
       clientX,
       clientY,
+      ...(targetRect ? { targetRect } : {}),
       ...(opts?.element ? { element: opts.element } : {}),
       ...(opts?.lineTop !== undefined ? { lineTop: opts.lineTop } : {}),
     });
@@ -1022,7 +1047,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setComposerBody("");
     setEditingId(null);
     if (!sheetLayout()) setPanelOpen(true);
-    else if (!panelOpen) showToast("Note saved. The Comment button opens your notes and Submit.");
+    else {
+      setPanelOpen(true);
+      setSheetExpanded(true);
+    }
   }
   saveComposerRef.current = () => {
     void saveComposer();
@@ -1227,9 +1255,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   function handleEvent(event: SessionEvent): void {
     setEventMessage(event.message ?? null);
+    documentRoot.dispatchEvent(new CustomEvent(THREAD_EVENT, {detail:event.kind}));
     // Forms keep their drafts in the page and show the notice themselves.
     if (event.kind === "revision") {
-      documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: event.kind }));
+      const revision = Number(event.cursor.split(":", 1)[0]);
+      if (!Number.isSafeInteger(revision) || revision <= config.revision) return;
+      documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: { kind: "revision", revision } }));
       const notice = "A newer document revision is available. Finish or discard this review before reloading.";
       setStatus(notice);
       showToast(notice, { sticky: true });
@@ -1238,7 +1269,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       // forms bind to it before they latch closed.
       if (event.forms?.length) documentRoot.dispatchEvent(new CustomEvent<FormAnswersDetail>(FORM_ANSWERS_EVENT, { detail: event.forms }));
       closeSession(true);
-    } else if (event.kind === "answer_state" && event.answers?.length) {
+    } else if ((event.kind === "answer_state" || event.kind === "thread") && event.answers?.length) {
       // Each form shows its own answer's delivery and acknowledgment.
       documentRoot.dispatchEvent(new CustomEvent<AnswerStateDetail>(ANSWER_STATE_EVENT, { detail: event.answers }));
     }
@@ -1322,7 +1353,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             aria-pressed={commentMode}
             title={commentMode ? "Exit Comment mode (C or Esc)" : "Comment mode (C)"}
             onClick={() => {
-              if (commentMode && !panelOpen) setPanelOpen(true);
+              if (commentMode && !panelOpen) { setPanelOpen(true); setSheetExpanded(notes.length > 0); }
+              else if (commentMode && sheetLayout() && !sheetExpanded) setSheetExpanded(true);
               else armComment(!commentMode);
             }}
           >
@@ -1550,13 +1582,18 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         id="cf-feedback-panel"
         class="cf-dock"
         data-open={railVisible ? "true" : "false"}
+        data-expanded={sheetExpanded ? "true" : "false"}
         data-testid="notes-dock"
         aria-label="Review notes"
         aria-labelledby="cf-feedback-title"
         hidden={!railVisible}
         ref={dockRef}
       >
-        <div class="hd">
+        <div class="hd" onPointerDown={(event) => { dockRef.current?.setAttribute("data-drag-start", String(event.clientY)); }} onPointerUp={(event) => {
+          const start = Number(dockRef.current?.getAttribute("data-drag-start"));
+          if (Number.isFinite(start) && start - event.clientY >= 20) setSheetExpanded(true);
+          dockRef.current?.removeAttribute("data-drag-start");
+        }}>
           <b id="cf-feedback-title">Notes</b>
           <span id="dockCount" class="cf-count" aria-label={`${notes.length} pending notes`}>
             {notes.length}
@@ -1627,45 +1664,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           )}
         </div>
 
-        {config.feedback?.items.length || config.feedback?.omitted_older ? (
-          <details class="cf-feedback-history" data-testid="feedback-history">
-            <summary id="cf-feedback-history-title">
-              Earlier feedback
-              {config.feedback.omitted_older ? (
-                <span> · {config.feedback.omitted_older} older in session history</span>
-              ) : null}
-            </summary>
-            <ol>
-              {config.feedback.items.map((item) => (
-                <li key={item.event_id}>
-                  <div class="cf-history-meta">
-                    <strong>{item.verdict.replaceAll("_", " ")}</strong>
-                    <span>{item.lifecycle}</span>
-                    {item.acknowledged ? <span data-testid="feedback-acknowledged">acknowledged by agent</span> : null}
-                    <span>Revision {item.source_revision}</span>
-                    <span>Version {item.event_version}</span>
-                  </div>
-                  {item.instruction ? <p>{item.instruction}</p> : null}
-                  {item.notes.length ? (
-                    <ul>
-                      {item.notes.map((note) => (
-                        <li key={note.id} data-anchor-state={note.anchor.state}>
-                          <div class="cf-note-heading">
-                            <strong>{note.block_label}</strong>
-                            <span>{anchorWords(note.anchor)}</span>
-                          </div>
-                          {note.quote ? <blockquote>{note.quote}</blockquote> : null}
-                          <p>{note.body}</p>
-                          {anchorNotice(note.anchor)}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          </details>
-        ) : null}
+        <ThreadRail config={config} documentRoot={documentRoot} />
 
         {/* Advanced tools — secondary path for a11y + qualification bridges */}
         <details class="cf-tools">
@@ -1988,36 +1987,6 @@ function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpo
 // The state of an earlier note in words, never its enum value (the detail
 // line below it, `anchorNotice`, says why): "moved" only when the anchor
 // reports a change.
-function anchorWords(anchor: FeedbackAnchor): string {
-  switch (anchor.state) {
-    case "orphaned": return "unpositioned";
-    case "block_fallback": return "on the block";
-    case "reanchored": return anchor.changed ? "moved" : "anchored";
-    case "entity_reanchored": return anchor.label_changed ? "moved" : "anchored";
-    default: return "anchored";
-  }
-}
-
-// What the rail says about where an earlier note now sits (SPC-014 B1): a
-// note that moved or lost its target says so, never silently.
-function anchorNotice(anchor: FeedbackAnchor) {
-  switch (anchor.state) {
-    case "orphaned": return <p class="cf-anchor-warning">Unpositioned: {anchor.reason}</p>;
-    case "block_fallback": return <p class="cf-anchor-warning">Shown on the block: {anchor.reason}</p>;
-    case "reanchored": return anchor.changed
-      ? <p class="cf-anchor-warning">Moved: the closest match in this revision differs from the quote.</p>
-      : <p class="cf-anchor-note">Matched uniquely in this revision.</p>;
-    case "entity_reanchored": return anchor.label_changed
-      ? <p class="cf-anchor-warning">The part it names was relabelled in this revision.</p>
-      : <p class="cf-anchor-note">Still names the same part; the block around it changed in this revision.</p>;
-    case "element_reanchored": return <p class="cf-anchor-note">The same element: its block is unchanged in this revision.</p>;
-    case "region_reanchored": return anchor.scope === "document"
-      ? <p class="cf-anchor-note">Still the whole document in this revision.</p>
-      : <p class="cf-anchor-note">The same area: its block is unchanged in this revision.</p>;
-    default: return null;
-  }
-}
-
 function visiblePart(rect: DOMRect): DOMRect | null {
   const top = Math.max(rect.top, 0);
   const bottom = Math.min(rect.bottom, window.innerHeight);

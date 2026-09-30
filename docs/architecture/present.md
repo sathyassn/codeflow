@@ -121,3 +121,20 @@ macOS, Linux, WSL2 and Windows matrix with a qualified browser is recorded.
 | Comment capture | toolbar capture survives focus changes, and leaving Comment releases it; iframe figures use native hit-testing while commenting and regain their pointer interaction afterwards |
 | Input bounds | review controls show the Rust-owned note, text, selection and payload bounds before submission |
 | Full history | remains available explicitly, without being injected into unrelated work |
+
+### Conversation and revision projections
+
+Replies, reopens and tombstones extend `responses.jsonl` additively and record
+the revision at each transition. Replies are agent output; only reviewer
+reopens and tombstones join the v2 delivery stream. Thread routes use the same
+host, origin, cookie and request-header checks as answers. Deletion redacts
+public projections, including note replies, while the private ledger remains
+append-only until clear. Previously delivered copies cannot be recalled.
+
+New revisions optionally record repository commit, dirty state and code/diff
+source paths. Existing records omit those fields and still load. Captured
+paths are metadata only: the service has no repository-file route, and the
+path/commit pair does not certify snippet equality. `present diff` compares
+stored block bodies and reanchors carried notes against its target revision.
+`present check` reuses document validation without launching a browser.
+Default exports omit the conversation; `--with-notes` adds a read-only appendix.

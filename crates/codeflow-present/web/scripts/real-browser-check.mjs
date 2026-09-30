@@ -79,6 +79,8 @@ const childEnvironment = {
   TMP: taskTemp,
   TEMP: taskTemp,
   NODE_DISABLE_COMPILE_CACHE: "1",
+  // A service this check starts exits once this process is gone.
+  CF_PRESENT_OWNER_PID: String(process.pid),
   AWS_SECRET_ACCESS_KEY: "aws-real-browser-canary",
   AWS_SESSION_TOKEN: "aws-session-real-browser-canary",
   OPENAI_API_KEY: "openai-real-browser-canary",

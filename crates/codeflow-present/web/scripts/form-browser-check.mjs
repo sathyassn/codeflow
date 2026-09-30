@@ -53,6 +53,8 @@ const environment = {
   TMPDIR: join(root, "tmp"),
   XDG_STATE_HOME: join(root, "state"),
   LANG: "C.UTF-8",
+  // A service this check starts exits once this process is gone.
+  CF_PRESENT_OWNER_PID: String(process.pid),
 };
 const run = (args) => {
   try {
@@ -87,6 +89,18 @@ try {
   const sent = [];
   page.on("request", (request) => {
     if (new URL(request.url()).pathname === ANSWERS) sent.push(request.postData() ?? "");
+  });
+  // The service answers a poll as soon as a revision lands, so the page's
+  // polls pass through here, where a case can hold an answer back and choose
+  // when a revision notice reaches the page (TSK-162).
+  let pollHold = null;
+  const pollCursors = [];
+  await page.route("**/app/api/events/poll", async (route) => {
+    pollCursors.push(JSON.parse(route.request().postData() ?? "null")?.cursor ?? null);
+    let response;
+    try { response = await route.fetch({ timeout: 60_000 }); } catch { await route.abort().catch(() => {}); return; }
+    if (pollHold) await pollHold.promise;
+    await route.fulfill({ response }).catch(() => {});
   });
   await page.goto(pathToFileURL(bootstrap).href, { waitUntil: "commit", timeout: 120_000 });
   await page.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"), { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -211,6 +225,10 @@ try {
   const third = JSON.parse(await readFile(fixture, "utf8"));
   third.title = "Forms fixture, revision 3";
   await writeFile(join(project, "forms-3.json"), `${JSON.stringify(third, null, 2)}\n`);
+  // The revision 3 notice is held until the form uses revision 3 and is
+  // back in editing: the order that once showed "A newer revision exists"
+  // on a form already at the newest revision (TSK-162).
+  pollHold = Promise.withResolvers();
   run(["present", "update", sessionId, join(project, "forms-3.json")]);
   await form.locator("[data-cf-form-action='amend']").click();
   await field("keep-days").locator("input").fill("7");
@@ -219,7 +237,19 @@ try {
   assert.match(staleCorrection.says, /Revision 3 is current\. This question is unchanged there\./u, staleCorrection.says);
   await refuseOnce((body) => { body.values.home = "cloud"; });
   await form.locator("[data-cf-form-action='confirm']").click();
-  await waitState(form, "editing");
+  const refusedCorrection = await waitState(form, "editing");
+  pollHold.resolve();
+  pollHold = null;
+  // The page polls again only once it has handled the last answer, so a poll
+  // whose cursor names revision 3 shows the notice reached the forms.
+  const handledBy = Date.now() + 30_000;
+  while (!pollCursors.some((cursor) => cursor?.startsWith("3:"))) {
+    if (Date.now() > handledBy) throw new Error(`late notice: the page never handled revision 3; its polls named ${JSON.stringify(pollCursors)}`);
+    await page.waitForTimeout(50);
+  }
+  assert.deepEqual(await stateOf(form), refusedCorrection, "late notice: a notice for the form's own revision changed it");
+  // Later polls reach the service directly, as in any other run.
+  await page.unroute("**/app/api/events/poll");
   const correct = form.locator("[data-cf-form-action='submit']");
   assert.ok(await correct.isVisible(), "refused corrected confirm: no send action");
   assert.equal(await correct.innerText(), "Send correction");
@@ -231,7 +261,7 @@ try {
   assert.equal(lines[1].amends, lines[0].answer_id);
   assert.equal(lines[1].revision, 3);
   assert.equal(lines[1].values["keep-days"], 7);
-  passed.push("amendment: 'Correct this answer' stores an amendment naming the original answer, both lines stay; a refused confirmation of a stale correction leaves 'Send correction', which stores it against revision 3");
+  passed.push("amendment: 'Correct this answer' stores an amendment naming the original answer, both lines stay; a refused confirmation of a stale correction leaves 'Send correction', which stores it against revision 3; the revision 3 notice, held until the form used revision 3, changed nothing");
 
   // A reload shows the last sent values (TSK-176). A second tab, loaded at
   // revision 3, sends a correction with a value in every field kind, then
@@ -564,6 +594,9 @@ try {
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
     const failedRequest = page.waitForEvent("requestfailed", (request) => new URL(request.url()).pathname === ANSWERS);
+    // Awaited below; if an earlier step fails, closing the page rejects it,
+    // and that rejection must not replace the step's own error.
+    failedRequest.catch(() => {});
     await page.route(`**${ANSWERS}`, async (route) => {
       const body = JSON.parse(route.request().postData());
       if (body.form_id === "store-choice") {

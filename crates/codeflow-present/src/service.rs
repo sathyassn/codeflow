@@ -1,3 +1,4 @@
+use axum::response::IntoResponse;
 use std::{
     collections::HashMap,
     fmt::Write as _,
@@ -47,6 +48,16 @@ use crate::{
 #[derive(RustEmbed)]
 #[folder = "assets/"]
 pub(crate) struct EmbeddedAssets;
+
+/// Names a process whose exit ends the service: a test harness that starts a
+/// presentation sets it to its own process id, so the service closes the
+/// session and exits once that process is gone, even when the process was
+/// killed before it could close the session. Unset, the service keeps running
+/// until close or idle expiry. The service takes a kernel handle on the owner
+/// when it starts, so it sees the exit before anything reaps the owner, and a
+/// later process that reuses the number cannot keep it alive. Only Linux and
+/// macOS follow the owner; elsewhere the variable is checked and then ignored.
+pub const OWNER_PID_ENV: &str = "CF_PRESENT_OWNER_PID";
 
 const BOOTSTRAP_HANDOFF: &str = "<!doctype html><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"><title>Opening presentation</title><script>location.replace('/app/')</script>";
 const BOOTSTRAP_HANDOFF_CSP: &str = "default-src 'none'; script-src 'sha256-4MyoobivIq6Xw46Dc5S5dlGeU1Me98yo/zmVu3ed3zg='; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -213,6 +224,7 @@ struct ReviewResponse {
 
 /// Run one session-scoped service until close or idle expiry.
 pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
+    let owner = owner_lifeline()?;
     let store = SessionStore::discover(&project)?;
     let _service_lease = store.acquire_service_lease(session_id)?;
     let session = store.load(session_id)?;
@@ -283,7 +295,7 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
     };
 
     let monitor_state = state.clone();
-    let monitor = tokio::spawn(async move { monitor_session(monitor_state).await });
+    let monitor = tokio::spawn(async move { monitor_session(monitor_state, owner).await });
     let shutdown = state.shutdown.clone();
     let app = Router::new()
         .route("/bootstrap", post(bootstrap))
@@ -293,6 +305,9 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         .route("/app/assets/{*path}", get(asset))
         .route("/app/api/reviews", post(submit_review))
         .route("/app/api/answers", post(submit_answer))
+        .route("/app/api/threads/list", post(list_threads))
+        .route("/app/api/threads/reopen", post(reopen_thread))
+        .route("/app/api/notes/tombstone", post(tombstone_note))
         .route("/app/api/events/poll", post(poll_events))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(limits::MAX_FEEDBACK_BYTES))
@@ -589,28 +604,22 @@ async fn asset(
     if let Err(response) = require_application_request(&state, &headers, false) {
         return response;
     }
-    if !accepts_brotli(&headers) {
+    let Some(encoding) = service_encoding(&headers) else {
         return plain(
             StatusCode::NOT_ACCEPTABLE,
-            "This browser route is not qualified because it does not advertise Brotli. Close it and run `codeflow present show <session-id> --no-launch` with a qualified browser.",
+            "This browser route is not qualified because it does not advertise Brotli or gzip. Close it and run `codeflow present show <session-id> --no-launch` with a qualified browser.",
         );
-    }
+    };
     let request_path = format!("/app/assets/{path}");
     let Some(asset) = state
         .assets
         .service
         .assets
         .iter()
-        .find(|asset| asset.request_path == request_path)
+        .find(|asset| asset.request_path == request_path && asset.content_encoding == encoding)
     else {
         return plain(StatusCode::NOT_FOUND, "asset not found");
     };
-    if asset.content_encoding != "br" {
-        return plain(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "asset manifest encoding is invalid",
-        );
-    }
     let Some(bytes) = EmbeddedAssets::get(&asset.stored_path) else {
         return plain(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -628,7 +637,7 @@ async fn asset(
         Body::from(bytes.data.into_owned()),
         &[
             (header::CONTENT_TYPE, &asset.media_type),
-            (header::CONTENT_ENCODING, "br"),
+            (header::CONTENT_ENCODING, encoding),
             (header::VARY, "Accept-Encoding"),
             (header::CACHE_CONTROL, "public,max-age=31536000,immutable"),
             (header::ETAG, &asset.etag),
@@ -965,6 +974,8 @@ fn session_event(
             "session_closed"
         } else if revised {
             "revision"
+        } else if answered && answers.thread_changed {
+            "thread"
         } else if answered {
             "answer_state"
         } else {
@@ -1078,18 +1089,47 @@ fn require_host(state: &AppState, headers: &HeaderMap) -> std::result::Result<()
     Ok(())
 }
 
-fn accepts_brotli(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT_ENCODING)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value.split(',').any(|encoding| {
-                encoding
-                    .split(';')
+// Both representations are equivalent. Prefer Brotli whenever explicitly
+// acceptable; q=0 and malformed quality values never opt into an encoding.
+fn service_encoding(headers: &HeaderMap) -> Option<&'static str> {
+    ["br", "gzip"].into_iter().find(|wanted| {
+        headers
+            .get_all(header::ACCEPT_ENCODING)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|item| {
+                let mut parts = item.split(';');
+                if !parts
                     .next()
-                    .is_some_and(|name| name.trim().eq_ignore_ascii_case("br"))
+                    .is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted))
+                {
+                    return false;
+                }
+                let Some(parameter) = parts.next() else {
+                    return true;
+                };
+                if parts.next().is_some() {
+                    return false;
+                }
+                let Some((name, value)) = parameter.trim().split_once('=') else {
+                    return false;
+                };
+                if !name.eq_ignore_ascii_case("q") {
+                    return false;
+                }
+                let value = value.trim();
+                let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+                if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return false;
+                }
+                match whole {
+                    "0" => fraction.bytes().any(|byte| byte != b'0'),
+                    "1" => fraction.bytes().all(|byte| byte == b'0'),
+                    _ => false,
+                }
             })
-        })
+    })
 }
 
 fn secure_html(status: StatusCode, body: String, csp: &str) -> Response<Body> {
@@ -1175,14 +1215,28 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
             "renderer prepaint source violates its CSP integrity contract".to_string(),
         ));
     }
-    let mut total = 0_u64;
+    let mut totals = HashMap::<&str, u64>::new();
+    let mut variants = std::collections::HashSet::new();
     for asset in &manifest.service.assets {
         if !asset.request_path.starts_with("/app/assets/")
             || asset.request_path.contains("..")
             || !asset.stored_path.starts_with("service/")
             || asset.stored_path.contains("..")
-            || asset.content_encoding != "br"
-            || asset.encoded_bytes > limits::MAX_BROTLI_CHUNK_BYTES
+            || !matches!(asset.content_encoding.as_str(), "br" | "gzip")
+            || !asset
+                .stored_path
+                .ends_with(if asset.content_encoding == "br" {
+                    ".br"
+                } else {
+                    ".gz"
+                })
+            || asset.encoded_bytes
+                > if asset.content_encoding == "br" {
+                    limits::MAX_BROTLI_CHUNK_BYTES
+                } else {
+                    limits::MAX_GZIP_CHUNK_BYTES
+                }
+            || !variants.insert((&asset.request_path, &asset.content_encoding))
             || asset.sha256.len() != 64
         {
             return Err(PresentError::CorruptState(format!(
@@ -1190,7 +1244,8 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
                 asset.request_path
             )));
         }
-        total = total.checked_add(asset.encoded_bytes).ok_or_else(|| {
+        let total = totals.entry(&asset.content_encoding).or_default();
+        *total = total.checked_add(asset.encoded_bytes).ok_or_else(|| {
             PresentError::CorruptState("renderer asset byte total overflow".to_string())
         })?;
         let bytes = EmbeddedAssets::get(&asset.stored_path).ok_or_else(|| {
@@ -1208,11 +1263,24 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
             )));
         }
     }
-    if total > limits::MAX_BROTLI_ASSET_BYTES {
-        return Err(PresentError::CorruptState(format!(
-            "renderer Brotli corpus exceeds {} bytes",
-            limits::MAX_BROTLI_ASSET_BYTES
-        )));
+    for (encoding, limit) in [
+        ("br", limits::MAX_BROTLI_ASSET_BYTES),
+        ("gzip", limits::MAX_GZIP_ASSET_BYTES),
+    ] {
+        if totals.get(encoding).copied().unwrap_or_default() > limit {
+            return Err(PresentError::CorruptState(format!(
+                "renderer {encoding} corpus exceeds {limit} bytes"
+            )));
+        }
+        if manifest.service.assets.iter().any(|asset| {
+            !manifest.service.assets.iter().any(|other| {
+                other.request_path == asset.request_path && other.content_encoding == encoding
+            })
+        }) {
+            return Err(PresentError::CorruptState(format!(
+                "renderer is missing a {encoding} variant"
+            )));
+        }
     }
     Ok(())
 }
@@ -1235,9 +1303,172 @@ fn write_bootstrap(path: &std::path::Path, html: &str) -> Result<()> {
         .map_err(|error| PresentError::io(path, error))
 }
 
-async fn monitor_session(state: AppState) {
+/// A handle on the process named by [`OWNER_PID_ENV`], if the variable is set.
+fn owner_lifeline() -> Result<Option<OwnerLifeline>> {
+    let Some(value) = std::env::var_os(OWNER_PID_ENV) else {
+        return Ok(None);
+    };
+    let pid = value
+        .to_str()
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| {
+            PresentError::ServiceUnavailable(format!("{OWNER_PID_ENV} is not a process id"))
+        })?;
+    OwnerLifeline::watch(pid).map_err(|error| {
+        PresentError::ServiceUnavailable(format!(
+            "{OWNER_PID_ENV} names no running process ({error})"
+        ))
+    })
+}
+
+/// A kernel handle on the owner, taken while it runs. It reports the owner's
+/// exit when the exit happens, before any parent reaps the process, and it
+/// stays bound to that process when a later one reuses its number.
+struct OwnerLifeline {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    handle: std::os::fd::OwnedFd,
+    exited: bool,
+}
+
+impl OwnerLifeline {
+    /// Watches `pid` through a pidfd.
+    #[cfg(target_os = "linux")]
+    fn watch(pid: i32) -> std::io::Result<Option<Self>> {
+        use std::os::fd::FromRawFd as _;
+        // SAFETY: pidfd_open takes a process id and flags, and returns a new
+        // descriptor or -1.
+        let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let descriptor = i32::try_from(descriptor)
+            .map_err(|_| std::io::Error::other("pidfd is out of range"))?;
+        // SAFETY: the kernel just returned this descriptor and nothing else
+        // owns it.
+        let handle = unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) };
+        Ok(Some(Self {
+            handle,
+            exited: false,
+        }))
+    }
+
+    /// Watches `pid` through a kqueue that reports its exit.
+    #[cfg(target_os = "macos")]
+    fn watch(pid: i32) -> std::io::Result<Option<Self>> {
+        use std::os::fd::{AsRawFd as _, FromRawFd as _};
+        let ident =
+            usize::try_from(pid).map_err(|_| std::io::Error::other("process id is negative"))?;
+        // SAFETY: kqueue takes no arguments and returns a new descriptor or -1.
+        let queue = unsafe { libc::kqueue() };
+        if queue < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: the kernel just returned this descriptor and nothing else
+        // owns it.
+        let handle = unsafe { std::os::fd::OwnedFd::from_raw_fd(queue) };
+        let change = libc::kevent {
+            ident,
+            filter: libc::EVFILT_PROC,
+            flags: libc::EV_ADD,
+            fflags: libc::NOTE_EXIT,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        // SAFETY: one valid change and no event buffer. Registration fails
+        // with ESRCH once the process has exited, reaped or not.
+        let registered = unsafe {
+            libc::kevent(
+                handle.as_raw_fd(),
+                &raw const change,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        if registered < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Some(Self {
+            handle,
+            exited: false,
+        }))
+    }
+
+    /// Other platforms do not follow the owner.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[allow(clippy::unnecessary_wraps)]
+    fn watch(_pid: i32) -> std::io::Result<Option<Self>> {
+        Ok(None)
+    }
+
+    /// Whether the owner has exited, without waiting.
+    fn has_exited(&mut self) -> bool {
+        if !self.exited {
+            self.exited = self.exit_reported();
+        }
+        self.exited
+    }
+
+    #[cfg(target_os = "linux")]
+    fn exit_reported(&self) -> bool {
+        use std::os::fd::AsRawFd as _;
+        let mut poll = libc::pollfd {
+            fd: self.handle.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd and a zero timeout. A pidfd becomes
+        // readable when its process exits.
+        unsafe { libc::poll(&raw mut poll, 1, 0) > 0 }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn exit_reported(&self) -> bool {
+        use std::os::fd::AsRawFd as _;
+        let mut event = libc::kevent {
+            ident: 0,
+            filter: 0,
+            flags: 0,
+            fflags: 0,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        let now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: no changes, room for one event and a zero timeout. The exit
+        // event is delivered once, which `has_exited` keeps.
+        let ready = unsafe {
+            libc::kevent(
+                self.handle.as_raw_fd(),
+                std::ptr::null(),
+                0,
+                &raw mut event,
+                1,
+                &raw const now,
+            )
+        };
+        ready > 0 && event.fflags & libc::NOTE_EXIT != 0
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn exit_reported(&self) -> bool {
+        false
+    }
+}
+
+async fn monitor_session(state: AppState, mut owner: Option<OwnerLifeline>) {
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
+        if owner.as_mut().is_some_and(OwnerLifeline::has_exited) {
+            let _ = state.store.close(state.session_id);
+            cleanup_owned_browser(&state);
+            state.shutdown.notify_waiters();
+            return;
+        }
         let now = now_unix();
         let bootstrap_expired = state.bootstrap.lock().is_ok_and(|bootstrap| {
             !bootstrap.used
@@ -1407,6 +1638,61 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+async fn list_threads(State(state): State<AppState>, headers: HeaderMap) -> Response<Body> {
+    if let Err(response) = require_application_request(&state, &headers, true) {
+        return response;
+    }
+    match state.store.conversation(state.session_id) {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(error) => plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
+}
+
+async fn reopen_thread(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<crate::conversation::ThreadRequest>,
+) -> Response<Body> {
+    change_thread(&state, &headers, &request, false)
+}
+
+async fn tombstone_note(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<crate::conversation::ThreadRequest>,
+) -> Response<Body> {
+    change_thread(&state, &headers, &request, true)
+}
+
+fn change_thread(
+    state: &AppState,
+    headers: &HeaderMap,
+    request: &crate::conversation::ThreadRequest,
+    tombstone: bool,
+) -> Response<Body> {
+    if let Err(response) = require_application_request(state, headers, true) {
+        return response;
+    }
+    match state
+        .store
+        .change_thread(state.session_id, request, tombstone)
+    {
+        Ok(event_id) => {
+            state.last_activity.store(now_unix(), Ordering::Release);
+            Json(serde_json::json!({"event_id":event_id})).into_response()
+        }
+        Err(PresentError::SessionClosed(_)) => plain(StatusCode::GONE, "session is closed"),
+        Err(PresentError::RevisionConflict { .. }) => plain(
+            StatusCode::CONFLICT,
+            "revision changed; reload before changing this thread",
+        ),
+        Err(PresentError::InvalidRequest(message)) => {
+            plain(StatusCode::UNPROCESSABLE_ENTITY, &message)
+        }
+        Err(error) => plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -2234,16 +2520,79 @@ mod tests {
         assert!(!constant_time_equal(b"same", b"diff"));
     }
 
+    #[tokio::test]
+    async fn service_encoding_negotiation_preserves_representation_headers() {
+        let (_temp, state) = app_state();
+        let path = state.assets.service.entrypoints["present.app"]
+            .trim_start_matches("/app/assets/")
+            .to_string();
+        let mut etags = std::collections::HashMap::new();
+        for (accept, expected) in [
+            ("br, gzip", Some("br")),
+            ("gzip", Some("gzip")),
+            ("gzip, br;q=0", Some("gzip")),
+            ("br;q=0.1, gzip;q=1", Some("br")),
+            ("BR; q=0.5", Some("br")),
+            ("br;q=0, gzip;q=0", None),
+            ("br;q=bogus, gzip", Some("gzip")),
+            ("br;q=2", None),
+            ("deflate", None),
+            ("", None),
+        ] {
+            let mut headers = application_headers(&state, false);
+            headers.insert(
+                header::ACCEPT_ENCODING,
+                HeaderValue::from_str(accept).unwrap(),
+            );
+            let response = asset(State(state.clone()), Path(path.clone()), headers).await;
+            let Some(encoding) = expected else {
+                assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE, "{accept}");
+                continue;
+            };
+            assert_eq!(response.status(), StatusCode::OK, "{accept}");
+            assert_eq!(response.headers()[header::CONTENT_ENCODING], encoding);
+            assert_eq!(response.headers()[header::VARY], "Accept-Encoding");
+            assert_eq!(
+                response.headers()[header::CONTENT_TYPE],
+                "text/javascript; charset=utf-8"
+            );
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "public,max-age=31536000,immutable"
+            );
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+            etags.insert(encoding, response.headers()[header::ETAG].clone());
+            let expected_asset = state
+                .assets
+                .service
+                .assets
+                .iter()
+                .find(|a| a.request_path.ends_with(&path) && a.content_encoding == encoding)
+                .unwrap();
+            let body = axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap();
+            assert_eq!(
+                body.as_ref(),
+                EmbeddedAssets::get(&expected_asset.stored_path)
+                    .unwrap()
+                    .data
+                    .as_ref()
+            );
+        }
+        assert_ne!(etags["br"], etags["gzip"]);
+    }
+
     #[test]
-    fn accept_encoding_requires_brotli_token() {
+    fn accept_encoding_prefers_brotli_token() {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::ACCEPT_ENCODING,
             HeaderValue::from_static("gzip, br;q=1"),
         );
-        assert!(accepts_brotli(&headers));
+        assert_eq!(service_encoding(&headers), Some("br"));
         headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
-        assert!(!accepts_brotli(&headers));
+        assert_eq!(service_encoding(&headers), Some("gzip"));
     }
 
     #[test]

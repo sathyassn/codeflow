@@ -55,6 +55,8 @@ pub enum EventKind {
     Review,
     Answer,
     Amendment,
+    Reopen,
+    Tombstone,
 }
 
 /// One v2 feedback line (I4), as `feedback --format v2` and `responses
@@ -79,6 +81,11 @@ pub struct FeedbackLine {
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum LineFields {
+    Thread {
+        target: Uuid,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        note_id: Option<Uuid>,
+    },
     Review {
         verdict: FeedbackVerdict,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,6 +161,7 @@ pub struct AnswerState {
 /// closure each form's latest answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnswerStates {
+    pub thread_changed: bool,
     /// The last line these states cover; the next cursor.
     pub through: u64,
     pub states: Vec<AnswerState>,
@@ -250,7 +258,11 @@ impl States {
                 ResponseEvent::Acknowledged(state) => {
                     acknowledged.insert(state.target);
                 }
-                ResponseEvent::Answer(_) | ResponseEvent::Amendment(_) => {}
+                ResponseEvent::Answer(_)
+                | ResponseEvent::Amendment(_)
+                | ResponseEvent::Reply(_)
+                | ResponseEvent::Reopen(_)
+                | ResponseEvent::Tombstone(_) => {}
             }
         }
         Self {
@@ -288,8 +300,9 @@ impl SessionStore {
         let snapshot = {
             let _lock = self.lock_session(id)?;
             let session = self.load(id)?;
-            let events = self.read_events_unlocked(id)?;
+            let mut events = self.read_events_unlocked(id)?;
             let ledger = Ledger::open(self.responses_path(id)?, id)?.events;
+            crate::conversation::redact(&mut events, &ledger);
             // Anchors need the revisions; only a read that lists a review
             // loads them, so a wait on answers reads no revision.
             let states = States::of(&events, &ledger);
@@ -333,7 +346,41 @@ impl SessionStore {
             let (kind, record) = match event {
                 ResponseEvent::Answer(record) => (EventKind::Answer, record),
                 ResponseEvent::Amendment(record) => (EventKind::Amendment, record),
-                ResponseEvent::Delivered(_) | ResponseEvent::Acknowledged(_) => continue,
+                ResponseEvent::Reopen(_) | ResponseEvent::Tombstone(_) => {
+                    let kind = if matches!(event, ResponseEvent::Reopen(_)) {
+                        EventKind::Reopen
+                    } else {
+                        EventKind::Tombstone
+                    };
+                    let record = event.transition().ok_or_else(|| {
+                        PresentError::CorruptState("missing thread transition".into())
+                    })?;
+                    let event_id = event
+                        .thread_id()
+                        .ok_or_else(|| PresentError::CorruptState("missing thread id".into()))?;
+                    let status = replayed.status(event_id);
+                    if filter.admits(kind, record.revision, None, status) {
+                        lines.push(FeedbackLine {
+                            format: 2,
+                            kind,
+                            event_id,
+                            session_id: id,
+                            revision: record.revision,
+                            sequence: record.sequence,
+                            status,
+                            created_at_unix: record.at_unix,
+                            untrusted: true,
+                            fields: LineFields::Thread {
+                                target: record.target,
+                                note_id: record.note_id,
+                            },
+                        });
+                    }
+                    continue;
+                }
+                ResponseEvent::Reply(_)
+                | ResponseEvent::Delivered(_)
+                | ResponseEvent::Acknowledged(_) => continue,
             };
             let status = replayed.status(record.answer_id);
             if filter.admits(kind, record.revision, Some(&record.form_id), status) {
@@ -469,12 +516,16 @@ impl SessionStore {
                 ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state) => {
                     state.target
                 }
+                ResponseEvent::Reply(_)
+                | ResponseEvent::Reopen(_)
+                | ResponseEvent::Tombstone(_) => continue,
             };
             if answers.contains(&target) && !changed.contains(&target) {
                 changed.push(target);
             }
         }
         Ok(AnswerStates {
+            thread_changed: read[after..].iter().any(|e| e.transition().is_some()),
             forms: Vec::new(),
             through: through as u64,
             states: changed
@@ -524,6 +575,7 @@ impl SessionStore {
         });
         forms.truncate(limit);
         Ok(AnswerStates {
+            thread_changed: false,
             through: ledger.len() as u64,
             states: Vec::new(),
             forms: forms
@@ -612,8 +664,11 @@ fn answer_line(kind: EventKind, record: &AnswerRecord, status: DeliveryStatus) -
 fn answer_ids(ledger: &[ResponseEvent]) -> HashSet<Uuid> {
     ledger
         .iter()
-        .filter_map(ResponseEvent::answer)
-        .map(|record| record.answer_id)
+        .filter_map(|event| match event {
+            ResponseEvent::Reopen(r) => Some(r.reopen_id),
+            ResponseEvent::Tombstone(r) => Some(r.tombstone_id),
+            _ => event.answer().map(|a| a.answer_id),
+        })
         .collect()
 }
 

@@ -24,6 +24,8 @@ pub const MAX_TABLE_ROWS: usize = 2_000;
 pub const MAX_TABLE_COLUMNS: usize = 64;
 pub const MAX_COLLECTION_ITEMS_PER_BLOCK: usize = 2_048;
 pub const MAX_DOCUMENT_COLLECTION_ITEMS: usize = 16_384;
+/// Agent reply text is bounded in UTF-8 bytes, independently of review-note UTF-16 limits.
+pub const MAX_REPLY_TEXT_BYTES: usize = 16 * 1024;
 pub const MAX_FEEDBACK_NOTES: usize = 100;
 pub const MAX_FEEDBACK_TEXT_UTF16: usize = 16 * 1024;
 pub const MAX_SELECTOR_EXACT_UTF16: usize = 4 * 1024;
@@ -60,6 +62,8 @@ pub const MAX_HISTORY_READ_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_RAW_ASSET_BYTES: u64 = 5_000_000;
 pub const MAX_RAW_CHUNK_BYTES: u64 = 850_000;
 pub const MAX_BROTLI_ASSET_BYTES: u64 = 1_150_000;
+pub const MAX_GZIP_ASSET_BYTES: u64 = 340_000;
+pub const MAX_GZIP_CHUNK_BYTES: u64 = 150_000;
 pub const MAX_BROTLI_CHUNK_BYTES: u64 = 150_000;
 pub const MAX_SERVICE_BINARY_DELTA_BYTES: u64 = 1_250_000;
 pub const MAX_EXPORT_PAYLOAD_BYTES: u64 = 1_300_000;
