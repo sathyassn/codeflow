@@ -970,14 +970,7 @@ fn verify_page_class(
 ) {
     let route = &page.route;
     if page.stale {
-        if page.class.is_some()
-            || page.class_reason.is_some()
-            || page.class_note.is_some()
-            || !page.figures.is_empty()
-            || page.source_region.is_some()
-            || page.lookup.is_some()
-            || page.altitude_words.is_some()
-        {
+        if stub_claims_class(page) {
             report
                 .issues
                 .push(format!("{route} stale stub claims a page class or figures"));
@@ -1070,6 +1063,18 @@ fn verify_page_class(
             (Some(_), None) => {}
         },
     }
+}
+
+/// A stale stub records no class, reason, note, figures, region, lookup or
+/// altitude words.
+fn stub_claims_class(page: &Page) -> bool {
+    page.class.is_some()
+        || page.class_reason.is_some()
+        || page.class_note.is_some()
+        || !page.figures.is_empty()
+        || page.source_region.is_some()
+        || page.lookup.is_some()
+        || page.altitude_words.is_some()
 }
 
 fn verify_explanatory_marker(route: &str, output: &str, report: &mut PortalValidationReport) {
