@@ -2135,7 +2135,10 @@ fn check_authority(
     violations: &mut Vec<Violation>,
 ) {
     if moved.transport_env
-        && git_subcommand(args).is_some_and(|(sub, _)| matches!(sub, "fetch" | "pull" | "push"))
+        && git_subcommand(args).is_some_and(|(sub, rest)| {
+            matches!(sub, "fetch" | "pull" | "push")
+                || super::ref_authority::remote_update_args(sub, rest).is_some()
+        })
     {
         violations.push(Violation::always_blocking(
             "git.policy_authority",

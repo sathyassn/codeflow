@@ -48,8 +48,9 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
-- **Tracking authority transport checks.** Fetch and pull reject URL rewrites
-  and arbitrary tracking-ref destinations. Direct writes to global Git config
+- **Tracking authority transport checks.** Fetch, pull and remote update reject
+  URL rewrites and configuration overrides; fetch and pull also reject arbitrary
+  tracking-ref destinations. Direct writes to global Git config
   files are refused while ordinary config reads and user-name updates pass.
 
 ### Added

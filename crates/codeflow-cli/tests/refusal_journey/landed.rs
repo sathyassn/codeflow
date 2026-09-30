@@ -944,3 +944,136 @@ fn r2_f1_direct_git_config_writes_are_authority_edits() {
     let out = child.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(2), "native edit: {out:?}");
 }
+
+#[test]
+fn r3_f3_linked_remote_update_rejects_configuration_overrides() {
+    let repo = Repo::new();
+    repo.landed();
+    repo.git(&["worktree", "add", "-q", "-b", "task/linked", "linked"]);
+    let linked = repo.root().join("linked");
+    let weak = Repo::new();
+    weak.remote();
+    weak.git(&["push", "-q", "origin", "HEAD:main"]);
+    let config = linked.join("g.conf");
+    let prefix = format!("{}/", repo.root().display());
+    let replacement = format!("{}/", weak.root().display());
+    std::fs::write(
+        &config,
+        format!("[url \"{replacement}\"]\ninsteadOf = {prefix}\n"),
+    )
+    .unwrap();
+    for relative in ["other-home/.gitconfig", "other-xdg/git/config"] {
+        let path = linked.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::copy(&config, path).unwrap();
+    }
+    let mut failures = Vec::new();
+    for environment in [
+        "GIT_CONFIG_GLOBAL=g.conf".to_string(),
+        "HOME=other-home".into(),
+        "XDG_CONFIG_HOME=other-xdg".into(),
+        format!("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.{replacement}.insteadOf GIT_CONFIG_VALUE_0={prefix}"),
+        "env GIT_CONFIG_GLOBAL=g.conf".into(),
+    ] {
+        for arguments in ["update", "update origin", "update --prune origin", "-v update -p origin"] {
+            let command = format!("{environment} git remote {arguments}");
+            let mut process = repo.command(&binary());
+            process.current_dir(&linked);
+            let out = run_hook(process, &linked, "git-guard", &command);
+            let text = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(2) || !text.contains("git.policy_authority") || !text.contains("configuration environment overrides") {
+                failures.push(format!("{command}: exit {:?}: {text}", out.status.code()));
+            }
+        }
+    }
+    for command in [
+        "git remote update",
+        "git remote update origin",
+        "git remote update -p origin",
+        "git remote -v",
+        "git remote show origin",
+        "git ls-remote origin",
+        "GIT_CONFIG_GLOBAL=g.conf git remote -v",
+        "git config --get remotes.team",
+    ] {
+        let mut process = repo.command(&binary());
+        process.current_dir(&linked);
+        let out = run_hook(process, &linked, "git-guard", command);
+        assert_eq!(out.status.code(), Some(0), "{command}: {out:?}");
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn r3_f3_remote_update_checks_every_selected_remote() {
+    let repo = Repo::new();
+    repo.landed();
+    repo.git(&["worktree", "add", "-q", "-b", "task/linked", "linked"]);
+    let linked = repo.root().join("linked");
+    let weak = Repo::new();
+    weak.remote();
+    weak.git(&["push", "-q", "origin", "HEAD:main"]);
+    // Only the second remote is rewritten; selecting origin alone remains safe.
+    repo.git(&["remote", "add", "secondary", "trusted:remote.git"]);
+    repo.git(&["config", "--add", "remotes.team", "origin"]);
+    repo.git(&["config", "--add", "remotes.team", "secondary origin"]);
+    std::fs::write(
+        repo.root().join("global.config"),
+        format!(
+            "[url \"{}/\"]\ninsteadOf = trusted:\n",
+            weak.root().display()
+        ),
+    )
+    .unwrap();
+    let mut failures = Vec::new();
+    let mut check = |command: &str, expected: i32| {
+        let mut process = repo.command(&binary());
+        process.current_dir(&linked);
+        let out = run_hook(process, &linked, "git-guard", command);
+        let text = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(expected)
+            || (expected == 2
+                && !(text.contains("git.policy_authority")
+                    && text.contains("effective URL for secondary")
+                    && text.contains("--show-origin")))
+        {
+            failures.push(format!(
+                "{command}: expected {expected}, exit {:?}: {text}",
+                out.status.code()
+            ));
+        }
+    };
+    for command in [
+        "git remote update",
+        "git remote update origin secondary",
+        "git remote update --prune secondary",
+        "git remote -v update -p team",
+        "git remote update -- team",
+    ] {
+        check(command, 2);
+    }
+    check("git remote update origin", 0);
+    repo.git(&["config", "remote.secondary.skipDefaultUpdate", "true"]);
+    check("git remote update", 0);
+    check("git remote update secondary", 2);
+    repo.git(&["config", "remotes.default", "origin secondary"]);
+    check("git remote update", 2);
+    repo.git(&["config", "remotes.default", "origin"]);
+    check("git remote update", 0);
+    check("git remote show secondary", 0);
+    // Group changes must not hide a selected remote from pre-command inspection.
+    for command in [
+        "git -c remotes.default=secondary remote update",
+        "git config remotes.default secondary && git remote update",
+    ] {
+        let mut process = repo.command(&binary());
+        process.current_dir(&linked);
+        let out = run_hook(process, &linked, "git-guard", command);
+        if out.status.code() != Some(2)
+            || !String::from_utf8_lossy(&out.stderr).contains("git.policy_authority")
+        {
+            failures.push(format!("{command}: exit {:?}", out.status.code()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -171,7 +171,10 @@ writes, including per-worktree config files, cannot replace the tracking
 authority, even when local-edit relief lowers hook integrity. Missing authority
 after a tracking ref exists refuses the call and names fetch or operator set-head
 recovery. Doctor and orient report the source, drift and the bootstrap residual.
-Fetch and pull compare the effective Git URL with the raw configured remote URL.
+Fetch, pull and remote update compare the effective Git URL with the raw
+configured remote URL. Remote update checks every selected remote, including
+groups and the default selection. Transport overrides and remote-group
+configuration changes cannot redirect an inspected update.
 Direct shell and native writes to `~/.gitconfig`, the XDG Git config and the
 `GIT_CONFIG_GLOBAL` file are authority edits; shell config reads and
 `git config --global user.name` remain allowed. A global config set to

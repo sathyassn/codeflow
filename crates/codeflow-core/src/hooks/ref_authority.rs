@@ -6,6 +6,7 @@ use std::process::Command;
 pub(super) fn protected_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
     key.starts_with("remote.")
+        || key.starts_with("remotes.")
         || key.starts_with("include.")
         || key.starts_with("includeif.")
         || (key.starts_with("url.")
@@ -46,7 +47,7 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
             }) || rest.iter().filter(|a| !a.starts_with('-')).count() == 1);
         if !read {
             return Some(
-                "writing remote, URL rewrite or include configuration can replace policy authority"
+                "writing remote, remote-group, URL rewrite or include configuration can replace policy authority"
                     .into(),
             );
         }
@@ -75,6 +76,9 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
             }) =>
         {
             Some("the operator manages remote identity and default-branch authority".into())
+        }
+        "remote" if remote_update_args(sub, rest).is_some() => {
+            remote_update(root, remote_update_args(sub, rest).unwrap())
         }
         "fetch" | "pull" => fetch(root, rest, sub == "pull"),
         "push" => {
@@ -109,6 +113,98 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Shared transport classification, including remote's leading verbose option.
+pub(super) fn remote_update_args<'a>(sub: &str, rest: &'a [String]) -> Option<&'a [String]> {
+    if sub != "remote" {
+        return None;
+    }
+    let index = rest.iter().position(|arg| !arg.starts_with('-'))?;
+    (rest[index] == "update").then(|| &rest[index + 1..])
+}
+
+fn remote_update(root: &Path, args: &[String]) -> Option<String> {
+    match update_remotes(root, args) {
+        Ok(names) => names
+            .into_iter()
+            .find_map(|name| fetch(root, &[name], false)),
+        Err(reason) => Some(reason),
+    }
+}
+
+fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
+    // Read the same effective config as Git, including includes and global scope.
+    let config = Command::new("git")
+        .current_dir(root)
+        .args(["config", "--null", "--list"])
+        .output()
+        .map_err(|error| format!("cannot inspect remote update configuration: {error}"))?;
+    if !config.status.success() {
+        return Err("cannot inspect remote update configuration; the operator checks git config --show-origin --list".into());
+    }
+    let text = String::from_utf8(config.stdout)
+        .map_err(|_| "cannot decode remote update configuration".to_string())?;
+    let entries: Vec<_> = text
+        .split_terminator('\0')
+        .map(|entry| entry.split_once('\n').unwrap_or((entry, "true")))
+        .collect();
+    let group = |name: &str| {
+        let key = format!("remotes.{name}");
+        entries
+            .iter()
+            .filter(|(k, _)| *k == key)
+            .flat_map(|(_, value)| value.split([' ', '\t', '\n']))
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let mut options = true;
+    let mut selected: Vec<_> = args
+        .iter()
+        .filter(|arg| {
+            if options && arg.as_str() == "--" {
+                options = false;
+                false
+            } else {
+                !options || !arg.starts_with('-')
+            }
+        })
+        .cloned()
+        .collect();
+    if selected.is_empty() {
+        selected.push("default".into());
+    }
+    if selected.last().is_some_and(|name| name == "default")
+        && !entries.iter().any(|(key, _)| *key == "remotes.default")
+    {
+        let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
+        let remotes = repo.remotes().map_err(|error| error.to_string())?;
+        let mut names = Vec::new();
+        for name in remotes.iter().flatten().flatten() {
+            let skip_key = format!("remote.{name}.skipdefaultupdate");
+            let alias_key = format!("remote.{name}.skipfetchall");
+            let skip = entries
+                .iter()
+                .rev()
+                .find(|(key, _)| *key == skip_key || *key == alias_key);
+            if !skip.is_some_and(|(_, value)| git2::Config::parse_bool(*value).unwrap_or(false)) {
+                names.push(name.to_string());
+            }
+        }
+        return Ok(names);
+    }
+    Ok(selected
+        .into_iter()
+        .flat_map(|name| {
+            let members = group(&name);
+            if members.is_empty() {
+                vec![name]
+            } else {
+                members
+            }
+        })
+        .collect())
 }
 
 fn operands(args: &[String], pull: bool) -> Vec<String> {
