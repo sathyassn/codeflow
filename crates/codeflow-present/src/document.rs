@@ -344,7 +344,10 @@ impl PresentationDocument {
             (Some(_), 1) => return Err(needs_v2("summary", "the document")),
             (Some(summary), _) => {
                 let characters = summary.trim().chars().count();
-                if characters == 0 || summary.chars().count() > limits::MAX_SUMMARY_CHARS {
+                if characters == 0
+                    || summary.contains(['\n', '\r'])
+                    || summary.chars().count() > limits::MAX_SUMMARY_CHARS
+                {
                     return Err(invalid(format!(
                         "summary must be 1 to {} characters",
                         limits::MAX_SUMMARY_CHARS
@@ -1738,6 +1741,95 @@ fn bounded(name: &str, value: &str, max: usize) -> Result<()> {
 
 fn invalid(message: impl Into<String>) -> PresentError {
     PresentError::InvalidDocument(message.into())
+}
+
+/// Collect independent authoring faults without a browser or a session mutation.
+#[derive(Debug, Serialize)]
+pub struct CheckFault {
+    pub block_id: Option<String>,
+    pub rule: &'static str,
+    pub message: String,
+}
+
+#[must_use]
+pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
+    let document: PresentationDocument = match serde_json::from_slice(bytes) {
+        Ok(document) => document,
+        Err(error) => {
+            return vec![CheckFault {
+                block_id: None,
+                rule: "schema",
+                message: error.to_string(),
+            }]
+        }
+    };
+    let mut faults = Vec::new();
+    // Visit children first so every independent fault names its own block.
+    for block in document.walk().into_iter().rev() {
+        let mut ids = HashSet::new();
+        if let Err(error) = validate_blocks(
+            std::slice::from_ref(block),
+            document.schema_version,
+            1,
+            &mut 0,
+            &mut 0,
+            &mut 0,
+            &mut ids,
+        ) {
+            let message = error.to_string();
+            if !faults.iter().any(|f: &CheckFault| f.message == message) {
+                faults.push(CheckFault {
+                    block_id: Some(block.id().into()),
+                    rule: if crate::form::FormView::of(block).is_some() {
+                        "form"
+                    } else {
+                        "block"
+                    },
+                    message,
+                });
+            }
+        }
+    }
+    let kinds: HashMap<_, _> = document
+        .walk()
+        .into_iter()
+        .map(|b| (b.id(), FrameKind::of(b)))
+        .collect();
+    for block in document.walk() {
+        for markdown in block.markdown_fields() {
+            for (event, in_link) in coalesced_markdown(markdown) {
+                let Event::Text(text) = event else { continue };
+                if in_link {
+                    continue;
+                }
+                for segment in reference_segments(&text) {
+                    if let TextSegment::Reference { kind, id } = segment {
+                        if kinds.get(id) != Some(&Some(kind)) {
+                            faults.push(CheckFault {
+                                block_id: Some(block.id().into()),
+                                rule: "anchor",
+                                message: format!(
+                                    "reference [{}:{id}] has no matching framed block",
+                                    kind.reference_prefix()
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Err(error) = document.validate() {
+        let message = error.to_string();
+        if !faults.iter().any(|f| f.message == message) {
+            faults.push(CheckFault {
+                block_id: None,
+                rule: "document",
+                message,
+            });
+        }
+    }
+    faults
 }
 
 #[cfg(test)]

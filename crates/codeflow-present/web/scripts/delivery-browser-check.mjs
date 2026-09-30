@@ -288,7 +288,7 @@ try {
     run(["present", "ack", sessionId, acked]);
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
-    const rail = await page.locator("[data-testid='feedback-history'] li").evaluateAll((items) => items
+    const rail = await page.locator("[data-testid='feedback-history'] li[data-review]").evaluateAll((items) => items
       .filter((item) => item.querySelector(".cf-history-meta"))
       .map((item) => [...item.querySelector(".cf-history-meta").children].map((part) => part.textContent.trim())));
     assert.equal(rail.length, 2, `rail: ${JSON.stringify(rail)}`);

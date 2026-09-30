@@ -1,3 +1,4 @@
+use axum::response::IntoResponse;
 use std::{
     collections::HashMap,
     fmt::Write as _,
@@ -304,6 +305,9 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         .route("/app/assets/{*path}", get(asset))
         .route("/app/api/reviews", post(submit_review))
         .route("/app/api/answers", post(submit_answer))
+        .route("/app/api/threads/list", post(list_threads))
+        .route("/app/api/threads/reopen", post(reopen_thread))
+        .route("/app/api/notes/tombstone", post(tombstone_note))
         .route("/app/api/events/poll", post(poll_events))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(limits::MAX_FEEDBACK_BYTES))
@@ -973,6 +977,8 @@ fn session_event(
             "session_closed"
         } else if revised {
             "revision"
+        } else if answered && answers.thread_changed {
+            "thread"
         } else if answered {
             "answer_state"
         } else {
@@ -1578,6 +1584,61 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+async fn list_threads(State(state): State<AppState>, headers: HeaderMap) -> Response<Body> {
+    if let Err(response) = require_application_request(&state, &headers, true) {
+        return response;
+    }
+    match state.store.conversation(state.session_id) {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(error) => plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
+}
+
+async fn reopen_thread(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<crate::conversation::ThreadRequest>,
+) -> Response<Body> {
+    change_thread(&state, &headers, &request, false)
+}
+
+async fn tombstone_note(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<crate::conversation::ThreadRequest>,
+) -> Response<Body> {
+    change_thread(&state, &headers, &request, true)
+}
+
+fn change_thread(
+    state: &AppState,
+    headers: &HeaderMap,
+    request: &crate::conversation::ThreadRequest,
+    tombstone: bool,
+) -> Response<Body> {
+    if let Err(response) = require_application_request(state, headers, true) {
+        return response;
+    }
+    match state
+        .store
+        .change_thread(state.session_id, request, tombstone)
+    {
+        Ok(event_id) => {
+            state.last_activity.store(now_unix(), Ordering::Release);
+            Json(serde_json::json!({"event_id":event_id})).into_response()
+        }
+        Err(PresentError::SessionClosed(_)) => plain(StatusCode::GONE, "session is closed"),
+        Err(PresentError::RevisionConflict { .. }) => plain(
+            StatusCode::CONFLICT,
+            "revision changed; reload before changing this thread",
+        ),
+        Err(PresentError::InvalidRequest(message)) => {
+            plain(StatusCode::UNPROCESSABLE_ENTITY, &message)
+        }
+        Err(error) => plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
 }
 
 #[cfg(test)]

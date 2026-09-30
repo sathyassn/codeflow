@@ -17,6 +17,16 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Present conversations and revision checks (TSK-193).** Agent replies appear
+  in the thread rail; reviewers can reopen resolved threads and delete notes
+  with visible tombstones. `present diff` compares revision blocks and carries
+  notes and answers; revisions record commit and dirty state. `present check`
+  reports framing, anchor and form faults without a browser. Export includes
+  the private conversation only with `--with-notes`. Codex model wake still
+  depends on upstream CLI background tasks; a bounded wait on the agent's next
+  turn delivers stored events until that support arrives.
+
+<!-- codeflow:release-impact minor -->
 - **Portable pull request checks.** `codeflow ci` reads Markdown sections,
   rejects explicitly empty PR bodies and ambiguous headings, and warns about
   summary detail, missing testing limits and oversized evidence. Generic release

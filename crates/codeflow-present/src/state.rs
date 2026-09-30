@@ -75,6 +75,8 @@ pub struct SessionRecord {
     pub id: Uuid,
     pub project_key: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     pub status: SessionStatus,
     pub current_revision: u64,
     pub created_at_unix: u64,
@@ -116,6 +118,15 @@ pub enum RevisionContent {
     },
 }
 
+impl RevisionContent {
+    fn summary(&self) -> Option<String> {
+        match self {
+            Self::Supported { document } => document.summary.clone(),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RevisionRecord {
@@ -123,15 +134,21 @@ pub struct RevisionRecord {
     pub revision: u64,
     pub created_at_unix: u64,
     pub content: RevisionContent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<crate::revision::RepositoryContext>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snapshots: Vec<crate::revision::SourceSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SessionHistory {
     pub schema_version: u32,
     pub session: HistorySession,
     pub revisions: Vec<RevisionRecord>,
     pub feedback_events: Vec<FeedbackEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub response_events: Vec<crate::responses::ResponseEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -814,11 +831,14 @@ impl SessionStore {
                 },
             ),
         };
+        let (repository_state, snapshots) = crate::revision::capture(&self.project_root, &content)?;
+        let summary = content.summary();
         let session = SessionRecord {
             state_schema_version: STATE_SCHEMA_VERSION,
             id,
             project_key: self.project_key.clone(),
             title,
+            summary,
             status: SessionStatus::Active,
             current_revision: 1,
             created_at_unix: now,
@@ -835,6 +855,8 @@ impl SessionStore {
             state_schema_version: STATE_SCHEMA_VERSION,
             revision: 1,
             created_at_unix: now,
+            context: repository_state,
+            snapshots,
             content,
         };
         let minimum_bytes = serialized_json_bytes(&initial_revision)?
@@ -1198,6 +1220,8 @@ impl SessionStore {
                 },
             ),
         };
+        let (repository_state, snapshots) = crate::revision::capture(&self.project_root, &content)?;
+        session.summary = content.summary();
         let marker_path = self.session_dir(id).join(UPDATE_MARKER);
         session.title = title;
         session.provenance = provenance;
@@ -1211,6 +1235,8 @@ impl SessionStore {
             state_schema_version: STATE_SCHEMA_VERSION,
             revision,
             created_at_unix: now,
+            context: repository_state,
+            snapshots,
             content,
         };
         let session_bytes = serialized_json_bytes(&session)?;
@@ -1332,10 +1358,20 @@ impl SessionStore {
             }
             revisions.push(record);
         }
-        let feedback_events = self.read_events_unlocked(id)?;
+        let mut feedback_events = self.read_events_unlocked(id)?;
+        let responses = crate::responses::Ledger::open(self.responses_path(id)?, id)?.events;
+        crate::conversation::redact(&mut feedback_events, &responses);
+        let response_events = crate::conversation::public_responses(&responses);
+        if aggregate_bytes.saturating_add(serde_json::to_vec(&response_events)?.len() as u64)
+            > limits::MAX_HISTORY_READ_BYTES
+        {
+            return Err(PresentError::ServiceUnavailable(
+                "conversation history exceeds its aggregate read bound".into(),
+            ));
+        }
         // A session holding v2 data prints against the v2 history schema; a
         // v1 session prints exactly as before (SPC-014 I2, compatibility).
-        let holds_v2 = revisions.iter().any(|record| {
+        let holds_v2 = !response_events.is_empty() || revisions.iter().any(|r| r.context.is_some() || !r.snapshots.is_empty()) || revisions.iter().any(|record| {
             matches!(&record.content, RevisionContent::Supported { document } if document.schema_version >= 2)
         }) || feedback_events.iter().any(|event| {
             matches!(event, FeedbackEvent::Received { envelope, .. } if envelope.has_entity_notes())
@@ -1354,6 +1390,7 @@ impl SessionStore {
             },
             revisions,
             feedback_events,
+            response_events,
         })
     }
 
@@ -1566,7 +1603,10 @@ impl SessionStore {
     pub fn events(&self, id: Uuid) -> Result<Vec<FeedbackEvent>> {
         let _lock = self.lock_session(id)?;
         self.load(id)?;
-        self.read_events_unlocked(id)
+        let mut events = self.read_events_unlocked(id)?;
+        let ledger = crate::responses::Ledger::open(self.responses_path(id)?, id)?;
+        crate::conversation::redact(&mut events, &ledger.events);
+        Ok(events)
     }
 
     pub fn latest_event_sequence(&self, id: Uuid) -> Result<u64> {
@@ -1710,9 +1750,10 @@ impl SessionStore {
             let _lock = self.lock_session(id)?;
             let session = self.load(id)?;
             let revision = self.revision(id, session.current_revision)?;
-            let events = self.read_events_unlocked(id)?;
+            let mut events = self.read_events_unlocked(id)?;
             let sources = self.source_revisions(id, &events, &revision)?;
             let ledger = crate::responses::Ledger::open(self.responses_path(id)?, id)?;
+            crate::conversation::redact(&mut events, &ledger.events);
             let acknowledged = ledger
                 .events
                 .iter()
@@ -2727,7 +2768,7 @@ fn cached_reanchor(key: ReanchorKey, compute: impl FnOnce() -> FeedbackAnchor) -
     anchor
 }
 
-fn build_feedback_snapshot(
+pub(crate) fn build_feedback_snapshot(
     session_id: Uuid,
     events: &[FeedbackEvent],
     current: &RevisionContent,
@@ -4496,6 +4537,8 @@ mod tests {
                 state_schema_version: STATE_SCHEMA_VERSION,
                 revision: 2,
                 created_at_unix: now_unix().unwrap(),
+                context: None,
+                snapshots: Vec::new(),
                 content: RevisionContent::Supported {
                     document: match parsed() {
                         ParsedDocument::Supported(document) => document,
@@ -4512,6 +4555,8 @@ mod tests {
             state_schema_version: STATE_SCHEMA_VERSION,
             revision: 2,
             created_at_unix: now_unix().unwrap(),
+            context: None,
+            snapshots: Vec::new(),
             content: RevisionContent::Supported {
                 document: match parsed() {
                     ParsedDocument::Supported(document) => document,

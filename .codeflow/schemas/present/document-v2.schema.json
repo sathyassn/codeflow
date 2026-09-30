@@ -30,7 +30,7 @@
     "summary": {
       "type": "string",
       "minLength": 1,
-      "pattern": "\\S",
+      "pattern": "^[^\\r\\n]+$",
       "maxLength": 200,
       "$comment": "SPC-014 B10: a one-line summary present list shows; at most 200 characters."
     },
@@ -1119,7 +1119,7 @@
           "maxLength": 2000
         }
       },
-      "$comment": "SPC-014 B5: every schema_version 2 stage is a figure framed as \"Figure N · title\" with a caption; the closed data-cf vocabulary (data-cf-target, data-cf-group, data-cf-label, data-cf-for) names review entities inside it."
+      "$comment": "SPC-014 B5: every schema_version 2 stage is a figure framed as \"Figure N \u00b7 title\" with a caption; the closed data-cf vocabulary (data-cf-target, data-cf-group, data-cf-label, data-cf-for) names review entities inside it."
     },
     "snapshot_source": {
       "type": "object",

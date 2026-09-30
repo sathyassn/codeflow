@@ -80,6 +80,13 @@ const server = createServer(async (request, response) => {
       response.end(await readFile(join(assetsRoot, asset.stored_path)));
       return;
     }
+    if (url.pathname === "/app/api/threads/list" && request.method === "POST") {
+      const fixture = new URL(request.headers.referer ?? "/app", "http://127.0.0.1").searchParams.get("case");
+      const feedback = JSON.parse(fixtureConfig(["prose","selection","iframe"].includes(fixture))).feedback;
+      response.writeHead(200, {"Content-Type":"application/json"});
+      response.end(JSON.stringify({feedback,answers:[],replies:[],reopens:[],tombstones:[],acknowledged:[],omitted_older:0}));
+      return;
+    }
     if (url.pathname === "/app/api/events/poll" && request.method === "POST") {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end('{"cursor":"end","kind":"session_closed","message":"Fixture session closed."}');
@@ -1115,40 +1122,8 @@ function assertNetworkStayedLoopback({ responses, externalRoutes }) {
   assertLoopbackOnly(responses);
 }
 
-function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false, limits = {}) {
-  const enhancements = proseOnly
-    ? ""
-    : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation" data-cf-block-digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
-        <h2 id="implementation">Implementation</h2>
-        <div data-cf-review-text-root><p id="selection-target">Review this exact sentence before approval.</p>
-        <figure role="img" aria-label="Stage fixture"><svg viewBox="0 0 280 36" width="280" height="36"><text id="stage-label" x="8" y="24">Stage words</text></svg></figure></div>
-        <pre tabindex="0" role="region" aria-label="Rust example"><code data-cf-language="rust">fn main() { println!("safe"); }</code></pre>
-      </section>
-      <section class="block block--figure" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
-        <h2 id="flow">Flow</h2>
-        <div data-cf-review-text-root data-cf-canonical-text="Figure">
-          <div class="figure-block" data-cf-figure-block="pending" data-cf-figure-declaration="${escapeAttribute(figureDeclaration)}">
-            <div data-cf-figure-output><p class="figure-block__title">Figure</p></div>
-            <p data-cf-figure-status class="sr-only" role="status"></p>
-          </div>
-        </div>
-      </section>
-      <section class="block block--html" data-cf-block-id="block-stage" data-cf-block-label="Stage" data-cf-block-digest="${"f".repeat(64)}">
-        <h2 id="stage">Stage</h2>
-        <div class="cf-stage-host"><svg class="cf-stage-svg" viewBox="0 0 640 180" role="img" aria-label="Stage scale fixture"><rect x="0" y="0" width="640" height="180"/><text x="20" y="40">Stage scale fixture</text></svg></div>
-      </section>`;
-  const sandbox = iframeOnly
-    ? `<section data-cf-block-id="frame-block" data-cf-block-label="Embedded view" data-cf-block-digest="${"e".repeat(64)}">
-        <h2>Embedded view</h2>
-        <div id="frame-scroll" style="height:240px;overflow:auto;transform:translateX(0)">
-          <figure id="frame-figure" style="margin:0;height:420px">
-            <iframe sandbox title="Sandbox fixture" src="/sandbox/1/fixture" style="height:400px;pointer-events:auto !important"></iframe>
-          </figure>
-        </div>
-      </section>`
-    : proseOnly ? "" : '<figure><iframe sandbox title="Sandbox fixture" src="/sandbox/1/fixture"></iframe></figure>';
-  const attackSandbox = proseOnly ? "" : '<iframe sandbox title="Attack sandbox" src="/sandbox/1/attack" style="width:1px;height:1px;position:fixed;left:0;top:0;opacity:0"></iframe>';
-  const config = JSON.stringify({
+function fixtureConfig(proseOnly,limits = {}) {
+  return JSON.stringify({
     schema_version: 1,
     session_id: "019f9b53-a341-7fa7-84c2-5f198ceea001",
     revision: 1,
@@ -1240,6 +1215,42 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false, limit
       ],
     },
   }).replaceAll("<", "\\u003c");
+}
+
+function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false, limits = {}) {
+  const enhancements = proseOnly
+    ? ""
+    : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation" data-cf-block-digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
+        <h2 id="implementation">Implementation</h2>
+        <div data-cf-review-text-root><p id="selection-target">Review this exact sentence before approval.</p>
+        <figure role="img" aria-label="Stage fixture"><svg viewBox="0 0 280 36" width="280" height="36"><text id="stage-label" x="8" y="24">Stage words</text></svg></figure></div>
+        <pre tabindex="0" role="region" aria-label="Rust example"><code data-cf-language="rust">fn main() { println!("safe"); }</code></pre>
+      </section>
+      <section class="block block--figure" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
+        <h2 id="flow">Flow</h2>
+        <div data-cf-review-text-root data-cf-canonical-text="Figure">
+          <div class="figure-block" data-cf-figure-block="pending" data-cf-figure-declaration="${escapeAttribute(figureDeclaration)}">
+            <div data-cf-figure-output><p class="figure-block__title">Figure</p></div>
+            <p data-cf-figure-status class="sr-only" role="status"></p>
+          </div>
+        </div>
+      </section>
+      <section class="block block--html" data-cf-block-id="block-stage" data-cf-block-label="Stage" data-cf-block-digest="${"f".repeat(64)}">
+        <h2 id="stage">Stage</h2>
+        <div class="cf-stage-host"><svg class="cf-stage-svg" viewBox="0 0 640 180" role="img" aria-label="Stage scale fixture"><rect x="0" y="0" width="640" height="180"/><text x="20" y="40">Stage scale fixture</text></svg></div>
+      </section>`;
+  const sandbox = iframeOnly
+    ? `<section data-cf-block-id="frame-block" data-cf-block-label="Embedded view" data-cf-block-digest="${"e".repeat(64)}">
+        <h2>Embedded view</h2>
+        <div id="frame-scroll" style="height:240px;overflow:auto;transform:translateX(0)">
+          <figure id="frame-figure" style="margin:0;height:420px">
+            <iframe sandbox title="Sandbox fixture" src="/sandbox/1/fixture" style="height:400px;pointer-events:auto !important"></iframe>
+          </figure>
+        </div>
+      </section>`
+    : proseOnly ? "" : '<figure><iframe sandbox title="Sandbox fixture" src="/sandbox/1/fixture"></iframe></figure>';
+  const attackSandbox = proseOnly ? "" : '<iframe sandbox title="Attack sandbox" src="/sandbox/1/attack" style="width:1px;height:1px;position:fixed;left:0;top:0;opacity:0"></iframe>';
+  const config = fixtureConfig(proseOnly,limits);
   return `<!doctype html>
 <html lang="en">
 <head>

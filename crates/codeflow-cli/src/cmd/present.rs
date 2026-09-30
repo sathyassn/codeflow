@@ -41,6 +41,31 @@ enum PresentCommand {
         #[arg(long)]
         no_launch: bool,
     },
+    /// Reply to a review, note or answer in the thread rail.
+    Reply {
+        session_id: String,
+        event_id: String,
+        #[arg(long)]
+        note: Option<String>,
+        text: String,
+    },
+    /// Compare blocks and carried feedback between revisions.
+    Diff {
+        session_id: String,
+        #[arg(long)]
+        from: u64,
+        #[arg(long)]
+        to: u64,
+    },
+    /// Check framing, anchors and forms without a browser.
+    Check {
+        #[arg(required_unless_present = "file", conflicts_with = "file")]
+        session_id: Option<String>,
+        #[arg(long)]
+        file: Option<PathBuf>,
+        #[arg(long, requires = "session_id")]
+        revision: Option<u64>,
+    },
     /// List presentation sessions for this project.
     List,
     /// Reopen an active presentation session.
@@ -115,6 +140,9 @@ enum PresentCommand {
         theme: String,
         #[arg(long, default_value = "system", value_parser = ["system", "light", "dark"])]
         mode: String,
+        /// Include the private conversation as a read-only appendix.
+        #[arg(long, alias = "include-feedback")]
+        with_notes: bool,
     },
     /// Remove eligible closed session state.
     Clear {
@@ -140,7 +168,7 @@ enum ResponsesCommand {
         form: Option<String>,
         #[arg(long, value_parser = ["pending", "delivered", "acknowledged"])]
         status: Option<String>,
-        #[arg(long, value_parser = ["review", "answer", "amendment"])]
+        #[arg(long, value_parser = ["review", "answer", "amendment", "reopen", "tombstone"])]
         kind: Option<String>,
     },
 }
@@ -171,6 +199,45 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<i32> {
     let project = std::env::current_dir().map_err(|error| PresentError::io(".", error))?;
     let store = SessionStore::discover(&project)?;
     match command {
+        PresentCommand::Check {
+            session_id,
+            file,
+            revision,
+        } => {
+            let bytes = if let Some(path) = file {
+                read_document(path)?
+            } else {
+                let id = parse_id(
+                    session_id
+                        .as_deref()
+                        .expect("clap requires session or file"),
+                )?;
+                let record = match revision {
+                    Some(n) => store.revision(id, *n)?,
+                    None => store.current_revision(id)?,
+                };
+                match record.content {
+                    codeflow_present::state::RevisionContent::Supported { document } => {
+                        serde_json::to_vec(&document)?
+                    }
+                    codeflow_present::state::RevisionContent::Unsupported { raw, .. } => {
+                        raw.into_bytes()
+                    }
+                    codeflow_present::state::RevisionContent::Retired { document, .. } => {
+                        serde_json::to_vec(&document)?
+                    }
+                }
+            };
+            let faults = codeflow_present::document::check_document(&bytes);
+            for fault in &faults {
+                println!("{}", serde_json::to_string(fault)?);
+            }
+            println!(
+                "{}",
+                serde_json::json!({"faults":faults.len(),"valid":faults.is_empty()})
+            );
+            Ok(if faults.is_empty() { 0 } else { 9 })
+        }
         PresentCommand::Feedback {
             session_id,
             follow,
@@ -210,6 +277,8 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<i32> {
                     "review" => EventKind::Review,
                     "answer" => EventKind::Answer,
                     "amendment" => EventKind::Amendment,
+                    "reopen" => EventKind::Reopen,
+                    "tombstone" => EventKind::Tombstone,
                     _ => unreachable!("clap validates kinds"),
                 }),
             };
@@ -245,6 +314,32 @@ fn run_command(
             document,
             no_launch,
         } => open(store, document, *no_launch),
+        PresentCommand::Reply {
+            session_id,
+            event_id,
+            note,
+            text,
+        } => {
+            let id = store.reply(
+                parse_id(session_id)?,
+                parse_id(event_id)?,
+                note.as_deref().map(parse_id).transpose()?,
+                text,
+            )?;
+            println!("reply {id}");
+            Ok(())
+        }
+        PresentCommand::Diff {
+            session_id,
+            from,
+            to,
+        } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&store.diff(parse_id(session_id)?, *from, *to)?)?
+            );
+            Ok(())
+        }
         PresentCommand::List => {
             println!("{}", serde_json::to_string_pretty(&store.list()?)?);
             Ok(())
@@ -286,14 +381,16 @@ fn run_command(
             out,
             theme,
             mode,
-        } => export(store, session_id, out, theme, mode),
+            with_notes,
+        } => export(store, session_id, out, theme, mode, *with_notes),
         PresentCommand::Clear {
             session_id,
             older_than,
             dry_run,
         } => clear(store, session_id.as_deref(), older_than, *dry_run),
         PresentCommand::ServeInternal { session_id } => serve(project, session_id),
-        PresentCommand::Feedback { .. }
+        PresentCommand::Check { .. }
+        | PresentCommand::Feedback { .. }
         | PresentCommand::Responses { .. }
         | PresentCommand::Ack { .. } => unreachable!("run_inner handles delivery commands"),
     }
@@ -351,6 +448,7 @@ fn export(
     out: &Path,
     theme: &str,
     mode: &str,
+    with_notes: bool,
 ) -> codeflow_present::Result<()> {
     let theme = match theme {
         "slate" | "editorial" => ExportTheme::Slate,
@@ -364,7 +462,17 @@ fn export(
         "dark" => ExportMode::Dark,
         _ => unreachable!("clap validates export modes"),
     };
-    export_session(store, parse_id(session_id)?, out, theme, mode)?;
+    if with_notes {
+        codeflow_present::export::export_session_with_notes(
+            store,
+            parse_id(session_id)?,
+            out,
+            theme,
+            mode,
+        )?;
+    } else {
+        export_session(store, parse_id(session_id)?, out, theme, mode)?;
+    }
     println!("exported {}", out.display());
     Ok(())
 }
