@@ -11,6 +11,7 @@ import errno
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import fnmatch
+import getpass
 import hashlib
 import hmac
 import io
@@ -2137,8 +2138,22 @@ def evaluator_directory(path: Path) -> bool:
             with os.scandir(pending.pop()) as entries:
                 for entry in entries:
                     count += 1
-                    if count > 100_000 or time.monotonic() >= deadline or entry.is_symlink():
+                    if count > 100_000 or time.monotonic() >= deadline:
                         return False
+                    if entry.is_symlink():
+                        parts = Path(entry.path).relative_to(path).parts
+                        executable = shutil.which("codex")
+                        # Codex creates these executable dispatch links while its
+                        # TUI is alive. They are not config imports. Permit only
+                        # their exact native location, names and binary target.
+                        runtime = (path.name == "codex" and len(parts) == 4
+                                   and parts[:2] == ("tmp", "arg0")
+                                   and re.fullmatch(r"codex-arg0[A-Za-z0-9]+", parts[2])
+                                   and parts[3] in {"applypatch", "apply_patch", "codex-execve-wrapper"}
+                                   and executable is not None
+                                   and os.readlink(entry.path) == executable)
+                        if not runtime:
+                            return False
                     if entry.is_dir(follow_symlinks=False):
                         pending.append(Path(entry.path))
     except OSError:
@@ -2158,6 +2173,15 @@ def trial_native_args(harness: str, environment: dict[str, str]) -> list[str]:
     if harness == "grok":
         return ["--leader-socket", str(Path(environment["TMPDIR"]) / "grok-leader.sock")]
     return []
+
+
+def prepare_subject_home(home: Path) -> None:
+    """Create a disposable HOME; macOS needs only the real Keychains folder."""
+    home.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        library = home / "Library"
+        library.mkdir()
+        (library / "Keychains").symlink_to(Path.home() / "Library/Keychains", target_is_directory=True)
 
 
 def prepare_eval_homes() -> str:
@@ -2189,6 +2213,11 @@ def prepare_eval_homes() -> str:
                 if key not in {"HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "PATH",
                                "CLAUDE_CODE_PROJECT_DIR_NAME", "GROK_LOG_FILE", "TERM"}}
     assignments = " ".join(shlex.quote(key + "=" + value) for key, value in retained.items())
+    keychain_setup = ""
+    if sys.platform == "darwin":
+        target = shlex.quote(str(Path.home() / "Library/Keychains"))
+        keychain_setup = (f'  mkdir -p "$eval_setup/home/Library" && '
+                          f'ln -s {target} "$eval_setup/home/Library/Keychains" || return\n')
     return f'''Prepared dedicated evaluator folders (no sign-in performed):
 {chr(10).join(str(path) for path in homes.values())}
 Run this shell function and the three commands yourself, one at a time:
@@ -2197,7 +2226,7 @@ eval_home_launch() {{
   eval_setup=$(mktemp -d {shlex.quote(str(root / "setup.XXXXXX"))}) || return
   printf 'Setup directory: %s\\n' "$eval_setup"
   mkdir -p "$eval_setup/home" "$eval_setup/tmp" "$eval_setup/home/.config" "$eval_setup/home/.codeflow"
-  if [ "$1" = grok ]; then set -- "$@" --leader-socket "$eval_setup/tmp/grok-leader.sock"; fi
+{keychain_setup}  if [ "$1" = grok ]; then set -- "$@" --leader-socket "$eval_setup/tmp/grok-leader.sock"; fi
   (cd "$eval_setup" && env -i TERM="${{TERM:-xterm-256color}}" PATH={shlex.quote(env["PATH"])} {assignments} HOME="$eval_setup/home" TMPDIR="$eval_setup/tmp" CODEFLOW_HOME="$eval_setup/home/.codeflow" XDG_CONFIG_HOME="$eval_setup/home/.config" GROK_LOG_FILE="$eval_setup/grok.log" "$@")
 }}
 eval_home_launch claude
@@ -2234,8 +2263,11 @@ def subject_environment(trial_dir: Path, subject_codeflow: Path, hidden: list[Pa
         if entry not in entries:
             entries.append(entry)
     environment = {name: os.environ[name] for name in SUBJECT_INHERITED_ENV if name in os.environ}
+    username = os.environ.get("USER") or os.environ.get("LOGNAME") or getpass.getuser()
     environment.update(
         {
+            "USER": username,
+            "LOGNAME": username,
             "PATH": os.pathsep.join(entries),
             "HOME": str(trial_dir / "home"),
             "CODEFLOW_HOME": str(trial_dir / "home" / ".codeflow"),
@@ -2369,8 +2401,8 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         write_fixture_file(output, relative, content)
     configure_fixture_hooks(output)
     digest = tree_digest(output)
-    for private in ("home", "tmp"):
-        (output.parent / private).mkdir()
+    prepare_subject_home(output.parent / "home")
+    (output.parent / "tmp").mkdir()
     if any(nested(evaluator_key_path(), root) for root in (resolved_run_root, subjects.resolve())):
         raise EvalError("the evaluator key lies inside the run or subjects root, where a trial can reach it")
     hidden = [resolved_run_root, subjects, evaluator_key_path().parent, *([GRADED_SUITE] if GRADED_SUITE is not None else [])]

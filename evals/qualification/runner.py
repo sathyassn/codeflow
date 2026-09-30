@@ -35,7 +35,7 @@ def herdr(*args: str, text: bool = False):
     done = subprocess.run(["herdr", *args], capture_output=True, text=True, timeout=60)
     if done.returncode:
         raise Refused(f"herdr {' '.join(args[:2])}: {done.stderr or done.stdout}")
-    return done.stdout if text else json.loads(done.stdout)
+    return done.stdout if text or args[:2] in {("pane", "send-keys"), ("pane", "send-text")} else json.loads(done.stdout)
 
 
 def write(path: Path, value: dict) -> None:
@@ -178,6 +178,18 @@ def visible(pane: str) -> str | None:
 
 def state(pane: str) -> dict:
     return herdr("agent", "get", pane)["result"]["agent"]
+
+
+def recover_registration(pane: str, name: str, harness: str, repository: Path,
+                         start_args: tuple[str, ...]) -> dict:
+    try:
+        registered = state(pane)
+    except Refused:
+        return herdr(*start_args)
+    expected = {"name": name, "pane_id": pane, "agent": harness, "cwd": str(repository)}
+    if any(registered.get(key) != value for key, value in expected.items()):
+        raise Refused("registered seat identity differs after workspace trust")
+    return {"registered_agent": registered}
 
 
 def trust_choice(screen: str, harness: str, repository: Path) -> str | None:
@@ -495,8 +507,8 @@ def launch(args) -> None:
         try:
             run["launch_response"] = herdr(*start_args)
         except Refused as exc:
-            # Herdr may report not-ready before it can register the native seat.
-            # The release harness re-registers this same pane after trust clears.
+            # Herdr may report not-ready with or without a registered native seat.
+            # Reuse only the exact seat; otherwise register this same pane.
             screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
             event = accept_workspace_trust(run["pane"], args.harness, repository, screen)
             if event is None:
@@ -508,7 +520,8 @@ def launch(args) -> None:
             screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
             if trust_choice(screen, args.harness, repository) is not None:
                 raise Refused("accepted trust dialog has not cleared; no repeated key")
-            run["launch_response"] = herdr(*start_args)
+            run["launch_response"] = recover_registration(
+                run["pane"], f"eval-{trial.name}", args.harness, repository, start_args)
         try:
             initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"])
         except Refused as exc:

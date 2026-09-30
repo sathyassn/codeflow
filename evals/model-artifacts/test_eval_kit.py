@@ -3694,6 +3694,70 @@ class ProcessRepairTests(unittest.TestCase):
         self.assertTrue(runner.grok_authenticated_editor(screen))
         self.assertFalse(runner.grok_authenticated_editor(screen + "Login with grok.com\n"))
 
+    def test_recovery_reuses_only_the_exact_registered_seat(self):
+        runner = self.runner()
+        pane, name, repository = "own-pane", "eval-trial", Path("/subject/repository")
+        registered = {"name": name, "pane_id": pane, "agent": "claude", "cwd": str(repository)}
+        with patch.object(runner, "state", return_value=registered), patch.object(runner, "herdr") as call:
+            self.assertEqual({"registered_agent": registered}, runner.recover_registration(pane, name, "claude", repository, ("agent", "start")))
+            call.assert_not_called()
+        for key in registered:
+            with self.subTest(key=key), patch.object(runner, "state", return_value={**registered, key: "other"}), patch.object(runner, "herdr") as call:
+                with self.assertRaises(runner.Refused):
+                    runner.recover_registration(pane, name, "claude", repository, ("agent", "start"))
+                call.assert_not_called()
+        with patch.object(runner, "state", side_effect=runner.Refused("not registered")), patch.object(runner, "herdr", return_value={"started": True}) as call:
+            self.assertEqual({"started": True}, runner.recover_registration(pane, name, "claude", repository, ("agent", "start")))
+            call.assert_called_once_with("agent", "start")
+
+    def test_herdr_key_and_text_acknowledgements_are_plain_text(self):
+        runner = self.runner()
+        with patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "sent\n", "")):
+            self.assertEqual("sent\n", runner.herdr("pane", "send-keys", "own-pane", "Enter"))
+            self.assertEqual("sent\n", runner.herdr("pane", "send-text", "own-pane", "prompt"))
+
+    def test_codex_runtime_executable_links_are_not_config_links(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codeflow-eval/codex"
+            helpers = root / "tmp/arg0/codex-arg0ABC123"
+            helpers.mkdir(parents=True)
+            binary = Path(temp) / "bin/codex"
+            with patch.object(eval_kit.shutil, "which", return_value=str(binary)):
+                for name in ["applypatch", "apply_patch", "codex-execve-wrapper"]:
+                    (helpers / name).symlink_to(binary)
+                self.assertTrue(eval_kit.evaluator_directory(root))
+                (helpers / "settings.json").symlink_to(binary)
+                self.assertFalse(eval_kit.evaluator_directory(root))
+                (helpers / "settings.json").unlink()
+                (helpers / "apply_patch").unlink()
+                (helpers / "apply_patch").symlink_to(Path(temp) / ".codex/config.toml")
+                self.assertFalse(eval_kit.evaluator_directory(root))
+
+    def test_disposable_macos_home_links_only_the_real_keychains_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            operator = Path(temp) / "operator"
+            home = Path(temp) / "trial/home"
+            with patch.object(Path, "home", return_value=operator), patch.object(eval_kit.sys, "platform", "darwin"):
+                eval_kit.prepare_subject_home(home)
+                printed = eval_kit.prepare_eval_homes()
+                self.assertIn('ln -s ' + str(operator / 'Library/Keychains') + ' "$eval_setup/home/Library/Keychains"', printed)
+                self.assertEqual(1, printed.count('ln -s '))
+            link = home / "Library/Keychains"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(str(operator / "Library/Keychains"), os.readlink(link))
+            self.assertEqual(["Keychains"], [p.name for p in (home / "Library").iterdir()])
+            self.assertFalse((operator / "Library").exists())
+            with patch.object(Path, "home", return_value=operator), patch.object(eval_kit.sys, "platform", "linux"):
+                other = Path(temp) / "linux/home"
+                eval_kit.prepare_subject_home(other)
+                self.assertFalse((other / "Library").exists())
+
+    def test_username_is_present_even_when_parent_environment_omits_it(self):
+        with patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
+            env = eval_kit.subject_environment(Path("/trial"), Path("/trial/bin/codeflow"), [])
+        self.assertTrue(env["USER"])
+        self.assertEqual(env["USER"], env["LOGNAME"])
+
     def test_trial_environment_pins_home_and_harness_config(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -3768,6 +3832,8 @@ class ProcessRepairTests(unittest.TestCase):
                             with self.assertRaisesRegex(runner.Refused, "evaluator home not signed in: run prepare-eval-homes"):
                                 runner.check_evaluator_auth(harness, env, Path(temp))
                         self.assertEqual(env, run.call_args.kwargs["env"])
+                        self.assertTrue(run.call_args.kwargs["env"]["USER"])
+                        self.assertEqual(env["USER"], run.call_args.kwargs["env"]["LOGNAME"])
                 with patch.object(runner.subprocess, "run", side_effect=subprocess.TimeoutExpired("status", 30)), self.assertRaises(runner.Refused):
                     runner.check_evaluator_auth(harness, env, Path(temp))
 
@@ -4040,6 +4106,9 @@ class ProcessRepairTests(unittest.TestCase):
                         raise runner.Refused("agent_not_ready: workspace trust")
                 if argv[:2] == ("pane", "read"):
                     return next(frames)
+                if argv[:2] == ("agent", "get"):
+                    return {"result": {"agent": {"name": "eval-trial", "pane_id": "owned-pane",
+                                                "agent": "claude", "cwd": str(repository)}}}
                 return herdr(*argv, **kwargs)
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
                  patch.object(runner, "herdr", side_effect=needs_trust), \
@@ -4049,7 +4118,7 @@ class ProcessRepairTests(unittest.TestCase):
                 runner.launch(args)
             accepted = json.loads((args.output / "launch.json").read_text())
             self.assertEqual("started", accepted["status"])
-            self.assertEqual(starts[0], starts[1])
+            self.assertEqual(1, len(starts))
             self.assertEqual(str(repository), accepted["trust_acceptances"][0]["path"])
             self.assertEqual("sha256:" + hashlib.sha256(trust.encode()).hexdigest(), accepted["trust_acceptances"][0]["screen_sha256"])
             self.assertIn("config_start", accepted)

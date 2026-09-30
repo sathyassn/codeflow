@@ -59,13 +59,25 @@ trial. `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME` point respectively to
 `~/.codeflow-eval/claude`, `codex` and `grok`, signed in once by the operator.
 Grok supports `GROK_HOME`, so no symlink is used. The kit never reads, copies
 or uses the operator's personal harness folders. Symlinked evaluator folders
-and any symlink inside them are refused without following the link. Checks
+and config symlinks inside them are refused without following the link.
+Codex's three native executable dispatch links under `tmp/arg0/codex-arg0*`
+are allowed only when their target is exactly the installed Codex executable.
+No configuration or credential link receives that exception. Checks
 are bounded to 100,000 entries and ten seconds per home; an incomplete check
 refuses. Executable symlinks under `~/.local/bin` may resolve to harness
 installation folders; this executes the installed binary without importing
 personal configuration. Credentials are managed only by the harness: on macOS Claude
 may use a Keychain entry scoped to its dedicated config directory; Codex is
 explicitly set to the file credential store in its dedicated folder.
+
+On macOS the disposable HOME links only `Library/Keychains` to the
+operator's real `~/Library/Keychains`. Nothing else in Library is linked.
+This lets macOS locate the login keychain; Claude uses the evaluator's own
+entry keyed to its dedicated config folder. The kit does not read or copy
+keychain contents, reset a keychain, or reference personal harness config.
+The printed setup helper creates the same link. Both `USER` and `LOGNAME`
+are populated in the subject environment and passed unchanged to the native
+status command, since Claude's keychain account uses the username.
 
 Before creating a tab, Claude must report `loggedIn: true` with the expected
 `configDirectory` from `claude auth status`; Codex must report `Logged in
