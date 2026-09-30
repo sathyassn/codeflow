@@ -3547,6 +3547,153 @@ class ProcessRepairTests(unittest.TestCase):
         self.assertIn("Implementation in progress", fixture["files"]["PLAN.md"])
         self.assertEqual("v1", fixture["state"]["approved_plan"])
 
+    @staticmethod
+    def trust_screen(harness, path, selected=True):
+        if harness == "claude":
+            choices = "❯ Yes, I trust this folder\n  No, exit" if selected else "❯ No, exit\n  Yes, I trust this folder"
+            return f"Accessing workspace:\n\n {path}\n\nQuick safety check: Is this a project you created or one you trust?\n{choices}\nEnter to confirm · Esc to cancel\n"
+        choices = "› 1. Trust and continue\n  2. Quit" if selected else "  1. Trust and continue\n› 2. Quit"
+        return f"Folder access\n {path}\n\nTrust this folder? Codex can read, edit, and run files here,\nsubject to your permission settings.\n{choices}\nenter continue · esc quit\n"
+
+    def test_exact_workspace_trust_is_verified_before_each_key_and_recorded(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository")
+        for harness in ["claude", "codex"]:
+            no = self.trust_screen(harness, path, False)
+            yes = self.trust_screen(harness, path, True)
+            with patch.object(runner, "herdr", side_effect=[no, {}, yes, {}]) as transport:
+                event = runner.accept_workspace_trust("own-pane", harness, path, no)
+            keys = [c.args[-1] for c in transport.call_args_list if c.args[:2] == ("pane", "send-keys")]
+            self.assertEqual(["Down" if harness == "claude" else "Up", "Enter"], keys)
+            self.assertEqual(harness, event["harness"])
+            self.assertEqual(str(path), event["path"])
+            self.assertEqual("sha256:" + hashlib.sha256(yes.encode()).hexdigest(), event["screen_sha256"])
+            self.assertIsInstance(event["time"], float)
+            with patch.object(runner, "herdr", side_effect=[no, {}, "Allow external CLAUDE.md file imports?"]) as transport, self.assertRaises(runner.Refused):
+                runner.accept_workspace_trust("own-pane", harness, path, no)
+            self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+
+    def test_other_workspace_and_import_prompts_never_receive_keys(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository")
+        for harness in ["claude", "codex"]:
+            for screen in [self.trust_screen(harness, str(path) + "-other"),
+                           "Allow external CLAUDE.md file imports?\n" + str(path),
+                           self.trust_screen(harness, path) + "\nAllow external CLAUDE.md file imports?",
+                           "Do you trust this unknown folder?\n" + str(path)]:
+                with patch.object(runner, "herdr") as transport, self.assertRaises(runner.Refused):
+                    runner.accept_workspace_trust("own-pane", harness, path, screen)
+                transport.assert_not_called()
+
+    def test_workspace_trust_runs_before_blocked_seat_is_rejected(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository"); events = []
+        screen = self.trust_screen("claude", path)
+        with patch.object(runner, "herdr", side_effect=[screen, screen, {}, "idle editor"]), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
+            self.assertEqual("idle", runner.wait_ready("pane", 1, "claude", path, events)["agent_status"])
+        self.assertEqual(1, len(events))
+
+    def test_run_root_and_custom_subject_ancestors_refuse_instructions(self):
+        for name in ["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude"]:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); bad = root / "ancestor"; bad.mkdir()
+                marker = bad / name
+                marker.mkdir() if name == ".claude" else marker.write_text("outside instructions")
+                with self.assertRaisesRegex(eval_kit.EvalError, "ancestor instructions"):
+                    eval_kit.ensure_run_root(bad / "nested/run")
+                self.assertFalse((bad / "nested").exists())
+                with self.assertRaisesRegex(eval_kit.EvalError, "ancestor instructions"):
+                    eval_kit.ensure_run_root(root / "run", bad / "subjects")
+                self.assertFalse((root / "run").exists())
+
+    def test_native_flag_allowlist_and_personal_paths(self):
+        runner = self.runner()
+        good = {"claude": ["--model", "fable", "--effort", "high", "--permission-mode", "auto"],
+                "codex": ["--model", "gpt-6", "-c", 'model_reasoning_effort="high"', "--ask-for-approval", "never", "--sandbox", "workspace-write"],
+                "grok": ["--model", "grok-4.6", "--reasoning-effort", "high", "--permission-mode", "default"]}
+        for harness, argv in good.items():
+            self.assertTrue(runner.permission_flags(harness, argv))
+            for flag in ["--settings", "--mcp-config", "--add-dir", "--plugin-dir", "--agents", "--dangerously-skip-permissions", "--profile", "--leader-socket"]:
+                with self.assertRaisesRegex(runner.Refused, flag):
+                    runner.permission_flags(harness, [*argv, flag, "/outside"])
+            with self.assertRaisesRegex(runner.Refused, "-c"):
+                runner.permission_flags(harness, [*argv, "-c", 'developer_instructions="injected"'])
+            for personal in [".claude/config", ".claude.json", ".codex/config.toml", ".grok/config.toml"]:
+                with self.assertRaisesRegex(runner.Refused, "--model"):
+                    runner.permission_flags(harness, ["--model", str(Path.home() / personal), *argv[2:]])
+        self.assertEqual({"--always-approve": "true"}, runner.permission_flags("grok", ["--model=grok", "--always-approve"]))
+        with self.assertRaisesRegex(runner.Refused, "--always-approve"):
+            runner.permission_flags("grok", [*good["grok"], "--always-approve"])
+
+    def test_nonsecret_config_digests_flag_add_edit_remove_without_reading_auth(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
+            folder = Path(env["CLAUDE_CONFIG_DIR"])
+            (folder / ".credentials.json").write_text("must never be opened")
+            original_open = Path.open
+            def guarded_open(path, *args, **kwargs):
+                self.assertNotIn(path.name, {"auth.json", ".credentials.json", "mcp_credentials.json"})
+                return original_open(path, *args, **kwargs)
+            with patch.object(Path, "open", guarded_open):
+                before = runner.config_snapshot(env)
+            self.assertNotIn(".credentials.json", str(before))
+            file = folder / "rules/test.md"; file.parent.mkdir(); file.write_text("first")
+            after = runner.config_snapshot(env)
+            self.assertEqual("sha256:" + hashlib.sha256(b"first").hexdigest(), after["claude"]["rules/test.md"])
+            self.assertIn("evaluator_config_drift", runner.config_drift(before, after))
+            file.write_text("second")
+            self.assertIn("evaluator_config_drift", runner.config_drift(after, runner.config_snapshot(env)))
+            file.unlink()
+            self.assertIn("evaluator_config_drift", runner.config_drift(after, runner.config_snapshot(env)))
+            self.assertEqual([], runner.config_drift(before, before))
+
+    def test_finish_records_config_digests_and_flags_drift_or_symlink(self):
+        import argparse
+        import io
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            root = Path(temp); runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(root / "trial", root / "bin/codeflow", [])
+            baseline = runner.config_snapshot(env)
+            runner.write(root / "launch.json", {"declared_directories": [], "observation": {},
+                         "environment": env, "config_start": baseline, "status": "started"})
+            runner.write(root / "before.json", runner.snapshot([]))
+            config = Path(env["CLAUDE_CONFIG_DIR"]) / "settings.json"
+            config.write_text('{"changed": true}')
+            with patch("sys.stdout", io.StringIO()):
+                runner.finish(argparse.Namespace(output=root))
+            saved = json.loads((root / "launch.json").read_text())
+            self.assertEqual(baseline, saved["config_start"])
+            self.assertIn("settings.json", saved["config_finish"]["claude"])
+            self.assertIn("evaluator_config_drift", json.loads((root / "observation.json").read_text())["validity_flags"])
+            config.unlink(); config.symlink_to(root / "not-read")
+            with patch("sys.stdout", io.StringIO()):
+                runner.finish(argparse.Namespace(output=root))
+            self.assertIn("evaluator_config_unreadable", json.loads((root / "observation.json").read_text())["validity_flags"])
+            self.assertTrue({"evaluator_config_drift", "evaluator_config_unreadable"} <= eval_kit.KNOWN_VALIDITY_FLAGS)
+
+    def test_inner_evaluator_symlinks_are_refused_without_following(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
+            folder = Path(env["CLAUDE_CONFIG_DIR"])
+            for name in ["settings.json", "unrelated/link", "rules"]:
+                link = folder / name; link.parent.mkdir(exist_ok=True)
+                link.symlink_to(Path(temp) / "must-not-follow")
+                self.assertFalse(runner.kit.evaluator_directory(folder))
+                with self.assertRaises(runner.kit.EvalError):
+                    runner.kit.prepare_eval_homes()
+                with self.assertRaises(runner.Refused):
+                    runner.config_snapshot(env)
+                link.unlink()
+
+    def test_grok_login_substring_in_path_is_not_a_login_dialog(self):
+        runner = self.runner()
+        screen = "/samples/login-service\nNew worktree    ctrl+w\nResume session    ctrl+r\n❯ Type a message...\n"
+        self.assertTrue(runner.grok_authenticated_editor(screen))
+        self.assertFalse(runner.grok_authenticated_editor(screen + "Login with grok.com\n"))
+
     def test_trial_environment_pins_home_and_harness_config(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -3816,8 +3963,8 @@ class ProcessRepairTests(unittest.TestCase):
         import argparse
         runner = self.runner()
         (ROOT / "target").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=ROOT / "target") as temp:
-            root = Path(temp)
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp) / "operator"):
+            root = Path(temp).resolve()
             repository = root / "subjects/trial/repository"
             repository.mkdir(parents=True)
             (repository / "TASK.md").write_text("Reply ok.\n")
@@ -3826,6 +3973,7 @@ class ProcessRepairTests(unittest.TestCase):
             binary = root / "subjects/bin/codeflow"
             binary.parent.mkdir()
             binary.write_text("fixture executable")
+            runner.kit.prepare_eval_homes()
             environment = runner.kit.subject_environment(repository.parent, binary, [])
             record = runner.kit.signed_registration({
                 "path": str(repository), "subjects_root": str(root / "subjects"),
@@ -3833,7 +3981,8 @@ class ProcessRepairTests(unittest.TestCase):
                 "subject_codeflow": str(binary), "codeflow_executable": {"sha256": runner.kit.executable_digest(binary)},
                 "subject_environment": environment, "case_id": "trial",
             })
-            record_path = root / "fixture.json"
+            record_path = root / "run/records/fixture.json"
+            record_path.parent.mkdir(parents=True)
             runner.write(record_path, record)
             calls, order = [], []
 
@@ -3880,6 +4029,36 @@ class ProcessRepairTests(unittest.TestCase):
             for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]:
                 self.assertIn(f"{key}={environment[key]}", create)
             self.assertEqual(native, list(next(c for c in calls if c[:2] == ("agent", "start"))[-len(native):]))
+            args.output = root / "native-start-trust"
+            starts = []
+            trust = self.trust_screen("claude", repository)
+            frames = iter([trust, trust, "idle editor"])
+            def needs_trust(*argv, **kwargs):
+                if argv[:2] == ("agent", "start"):
+                    starts.append(argv)
+                    if len(starts) == 1:
+                        raise runner.Refused("agent_not_ready: workspace trust")
+                if argv[:2] == ("pane", "read"):
+                    return next(frames)
+                return herdr(*argv, **kwargs)
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=needs_trust), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_claude", side_effect=deliver), patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            accepted = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual("started", accepted["status"])
+            self.assertEqual(starts[0], starts[1])
+            self.assertEqual(str(repository), accepted["trust_acceptances"][0]["path"])
+            self.assertEqual("sha256:" + hashlib.sha256(trust.encode()).hexdigest(), accepted["trust_acceptances"][0]["screen_sha256"])
+            self.assertIn("config_start", accepted)
+            (root / "AGENTS.md").write_text("new ancestor instructions")
+            args.output = root / "ancestor-refusal"
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.kit.EvalError, "ancestor instructions"):
+                runner.launch(args)
+            transport.assert_not_called()
+            (root / "AGENTS.md").unlink()
             args.output = root / "failed-readiness"
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
                  patch.object(runner, "herdr", side_effect=herdr), \
@@ -3895,8 +4074,16 @@ class ProcessRepairTests(unittest.TestCase):
                 runner.launch(args)
             transport.assert_not_called()
             self.assertFalse(args.output.exists())
+            args.output = root / "refused-flags"
+            args.native = ["--settings", "/outside/settings.json"]
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "--settings"):
+                runner.launch(args)
+            transport.assert_not_called()
+            self.assertEqual("--settings", json.loads((args.output / "launch.json").read_text())["refused_flag"])
+            args.native = ["--", *native]
             args.harness = "grok"
             args.output = root / "grok-login"
+            calls.clear()
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": False}), \
                  patch.object(runner, "herdr", side_effect=lambda *a, **k: "Approve in your browser to finish signing in." if a[:2] == ("pane", "read") else herdr(*a, **k)), \
                  patch.object(runner, "wait_ready", side_effect=ready), \

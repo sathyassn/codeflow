@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from typing import Any
 
 try:
@@ -65,6 +66,8 @@ EXPERIMENT_VARIABLE = re.compile(r"^system\.[a-z_][a-z0-9_.]*$")
 EVIDENCE_KINDS = frozenset({"session", "tool", "file", "command", "ui"})
 KNOWN_VALIDITY_FLAGS = {
     "declared_directory_changed",
+    "evaluator_config_drift",
+    "evaluator_config_unreadable",
     "directory_observation_incomplete",
     "directory_observation_entry_cap",
     "directory_observation_time_cap",
@@ -1752,6 +1755,24 @@ def nested(inner: Path, outer: Path) -> bool:
     return inner == outer or outer in inner.parents
 
 
+def check_instruction_ancestors(path: Path) -> list[str]:
+    """Check metadata only, including the root itself; never open ancestor rules."""
+    resolved = path.expanduser().resolve()
+    checked = []
+    for parent in (resolved, *resolved.parents):
+        for name in ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude"):
+            candidate = parent / name
+            try:
+                candidate.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise EvalError(f"cannot check ancestor instructions: {candidate}") from exc
+            raise EvalError(f"ancestor instructions: {candidate}; choose a clean evaluation root")
+        checked.append(str(parent))
+    return checked
+
+
 def ensure_run_root(run_root: Path, subjects_root: Path | None = None) -> dict:
     """Create or reopen a run root and its separate subjects root.
 
@@ -1765,6 +1786,7 @@ def ensure_run_root(run_root: Path, subjects_root: Path | None = None) -> dict:
         raise EvalError("evaluation run root must not be a symlink")
     run_root = raw.resolve()
     refuse_broad_directory(run_root, "an evaluation run root")
+    check_instruction_ancestors(run_root)
     marker_path = run_root / RUN_MARKER
     if run_root.exists():
         if not marker_path.is_file():
@@ -1784,12 +1806,14 @@ def ensure_run_root(run_root: Path, subjects_root: Path | None = None) -> dict:
             raise EvalError("the run root predates separate subject workspaces; start a new run root")
         if subjects_root is not None and subjects_root.expanduser().resolve() != Path(marker["subjects_root"]):
             raise EvalError("the run root already names another subjects root")
+        check_instruction_ancestors(Path(marker["subjects_root"]))
         return marker
     raw_subjects = (subjects_root or run_root.parent / f"{run_root.name}{SUBJECTS_SUFFIX}").expanduser()
     if raw_subjects.is_symlink():
         raise EvalError("the subjects root must not be a symlink")
     subjects = raw_subjects.resolve()
     refuse_broad_directory(subjects, "a subjects root")
+    check_instruction_ancestors(subjects)
     if nested(subjects, run_root) or nested(run_root, subjects):
         raise EvalError("the run root and the subjects root must not contain each other")
     if subjects.exists():
@@ -2103,8 +2127,23 @@ def evaluator_homes() -> dict[str, Path]:
 def evaluator_directory(path: Path) -> bool:
     # Reject links at either kit-owned level, including a dangling link. Never
     # resolve a replacement evaluator folder into a personal harness folder.
-    return (path.is_absolute() and not path.parent.is_symlink() and not path.is_symlink()
-            and path.parent.is_dir() and path.is_dir())
+    if not (path.is_absolute() and not path.parent.is_symlink() and not path.is_symlink()
+            and path.parent.is_dir() and path.is_dir()):
+        return False
+    deadline, count = time.monotonic() + 10, 0
+    pending = [path]
+    try:
+        while pending:
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    count += 1
+                    if count > 100_000 or time.monotonic() >= deadline or entry.is_symlink():
+                        return False
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+    except OSError:
+        return False
+    return True
 
 
 def trial_native_args(harness: str, environment: dict[str, str]) -> list[str]:
@@ -2132,6 +2171,8 @@ def prepare_eval_homes() -> str:
         if path.is_symlink():
             raise EvalError("evaluator home must not be a symlink")
         path.mkdir(mode=0o700, exist_ok=True)
+        if not evaluator_directory(path):
+            raise EvalError("evaluator home contains a symlink or cannot be inspected")
     seeds = {homes["claude"] / ".claude.json": json.dumps({"theme": "dark", "hasCompletedOnboarding": True}) + "\n",
              homes["codex"] / "config.toml": 'cli_auth_credentials_store = "file"\n'}
     for path, value in seeds.items():
@@ -2170,7 +2211,8 @@ Only these dedicated config folders persist. Never copy personal harness files.
 Setup directories are disposable; close the seat before removing its printed setup directory.
 For a materialized Codex fixture, launch with the recorded subject environment,
 open /hooks, review and trust the fixture's hooks before running a hook-dependent trial.
-A fresh fixture path may require /hooks trust again; setup does not grant trust.
+Hook trust is keyed by content hash: one operator review covers byte-identical
+fixture hooks across trials. Changed hooks need a new review; setup grants no trust.
 Trials refuse missing or unconfirmed sign-ins: evaluator home not signed in: run prepare-eval-homes
 '''
 
@@ -2232,6 +2274,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     opaque_id = trial_opaque_id(marker["run_id"], case_id, trial)
     output = subjects / opaque_id / "repository"
     record_path = resolved_run_root / "records" / f"{opaque_id}.fixture.json"
+    check_instruction_ancestors(output.parent)
     refuse_symlink_components(output.parent, subjects)
     if output.exists():
         raise EvalError(f"trial fixture already exists: {output}")

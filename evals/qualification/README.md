@@ -5,16 +5,24 @@ kit fixture record. TSK-194 can use it for seat qualification. It does not
 install into consuming projects, authenticate accounts, grade its own subject,
 or treat a terminal status as proof that the model completed the task.
 
-Materialize with the current binary and kit first. Keep fixture roots and
-runner evidence outside `/private/tmp` when possible. Put runner evidence
-outside every watched directory; overlapping evidence directories are refused.
+Materialize with the current binary and kit first. The run root and subject
+ancestors must contain no `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or
+`.claude` entry. The kit checks at materialization and launch, recording the
+checked ancestor paths in `launch.json`. Even a root under the operator's
+home fails if that home contains `.claude`; use a clean location outside both
+the home and repository. Only metadata is checked, never ancestor contents.
+Put runner evidence outside every watched directory; overlapping evidence
+directories are refused.
 
 ```sh
-python3 assets/base/agents/skills/cf-evaluate-model/scripts/eval_kit.py materialize \
-  --run-root "$PWD/target/qualification/run" --case model-independent-plans \
+kit=assets/base/agents/skills/cf-evaluate-model/scripts
+run_parent=$(mktemp -d /private/tmp/codeflow-eval.XXXXXX)
+python3 "$kit/eval_kit.py" materialize \
+  --run-root "$run_parent/run" --case model-independent-plans \
   --trial 1 --codeflow "$PWD/target/release/codeflow"
 python3 evals/qualification/runner.py launch \
-  --record <printed-fixture-record> --output "$PWD/target/qualification/trial-1" \
+  --record <printed-fixture-record> \
+  --output "$PWD/target/qualification/trial-1" \
   --workspace <Herdr-workspace-id> --harness codex -- \
   --model <qualified-selector> -c 'model_reasoning_effort="high"' \
   --ask-for-approval never --sandbox danger-full-access
@@ -33,7 +41,8 @@ identity evidence before claiming them as observed.
 Before the first trial, prepare dedicated evaluator authentication:
 
 ```sh
-python3 assets/base/agents/skills/cf-evaluate-model/scripts/eval_kit.py prepare-eval-homes
+kit=assets/base/agents/skills/cf-evaluate-model/scripts
+python3 "$kit/eval_kit.py" prepare-eval-homes
 ```
 
 Run the printed native commands yourself and complete each harness's sign-in.
@@ -41,14 +50,20 @@ The command only creates folders and missing non-secret settings; it never
 signs in, reads credentials, or overwrites existing config. Claude uses
 `/login`, Codex uses its ChatGPT sign-in, and Grok uses browser approval.
 For hook-dependent Codex fixtures, open `/hooks` and review and trust the
-fixture's hooks; a fresh path may require trust again. No trust is seeded.
+fixture's hooks once. Codex records hook trust by content hash, and the
+materialized hook files are byte-identical across cases and paths. That one
+operator review covers trials until hook contents change. No trust is seeded.
 
 `HOME`, `TMPDIR`, `CODEFLOW_HOME` and `XDG_CONFIG_HOME` stay disposable per
 trial. `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME` point respectively to
 `~/.codeflow-eval/claude`, `codex` and `grok`, signed in once by the operator.
 Grok supports `GROK_HOME`, so no symlink is used. The kit never reads, copies
 or uses the operator's personal harness folders. Symlinked evaluator folders
-are refused. Credentials are managed only by the harness: on macOS Claude
+and any symlink inside them are refused without following the link. Checks
+are bounded to 100,000 entries and ten seconds per home; an incomplete check
+refuses. Executable symlinks under `~/.local/bin` may resolve to harness
+installation folders; this executes the installed binary without importing
+personal configuration. Credentials are managed only by the harness: on macOS Claude
 may use a Keychain entry scoped to its dedicated config directory; Codex is
 explicitly set to the file credential store in its dedicated folder.
 
@@ -62,6 +77,37 @@ refuse before any prompt, using `evaluator home not signed in: run
 prepare-eval-homes`. Grok may show a browser-approval screen before refusal;
 the runner never answers it. A positive status is local sign-in evidence,
 not a guarantee that a remote subscription or token will remain valid.
+
+During startup, the runner may accept only Claude's workspace-trust or
+Codex's project-trust dialog naming this trial's exact materialized subject
+path (see the [Codex trust renderer][codex-trust]). It re-reads the visible
+pane before each selection key and Enter,
+requires the affirmative choice visibly selected, and records harness,
+path, screen-text SHA-256 and time in `trust_acceptances`. This implements
+the operator's standing authorization for harness-created disposable samples.
+A different path, truncated path, import dialog or other trust prompt
+refuses. The kit never writes trust grants into config. This workspace
+acceptance is separate from the operator's one-time review of Codex hooks.
+
+Caller arguments use a per-harness allowlist: Claude model, effort and
+permission mode; Codex model, reasoning effort (`-c model_reasoning_effort`),
+approval policy and sandbox; Grok model, reasoning effort and permission mode
+or always-approve. No other config, directory, plugin, agent or profile flag
+is accepted. Values resolving under personal harness folders are refused.
+The refused flag name is recorded in `launch.json`. State-control arguments
+are appended only by the kit and are included in the exact launch arguments.
+
+At trial start, after authorized workspace trust and readiness but before
+prompt delivery, `config_start` records SHA-256 digests of non-secret
+configuration in all three evaluator homes. `finish` writes `config_finish`
+to the same `launch.json`. Added, edited or removed files raise
+`evaluator_config_drift`; unreadable files or new symlinks raise
+`evaluator_config_unreadable`. Coverage is the settings/config files,
+CLAUDE/AGENTS/GROK instruction files and recursive `rules/` listed in the
+runner's `CONFIG_FILES`. Account stores, credentials, `.claude.json`, session
+history and caches are not hashed. Native workspace-trust writes before
+readiness are not trial drift. The digests do not prove absence of transient
+changes restored before finish, or changes outside the listed coverage.
 
 Claude auto-memory and Grok cross-session memory are disabled in the launch
 environment. Codex launch overrides disable history and memory generation
@@ -83,9 +129,9 @@ Sources: [Claude environment](https://code.claude.com/docs/en/env-vars),
 [Claude status](https://code.claude.com/docs/en/cli-reference),
 [Codex settings](https://learn.chatgpt.com/docs/config-file/config-reference),
 [Grok settings](https://docs.x.ai/build/settings/reference), and the
-[Grok welcome renderer](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/src/views/welcome/mod.rs).
+[Grok welcome renderer][grok-welcome].
 Claude's `theme` and `hasCompletedOnboarding` bootstrap in `.claude.json`
-are described in its public [onboarding report](https://github.com/anthropics/claude-code/issues/67149)
+are described in its public [onboarding report][claude-onboarding]
 and the native theme dialog; the onboarding key is not a stable settings API.
 The kit seeds only a missing file. A changed first-run UI is a refusal for
 inspection, not permission to invent flags or answer login automatically.
@@ -159,3 +205,7 @@ process-round case boundaries and all six R-105 scenarios from SPC-013.
 The delivery test suite is offline by default. Its two live Herdr canaries
 require `CF_HERDR_LIVE_CANARY=1`; the primary may opt in when native launch
 is authorized. A live canary is a transport check, not an acceptance trial.
+
+[grok-welcome]: https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/src/views/welcome/mod.rs
+[claude-onboarding]: https://github.com/anthropics/claude-code/issues/67149
+[codex-trust]: https://github.com/openai/codex/blob/main/codex-rs/tui/src/onboarding/trust_directory.rs

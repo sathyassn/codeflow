@@ -7,6 +7,7 @@ Use --help and README.md. A clean snapshot is bounded evidence, not confinement.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -25,7 +26,9 @@ spec.loader.exec_module(kit)
 
 
 class Refused(RuntimeError):
-    pass
+    def __init__(self, message: str, flag: str | None = None):
+        super().__init__(message)
+        self.flag = flag
 
 
 def herdr(*args: str, text: bool = False):
@@ -177,13 +180,78 @@ def state(pane: str) -> dict:
     return herdr("agent", "get", pane)["result"]["agent"]
 
 
-def wait_ready(pane: str, seconds: float) -> dict:
+def trust_choice(screen: str, harness: str, repository: Path) -> str | None:
+    lines = [line.strip() for line in screen.splitlines()]
+    if any(re.search(r"(?i)^(?:[❯›>]\s*)?(?:allow external .*imports|external imports:|import .*settings|.*hooks.*(?:review|trust))", line) for line in lines):
+        raise Refused("trust or import prompt is not authorized")
+    header = {"claude": "Accessing workspace:", "codex": "Folder access"}.get(harness)
+    suspicious = re.search(r"(?i)do you trust|trust (?:this|the) (?:folder|directory|project)|one you trust|folder access|accessing workspace:", screen)
+    if not header or header not in lines:
+        if suspicious:
+            raise Refused("unrecognized trust dialog")
+        return None
+    if lines.count(header) != 1:
+        raise Refused("ambiguous trust dialog")
+    index = lines.index(header) + 1
+    while index < len(lines) and not lines[index]:
+        index += 1
+    path_lines = []
+    while index < len(lines) and lines[index]:
+        path_lines.append(lines[index]); index += 1
+    if "".join(path_lines) != str(repository):
+        raise Refused("trust dialog does not name the exact materialized subject path")
+    if harness == "claude":
+        yes, no, cursor = "Yes, I trust this folder", "No, exit", "❯"
+        valid = "Is this a project you created or one you trust?" in screen and "Enter to confirm · Esc to cancel" in lines
+    else:
+        yes, no, cursor = "1. Trust and continue", "2. Quit", "›"
+        valid = "Trust this folder? Codex can read, edit, and run files here," in screen and any(re.fullmatch(r"enter continue(?: and create sandbox)? · esc quit", line) for line in lines)
+    if valid and f"{cursor} {yes}" in lines and no in lines:
+        return "yes"
+    if valid and f"{cursor} {no}" in lines and yes in lines:
+        return "no"
+    raise Refused("unrecognized trust choices; no acceptance sent")
+
+
+def accept_workspace_trust(pane: str, harness: str, repository: Path, screen: str) -> dict | None:
+    choice = trust_choice(screen, harness, repository)
+    if choice is None:
+        return None
+    # Re-read before each key; never send Enter based on an earlier screen.
+    current = herdr("pane", "read", pane, "--source", "visible", text=True)
+    if trust_choice(current, harness, repository) != choice:
+        raise Refused("trust dialog changed before key delivery")
+    if choice == "no":
+        herdr("pane", "send-keys", pane, "Down" if harness == "claude" else "Up")
+        time.sleep(0.2)
+        current = herdr("pane", "read", pane, "--source", "visible", text=True)
+        if trust_choice(current, harness, repository) != "yes":
+            raise Refused("trust choice not visibly selected; no Enter sent")
+    herdr("pane", "send-keys", pane, "Enter")
+    return {"harness": harness, "path": str(repository),
+            "screen_sha256": "sha256:" + hashlib.sha256(current.encode()).hexdigest(), "time": time.time()}
+
+
+def wait_ready(pane: str, seconds: float, harness: str | None = None,
+               repository: Path | None = None, acceptances: list | None = None) -> dict:
     end = time.monotonic() + seconds
+    accepted = bool(acceptances)
     while True:
+        trust_pending = False
+        if harness is not None:
+            screen = herdr("pane", "read", pane, "--source", "visible", text=True)
+            choice = trust_choice(screen, harness, repository)
+            trust_pending = choice is not None
+            if trust_pending and not accepted:
+                event = accept_workspace_trust(pane, harness, repository, screen)
+                acceptances.append(event)
+                accepted = True
+            if not screen.strip():
+                trust_pending = True
         current = state(pane)
-        if current.get("agent_status") in {"idle", "done"}:
+        if not trust_pending and current.get("agent_status") in {"idle", "done"}:
             return current
-        if current.get("agent_status") == "blocked" or time.monotonic() >= end:
+        if (not trust_pending and current.get("agent_status") == "blocked") or time.monotonic() >= end:
             raise Refused("seat did not become ready; inspect its native UI before any delivery")
         time.sleep(0.5)
 
@@ -269,7 +337,7 @@ def check_evaluator_auth(harness: str, environment: dict[str, str], cwd: Path) -
 def grok_authenticated_editor(screen: str) -> bool:
     # Public Grok welcome renderer: these menu rows require AuthState::Done
     # with access. Pending login can paint a prompt too, so prompt alone fails.
-    if re.search(r"(?i)login|sign(?:ed|ing)? in|authentication|approve in your browser|switch account", screen):
+    if re.search(r"(?im)^\s*(?:Login with .+|Approve in your browser to finish signing in\.|A browser window will open for authentication\.|Switch account(?:\s+.*)?)\s*$", screen):
         return False
     lines = [line.strip() for line in screen.splitlines()]
     return (bool(re.search(r"(?m)^\s*New worktree\s+ctrl\+w\s*$", screen))
@@ -277,30 +345,81 @@ def grok_authenticated_editor(screen: str) -> bool:
             and any(re.fullmatch(r"[│┃]?\s*[❯>]\s*(?:Type a message\.\.\.)?\s*[│┃]?", line) for line in lines))
 
 
-def permission_flags(harness: str, native: list[str]) -> dict[str, str]:
+def permission_flags(harness: str, native: list[str], cwd: Path | None = None) -> dict[str, str]:
+    allowed = {"claude": {"--model", "--effort", "--permission-mode"},
+               "codex": {"--model", "-c", "--ask-for-approval", "--sandbox"},
+               "grok": {"--model", "--reasoning-effort", "--permission-mode", "--always-approve"}}[harness]
+    values = {}
+    index = 0
+    personal = [Path.home() / name for name in (".claude", ".claude.json", ".codex", ".grok")]
+    while index < len(native):
+        flag, separator, value = native[index].partition("=")
+        if flag not in allowed or flag in values:
+            raise Refused(f"refused native flag: {flag if flag.startswith('-') else '<positional>'}", flag if flag.startswith('-') else "<positional>")
+        index += 1
+        if flag == "--always-approve":
+            if separator or "--permission-mode" in values:
+                raise Refused(f"refused native flag: {flag}", flag)
+            value = "true"
+        elif not separator:
+            if index == len(native) or native[index].startswith("-"):
+                raise Refused(f"refused native flag: {flag} (missing value)", flag)
+            value = native[index]; index += 1
+        if not value or (harness == "grok" and flag == "--permission-mode" and "--always-approve" in values):
+            raise Refused(f"refused native flag: {flag}", flag)
+        path_value = value.strip("\"'")
+        if path_value.startswith("~/"):
+            path_value = str(Path.home() / path_value[2:])
+        candidate = Path(path_value).expanduser()
+        resolved = (candidate if candidate.is_absolute() else (cwd or Path.cwd()) / candidate).resolve()
+        if any(resolved == folder.resolve() or folder.resolve() in resolved.parents for folder in personal):
+            raise Refused(f"refused native flag: {flag} (personal config path)", flag)
+        if flag == "-c" and not re.fullmatch(r'model_reasoning_effort=(?:"(?:minimal|low|medium|high|xhigh)"|minimal|low|medium|high|xhigh)', value):
+            raise Refused("refused native flag: -c (only model_reasoning_effort is caller-owned)", flag)
+        values[flag] = value
     required = {"codex": ("--ask-for-approval", "--sandbox"),
                 "claude": ("--permission-mode",), "grok": ("--permission-mode",)}[harness]
-    forbidden = {"exec", "-p", "--print", "--single", "--prompt-file", "--prompt-json",
-                 "resume", "fork", "--resume", "--continue", "--fork-session", "--session-id",
-                 "--cwd", "--cd", "-C", "--leader-socket"}
-    if harness in {"claude", "grok"}:
-        forbidden.update({"-c", "-r", "-s"})
-    if any(arg.split("=", 1)[0] in forbidden for arg in native):
-        raise Refused("only fresh native interactive arguments are allowed; no resume or path overrides")
-    if harness == "grok" and "--always-approve" in native:
+    if harness == "grok" and "--always-approve" in values:
         required = ("--always-approve",)
-    result = {}
     for flag in required:
-        if native.count(flag) != 1:
-            raise Refused(f"supply one explicit {flag} in native arguments")
-        index = native.index(flag)
-        if flag == "--always-approve":
-            result[flag] = "true"
-        elif index + 1 >= len(native) or native[index + 1].startswith("-"):
-            raise Refused(f"missing value for {flag}")
-        else:
-            result[flag] = native[index + 1]
+        if flag not in values:
+            raise Refused(f"refused native flag: {flag} (required)", flag)
+    return {flag: values[flag] for flag in required}
+
+
+CONFIG_FILES = {
+    "claude": ("settings.json", "settings.local.json", "CLAUDE.md", "CLAUDE.local.md", "rules"),
+    "codex": ("config.toml", "AGENTS.md", "AGENTS.override.md", "hooks.json", "rules"),
+    "grok": ("config.toml", "managed_config.toml", "requirements.toml", "GROK.md", "AGENTS.md", "rules"),
+}
+
+
+def config_snapshot(environment: dict[str, str]) -> dict:
+    result = {}
+    for harness, variable in kit.EVALUATOR_HOME_VARIABLES.items():
+        root = Path(environment[variable])
+        if not kit.evaluator_directory(root):
+            raise Refused(f"evaluator config unavailable or contains symlinks: {harness}")
+        hashes = {}
+        for name in CONFIG_FILES[harness]:
+            path = root / name
+            candidates = sorted(path.rglob("*")) if path.is_dir() else [path]
+            for candidate in candidates:
+                # No auth/account stores, session transcripts, or credential files.
+                if candidate.name in {"auth.json", ".credentials.json", "mcp_credentials.json"}:
+                    continue
+                if candidate.is_symlink():
+                    raise Refused(f"evaluator config contains symlink: {harness}")
+                if candidate.is_file():
+                    if candidate.stat().st_size > kit.MAX_SETTINGS_BYTES:
+                        raise Refused(f"evaluator config exceeds size cap: {harness}")
+                    hashes[str(candidate.relative_to(root))] = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
+        result[harness] = hashes
     return result
+
+
+def config_drift(before: dict, after: dict) -> list[str]:
+    return ["evaluator_config_drift"] if before != after else []
 
 
 def launch(args) -> None:
@@ -316,15 +435,14 @@ def launch(args) -> None:
     if kit.executable_digest(binary) != record["codeflow_executable"]["sha256"]:
         raise Refused("subject binary changed since materialization")
     trial = repository.parent
+    ancestry = {"run": kit.check_instruction_ancestors(args.record.resolve().parent.parent),
+                "subject": kit.check_instruction_ancestors(trial)}
     environment = record["subject_environment"]
     for key, path in {"HOME": trial / "home", "TMPDIR": trial / "tmp",
                       "CODEFLOW_HOME": trial / "home/.codeflow", "XDG_CONFIG_HOME": trial / "home/.config"}.items():
         if environment.get(key) != str(path):
             raise Refused(f"materialize with the current kit: {key} must be {path}")
     native = args.native[1:] if args.native[:1] == ["--"] else args.native
-    permissions = permission_flags(args.harness, native)
-    authentication = check_evaluator_auth(args.harness, environment, repository)
-    native = [*native, *kit.trial_native_args(args.harness, environment)]
     watched = sorted({str(Path(p).resolve()) for p in
                       [environment["TMPDIR"], "/private/tmp", *args.watch_dir]})
     observation = {"shallow": ["/private/tmp"],
@@ -336,12 +454,24 @@ def launch(args) -> None:
             raise Refused("runner evidence must live outside declared directories")
     if args.output.exists():
         raise Refused("output already exists; never reuse a trial launch")
+    try:
+        permissions = permission_flags(args.harness, native, repository)
+    except Refused as exc:
+        args.output.mkdir(parents=True)
+        write(args.output / "launch.json", {"harness": args.harness, "status": "refused",
+                                           "refused_flag": exc.flag, "error": str(exc)})
+        raise
+    authentication = check_evaluator_auth(args.harness, environment, repository)
+    # Validate all config roots before a native process could follow a link.
+    config_snapshot(environment)
+    native = [*native, *kit.trial_native_args(args.harness, environment)]
     args.output.mkdir(parents=True)
     run = {"schema_version": 1, "fixture_record": str(args.record.resolve()),
            "repository": str(repository), "harness": args.harness,
            "native_args": native, "permission_flags": permissions,
            "environment": environment, "declared_directories": watched,
            "observation": observation, "authentication": authentication,
+           "instruction_ancestors": ancestry, "trust_acceptances": [],
            "status": "prepared", "started_at": time.time()}
     write(args.output / "launch.json", run)
     try:
@@ -360,10 +490,27 @@ def launch(args) -> None:
             if time.monotonic() >= end:
                 raise Refused("new pane did not reach an idle shell; no seat started")
             time.sleep(0.5)
-        run["launch_response"] = herdr("agent", "start", f"eval-{trial.name}", "--kind",
-                                      args.harness, "--pane", run["pane"], "--", *native)
+        start_args = ("agent", "start", f"eval-{trial.name}", "--kind",
+                      args.harness, "--pane", run["pane"], "--", *native)
         try:
-            initial = wait_ready(run["pane"], args.start_timeout)
+            run["launch_response"] = herdr(*start_args)
+        except Refused as exc:
+            # Herdr may report not-ready before it can register the native seat.
+            # The release harness re-registers this same pane after trust clears.
+            screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
+            event = accept_workspace_trust(run["pane"], args.harness, repository, screen)
+            if event is None:
+                raise exc
+            run["trust_acceptances"].append(event)
+            run["initial_start_error"] = str(exc)
+            write(args.output / "launch.json", run)
+            time.sleep(0.2)
+            screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
+            if trust_choice(screen, args.harness, repository) is not None:
+                raise Refused("accepted trust dialog has not cleared; no repeated key")
+            run["launch_response"] = herdr(*start_args)
+        try:
+            initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"])
         except Refused as exc:
             if args.harness == "grok":
                 raise Refused(AUTH_REFUSAL) from exc
@@ -372,7 +519,9 @@ def launch(args) -> None:
             if not grok_authenticated_editor(herdr("pane", "read", run["pane"], "--source", "visible", text=True)):
                 raise Refused(AUTH_REFUSAL)
             run["authentication"]["signed_in"] = True
+        run["config_start"] = config_snapshot(environment)
         run["initial_agent"] = initial
+        write(args.output / "launch.json", run)
         write(args.output / "before.json", snapshot(watched, **observation))
         prompt = (repository / "TASK.md").read_text(encoding="utf-8")
         if args.harness == "claude":
@@ -402,6 +551,16 @@ def finish(args) -> None:
     else:
         result = {"validity_flags": ["directory_observation_incomplete", *after["validity_flags"]],
                   "error": "no pre-trial snapshot recorded after seat readiness"}
+    try:
+        run["config_finish"] = config_snapshot(run["environment"])
+        if "config_start" not in run:
+            result["validity_flags"].append("evaluator_config_unreadable")
+        else:
+            result["validity_flags"].extend(config_drift(run["config_start"], run["config_finish"]))
+    except (Refused, OSError, KeyError) as exc:
+        run["config_finish"] = {"error": str(exc)}
+        result["validity_flags"].append("evaluator_config_unreadable")
+    write(args.output / "launch.json", run)
     if run["status"] != "started":
         result["validity_flags"].append("native_launch_not_confirmed")
     write(args.output / "after.json", after)
