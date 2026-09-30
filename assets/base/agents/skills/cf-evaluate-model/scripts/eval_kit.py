@@ -2240,8 +2240,9 @@ Only these dedicated config folders persist. Never copy personal harness files.
 Setup directories are disposable; close the seat before removing its printed setup directory.
 For a materialized Codex fixture, launch with the recorded subject environment,
 open /hooks, review and trust the fixture's hooks before running a hook-dependent trial.
-Hook trust is keyed by content hash: one operator review covers byte-identical
-fixture hooks across trials. Changed hooks need a new review; setup grants no trust.
+Codex hook trust is keyed by the hooks file's absolute path and a per-hook hash.
+A review in one fixture does not carry to another, even with identical hooks.
+A new path or changed hook needs human-authorized acceptance; setup grants no trust.
 Trials refuse missing or unconfirmed sign-ins: evaluator home not signed in: run prepare-eval-homes
 '''
 

@@ -3613,6 +3613,18 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertFalse(any(c.args[:2] in {("pane", "send-keys"), ("pane", "send-text")} for c in transport.call_args_list))
             self.assertEqual([], frames)
 
+    def test_codex_hook_refusal_names_the_trial_path_without_sending_a_key(self):
+        runner = self.runner()
+        path = Path("/disposable/trial-8/repository")
+        screen = "Hooks need review\n5 hooks are new or changed.\n› 1. Review hooks\n"
+        with patch.object(runner, "herdr", return_value=screen) as transport:
+            with self.assertRaises(runner.Refused) as refused:
+                runner.handle_startup("owned", "codex", path, screen, [], [])
+        self.assertIn(str(path), str(refused.exception))
+        self.assertIn("one human-authorized acceptance", str(refused.exception))
+        self.assertIn("evaluator home ~/.codeflow-eval/codex", str(refused.exception))
+        transport.assert_not_called()
+
     def test_codex_delivery_pastes_only_into_the_verified_composer(self):
         runner = self.runner(); path = Path("/disposable/subject/repository"); expect = self.codex_expect(path)
         prompt = "Which branch holds the customer search work?\n"

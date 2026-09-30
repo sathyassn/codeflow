@@ -200,6 +200,10 @@ def recover_registration(pane: str, name: str, harness: str, repository: Path,
 
 def trust_choice(screen: str, harness: str, repository: Path) -> str | None:
     lines = [line.strip() for line in screen.splitlines()]
+    if harness == "codex" and "Hooks need review" in lines:
+        raise Refused(f"hooks for the Codex trial fixture {repository} need one "
+                      "human-authorized acceptance in the dedicated evaluator home "
+                      "~/.codeflow-eval/codex; no key was sent")
     if any(re.search(r"(?i)^(?:[❯›>]\s*)?(?:allow external .*imports|external imports:|import .*settings|.*hooks.*(?:review|trust))", line) for line in lines):
         raise Refused("trust or import prompt is not authorized")
     if harness == "grok" and "Do you trust the contents of this directory?" in lines:

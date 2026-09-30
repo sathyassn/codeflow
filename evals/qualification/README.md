@@ -69,9 +69,11 @@ them yourself. Use `/hooks` if needed. Exit without submitting `TASK.md`.
 The review covers `.codex/hooks.json`: the PreToolUse `git-guard` and
 `exec-guard` commands, plus `session-orient` at SessionStart and
 UserPromptSubmit. These invoke the pinned fixture `codeflow` binary.
-Codex records hook trust by content hash; the materialized hook files are
-byte-identical across cases and paths. One operator review covers trials
-until hook contents change. No trust is seeded or selected by the kit.
+Codex keys hook trust by the hooks file's absolute path and a per-hook hash.
+A review in one fixture does not carry to another, even with identical hooks.
+A new path or changed hook needs human-authorized acceptance. No trust is
+seeded or selected by the kit; it refuses at "Hooks need review", names the
+trial's fixture path and the dedicated evaluator home, and sends no key.
 
 `HOME`, `TMPDIR`, `CODEFLOW_HOME` and `XDG_CONFIG_HOME` stay disposable per
 trial. `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME` point respectively to
@@ -121,7 +123,7 @@ screen-text SHA-256 and time in `trust_acceptances`. This implements
 the operator's standing authorization for harness-created disposable samples.
 A different path, truncated path, import dialog or other trust prompt
 refuses. The kit never writes trust grants into config. This workspace
-acceptance is separate from the operator's one-time review of Codex hooks.
+acceptance is separate from the operator's review of that fixture's Codex hooks.
 
 Caller arguments use a per-harness allowlist: Claude model, effort and
 permission mode; Codex model, reasoning effort (`-c model_reasoning_effort`),
