@@ -8,7 +8,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import type {
   AppearanceMode,
   ChromeConfig,
-  FeedbackAnchor,
   FeedbackKind,
   PendingFeedback,
   ReviewRequest,
@@ -21,6 +20,7 @@ import type {
 } from "./contracts";
 import { parseServiceError } from "./contracts";
 import type { EntitySelector } from "./contracts";
+import { ThreadRail, THREAD_EVENT } from "./threads";
 import { followSessionEvents } from "./events";
 import { ANSWER_STATE_EVENT, FORM_ANSWERS_EVENT, SESSION_EVENT, type AnswerStateDetail, type FormAnswersDetail, type SessionEventDetail } from "./forms";
 import { postJson, PresentRequestError } from "./http";
@@ -1255,6 +1255,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   function handleEvent(event: SessionEvent): void {
     setEventMessage(event.message ?? null);
+    documentRoot.dispatchEvent(new CustomEvent(THREAD_EVENT, {detail:event.kind}));
     // Forms keep their drafts in the page and show the notice themselves.
     if (event.kind === "revision") {
       const revision = Number(event.cursor.split(":", 1)[0]);
@@ -1268,7 +1269,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       // forms bind to it before they latch closed.
       if (event.forms?.length) documentRoot.dispatchEvent(new CustomEvent<FormAnswersDetail>(FORM_ANSWERS_EVENT, { detail: event.forms }));
       closeSession(true);
-    } else if (event.kind === "answer_state" && event.answers?.length) {
+    } else if ((event.kind === "answer_state" || event.kind === "thread") && event.answers?.length) {
       // Each form shows its own answer's delivery and acknowledgment.
       documentRoot.dispatchEvent(new CustomEvent<AnswerStateDetail>(ANSWER_STATE_EVENT, { detail: event.answers }));
     }
@@ -1663,45 +1664,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           )}
         </div>
 
-        {config.feedback?.items.length || config.feedback?.omitted_older ? (
-          <details class="cf-feedback-history" data-testid="feedback-history">
-            <summary id="cf-feedback-history-title">
-              Earlier feedback
-              {config.feedback.omitted_older ? (
-                <span> · {config.feedback.omitted_older} older in session history</span>
-              ) : null}
-            </summary>
-            <ol>
-              {config.feedback.items.map((item) => (
-                <li key={item.event_id}>
-                  <div class="cf-history-meta">
-                    <strong>{item.verdict.replaceAll("_", " ")}</strong>
-                    <span>{item.lifecycle}</span>
-                    {item.acknowledged ? <span data-testid="feedback-acknowledged">acknowledged by agent</span> : null}
-                    <span>Revision {item.source_revision}</span>
-                    <span>Version {item.event_version}</span>
-                  </div>
-                  {item.instruction ? <p>{item.instruction}</p> : null}
-                  {item.notes.length ? (
-                    <ul>
-                      {item.notes.map((note) => (
-                        <li key={note.id} data-anchor-state={note.anchor.state}>
-                          <div class="cf-note-heading">
-                            <strong>{note.block_label}</strong>
-                            <span>{anchorWords(note.anchor)}</span>
-                          </div>
-                          {note.quote ? <blockquote>{note.quote}</blockquote> : null}
-                          <p>{note.body}</p>
-                          {anchorNotice(note.anchor)}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          </details>
-        ) : null}
+        <ThreadRail config={config} documentRoot={documentRoot} />
 
         {/* Advanced tools — secondary path for a11y + qualification bridges */}
         <details class="cf-tools">
@@ -2024,36 +1987,6 @@ function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpo
 // The state of an earlier note in words, never its enum value (the detail
 // line below it, `anchorNotice`, says why): "moved" only when the anchor
 // reports a change.
-function anchorWords(anchor: FeedbackAnchor): string {
-  switch (anchor.state) {
-    case "orphaned": return "unpositioned";
-    case "block_fallback": return "on the block";
-    case "reanchored": return anchor.changed ? "moved" : "anchored";
-    case "entity_reanchored": return anchor.label_changed ? "moved" : "anchored";
-    default: return "anchored";
-  }
-}
-
-// What the rail says about where an earlier note now sits (SPC-014 B1): a
-// note that moved or lost its target says so, never silently.
-function anchorNotice(anchor: FeedbackAnchor) {
-  switch (anchor.state) {
-    case "orphaned": return <p class="cf-anchor-warning">Unpositioned: {anchor.reason}</p>;
-    case "block_fallback": return <p class="cf-anchor-warning">Shown on the block: {anchor.reason}</p>;
-    case "reanchored": return anchor.changed
-      ? <p class="cf-anchor-warning">Moved: the closest match in this revision differs from the quote.</p>
-      : <p class="cf-anchor-note">Matched uniquely in this revision.</p>;
-    case "entity_reanchored": return anchor.label_changed
-      ? <p class="cf-anchor-warning">The part it names was relabelled in this revision.</p>
-      : <p class="cf-anchor-note">Still names the same part; the block around it changed in this revision.</p>;
-    case "element_reanchored": return <p class="cf-anchor-note">The same element: its block is unchanged in this revision.</p>;
-    case "region_reanchored": return anchor.scope === "document"
-      ? <p class="cf-anchor-note">Still the whole document in this revision.</p>
-      : <p class="cf-anchor-note">The same area: its block is unchanged in this revision.</p>;
-    default: return null;
-  }
-}
-
 function visiblePart(rect: DOMRect): DOMRect | null {
   const top = Math.max(rect.top, 0);
   const bottom = Math.min(rect.bottom, window.innerHeight);

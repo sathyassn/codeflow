@@ -39,9 +39,30 @@ pub fn export_session(
     theme: ExportTheme,
     mode: ExportMode,
 ) -> Result<()> {
+    export_inner(store, session_id, output, theme, mode, false)
+}
+
+pub fn export_session_with_notes(
+    store: &SessionStore,
+    session_id: Uuid,
+    output: &Path,
+    theme: ExportTheme,
+    mode: ExportMode,
+) -> Result<()> {
+    export_inner(store, session_id, output, theme, mode, true)
+}
+
+fn export_inner(
+    store: &SessionStore,
+    session_id: Uuid,
+    output: &Path,
+    theme: ExportTheme,
+    mode: ExportMode,
+    with_notes: bool,
+) -> Result<()> {
     let revision = store.current_revision(session_id)?;
     let utility_style = store.utility_tokens()?.map(|tokens| tokens.css());
-    let html = match revision.content {
+    let mut html = match revision.content {
         RevisionContent::Supported { document } => {
             let static_html = render_document(
                 &document,
@@ -84,6 +105,17 @@ pub fn export_session(
         } => render_unsupported(&raw, schema_version),
         RevisionContent::Retired { document, .. } => render_retired(&document),
     };
+    if with_notes {
+        let history = store.history(session_id)?;
+        let notes = serde_json::to_string_pretty(
+            &serde_json::json!({"reviews":history.feedback_events,"responses":history.response_events}),
+        )?;
+        let escaped = notes
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        html = html.replacen("</body>",&format!("<section aria-label=\"Conversation\"><h2>Conversation</h2><pre>{escaped}</pre></section></body>"),1);
+    }
     write_new_private(output, html.as_bytes())
 }
 

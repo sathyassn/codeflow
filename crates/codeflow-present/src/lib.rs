@@ -11,6 +11,9 @@ pub mod browser;
 pub mod config;
 #[cfg(test)]
 mod contract_tests;
+pub mod conversation;
+#[cfg(test)]
+mod conversation_tests;
 pub mod delivery;
 pub mod document;
 pub mod entity;
@@ -24,6 +27,7 @@ mod platform;
 pub mod render;
 pub mod responses;
 pub mod retired;
+pub mod revision;
 mod safe_html;
 mod scoped_css;
 pub mod service;

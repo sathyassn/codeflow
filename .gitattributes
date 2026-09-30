@@ -1,4 +1,5 @@
 # Generated cf-present payloads are compressed binary data. Prevent text
 # normalization, text diffs, and automatic merge drivers from corrupting them.
 crates/codeflow-present/assets/service/*.br binary
+crates/codeflow-present/assets/service/*.gz binary
 crates/codeflow-present/assets/export/*.gz binary

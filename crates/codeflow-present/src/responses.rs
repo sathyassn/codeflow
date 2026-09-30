@@ -47,6 +47,7 @@ pub const RESPONSES_FILE: &str = "responses.jsonl";
 #[serde(rename_all = "snake_case")]
 pub enum Actor {
     Operator,
+    Agent,
 }
 
 /// An `answer` or `amendment` line of I4, without its `event` tag.
@@ -87,6 +88,40 @@ pub struct StateRecord {
     pub at_unix: u64,
 }
 
+/// Common, revision-bound fields of a conversation transition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThreadTransition {
+    pub sequence: u64,
+    pub target: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_id: Option<Uuid>,
+    pub revision: u64,
+    pub actor: Actor,
+    pub at_unix: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplyRecord {
+    pub reply_id: Uuid,
+    pub text: String,
+    #[serde(flatten)]
+    pub transition: ThreadTransition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReopenRecord {
+    pub reopen_id: Uuid,
+    #[serde(flatten)]
+    pub transition: ThreadTransition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TombstoneRecord {
+    pub tombstone_id: Uuid,
+    #[serde(flatten)]
+    pub transition: ThreadTransition,
+}
+
 /// One line of `responses.jsonl` (I4). Later event kinds (replies, reopens,
 /// tombstones) extend the enum additively.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,6 +131,9 @@ pub enum ResponseEvent {
     Amendment(AnswerRecord),
     Delivered(StateRecord),
     Acknowledged(StateRecord),
+    Reply(ReplyRecord),
+    Reopen(ReopenRecord),
+    Tombstone(TombstoneRecord),
 }
 
 impl ResponseEvent {
@@ -104,15 +142,35 @@ impl ResponseEvent {
     pub const fn answer(&self) -> Option<&AnswerRecord> {
         match self {
             Self::Answer(record) | Self::Amendment(record) => Some(record),
-            Self::Delivered(_) | Self::Acknowledged(_) => None,
+            _ => None,
         }
     }
 
+    #[must_use]
+    pub(crate) const fn transition(&self) -> Option<&ThreadTransition> {
+        match self {
+            Self::Reply(r) => Some(&r.transition),
+            Self::Reopen(r) => Some(&r.transition),
+            Self::Tombstone(r) => Some(&r.transition),
+            _ => None,
+        }
+    }
+    pub(crate) const fn thread_id(&self) -> Option<Uuid> {
+        match self {
+            Self::Reply(r) => Some(r.reply_id),
+            Self::Reopen(r) => Some(r.reopen_id),
+            Self::Tombstone(r) => Some(r.tombstone_id),
+            _ => None,
+        }
+    }
     #[must_use]
     pub const fn sequence(&self) -> u64 {
         match self {
             Self::Answer(record) | Self::Amendment(record) => record.sequence,
             Self::Delivered(record) | Self::Acknowledged(record) => record.sequence,
+            Self::Reply(r) => r.transition.sequence,
+            Self::Reopen(r) => r.transition.sequence,
+            Self::Tombstone(r) => r.transition.sequence,
         }
     }
 }
@@ -217,7 +275,7 @@ impl Ledger {
     }
 
     /// Syncs the ledger file, so every line in it is durable.
-    fn sync(&self) -> Result<()> {
+    pub(crate) fn sync(&self) -> Result<()> {
         let file = open_private_rw(&self.path)?;
         #[cfg(test)]
         if fault::sync_fails() {
@@ -242,6 +300,13 @@ impl Ledger {
                 ResponseEvent::Answer(record) | ResponseEvent::Amendment(record) => {
                     open.insert(record.answer_id, 2);
                 }
+                ResponseEvent::Reopen(r) => {
+                    open.insert(r.reopen_id, 2);
+                }
+                ResponseEvent::Tombstone(r) => {
+                    open.insert(r.tombstone_id, 2);
+                }
+                ResponseEvent::Reply(_) => {}
                 ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state) => {
                     if let Some(left) = open.get_mut(&state.target) {
                         *left = left.saturating_sub(1);
@@ -354,13 +419,18 @@ impl Ledger {
         let open = self.open_reservations(&review_ids(store, self.session_id)?);
         let reserved: usize = open.values().sum();
         let kept = match &event {
-            ResponseEvent::Answer(_) | ResponseEvent::Amendment(_) => reserved + 2,
+            ResponseEvent::Answer(_)
+            | ResponseEvent::Amendment(_)
+            | ResponseEvent::Reopen(_)
+            | ResponseEvent::Tombstone(_) => reserved + 2,
             ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state)
                 if open.get(&state.target).copied().unwrap_or(0) > 0 =>
             {
                 0
             }
-            ResponseEvent::Delivered(_) | ResponseEvent::Acknowledged(_) => reserved,
+            ResponseEvent::Reply(_)
+            | ResponseEvent::Delivered(_)
+            | ResponseEvent::Acknowledged(_) => reserved,
         };
         let mut line = serde_json::to_vec(&event)?;
         if line.len() as u64 > limits::MAX_RESPONSE_RECORD_BYTES {
@@ -507,6 +577,7 @@ fn validate_ledger(path: &Path, events: &[ResponseEvent], session_id: Uuid) -> R
     if events.len() > max_events() {
         return corrupt(format!("more than {} lines", max_events()));
     }
+    let mut identities = HashSet::new();
     let mut answers = HashSet::new();
     let mut requests = HashSet::new();
     let mut delivered = HashSet::new();
@@ -517,6 +588,32 @@ fn validate_ledger(path: &Path, events: &[ResponseEvent], session_id: Uuid) -> R
             return corrupt(format!("line {line} has sequence {}", event.sequence()));
         }
         let record = match event {
+            ResponseEvent::Reply(_) | ResponseEvent::Reopen(_) | ResponseEvent::Tombstone(_) => {
+                let transition = event.transition().expect("thread transition");
+                if transition.revision == 0
+                    || !identities.insert(event.thread_id().expect("thread id"))
+                {
+                    return corrupt(format!("line {line} has an invalid transition"));
+                }
+                if let ResponseEvent::Reply(reply) = event {
+                    if reply.text.trim().is_empty()
+                        || reply.text.len() > crate::limits::MAX_REPLY_TEXT_BYTES
+                        || transition.actor != Actor::Agent
+                    {
+                        return corrupt(format!("line {line} has an invalid reply"));
+                    }
+                    // Replies are never delivered back to the agent.
+                    // Agent output has no delivery reservation.
+                } else {
+                    if transition.actor != Actor::Operator
+                        || matches!(event, ResponseEvent::Tombstone(_) if transition.note_id.is_none())
+                    {
+                        return corrupt(format!("line {line} has an invalid actor or note"));
+                    }
+                    answers.insert(event.thread_id().expect("thread id"));
+                }
+                continue;
+            }
             ResponseEvent::Answer(record) | ResponseEvent::Amendment(record) => record,
             ResponseEvent::Delivered(state) => {
                 if !answers.contains(&state.target) || !delivered.insert(state.target) {
@@ -540,7 +637,10 @@ fn validate_ledger(path: &Path, events: &[ResponseEvent], session_id: Uuid) -> R
         if record.session_id != session_id {
             return corrupt(format!("line {line} names another session"));
         }
-        if !answers.insert(record.answer_id) || !requests.insert(record.request_id) {
+        if !identities.insert(record.answer_id)
+            || !answers.insert(record.answer_id)
+            || !requests.insert(record.request_id)
+        {
             return corrupt(format!("line {line} reuses an answer or request id"));
         }
         let original_of_form = |amends: Uuid| {
@@ -647,7 +747,9 @@ impl SessionStore {
     pub fn responses(&self, session_id: Uuid) -> Result<Vec<ResponseEvent>> {
         let _lock = self.lock_session(session_id)?;
         self.load(session_id)?;
-        Ok(Ledger::open(self.responses_path(session_id)?, session_id)?.events)
+        Ok(crate::conversation::public_responses(
+            &Ledger::open(self.responses_path(session_id)?, session_id)?.events,
+        ))
     }
 
     pub(crate) fn responses_path(&self, session_id: Uuid) -> Result<PathBuf> {

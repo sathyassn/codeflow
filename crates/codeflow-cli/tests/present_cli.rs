@@ -2669,3 +2669,227 @@ fn a_pending_answer_survives_a_service_restart_and_is_delivered_once() {
     assert!(again.stdout.is_empty());
     close_and_clear(&fixture, &session_id);
 }
+
+#[test]
+fn tsk193_reply_and_thread_transitions_are_revision_bound() {
+    let fixture = setup_project();
+    let running = open_recover_and_bootstrap(&fixture);
+    verify_runtime_boundaries(&fixture, &running);
+    let event = "019f9b53-a341-7fa7-84c2-5f198ceea099";
+    let note = "019f9b53-a341-7fa7-84c2-5f198ceea100";
+    let reply = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "reply",
+            &running.session_id,
+            event,
+            "--note",
+            note,
+            "I changed this.",
+        ],
+    ));
+    assert!(reply.contains("reply"));
+    for route in ["threads/reopen", "notes/tombstone"] {
+        let body = serde_json::json!({"session_id": running.session_id, "target": event, "note_id": note, "revision":1}).to_string();
+        let response = http(running.port, &format!("POST /app/api/{route} HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.authority, running.cookie, body.len()));
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    let history = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", &running.session_id],
+    ));
+    assert!(!history.contains("Keep the quote"));
+    assert!(history.contains("tombstone"));
+    let history_json: serde_json::Value = serde_json::from_str(&history).unwrap();
+    assert_eq!(
+        schema_registry().errors(
+            "urn:codeflow:schema:present:session-history:2",
+            &history_json
+        ),
+        Vec::<String>::new()
+    );
+
+    let feedback = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "feedback", &running.session_id, "--format", "v2"],
+    ));
+    assert!(feedback.contains("reopen"));
+    assert!(feedback.contains("tombstone"));
+    assert!(!feedback.contains("I changed this."));
+    close_and_clear(&fixture, &running.session_id);
+}
+
+#[test]
+fn tsk193_diff_reports_edited_added_and_removed_blocks() {
+    let fixture = setup_project();
+    let first = fixture.project.join("first.json");
+    let doc = |blocks: serde_json::Value| {
+        serde_json::json!({"schema_version":2,"title":"Diff","summary":"One line for the list","blocks": blocks}).to_string()
+    };
+    fs::write(
+        &first,
+        doc(serde_json::json!([
+        {"type":"narrative","id":"edited","markdown":"before"},
+        {"type":"narrative","id":"removed","markdown":"gone"}])),
+    )
+    .unwrap();
+    fs::write(
+        &fixture.second,
+        doc(serde_json::json!([
+        {"type":"narrative","id":"edited","markdown":"after"},
+        {"type":"narrative","id":"added","markdown":"new"}])),
+    )
+    .unwrap();
+    let (id, _) = open_no_launch(&fixture, &first);
+    let listed = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    ));
+    assert!(listed.contains("One line for the list"));
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "update", &id, fixture.second.to_str().unwrap()],
+    ));
+    let diff = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "diff", &id, "--from", "1", "--to", "2"],
+    ));
+    let value: serde_json::Value = serde_json::from_str(&diff).unwrap();
+    let kinds: Vec<_> = value["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| (b["id"].as_str().unwrap(), b["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("edited", "changed"),
+            ("added", "added"),
+            ("removed", "removed")
+        ]
+    );
+    close_and_clear(&fixture, &id);
+}
+
+#[test]
+fn tsk193_check_names_faults_and_accepts_a_clean_session() {
+    let fixture = setup_project();
+    let (id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
+    let checked = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "check", &id],
+    ));
+    assert!(checked.contains("\"faults\":0"));
+    let bad = fixture.project.join("bad.json");
+    fs::write(&bad, r#"{"schema_version":2,"title":"Faulty","blocks":[{"type":"table","id":"bad-table","columns":["A"],"rows":[["B"]]},{"type":"narrative","id":"bad-anchor","markdown":"See [table:missing]"},{"type":"form","id":"bad-form","title":"Question","fields":[],"required":["missing"]}]}"#).unwrap();
+    let output = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "check", "--file", bad.to_str().unwrap()],
+    );
+    assert_eq!(output.status.code(), Some(9));
+    let faults = String::from_utf8(output.stdout).unwrap();
+    for id in ["bad-table", "bad-anchor", "bad-form"] {
+        assert!(faults.contains(id), "{faults}");
+    }
+    close_and_clear(&fixture, &id);
+}
+
+#[test]
+fn tsk193_revision_context_and_opt_in_export() {
+    let fixture = setup_project();
+    for args in [
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&fixture.project)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let running = open_recover_and_bootstrap(&fixture);
+    verify_runtime_boundaries(&fixture, &running);
+    let history: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", &running.session_id],
+    )))
+    .unwrap();
+    assert!(history["revisions"][0]["context"]["commit"]
+        .as_str()
+        .is_some());
+    assert_eq!(history["revisions"][0]["context"]["dirty"], false);
+    for with_notes in [false, true] {
+        let out = fixture.project.join(format!("notes-{with_notes}.html"));
+        let mut args = vec![
+            "present",
+            "export",
+            &running.session_id,
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        if with_notes {
+            args.push("--with-notes");
+        }
+        require_success(&codeflow(&fixture.project, &fixture.home, &args));
+        assert_eq!(
+            fs::read_to_string(out).unwrap().contains("Keep the quote"),
+            with_notes
+        );
+    }
+    close_and_clear(&fixture, &running.session_id);
+}
+
+#[test]
+fn tsk193_capture_io_failure_warns_but_open_and_update_succeed() {
+    let fixture = setup_project();
+    fs::write(fixture.project.join("blocked"), "not a directory").unwrap();
+    let input = fixture.project.join("optional-context.json");
+    fs::write(&input, r#"{"schema_version":2,"title":"Optional context","blocks":[{"type":"code","id":"code","language":"rust","code":"fn main() {}","source":{"path":"blocked/child.rs"}}]}"#).unwrap();
+    let opened = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "open", input.to_str().unwrap(), "--no-launch"],
+    );
+    let output = require_success(&opened);
+    let id = between(&output, "session ", " ready");
+    assert!(String::from_utf8_lossy(&opened.stderr).contains("warning: revision metadata omitted"));
+    let updated = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "update", id, input.to_str().unwrap()],
+    );
+    require_success(&updated);
+    assert!(String::from_utf8_lossy(&updated.stderr).contains("warning: revision metadata omitted"));
+    let history: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", id],
+    )))
+    .unwrap();
+    assert_eq!(history["revisions"].as_array().unwrap().len(), 2);
+    for revision in history["revisions"].as_array().unwrap() {
+        assert!(revision.get("context").is_none());
+        assert!(revision.get("snapshots").is_none());
+    }
+    close_and_clear(&fixture, id);
+}

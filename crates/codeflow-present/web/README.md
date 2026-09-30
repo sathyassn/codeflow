@@ -73,10 +73,23 @@ compares them byte-for-byte with the committed service/export tree.
 - `present.export` — the separate all-feature gzip renderer for standalone
   export.
 
-Service payloads are content-hashed and committed only as Brotli. Their public
-request path and private stored path are distinct manifest fields. The export
-renderer is one deterministic gzip payload; it is not a service fallback.
-Raising a build budget requires new measured ADR evidence.
+Service payloads are content-hashed and committed as Brotli and deterministic
+gzip variants. The service prefers an acceptable explicit `br` token, then
+`gzip`; q=0 excludes an encoding. Neither acceptable token yields 406; raw
+assets are never served. Safari on loopback HTTP uses gzip. Public request
+paths are shared, while stored paths, encoding and ETags belong to each variant.
+Both variants have integrity hashes and file components in
+`assets/service-sbom.cdx.json`; the unchanged dependency SBOM lives in
+`assets/supply-chain/npm-sbom.cdx.json`. Clean-build checks cover both variants,
+byte-equivalent decoded content, and gzip headers with no mtime and OS byte 255.
+The export renderer remains a separate deterministic gzip payload.
+Raising a build budget requires new measured ADR evidence. ADR-0049's
+2026-09-30 amendment records the gzip storage and request costs. Run
+`npm run check:browser` against the built CLI: after the three-engine browser
+suite it runs `check:transport` to enforce prose, code and figure request caps
+with native Chrome and WebKit requests. `check:transport` also runs on its own
+for diagnosis. The old spike targets were never enforced; the new caps have
+15.9%, 13.0% and 19.3% headroom above the measured gzip pages, respectively.
 
 The browser check covers prose-only lazy loading, code highlighting and figure
 drawing, zero CSP violations, zero non-loopback requests, Rust-document node

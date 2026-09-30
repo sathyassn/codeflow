@@ -1,3 +1,4 @@
+use axum::response::IntoResponse;
 use std::{
     collections::HashMap,
     fmt::Write as _,
@@ -304,6 +305,9 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         .route("/app/assets/{*path}", get(asset))
         .route("/app/api/reviews", post(submit_review))
         .route("/app/api/answers", post(submit_answer))
+        .route("/app/api/threads/list", post(list_threads))
+        .route("/app/api/threads/reopen", post(reopen_thread))
+        .route("/app/api/notes/tombstone", post(tombstone_note))
         .route("/app/api/events/poll", post(poll_events))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(limits::MAX_FEEDBACK_BYTES))
@@ -597,28 +601,22 @@ async fn asset(
     if let Err(response) = require_application_request(&state, &headers, false) {
         return response;
     }
-    if !accepts_brotli(&headers) {
+    let Some(encoding) = service_encoding(&headers) else {
         return plain(
             StatusCode::NOT_ACCEPTABLE,
-            "This browser route is not qualified because it does not advertise Brotli. Close it and run `codeflow present show <session-id> --no-launch` with a qualified browser.",
+            "This browser route is not qualified because it does not advertise Brotli or gzip. Close it and run `codeflow present show <session-id> --no-launch` with a qualified browser.",
         );
-    }
+    };
     let request_path = format!("/app/assets/{path}");
     let Some(asset) = state
         .assets
         .service
         .assets
         .iter()
-        .find(|asset| asset.request_path == request_path)
+        .find(|asset| asset.request_path == request_path && asset.content_encoding == encoding)
     else {
         return plain(StatusCode::NOT_FOUND, "asset not found");
     };
-    if asset.content_encoding != "br" {
-        return plain(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "asset manifest encoding is invalid",
-        );
-    }
     let Some(bytes) = EmbeddedAssets::get(&asset.stored_path) else {
         return plain(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -636,7 +634,7 @@ async fn asset(
         Body::from(bytes.data.into_owned()),
         &[
             (header::CONTENT_TYPE, &asset.media_type),
-            (header::CONTENT_ENCODING, "br"),
+            (header::CONTENT_ENCODING, encoding),
             (header::VARY, "Accept-Encoding"),
             (header::CACHE_CONTROL, "public,max-age=31536000,immutable"),
             (header::ETAG, &asset.etag),
@@ -973,6 +971,8 @@ fn session_event(
             "session_closed"
         } else if revised {
             "revision"
+        } else if answered && answers.thread_changed {
+            "thread"
         } else if answered {
             "answer_state"
         } else {
@@ -1086,18 +1086,47 @@ fn require_host(state: &AppState, headers: &HeaderMap) -> std::result::Result<()
     Ok(())
 }
 
-fn accepts_brotli(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT_ENCODING)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value.split(',').any(|encoding| {
-                encoding
-                    .split(';')
+// Both representations are equivalent. Prefer Brotli whenever explicitly
+// acceptable; q=0 and malformed quality values never opt into an encoding.
+fn service_encoding(headers: &HeaderMap) -> Option<&'static str> {
+    ["br", "gzip"].into_iter().find(|wanted| {
+        headers
+            .get_all(header::ACCEPT_ENCODING)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|item| {
+                let mut parts = item.split(';');
+                if !parts
                     .next()
-                    .is_some_and(|name| name.trim().eq_ignore_ascii_case("br"))
+                    .is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted))
+                {
+                    return false;
+                }
+                let Some(parameter) = parts.next() else {
+                    return true;
+                };
+                if parts.next().is_some() {
+                    return false;
+                }
+                let Some((name, value)) = parameter.trim().split_once('=') else {
+                    return false;
+                };
+                if !name.eq_ignore_ascii_case("q") {
+                    return false;
+                }
+                let value = value.trim();
+                let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+                if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return false;
+                }
+                match whole {
+                    "0" => fraction.bytes().any(|byte| byte != b'0'),
+                    "1" => fraction.bytes().all(|byte| byte == b'0'),
+                    _ => false,
+                }
             })
-        })
+    })
 }
 
 fn secure_html(status: StatusCode, body: String, csp: &str) -> Response<Body> {
@@ -1183,14 +1212,28 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
             "renderer prepaint source violates its CSP integrity contract".to_string(),
         ));
     }
-    let mut total = 0_u64;
+    let mut totals = HashMap::<&str, u64>::new();
+    let mut variants = std::collections::HashSet::new();
     for asset in &manifest.service.assets {
         if !asset.request_path.starts_with("/app/assets/")
             || asset.request_path.contains("..")
             || !asset.stored_path.starts_with("service/")
             || asset.stored_path.contains("..")
-            || asset.content_encoding != "br"
-            || asset.encoded_bytes > limits::MAX_BROTLI_CHUNK_BYTES
+            || !matches!(asset.content_encoding.as_str(), "br" | "gzip")
+            || !asset
+                .stored_path
+                .ends_with(if asset.content_encoding == "br" {
+                    ".br"
+                } else {
+                    ".gz"
+                })
+            || asset.encoded_bytes
+                > if asset.content_encoding == "br" {
+                    limits::MAX_BROTLI_CHUNK_BYTES
+                } else {
+                    limits::MAX_GZIP_CHUNK_BYTES
+                }
+            || !variants.insert((&asset.request_path, &asset.content_encoding))
             || asset.sha256.len() != 64
         {
             return Err(PresentError::CorruptState(format!(
@@ -1198,7 +1241,8 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
                 asset.request_path
             )));
         }
-        total = total.checked_add(asset.encoded_bytes).ok_or_else(|| {
+        let total = totals.entry(&asset.content_encoding).or_default();
+        *total = total.checked_add(asset.encoded_bytes).ok_or_else(|| {
             PresentError::CorruptState("renderer asset byte total overflow".to_string())
         })?;
         let bytes = EmbeddedAssets::get(&asset.stored_path).ok_or_else(|| {
@@ -1216,11 +1260,24 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
             )));
         }
     }
-    if total > limits::MAX_BROTLI_ASSET_BYTES {
-        return Err(PresentError::CorruptState(format!(
-            "renderer Brotli corpus exceeds {} bytes",
-            limits::MAX_BROTLI_ASSET_BYTES
-        )));
+    for (encoding, limit) in [
+        ("br", limits::MAX_BROTLI_ASSET_BYTES),
+        ("gzip", limits::MAX_GZIP_ASSET_BYTES),
+    ] {
+        if totals.get(encoding).copied().unwrap_or_default() > limit {
+            return Err(PresentError::CorruptState(format!(
+                "renderer {encoding} corpus exceeds {limit} bytes"
+            )));
+        }
+        if manifest.service.assets.iter().any(|asset| {
+            !manifest.service.assets.iter().any(|other| {
+                other.request_path == asset.request_path && other.content_encoding == encoding
+            })
+        }) {
+            return Err(PresentError::CorruptState(format!(
+                "renderer is missing a {encoding} variant"
+            )));
+        }
     }
     Ok(())
 }
@@ -1578,6 +1635,61 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+async fn list_threads(State(state): State<AppState>, headers: HeaderMap) -> Response<Body> {
+    if let Err(response) = require_application_request(&state, &headers, true) {
+        return response;
+    }
+    match state.store.conversation(state.session_id) {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(error) => plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
+}
+
+async fn reopen_thread(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<crate::conversation::ThreadRequest>,
+) -> Response<Body> {
+    change_thread(&state, &headers, &request, false)
+}
+
+async fn tombstone_note(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<crate::conversation::ThreadRequest>,
+) -> Response<Body> {
+    change_thread(&state, &headers, &request, true)
+}
+
+fn change_thread(
+    state: &AppState,
+    headers: &HeaderMap,
+    request: &crate::conversation::ThreadRequest,
+    tombstone: bool,
+) -> Response<Body> {
+    if let Err(response) = require_application_request(state, headers, true) {
+        return response;
+    }
+    match state
+        .store
+        .change_thread(state.session_id, request, tombstone)
+    {
+        Ok(event_id) => {
+            state.last_activity.store(now_unix(), Ordering::Release);
+            Json(serde_json::json!({"event_id":event_id})).into_response()
+        }
+        Err(PresentError::SessionClosed(_)) => plain(StatusCode::GONE, "session is closed"),
+        Err(PresentError::RevisionConflict { .. }) => plain(
+            StatusCode::CONFLICT,
+            "revision changed; reload before changing this thread",
+        ),
+        Err(PresentError::InvalidRequest(message)) => {
+            plain(StatusCode::UNPROCESSABLE_ENTITY, &message)
+        }
+        Err(error) => plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -2405,16 +2517,79 @@ mod tests {
         assert!(!constant_time_equal(b"same", b"diff"));
     }
 
+    #[tokio::test]
+    async fn service_encoding_negotiation_preserves_representation_headers() {
+        let (_temp, state) = app_state();
+        let path = state.assets.service.entrypoints["present.app"]
+            .trim_start_matches("/app/assets/")
+            .to_string();
+        let mut etags = std::collections::HashMap::new();
+        for (accept, expected) in [
+            ("br, gzip", Some("br")),
+            ("gzip", Some("gzip")),
+            ("gzip, br;q=0", Some("gzip")),
+            ("br;q=0.1, gzip;q=1", Some("br")),
+            ("BR; q=0.5", Some("br")),
+            ("br;q=0, gzip;q=0", None),
+            ("br;q=bogus, gzip", Some("gzip")),
+            ("br;q=2", None),
+            ("deflate", None),
+            ("", None),
+        ] {
+            let mut headers = application_headers(&state, false);
+            headers.insert(
+                header::ACCEPT_ENCODING,
+                HeaderValue::from_str(accept).unwrap(),
+            );
+            let response = asset(State(state.clone()), Path(path.clone()), headers).await;
+            let Some(encoding) = expected else {
+                assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE, "{accept}");
+                continue;
+            };
+            assert_eq!(response.status(), StatusCode::OK, "{accept}");
+            assert_eq!(response.headers()[header::CONTENT_ENCODING], encoding);
+            assert_eq!(response.headers()[header::VARY], "Accept-Encoding");
+            assert_eq!(
+                response.headers()[header::CONTENT_TYPE],
+                "text/javascript; charset=utf-8"
+            );
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "public,max-age=31536000,immutable"
+            );
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+            etags.insert(encoding, response.headers()[header::ETAG].clone());
+            let expected_asset = state
+                .assets
+                .service
+                .assets
+                .iter()
+                .find(|a| a.request_path.ends_with(&path) && a.content_encoding == encoding)
+                .unwrap();
+            let body = axum::body::to_bytes(response.into_body(), 1_000_000)
+                .await
+                .unwrap();
+            assert_eq!(
+                body.as_ref(),
+                EmbeddedAssets::get(&expected_asset.stored_path)
+                    .unwrap()
+                    .data
+                    .as_ref()
+            );
+        }
+        assert_ne!(etags["br"], etags["gzip"]);
+    }
+
     #[test]
-    fn accept_encoding_requires_brotli_token() {
+    fn accept_encoding_prefers_brotli_token() {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::ACCEPT_ENCODING,
             HeaderValue::from_static("gzip, br;q=1"),
         );
-        assert!(accepts_brotli(&headers));
+        assert_eq!(service_encoding(&headers), Some("br"));
         headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
-        assert!(!accepts_brotli(&headers));
+        assert_eq!(service_encoding(&headers), Some("gzip"));
     }
 
     #[test]

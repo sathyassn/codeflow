@@ -23,6 +23,8 @@ export const budgets = Object.freeze({
   largest_raw_chunk_bytes: 205_000, // measured 186,275 B
   brotli_corpus_bytes: 295_000, // measured 263,687 B
   largest_brotli_chunk_bytes: 145_000, // measured 131,206 B
+  gzip_corpus_bytes: 340_000, // measured 305,879 B; ADR-0049 amendment
+  largest_gzip_chunk_bytes: 150_000, // measured 132,502 B
   export_gzip_bytes: 295_000, // measured 265,653 B
 });
 
@@ -102,6 +104,8 @@ export async function buildAssets(assetsRoot = defaultAssetsRoot) {
     const serviceAssets = [];
     let rawCorpusBytes = 0;
     let brotliCorpusBytes = 0;
+    let gzipCorpusBytes = 0;
+    let largestGzipChunkBytes = 0;
     let largestRawChunkBytes = 0;
     let largestBrotliChunkBytes = 0;
     for (const rawPath of serviceFiles) {
@@ -119,15 +123,20 @@ export async function buildAssets(assetsRoot = defaultAssetsRoot) {
       brotliCorpusBytes += encoded.byteLength;
       largestRawChunkBytes = Math.max(largestRawChunkBytes, raw.byteLength);
       largestBrotliChunkBytes = Math.max(largestBrotliChunkBytes, encoded.byteLength);
-      serviceAssets.push({
+      const gzip = deterministicGzip(raw);
+      const gzipPath = `service/${name}.gz`;
+      await writeFile(join(staging, gzipPath), gzip);
+      gzipCorpusBytes += gzip.byteLength;
+      largestGzipChunkBytes = Math.max(largestGzipChunkBytes, gzip.byteLength);
+      for (const [encoding, path, bytes] of [["br", storedPath, encoded], ["gzip", gzipPath, gzip]]) serviceAssets.push({
         request_path: `/app/assets/${name}`,
-        stored_path: storedPath,
+        stored_path: path,
         media_type: mediaType(name),
-        content_encoding: "br",
+        content_encoding: encoding,
         raw_bytes: raw.byteLength,
-        encoded_bytes: encoded.byteLength,
-        sha256: sha256Hex(encoded),
-        etag: `"sha256-${sha256Base64(encoded)}"`,
+        encoded_bytes: bytes.byteLength,
+        sha256: sha256Hex(bytes),
+        etag: `"sha256-${sha256Base64(bytes)}"`,
         imports: (metadata[name]?.imports ?? []).map((item) => ({
           request_path: `/app/assets/${item.path}`,
           kind: item.kind,
@@ -137,9 +146,7 @@ export async function buildAssets(assetsRoot = defaultAssetsRoot) {
     serviceAssets.sort((left, right) => left.request_path.localeCompare(right.request_path));
 
     const exportRaw = await readFile(rawExport);
-    const exportEncoded = gzipSync(exportRaw, { level: 9, mtime: 0 });
-    // Node writes the host OS in this byte; normalize it for portable assets.
-    exportEncoded[9] = 255;
+    const exportEncoded = deterministicGzip(exportRaw);
     const exportHash = sha256Hex(exportEncoded);
     const exportStoredPath = `export/renderer-${exportHash.slice(0, 16)}.js.gz`;
     await writeFile(join(staging, exportStoredPath), exportEncoded);
@@ -152,6 +159,8 @@ export async function buildAssets(assetsRoot = defaultAssetsRoot) {
     enforceBudget("largest raw service chunk", largestRawChunkBytes, budgets.largest_raw_chunk_bytes);
     enforceBudget("Brotli service corpus", brotliCorpusBytes, budgets.brotli_corpus_bytes);
     enforceBudget("largest Brotli service chunk", largestBrotliChunkBytes, budgets.largest_brotli_chunk_bytes);
+    enforceBudget("gzip service corpus", gzipCorpusBytes, budgets.gzip_corpus_bytes);
+    enforceBudget("largest gzip service chunk", largestGzipChunkBytes, budgets.largest_gzip_chunk_bytes);
     enforceBudget("gzip export renderer", exportEncoded.byteLength, budgets.export_gzip_bytes);
 
     const manifest = {
@@ -178,9 +187,12 @@ export async function buildAssets(assetsRoot = defaultAssetsRoot) {
         },
         assets: serviceAssets,
         metrics: {
-          asset_count: serviceAssets.length,
+          asset_count: serviceFiles.length,
+          representation_count: serviceAssets.length,
           raw_corpus_bytes: rawCorpusBytes,
           brotli_corpus_bytes: brotliCorpusBytes,
+          gzip_corpus_bytes: gzipCorpusBytes,
+          largest_gzip_chunk_bytes: largestGzipChunkBytes,
           largest_raw_chunk_bytes: largestRawChunkBytes,
           largest_brotli_chunk_bytes: largestBrotliChunkBytes,
         },
@@ -200,6 +212,15 @@ export async function buildAssets(assetsRoot = defaultAssetsRoot) {
     };
     await writeFile(join(staging, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
+    // File-level SBOM complements the production dependency SBOM in supply-chain/.
+    const sbom = {
+      bomFormat: "CycloneDX", specVersion: "1.5", version: 1,
+      components: serviceAssets.map((asset) => ({
+        type: "file", "bom-ref": asset.stored_path, name: asset.stored_path,
+        hashes: [{ alg: "SHA-256", content: asset.sha256 }],
+      })),
+    };
+    await writeFile(join(staging, "service-sbom.cdx.json"), `${JSON.stringify(sbom, null, 2)}\n`);
     await installBuiltAssets(staging, assetsRoot);
     return manifest;
   } finally {
@@ -213,7 +234,7 @@ async function installBuiltAssets(staging, assetsRoot) {
   await cp(staging, localStaging, { recursive: true, force: true });
   await mkdir(assetsRoot, { recursive: true });
   try {
-    for (const name of ["service", "export", "manifest.json"]) {
+    for (const name of ["service", "export", "manifest.json", "service-sbom.cdx.json"]) {
       const destination = join(assetsRoot, name);
       await rm(destination, { recursive: true, force: true });
       await rename(join(localStaging, name), destination);
@@ -259,9 +280,15 @@ function enforceBudget(label, actual, limit) {
 }
 
 function corpusHash(assets, exportHash, prepaint) {
-  const lines = assets.map((asset) => `${asset.request_path}\0${asset.sha256}`).sort();
+  const lines = assets.map((asset) => `${asset.request_path}\0${asset.content_encoding}\0${asset.sha256}`).sort();
   lines.push(`present.export\0${exportHash}`, `present.prepaint\0${sha256Hex(prepaint)}`);
   return sha256Hex(lines.join("\n"));
+}
+
+function deterministicGzip(raw) {
+  const bytes = gzipSync(raw, { level: 9, mtime: 0 });
+  bytes[9] = 255;
+  return bytes;
 }
 
 function sha256Hex(value) {
@@ -293,6 +320,7 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
   process.stdout.write(
     `cf-present assets: ${manifest.service.metrics.asset_count} service files, ` +
       `${manifest.service.metrics.brotli_corpus_bytes} B Brotli, ` +
+      `${manifest.service.metrics.gzip_corpus_bytes} B service gzip, ` +
       `${manifest.export["present.export"].encoded_bytes} B export gzip\n`,
   );
 }
