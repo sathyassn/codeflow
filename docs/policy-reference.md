@@ -102,7 +102,7 @@ written here.
 
 | Stage | What it checks | Detail |
 |---|---|---|
-| `pre-commit` | A commit on a protected branch, staged secrets or `.env` files, and the read-only durable-work preflight when task tracking is active | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
+| `pre-commit` | A commit on a protected branch, or in the root checkout while it is off its root branch; staged secrets or `.env` files; staged conflict markers | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
 | `commit-msg` | Commit format, AI attribution and emoji in the message | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
 | `pre-merge-commit` | A merge commit onto a protected branch that is not a fast forward | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
 | `reference-transaction` | A fast-forward merge, hard reset or branch delete on a protected branch | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
