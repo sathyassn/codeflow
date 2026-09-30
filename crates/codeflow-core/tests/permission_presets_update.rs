@@ -730,12 +730,12 @@ fn update_brings_the_codex_profiles_and_keeps_the_adopters_keys() {
         builder["filesystem"][":workspace_roots"][".git"].as_str(),
         Some("write")
     );
-    assert_eq!(
-        merged["permissions"]["cf-guard"]["filesystem"][":workspace_roots"]
-            [".codeflow/policy.json"]
-            .as_str(),
-        Some("read")
-    );
+    let workspace = &merged["permissions"]["cf-guard"]["filesystem"][":workspace_roots"];
+    assert_eq!(workspace[".codeflow/policy.json"].as_str(), Some("read"));
+    // TSK-190: the root-level secret denies replace the `**/` globs, which
+    // blocked every directory delete.
+    assert_eq!(workspace[".env"].as_str(), Some("deny"));
+    assert!(workspace.get("**/.env").is_none(), "{workspace:?}");
 }
 
 /// AC-6: the Grok profile is installed when absent and never overwritten.

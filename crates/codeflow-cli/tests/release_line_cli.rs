@@ -1285,8 +1285,10 @@ fn pre_push_new_with(
 /// range starts at the newest line commit the destination holds, as its
 /// pull request does. The branch was published before the first merge, so
 /// the old head, the first merged line tip and the newest one all bound the
-/// push. A criteria edit made on the task branch itself is still refused.
-/// Both an update of the published branch and a first push are checked.
+/// push. Both an update of the published branch and a first push are
+/// checked. With no pull request body the branch is judged as its own task
+/// (TSK-196): its own criteria edit passes and prints its delta for the
+/// reviewer, while an edit to another task's frozen criteria is refused.
 #[test]
 fn a_task_branch_that_merges_its_line_is_judged_on_its_own_work() {
     let fx = Fx::new(false);
@@ -1324,11 +1326,24 @@ fn a_task_branch_that_merges_its_line_is_judged_on_its_own_work() {
 
     let current = std::fs::read_to_string(fx.root.join(path("TSK-001"))).unwrap();
     fx.write(&path("TSK-001"), &current.replace(CRITERIA, LOOSER));
-    let edited = fx.commit("docs(records): loosen the criterion");
+    let own = fx.commit("docs(records): loosen the criterion");
+    let result = fx.pre_push(branch, &own, &published);
+    passes(&result, "the task's own criteria edit");
+    assert!(
+        result.1.contains("TSK-001 criteria delta"),
+        "the own edit prints its delta:\n{}",
+        result.1
+    );
+
+    let other = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
+    let looser = other.replace(CRITERIA, LOOSER);
+    assert_ne!(looser, other, "TSK-003 holds its criteria:\n{other}");
+    fx.write(&path("TSK-003"), &looser);
+    let edited = fx.commit("docs(records): loosen another criterion");
     blocks(
         &fx.pre_push(branch, &edited, &published),
-        "a criteria edit on the task branch",
-        &["work.criteria_frozen", "TSK-001"],
+        "another task's criteria edit on the task branch",
+        &["work.criteria_frozen", "TSK-003"],
     );
 }
 

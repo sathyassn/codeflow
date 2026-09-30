@@ -17,7 +17,7 @@ use codeflow_core::workgraph::classify::is_planning_path;
 use codeflow_core::workgraph::release_line;
 use codeflow_core::workgraph::{check_epic_line, task_id_from_branch};
 
-use super::classification::{range_changes, Class, Range};
+use super::classification::{range_changes, root_branch_at, Class, Range};
 
 /// Run the checks when durable work tracking is on at the target or at the
 /// head, and a range resolves. `class` is the pull request's validated
@@ -127,7 +127,7 @@ fn judge(
 /// The destination and scope of a release range, asked once per run and
 /// shared by the records rule and the acceptance check; `None` for an
 /// ordinary range.
-fn release_scope<'n>(
+pub(super) fn release_scope<'n>(
     root: &Path,
     names: &'n super::Names<'_>,
 ) -> Result<Option<&'n (release_line::Destination, release_line::Scope)>, &'n str> {
@@ -181,10 +181,11 @@ fn unscoped(error: &str) -> String {
     format!("whether this is a release range cannot be decided, so nothing is judged under the ordinary rules instead (SPC-013 R-120): {error}")
 }
 
-/// Criteria may change only in a planning-only change or on a validated
-/// epic line (R-52), decided from the validated class, never from the
-/// branch prefix alone. Without a class (no pull request body), the range
-/// must itself be planning-only on a branch that carries no task, or a
+/// Criteria may change only in a planning-only change, on a validated epic
+/// line (R-52) or on the workspace root branch the target's policy names,
+/// decided from the validated class, never from the branch prefix alone.
+/// Without a class (no pull request body), the range must itself be
+/// planning-only on a branch that carries no task, the root branch, or a
 /// verified epic line.
 fn criteria(
     root: &Path,
@@ -195,8 +196,15 @@ fn criteria(
     if let Some(Class::Tracked { task_id, .. }) = class {
         return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, task_id);
     }
+    // Without a pull request body (a push), a task branch's only valid class
+    // is its own task, so it may change that task's criteria as its PR may.
+    if class.is_none() {
+        if let Some(task_id) = task_id_from_branch(root, branch) {
+            return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, &task_id);
+        }
+    }
     let amendable = match class {
-        Some(Class::PlanningOnly | Class::EpicLine(_)) => true,
+        Some(Class::PlanningOnly | Class::EpicLine(_) | Class::RootBranch(_)) => true,
         Some(_) => false,
         None => {
             let planning_only = task_id_from_branch(root, branch).is_none()
@@ -204,6 +212,7 @@ fn criteria(
                     .iter()
                     .all(|(_, path)| is_planning_path(path));
             planning_only
+                || root_branch_at(root, range.base).as_deref() == Some(branch)
                 || (branch.starts_with("integration/")
                     && check_epic_line(root, branch, range.target, range.base, range.head).is_ok())
         }

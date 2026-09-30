@@ -89,6 +89,11 @@ branch is judged, and `git.worktree_locations` lists where linked worktrees
 may live. An umbrella repository that holds several projects, each its own
 repository, uses workspace mode instead: see
 [workspace-mode.md](workspace-mode.md) and `codeflow init --workspace`.
+There `codeflow ci` accepts a range on the root branch the target's policy
+names, as it accepts a verified epic line. With durable tracking, it
+refuses a pull request from any other `integration/*` branch that is not a
+verified epic line or a release branch, whatever its `Task:` line and also
+when the host supplies no body.
 
 ## What each tier installs
 
@@ -620,15 +625,26 @@ shell access as credential-bearing and tighten that task's tool boundary.
   interactively with `--permission-mode auto` and CLI-scoped
   `autoMode.classifyAllShell`; `/cf-customize` can offer the equivalent user
   default but never writes it without approval.
-- Codex's `.codex/config.toml` selects the guarded workspace permission profile
-  without a legacy `sandbox_mode` override, enables live search, and sets
-  `approval_policy = "never"` (never request approval) with `model_reasoning_effort =
-  "medium"`. Production launch also passes `--sandbox danger-full-access` (full
-  access), so the OS sandbox is off for that process; git-guard, exec-guard,
-  git hooks, and CI remain the floor. Catastrophic work still stops for the
-  operator. `never` alone grants no access; operations outside the effective
-  sandbox fail instead of asking. Approval policy and sandbox authority are
-  separate controls ([Codex security](https://learn.chatgpt.com/docs/security)).
+- Codex's `.codex/config.toml` selects the guarded `cf-guard` permission
+  profile without a legacy `sandbox_mode` override, enables live search, and
+  sets `approval_policy = "never"` (never request approval) with
+  `model_reasoning_effort = "high"`. A reviewer or consult seat launches with
+  `--ask-for-approval never` and no `--sandbox` flag, so `cf-guard` applies:
+  workspace writes and deletes, the enforcement files read-only, no unix
+  sockets and no local binding. Its secret-file denies (`.env`, `.env.*`,
+  `*.pem`, `*.key`, `*.p12`, `*.pfx`, `.netrc`, `id_rsa*`, `id_ed25519*`)
+  cover the workspace root only, because the recursive `**/` forms made Codex
+  refuse every directory delete; a nested secret file, such as `sub/.env` or
+  a linked worktree's `.env`, can be read, changed and deleted by the seat. A
+  builder seat also passes `--sandbox danger-full-access` (full access), so
+  the OS sandbox is off for that process; git-guard, exec-guard, git hooks,
+  and CI remain the floor. The `cf-builder` profile is defined but not
+  selected: its spike ran fetch, worktree add, commit and builds unattended
+  but could not push to a remote outside the workspace root (ADR-0075 D1).
+  Catastrophic work still stops for the operator. `never` alone grants no
+  access; operations outside the effective sandbox fail instead of asking.
+  Approval policy and sandbox authority are separate controls
+  ([Codex security](https://learn.chatgpt.com/docs/security)).
 - A settings file cannot install or authenticate every task-specific tool.
   `/cf-customize` inventories and canaries authoritative-doc research, GitHub,
   the stack format/lint/test/coverage/security toolchain, browser/Playwright,

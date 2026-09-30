@@ -64,7 +64,7 @@ publication date._
   parse covered wrappers, leading flags and tag-push spellings, including
   `cargo +stable publish` and `git push origin v1.2.3`. Codex gets `.codex/rules/codeflow.rules`, and its `cf-guard`
   profile now runs the network proxy, with a `cf-builder` profile defined
-  beside it but not selected (tested on Codex 0.157.1; earlier versions
+  beside it but not selected (tested on Codex 0.159.1; earlier versions
   are unqualified). Grok gets `.grok/sandbox.toml`, written only when
   absent. The Claude presets' sandbox now withholds model, cloud and
   publishing credential variables and the common credential stores
@@ -236,7 +236,8 @@ publication date._
   the task's own range. `task status complete` also refuses uncommitted
   changes outside the record. A task's own pull request may change its
   criteria before its first completion, and `codeflow ci` prints the change
-  for the reviewer. A change to another task's criteria is refused unless the
+  for the reviewer; the pre-push check, which has no pull request body,
+  lets the task branch carry that change too. A change to another task's criteria is refused unless the
   pull request's validated class is planning-only or a checked epic line,
   whatever its branch prefix, and a reopened task keeps its criteria as its
   target has them. A range touching the adopter-facing path set needs a task
@@ -1242,6 +1243,40 @@ publication date._
     and the guards; delegated seats deny the retry natively. Herdr's
     named list remains workspace practice. Landed-policy authority and
     fail-closed hooks are separate TSK-189 work.
+
+<!-- codeflow:release-impact patch -->
+- **A Codex seat under `cf-guard` can delete files and build.** The
+  profile's secret-file denies (`.env`, `.env.*`, `*.pem`, `*.key`,
+  `*.p12`, `*.pfx`, `.netrc`, `id_rsa*`, `id_ed25519*`) now apply at the
+  workspace root only. The `**/` forms made Codex deny deleting and
+  renaming every directory, so `rmdir`, `cargo build` and `npm` builds
+  failed. Nested secret files, such as `sub/.env` or a linked worktree's
+  `.env` under `.worktrees/`, are no longer denied, so a seat can read,
+  change or delete them; the config comment records that gap. The network is unchanged: no unix sockets and no local
+  binding. Reviewer seats launch with `--ask-for-approval never` and no
+  `--sandbox` flag, which selects `cf-guard`; builder seats keep full
+  access, because the `cf-builder` spike did not pass (a push to a remote
+  outside the workspace root is denied). Tested on Codex 0.159.1. On macOS,
+  Playwright's Chromium did not start under the sandboxed profiles probed
+  (`cf-guard`, `cf-builder` and `:workspace`), since the sandbox denies its
+  Mach port rendezvous; it starts unsandboxed, so a full-access builder can
+  run browser tests (TSK-190).
+
+<!-- codeflow:release-impact patch -->
+- **`codeflow ci` accepts a workspace's root branch.** In workspace mode,
+  at every tier, a range on the branch `git.root_branch` names, such as
+  `integration/workspace`, is classified as the workspace root branch, the
+  way a verified epic line is: it needs no `Task:` line and may change task
+  criteria. Before, `ci` refused it as an unverified epic line and blocked
+  any criteria change on it. The branch is read from the policy on the
+  target. With durable tracking, a pull request from any other
+  `integration/*` branch that is neither a verified epic line nor a release
+  branch is refused whatever its `Task:` line, and also when the host
+  supplies no body (a Bitbucket description `ci` cannot read); before,
+  `Task: TSK-NNN` or a missing body let one through. A plain push with no
+  pull request context, the minimal tier, and a range into a release
+  branch, which the release checks judge, are not judged this way
+  (TSK-190).
 
 <!-- codeflow:release-impact patch -->
 - **An approved spec is amended until it ships, and frozen after.** The
