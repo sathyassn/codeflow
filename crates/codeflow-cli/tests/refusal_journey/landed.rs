@@ -154,7 +154,7 @@ fn ac1_namespace_bootstrap_and_ac2_missing_authority() {
     repo.git(&["commit", "-qm", "chore: policy"]);
     let out = repo.check("exec-guard", "claude -p hello", 2);
     assert!(String::from_utf8_lossy(&out.stderr).contains("before the first fetch of origin"));
-    repo.git(&["push", "-q", "origin", "HEAD:main"]);
+    repo.git(&["push", "-q", "origin", "HEAD:trunk"]);
     let out = repo.check("exec-guard", "echo ok", 2);
     assert!(String::from_utf8_lossy(&out.stderr).contains("git remote set-head origin --auto"));
     repo.check("git-guard", "git fetch origin", 0);
@@ -399,7 +399,7 @@ fn ac1_target_levels_and_retargeted_repository_use_landed_refs() {
     repo.check(
         "git-guard",
         &format!("git -C '{}' status", target.root().display()),
-        2,
+        0,
     );
 }
 
@@ -1076,4 +1076,186 @@ fn r3_f3_remote_update_checks_every_selected_remote() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn r4_init_and_push_without_remote_head_uses_landed_main() {
+    let repo = Repo::new();
+    repo.remote();
+    repo.policy("block");
+    repo.git(&["add", ".codeflow/policy.json"]);
+    repo.git(&["commit", "-qm", "chore: strict landed policy"]);
+    repo.git(&["push", "-qu", "origin", "HEAD:main"]);
+    assert!(!repo
+        .command("git")
+        .args(["rev-parse", "--verify", "refs/remotes/origin/HEAD"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    repo.check("git-guard", "git status", 0);
+    repo.policy("off");
+    let out = repo.check("exec-guard", "claude -p hello", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("refs/remotes/origin/main (remote HEAD not set)"),
+        "{text}"
+    );
+    repo.git(&["add", ".codeflow/policy.json"]);
+    repo.git(&["commit", "-qm", "chore: weaker local policy"]);
+    repo.check("exec-guard", "claude -p hello", 2);
+    let doctor = repo
+        .command(&binary())
+        .args(["doctor", "--check", "policy-source"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        text.contains("refs/remotes/origin/main (remote HEAD not set)")
+            && text.contains("git remote set-head origin --auto"),
+        "{text}"
+    );
+}
+
+#[test]
+fn r4_policy_remedy_clears_only_after_landing_and_fetch() {
+    let repo = Repo::new();
+    repo.landed();
+    let out = repo.check("git-guard", "git branch -D main", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("land")
+            && text.contains("fetch")
+            && text.contains("refs/remotes/origin/main"),
+        "{text}"
+    );
+    std::fs::write(
+        repo.root().join(".codeflow/policy.json"),
+        r#"{"git":{"protected_branches":["master"]}}"#,
+    )
+    .unwrap();
+    repo.check("git-guard", "git branch -D main", 2);
+    repo.git(&["add", ".codeflow/policy.json"]);
+    repo.git(&["commit", "-qm", "chore: operator changes protection"]);
+    repo.check("git-guard", "git branch -D main", 2);
+    repo.git(&["push", "-q", "origin", "HEAD:main"]);
+    repo.git(&["fetch", "-q", "origin"]);
+    repo.check("git-guard", "git branch -D main", 0);
+}
+
+#[test]
+fn r4_custom_default_without_remote_head_names_tried_refs_and_recovery() {
+    let repo = Repo::new();
+    repo.remote();
+    repo.git(&["push", "-qu", "origin", "HEAD:trunk"]);
+    repo.git(&[
+        "--git-dir",
+        "remote.git",
+        "symbolic-ref",
+        "HEAD",
+        "refs/heads/trunk",
+    ]);
+    let out = repo.check("git-guard", "git status", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    for part in [
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/master",
+        "git fetch origin",
+        "git remote set-head origin --auto",
+    ] {
+        assert!(text.contains(part), "missing {part}: {text}");
+    }
+    let doctor = repo
+        .command(&binary())
+        .args(["doctor", "--check", "policy-source"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        text.contains("refs/remotes/origin/main")
+            && text.contains("refs/remotes/origin/master")
+            && text.contains("git remote set-head origin --auto"),
+        "{text}"
+    );
+    // The named operator recovery works on the fixture's advertised default.
+    repo.git(&["remote", "set-head", "origin", "--auto"]);
+    repo.check("git-guard", "git status", 0);
+}
+
+#[test]
+fn r4_remote_head_fallback_order_ignores_local_branch_selection() {
+    let repo = Repo::new();
+    repo.remote();
+    repo.git(&["push", "-q", "origin", "HEAD:master"]);
+    repo.policy("block");
+    repo.git(&["add", ".codeflow/policy.json"]);
+    repo.git(&["commit", "-qm", "chore: stricter main"]);
+    repo.git(&["push", "-q", "origin", "HEAD:main"]);
+    std::fs::write(
+        repo.root().join(".codeflow/policy.json"),
+        r#"{"git":{"protected_branches":["master"]},"security":{"headless_peer_runs":"off"}}"#,
+    )
+    .unwrap();
+    repo.git(&["add", ".codeflow/policy.json"]);
+    repo.git(&[
+        "commit",
+        "-qm",
+        "chore: local selection cannot choose master",
+    ]);
+    let out = repo.check("exec-guard", "claude -p hello", 2);
+    assert!(String::from_utf8_lossy(&out.stderr)
+        .contains("refs/remotes/origin/main (remote HEAD not set)"));
+    repo.git(&["update-ref", "-d", "refs/remotes/origin/main"]);
+    repo.check("exec-guard", "claude -p hello", 0);
+    let doctor = repo
+        .command(&binary())
+        .args(["doctor", "--check", "policy-source"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&doctor.stdout)
+        .contains("refs/remotes/origin/master (remote HEAD not set)"));
+}
+
+#[test]
+fn r4_an_existing_remote_head_with_a_missing_target_does_not_fall_back() {
+    let repo = Repo::new();
+    repo.remote();
+    repo.git(&["push", "-q", "origin", "HEAD:main"]);
+    repo.git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/trunk",
+    ]);
+    let out = repo.check("git-guard", "git status", 2);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git fetch origin"));
+}
+
+#[test]
+fn r4_fallback_default_record_still_requires_the_declared_target() {
+    let repo = Repo::new();
+    repo.remote();
+    std::fs::create_dir_all(repo.root().join("project-management/tasks")).unwrap();
+    std::fs::write(
+        repo.root().join("project-management/tasks/TSK-001.md"),
+        "---\nid: TSK-001\nintegration_target: integration/test\n---\n",
+    )
+    .unwrap();
+    repo.git(&["add", "project-management"]);
+    repo.git(&["commit", "-qm", "chore: declare policy target"]);
+    repo.git(&["push", "-q", "origin", "HEAD:main"]);
+    repo.git(&["switch", "-qc", "task/TSK-001-impl"]);
+    let out = repo.check("git-guard", "git status", 2);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("refs/remotes/origin/integration/test"));
+    repo.policy("block");
+    repo.git(&["add", ".codeflow/policy.json"]);
+    repo.git(&["commit", "-qm", "chore: stricter target policy"]);
+    repo.git(&["push", "-q", "origin", "HEAD:integration/test"]);
+    repo.policy("off");
+    let out = repo.check("exec-guard", "claude -p hello", 2);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        text.contains("refs/remotes/origin/main (remote HEAD not set)")
+            && text.contains("refs/remotes/origin/integration/test (stricter policy levels)"),
+        "{text}"
+    );
 }

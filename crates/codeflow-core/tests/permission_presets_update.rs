@@ -211,7 +211,18 @@ fn without_a_baseline_new_entries_are_added_and_nothing_is_removed() {
     for rule in strings(&json(&incoming)["permissions"]["deny"]) {
         assert!(deny.contains(&rule), "missing {rule}");
     }
-    assert!(!report.iter().any(|l| l.contains("removed")), "{report:?}");
+    // Recognized CodeFlow hook commands migrate to contract 3; adopter
+    // permissions still cannot be inferred away without a baseline.
+    assert!(
+        !report
+            .iter()
+            .any(|line| line.contains("removed")
+                && !line.starts_with("settings: removed stale hook ")),
+        "{report:?}"
+    );
+    for rule in strings(&prior["permissions"]["deny"]) {
+        assert!(deny.contains(&rule), "removed adopter deny: {rule}");
+    }
 }
 
 /// Gitignore-style path glob, as in the CLI preset tests: `**/` spans zero

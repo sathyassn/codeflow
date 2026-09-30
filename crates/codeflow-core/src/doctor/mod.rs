@@ -3386,12 +3386,12 @@ mod tests {
 
     #[test]
     fn the_shipped_codex_hooks_are_all_hashable() {
-        // The shipped file adds a matcherless UserPromptSubmit hook, which
-        // no Codex record here has trusted yet: it counts, untrusted.
+        // Contract 3 changes every command, including the fifth edit guard;
+        // none matches the three older approvals in this observed fixture.
         let (_dir, opts) = codex_project(SHIPPED_CODEX_HOOKS, &CODEX_TRUSTED);
         let r = check_codex(&opts);
         assert!(r.status.is_warn(), "{}", r.message);
-        assert!(r.message.contains("3 of 4"), "{}", r.message);
+        assert!(r.message.contains("0 of 5"), "{}", r.message);
     }
 
     #[test]

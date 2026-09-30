@@ -13,6 +13,7 @@ pub struct LandedPolicy {
     pub project: Option<toml::Value>,
     pub source: String,
     pub local_differs: bool,
+    remote_head_advice: Option<String>,
 }
 
 /// Read the authority without fetching or changing repository state.
@@ -68,14 +69,15 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
         return Ok(finish(root, policy, project, format!("HEAD ({reason})")));
     }
     let remote = remote.ok_or("populated tracking namespace has no configured remote")?;
-    let default_ref = format!("refs/remotes/{remote}/HEAD");
-    let default = repo.find_reference(&default_ref).and_then(|r| r.resolve())
-        .map_err(|_| format!("missing policy source {default_ref}; run git fetch {remote}; if HEAD is still missing, the operator runs git remote set-head {remote} --auto"))?;
-    let source = default.name().map_err(|e| e.to_string())?.to_owned();
+    let (source, fallback) = default_source(&repo, remote)?;
     let (mut policy, mut project) = at(&repo, &source)?;
     let branch = super::repo::current_branch(&repo);
-    let target = declared_target(&repo, remote, &branch, &policy)?;
-    let mut sources = source.clone();
+    let target = declared_target(&repo, remote, &branch, &policy, &source)?;
+    let mut sources = if fallback {
+        format!("{source} (remote HEAD not set)")
+    } else {
+        source.clone()
+    };
     if let Some(target) = target {
         let target_ref = format!("refs/remotes/{remote}/{target}");
         if target_ref != source {
@@ -86,7 +88,38 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
             let _ = write!(sources, " + {target_ref} (stricter policy levels)");
         }
     }
-    Ok(finish(root, policy, project, sources))
+    let mut authority = finish(root, policy, project, sources);
+    if fallback {
+        authority.remote_head_advice = Some(format!(
+            "operator advice: git remote set-head {remote} --auto"
+        ));
+    }
+    Ok(authority)
+}
+
+fn default_source(repo: &Repository, remote: &str) -> Result<(String, bool), String> {
+    let head = format!("refs/remotes/{remote}/HEAD");
+    let recovery = |error| {
+        format!("cannot read policy source {head}: {error}; run git fetch {remote}; the operator can repair the default with git remote set-head {remote} --auto")
+    };
+    match repo.find_reference(&head) {
+        Ok(reference) => {
+            // An existing HEAD names authority even if its target needs fetching.
+            let reference = reference.resolve().map_err(recovery)?;
+            Ok((reference.name().map_err(recovery)?.to_owned(), false))
+        }
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            // Never let a local policy choose which tracking branch is trusted.
+            let tried = [
+                format!("refs/remotes/{remote}/main"),
+                format!("refs/remotes/{remote}/master"),
+            ];
+            let source = tried.iter().find(|name| repo.find_reference(name).is_ok())
+                .ok_or_else(|| format!("missing policy source {head}; tried {} and {}; run git fetch {remote}; for another default branch the operator runs git remote set-head {remote} --auto", tried[0], tried[1]))?;
+            Ok((source.clone(), true))
+        }
+        Err(error) => Err(recovery(error)),
+    }
 }
 
 fn working(root: &Path, source: &str) -> LandedPolicy {
@@ -95,6 +128,7 @@ fn working(root: &Path, source: &str) -> LandedPolicy {
         project: super::policy::read_project_toml(root),
         source: source.into(),
         local_differs: false,
+        remote_head_advice: None,
     }
 }
 
@@ -112,6 +146,7 @@ fn finish(
         project,
         source,
         local_differs,
+        remote_head_advice: None,
     }
 }
 
@@ -147,6 +182,7 @@ fn declared_target(
     remote: &str,
     branch: &str,
     policy: &Policy,
+    default_source: &str,
 ) -> Result<Option<String>, String> {
     if !policy.git.root_branch.is_empty() {
         return Ok(Some(policy.git.root_branch.clone()));
@@ -200,12 +236,7 @@ fn declared_target(
         .map_err(|e| e.to_string())?;
         if let Some(target) = found {
             // A default-branch record can name a missing target, which must fail closed.
-            if name.ends_with(&format!("/{target}"))
-                || repo
-                    .find_reference(&format!("refs/remotes/{remote}/HEAD"))
-                    .and_then(|r| r.resolve())
-                    .is_ok_and(|r| r.name().ok() == Some(name))
-            {
+            if name.ends_with(&format!("/{target}")) || name == default_source {
                 targets.insert(target);
             }
         }
@@ -273,8 +304,11 @@ pub fn diagnostic(root: &Path) -> Result<String, String> {
     } else {
         ""
     };
+    let advice = authority
+        .remote_head_advice
+        .map_or_else(String::new, |advice| format!("; {advice}"));
     Ok(format!(
-        "policy source: {}{residual}{drift}; refresh with git fetch",
+        "policy source: {}{residual}{drift}; refresh with git fetch{advice}",
         authority.source
     ))
 }

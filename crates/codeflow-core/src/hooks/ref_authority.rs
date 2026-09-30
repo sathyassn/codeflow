@@ -1,6 +1,5 @@
 //! Ref plumbing and transport must not replace the landed policy authority.
 use std::path::Path;
-use std::process::Command;
 
 /// Keys whose writes could replace a configured remote or its transport.
 pub(super) fn protected_key(key: &str) -> bool {
@@ -135,7 +134,7 @@ fn remote_update(root: &Path, args: &[String]) -> Option<String> {
 
 fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
     // Read the same effective config as Git, including includes and global scope.
-    let config = Command::new("git")
+    let config = crate::git::command()
         .current_dir(root)
         .args(["config", "--null", "--list"])
         .output()
@@ -279,7 +278,7 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
         Err(error) => return Some(format!("cannot read raw remote.{name}.url: {error}; the operator inspects git config --show-origin --get remote.{name}.url")),
     };
     // Git applies includes and insteadOf at every scope; compare its resolved URL.
-    let effective = Command::new("git")
+    let effective = crate::git::command()
         .current_dir(root)
         .args(["remote", "get-url", name])
         .output()

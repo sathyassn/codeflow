@@ -165,6 +165,9 @@ git client plane carries five shims — `pre-commit`, `commit-msg`,
 judges Git policy and local-work discards using the target repository's state.
 Agent guards read committed policy and project settings from the configured
 remote's default branch and declared target, taking the stricter policy levels.
+Without remote HEAD, the fixed fallback is the remote's main, then master;
+local policy cannot choose another source. Custom default names require operator
+`git remote set-head <remote> --auto`, named with the tried refs in diagnostics.
 They use HEAD only with no remote or an empty tracking namespace, and the working
 copy only on unborn HEAD. Ref plumbing, transport configuration and Git metadata
 writes, including per-worktree config files, cannot replace the tracking
