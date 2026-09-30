@@ -677,11 +677,17 @@ mod tests {
         let mut line = input("Task: EPC-001", "integration/EPC-001-work", &code);
         line.epic_line = Some(Ok("EPC-001".into()));
         assert_eq!(classify(&line), Ok(Class::EpicLine("EPC-001".into())));
-        let mut root = input("", "integration/workspace", &code);
+        let mut root = input(
+            "",
+            codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH,
+            &code,
+        );
         root.root_branch = true;
         assert_eq!(
             classify(&root),
-            Ok(Class::RootBranch("integration/workspace".into()))
+            Ok(Class::RootBranch(
+                codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH.into()
+            ))
         );
     }
 
@@ -690,11 +696,19 @@ mod tests {
         let code = paths(&["src/lib.rs"]);
         // Another integration/ head, or the root's name when the target's
         // policy does not name it, still needs its unit.
-        assert!(classify(&input("", "integration/workspace", &code))
-            .unwrap_err()
-            .contains("no `Task:` line"));
+        assert!(classify(&input(
+            "",
+            codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH,
+            &code
+        ))
+        .unwrap_err()
+        .contains("no `Task:` line"));
         // The root branch is no epic line, so an epic name does not fit it.
-        let mut named = input("Task: EPC-001", "integration/workspace", &code);
+        let mut named = input(
+            "Task: EPC-001",
+            codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH,
+            &code,
+        );
         named.root_branch = true;
         assert!(classify(&named)
             .unwrap_err()

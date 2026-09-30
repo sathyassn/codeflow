@@ -855,19 +855,25 @@ fn recommend_defaults(
     notes
 }
 
-/// Delete each top-level [`DEPRECATED_KEYS`] entry the user file carries and
+/// Delete each dotted-path [`DEPRECATED_KEYS`] entry the user file carries and
 /// the new shipped default does not. Returns the removed keys.
 fn remove_deprecated_keys(
     user: &mut serde_json::Value,
     new_default: &serde_json::Value,
 ) -> Vec<String> {
-    let Some(obj) = user.as_object_mut() else {
-        return Vec::new();
-    };
     DEPRECATED_KEYS
         .iter()
         .map(|(key, _)| *key)
-        .filter(|key| new_default.get(key).is_none() && obj.remove(*key).is_some())
+        .filter(|key| {
+            let pointer = format!("/{}", key.replace('.', "/"));
+            if new_default.pointer(&pointer).is_some() {
+                return false;
+            }
+            let (parent, leaf) = pointer.rsplit_once('/').expect("pointer has a slash");
+            user.pointer_mut(parent)
+                .and_then(serde_json::Value::as_object_mut)
+                .is_some_and(|obj| obj.remove(leaf).is_some())
+        })
         .map(str::to_string)
         .collect()
 }

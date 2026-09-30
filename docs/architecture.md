@@ -48,7 +48,7 @@ caption: the cli calls core and present; the scaffold this repository ships is t
 .codeflow/policy.json | one source of truth @accent
 ->
 git client hooks | pre-commit · commit-msg · pre-merge-commit · reference-transaction · pre-push
-PreToolUse guards | git-guard · exec-guard, in-session
+PreToolUse guards | git-guard · exec-guard · edit-guard, in-session
 codeflow ci | the same git standards, server-side
 remote protection | where the host arms it
 ->
@@ -77,7 +77,7 @@ Core modules grouped by responsibility:
 - **Scaffold** (`scaffold/`): `init`, `update`, manifest, 3-way merge, and the
   ownership classes below; sourced from the rust-embed asset provider.
 - **Enforcement** (`hooks/`, `security/`, `git/`, `delegate.rs`,
-  `integrate.rs`, `remote.rs`, `root_checkout.rs`): the `git-guard` and `exec-guard` PreToolUse
+  `integrate.rs`, `remote.rs`, `root_checkout.rs`): the `git-guard`, `exec-guard` and `edit-guard` PreToolUse
   handlers and git-client hook stages, the dual-mode `delegate-turn` adapter
   (legacy `--result` record-and-signal plus the schema-v2 lifecycle backed by
   the transport-neutral `delegate.rs` state machine — ADR-0036), the secret
@@ -161,14 +161,18 @@ git client plane carries five shims — `pre-commit`, `commit-msg`,
 `pre-merge-commit` (non-fast-forward merge commits onto protected),
 `reference-transaction` (the harness-agnostic backstop: fast-forward merges,
 `reset --hard`, and `branch -D` on protected, git ≥ 2.28), and `pre-push`
-(ADR-0007). The in-session guard plane is two handlers — `git-guard` (git
-policy) and `exec-guard` (the `security` section: destructive commands block,
-privilege escalation warns) — wired for Claude in `.claude/settings.json` and,
-through a byte-compatible PreToolUse payload, for an interactive Codex session in
-`.codex/hooks.json` and for Grok Build in `.grok/hooks/codeflow.json` (ADR-0008
-analog; Grok project hooks need `/hooks-trust` or `--trust`. Headless
-`codex exec` / `grok -p` do not run project PreToolUse hooks, so those
-invocations are not work-session lanes and rely on the git-hook plane). Codex credential
+(ADR-0007). The in-session guard plane has three handlers. `git-guard`
+judges Git policy and local-work discards using the target repository's state.
+`exec-guard` judges catastrophic commands, privilege, outward action families,
+secret-store reads and interpreter literals at the underlying rule's level.
+`edit-guard` judges native file edits against the action table's enforcement
+paths, including patch move sources and destinations. Shell guards are wired
+for Claude in `.claude/settings.json`, Codex in `.codex/hooks.json`, and Grok
+in `.grok/hooks/codeflow.json`; the Codex and Grok files also wire edit-guard.
+Grok project hooks need `/hooks-trust` or `--trust`. Headless `codex exec` and
+`grok -p` do not run project PreToolUse hooks, so those invocations are not
+work-session lanes and rely on the git-hook plane. These parsers do not
+inspect arbitrary opaque child programs. Codex credential
 *reads* are guarded too — not only the Bash guards: a `cf-guard` permission profile
 in `.codex/config.toml` (selected via `default_permissions`, extending `:workspace`)
 denies the home-dir secret stores and high-confidence workspace key material

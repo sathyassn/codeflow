@@ -124,7 +124,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
@@ -137,7 +137,11 @@ format/attribution/emoji and the ADR-0067 em and en dash check,
 pre-merge-commit and reference-transaction protected-branch merge/ref rules,
 pre-push branch naming and protected-branch rules) and the Claude
 `git-guard` PreToolUse hook (in-session immediacy, plus
-the `gh pr merge` and PR-body checks no client hook can see). Two are the
+the `gh pr merge` and PR-body checks no client hook can see). The session
+checks also refuse parsed wrapped and interpreter action families, covered
+loss of local-only Git work, and enforcement-path edits through native Codex
+and Grok file tools. Commands that cannot be inspected inside opaque child
+programs remain outside this parsing guarantee. Two are the
 authoritative perimeter — CI, which re-runs the same checks through the
 `codeflow ci` binary (the same Rust functions the hooks call, so no inline
 drift, portable across CI hosts via thin GitHub/GitLab/Bitbucket/generic
