@@ -100,7 +100,8 @@ asks you to promote a decision to a named record.
 Send an agent reply with `codeflow present reply <session-id> <event-id>
 "text"`. For one note in a review, add `--note <note-id>`. Replies appear in
 that thread's rail entry and record the current revision. They are agent
-output, so the feedback stream never sends them back to the agent.
+output, so the feedback stream never sends them back to the agent. Reply
+text must be nonblank and at most 16,384 UTF-8 bytes (`MAX_REPLY_TEXT_BYTES`).
 
 The reviewer can use Reopen on an acknowledged or resolved thread, including
 an answer. The next v2 wait delivers a `reopen` with `target` and, for a note,
@@ -125,7 +126,9 @@ Each new revision records HEAD and a dirty flag when the repository has a
 commit. A code or diff block's `source.path` records its repository-relative
 path and that commit. Paths cannot escape or traverse symlinks. A path may
 name a deleted file; these fields do not certify that the snippet matches
-file bytes, and the service never serves repository files.
+file bytes, and the service never serves repository files. Git or filesystem
+errors during capture omit the optional context and snapshots with a warning;
+unsafe source paths are still refused.
 
 `codeflow present check <session-id> [--revision N]` validates framing,
 anchors and forms without a browser. `--file document.json` checks a document

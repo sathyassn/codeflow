@@ -28,37 +28,12 @@ pub(crate) fn capture(
     root: &Path,
     content: &RevisionContent,
 ) -> Result<(Option<RepositoryContext>, Vec<SourceSnapshot>)> {
-    let repository_state = match git2::Repository::open(root) {
-        Ok(repository) => match repository.head() {
-            Ok(head) => {
-                let commit = head
-                    .peel_to_commit()
-                    .map_err(|e| PresentError::InvalidRequest(e.to_string()))?
-                    .id()
-                    .to_string();
-                let mut options = git2::StatusOptions::new();
-                options
-                    .include_untracked(true)
-                    .recurse_untracked_dirs(false);
-                let dirty = !repository
-                    .statuses(Some(&mut options))
-                    .map_err(|e| PresentError::InvalidRequest(e.to_string()))?
-                    .is_empty();
-                Some(RepositoryContext { commit, dirty })
-            }
-            Err(e)
-                if matches!(
-                    e.code(),
-                    git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
-                ) =>
-            {
-                None
-            }
-            Err(e) => return Err(PresentError::InvalidRequest(e.to_string())),
-        },
-        Err(e) if e.code() == git2::ErrorCode::NotFound => None,
-        Err(e) => return Err(PresentError::InvalidRequest(e.to_string())),
-    };
+    let mut failed = false;
+    let repository_state = repository_context(root).unwrap_or_else(|error| {
+        warn_capture(error);
+        failed = true;
+        None
+    });
     let commit = repository_state.as_ref().map(|c| c.commit.clone());
     let mut snapshots = Vec::new();
     if let RevisionContent::Supported { document } = content {
@@ -67,34 +42,94 @@ pub(crate) fn capture(
                 continue;
             };
             let Some(source) = source else { continue };
-            let mut path = root.to_path_buf();
-            for component in Path::new(&source.path).components() {
-                let Component::Normal(part) = component else {
-                    return Err(PresentError::UnsafePath(path));
-                };
-                path.push(part);
-                match std::fs::symlink_metadata(&path) {
-                    Ok(meta) if crate::platform::is_link_like(&meta) => {
-                        return Err(PresentError::UnsafePath(path))
-                    }
-                    Ok(_) => {}
-                    // A diff may name a deleted file. Path and commit are provenance,
-                    // not a claim that the snippet matches a current file's bytes.
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(PresentError::io(&path, e)),
+            match check_source_path(root, &source.path) {
+                Ok(()) => snapshots.push(SourceSnapshot {
+                    block_id: block.id().into(),
+                    path: source.path.clone(),
+                    commit: commit.clone(),
+                }),
+                Err(error @ PresentError::Io { .. }) => {
+                    warn_capture(error);
+                    failed = true;
                 }
+                // A capture error does not excuse an unsafe path in another block.
+                Err(error) => return Err(error),
             }
-            if path.is_dir() {
-                return Err(PresentError::UnsafePath(path));
-            }
-            snapshots.push(SourceSnapshot {
-                block_id: block.id().into(),
-                path: source.path.clone(),
-                commit: commit.clone(),
-            });
         }
     }
-    Ok((repository_state, snapshots))
+    if failed {
+        Ok((None, Vec::new()))
+    } else {
+        Ok((repository_state, snapshots))
+    }
+}
+
+fn warn_capture(error: impl std::fmt::Display) {
+    eprintln!("present: warning: revision metadata omitted: {error}");
+}
+
+fn repository_context(root: &Path) -> std::result::Result<Option<RepositoryContext>, git2::Error> {
+    let repository = match git2::Repository::open(root) {
+        Ok(repository) => repository,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let head = match repository.head() {
+        Ok(head) => head,
+        Err(error)
+            if matches!(
+                error.code(),
+                git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
+            ) =>
+        {
+            return Ok(None)
+        }
+        Err(error) => return Err(error),
+    };
+    let commit = head.peel_to_commit()?;
+    // Staged changes already prove dirty without touching the working tree.
+    let staged = repository.diff_tree_to_index(Some(&commit.tree()?), None, None)?;
+    let dirty = if staged.deltas().len() > 0 {
+        true
+    } else {
+        // A clean index still needs a workdir scan to detect tracked and
+        // untracked changes. Do not repeat the HEAD/index comparison or
+        // enumerate the contents of untracked directories.
+        let mut options = git2::StatusOptions::new();
+        options
+            .show(git2::StatusShow::Workdir)
+            .include_untracked(true)
+            .recurse_untracked_dirs(false);
+        !repository.statuses(Some(&mut options))?.is_empty()
+    };
+    Ok(Some(RepositoryContext {
+        commit: commit.id().to_string(),
+        dirty,
+    }))
+}
+
+fn check_source_path(root: &Path, source: &str) -> Result<()> {
+    let mut path = root.to_path_buf();
+    let mut directory = false;
+    for component in Path::new(source).components() {
+        let Component::Normal(part) = component else {
+            return Err(PresentError::UnsafePath(path));
+        };
+        path.push(part);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if crate::platform::is_link_like(&meta) => {
+                return Err(PresentError::UnsafePath(path))
+            }
+            Ok(meta) => directory = meta.is_dir(),
+            // Diffs may name deleted files. Provenance does not certify bytes.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => directory = false,
+            Err(error) => return Err(PresentError::io(&path, error)),
+        }
+    }
+    if directory {
+        return Err(PresentError::UnsafePath(path));
+    }
+    Ok(())
 }
 
 impl SessionStore {
@@ -196,12 +231,51 @@ mod tests {
         assert_eq!(snapshots[0].commit, Some(head.to_string()));
         std::fs::write(root.join("sample.rs"), "changed").unwrap();
         assert!(capture(root, &content).unwrap().0.unwrap().dirty);
+        index.add_path(Path::new("sample.rs")).unwrap();
+        index.write().unwrap();
+        assert!(capture(root, &content).unwrap().0.unwrap().dirty);
+        std::fs::write(root.join("sample.rs"), "fn main() {}\n").unwrap();
+        index.add_path(Path::new("sample.rs")).unwrap();
+        index.write().unwrap();
+        assert!(!capture(root, &content).unwrap().0.unwrap().dirty);
+        std::fs::write(root.join("untracked.txt"), "untracked").unwrap();
+        assert!(capture(root, &content).unwrap().0.unwrap().dirty);
+        std::fs::remove_file(root.join("untracked.txt")).unwrap();
         #[cfg(unix)]
         {
             std::fs::remove_file(root.join("sample.rs")).unwrap();
             std::os::unix::fs::symlink("outside", root.join("sample.rs")).unwrap();
             assert!(matches!(
                 capture(root, &content),
+                Err(PresentError::UnsafePath(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn corrupt_git_metadata_is_optional() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repository = git2::Repository::init(tmp.path()).unwrap();
+        let tree_id = repository.index().unwrap().write_tree().unwrap();
+        let tree = repository.find_tree(tree_id).unwrap();
+        let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        repository
+            .commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])
+            .unwrap();
+        std::fs::write(repository.path().join("index"), "broken index").unwrap();
+        let content = RevisionContent::Unsupported {
+            schema_version: 99,
+            raw: "{}".into(),
+        };
+        let (repository_state, snapshots) = capture(tmp.path(), &content).unwrap();
+        assert!(repository_state.is_none());
+        assert!(snapshots.is_empty());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("outside", tmp.path().join("unsafe.rs")).unwrap();
+            let crate::document::ParsedDocument::Supported(document) = parse_document(br#"{"schema_version":2,"title":"Source","blocks":[{"type":"code","id":"code","language":"rust","code":"fn main() {}","source":{"path":"unsafe.rs"}}]}"#).unwrap() else { panic!() };
+            assert!(matches!(
+                capture(tmp.path(), &RevisionContent::Supported { document }),
                 Err(PresentError::UnsafePath(_))
             ));
         }

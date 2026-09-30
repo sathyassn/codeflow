@@ -485,7 +485,7 @@
     ".agents/skills/cf-present/references/feedback-loop.md": {
       "src": "agents/skills/cf-present/references/feedback-loop.md",
       "ownership": "managed",
-      "sha256": "e8857d055bfced8f54994b9b2330903773af3c9d2f166344b2a48cc7d445c332",
+      "sha256": "3161eb58e81c49f3957c45a57bf33187cad10653a18ce0d9afac04baf531cc55",
       "exec": false
     },
     ".agents/skills/cf-present/references/visual-craft.md": {
@@ -1103,7 +1103,7 @@
     ".claude/skills/cf-present/references/feedback-loop.md": {
       "src": "agents/skills/cf-present/references/feedback-loop.md",
       "ownership": "managed",
-      "sha256": "e8857d055bfced8f54994b9b2330903773af3c9d2f166344b2a48cc7d445c332",
+      "sha256": "3161eb58e81c49f3957c45a57bf33187cad10653a18ce0d9afac04baf531cc55",
       "exec": false
     },
     ".claude/skills/cf-present/references/visual-craft.md": {
@@ -1277,7 +1277,7 @@
     ".codeflow/schemas/present/document-v2.schema.json": {
       "src": "present/schemas/document-v2.schema.json",
       "ownership": "managed",
-      "sha256": "aafe57c9d2da7844fb33f5083380fe730c812b18395d67da4308cfaba23f11e9",
+      "sha256": "e77f7bf7c59ada46ccb79cf0b8bb8b38191b214546e2e2322d13c0438edec551",
       "exec": false
     },
     ".codeflow/schemas/present/session-history-v1.schema.json": {

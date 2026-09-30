@@ -138,4 +138,3 @@ function anchorNotice(anchor: FeedbackAnchor) {
     default: return null;
   }
 }
-

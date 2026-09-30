@@ -71,10 +71,11 @@ pub(crate) fn public_responses(ledger: &[ResponseEvent]) -> Vec<ResponseEvent> {
 
 impl SessionStore {
     pub fn reply(&self, id: Uuid, target: Uuid, note_id: Option<Uuid>, text: &str) -> Result<Uuid> {
-        if text.trim().is_empty() || text.len() > 16 * 1024 {
-            return Err(PresentError::InvalidRequest(
-                "reply must be 1 to 16384 bytes".into(),
-            ));
+        if text.trim().is_empty() || text.len() > crate::limits::MAX_REPLY_TEXT_BYTES {
+            return Err(PresentError::InvalidRequest(format!(
+                "reply must be 1 to {} bytes",
+                crate::limits::MAX_REPLY_TEXT_BYTES
+            )));
         }
         let _lease = self.prepare_control_mutation()?;
         let _lock = self.lock_session(id)?;

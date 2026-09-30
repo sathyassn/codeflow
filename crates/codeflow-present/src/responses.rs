@@ -597,7 +597,7 @@ fn validate_ledger(path: &Path, events: &[ResponseEvent], session_id: Uuid) -> R
                 }
                 if let ResponseEvent::Reply(reply) = event {
                     if reply.text.trim().is_empty()
-                        || reply.text.len() > 16 * 1024
+                        || reply.text.len() > crate::limits::MAX_REPLY_TEXT_BYTES
                         || transition.actor != Actor::Agent
                     {
                         return corrupt(format!("line {line} has an invalid reply"));

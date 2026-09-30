@@ -2858,3 +2858,38 @@ fn tsk193_revision_context_and_opt_in_export() {
     }
     close_and_clear(&fixture, &running.session_id);
 }
+
+#[test]
+fn tsk193_capture_io_failure_warns_but_open_and_update_succeed() {
+    let fixture = setup_project();
+    fs::write(fixture.project.join("blocked"), "not a directory").unwrap();
+    let input = fixture.project.join("optional-context.json");
+    fs::write(&input, r#"{"schema_version":2,"title":"Optional context","blocks":[{"type":"code","id":"code","language":"rust","code":"fn main() {}","source":{"path":"blocked/child.rs"}}]}"#).unwrap();
+    let opened = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "open", input.to_str().unwrap(), "--no-launch"],
+    );
+    let output = require_success(&opened);
+    let id = between(&output, "session ", " ready");
+    assert!(String::from_utf8_lossy(&opened.stderr).contains("warning: revision metadata omitted"));
+    let updated = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "update", id, input.to_str().unwrap()],
+    );
+    require_success(&updated);
+    assert!(String::from_utf8_lossy(&updated.stderr).contains("warning: revision metadata omitted"));
+    let history: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", id],
+    )))
+    .unwrap();
+    assert_eq!(history["revisions"].as_array().unwrap().len(), 2);
+    for revision in history["revisions"].as_array().unwrap() {
+        assert!(revision.get("context").is_none());
+        assert!(revision.get("snapshots").is_none());
+    }
+    close_and_clear(&fixture, id);
+}

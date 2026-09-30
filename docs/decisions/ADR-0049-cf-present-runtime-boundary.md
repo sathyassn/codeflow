@@ -282,3 +282,16 @@ with bounded headroom. The figure cap does not rise. `npm run check:transport`
 enforces all three caps on both native clients through the production service.
 The full conversation journey passes in Chrome, Firefox and WebKit at 1280
 and 375 px; the earlier native WebKit 406 is the fail-before evidence.
+
+### Clarification 2026-09-30: request-cap enforcement (TSK-193 fix round 2)
+
+The spike's 7,500 / 75,000 / 250,000 B page figures were documented targets
+only, never enforced by a check. The table above compares those targets with
+new measured caps; it does not describe a passing gate being loosened.
+The new prose cap has 15.9% headroom above the measured gzip page, the code
+cap has 13.0%, and the retained figure cap has 19.3%.
+
+`npm run check:browser` now runs the existing three-engine browser suite and
+then `check:transport`, so the measured page caps are part of that browser
+gate. The transport subcheck uses native Chrome Brotli and WebKit gzip on
+three cold pages each. It remains independently runnable for diagnosis.

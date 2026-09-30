@@ -1227,7 +1227,12 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
                 } else {
                     ".gz"
                 })
-            || asset.encoded_bytes > limits::MAX_BROTLI_CHUNK_BYTES
+            || asset.encoded_bytes
+                > if asset.content_encoding == "br" {
+                    limits::MAX_BROTLI_CHUNK_BYTES
+                } else {
+                    limits::MAX_GZIP_CHUNK_BYTES
+                }
             || !variants.insert((&asset.request_path, &asset.content_encoding))
             || asset.sha256.len() != 64
         {
