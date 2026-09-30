@@ -1,21 +1,30 @@
 #!/bin/sh
 # codeflow git-hook shim, managed by `codeflow update`.
-# All policy lives in .codeflow/policy.json and is evaluated by the binary,
-# never here.
-# A codeflow command that runs git names its own binary in
-# CODEFLOW_HOOK_BINARY, and the hook runs that binary; one that is missing or
-# not executable fails the hook (SPC-013 R-85). Git run outside codeflow uses
-# the codeflow on PATH, and no-ops gracefully when there is none.
+# Contract 3: a missing or older binary refuses the operation.
+repair() {
+  echo "codeflow: missing, older or failed hook binary; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update" >&2
+}
 if [ -n "${CODEFLOW_HOOK_BINARY+set}" ]; then
   codeflow_bin=$CODEFLOW_HOOK_BINARY
   if [ ! -f "$codeflow_bin" ] || [ ! -x "$codeflow_bin" ]; then
-    echo "codeflow: the codeflow binary that ran this git command ($codeflow_bin) is missing or not executable" >&2
+    repair
     exit 1
   fi
 else
-  command -v codeflow >/dev/null 2>&1 || exit 0
+  if ! command -v codeflow >/dev/null 2>&1; then
+    repair
+    exit 1
+  fi
   codeflow_bin=codeflow
 fi
-# This hook fires on every ref update, so it carries no capability probe: the
-# commit, merge and push shims warn when the binary is older (SPC-013 R-85).
-exec "$codeflow_bin" git-hook reference-transaction "$@"
+if ! "$codeflow_bin" git-hook capabilities </dev/null 2>/dev/null | grep -qx 'hooks 3'; then
+  repair
+  exit 1
+fi
+"$codeflow_bin" git-hook reference-transaction "$@"
+codeflow_status=$?
+if [ "$codeflow_status" -ne 0 ]; then
+  if [ "$codeflow_status" -ne 1 ]; then repair; fi
+  exit 1
+fi
+exit 0

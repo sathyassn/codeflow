@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::models::{EpicFilter, EpicStatus, TaskFilter, TaskStatus};
 use crate::workgraph::{MarkdownStore, RecordStore};
 
-use super::policy::{read_project_toml, Policy};
+use super::policy::Policy;
 use super::repo::RepoInfo;
 
 /// Hard cap from the charter (§3.4 / D21).
@@ -23,7 +23,8 @@ pub const MAX_LINES: usize = 30;
 /// Returns an empty string when orient is disabled in `project.toml`.
 #[must_use]
 pub fn generate(root: &Path) -> String {
-    let project_toml = read_project_toml(root);
+    let authority = super::landed_policy::load(root);
+    let project_toml = authority.as_ref().ok().and_then(|a| a.project.clone());
     if !enabled(project_toml.as_ref()) {
         return String::new();
     }
@@ -62,6 +63,23 @@ pub fn generate(root: &Path) -> String {
 
     let _ = writeln!(out, "{}", gates_line(root));
 
+    let _ = writeln!(
+        out,
+        "{}",
+        super::landed_policy::diagnostic(root).unwrap_or_else(|e| e)
+    );
+    let binary = std::process::Command::new("codeflow")
+        .args(["git-hook", "capabilities"])
+        .output();
+    if !binary
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "hooks 3")
+    {
+        let _ = writeln!(
+            out,
+            "hook binary missing or older; {}; then codeflow update",
+            super::landed_policy::INSTALL
+        );
+    }
     let pointers = pointer_paths(root);
     if !pointers.is_empty() {
         let _ = writeln!(out, "read: {}", pointers.join(" · "));

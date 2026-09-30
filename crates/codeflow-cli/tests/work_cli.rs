@@ -693,3 +693,71 @@ fn task_help_and_doctor_explain_standalone_and_retired_policy() {
         "{text}"
     );
 }
+
+#[test]
+fn tsk189_claim_reads_the_fetched_target_from_main() {
+    let dir = fixture();
+    let root = dir.path();
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(root, &["switch", "-qc", "integration/test-line"]);
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[]").replace(
+            "integration_target: main",
+            "integration_target: integration/test-line",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan line"]);
+    git(root, &["push", "-q", "origin", "integration/test-line"]);
+    git(root, &["switch", "-q", "main"]);
+    succeeds(&cli(root, &["work", "claim", "TSK-003"], None));
+    assert!(git(root, &["branch", "--list", "task/TSK-003-*"]).contains("TSK-003"));
+}
+
+#[test]
+fn tsk189_start_prefers_fetched_line_without_local_upstream() {
+    let dir = fixture();
+    let root = dir.path();
+    let base = git(root, &["rev-parse", "HEAD"]);
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(root, &["switch", "-qc", "integration/test-line"]);
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[]").replace(
+            "integration_target: main",
+            "integration_target: integration/test-line",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan line"]);
+    git(root, &["push", "-q", "origin", "integration/test-line"]);
+    git(root, &["switch", "-qc", "task/TSK-003-work"]);
+    git(
+        root,
+        &["update-ref", "refs/heads/integration/test-line", &base],
+    );
+    let out = cli(root, &["work", "start", "TSK-003"], None);
+    succeeds(&out);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("refs/remotes/origin/integration/test-line"),
+        "{text}"
+    );
+}

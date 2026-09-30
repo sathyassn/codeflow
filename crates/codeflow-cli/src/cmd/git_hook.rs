@@ -24,7 +24,7 @@ pub enum StageName {
 
 /// The capability the current hook shims need. A shim whose probe does not
 /// print exactly this line warns that the binary is older than the shims.
-pub const HOOK_CAPABILITY: &str = "hooks 2";
+pub const HOOK_CAPABILITY: &str = "hooks 3";
 
 #[derive(Debug, Args)]
 pub struct GitHookArgs {

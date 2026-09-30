@@ -91,8 +91,8 @@ Core modules grouped by responsibility:
   lint, including structural task dependency identity/reference/cycle checks),
   the capability registry parser, FTS5 recall, and the cross-repo registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`, `reading.rs`): the doctor check table (19 checks: hooks, claude, codex, grok, config,
-  permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity,
+  `error.rs`, `reading.rs`): the doctor check table (20 checks: hooks, claude, codex, grok, config,
+  permissions, policy-source, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity,
   ci-perimeter, managed-drift,
   customization, instructions, reading, test-config, id-registry, adopter-fit), with the progressive
   reading map (`reading.rs`: the per-task reading chain, the conditional reads and their triggers,
@@ -163,6 +163,27 @@ git client plane carries five shims — `pre-commit`, `commit-msg`,
 `reset --hard`, and `branch -D` on protected, git ≥ 2.28), and `pre-push`
 (ADR-0007). The in-session guard plane has three handlers. `git-guard`
 judges Git policy and local-work discards using the target repository's state.
+Agent guards read committed policy and project settings from the configured
+remote's default branch and declared target, taking the stricter policy levels.
+They use HEAD only with no remote or an empty tracking namespace, and the working
+copy only on unborn HEAD. Ref plumbing, transport configuration and Git metadata
+writes, including per-worktree config files, cannot replace the tracking
+authority, even when local-edit relief lowers hook integrity. Missing authority
+after a tracking ref exists refuses the call and names fetch or operator set-head
+recovery. Doctor and orient report the source, drift and the bootstrap residual.
+Fetch, pull and remote update compare the effective Git URL with the raw
+configured remote URL. Remote update checks every selected remote, including
+groups and the default selection. Transport overrides and remote-group
+configuration changes cannot redirect an inspected update.
+Direct shell and native writes to `~/.gitconfig`, the XDG Git config and the
+`GIT_CONFIG_GLOBAL` file are authority edits; shell config reads and
+`git config --global user.name` remain allowed. A global config set to
+`/dev/null` stays an ordinary output sink.
+Contract-3 git shims exit 1 and harness wrappers exit 2 when their binary is
+missing or older; they print the installer and `codeflow update`. The wrappers
+require a POSIX shell (macOS, Linux, WSL or Git Bash); native PowerShell as the
+hook runner is unsupported. A PowerShell tool payload remains inspectable when
+the harness runs its hooks through a supported shell.
 `exec-guard` judges catastrophic commands, privilege, outward action families,
 secret-store reads and interpreter literals at the underlying rule's level.
 `edit-guard` judges native file edits against the action table's enforcement
@@ -213,8 +234,8 @@ the same orientation digest Claude gets. The same command is the advisory
 entry for `UserPromptSubmit` too: it reads the payload's event and adds the
 kernel guidance block after a compaction, resume or fork, or one rule line
 to a prompt that asks for a duration, a status or a complex explanation
-(`hooks/guidance.rs`, TSK-128). One command for both events means an older
-binary still exits 0 on a prompt. The guards never pass through it. Grok
+(`hooks/guidance.rs`, TSK-128). Contract 3 now refuses an older binary
+on either event. The guards never pass through this advisory entry. Grok
 Build ignores these events' output, so it wires only the guards.
 PR-content checks (attribution/emoji,
 `gh pr merge` base) are git-guard/CI concerns by design — git hooks cannot see

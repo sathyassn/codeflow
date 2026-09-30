@@ -397,11 +397,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codeflow hook git-guard"
+            "command": "codeflow hook git-guard --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then echo \"codeflow: hook refused or binary missing/older; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; fi"
           },
           {
             "type": "command",
-            "command": "codeflow hook exec-guard"
+            "command": "codeflow hook exec-guard --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then echo \"codeflow: hook refused or binary missing/older; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; fi"
           }
         ]
       }
@@ -412,7 +412,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codeflow hook session-orient"
+            "command": "codeflow hook session-orient --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then echo \"codeflow: hook refused or binary missing/older; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; fi"
           }
         ]
       }
@@ -422,7 +422,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codeflow hook session-orient"
+            "command": "codeflow hook session-orient --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then echo \"codeflow: hook refused or binary missing/older; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; fi"
           }
         ]
       }
@@ -432,7 +432,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codeflow hook session-summary"
+            "command": "codeflow hook session-summary --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then echo \"codeflow: hook refused or binary missing/older; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; fi"
           }
         ]
       }
