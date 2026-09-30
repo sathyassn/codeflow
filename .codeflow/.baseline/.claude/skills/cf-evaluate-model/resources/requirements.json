@@ -2304,6 +2304,13 @@
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "a gate is the check, not the job name",
+            "For red or unfinished CI jobs, follow",
+            "references/pr-checks.md#redness-classes"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-checks.md",
+          "markers": [
             "an infra-killed job that only restacks already-green checks does not"
           ]
         }

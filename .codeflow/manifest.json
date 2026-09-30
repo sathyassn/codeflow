@@ -263,7 +263,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "6a97e1d816a950c66324a1df3dcc2977bee178888a7f902c576ab2d3a9c29e2c",
+      "sha256": "3ae31f1dec9b0a8b7bd5f4c1b2a1b70cf992cd4eeda883360d3067d88bbb326f",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -617,13 +617,13 @@
     ".agents/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "5c93af678888bc34611487f393ee51b3f4bea6babda84a5806afdd8976cca1ae",
+      "sha256": "32346e913b6841a0a8e0160abd1abb5442b8f6f84aa72646b4741190a0a48fa6",
       "exec": false
     },
     ".agents/skills/cf-ship/references/pr-checks.md": {
       "src": "agents/skills/cf-ship/references/pr-checks.md",
       "ownership": "managed",
-      "sha256": "b7983a8abc46ed360ad06cefe7f25ae1f3ecc264e66e449ff13f648ae6aab6ad",
+      "sha256": "abb2534e3d67ee1ffb19944f2da2804be9e17fbd3eaadd091ad5f5d3947fcc7c",
       "exec": false
     },
     ".agents/skills/cf-ship/references/pr-evidence.md": {
@@ -923,7 +923,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "6a97e1d816a950c66324a1df3dcc2977bee178888a7f902c576ab2d3a9c29e2c",
+      "sha256": "3ae31f1dec9b0a8b7bd5f4c1b2a1b70cf992cd4eeda883360d3067d88bbb326f",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1277,13 +1277,13 @@
     ".claude/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "5c93af678888bc34611487f393ee51b3f4bea6babda84a5806afdd8976cca1ae",
+      "sha256": "32346e913b6841a0a8e0160abd1abb5442b8f6f84aa72646b4741190a0a48fa6",
       "exec": false
     },
     ".claude/skills/cf-ship/references/pr-checks.md": {
       "src": "agents/skills/cf-ship/references/pr-checks.md",
       "ownership": "managed",
-      "sha256": "b7983a8abc46ed360ad06cefe7f25ae1f3ecc264e66e449ff13f648ae6aab6ad",
+      "sha256": "abb2534e3d67ee1ffb19944f2da2804be9e17fbd3eaadd091ad5f5d3947fcc7c",
       "exec": false
     },
     ".claude/skills/cf-ship/references/pr-evidence.md": {

@@ -37,3 +37,8 @@ Classify each red or stuck check with the quality contract's redness classes:
   evidence with the reason the tool gave, not as a product defect. A
   completed green run of the same check still counts, as the quality contract
   says. Do not rerun the same job without a new reason.
+
+Classify CI redness with the quality contract: assertion-red blocks;
+an infra-killed job that only restacks already-green checks does not. If
+the host merge UI still requires that unfinished job by name, the human
+waits, reruns, or overrides. That is merge authorization, not a failed test.
