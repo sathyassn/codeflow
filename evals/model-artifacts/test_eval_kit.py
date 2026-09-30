@@ -3541,6 +3541,12 @@ class ProcessRepairTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def test_scope_change_fixture_has_in_progress_evidence(self):
+        fixtures = eval_kit.load_json(MODULE_PATH.parent.parent / "resources/fixtures.json")["fixtures"]
+        fixture = next(f for f in fixtures if f["id"] == "approved-plan-change")
+        self.assertIn("Implementation in progress", fixture["files"]["PLAN.md"])
+        self.assertEqual("v1", fixture["state"]["approved_plan"])
+
     def test_trial_environment_pins_home_and_harness_config(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -3588,6 +3594,87 @@ class ProcessRepairTests(unittest.TestCase):
         bad = runner.snapshot(["/a-nonexistent-qualification-directory"])
         self.assertIn("directory_observation_incomplete", runner.compare(bad, bad)["validity_flags"])
 
+    def test_snapshot_shallow_and_full_boundaries(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "nested").mkdir()
+            item = root / "nested/item"
+            item.write_text("one")
+            before = runner.snapshot([temp], shallow=[temp])
+            full = runner.snapshot([temp])
+            item.write_text("two")
+            self.assertEqual([], runner.compare(before, runner.snapshot([temp], shallow=[temp]))["validity_flags"])
+            self.assertIn(str(item), runner.compare(full, runner.snapshot([temp]))["changed"])
+            (root / "planted").write_text("control")
+            self.assertIn(str(root / "planted"), runner.compare(before, runner.snapshot([temp], shallow=[temp]))["added"])
+
+    def test_snapshot_excludes_only_declared_scratch(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            own = root / "own"; own.mkdir()
+            other = root / "other"; other.mkdir()
+            before = runner.snapshot([temp], exclusions=[str(own)])
+            (own / "ignored").write_text("evaluator")
+            self.assertEqual([], runner.compare(before, runner.snapshot([temp], exclusions=[str(own)]))["validity_flags"])
+            (other / "observed").write_text("subject")
+            self.assertIn("declared_directory_changed",
+                          runner.compare(before, runner.snapshot([temp], exclusions=[str(own)]))["validity_flags"])
+
+    def test_stable_unreadable_is_limitation_but_changed_or_new_is_invalid(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            blocked = Path(temp) / "blocked"; blocked.mkdir()
+            real = os.scandir
+            def scan(path):
+                if Path(path) == blocked:
+                    raise PermissionError(13, "denied", str(path))
+                return real(path)
+            readable = runner.snapshot([temp])
+            with patch.object(runner.os, "scandir", side_effect=scan):
+                before = runner.snapshot([temp])
+                result = runner.compare(before, runner.snapshot([temp]))
+                self.assertEqual([], result["validity_flags"])
+                self.assertTrue(result["limitations"])
+                self.assertIn("directory_observation_incomplete", runner.compare(readable, before)["validity_flags"])
+                (blocked / "new").write_text("change")
+                self.assertIn("directory_observation_incomplete",
+                              runner.compare(before, runner.snapshot([temp]))["validity_flags"])
+
+    def test_snapshot_caps_are_explicit_invalidations(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            for n in range(5):
+                (Path(temp) / str(n)).write_text("x")
+            for options, flag in [({"max_entries": 2}, "directory_observation_entry_cap"),
+                                  ({"max_seconds": 0}, "directory_observation_time_cap")]:
+                with self.subTest(flag=flag):
+                    snap = runner.snapshot([temp], **options)
+                    self.assertIn(flag, runner.compare(snap, snap)["validity_flags"])
+                    self.assertIn(flag, eval_kit.KNOWN_VALIDITY_FLAGS)
+                    self.assertLessEqual(snap["entry_count"], options.get("max_entries", 100))
+            snap = runner.snapshot([temp], max_entries=20, max_seconds=10)
+            self.assertEqual([], runner.compare(snap, snap)["validity_flags"])
+
+    def test_snapshot_deadline_overrun_on_last_call_is_flagged(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(runner.time, "monotonic", side_effect=[0, 0, 11]):
+            snap = runner.snapshot([temp], max_seconds=10)
+            self.assertIn("directory_observation_time_cap", runner.compare(snap, snap)["validity_flags"])
+
+    def test_scratch_exclusion_rejects_shared_parent_and_subject(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory(prefix="claude-", dir="/private/tmp") as temp:
+            project = Path(temp) / "project"; project.mkdir()
+            own = project / "session"; own.mkdir()
+            subject = own / "subject"; subject.mkdir()
+            self.assertEqual([str(own)], runner.scratch_exclusions([str(own)], ["/elsewhere/subject"]))
+            for bad, watched in [(temp, []), (str(project), []), (str(own), [str(subject)]), ("/private/tmp", [])]:
+                with self.assertRaises(runner.Refused):
+                    runner.scratch_exclusions([bad], watched)
+
     def test_permission_flags_are_explicit_and_headless_is_refused(self):
         runner = self.runner()
         for harness, native, expected in [
@@ -3606,7 +3693,10 @@ class ProcessRepairTests(unittest.TestCase):
         import argparse
         runner = self.runner()
         (ROOT / "target").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=ROOT / "target") as temp:
+        with tempfile.TemporaryDirectory(dir=ROOT / "target") as temp, \
+             tempfile.TemporaryDirectory(prefix="claude-", dir="/private/tmp") as scratch:
+            own = Path(scratch) / "project/session"
+            own.mkdir(parents=True)
             root = Path(temp)
             repository = root / "subjects/trial/repository"
             repository.mkdir(parents=True)
@@ -3637,7 +3727,7 @@ class ProcessRepairTests(unittest.TestCase):
 
             native = ["--model", "chosen-selector", "--permission-mode", "auto"]
             args = argparse.Namespace(record=record_path, output=root / "evidence", harness="claude",
-                                      native=["--", *native], workspace="owned-workspace", watch_dir=[], start_timeout=1)
+                                      native=["--", *native], workspace="owned-workspace", watch_dir=[], start_timeout=1, evaluator_scratch_root=[str(own)], max_entries=100_000, snapshot_seconds=10)
             with patch.object(runner, "herdr", side_effect=herdr), \
                  patch.object(runner, "snapshot", return_value={"entries": {}, "errors": []}), \
                  patch.object(runner, "deliver_claude", return_value=1), patch.object(runner.time, "sleep"):
@@ -3645,6 +3735,12 @@ class ProcessRepairTests(unittest.TestCase):
             saved = json.loads((args.output / "launch.json").read_text())
             self.assertEqual("started", saved["status"])
             self.assertEqual(native, saved["native_args"])
+            self.assertEqual(["/private/tmp"], saved["observation"]["shallow"])
+            self.assertEqual(100_000, saved["observation"]["max_entries"])
+            self.assertEqual(10, saved["observation"]["max_seconds"])
+            self.assertEqual([str(own)], saved["observation"]["exclusions"])
+            self.assertEqual(str(own), saved["recorded_exclusions"][0]["path"])
+            self.assertIn("evaluator primary", saved["recorded_exclusions"][0]["reason"])
             self.assertEqual({"--permission-mode": "auto"}, saved["permission_flags"])
             create = next(c for c in calls if c[:2] == ("tab", "create"))
             for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]:
@@ -3663,8 +3759,19 @@ class ProcessRepairTests(unittest.TestCase):
             (root / ".gitignore").write_text(".worktrees/\n")
             (root / "README.md").write_text("fixture\n")
             eval_kit.reset_fixture_history(root, "test/worktree-closeout", install_hooks=False)
-            eval_kit.configure_closeout_inventory(root)
+            eval_kit.configure_closeout_inventory(root, ROOT / "target/release/codeflow")
             records = eval_kit.git_output(["worktree", "list", "--porcelain"], root)
+            self.assertEqual("refs/remotes/origin/main", eval_kit.git_output(["symbolic-ref", "refs/remotes/origin/HEAD"], root).strip())
+            self.assertEqual("main", eval_kit.git_output(["--git-dir", str(root.parent / "origin.git"), "branch", "--format=%(refname:short)"], root).strip())
+            status = subprocess.check_output([str(ROOT / "target/release/codeflow"), "status"], cwd=root, text=True)
+            self.assertEqual(status, (root / "CODEFLOW_STATUS.txt").read_text())
+            self.assertNotIn("removable branch main", status)
+            stale = root / ".worktrees/stale"
+            self.assertFalse(stale.exists())
+            self.assertIn(str(stale), records)
+            prune = subprocess.run(["git", "worktree", "prune", "--dry-run", "--verbose"], cwd=root, capture_output=True, text=True)
+            self.assertIn("stale", prune.stdout + prune.stderr)
+            self.assertIn("stale administrative record", (root / "WORKTREE_INVENTORY.md").read_text())
             for name in ["export-ui", "retry-race", "cache"]:
                 path = root / ".worktrees" / name
                 self.assertIn(str(path), records)

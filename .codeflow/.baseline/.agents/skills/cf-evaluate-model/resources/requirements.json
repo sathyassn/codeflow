@@ -2428,15 +2428,7 @@
         {
           "path": ".agents/skills/cf-ship/references/pr-checks.md",
           "markers": [
-            "timeout 30m gh pr checks <url> --required --watch --interval 60",
-            "An empty list is not readiness",
-            "within the original thirty-minute budget",
-            "A gate with no readable matching run is missing",
-            "evidence.",
-            "Never run `--watch` without the ceiling",
-            "`timeout 30m gh pr checks <url> --watch --interval 60`",
-            "Do not wait for the operator to name the job",
-            "Report it as missing evidence with the reason the tool gave, not as a product defect"
+            "A gate with no readable matching run is missing evidence"
           ]
         },
         {

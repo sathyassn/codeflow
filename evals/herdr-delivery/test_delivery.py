@@ -506,6 +506,22 @@ class QualificationDeliveryTests(unittest.TestCase):
                     self.screen(" "), self.screen("pending\n❯ second prompt")]:
             self.assertIsNone(editor(bad), bad)
 
+    def test_live_idle_placeholders_allow_first_delivery(self):
+        from unittest.mock import patch
+        runner = self.runner
+        for placeholder, footer in [
+            ('Try "fix lint errors"', '  ⏸ manual mode on'),
+            ('Try "create a util logging.py that..."', '  ⏵⏵ bypass permissions on (shift+tab to cycle)'),
+            ('Try "refactor <filepath>"', '  codeflow-qualify\n  ⏸ manual mode on'),
+        ]:
+            initial = self.screen(placeholder).replace('  ⏸ manual mode on', footer)
+            with self.subTest(placeholder=placeholder), \
+                 patch.object(runner, "visible", side_effect=[runner.editor(initial), "prompt"]), \
+                 patch.object(runner, "started", return_value=True), \
+                 patch.object(runner, "herdr") as call, patch.object(runner.time, "sleep"):
+                self.assertEqual(1, runner.deliver_claude("own-pane", "prompt", {}, 1))
+                self.assertEqual(1, sum(c.args[:2] == ("pane", "send-text") for c in call.call_args_list))
+
     def test_second_enter_only_when_this_prompt_remains_in_verified_editor(self):
         from unittest.mock import patch
         runner = self.runner
@@ -525,7 +541,7 @@ class QualificationDeliveryTests(unittest.TestCase):
     def test_unreadable_or_nonempty_initial_editor_gets_no_text(self):
         from unittest.mock import patch
         runner = self.runner
-        for initial in [None, "previous input"]:
+        for initial in [None, "previous input", 'Try "hint" then act', 'Try "hint"\nmore']:
             with patch.object(runner, "visible", return_value=initial), patch.object(runner, "herdr") as call:
                 with self.assertRaises(runner.Refused):
                     runner.deliver_claude("own-pane", "prompt", {}, 1)

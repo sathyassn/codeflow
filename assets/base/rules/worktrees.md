@@ -70,8 +70,8 @@ This section is the one home of the cleanup rules; the skills point here.
 At orientation and after a landing, use `codeflow status` to inventory
 linked worktrees and unattached local branches. Before any removal, read
 `CODEFLOW_STATUS.txt` when supplied, then verify its paths and merge evidence
-against current Git state. A saved inventory may be stale. Treat its
-removable/dirty/unproven classification as local Git evidence, not ownership
+against current Git state. A saved inventory may be stale. Treat the
+removable/dirty/unproven classification from `codeflow status` as local Git evidence, not ownership
 authorization: confirm the owner is inactive before promptly closing a
 proven-landed resource. Retain active, dirty, and unproven work with an
 owner, reason, and recheck event; never use age, name resemblance, or

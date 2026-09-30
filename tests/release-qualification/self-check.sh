@@ -528,7 +528,7 @@ $RULE
 
 # run_deliver <accept-at> <pane text> [directive pane] [pane after Enter]
 run_deliver() {
-  stub_herdr "$(printf '%s\n❯ \n%s\n  ⏸ manual mode on\n' "$RULE" "$RULE")"
+  stub_herdr "${5:-$(printf '%s\n❯ \n%s\n  ⏸ manual mode on\n' "$RULE" "$RULE")}"
   printf '%s\n' "$2" >"$STUB_DIR/pane-text-paste"
   printf '%s' "$1" >"$STUB_DIR/accept-at"
   rm -f "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter"
@@ -729,6 +729,16 @@ ok deliver_turn.probe "probes acceptance of this turn for 5 s" \
 
 # shellcheck disable=SC2034 # read by deliver_turn in lib.sh
 DELIVER_SETTLE_SECONDS=0
+
+# Live placeholders must be accepted before the initial paste.
+for idle in "$IDLE_PANE" "$BYPASS_IDLE_PANE" "$STATUS_IDLE_PANE"; do
+  run_deliver 1 "$UNSENT_PANE" '' '' "$idle"
+  ok deliver_turn.idle_placeholder "live idle placeholder allows exactly one delivery" \
+    "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] && [ "$DELIVER_TEXTS" = 1 ] && echo 0 || echo 1)"
+done
+run_deliver 1 "$UNSENT_PANE" '' '' "$EXTRA_TEXT_PANE"
+ok deliver_turn.initial_text "existing input refuses the paste" \
+  "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_TEXTS" = 0 ] && echo 0 || echo 1)"
 
 # The prompt still in the editor after the first Enter: one re-Enter lands it.
 run_deliver 2 "$UNSENT_PANE"

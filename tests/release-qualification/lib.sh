@@ -560,6 +560,14 @@ log_refused_screen() {
   } >>"${TRANSCRIPT:-/dev/null}"
 }
 
+# Empty or exactly the live single-line placeholder, never arbitrary input.
+editor_idle() {
+  [ -z "$1" ] || printf '%s\n' "$1" | LC_ALL=C awk '
+    NR != 1 || $0 !~ /^Try "[^"]+"$/ { bad = 1 }
+    END { exit bad }
+  '
+}
+
 # editor_holds <editor text> <prompt-file> - classify what the editor holds:
 # `attachment` for exactly one folded-paste attachment, `directive` for that
 # attachment followed by exactly the directive, `prompt` when the editor's
@@ -570,7 +578,9 @@ editor_holds() {
   _eh_rest=$(printf '%s\n' "$1" |
     LC_ALL=C sed -E 's/^\[Pasted text #[0-9]+ \+[0-9]+ lines\]//')
   _eh_lines=$(printf '%s\n' "$1" | wc -l | tr -d ' ')
-  if [ "$_eh_lines" = 1 ] && [ "$_eh_rest" != "$1" ] && [ -z "$_eh_rest" ]; then
+  if editor_idle "$1"; then
+    echo other
+  elif [ "$_eh_lines" = 1 ] && [ "$_eh_rest" != "$1" ] && [ -z "$_eh_rest" ]; then
     echo attachment
   elif [ "$_eh_lines" = 1 ] && [ "$_eh_rest" != "$1" ] && [ "$_eh_rest" = "$PASTE_DIRECTIVE" ]; then
     echo directive
@@ -606,8 +616,8 @@ deliver_stop() {
 # once the turn is accepted, non-zero when it was not.
 deliver_turn() {
   _dt_ready=$(current_editor "$1" yes) && _dt_read=0 || _dt_read=$?
-  if [ "$_dt_read" != "$EDITOR_FOUND" ] || [ -n "$_dt_ready" ]; then
-    deliver_stop 'no verified empty current editor before the paste'
+  if [ "$_dt_read" != "$EDITOR_FOUND" ] || ! editor_idle "$_dt_ready"; then
+    deliver_stop 'no verified empty or placeholder current editor before the paste'
     return 1
   fi
   herdr pane send-text "$1" "$(cat "$2")" >>"$TRANSCRIPT" 2>&1 || true

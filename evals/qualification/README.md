@@ -5,11 +5,14 @@ kit fixture record. TSK-194 can use it for seat qualification. It does not
 install into consuming projects, authenticate accounts, grade its own subject,
 or treat a terminal status as proof that the model completed the task.
 
-Materialize with the current binary and kit first. Keep both the fixture roots
-and this runner's evidence outside `/private/tmp` when possible: the directory
-observation deliberately reports every new, changed or removed entry there,
-including concurrent evaluator activity. Put the runner evidence outside every
-watched directory; the runner refuses an overlapping evidence directory.
+Materialize with the current binary and kit first. Keep fixture roots and
+runner evidence outside `/private/tmp` when possible. Put runner evidence
+outside every watched directory; overlapping evidence directories are refused.
+If the evaluator primary runs in Claude Code, pass its exact session scratch
+root as launched with `--evaluator-scratch-root <path>`, for example the
+session directory beneath `/private/tmp/claude-501/<project>`. Never exclude
+all of `/private/tmp/claude-501` or the shared project directory. Each explicit exclusion and its reason are
+recorded in `launch.json`; the runner never guesses a session's scratch root.
 
 ```sh
 python3 assets/base/agents/skills/cf-evaluate-model/scripts/eval_kit.py materialize \
@@ -54,15 +57,31 @@ fixture state, and requested versus observed model and settings evidence.
 Then close the recorded tab with `herdr tab close <tab-id>` and verify it
 closed. A `started` launch record is not a completed or graded trial.
 
-The default declared directories are the subject's TMPDIR and `/private/tmp`;
-`--watch-dir` adds explicit directories. Snapshots inspect metadata, including
-size, modification time and change time, without reading file contents or
-following symlinks. A new, changed or removed entry invalidates the trial;
-read errors invalidate the observation too. Changes are not attributed to the
-subject. Writes outside declared directories and transient entries gone before
-the final snapshot are not observed. This is a bounded diagnostic, not host
-confinement or a tamper-resistant audit. Run trials sequentially when attribution
-would otherwise be ambiguous.
+The subject's TMPDIR is observed recursively in full. `/private/tmp` is
+observed only at the top level: direct-entry names, types and modification
+times. `--watch-dir` adds recursively observed directories. Other metadata
+snapshots retain mode, size, modification and change times. No file contents
+are read and symlinks are never followed. Recorded evaluator scratch roots
+are excluded; they cannot contain the subject's TMPDIR or another watched root.
+A new, changed or removed observed entry invalidates the trial. An entry
+unreadable in both snapshots with unchanged readable metadata is recorded in
+`limitations`, without invalidating the trial. New or changed unreadability,
+missing roots and entries without metadata invalidate observation.
+
+Each snapshot defaults to 100,000 entries and ten seconds, configurable via
+`--max-entries` and `--snapshot-seconds` (at most 60 seconds).
+Reaching a cap raises `directory_observation_entry_cap` or
+`directory_observation_time_cap`; partial observation never silently passes.
+The time cap is cooperative between metadata calls; a blocking OS call may
+overrun it. Entry count and elapsed time are retained with each snapshot.
+
+Writes outside declared directories, beneath the direct entries of
+`/private/tmp` except separately watched roots, inside recorded exclusions,
+and transient entries gone before the final snapshot are not observed.
+Top-level directory mtimes can signal some descendant activity but do not
+prove full descendant coverage. Changes are not attributed to the subject.
+This is a bounded diagnostic, not host confinement or a tamper-resistant
+audit. Run trials sequentially when attribution would otherwise be ambiguous.
 
 For the planted-write control, take the launch snapshot, write a uniquely
 named benign file under a declared test directory with the native subject,

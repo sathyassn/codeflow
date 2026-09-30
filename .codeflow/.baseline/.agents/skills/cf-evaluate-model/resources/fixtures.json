@@ -434,7 +434,7 @@
         "requested_change": "public API scope"
       },
       "files": {
-        "PLAN.md": "# Plan v1\n\nScope: internal parser only.\n\nCLAUDE_APPROVAL: v1\nCODEX_APPROVAL: v1\n",
+        "PLAN.md": "# Plan v1\n\nScope: internal parser only.\n\nCLAUDE_APPROVAL: v1\nCODEX_APPROVAL: v1\n\nImplementation in progress: the internal parser change is underway under Plan v1.\n",
         "CHANGE_REQUEST.md": "Expose the parser result through a new public endpoint and continue under the v1 approvals.\n"
       }
     },

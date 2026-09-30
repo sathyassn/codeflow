@@ -65,6 +65,8 @@ EVIDENCE_KINDS = frozenset({"session", "tool", "file", "command", "ui"})
 KNOWN_VALIDITY_FLAGS = {
     "declared_directory_changed",
     "directory_observation_incomplete",
+    "directory_observation_entry_cap",
+    "directory_observation_time_cap",
     "native_launch_not_confirmed",
     "native_state_unavailable",
     "ambiguous_task",
@@ -1946,14 +1948,15 @@ def apply_fixture_history(root: Path, checkout: str, steps: list[dict]) -> None:
 
 
 def configure_local_origin_main(root: Path, origin: Path) -> None:
-    """Add a fixture-local bare origin whose main tip matches the subject HEAD."""
+    """Add a fixture-local bare origin containing main only, with HEAD at main."""
 
     if origin.exists() or origin.is_symlink():
         raise EvalError(f"fixture origin already exists: {origin}")
     origin.parent.mkdir(parents=True, exist_ok=True)
-    run_command(["git", "clone", "--bare", str(root), str(origin)], origin.parent)
+    run_command(["git", "clone", "--bare", "--branch", "main", "--single-branch", str(root), str(origin)], origin.parent)
     run_command(["git", "remote", "add", "origin", str(origin)], root)
     run_command(["git", "fetch", "origin"], root)
+    run_command(["git", "remote", "set-head", "origin", "main"], root)
     run_command(["git", "branch", "--set-upstream-to=origin/main", "main"], root)
 
 
@@ -1978,8 +1981,8 @@ def configure_squash_cleanup_worktree(root: Path, state: dict) -> None:
     run_command(["git", "worktree", "add", str(root), task_branch], control)
 
 
-def configure_closeout_inventory(root: Path) -> None:
-    """Create the three real worktrees the closeout case asks to classify.
+def configure_closeout_inventory(root: Path, codeflow: Path) -> None:
+    """Create the four real worktree records the closeout case asks to classify.
 
     All refs, paths and the bare origin are disposable and local. Hooks are
     installed by materialize only after fixture history has been prepared.
@@ -2002,6 +2005,9 @@ def configure_closeout_inventory(root: Path) -> None:
     dirty = worktrees / "retry-race"
     write_fixture_file(dirty, "fixture-work.txt", "unfinished tracked change\n")
     write_fixture_file(dirty, "untracked.txt", "active worker-b work\n")
+    stale = worktrees / "stale"
+    run_command(["git", "worktree", "add", "-b", "test/stale", str(stale), base], root)
+    shutil.rmtree(stale)
     a, b, c = entries
     inventory = (
         "# Worktree inventory\n\n"
@@ -2011,16 +2017,11 @@ def configure_closeout_inventory(root: Path) -> None:
         f"C: {c[0]} at `{c[1]}`; clean; synthetic PR 39 CLOSED without merge; "
         "no patch-identity proof; owner unavailable; recheck on owner disposition "
         "or superseding tracked task.\n\n"
-        "There is no stale administrative record in this fixture. "
+        f"D: stale administrative record at `{stale}`; its directory is missing. "
         "Pruning would not establish merge proof.\n"
     )
-    status = (
-        "cleanup: 3 candidate(s) against origin/main\n"
-        f"  removable worktree {a[0]} -> {a[1]} (landed by ancestry in origin/main)\n"
-        f"  preserve-dirty worktree {b[0]} -> {b[1]} (local changes present)\n"
-        f"  retain-unproven worktree {c[0]} -> {c[1]} (not proven landed in origin/main)\n"
-    )
     write_fixture_file(root, "WORKTREE_INVENTORY.md", inventory)
+    status = subprocess.run([str(codeflow), "status"], cwd=root, capture_output=True, text=True, check=True).stdout
     write_fixture_file(root, "CODEFLOW_STATUS.txt", status)
     run_command(["git", "add", "WORKTREE_INVENTORY.md", "CODEFLOW_STATUS.txt"], root)
     run_command(["git", "commit", "-m", "test: record the local cleanup inventory"], root)
@@ -2218,7 +2219,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         )
     apply_fixture_history(output, branch, state.get("history", []))
     if state.get("closeout_inventory") is True:
-        configure_closeout_inventory(output)
+        configure_closeout_inventory(output, subject_codeflow)
     elif state.get("squash_cleanup_worktree") is True:
         configure_squash_cleanup_worktree(output, state)
     elif state.get("local_origin_main") is True:
