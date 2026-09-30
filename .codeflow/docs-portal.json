@@ -282,11 +282,11 @@
     },
     "tests/fixtures/figures/08-derivation.json": {
       "ownership": "managed",
-      "pristine_sha256": "ac72e525759e22b4ca25c7f4017f06ced5e3d6a6a999b074b008b39b4e9604c3"
+      "pristine_sha256": "7ee6c24358f9f3a2e9cef604127c4687a3b8f38fbf754aa586334cc40f5a4c47"
     },
     "tests/fixtures/figures/09-graph.json": {
       "ownership": "managed",
-      "pristine_sha256": "7cb9043d73e2985b2a8826b4f25f18c772fbbd98d1d2a5d8258acf28470c2c8b"
+      "pristine_sha256": "25e1b31aae46964b4f75b7112e4700b45eda1b6b129195b4d030e977393e752e"
     },
     "tests/fixtures/figures/10-extent-derived.json": {
       "ownership": "managed",
@@ -342,11 +342,11 @@
     },
     "tests/fixtures/figures/rendered/08-derivation.html": {
       "ownership": "managed",
-      "pristine_sha256": "2889fbe2250dca96dc6b50f7358f861dcf8e879bc8441bcd745b736da3809d67"
+      "pristine_sha256": "05b254af7a22a0f37f960bf999fada464e8be02ed83acc7dff0005c77aa080a2"
     },
     "tests/fixtures/figures/rendered/09-graph.html": {
       "ownership": "managed",
-      "pristine_sha256": "0142594f11b1f2860bfc3570dfe913bf049a03700becc1da0bdb337df6146ac8"
+      "pristine_sha256": "38f317dae3b5e120463ebd90c04fcaca3c3790c95d69435773e7e3f739a291f0"
     },
     "tests/fixtures/figures/rendered/10-extent-derived.html": {
       "ownership": "managed",

@@ -99,7 +99,7 @@
         {
           "state": "compares",
           "shape": "path",
-          "d": "M664 154V206H100V112",
+          "d": "M664 154V206H85V112",
           "square": "end",
           "id": "m5"
         },
@@ -113,9 +113,9 @@
         {
           "state": "source",
           "shape": "rect",
-          "x": 20,
+          "x": 8,
           "y": 56,
-          "w": 156,
+          "w": 168,
           "h": 48,
           "rx": 4,
           "cap": "end",
@@ -123,7 +123,7 @@
         },
         {
           "text": "repository sources",
-          "x": 98,
+          "x": 85,
           "y": 85,
           "anchor": "middle",
           "for": [

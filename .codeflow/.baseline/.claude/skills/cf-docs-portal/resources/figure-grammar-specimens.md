@@ -521,9 +521,9 @@ figure:
 <defs><marker id="fg-der-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10Z" fill="var(--cf-fig-line)"/></marker><marker id="fg-der-o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1L9 5L1 9Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line-mid)" stroke-width="1.5"/></marker><marker id="fg-der-s" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><rect x="1" y="1" width="8" height="8" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line-mid)" stroke-width="1.5"/></marker></defs>
 <g data-state="derives" fill="none" stroke="var(--cf-fig-line)" stroke-width="2" marker-end="url(#fg-der-a)"><path d="M176 80H262"/><path d="M338 80H424"/></g>
 <path data-state="declares" d="M300 108V150H424" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#fg-der-o)"/>
-<g data-state="compares" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="1.5" stroke-dasharray="2 4" marker-end="url(#fg-der-s)"><path d="M652 150H594"/><path d="M664 154V206H100V112"/><path d="M664 130V80H594"/></g>
-<rect data-state="source" x="20" y="56" width="156" height="48" rx="4" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line)" stroke-width="2"/>
-<text x="98" y="85" text-anchor="middle">repository sources</text>
+<g data-state="compares" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="1.5" stroke-dasharray="2 4" marker-end="url(#fg-der-s)"><path d="M652 150H594"/><path d="M664 154V206H85V112"/><path d="M664 130V80H594"/></g>
+<rect data-state="source" x="8" y="56" width="168" height="48" rx="4" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line)" stroke-width="2"/>
+<text x="85" y="85" text-anchor="middle">repository sources</text>
 <path data-state="transform" d="M300 52L338 80L300 108L262 80Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-accent)" stroke-width="3.5" stroke-linejoin="round"/>
 <text x="300" y="36" text-anchor="middle">adapter</text>
 <rect data-state="product" x="426" y="56" width="160" height="48" rx="4" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line)" stroke-width="1.5"/>
