@@ -1,11 +1,11 @@
 //! Ref plumbing and transport must not replace the landed policy authority.
 use std::path::Path;
-use std::process::Command;
 
 /// Keys whose writes could replace a configured remote or its transport.
 pub(super) fn protected_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
-    key.starts_with("remote.")
+    key == "fetch.followremotehead"
+        || key.starts_with("remote.")
         || key.starts_with("remotes.")
         || key.starts_with("include.")
         || key.starts_with("includeif.")
@@ -47,7 +47,7 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
             }) || rest.iter().filter(|a| !a.starts_with('-')).count() == 1);
         if !read {
             return Some(
-                "writing remote, remote-group, URL rewrite or include configuration can replace policy authority"
+                "writing remote, HEAD-follow, remote-group, URL rewrite or include configuration can replace policy authority"
                     .into(),
             );
         }
@@ -77,8 +77,8 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
         {
             Some("the operator manages remote identity and default-branch authority".into())
         }
-        "remote" if remote_update_args(sub, rest).is_some() => {
-            remote_update(root, remote_update_args(sub, rest).unwrap())
+        "remote" if remote_transport_args(sub, rest).is_some() => {
+            check_remote_transport(root, remote_transport_args(sub, rest).unwrap())
         }
         "fetch" | "pull" => fetch(root, rest, sub == "pull"),
         "push" => {
@@ -116,12 +116,26 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
 }
 
 /// Shared transport classification, including remote's leading verbose option.
-pub(super) fn remote_update_args<'a>(sub: &str, rest: &'a [String]) -> Option<&'a [String]> {
+pub(super) fn remote_transport_args<'a>(
+    sub: &str,
+    rest: &'a [String],
+) -> Option<(&'a str, &'a [String])> {
     if sub != "remote" {
         return None;
     }
     let index = rest.iter().position(|arg| !arg.starts_with('-'))?;
-    (rest[index] == "update").then(|| &rest[index + 1..])
+    matches!(rest[index].as_str(), "update" | "prune")
+        .then(|| (rest[index].as_str(), &rest[index + 1..]))
+}
+
+fn check_remote_transport(root: &Path, (operation, args): (&str, &[String])) -> Option<String> {
+    if operation == "prune" {
+        args.iter()
+            .filter(|arg| !arg.starts_with('-'))
+            .find_map(|remote| fetch(root, std::slice::from_ref(remote), false))
+    } else {
+        remote_update(root, args)
+    }
 }
 
 fn remote_update(root: &Path, args: &[String]) -> Option<String> {
@@ -135,7 +149,7 @@ fn remote_update(root: &Path, args: &[String]) -> Option<String> {
 
 fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
     // Read the same effective config as Git, including includes and global scope.
-    let config = Command::new("git")
+    let config = crate::git::command()
         .current_dir(root)
         .args(["config", "--null", "--list"])
         .output()
@@ -279,7 +293,7 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
         Err(error) => return Some(format!("cannot read raw remote.{name}.url: {error}; the operator inspects git config --show-origin --get remote.{name}.url")),
     };
     // Git applies includes and insteadOf at every scope; compare its resolved URL.
-    let effective = Command::new("git")
+    let effective = crate::git::command()
         .current_dir(root)
         .args(["remote", "get-url", name])
         .output()
