@@ -116,21 +116,76 @@ fn cf_guard_denies_pure_secret_stores_and_workspace_env_files() {
         .as_table()
         .expect("workspace-relative filesystem table exists");
     for key in [
-        "**/.env",
-        "**/.env.*",
-        "**/*.pem",
-        "**/*.key",
-        "**/*.p12",
-        "**/*.pfx",
-        "**/.netrc",
-        "**/id_rsa*",
-        "**/id_ed25519*",
+        ".env",
+        ".env.*",
+        "*.pem",
+        "*.key",
+        "*.p12",
+        "*.pfx",
+        ".netrc",
+        "id_rsa*",
+        "id_ed25519*",
     ] {
         assert_eq!(
             workspace[key].as_str(),
             Some("deny"),
             "missing workspace deny for {key}"
         );
+    }
+}
+
+/// TSK-190 AC-1: a wildcard in a directory component of a workspace deny
+/// (`**/.env`, `*/.env`) makes Codex 0.159.1 deny unlinking the directories
+/// it could match, so a seat cannot `rmdir`, rename or `cargo build`. The
+/// secret denies stay at the workspace root only.
+#[test]
+fn cf_guard_workspace_denies_keep_directory_deletes() {
+    let cfg = shipped_config();
+    for profile in ["cf-guard", "cf-builder"] {
+        let Some(workspace) = cfg["permissions"][profile]
+            .get("filesystem")
+            .and_then(|fs| fs.get(":workspace_roots"))
+            .and_then(toml::Value::as_table)
+        else {
+            continue;
+        };
+        for key in workspace.keys() {
+            let dirs = key.rsplit_once('/').map_or("", |(dirs, _)| dirs);
+            assert!(
+                !dirs.contains(['*', '?', '[']),
+                "{profile} workspace entry {key:?} has a wildcard directory; it blocks directory deletes"
+            );
+        }
+    }
+}
+
+/// TSK-190 AC-2: the launch text follows ADR-0075 D1 and D2. A builder runs
+/// full access until a `cf-builder` spike passes; a reviewer runs `never`
+/// with no `--sandbox` flag, so the project's `cf-guard` profile applies.
+#[test]
+fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
+    for relative in [
+        "assets/base/agents/skills/cf-herdr/SKILL.md",
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ] {
+        let text = std::fs::read_to_string(root().join(relative)).expect("read skill");
+        let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        for required in [
+            "danger-full-access",
+            "(ADR-0075 D1",
+            "`--ask-for-approval never` with no `--sandbox` flag, which selects the project's `cf-guard` profile (D2)",
+        ] {
+            assert!(
+                normalized.contains(required),
+                "{relative} lost launch text: {required}"
+            );
+        }
+        for retired in ["--sandbox workspace-write", "--ask-for-approval on-request"] {
+            assert!(
+                !normalized.contains(retired),
+                "{relative} still names the retired reviewer launch {retired}"
+            );
+        }
     }
 }
 

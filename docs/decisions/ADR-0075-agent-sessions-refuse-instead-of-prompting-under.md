@@ -14,7 +14,8 @@ architecture_impact: "the permission presets for Claude, Codex and Grok become d
 ## Delivery note (2026-09-29)
 
 This record is still proposed; TSK-175 accepts it. Release 3.0.0 carries
-only TSK-171, the first of the five implementing tasks. The rest follows in
+TSK-171, the first of the five implementing tasks, and TSK-190's D1 spike
+and D2 launch text. The rest follows in
 3.1. Until then, the decisions below describe intended behavior, and the
 3.0.0 CHANGELOG entry is the account of what shipped.
 
@@ -34,10 +35,34 @@ Shipped in 3.0.0 (TSK-171):
 - The profile assets for D1 to D3: the Codex `cf-guard` profile with the
   network proxy and a `cf-builder` profile that is defined but not selected,
   and the Grok `cf-guard` and `cf-guard-worktree` profiles. The launch
-  postures themselves are unchanged.
+  postures themselves are unchanged, except D2's below.
 - The Claude presets' sandbox credential variable and store denies.
 - The policy keys the later tasks read, at their shipped defaults, with no
   check reading them.
+
+Also in 3.0.0 (TSK-190):
+
+- D2: Codex reviewer seats launch with `--ask-for-approval never` and no
+  `--sandbox` flag, so `cf-guard` applies; the cf-model-orchestrator and
+  cf-herdr launch text says so. `cf-guard` denies secret files at the
+  workspace root only, since the `**/` forms blocked every directory
+  delete; nested secret files are a recorded gap.
+- D1: the spike ran on 2026-09-29 on Codex 0.159.1 and did not pass.
+  Fetch with an absolute remote URL, worktree add, stage, commit, cargo and
+  npm builds ran unattended from the main checkout root, with `.git/hooks`
+  and `.git/config` unwritable; a push to a bare remote outside the
+  workspace root was denied, and a push to a hosted remote was not tried.
+  Builder seats keep full access with that gap recorded, and `cf-builder`
+  stays defined and unselected.
+- D7, observed on Codex 0.159.1 in a native capture for TSK-188: the
+  quoted form `-c 'projects."<worktree>".trust_level="trusted"'` did not
+  skip the folder-trust dialog (the argument reached Codex as written).
+  The unquoted `-c projects.<absolute path>.trust_level=trusted` did, and
+  works only for a path with no dots in it. Separately, Codex runs a
+  project's hooks only after a person grants a one-time hook-trust prompt,
+  stored as `hooks.state` with a `trusted_hash` in `~/.codex/config.toml`;
+  a changed `hooks.json` needs the grant again. Both stay operator steps
+  (decision 8) until TSK-174 and TSK-175 settle the launch form.
 
 Follows in 3.1:
 
