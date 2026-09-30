@@ -1619,7 +1619,7 @@
     ".claude/workflows/pipeline.workflow.js": {
       "src": "claude/workflows/pipeline.workflow.js",
       "ownership": "user-owned",
-      "sha256": "b010b47b7b765069fa36f9d1a53bd730079faedc2ae72d85994f035d0b5888d3",
+      "sha256": "4dc48f427f32d06fed0fcaa081f39fdce6dd5f824790571a3e23e956721f62da",
       "exec": false
     },
     ".codeflow/git-hooks/commit-msg": {
