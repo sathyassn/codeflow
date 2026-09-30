@@ -40,7 +40,9 @@ impl Project {
         success(&self.command("git").args(args).output().unwrap());
     }
     fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        Self::from_temp(tempfile::tempdir().unwrap())
+    }
+    fn from_temp(temp: tempfile::TempDir) -> Self {
         let root = temp.path().join("project");
         let bin = temp.path().join("bin");
         let home = temp.path().join("state");
@@ -60,7 +62,7 @@ impl Project {
         std::fs::write(project.root.join("src/main.rs"), "fn main() {}\n").unwrap();
         std::fs::write(
             project.root.join("Cargo.toml"),
-            "[package]\nname = \"guard-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            "[workspace]\n\n[package]\nname = \"guard-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         )
         .unwrap();
         std::fs::write(project.root.join(".gitignore"), "target/\n").unwrap();
@@ -91,6 +93,32 @@ impl Project {
                 .unwrap(),
         );
         project
+    }
+    fn check_shell(&self, cwd: &std::path::Path, command: &str, refused: bool) {
+        let payload = json!({"tool_name":"Bash", "cwd":cwd, "tool_input":{"command":command}});
+        let mut child = self
+            .command("codeflow")
+            // The hook process may start outside the payload's directory.
+            .current_dir(self.temp.path())
+            .args(["hook", "git-guard"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        if refused {
+            assert_eq!(output.status.code(), Some(2), "{command}: {output:?}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("git.hook_integrity"));
+        } else {
+            success(&output);
+        }
     }
     fn replay(&self, harness: &str, tool: &str, input: Value) -> Vec<Output> {
         let mut payload = if harness == "grok" {
@@ -387,33 +415,7 @@ fn installed_documented_edit_hook_payloads_protect_paths() {
 fn n3_shell_integrity_paths_use_payload_cwd_and_disk_case() {
     let project = Project::new();
     assert!(project.root.join(".CODEFLOW/policy.json").exists());
-    let check = |command: &str, refused: bool| {
-        let payload =
-            json!({"tool_name":"Bash", "cwd":project.root, "tool_input":{"command":command}});
-        let mut child = project
-            .command("codeflow")
-            // The hook process may start outside the payload's directory.
-            .current_dir(project.temp.path())
-            .args(["hook", "git-guard"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.to_string().as_bytes())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        if refused {
-            assert_eq!(output.status.code(), Some(2), "{command}: {output:?}");
-            assert!(String::from_utf8_lossy(&output.stderr).contains("git.hook_integrity"));
-        } else {
-            success(&output);
-        }
-    };
+    let check = |command: &str, refused: bool| project.check_shell(&project.root, command, refused);
     for path in [".CODEFLOW/policy.json", ".codeflow/policy.json"] {
         for command in [
             format!(
@@ -441,5 +443,129 @@ EOF",
         "cat .CODEFLOW/policy.json",
     ] {
         check(command, false);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn r1_integrity_paths_inside_and_outside_claude_tmp() {
+    let local = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tsk188-r3-fixtures");
+    std::fs::create_dir_all(&local).unwrap();
+    for base in [std::path::Path::new("/tmp"), local.as_path()] {
+        let temp = tempfile::Builder::new()
+            .prefix("claude-tsk188-r1-")
+            .tempdir_in(base)
+            .unwrap();
+        let project = Project::from_temp(temp);
+        for path in [".CODEFLOW/policy.json", ".codeflow/policy.json"] {
+            project.check_shell(
+                &project.root,
+                &format!("cat > {path} <<'EOF'\nx\nEOF"),
+                true,
+            );
+            project.check_shell(
+                &project.root,
+                &format!("printf x > {}", project.root.join(path).display()),
+                true,
+            );
+        }
+        project.check_shell(&project.root, "printf x > .CODEFLOW/notes.md", false);
+        project.check_shell(
+            &project.root,
+            "printf x > /tmp/claude-tsk188-other/.codeflow/policy.json",
+            false,
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn r2_integrity_paths_follow_cd_segments() {
+    let project = Project::new();
+    for path in [".CODEFLOW/policy.json", ".codeflow/policy.json"] {
+        project.check_shell(
+            &project.root.join("src"),
+            &format!("cd .. && printf x > {path}"),
+            true,
+        );
+        project.check_shell(
+            &project.root,
+            &format!("cd src && printf x > ../{path}"),
+            true,
+        );
+        project.check_shell(
+            &project.root.join("src"),
+            &format!("cd ..; printf x > {path}"),
+            true,
+        );
+    }
+    project.check_shell(
+        &project.root,
+        "cd .codeflow && printf x > policy.json",
+        true,
+    );
+    for command in [
+        "cd .. && printf x > .CODEFLOW/notes.md",
+        "cd .. && rm -rf target",
+        "cd .. && cp .codeflow/policy.json notes.md",
+    ] {
+        project.check_shell(&project.root.join("src"), command, false);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn r3_dd_output_operand_is_an_integrity_path() {
+    let project = Project::new();
+    for command in [
+        "dd if=x of=.CODEFLOW/policy.json",
+        "dd if=x of=.codeflow/policy.json",
+        "dd of=.Git/hooks/pre-commit if=x",
+    ] {
+        project.check_shell(&project.root, command, true);
+    }
+    for command in [
+        "dd if=.codeflow/policy.json of=notes.md",
+        "dd if=x of=.CODEFLOW/notes.md",
+        "dd if=x of=ordinary",
+    ] {
+        project.check_shell(&project.root, command, false);
+    }
+}
+
+#[test]
+fn r4_integrity_ancestor_directories_are_protected() {
+    let project = Project::new();
+    let mut dirs = vec![".codeflow", ".git", ".git/hooks"];
+    if cfg!(target_os = "macos") {
+        dirs.extend([".CODEFLOW", ".Git", ".Git/hooks"]);
+    }
+    for dir in dirs {
+        for command in [
+            format!("rm -rf {dir}"),
+            format!("mv {dir} x"),
+            format!("cp -r stuff {dir}"),
+            format!("cp -r stuff/. {dir}/"),
+            format!("git rm -r {dir}"),
+        ] {
+            project.check_shell(&project.root, &command, true);
+        }
+        project.check_shell(&project.root, &format!("cd {dir} && rm -rf ."), true);
+        project.check_shell(&project.root, &format!("cp -r {dir} backup"), false);
+        project.check_shell(&project.root, &format!("ln -s {dir} backup"), false);
+        project.check_shell(&project.root, &format!("ln -sf stuff {dir}"), true);
+        project.check_shell(&project.root, &format!("ls {dir}"), false);
+    }
+    for command in [
+        "rm -rf target",
+        "rm -rf src/ordinary",
+        "rm -rf .codeflow-notes",
+        "cp -r stuff ordinary",
+        "printf x > .codeflow/notes.md",
+        "mv .codeflow/notes.md notes.md",
+        "cp .codeflow/policy.json notes.md",
+        "cat .codeflow/policy.json",
+    ] {
+        project.check_shell(&project.root, command, false);
     }
 }
