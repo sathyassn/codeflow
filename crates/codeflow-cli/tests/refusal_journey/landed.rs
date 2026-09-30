@@ -1532,9 +1532,47 @@ fn r4_review_broken_candidates_and_remote_head_refuse() {
     }
 }
 
+fn head_follow_modes(version: &str) -> &'static [&'static str] {
+    let supported = version
+        .strip_prefix("git version ")
+        .and_then(|version| {
+            let mut parts = version.split('.');
+            Some((
+                parts.next()?.parse::<u32>().ok()?,
+                parts.next()?.parse::<u32>().ok()?,
+            ))
+        })
+        .is_some_and(|version| version >= (2, 48));
+    if supported {
+        &["never", "create", "warn", "always", "warn-if-not-main"]
+    } else {
+        eprintln!("skipping HEAD-follow create, warn, always and warn-if-not-main legs: Git 2.48 or newer required; found {version}; running the never leg");
+        &["never"]
+    }
+}
+
+#[test]
+fn r5_head_follow_modes_respect_git_version() {
+    for version in [
+        "git version 2.47.3",
+        "git version 2.39.5 (Apple Git-154)",
+        "unknown",
+    ] {
+        assert_eq!(head_follow_modes(version), &["never"], "{version}");
+    }
+    for version in [
+        "git version 2.48.0",
+        "git version 2.53.0.windows.1",
+        "git version 3.0.0",
+    ] {
+        assert_eq!(head_follow_modes(version).len(), 5, "{version}");
+    }
+}
+
 #[test]
 fn r4_review_custom_default_beside_main_and_head_transition() {
-    for mode in ["never", "create", "warn", "always", "warn-if-not-main"] {
+    let version = Repo::new().git(&["--version"]);
+    for &mode in head_follow_modes(&version) {
         let repo = Repo::new();
         repo.remote();
         publish_policy(
@@ -1672,4 +1710,32 @@ fn r4_review_remote_prune_checks_transport_authority() {
         repo.root().join("remote.git").to_str().unwrap(),
     ]);
     repo.check("git-guard", "git remote prune origin", 2);
+}
+
+#[test]
+fn r5_policy_relaxation_names_every_source_and_requires_every_landing() {
+    let repo = Repo::new();
+    repo.remote();
+    let strict = json!({"git":{"root_branch":"integration/line","protected_branches":["main"]}});
+    let relaxed = json!({"git":{"root_branch":"integration/line","protected_branches":[]}});
+    for branch in ["integration/line", "main", "master"] {
+        publish_policy(&repo, branch, &strict);
+    }
+    let output = repo.check("git-guard", "git branch -D main", 2);
+    let text = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        text.contains("on every branch named as a policy source"),
+        "{text}"
+    );
+    for branch in ["main", "master", "integration/line"] {
+        assert!(
+            text.contains(&format!("refs/remotes/origin/{branch}")),
+            "{text}"
+        );
+    }
+    for (branch, expected) in [("integration/line", 2), ("main", 2), ("master", 0)] {
+        publish_policy(&repo, branch, &relaxed);
+        repo.git(&["fetch", "-q", "origin", branch]);
+        repo.check("git-guard", "git branch -D main", expected);
+    }
 }
