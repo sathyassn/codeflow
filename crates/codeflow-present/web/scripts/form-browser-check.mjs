@@ -94,7 +94,9 @@ try {
   // polls pass through here, where a case can hold an answer back and choose
   // when a revision notice reaches the page (TSK-162).
   let pollHold = null;
+  const pollCursors = [];
   await page.route("**/app/api/events/poll", async (route) => {
+    pollCursors.push(JSON.parse(route.request().postData() ?? "null")?.cursor ?? null);
     let response;
     try { response = await route.fetch({ timeout: 60_000 }); } catch { await route.abort().catch(() => {}); return; }
     if (pollHold) await pollHold.promise;
@@ -236,7 +238,13 @@ try {
   // refused confirmation below still returns the form to editing.
   pollHold.resolve();
   pollHold = null;
-  await page.locator(".cf-event-message", { hasText: "Revision 3 is available." }).waitFor({ state: "attached" });
+  // The page polls again only once it has handled the last answer, so a poll
+  // whose cursor names revision 3 shows the notice reached the forms.
+  const handledBy = Date.now() + 30_000;
+  while (!pollCursors.some((cursor) => cursor?.startsWith("3:"))) {
+    if (Date.now() > handledBy) throw new Error(`late notice: the page never handled revision 3; its polls named ${JSON.stringify(pollCursors)}`);
+    await page.waitForTimeout(50);
+  }
   assert.deepEqual(await stateOf(form), staleCorrection, "late notice: a notice for the form's own revision changed it");
   await refuseOnce((body) => { body.values.home = "cloud"; });
   await form.locator("[data-cf-form-action='confirm']").click();
@@ -585,6 +593,9 @@ try {
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
     const failedRequest = page.waitForEvent("requestfailed", (request) => new URL(request.url()).pathname === ANSWERS);
+    // Awaited below; if an earlier step fails, closing the page rejects it,
+    // and that rejection must not replace the step's own error.
+    failedRequest.catch(() => {});
     await page.route(`**${ANSWERS}`, async (route) => {
       const body = JSON.parse(route.request().postData());
       if (body.form_id === "store-choice") {
