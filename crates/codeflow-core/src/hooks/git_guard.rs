@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -375,6 +375,13 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
 /// disclose how the verdict was reached.
 #[must_use]
 pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    evaluate_report_at(command, ctx, &cwd)
+}
+
+/// Evaluate a command using the tool payload's working directory for paths.
+#[must_use]
+pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> Evaluation {
     let mut report = Evaluation::default();
     let violations = &mut report.violations;
     // Chained checkout/switch dodges change the branch later segments run on.
@@ -414,7 +421,7 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
         // Hook/policy integrity: writes or removes that would disarm or tamper
         // with the enforcement plane, evaluated on ANY command (not just git).
         if ctx.policy.hook_integrity.is_active() {
-            if let Some(v) = integrity_write_violation(&tokens, ctx.policy.hook_integrity) {
+            if let Some(v) = integrity_write_violation(&tokens, ctx.policy.hook_integrity, cwd) {
                 violations.push(v);
                 continue;
             }
@@ -809,18 +816,35 @@ fn normalize_path(s: &str) -> String {
 
 /// The integrity path a single argument token names, when any. The token is
 /// normalized first so equivalent spellings match.
-fn token_integrity_path(token: &str) -> Option<&'static str> {
+fn token_integrity_path(token: &str, cwd: &Path) -> Option<&'static str> {
     let norm = normalize_path(token);
     INTEGRITY_PREFIXES
         .iter()
         .chain(INTEGRITY_FILES.iter())
         .copied()
         .find(|p| is_path_targeted(&norm, p))
+        .or_else(|| {
+            // Recover existing components using the filesystem, rather than
+            // folding case on volumes where these are different files.
+            let mut path = PathBuf::new();
+            for component in cwd.join(token).components() {
+                path.push(component);
+                if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+                    super::edit_guard::normalize_case(&mut path, &metadata);
+                }
+            }
+            let real = normalize_path(&path.to_string_lossy());
+            INTEGRITY_PREFIXES
+                .iter()
+                .chain(INTEGRITY_FILES.iter())
+                .copied()
+                .find(|p| is_path_targeted(&real, p))
+        })
 }
 
 /// The integrity path named by any argument in `args`.
-fn arg_integrity_path(args: &[String]) -> Option<&'static str> {
-    args.iter().find_map(|a| token_integrity_path(a))
+fn arg_integrity_path(args: &[String], cwd: &Path) -> Option<&'static str> {
+    args.iter().find_map(|a| token_integrity_path(a, cwd))
 }
 
 /// Where a write-redirect operator's target sits.
@@ -874,17 +898,17 @@ fn classify_redirect_rest(rest: &str) -> RedirectTarget<'_> {
 /// A write redirect (`>`, `>>`, `>|`, `1>`, `2>>`, …) whose target is an
 /// integrity path, from the token stream — target attached (`>policy.json`) or
 /// the next token (`> policy.json`).
-fn redirect_integrity_path(tokens: &[String]) -> Option<&'static str> {
+fn redirect_integrity_path(tokens: &[String], cwd: &Path) -> Option<&'static str> {
     let mut i = 0;
     while i < tokens.len() {
         match redirect_target(&tokens[i]) {
             Some(RedirectTarget::Attached(t)) => {
-                if let Some(p) = token_integrity_path(t) {
+                if let Some(p) = token_integrity_path(t, cwd) {
                     return Some(p);
                 }
             }
             Some(RedirectTarget::Next) => {
-                if let Some(p) = tokens.get(i + 1).and_then(|n| token_integrity_path(n)) {
+                if let Some(p) = tokens.get(i + 1).and_then(|n| token_integrity_path(n, cwd)) {
                     return Some(p);
                 }
             }
@@ -900,8 +924,12 @@ fn redirect_integrity_path(tokens: &[String]) -> Option<&'static str> {
 /// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
 /// (`.codeflow/policy.json`, `.codeflow/project.toml`). Reads (`cat`, a `cp`
 /// *from* an integrity path) stay allowed.
-fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Violation> {
-    if let Some(p) = redirect_integrity_path(tokens) {
+fn integrity_write_violation(
+    tokens: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+) -> Option<Violation> {
+    if let Some(p) = redirect_integrity_path(tokens, cwd) {
         return Some(hook_integrity_violation(
             level,
             format!("redirect would overwrite the integrity path `{p}`"),
@@ -923,7 +951,7 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
             | "ln"
             | "install"
     ) {
-        if let Some(p) = arg_integrity_path(args) {
+        if let Some(p) = arg_integrity_path(args, cwd) {
             return Some(hook_integrity_violation(
                 level,
                 format!("`{cmd}` targets the integrity path `{p}`"),
@@ -931,7 +959,7 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
         }
     }
     if cmd == "sed" && requests_in_place(args) {
-        if let Some(p) = arg_integrity_path(args) {
+        if let Some(p) = arg_integrity_path(args, cwd) {
             return Some(hook_integrity_violation(
                 level,
                 format!("`sed -i` edits the integrity path `{p}`"),
@@ -942,7 +970,7 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
         // Only a write matters: the integrity path as the destination (the last
         // non-flag argument). A `cp` *from* an integrity path is a read.
         if let Some(dest) = args.iter().rev().find(|a| !a.starts_with('-')) {
-            if let Some(p) = token_integrity_path(dest) {
+            if let Some(p) = token_integrity_path(dest, cwd) {
                 return Some(hook_integrity_violation(
                     level,
                     format!("`cp` writes the integrity path `{p}`"),
@@ -951,7 +979,7 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
         }
     }
     if cmd == "git" && matches!(args.first().map(String::as_str), Some("rm" | "mv")) {
-        if let Some(p) = arg_integrity_path(&args[1..]) {
+        if let Some(p) = arg_integrity_path(&args[1..], cwd) {
             return Some(hook_integrity_violation(
                 level,
                 format!("`git {}` removes the integrity path `{p}`", args[0]),

@@ -679,3 +679,23 @@ fn clears_discard_local_work() {
     );
     assert!(text(&run("git", root, &["stash", "show", "-p"])).contains("locally changed"));
 }
+
+#[test]
+fn clears_push_without_follow_tags() {
+    let dir = with_origin();
+    let root = dir.path();
+    git(root, &["config", "push.followTags", "true"]);
+    let printed = refused(
+        root,
+        "exec-guard",
+        "git push origin feat/x",
+        "security.outward_actions",
+        "PUSH_WITHOUT_FOLLOW_TAGS",
+    );
+    let step = printed_command(&printed, "PUSH_WITHOUT_FOLLOW_TAGS", None)
+        .replace("<remote>", "origin")
+        .replace("<branch>", "feat/x");
+    assert_passes(root, "exec-guard", &step);
+    run_printed(root, &step, &[], &[]);
+    assert_eq!(head(root, "origin/feat/x"), head(root, "feat/x"));
+}

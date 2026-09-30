@@ -264,7 +264,7 @@ fn git_guard(stdin: &str) -> i32 {
         discard_lookup: Some(&discard),
         root_checkout: root_checkout.as_ref(),
     };
-    let report = git_guard::evaluate_report(command, &ctx);
+    let report = git_guard::evaluate_report_at(command, &ctx, &cwd);
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
 }
 

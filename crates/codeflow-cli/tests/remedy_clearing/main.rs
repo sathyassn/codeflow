@@ -79,6 +79,7 @@ use Proof::{Confirms, Excluded, Runs};
 const ROWS: &[(&str, Proof)] = &[
     ("DISCARD_LOCAL_WORK", Runs),
     ("OUTWARD_ACTION", Excluded(HumanAuthority)),
+    ("PUSH_WITHOUT_FOLLOW_TAGS", Runs),
     ("TASK_STATUS", Runs),
     ("EPIC_STATUS", Runs),
     ("SUPERSEDED_CITATION", Runs),

@@ -381,3 +381,65 @@ fn installed_documented_edit_hook_payloads_protect_paths() {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn n3_shell_integrity_paths_use_payload_cwd_and_disk_case() {
+    let project = Project::new();
+    assert!(project.root.join(".CODEFLOW/policy.json").exists());
+    let check = |command: &str, refused: bool| {
+        let payload =
+            json!({"tool_name":"Bash", "cwd":project.root, "tool_input":{"command":command}});
+        let mut child = project
+            .command("codeflow")
+            // The hook process may start outside the payload's directory.
+            .current_dir(project.temp.path())
+            .args(["hook", "git-guard"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        if refused {
+            assert_eq!(output.status.code(), Some(2), "{command}: {output:?}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("git.hook_integrity"));
+        } else {
+            success(&output);
+        }
+    };
+    for path in [".CODEFLOW/policy.json", ".codeflow/policy.json"] {
+        for command in [
+            format!(
+                "cat > {path} <<'EOF'
+x
+EOF"
+            ),
+            format!("cp x {path}"),
+            format!("sed -i '' s/a/b/ {path}"),
+            format!("tee {path} < x"),
+        ] {
+            check(&command, true);
+        }
+    }
+    check("printf x > .Git/hooks/pre-commit", true);
+    check("printf x > .git/hooks/pre-commit", true);
+    for command in [
+        "cat > .CODEFLOW/notes.md <<'EOF'
+x
+EOF",
+        "cp x .CODEFLOW/notes.md",
+        "sed -i '' s/a/b/ .CODEFLOW/notes.md",
+        "tee .CODEFLOW/notes.md < x",
+        "cp .CODEFLOW/policy.json notes.md",
+        "cat .CODEFLOW/policy.json",
+    ] {
+        check(command, false);
+    }
+}

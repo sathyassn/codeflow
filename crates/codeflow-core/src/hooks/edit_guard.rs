@@ -377,7 +377,7 @@ fn path_text(path: &Path) -> Result<String, EditError> {
 // APFS realpath retains the caller's case. Recover the directory entry's
 // spelling only when its identity matches, so suffix rules stay precise.
 #[cfg(target_os = "macos")]
-fn normalize_case(path: &mut PathBuf, metadata: &std::fs::Metadata) {
+pub(crate) fn normalize_case(path: &mut PathBuf, metadata: &std::fs::Metadata) {
     use std::os::unix::fs::MetadataExt;
     let Some(parent) = path.parent() else {
         return;
@@ -403,7 +403,7 @@ fn normalize_case(path: &mut PathBuf, metadata: &std::fs::Metadata) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn normalize_case(_path: &mut PathBuf, _metadata: &std::fs::Metadata) {}
+pub(crate) fn normalize_case(_path: &mut PathBuf, _metadata: &std::fs::Metadata) {}
 
 // Resolve one component at a time. Lexically deleting `alias/..` before
 // following `alias` is wrong when alias is a symlink into another directory.

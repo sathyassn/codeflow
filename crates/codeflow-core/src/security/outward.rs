@@ -34,6 +34,9 @@ pub(crate) fn evaluate_at(
     families.extend(embedded.families);
     families.sort_unstable();
     families.dedup();
+    if families.contains(&"release") {
+        families.retain(|id| *id != "configured_tag_push");
+    }
     families
         .into_iter()
         .filter_map(|id| {
@@ -43,6 +46,15 @@ pub(crate) fn evaluate_at(
                 _ => levels.outward_actions,
             };
             level.is_active().then(|| {
+                if id == "configured_tag_push" {
+                    return Violation::new(
+                        "security.outward_actions",
+                        level,
+                        "release action: effective push.followTags config enables tag publication"
+                            .to_string(),
+                        crate::remedy::PUSH_WITHOUT_FOLLOW_TAGS.remedy(),
+                    );
+                }
                 Violation::new(
                     match id {
                         "privilege" => "security.privilege_escalation",
@@ -257,7 +269,10 @@ fn record_interpreter(name: &str, rest: &[String], out: &mut Parsed) {
                             _ => s.ends_with('c'),
                         }
                 });
-            if cluster
+            if let Some(code) = (name == "perl").then(|| perl_attached_code(arg)).flatten() {
+                out.code.push(code.to_string());
+                found = true;
+            } else if cluster
                 || arg == flag
                 || (name.starts_with("node") && matches!(arg.as_str(), "--eval" | "-p" | "--print"))
             {
@@ -277,6 +292,20 @@ fn record_interpreter(name: &str, rest: &[String], out: &mut Parsed) {
             out.stdin_interpreter += 1;
         }
     }
+}
+
+// Only cross flags that do not consume a value. In particular, the `e` in
+// `-Mfeature` or a backup suffix is not an evaluation switch.
+fn perl_attached_code(arg: &str) -> Option<&str> {
+    let flags = arg.strip_prefix('-')?;
+    for (at, flag) in flags.char_indices() {
+        match flag {
+            'e' | 'E' => return flags.get(at + 1..).filter(|code| !code.is_empty()),
+            'a' | 'c' | 'f' | 'l' | 'n' | 'p' | 's' | 't' | 'T' | 'u' | 'U' | 'w' | 'W' | 'X' => {}
+            _ => return None,
+        }
+    }
+    None
 }
 
 fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Parsed) {
@@ -319,9 +348,10 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
         if body.iter().any(|a| {
             matches!(a.as_str(), "--tags" | "--follow-tags" | "tag") || a.contains("refs/tags/")
         }) || tag_push(body, cwd, rest, &out.created_tags)
-            || follow_tags(cwd, rest)
         {
             out.families.push("release");
+        } else if follow_tags(cwd, rest) {
+            out.families.push("configured_tag_push");
         }
     }
     if name == "gh" {
@@ -479,9 +509,21 @@ fn tag_push(
     };
     args.iter().filter(|arg| !arg.starts_with('-')).any(|arg| {
         arg.trim_start_matches('+').split(':').any(|part| {
-            !part.is_empty()
-                && (repo.find_reference(&format!("refs/tags/{part}")).is_ok()
-                    || created.iter().any(|(at, tag)| at == &dir && tag == part))
+            let shorthand = part
+                .strip_prefix("tags/")
+                .or_else(|| part.strip_prefix("refs/tags/"));
+            [Some(part), shorthand]
+                .into_iter()
+                .flatten()
+                .any(|tag_name| {
+                    !tag_name.is_empty()
+                        && (repo
+                            .find_reference(&format!("refs/tags/{tag_name}"))
+                            .is_ok()
+                            || created
+                                .iter()
+                                .any(|(at, tag)| at == &dir && tag == tag_name))
+                })
         })
     })
 }
@@ -528,7 +570,7 @@ fn follow_tags(cwd: Option<&Path>, globals: &[String]) -> bool {
     let override_value = globals[..end]
         .windows(2)
         .filter(|p| p[0] == "-c")
-        .filter_map(|p| p[1].split_once('='))
+        .map(|p| p[1].split_once('=').unwrap_or((&p[1], "true")))
         .filter(|(key, _)| key.eq_ignore_ascii_case("push.followTags"))
         .map(|(_, value)| truthy(value))
         .next_back();
@@ -642,6 +684,122 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 mod tests {
     use super::*;
     use crate::security::actions::{table, PatternToken};
+
+    #[test]
+    fn n1_tag_shorthand_matches_existing_and_new_tags() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let id = repo.blob(b"tag target").unwrap();
+        repo.tag_lightweight("v1.2.3", &repo.find_object(id, None).unwrap(), false)
+            .unwrap();
+        for command in [
+            "git push origin tags/v1.2.3",
+            "git push origin +tags/v1.2.3",
+            "git push origin refs/tags/v1.2.3",
+            "git tag v9 && git push origin tags/v9",
+            "git tag v9 && git push origin HEAD:tags/v9",
+        ] {
+            assert!(
+                !evaluate_at(command, &SecuritySection::default(), Some(temp.path())).is_empty(),
+                "{command}"
+            );
+        }
+        for command in [
+            "git push origin tags-x",
+            "git push origin tags/task/x",
+            "git tag v9 && git push origin tags-x",
+        ] {
+            assert!(
+                evaluate_at(command, &SecuritySection::default(), Some(temp.path())).is_empty(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn n2_valueless_follow_tags_is_true() {
+        for command in [
+            "git -c push.followTags push origin task/x",
+            "git -c PUSH.FOLLOWTAGS push origin task/x",
+        ] {
+            assert!(
+                !evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+        for command in [
+            "git -c push.followTags=false push origin task/x",
+            "git -c push.followTags -c push.followTags=false push origin task/x",
+            "git -c push.followTags push --no-follow-tags origin task/x",
+        ] {
+            assert!(
+                evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn n5_perl_code_attached_to_clusters() {
+        for command in [
+            r#"perl -pe'system("cargo publish")'"#,
+            r#"perl -E'system("cargo publish")'"#,
+            r#"perl -lwe'system("cargo publish")'"#,
+        ] {
+            assert!(
+                !evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+        for command in [
+            "perl -pe's/a/b/' README.md",
+            "perl -lwe'print 1'",
+            "perl -Mfeature -pe'print' README.md",
+            "perl -i.backup -pe's/a/b/' README.md",
+        ] {
+            assert!(
+                evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn n6_effective_follow_tags_names_cause_and_route() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_bool("push.followTags", true)
+            .unwrap();
+        let findings = evaluate_at(
+            "git push origin task/x",
+            &SecuritySection::default(),
+            Some(temp.path()),
+        );
+        assert_eq!(findings.len(), 1);
+        assert!(
+            findings[0].message.contains("effective")
+                && findings[0].message.contains("push.followTags"),
+            "{findings:?}"
+        );
+        assert!(
+            findings[0].remedy.contains("--no-follow-tags"),
+            "{findings:?}"
+        );
+        assert!(evaluate_at(
+            "git push --no-follow-tags origin task/x",
+            &SecuritySection::default(),
+            Some(temp.path())
+        )
+        .is_empty());
+        let direct = evaluate_at(
+            "git push origin refs/tags/v1",
+            &SecuritySection::default(),
+            Some(temp.path()),
+        );
+        assert!(!direct[0].remedy.contains("--no-follow-tags"), "{direct:?}");
+    }
 
     #[test]
     fn f1_tags_created_earlier_are_release_refspecs() {
