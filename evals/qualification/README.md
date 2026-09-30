@@ -30,10 +30,66 @@ refused. Model and permission flags in the launch record are **requested**,
 not independently observed effective settings. Retain native settings and
 identity evidence before claiming them as observed.
 
-HOME, TMPDIR, CODEFLOW_HOME and harness config directories come from the kit.
-The primary must provision permitted authentication through the harness's
-supported mechanism in the isolated home. A login failure stops the trial;
-never replace HOME with the real home or copy credentials to make it pass.
+Before the first trial, prepare dedicated evaluator authentication:
+
+```sh
+python3 assets/base/agents/skills/cf-evaluate-model/scripts/eval_kit.py prepare-eval-homes
+```
+
+Run the printed native commands yourself and complete each harness's sign-in.
+The command only creates folders and missing non-secret settings; it never
+signs in, reads credentials, or overwrites existing config. Claude uses
+`/login`, Codex uses its ChatGPT sign-in, and Grok uses browser approval.
+For hook-dependent Codex fixtures, open `/hooks` and review and trust the
+fixture's hooks; a fresh path may require trust again. No trust is seeded.
+
+`HOME`, `TMPDIR`, `CODEFLOW_HOME` and `XDG_CONFIG_HOME` stay disposable per
+trial. `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME` point respectively to
+`~/.codeflow-eval/claude`, `codex` and `grok`, signed in once by the operator.
+Grok supports `GROK_HOME`, so no symlink is used. The kit never reads, copies
+or uses the operator's personal harness folders. Symlinked evaluator folders
+are refused. Credentials are managed only by the harness: on macOS Claude
+may use a Keychain entry scoped to its dedicated config directory; Codex is
+explicitly set to the file credential store in its dedicated folder.
+
+Before creating a tab, Claude must report `loggedIn: true` with the expected
+`configDirectory` from `claude auth status`; Codex must report `Logged in
+using ChatGPT` from `codex login status`. Raw account details are not retained.
+Grok has no installed auth-status subcommand: after startup its fresh welcome
+must show the authenticated `New worktree` and `Resume session` menu rows
+and an empty or placeholder editor, without a login screen. Unknown states
+refuse before any prompt, using `evaluator home not signed in: run
+prepare-eval-homes`. Grok may show a browser-approval screen before refusal;
+the runner never answers it. A positive status is local sign-in evidence,
+not a guarantee that a remote subscription or token will remain valid.
+
+Claude auto-memory and Grok cross-session memory are disabled in the launch
+environment. Codex launch overrides disable history and memory generation
+and injection, and move its SQLite state and logs into the disposable HOME.
+Grok logs and its leader socket are disposable. Claude transcripts and
+history, Codex session rollouts, and Grok sessions can still accumulate in
+their dedicated folders, along with native config, caches and auth refreshes.
+Every fixture has a fresh path, Claude has a unique project storage name,
+and resume/continue arguments are refused. Retained conversations are not
+automatically resumed and shared memory is not injected into new trials.
+Do not install personal instructions, skills or plugins in these folders.
+This is context isolation, not a filesystem read barrier: a subject with
+sufficient permissions could explicitly read retained files. Treat such a
+read or shared config mutation as contamination; native trace review is
+still required. Do not claim that path separation makes history inaccessible.
+
+Sources: [Claude environment](https://code.claude.com/docs/en/env-vars),
+[Claude authentication](https://code.claude.com/docs/en/authentication),
+[Claude status](https://code.claude.com/docs/en/cli-reference),
+[Codex settings](https://learn.chatgpt.com/docs/config-file/config-reference),
+[Grok settings](https://docs.x.ai/build/settings/reference), and the
+[Grok welcome renderer](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/src/views/welcome/mod.rs).
+Claude's `theme` and `hasCompletedOnboarding` bootstrap in `.claude.json`
+are described in its public [onboarding report](https://github.com/anthropics/claude-code/issues/67149)
+and the native theme dialog; the onboarding key is not a stable settings API.
+The kit seeds only a missing file. A changed first-run UI is a refusal for
+inspection, not permission to invent flags or answer login automatically.
+
 A new tab has its own cwd and environment; no existing pane is reused. The
 runner waits for shell readiness before starting a seat, then for seat readiness
 before taking the `before.json` baseline, then delivering the prompt.

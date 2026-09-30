@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import shutil
 import stat
 import statistics
@@ -2092,11 +2093,95 @@ def pin_subject_executable(subjects: Path, source: Path, sha256: str) -> Path:
 SUBJECT_INHERITED_ENV = ("LANG", "LC_ALL", "TERM", "USER", "LOGNAME", "SHELL")
 
 
+EVALUATOR_HOME_VARIABLES = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "grok": "GROK_HOME"}
+
+
+def evaluator_homes() -> dict[str, Path]:
+    return {harness: Path.home() / ".codeflow-eval" / harness for harness in EVALUATOR_HOME_VARIABLES}
+
+
+def evaluator_directory(path: Path) -> bool:
+    # Reject links at either kit-owned level, including a dangling link. Never
+    # resolve a replacement evaluator folder into a personal harness folder.
+    return (path.is_absolute() and not path.parent.is_symlink() and not path.is_symlink()
+            and path.parent.is_dir() and path.is_dir())
+
+
+def trial_native_args(harness: str, environment: dict[str, str]) -> list[str]:
+    """Documented process-local state controls; retained transcripts are not resumed."""
+    home = Path(environment["HOME"])
+    if harness == "codex":
+        values = ['cli_auth_credentials_store="file"', 'history.persistence="none"',
+                  'memories.generate_memories=false', 'memories.use_memories=false',
+                  'sqlite_home=' + json.dumps(str(home / "codex-state")),
+                  'log_dir=' + json.dumps(str(home / "codex-logs"))]
+        return [item for value in values for item in ["-c", value]]
+    if harness == "grok":
+        return ["--leader-socket", str(Path(environment["TMPDIR"]) / "grok-leader.sock")]
+    return []
+
+
+def prepare_eval_homes() -> str:
+    """Prepare config only. Never launch a harness, read credentials, or sign in."""
+    homes = evaluator_homes()
+    root = next(iter(homes.values())).parent
+    if root.is_symlink():
+        raise EvalError("evaluator home must not be a symlink")
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for path in homes.values():
+        if path.is_symlink():
+            raise EvalError("evaluator home must not be a symlink")
+        path.mkdir(mode=0o700, exist_ok=True)
+    seeds = {homes["claude"] / ".claude.json": json.dumps({"theme": "dark", "hasCompletedOnboarding": True}) + "\n",
+             homes["codex"] / "config.toml": 'cli_auth_credentials_store = "file"\n'}
+    for path, value in seeds.items():
+        # Exclusive creation preserves existing config without reading it.
+        try:
+            with path.open("x", encoding="utf-8") as stream:
+                stream.write(value)
+            path.chmod(0o600)
+        except FileExistsError:
+            if path.is_symlink() or not path.is_file():
+                raise EvalError("evaluator settings must be a regular file")
+    env = subject_environment(Path("/SETUP"), Path("/usr/bin/codeflow"), [])
+    retained = {key: value for key, value in env.items()
+                if key not in {"HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "PATH",
+                               "CLAUDE_CODE_PROJECT_DIR_NAME", "GROK_LOG_FILE", "TERM"}}
+    assignments = " ".join(shlex.quote(key + "=" + value) for key, value in retained.items())
+    return f'''Prepared dedicated evaluator folders (no sign-in performed):
+{chr(10).join(str(path) for path in homes.values())}
+Run this shell function and the three commands yourself, one at a time:
+
+eval_home_launch() {{
+  eval_setup=$(mktemp -d {shlex.quote(str(root / "setup.XXXXXX"))}) || return
+  printf 'Setup directory: %s\\n' "$eval_setup"
+  mkdir -p "$eval_setup/home" "$eval_setup/tmp" "$eval_setup/home/.config" "$eval_setup/home/.codeflow"
+  if [ "$1" = grok ]; then set -- "$@" --leader-socket "$eval_setup/tmp/grok-leader.sock"; fi
+  (cd "$eval_setup" && env -i TERM="${{TERM:-xterm-256color}}" PATH={shlex.quote(env["PATH"])} {assignments} HOME="$eval_setup/home" TMPDIR="$eval_setup/tmp" CODEFLOW_HOME="$eval_setup/home/.codeflow" XDG_CONFIG_HOME="$eval_setup/home/.config" GROK_LOG_FILE="$eval_setup/grok.log" "$@")
+}}
+eval_home_launch claude
+eval_home_launch codex -c 'cli_auth_credentials_store="file"'
+eval_home_launch grok
+
+Claude: use /login and complete your browser sign-in; exit when signed in.
+Codex: choose the ChatGPT sign-in and complete it; exit when signed in.
+Grok: approve the browser sign-in yourself; exit when signed in. Do not import personal settings.
+Only these dedicated config folders persist. Never copy personal harness files.
+Setup directories are disposable; close the seat before removing its printed setup directory.
+For a materialized Codex fixture, launch with the recorded subject environment,
+open /hooks, review and trust the fixture's hooks before running a hook-dependent trial.
+A fresh fixture path may require /hooks trust again; setup does not grant trust.
+Trials refuse missing or unconfirmed sign-ins: evaluator home not signed in: run prepare-eval-homes
+'''
+
+
 def subject_environment(trial_dir: Path, subject_codeflow: Path, hidden: list[Path]) -> dict[str, str]:
     """The environment a harness gives the subject session: the pinned
     executable's copy first on PATH, its own home and temporary directory, and
     no PATH entry inside a directory the subject must not read."""
 
+    personal_configs = [Path.home() / name for name in (".claude", ".codex", ".grok")]
+    hidden = [*hidden, *personal_configs]
     entries = [str(subject_codeflow.parent)]
     for entry in os.environ.get("PATH", "/usr/bin:/bin").split(os.pathsep):
         if not entry or not os.path.isabs(entry):
@@ -2112,8 +2197,11 @@ def subject_environment(trial_dir: Path, subject_codeflow: Path, hidden: list[Pa
             "PATH": os.pathsep.join(entries),
             "HOME": str(trial_dir / "home"),
             "CODEFLOW_HOME": str(trial_dir / "home" / ".codeflow"),
-            "CODEX_HOME": str(trial_dir / "home" / ".codex"),
-            "CLAUDE_CONFIG_DIR": str(trial_dir / "home" / ".claude"),
+            **{variable: str(evaluator_homes()[harness]) for harness, variable in EVALUATOR_HOME_VARIABLES.items()},
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-" + hashlib.sha256(str(trial_dir).encode()).hexdigest()[:24],
+            "GROK_MEMORY": "0",
+            "GROK_LOG_FILE": str(trial_dir / "home" / "grok.log"),
             "XDG_CONFIG_HOME": str(trial_dir / "home" / ".config"),
             "TMPDIR": str(trial_dir / "tmp"),
         }
@@ -6142,6 +6230,7 @@ def cleanup_run(run_root: Path, confirmation: str) -> None:
 def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(description=__doc__)
     sub = cli.add_subparsers(dest="command", required=True)
+    sub.add_parser("prepare-eval-homes", help="prepare dedicated config and print operator sign-in steps")
     validate_suite_cmd = sub.add_parser("validate-suite")
     validate_suite_cmd.add_argument("--project-root", type=Path)
     validate_suite_cmd.add_argument("--resources", type=Path, default=RESOURCE_DIR)
@@ -6263,6 +6352,9 @@ def main() -> int:
     try:
         if getattr(args, "graded_suite", None) is not None:
             set_graded_suite(args.graded_suite)
+        if args.command == "prepare-eval-homes":
+            print(prepare_eval_homes())
+            return 0
         if args.command == "validate-suite":
             root = args.project_root.resolve() if args.project_root else project_root()
             errors = validate_suite(root, args.resources.resolve())

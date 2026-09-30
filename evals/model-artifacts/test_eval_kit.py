@@ -3552,8 +3552,94 @@ class ProcessRepairTests(unittest.TestCase):
             root = Path(temp)
             environment = eval_kit.subject_environment(root, root / "bin/codeflow", [])
             for key, path in {"HOME": "home", "TMPDIR": "tmp", "CODEFLOW_HOME": "home/.codeflow",
-                              "CODEX_HOME": "home/.codex", "CLAUDE_CONFIG_DIR": "home/.claude"}.items():
+                              "XDG_CONFIG_HOME": "home/.config"}.items():
                 self.assertEqual(environment[key], str(root / path))
+
+    def test_dedicated_evaluator_homes_ignore_personal_config_environment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            host = Path(temp) / "operator"
+            trial = Path(temp) / "trial"
+            hostile = {key: str(host / "personal") for key in
+                       ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "GROK_HOME", "XDG_CONFIG_HOME"]}
+            hostile["PATH"] = str(host / ".codex/bin") + os.pathsep + "/usr/bin"
+            with patch.object(Path, "home", return_value=host), patch.dict(os.environ, hostile):
+                env = eval_kit.subject_environment(trial, trial / "bin/codeflow", [])
+            for harness, key in [("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME"), ("grok", "GROK_HOME")]:
+                self.assertEqual(str(host / ".codeflow-eval" / harness), env[key])
+            self.assertEqual([str(trial / "bin"), "/usr/bin"], env["PATH"].split(os.pathsep))
+            self.assertEqual("1", env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
+            self.assertEqual("0", env["GROK_MEMORY"])
+            self.assertFalse(any("personal" in value for value in env.values()))
+            for name in [".claude", ".claude.json", ".codex", ".grok"]:
+                self.assertNotIn(str(host / name), env.values())
+
+    def test_prepare_evaluator_homes_only_seeds_missing_nonsecret_settings(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)), \
+             patch.object(eval_kit.subprocess, "run") as run:
+            output = eval_kit.prepare_eval_homes()
+            root = Path(temp) / ".codeflow-eval"
+            self.assertEqual({"theme": "dark", "hasCompletedOnboarding": True},
+                             json.loads((root / "claude/.claude.json").read_text()))
+            self.assertEqual('cli_auth_credentials_store = "file"\n', (root / "codex/config.toml").read_text())
+            self.assertTrue((root / "grok").is_dir())
+            for word in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "/login", "/hooks", "browser"]:
+                self.assertIn(word, output)
+            (root / "claude/.claude.json").write_text("preserve without parsing")
+            eval_kit.prepare_eval_homes()
+            self.assertEqual("preserve without parsing", (root / "claude/.claude.json").read_text())
+            run.assert_not_called()
+
+    def test_evaluator_home_missing_and_symlink_are_refused_without_status_command(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            env = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
+            for harness, key in runner.kit.EVALUATOR_HOME_VARIABLES.items():
+                with patch.object(runner.subprocess, "run") as run, self.assertRaisesRegex(runner.Refused, "evaluator home not signed in: run prepare-eval-homes"):
+                    runner.check_evaluator_auth(harness, env, Path(temp))
+                run.assert_not_called()
+                dest = Path(env[key]); dest.parent.mkdir(exist_ok=True)
+                dest.symlink_to(Path(temp), target_is_directory=True)
+                with patch.object(runner.subprocess, "run") as run, self.assertRaises(runner.Refused):
+                    runner.check_evaluator_auth(harness, env, Path(temp))
+                run.assert_not_called()
+                dest.unlink()
+
+    def test_evaluator_status_requires_positive_native_signal(self):
+        import subprocess
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
+            for harness in ["claude", "codex"]:
+                good = json.dumps({"loggedIn": True, "configDirectory": env["CLAUDE_CONFIG_DIR"]}) if harness == "claude" else "Logged in using ChatGPT"
+                for code, output, passes in [(0, good, True), (1, "Not logged in", False), (0, "unknown", False), (0, '{"loggedIn": false}', False)]:
+                    with patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], code, output, "")) as run:
+                        if passes:
+                            signal = runner.check_evaluator_auth(harness, env, Path(temp))
+                            self.assertTrue(signal["signed_in"])
+                        else:
+                            with self.assertRaisesRegex(runner.Refused, "evaluator home not signed in: run prepare-eval-homes"):
+                                runner.check_evaluator_auth(harness, env, Path(temp))
+                        self.assertEqual(env, run.call_args.kwargs["env"])
+                with patch.object(runner.subprocess, "run", side_effect=subprocess.TimeoutExpired("status", 30)), self.assertRaises(runner.Refused):
+                    runner.check_evaluator_auth(harness, env, Path(temp))
+
+    def test_grok_auth_requires_post_login_welcome_and_empty_prompt(self):
+        runner = self.runner()
+        screen = "New worktree    ctrl+w\nResume session    ctrl+r\n❯ Type a message...\n"
+        self.assertTrue(runner.grok_authenticated_editor(screen))
+        for bad in ["", "❯ Type a message...", "Login with grok.com", screen + "Approve in your browser to finish signing in.", screen.replace("Type a message...", "unsent text")]:
+            self.assertFalse(runner.grok_authenticated_editor(bad), bad)
+
+    def test_trial_arguments_disable_shared_memory_and_resume(self):
+        runner = self.runner()
+        env = runner.kit.subject_environment(Path("/trial"), Path("/trial/bin/codeflow"), [])
+        flags = runner.kit.trial_native_args("codex", env)
+        for value in ['history.persistence="none"', 'memories.generate_memories=false', 'memories.use_memories=false', 'sqlite_home="/trial/home/codex-state"']:
+            self.assertIn(value, flags)
+        for harness, flag in [("codex", "resume"), ("claude", "--continue"), ("grok", "--resume=old")]:
+            with self.assertRaises(runner.Refused):
+                runner.permission_flags(harness, [flag])
 
     def test_planted_and_changed_entries_invalidate_bounded_observation(self):
         runner = self.runner()
@@ -3776,7 +3862,8 @@ class ProcessRepairTests(unittest.TestCase):
             native = ["--model", "chosen-selector", "--permission-mode", "auto"]
             args = argparse.Namespace(record=record_path, output=root / "evidence", harness="claude",
                                       native=["--", *native], workspace="owned-workspace", watch_dir=[], start_timeout=1, max_entries=100_000, snapshot_seconds=10)
-            with patch.object(runner, "herdr", side_effect=herdr), \
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
                  patch.object(runner, "wait_ready", side_effect=ready), \
                  patch.object(runner, "snapshot", side_effect=snapshot), \
                  patch.object(runner, "deliver_claude", side_effect=deliver), patch.object(runner.time, "sleep"):
@@ -3794,13 +3881,31 @@ class ProcessRepairTests(unittest.TestCase):
                 self.assertIn(f"{key}={environment[key]}", create)
             self.assertEqual(native, list(next(c for c in calls if c[:2] == ("agent", "start"))[-len(native):]))
             args.output = root / "failed-readiness"
-            with patch.object(runner, "herdr", side_effect=herdr), \
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
                  patch.object(runner, "wait_ready", side_effect=runner.Refused("not ready")), \
                  patch.object(runner, "snapshot") as capture, \
                  patch.object(runner.time, "sleep"), self.assertRaisesRegex(runner.Refused, "not ready"):
                 runner.launch(args)
             capture.assert_not_called()
             self.assertFalse((args.output / "before.json").exists())
+            args.output = root / "unsigned-seat"
+            with patch.object(runner, "check_evaluator_auth", side_effect=runner.Refused(runner.AUTH_REFUSAL)), \
+                 patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, runner.AUTH_REFUSAL):
+                runner.launch(args)
+            transport.assert_not_called()
+            self.assertFalse(args.output.exists())
+            args.harness = "grok"
+            args.output = root / "grok-login"
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": False}), \
+                 patch.object(runner, "herdr", side_effect=lambda *a, **k: "Approve in your browser to finish signing in." if a[:2] == ("pane", "read") else herdr(*a, **k)), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot") as capture, patch.object(runner.time, "sleep"), \
+                 self.assertRaisesRegex(runner.Refused, runner.AUTH_REFUSAL):
+                runner.launch(args)
+            capture.assert_not_called()
+            self.assertEqual("refused", json.loads((args.output / "launch.json").read_text())["status"])
+            self.assertFalse(any(call[:2] in [("pane", "send-text"), ("pane", "send-keys")] for call in calls))
             record["path"] = "/another/repository"
             runner.write(record_path, record)
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "signature"):

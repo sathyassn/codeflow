@@ -238,11 +238,55 @@ def deliver_claude(pane: str, prompt: str, initial: dict, seconds: float) -> int
     return 2
 
 
+AUTH_REFUSAL = "evaluator home not signed in: run prepare-eval-homes"
+
+
+def check_evaluator_auth(harness: str, environment: dict[str, str], cwd: Path) -> dict:
+    folder = kit.evaluator_homes()[harness]
+    if environment.get(kit.EVALUATOR_HOME_VARIABLES[harness]) != str(folder) or not kit.evaluator_directory(folder):
+        raise Refused(AUTH_REFUSAL)
+    if harness == "grok":
+        # No status command in Grok Build. Its authenticated welcome is checked
+        # after native startup, before snapshot or delivery. No keys are sent.
+        return {"method": "native-welcome", "signed_in": False}
+    argv = (["claude", "auth", "status"] if harness == "claude" else
+            ["codex", "-c", 'cli_auth_credentials_store="file"', "login", "status"])
+    try:
+        done = subprocess.run(argv, env=environment, cwd=cwd, capture_output=True, text=True, timeout=30)
+        if harness == "claude":
+            status = json.loads(done.stdout)
+            confirmed = status.get("loggedIn") is True and status.get("configDirectory") == str(folder)
+        else:
+            confirmed = (done.stdout + done.stderr).strip() == "Logged in using ChatGPT"
+        if done.returncode or not confirmed:
+            raise Refused(AUTH_REFUSAL)
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError) as exc:
+        raise Refused(AUTH_REFUSAL) from exc
+    # Do not retain account details or raw status output.
+    return {"method": "native-status", "command": argv, "signed_in": True}
+
+
+def grok_authenticated_editor(screen: str) -> bool:
+    # Public Grok welcome renderer: these menu rows require AuthState::Done
+    # with access. Pending login can paint a prompt too, so prompt alone fails.
+    if re.search(r"(?i)login|sign(?:ed|ing)? in|authentication|approve in your browser|switch account", screen):
+        return False
+    lines = [line.strip() for line in screen.splitlines()]
+    return (bool(re.search(r"(?m)^\s*New worktree\s+ctrl\+w\s*$", screen))
+            and bool(re.search(r"(?m)^\s*Resume session\s+ctrl\+r\s*$", screen))
+            and any(re.fullmatch(r"[│┃]?\s*[❯>]\s*(?:Type a message\.\.\.)?\s*[│┃]?", line) for line in lines))
+
+
 def permission_flags(harness: str, native: list[str]) -> dict[str, str]:
     required = {"codex": ("--ask-for-approval", "--sandbox"),
                 "claude": ("--permission-mode",), "grok": ("--permission-mode",)}[harness]
-    if any(arg in {"exec", "-p", "--print", "--single"} for arg in native):
-        raise Refused("only native interactive arguments are allowed")
+    forbidden = {"exec", "-p", "--print", "--single", "--prompt-file", "--prompt-json",
+                 "resume", "fork", "--resume", "--continue", "--fork-session", "--session-id",
+                 "--cwd", "--cd", "-C", "--leader-socket"}
+    if harness in {"claude", "grok"}:
+        forbidden.update({"-c", "-r", "-s"})
+    if any(arg.split("=", 1)[0] in forbidden for arg in native):
+        raise Refused("only fresh native interactive arguments are allowed; no resume or path overrides")
     if harness == "grok" and "--always-approve" in native:
         required = ("--always-approve",)
     result = {}
@@ -274,11 +318,13 @@ def launch(args) -> None:
     trial = repository.parent
     environment = record["subject_environment"]
     for key, path in {"HOME": trial / "home", "TMPDIR": trial / "tmp",
-                      "CODEFLOW_HOME": trial / "home/.codeflow"}.items():
+                      "CODEFLOW_HOME": trial / "home/.codeflow", "XDG_CONFIG_HOME": trial / "home/.config"}.items():
         if environment.get(key) != str(path):
             raise Refused(f"materialize with the current kit: {key} must be {path}")
     native = args.native[1:] if args.native[:1] == ["--"] else args.native
     permissions = permission_flags(args.harness, native)
+    authentication = check_evaluator_auth(args.harness, environment, repository)
+    native = [*native, *kit.trial_native_args(args.harness, environment)]
     watched = sorted({str(Path(p).resolve()) for p in
                       [environment["TMPDIR"], "/private/tmp", *args.watch_dir]})
     observation = {"shallow": ["/private/tmp"],
@@ -295,7 +341,7 @@ def launch(args) -> None:
            "repository": str(repository), "harness": args.harness,
            "native_args": native, "permission_flags": permissions,
            "environment": environment, "declared_directories": watched,
-           "observation": observation,
+           "observation": observation, "authentication": authentication,
            "status": "prepared", "started_at": time.time()}
     write(args.output / "launch.json", run)
     try:
@@ -316,7 +362,16 @@ def launch(args) -> None:
             time.sleep(0.5)
         run["launch_response"] = herdr("agent", "start", f"eval-{trial.name}", "--kind",
                                       args.harness, "--pane", run["pane"], "--", *native)
-        initial = wait_ready(run["pane"], args.start_timeout)
+        try:
+            initial = wait_ready(run["pane"], args.start_timeout)
+        except Refused as exc:
+            if args.harness == "grok":
+                raise Refused(AUTH_REFUSAL) from exc
+            raise
+        if args.harness == "grok":
+            if not grok_authenticated_editor(herdr("pane", "read", run["pane"], "--source", "visible", text=True)):
+                raise Refused(AUTH_REFUSAL)
+            run["authentication"]["signed_in"] = True
         run["initial_agent"] = initial
         write(args.output / "before.json", snapshot(watched, **observation))
         prompt = (repository / "TASK.md").read_text(encoding="utf-8")
