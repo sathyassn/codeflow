@@ -48,9 +48,9 @@ Core modules grouped by responsibility.
 | Area | Modules | What it owns |
 |---|---|---|
 | Scaffold | `scaffold/` | `init`, `update`, the manifest, 3-way merge, and the ownership classes below, sourced from the rust-embed asset provider |
-| Enforcement | `hooks/`, `security/`, `git/`, `delegate.rs`, `integrate.rs`, `remote.rs`, `root_checkout.rs` | the `git-guard` and `exec-guard` PreToolUse handlers and the git-client hook stages, the dual-mode `delegate-turn` adapter (the legacy `--result` record-and-signal mode plus the transport-neutral delegate lifecycle state machine in `delegate.rs`, architecture decision record ADR-0036), the secret scanner, git conflict detection and CI wait, the flock-guarded `integrate` primitive with its gate-context token, the GitHub remote-protect adapter, and the root checkout's root branch, the actor read from harness markers, and workspace mode (ADR-0074) |
+| Enforcement | `hooks/`, `security/`, `git/`, `delegate.rs`, `integrate.rs`, `remote.rs`, `root_checkout.rs` | the `git-guard`, `exec-guard` and `edit-guard` PreToolUse handlers and the git-client hook stages, the dual-mode `delegate-turn` adapter (the legacy `--result` record-and-signal mode plus the transport-neutral delegate lifecycle state machine in `delegate.rs`, architecture decision record ADR-0036), the secret scanner, git conflict detection and CI wait, the flock-guarded `integrate` primitive with its gate-context token, the GitHub remote-protect adapter, and the root checkout's root branch, the actor read from harness markers, and workspace mode (ADR-0074) |
 | Records and knowledge | `models/`, `ledger/`, `workgraph/`, `validate/`, `capability.rs`, `recall.rs`, `registry.rs` | frontmatter models, the JSONL ledger, the work graph, `validate` and its `--docs` referential-integrity lint, including structural task dependency identity, reference and cycle checks, the capability registry parser, full-text search (FTS5) recall, and the cross-repo registry |
-| Support | `doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`, `error.rs`, `reading.rs` | the doctor check table (19 checks: hooks, claude, codex, grok, config, permissions, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit), the progressive reading map (`reading.rs`: the per-task reading chain, the conditional reads and their triggers, the orphan check and the size guideline numbers, shared with `artifact_budget_contract`), including bidirectional delegate readiness (Codex auth and Model Context Protocol (MCP) servers, the Claude plugin, and tmux prerequisites; live interactive canaries remain outside the binary) and a sentinel-based consuming-project customization nudge, structured settings merge, generated status views, the test-gate engine, path flock, and pruned error types |
+| Support | `doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`, `error.rs`, `reading.rs` | the doctor check table (20 checks: hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit), the progressive reading map (`reading.rs`: the per-task reading chain, the conditional reads and their triggers, the orphan check and the size guideline numbers, shared with `artifact_budget_contract`), including bidirectional delegate readiness (Codex auth and Model Context Protocol (MCP) servers, the Claude plugin, and tmux prerequisites; live interactive canaries remain outside the binary) and a sentinel-based consuming-project customization nudge, structured settings merge, generated status views, the test-gate engine, path flock, and pruned error types |
 
 The shell plane reads a composed deletion as scoped shell. Each variable,
 positional parameter and the working directory carry every value they may hold
@@ -65,10 +65,9 @@ deletion that depends on it is refused as unproven (TSK-141).
 `session-orient` is also the advisory entry for `UserPromptSubmit`. It reads
 the payload's event and adds the kernel guidance block after a compaction,
 resume or fork, or one rule line to a prompt that asks for a duration, a status
-or a complex explanation (`hooks/guidance.rs`, TSK-128). One command for both
-events means an older binary still exits 0 on a prompt. The guards never pass
-through it. Grok Build ignores these events' output, so it wires only the
-guards.
+or a complex explanation (`hooks/guidance.rs`, TSK-128). Contract 3 refuses
+an older binary on either event. The guards never pass through it. Grok Build
+ignores these events' output, so it wires only the guards.
 
 A git-hook shim runs the `codeflow` binary whose command started git. That
 command names itself in `CODEFLOW_HOOK_BINARY` for its git children only, and

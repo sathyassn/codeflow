@@ -27,6 +27,8 @@ pub mod git;
 #[cfg(test)]
 pub(crate) mod guard_forms;
 pub mod headless;
+pub(crate) mod interpreter;
+pub(crate) mod outward;
 pub mod pattern;
 pub mod policy;
 pub mod privilege;

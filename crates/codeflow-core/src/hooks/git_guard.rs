@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -172,19 +172,29 @@ pub fn read_target(
     };
     // Empty on a detached HEAD, which no branch rule protects.
     let branch = super::repo::current_branch(&repo);
-    let same = session_common.is_some_and(|s| same_path(s, repo.commondir()));
+    let same = session_common.is_some_and(|s| same_path(s, repo.commondir()))
+        && git2::Repository::discover(cwd)
+            .ok()
+            .and_then(|session| session.workdir().map(Path::to_path_buf))
+            .zip(repo.workdir())
+            .is_some_and(|(session, target)| same_path(&session, target));
     let policy = if same {
         None
     } else {
-        Some(repo.workdir().map_or_else(GitPolicy::default, |root| {
-            super::policy::Policy::load_effective(root).0.git
-        }))
+        Some(
+            super::landed_policy::load(repo.workdir().unwrap_or(repo.path()))
+                .ok()?
+                .policy
+                .git,
+        )
     };
     let root = repo
         .workdir()
         .filter(|_| crate::root_checkout::is_root_checkout(&repo))
         .and_then(|dir| {
-            RootCheckout::read(&repo, &super::policy::Policy::load_effective(dir).0.git)
+            super::landed_policy::load(dir)
+                .ok()
+                .and_then(|authority| RootCheckout::read(&repo, &authority.policy.git))
         });
     Some(TargetRepo {
         branch,
@@ -344,6 +354,8 @@ pub struct GuardContext<'a> {
     /// How to resolve a subcommand that is not a git builtin to the alias it
     /// names (injected). `None` leaves every such subcommand unclassifiable.
     pub alias_lookup: AliasLookup<'a>,
+    /// Read-only local-work proof for the command's actual repository.
+    pub discard_lookup: DiscardLookup<'a>,
     /// The session's root checkout, when the command runs in one: a commit
     /// there off its root branch is judged by `git.root_checkout_commits`
     /// (TSK-165). `None` in a linked worktree.
@@ -373,6 +385,14 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
 /// disclose how the verdict was reached.
 #[must_use]
 pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    evaluate_report_at(command, ctx, &cwd)
+}
+
+/// Evaluate a command using the tool payload's working directory for paths.
+#[must_use]
+#[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
+pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> Evaluation {
     let mut report = Evaluation::default();
     let violations = &mut report.violations;
     // Chained checkout/switch dodges change the branch later segments run on.
@@ -391,7 +411,10 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
     // `$(…)`/backticks, newlines, and backgrounding `&` — so a git/gh
     // invocation is evaluated wherever it sits, not only as a segment's first
     // word (the review's wrapper evasions).
+    let mut earlier_mutation = command.contains("GIT_INDEX_FILE");
     for (idx, segment) in segments.iter().enumerate() {
+        branches.discard_state_changed = earlier_mutation;
+        earlier_mutation |= may_change_discard_state(segment);
         let top_level = match roles.as_ref().map(|r| r[idx]) {
             Some(Some(join)) => {
                 shell.begin(join);
@@ -408,8 +431,16 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
 
         // Hook/policy integrity: writes or removes that would disarm or tamper
         // with the enforcement plane, evaluated on ANY command (not just git).
-        if ctx.policy.hook_integrity.is_active() {
-            if let Some(v) = integrity_write_violation(&tokens, ctx.policy.hook_integrity) {
+        let moved = line.moves_for(&shell, top_level, &tokens);
+        if let Some(mut v) =
+            integrity_write_in_dirs(&tokens, ctx.policy.hook_integrity, cwd, &moved.cwd)
+        {
+            let authority = v.message.contains(super::edit_guard::AUTHORITY_PATH);
+            if authority {
+                v.level = PolicyLevel::Block;
+                v.level_fixed = true;
+            }
+            if authority || ctx.policy.hook_integrity.is_active() {
                 violations.push(v);
                 continue;
             }
@@ -437,7 +468,7 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
         // A `cd <dir>` (as its own simple command) retargets later git ops.
         if let Some(dir) = cd_target(&tokens) {
             if top_level {
-                if tokens[0] == "cd" {
+                if tokens[0] == "cd" || plain_pushd(segment) {
                     shell.cd(&dir);
                 } else {
                     shell.observe(&tokens[0], &tokens[1..]);
@@ -475,7 +506,16 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
         match program_kind(program) {
             ProgramKind::Git => {
                 let moved = line.moves_for(&shell, top_level, &tokens);
-                check_git(args, &mut branches, &moved, ctx, violations, &mut notes, 0);
+                check_git(
+                    args,
+                    &mut branches,
+                    &moved,
+                    ctx,
+                    violations,
+                    &mut notes,
+                    0,
+                    cwd,
+                );
             }
             ProgramKind::Gh => check_gh(args, ctx, violations),
             // A program named by a substitution could be git itself.
@@ -718,6 +758,16 @@ fn git_config_env_sets_hooks_path(tokens: &[String]) -> bool {
         })
 }
 
+/// Inspect assignments before launchers are stripped, including prior exports.
+pub(super) fn transport_config_environment(command: &str) -> bool {
+    expand_commands(command).iter().any(|segment| {
+        let tokens = shell_tokens(segment);
+        leading_env_assignments(&tokens).iter().any(|(name, _)| {
+            name.starts_with("GIT_CONFIG") || matches!(*name, "HOME" | "XDG_CONFIG_HOME")
+        })
+    })
+}
+
 /// Env vars whose in-session assignment disables the client hooks. `HUSKY`
 /// only disarms at `=0`; the rest disarm at any value.
 const HOOK_SKIP_ENV_VARS: &[&str] = &[
@@ -765,6 +815,21 @@ fn hook_skip_env(tokens: &[String]) -> Option<&'static str> {
     None
 }
 
+// Only the directory form has cd semantics; stack indexes and `-n` do not.
+fn plain_pushd(segment: &str) -> bool {
+    let mut tokens = command_argv(segment);
+    strip_reserved_words(&mut tokens);
+    let Some((program, args)) = tokens.split_first() else {
+        return false;
+    };
+    let args = if args.first().is_some_and(|arg| arg == "--") {
+        &args[1..]
+    } else {
+        args
+    };
+    program == "pushd" && matches!(args, [dir] if !dir.starts_with(['+', '-']))
+}
+
 /// A `cd <dir>`/`pushd <dir>` simple command that retargets later git ops.
 fn cd_target(tokens: &[String]) -> Option<String> {
     let first = tokens.first()?.as_str();
@@ -780,8 +845,13 @@ fn cd_target(tokens: &[String]) -> Option<String> {
 
 /// The hook shims and the integrity files: directory prefixes and exact files
 /// whose mutation would disarm or falsify the enforcement plane.
-const INTEGRITY_PREFIXES: &[&str] = &[".git/hooks", ".codeflow/git-hooks"];
-const INTEGRITY_FILES: &[&str] = &[".codeflow/policy.json", ".codeflow/project.toml"];
+const INTEGRITY_PREFIXES: &[&str] = &[".git/hooks", ".git/refs/remotes", ".codeflow/git-hooks"];
+const INTEGRITY_FILES: &[&str] = &[
+    ".codeflow/policy.json",
+    ".codeflow/project.toml",
+    ".git/config",
+    ".git/packed-refs",
+];
 
 /// Collapse the path spellings that name the same file — `//`, `/./`, a
 /// trailing `/`, and a leading `./` — so a matcher compares the real path, not
@@ -802,20 +872,154 @@ fn normalize_path(s: &str) -> String {
     }
 }
 
+fn integrity_write_in_dirs(
+    tokens: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    dirs: &Cwd,
+) -> Option<Violation> {
+    match dirs {
+        Cwd::Paths(dirs) => dirs
+            .iter()
+            .find_map(|dir| integrity_write_violation(tokens, level, &cwd.join(dir), cwd)),
+        Cwd::Unknown(_) => integrity_write_violation(tokens, level, cwd, cwd),
+    }
+}
+
 /// The integrity path a single argument token names, when any. The token is
 /// normalized first so equivalent spellings match.
-fn token_integrity_path(token: &str) -> Option<&'static str> {
-    let norm = normalize_path(token);
+fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+    let path = integrity_shell_path(token, cwd);
+    if super::edit_guard::repository_authority_target(&path, payload_cwd, true) {
+        return Some(super::edit_guard::AUTHORITY_PATH);
+    }
+    if super::edit_guard::repository_enforcement_target(&path, payload_cwd, true) {
+        return Some("repository enforcement files");
+    }
+    integrity_target(&normalize_path(token)).or_else(|| {
+        let base = integrity_disk_case(payload_cwd);
+        let path = integrity_disk_case(&cwd.join(token));
+        if let Some(protected) = root_dot_pattern_target(&path) {
+            return Some(protected);
+        }
+        // A derived absolute path is not a typed scratch-copy exemption.
+        // Keep relative spellings (including `..`) relative to the tool cwd.
+        let target = path
+            .strip_prefix(&base)
+            .ok()
+            .or_else(|| Path::new(token).is_absolute().then_some(path.as_path()))?;
+        integrity_target(&normalize_path(&target.to_string_lossy()))
+    })
+}
+
+fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
+    if let Some(relative) = token.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(relative);
+        }
+    }
+    for name in ["HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL"] {
+        let relative = token
+            .strip_prefix(&format!("${name}"))
+            .or_else(|| token.strip_prefix(&format!("${{{name}}}")));
+        if let Some(relative) = relative.filter(|s| s.is_empty() || s.starts_with('/')) {
+            if let Some(value) = std::env::var_os(name) {
+                return cwd.join(value).join(relative.trim_start_matches('/'));
+            }
+        }
+    }
+    cwd.join(token)
+}
+
+// Only explicit dot-patterns at a repository root can reach these hidden
+// directories; ordinary root globs and patterns below other paths stay ordinary.
+// The pattern's own directory decides, wherever the command runs from.
+fn root_dot_pattern_target(path: &Path) -> Option<&'static str> {
+    let pattern = path.file_name()?.to_str()?;
+    if !pattern.starts_with('.') || !pattern.contains(['*', '?', '[', '{']) {
+        return None;
+    }
+    let parent = path.parent()?.canonicalize().ok()?;
+    let root = super::RepoInfo::discover(&parent)?
+        .root
+        .canonicalize()
+        .ok()?;
+    if parent != root {
+        return None;
+    }
     INTEGRITY_PREFIXES
         .iter()
         .chain(INTEGRITY_FILES.iter())
         .copied()
-        .find(|p| is_path_targeted(&norm, p))
+        .find(|protected| {
+            protected
+                .split_once('/')
+                .is_some_and(|(root, _)| integrity_glob_matches(pattern, root))
+        })
+}
+
+// Glob handles stars, questions and brackets. Expand comma braces from the
+// innermost pair, without consulting the filesystem or executing the shell.
+fn integrity_glob_matches(pattern: &str, name: &str) -> bool {
+    if let Some((prefix, tail)) = pattern.rsplit_once('{') {
+        if let Some((choices, suffix)) = tail.split_once('}') {
+            if choices.contains(',') {
+                return choices.split(',').any(|choice| {
+                    integrity_glob_matches(&format!("{prefix}{choice}{suffix}"), name)
+                });
+            }
+        }
+    }
+    glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches(name))
+}
+
+fn integrity_disk_case(path: &Path) -> PathBuf {
+    let mut real = PathBuf::new();
+    for component in path.components() {
+        real.push(component);
+        if let Ok(metadata) = std::fs::symlink_metadata(&real) {
+            super::edit_guard::normalize_case(&mut real, &metadata);
+        }
+    }
+    real
+}
+
+fn integrity_target(path: &str) -> Option<&'static str> {
+    // A final-component pattern can empty the directory that contains it.
+    let target = Path::new(path);
+    let path = if target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains(['*', '?', '[', '{']))
+    {
+        target.parent().and_then(Path::to_str).unwrap_or(path)
+    } else {
+        path
+    };
+    INTEGRITY_PREFIXES
+        .iter()
+        .chain(INTEGRITY_FILES.iter())
+        .copied()
+        .find(|protected| {
+            is_path_targeted(path, protected)
+                || Path::new(protected)
+                    .ancestors()
+                    .skip(1)
+                    .filter_map(Path::to_str)
+                    .filter(|ancestor| !ancestor.is_empty())
+                    .any(|ancestor| {
+                        // An ancestor must be the whole target, not a prefix of
+                        // an ordinary file such as `.codeflow/notes.md`.
+                        (path == ancestor || path.ends_with(&format!("/{ancestor}")))
+                            && is_path_targeted(path, ancestor)
+                    })
+        })
 }
 
 /// The integrity path named by any argument in `args`.
-fn arg_integrity_path(args: &[String]) -> Option<&'static str> {
-    args.iter().find_map(|a| token_integrity_path(a))
+fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+    args.iter()
+        .find_map(|a| token_integrity_path(a, cwd, payload_cwd))
 }
 
 /// Where a write-redirect operator's target sits.
@@ -869,17 +1073,24 @@ fn classify_redirect_rest(rest: &str) -> RedirectTarget<'_> {
 /// A write redirect (`>`, `>>`, `>|`, `1>`, `2>>`, …) whose target is an
 /// integrity path, from the token stream — target attached (`>policy.json`) or
 /// the next token (`> policy.json`).
-fn redirect_integrity_path(tokens: &[String]) -> Option<&'static str> {
+fn redirect_integrity_path(
+    tokens: &[String],
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<&'static str> {
     let mut i = 0;
     while i < tokens.len() {
         match redirect_target(&tokens[i]) {
             Some(RedirectTarget::Attached(t)) => {
-                if let Some(p) = token_integrity_path(t) {
+                if let Some(p) = token_integrity_path(t, cwd, payload_cwd) {
                     return Some(p);
                 }
             }
             Some(RedirectTarget::Next) => {
-                if let Some(p) = tokens.get(i + 1).and_then(|n| token_integrity_path(n)) {
+                if let Some(p) = tokens
+                    .get(i + 1)
+                    .and_then(|n| token_integrity_path(n, cwd, payload_cwd))
+                {
                     return Some(p);
                 }
             }
@@ -890,13 +1101,69 @@ fn redirect_integrity_path(tokens: &[String]) -> Option<&'static str> {
     None
 }
 
+fn rsync_dry_run(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        arg == "--dry-run"
+            || arg
+                .strip_prefix('-')
+                .is_some_and(|flags| !flags.starts_with('-') && flags.contains('n'))
+    })
+}
+
+// Find's traversal roots are separate from predicate operands and -exec data.
+fn find_mutating_roots(args: &[String]) -> Option<&[String]> {
+    let start = args
+        .iter()
+        .take_while(|arg| matches!(arg.as_str(), "-H" | "-L" | "-P"))
+        .count();
+    let rest = &args[start..];
+    let end = rest
+        .iter()
+        .position(|arg| arg.starts_with('-') || matches!(arg.as_str(), "!" | "("))
+        .unwrap_or(rest.len());
+    let roots = &rest[..end];
+    let mut at = end;
+    while let Some(arg) = rest.get(at) {
+        match arg.as_str() {
+            "-delete" => return Some(roots),
+            "-exec" | "-execdir" => {
+                let tail = &rest[at + 1..];
+                let end = tail
+                    .iter()
+                    .position(|arg| matches!(arg.as_str(), ";" | "+"))
+                    .unwrap_or(tail.len());
+                if strip_launchers(&tail[..end])
+                    .is_some_and(|(program, _)| matches!(basename(program), "rm" | "chmod"))
+                {
+                    return Some(roots);
+                }
+                at += end + 1;
+            }
+            "-name" | "-iname" | "-path" | "-ipath" | "-wholename" | "-iwholename" | "-regex"
+            | "-iregex" | "-type" | "-xtype" | "-user" | "-group" | "-uid" | "-gid" | "-perm"
+            | "-size" | "-links" | "-inum" | "-mtime" | "-mmin" | "-atime" | "-amin" | "-ctime"
+            | "-cmin" | "-newer" | "-anewer" | "-cnewer" | "-newermt" | "-maxdepth"
+            | "-mindepth" | "-printf" | "-fprint" | "-fprint0" | "-fls" => at += 1,
+            "-fprintf" => at += 2,
+            _ => {}
+        }
+        at += 1;
+    }
+    None
+}
+
 /// Block a Bash write/remove that would disarm or falsify the enforcement
 /// plane: a redirect into, or a mutating command targeting, the hook shims
 /// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
 /// (`.codeflow/policy.json`, `.codeflow/project.toml`). Reads (`cat`, a `cp`
 /// *from* an integrity path) stay allowed.
-fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Violation> {
-    if let Some(p) = redirect_integrity_path(tokens) {
+fn integrity_write_violation(
+    tokens: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    if let Some(p) = redirect_integrity_path(tokens, cwd, payload_cwd) {
         return Some(hook_integrity_violation(
             level,
             format!("redirect would overwrite the integrity path `{p}`"),
@@ -905,48 +1172,59 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
     let (program, args) = strip_launchers(tokens)?;
     let cmd = basename(program);
 
-    if matches!(
-        cmd,
-        "rm" | "unlink"
-            | "mv"
-            | "tee"
-            | "dd"
-            | "truncate"
-            | "shred"
-            | "chmod"
-            | "chown"
-            | "ln"
-            | "install"
-    ) {
-        if let Some(p) = arg_integrity_path(args) {
+    let write_args = match cmd {
+        "find" => find_mutating_roots(args),
+        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "install" => {
+            Some(args)
+        }
+        _ => None,
+    };
+    if let Some(p) = write_args.and_then(|paths| {
+        if paths.is_empty() && cmd == "find" {
+            token_integrity_path(".", cwd, payload_cwd)
+        } else {
+            arg_integrity_path(paths, cwd, payload_cwd)
+        }
+    }) {
+        return Some(hook_integrity_violation(
+            level,
+            format!("`{cmd}` targets the integrity path `{p}`"),
+        ));
+    }
+    if cmd == "dd" {
+        if let Some(p) = args
+            .iter()
+            .filter_map(|arg| arg.strip_prefix("of="))
+            .find_map(|path| token_integrity_path(path, cwd, payload_cwd))
+        {
             return Some(hook_integrity_violation(
                 level,
-                format!("`{cmd}` targets the integrity path `{p}`"),
+                format!("`dd` writes the integrity path `{p}`"),
             ));
         }
     }
     if cmd == "sed" && requests_in_place(args) {
-        if let Some(p) = arg_integrity_path(args) {
+        if let Some(p) = arg_integrity_path(args, cwd, payload_cwd) {
             return Some(hook_integrity_violation(
                 level,
                 format!("`sed -i` edits the integrity path `{p}`"),
             ));
         }
     }
-    if cmd == "cp" {
-        // Only a write matters: the integrity path as the destination (the last
-        // non-flag argument). A `cp` *from* an integrity path is a read.
+    if matches!(cmd, "cp" | "ln") || (cmd == "rsync" && !rsync_dry_run(args)) {
+        // Only the destination is written. A copy or link from an integrity
+        // path leaves that source in place.
         if let Some(dest) = args.iter().rev().find(|a| !a.starts_with('-')) {
-            if let Some(p) = token_integrity_path(dest) {
+            if let Some(p) = token_integrity_path(dest, cwd, payload_cwd) {
                 return Some(hook_integrity_violation(
                     level,
-                    format!("`cp` writes the integrity path `{p}`"),
+                    format!("`{cmd}` writes the integrity path `{p}`"),
                 ));
             }
         }
     }
     if cmd == "git" && matches!(args.first().map(String::as_str), Some("rm" | "mv")) {
-        if let Some(p) = arg_integrity_path(&args[1..]) {
+        if let Some(p) = arg_integrity_path(&args[1..], cwd, payload_cwd) {
             return Some(hook_integrity_violation(
                 level,
                 format!("`git {}` removes the integrity path `{p}`", args[0]),
@@ -1673,6 +1951,8 @@ struct BranchTracker {
     /// branch (which `includeIf "onbranch:…"` reads), so an alias read from
     /// disk now may not be what git runs.
     config_changed: bool,
+    /// Earlier shell steps may invalidate the disk snapshot for discard checks.
+    discard_state_changed: bool,
 }
 
 impl BranchTracker {
@@ -1686,6 +1966,7 @@ impl BranchTracker {
             now: start.clone(),
             list: start,
             config_changed: false,
+            discard_state_changed: false,
         }
     }
 
@@ -1741,6 +2022,7 @@ struct LineFacts {
 
 /// What a line may change about where git reads its repository and its
 /// configuration.
+#[allow(clippy::struct_excessive_bools)] // Independent facts may all hold on the same command line.
 struct Mentions {
     /// A git location variable (`GIT_DIR`, …).
     location_var: bool,
@@ -1748,6 +2030,8 @@ struct Mentions {
     /// `XDG_CONFIG_HOME`) or a config file path, which the alias reader
     /// cannot see.
     config_env: bool,
+    /// Transport cannot trust config supplied by the command being judged.
+    transport_env: bool,
     /// A `git config` write whose order the guard does not model: anywhere
     /// on a line that is not flat, or nested in a substitution. Top-level
     /// writes on a flat line are followed in order.
@@ -1762,6 +2046,7 @@ impl LineFacts {
             mentions: Mentions {
                 location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
                 config_env: mentions_config_env(command),
+                transport_env: transport_config_environment(command),
                 config_write: false,
             },
         };
@@ -1817,6 +2102,7 @@ impl LineFacts {
             // environment is only modeled at top level of a flat line.
             location_unknown: self.mentions.location_var && !tracked,
             config_unknown: self.mentions.config_env || self.mentions.config_write,
+            transport_env: self.mentions.transport_env,
             narrows: tracked,
             tokens,
         }
@@ -1824,6 +2110,7 @@ impl LineFacts {
 }
 
 /// Where the line has moved the directory a git op runs in.
+#[allow(clippy::struct_excessive_bools)] // Orthogonal location, config, transport and ordering evidence.
 struct Moves<'r> {
     /// The directories the op could run in.
     cwd: Cwd,
@@ -1833,6 +2120,7 @@ struct Moves<'r> {
     location_unknown: bool,
     /// The line may change where git reads its configuration from.
     config_unknown: bool,
+    transport_env: bool,
     /// The op is a modeled top-level command, so a branch move it makes
     /// holds for the rest of its `&&` list.
     narrows: bool,
@@ -1840,6 +2128,50 @@ struct Moves<'r> {
     tokens: &'r [String],
 }
 
+fn check_authority(
+    args: &[String],
+    moved: &Moves<'_>,
+    cwd: &Path,
+    violations: &mut Vec<Violation>,
+) {
+    if moved.transport_env
+        && git_subcommand(args).is_some_and(|(sub, rest)| {
+            matches!(sub, "fetch" | "pull" | "push")
+                || super::ref_authority::remote_update_args(sub, rest).is_some()
+        })
+    {
+        violations.push(Violation::always_blocking(
+            "git.policy_authority",
+            "command-local configuration can redirect the configured remote".into(),
+            "use the configured remote without configuration environment overrides",
+        ));
+        return;
+    }
+    if let Ok(specs) = compose_targets(args, moved) {
+        for spec in specs {
+            let target = spec
+                .as_ref()
+                .map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path));
+            if let Err(reason) = super::landed_policy::load(&target) {
+                let recovery = git_subcommand(args)
+                    .is_some_and(|(sub, rest)| sub == "fetch" && rest.len() <= 1)
+                    && super::ref_authority::check(&target, args).is_none();
+                if !recovery {
+                    violations.push(Violation::always_blocking(
+                        "git.policy_authority",
+                        reason,
+                        "restore the named remote-tracking policy authority",
+                    ));
+                }
+            }
+            if let Some(reason) = super::ref_authority::check(&target, args) {
+                violations.push(Violation::always_blocking("git.policy_authority", reason, "the operator repairs the configured remote; agents use its ordinary fetch mapping"));
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Ordered checks share the parsed command and its exact cwd.
 fn check_git(
     args: &[String],
     branches: &mut BranchTracker,
@@ -1848,7 +2180,9 @@ fn check_git(
     out: &mut Vec<Violation>,
     notes: &mut Vec<crate::remedy::Finding>,
     depth: usize,
+    cwd: &Path,
 ) {
+    check_authority(args, moved, cwd, out);
     let policy = ctx.policy;
 
     // Global-flag pass, ahead of the subcommand: hook-path override (`git -c
@@ -1881,7 +2215,9 @@ fn check_git(
         match expand_alias(args, sub, moved, ctx, depth, branches.config_changed) {
             Ok(expansions) => {
                 for expanded in expansions {
-                    check_git(&expanded, branches, moved, ctx, out, notes, depth + 1);
+                    check_git(&expanded, branches, moved, ctx, out, notes, depth + 1, cwd);
+                    branches.discard_state_changed |= git_subcommand(&expanded)
+                        .is_none_or(|(sub, rest)| !discard_readonly_git(sub, rest));
                 }
             }
             Err(why) => {
@@ -1917,6 +2253,15 @@ fn check_git(
             out.extend(strictest);
         }
     }
+    check_discard(
+        args,
+        sub,
+        rest,
+        moved,
+        branches.discard_state_changed,
+        ctx,
+        out,
+    );
     track_branch_move(
         sub,
         rest,
@@ -1941,6 +2286,7 @@ fn check_git(
             pr_base_lookup: ctx.pr_base_lookup,
             dir_target_lookup: ctx.dir_target_lookup,
             alias_lookup: ctx.alias_lookup,
+            discard_lookup: ctx.discard_lookup,
             root_checkout: ctx.root_checkout,
         };
         let mut case = Vec::new();
@@ -1957,6 +2303,18 @@ fn check_git(
     }
     if let Some(why) = judged.unresolved {
         notes.push(disclose_unresolved(sub, &why, &mut found));
+    }
+    if !found.is_empty() && ctx.dir_target_lookup.is_some() {
+        if let Ok(specs) = compose_targets(args, moved) {
+            for spec in specs.into_iter().flatten() {
+                if let Ok(authority) = super::landed_policy::load(&cwd.join(spec.path)) {
+                    for finding in &mut found {
+                        finding.message.push_str("; target policy source: ");
+                        finding.message.push_str(&authority.source);
+                    }
+                }
+            }
+        }
     }
     out.extend(found);
 }
@@ -2046,6 +2404,10 @@ const JUDGED_SUBCOMMANDS: &[&str] = &[
     "push",
     "checkout",
     "switch",
+    "restore",
+    "clean",
+    "stash",
+    "worktree",
 ];
 
 /// Subcommands that act on the branch checked out where they run. Their
@@ -2154,20 +2516,31 @@ fn exposed_rules(sub: Option<&str>, p: &GitPolicy) -> Vec<(&'static str, PolicyL
         ("git.hard_reset_protected", p.hard_reset_protected),
         ("git.local_ref_protection", p.local_ref_protection),
         ("git.hook_integrity", p.hook_integrity),
+        ("git.discard_uncommitted", p.discard_uncommitted),
     ];
     let names: &[&str] = match sub {
         None => return all.to_vec(),
         Some("commit") => &["git.commit_to_protected"],
         Some("merge" | "cherry-pick") => &["git.merge_to_protected"],
-        Some("rebase" | "reset") => &["git.hard_reset_protected"],
+        Some("rebase") => &["git.hard_reset_protected"],
+        Some("reset") => &["git.hard_reset_protected", "git.discard_uncommitted"],
         Some("push") => &[
             "git.push_to_protected",
             "git.force_push_protected",
             "git.delete_protected",
         ],
-        Some("branch") => &["git.delete_protected", "git.local_ref_protection"],
+        Some("branch") => &[
+            "git.delete_protected",
+            "git.local_ref_protection",
+            "git.discard_uncommitted",
+        ],
         Some("config") => &["git.hook_integrity"],
-        Some("checkout" | "switch") => &["git.local_ref_protection", "git.commit_to_protected"],
+        Some("checkout" | "switch") => &[
+            "git.local_ref_protection",
+            "git.commit_to_protected",
+            "git.discard_uncommitted",
+        ],
+        Some("restore" | "clean" | "stash" | "worktree") => &["git.discard_uncommitted"],
         Some(_) => &["git.local_ref_protection", "git.delete_protected"],
     };
     all.into_iter()
@@ -2212,7 +2585,7 @@ fn unclassifiable_violation(
 /// Git's builtin commands (`git --list-cmds=builtins`, Git 2.53). Git runs a
 /// builtin even when an alias of the same name exists, so only another name
 /// is looked up as an alias.
-const GIT_BUILTINS: &[&str] = &[
+pub(crate) const GIT_BUILTINS: &[&str] = &[
     "add",
     "am",
     "annotate",
@@ -3632,6 +4005,20 @@ const GIT_UPDATE_REF_OPTIONS: OptionSpec = OptionSpec {
     git_style: true,
 };
 
+pub(super) fn ref_plumbing_tampers(sub: &str, args: &[String]) -> bool {
+    let parsed = parse_options(args, &GIT_UPDATE_REF_OPTIONS);
+    let writing = sub == "update-ref"
+        || parsed.has_short(&['d'])
+        || args.iter().any(|arg| arg == "--delete")
+        || parsed.operands.len() >= 2;
+    writing
+        && (parsed.has_long("--stdin")
+            || parsed
+                .operands
+                .iter()
+                .any(|name| name.starts_with("refs/remotes/")))
+}
+
 /// `git reset` (git-reset(1)): the mode options are booleans, and only the
 /// pathspec sources take a value.
 const GIT_RESET_OPTIONS: OptionSpec = OptionSpec {
@@ -4135,7 +4522,7 @@ fn is_identifier(s: &str) -> bool {
 const GIT_GLOBAL_VALUE_FLAGS: &[&str] = &["-C", "-c", "--git-dir", "--work-tree", "--namespace"];
 
 /// Find the git subcommand, skipping global flags (`git -C path commit …`).
-fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
+pub(super) fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     let mut idx = 0;
     while idx < args.len() {
         let t = &args[idx];
@@ -4311,6 +4698,7 @@ mod registry_guard_tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         };
         evaluate(command, &ctx)
@@ -4374,6 +4762,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
     }
@@ -4391,6 +4780,7 @@ mod tests {
             pr_base_lookup: Some(lookup),
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
     }
@@ -4408,6 +4798,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: Some(resolver),
             alias_lookup: Some(&fixture_alias),
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
     }
@@ -4564,6 +4955,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         };
         assert!(evaluate("git commit -m 'feat: x'", &c).is_empty());
@@ -4588,6 +4980,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         };
         assert!(evaluate("git merge feat/x", &c).is_empty());
@@ -5875,13 +6268,15 @@ mod tests {
     }
 
     #[test]
-    fn test_update_ref_remote_tracking_feature_allowed() {
+    fn test_update_ref_remote_tracking_feature_refused() {
         let p = default_policy();
-        assert!(evaluate(
-            "git update-ref refs/remotes/origin/feat/x abc",
-            &ctx(&p, "feat/x")
-        )
-        .is_empty());
+        assert!(has_rule(
+            &evaluate(
+                "git update-ref refs/remotes/origin/feat/x abc",
+                &ctx(&p, "feat/x")
+            ),
+            "git.policy_authority"
+        ));
     }
 
     // -- bulk push (4d) --
@@ -7139,13 +7534,12 @@ mod tests {
         assert!(has_rule(&r.violations, "git.commit_to_protected"));
     }
 
-    // Forms the tracker cannot follow stay unknown: `pushd` (its `-n` does
+    // Forms the tracker cannot follow stay unknown: `pushd -n` (it does
     // not move), a negated `cd`, and an assignment whose redirection can fail.
     #[test]
     fn test_tsk112_unmodeled_moves_stay_unknown() {
         for (cmd, session) in [
             ("pushd -n /scratch && git commit -m x", "main"),
-            ("pushd /scratch && git commit -m x", "main"),
             ("! cd /scratch-main && git commit -m x", "feat/s"),
             (
                 "R=/scratch-main; export R=/scratch > /absent/x; git -C \"$R\" commit -m x",
@@ -7163,6 +7557,14 @@ mod tests {
                 r.violations
             );
         }
+    }
+
+    #[test]
+    fn q4_plain_pushd_has_cd_semantics() {
+        let allowed = report("pushd /scratch && git commit -m x", "main");
+        assert!(allowed.violations.is_empty(), "{:?}", allowed.violations);
+        let denied = report("pushd /scratch-main && git commit -m x", "feat/s");
+        assert!(has_rule(&denied.violations, "git.commit_to_protected"));
     }
 
     // A commit message built by a heredoc substitution keeps the line flat.
@@ -7263,6 +7665,19 @@ mod tests {
             r#"{"git":{"protected_branches":["trunk"]}}"#,
         )
         .unwrap();
+        run_git(&owned, &["add", ".codeflow/policy.json"]);
+        run_git(
+            &owned,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@e",
+                "commit",
+                "-qm",
+                "chore: policy",
+            ],
+        );
         let common = session.join(".git");
         let read = |path: &str, git_dir: bool| {
             read_target(&session, Some(&common), &Retarget { path, git_dir })
@@ -7290,5 +7705,619 @@ mod tests {
         // Nothing there: unresolved.
         assert!(read("missing", false).is_none());
         assert!(read("$R", false).is_none());
+    }
+}
+
+/// State required for a destructive command, at its composed repository target.
+pub struct DiscardQuery<'a> {
+    pub target: Option<Retarget<'a>>,
+    pub intent: &'a super::git_discard::Intent,
+}
+/// An unreadable or absent state probe is uncertainty, never a clean result.
+pub type DiscardLookup<'a> =
+    Option<&'a dyn Fn(&DiscardQuery<'_>) -> Result<Option<String>, String>>;
+
+/// Normalize the destructive forms with the same option parser as other rules.
+#[allow(clippy::too_many_lines)] // One explicit arm per supported Git discard operation.
+fn discard_intent(
+    sub: &str,
+    rest: &[String],
+    moved: &Moves<'_>,
+) -> Result<Option<super::git_discard::Intent>, String> {
+    use super::git_discard::Intent;
+    if !matches!(
+        sub,
+        "reset"
+            | "restore"
+            | "checkout"
+            | "switch"
+            | "clean"
+            | "stash"
+            | "branch"
+            | "worktree"
+            | "update-ref"
+    ) {
+        return Ok(None);
+    }
+    let no_vars = HashMap::new();
+    let vars = moved.vars.unwrap_or(&no_vars);
+    let mut operands_only = false;
+    let rest: Vec<String> = rest
+        .iter()
+        .map(|s| {
+            if s == "--" || s == END_OF_OPTIONS {
+                operands_only = true;
+            }
+            if operands_only && matches!(sub, "branch" | "switch") {
+                Ok(s.clone())
+            } else if has_substitution(s) {
+                Err("a generated argument can change what would be discarded".into())
+            } else {
+                expand_word(s, vars)
+            }
+        })
+        .collect::<Result<_, String>>()?;
+    let spec = match sub {
+        "reset" => &GIT_RESET_OPTIONS,
+        "branch" => &GIT_BRANCH_OPTIONS,
+        "update-ref" => &GIT_UPDATE_REF_OPTIONS,
+        "clean" => &DISCARD_CLEAN_OPTIONS,
+        "restore" | "checkout" | "switch" => &DISCARD_RESTORE_OPTIONS,
+        _ => &DISCARD_MISC_OPTIONS,
+    };
+    let parsed = parse_options(&rest, spec);
+    if parsed.has_short(&['h']) || parsed.has_long("--help") {
+        return Ok(None);
+    }
+    let paths = || parsed.operands.iter().map(|p| (*p).to_owned()).collect();
+    match sub {
+        "update-ref" => Ok(parsed.has_short(&['d']).then(|| {
+            Intent::ForceDeleteBranches(
+                parsed
+                    .operands
+                    .first()
+                    .and_then(|name| name.strip_prefix("refs/heads/"))
+                    .map(str::to_owned)
+                    .into_iter()
+                    .collect(),
+            )
+        })),
+        "reset" => Ok(parsed.has_long("--hard").then_some(Intent::HardReset)),
+        "restore" | "checkout" | "switch" => {
+            if sub == "restore"
+                && (parsed.has_long("--staged") || parsed.has_short(&['S']))
+                && !(parsed.has_long("--worktree") || parsed.has_short(&['W']))
+            {
+                return Ok(None);
+            }
+            if parsed.has_long("--pathspec-from-file")
+                || parsed.has_short(&['p'])
+                || parsed.has_long("--patch")
+            {
+                return Err("pathspec input or interactive restore requires an explicit preview and named paths".into());
+            }
+            if matches!(sub, "checkout" | "switch")
+                && (parsed.has_short(&['f'])
+                    || parsed.has_long("--force")
+                    || parsed.has_long("--discard-changes"))
+            {
+                return Ok(Some(Intent::HardReset));
+            }
+            if sub == "switch"
+                || parsed.has_short(&['b', 'B', 'c', 'C'])
+                || parsed.has_long("--orphan")
+            {
+                return Ok(None);
+            }
+            Ok(Some(
+                if sub == "checkout" && !rest.iter().any(|p| p == "--" || p == END_OF_OPTIONS) {
+                    Intent::CheckoutPaths(paths())
+                } else {
+                    Intent::RestorePaths(paths())
+                },
+            ))
+        }
+        "clean" => {
+            if parsed.has_short(&['n']) || parsed.has_long("--dry-run") {
+                return Ok(None);
+            }
+            // -X removes ignored output only, the accepted AC-2 control.
+            if parsed.has_short(&['X']) {
+                return Ok(None);
+            }
+            if parsed.has_short(&['i'])
+                || parsed.has_long("--interactive")
+                || parsed.has_short(&['e'])
+                || parsed.has_long("--exclude")
+            {
+                return Err("interactive clean or exclusions need a separate dry-run and explicit named paths".into());
+            }
+            Ok(Some(Intent::CleanNonIgnored {
+                paths: paths(),
+                directories: parsed.has_short(&['d']),
+            }))
+        }
+        "stash" => Ok(
+            matches!(parsed.operands.first().copied(), Some("drop" | "clear"))
+                .then_some(Intent::StashDiscard),
+        ),
+        "branch" => {
+            if parsed.has_short(&['r']) || parsed.has_long("--remotes") {
+                return Ok(None);
+            }
+            let force = parsed.has_short(&['D'])
+                || ((parsed.has_short(&['d']) || parsed.has_long("--delete"))
+                    && (parsed.has_short(&['f']) || parsed.has_long("--force")));
+            if force
+                && parsed
+                    .operands
+                    .iter()
+                    .any(|s| has_substitution(s) || s.contains('$'))
+            {
+                return Err(
+                    "cannot resolve the branch whose unique work would be discarded".into(),
+                );
+            }
+            Ok(force.then(|| Intent::ForceDeleteBranches(paths())))
+        }
+        "worktree" => {
+            if parsed.operands.first() != Some(&"remove")
+                || !(parsed.has_short(&['f']) || parsed.has_long("--force"))
+            {
+                return Ok(None);
+            }
+            let path = parsed
+                .operands
+                .get(1)
+                .ok_or("force removal has no resolved worktree path")?;
+            Ok(Some(Intent::ForceRemoveWorktree((*path).into())))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn discard_violation(level: PolicyLevel, sub: &str, why: &str) -> Violation {
+    Violation::new(
+        "git.discard_uncommitted",
+        level,
+        format!("`git {sub}` cannot safely discard local work: {why}"),
+        crate::remedy::DISCARD_LOCAL_WORK.remedy(),
+    )
+}
+
+/// Evaluate every target, with that target's own policy. An unavailable lookup
+/// refuses destructive commands; it never manufactures an empty repository.
+fn check_discard(
+    args: &[String],
+    sub: &str,
+    rest: &[String],
+    moved: &Moves<'_>,
+    prior_mutation: bool,
+    ctx: &GuardContext<'_>,
+    out: &mut Vec<Violation>,
+) {
+    let intent = discard_intent(sub, rest, moved);
+    if matches!(intent, Ok(None)) {
+        return;
+    }
+    let specs = match compose_targets(args, moved) {
+        Ok(specs) => specs,
+        Err(why) => {
+            if ctx.policy.discard_uncommitted.is_active() {
+                out.push(discard_violation(ctx.policy.discard_uncommitted, sub, &why));
+            }
+            return;
+        }
+    };
+    for spec in &specs {
+        let target = spec.as_ref().map(|s| Retarget {
+            path: &s.path,
+            git_dir: s.git_dir,
+        });
+        let mut unresolved = None;
+        let rules = match target {
+            None => Cow::Borrowed(ctx.policy),
+            Some(target) => {
+                if let Some(repo) = lookup(&target, ctx) {
+                    repo.policy.map_or(Cow::Borrowed(ctx.policy), Cow::Owned)
+                } else {
+                    unresolved = Some("target repository or policy is unreadable".to_string());
+                    Cow::Borrowed(ctx.policy)
+                }
+            }
+        };
+        let level = rules.discard_uncommitted;
+        if !level.is_active() {
+            continue;
+        }
+        let result = if let Some(why) = unresolved {
+            Err(why)
+        } else if prior_mutation {
+            Err("an earlier command may change the tree, stash or refs; run the inspection after that command finishes".into())
+        } else if moved.config_unknown
+            || args
+                .iter()
+                .take(args.len().saturating_sub(rest.len() + 1))
+                .any(|a| {
+                    a == "--work-tree"
+                        || a.starts_with("--work-tree=")
+                        || a == "--bare"
+                        || a.contains("core.worktree=")
+                        || a.contains("core.bare=")
+                        || a.contains("include.path=")
+                        || a.contains("includeIf.")
+                })
+        {
+            Err("explicit work-tree or bare repository overrides need an unambiguous git -C invocation".into())
+        } else {
+            match &intent {
+                Err(why) => Err(why.clone()),
+                Ok(Some(intent)) => ctx
+                    .discard_lookup
+                    .ok_or_else(|| "repository-state lookup is unavailable".to_string())
+                    .and_then(|probe| probe(&DiscardQuery { target, intent })),
+                Ok(None) => Ok(None),
+            }
+        };
+        let why = match result {
+            Ok(None) => continue,
+            Ok(Some(why)) | Err(why) => why,
+        };
+        let violation = discard_violation(level, sub, &why);
+        if !out.iter().any(|v| {
+            v.rule == violation.rule && v.level == violation.level && v.message == violation.message
+        }) {
+            out.push(violation);
+        }
+    }
+}
+
+/// A pre-call snapshot cannot describe changes made by earlier commands in
+/// this same shell call. Only obvious read-only operations preserve the proof.
+fn may_change_discard_state(segment: &str) -> bool {
+    let mut words = command_argv(segment);
+    strip_reserved_words(&mut words);
+    let mut tokens = shell_tokens(segment);
+    strip_reserved_words(&mut tokens);
+    if words.len() != tokens.len() {
+        return true;
+    }
+    let Some((program, args)) = strip_launchers(&words) else {
+        return false;
+    };
+    let name = basename(program);
+    // expand_commands emits these bodies separately, in execution order.
+    if (is_shell(name) && shell_c_argument(args).is_some()) || name == "eval" {
+        return false;
+    }
+    if name == "git" {
+        return git_subcommand(args).is_none_or(|(sub, rest)| !discard_readonly_git(sub, rest));
+    }
+    !matches!(
+        name,
+        "cd" | "pushd"
+            | "popd"
+            | "pwd"
+            | "true"
+            | "false"
+            | ":"
+            | "echo"
+            | "printf"
+            | "cat"
+            | "grep"
+            | "rg"
+            | "ls"
+    )
+}
+fn discard_readonly_git(sub: &str, rest: &[String]) -> bool {
+    matches!(
+        sub,
+        "status"
+            | "diff"
+            | "log"
+            | "show"
+            | "rev-parse"
+            | "ls-files"
+            | "ls-tree"
+            | "merge-base"
+            | "for-each-ref"
+            | "show-ref"
+            | "cat-file"
+            | "check-ignore"
+            | "help"
+            | "version"
+    ) && !rest
+        .iter()
+        .any(|p| p == "--output" || p.starts_with("--output="))
+}
+
+const DISCARD_RESTORE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('s', Arity::Value),
+        ('b', Arity::Value),
+        ('B', Arity::Value),
+        ('c', Arity::Value),
+        ('C', Arity::Value),
+    ],
+    long: &[
+        ("--source", Arity::Value),
+        ("--pathspec-from-file", Arity::Value),
+        ("--pathspec-file-nul", Arity::Flag),
+        ("--orphan", Arity::Value),
+        ("--conflict", Arity::Value),
+        ("--track", Arity::AttachedValue),
+        ("--force", Arity::Flag),
+        ("--discard-changes", Arity::Flag),
+        ("--patch", Arity::Flag),
+        ("--staged", Arity::Flag),
+        ("--worktree", Arity::Flag),
+        ("--detach", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--help", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+const DISCARD_CLEAN_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('e', Arity::Value)],
+    long: &[
+        ("--exclude", Arity::Value),
+        ("--force", Arity::Flag),
+        ("--dry-run", Arity::Flag),
+        ("--interactive", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--help", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+const DISCARD_MISC_OPTIONS: OptionSpec = OptionSpec {
+    short: &[],
+    long: &[
+        ("--force", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--help", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+#[cfg(test)]
+mod discard_integration_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn context<'a>(policy: &'a GitPolicy, probe: DiscardLookup<'a>) -> GuardContext<'a> {
+        GuardContext {
+            policy,
+            current_branch: "task/local",
+            integrate_token: false,
+            pr_base_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            discard_lookup: probe,
+            root_checkout: None,
+        }
+    }
+    fn discard_only(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
+        evaluate(command, ctx)
+            .into_iter()
+            .filter(|v| v.rule == "git.discard_uncommitted")
+            .collect()
+    }
+    #[test]
+    fn parser_recognizes_the_destructive_forms_and_preserves_controls() {
+        let policy = GitPolicy::default();
+        let dirty = |_: &DiscardQuery<'_>| Ok(Some("fixture local work".into()));
+        let ctx = context(&policy, Some(&dirty));
+        for command in [
+            "git reset --hard",
+            "git reset --har",
+            "git checkout -- .",
+            "git restore .",
+            "git restore --source HEAD src",
+            "git checkout -f task/other",
+            "git switch --discard-changes task/other",
+            "git stash drop",
+            "git stash clear",
+            "git clean -fd",
+            "git clean -df",
+            "git branch -D task/old",
+            "git branch -df task/old",
+            "git branch --delete --force task/old",
+            "git worktree remove -f sibling",
+            "git worktree remove --forc sibling",
+            "bash -lc 'git reset --hard'",
+            "command git reset --hard",
+        ] {
+            assert!(!discard_only(command, &ctx).is_empty(), "{command}");
+        }
+        for command in [
+            "git reset --soft HEAD~1",
+            "git clean -nd",
+            "git clean --dry-run",
+            "git clean -fdX target/",
+            "git stash pop",
+            "git stash list",
+            "git worktree list",
+            "git branch -r -D origin/task/old",
+            "git restore --help",
+        ] {
+            assert!(discard_only(command, &ctx).is_empty(), "{command}");
+        }
+    }
+    #[test]
+    fn absent_or_unreadable_state_does_not_prove_safety() {
+        let policy = GitPolicy::default();
+        let ctx = context(&policy, None);
+        assert!(discard_only("git reset --hard", &ctx)[0]
+            .message
+            .contains("lookup is unavailable"));
+        let unreadable = |_: &DiscardQuery<'_>| Err("status failed".into());
+        let ctx = context(&policy, Some(&unreadable));
+        assert!(discard_only("git reset --hard", &ctx)[0]
+            .message
+            .contains("status failed"));
+    }
+    #[test]
+    fn an_earlier_mutation_invalidates_clean_snapshot_proof() {
+        let policy = GitPolicy::default();
+        let clean = |_: &DiscardQuery<'_>| Ok(None);
+        let ctx = context(&policy, Some(&clean));
+        for command in [
+            "printf changed > src/a && git reset --hard",
+            "touch notes; git clean -fd",
+            "git commit -m update && git branch -D task/old",
+            "git stash push && git stash clear",
+            "bash -lc 'touch notes; git clean -fd'",
+        ] {
+            let found = discard_only(command, &ctx);
+            assert!(
+                found.iter().any(|v| v.message.contains("earlier command")),
+                "{command}: {found:?}"
+            );
+        }
+        for command in [
+            "git status && git reset --hard",
+            "echo inspecting && git reset --hard",
+            "git clean -fdX target/",
+        ] {
+            assert!(discard_only(command, &ctx).is_empty(), "{command}");
+        }
+    }
+    #[test]
+    fn discard_uncertainty_is_protected_on_feature_branches() {
+        let policy = GitPolicy::default();
+        let clean = |_: &DiscardQuery<'_>| Ok(None);
+        let ctx = context(&policy, Some(&clean));
+        for command in [
+            "git reset \"$(printf -- --hard)\"",
+            "git restore \"$UNKNOWN\"",
+            "git clean --exclude=keep -fd",
+            "git restore --pathspec-from-file=paths",
+        ] {
+            assert!(!discard_only(command, &ctx).is_empty(), "{command}");
+        }
+    }
+    #[test]
+    fn configured_relief_keeps_warn_and_off_semantics() {
+        let mut policy = GitPolicy {
+            discard_uncommitted: PolicyLevel::Warn,
+            ..GitPolicy::default()
+        };
+        let ctx = context(&policy, None);
+        let found = discard_only("git reset --hard", &ctx);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].level, PolicyLevel::Warn);
+        policy.discard_uncommitted = PolicyLevel::Off;
+        assert!(discard_only("git reset --hard", &context(&policy, None)).is_empty());
+    }
+    // All mutations below are fixture setup in newly created temp repositories.
+    fn fixture() -> (tempfile::TempDir, git2::Repository) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        repo.set_head("refs/heads/task/local").unwrap();
+        std::fs::create_dir(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/a"), "tracked\n").unwrap();
+        std::fs::write(temp.path().join(".gitignore"), "target/\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "test: fixture",
+            &repo.find_tree(oid).unwrap(),
+            &[],
+        )
+        .unwrap();
+        (temp, repo)
+    }
+    fn actual(cwd: &Path, command: &str) -> Vec<Violation> {
+        let policy = GitPolicy::default();
+        let common = git2::Repository::discover(cwd)
+            .unwrap()
+            .commondir()
+            .to_path_buf();
+        let target = |s: &Retarget<'_>| read_target(cwd, Some(&common), s);
+        let probe =
+            |q: &DiscardQuery<'_>| super::super::git_discard::inspect(cwd, q.target, q.intent);
+        let alias = |q: &AliasQuery<'_>| read_alias(cwd, q);
+        let mut ctx = context(&policy, Some(&probe));
+        ctx.dir_target_lookup = Some(&target);
+        ctx.alias_lookup = Some(&alias);
+        discard_only(command, &ctx)
+    }
+
+    #[test]
+    fn f12_branch_operands_after_separator_are_not_options() {
+        let (temp, _repo) = fixture();
+        for command in [r#"git branch -d -- "$name""#, r#"git switch -- "$BRANCH""#] {
+            assert!(actual(temp.path(), command).is_empty(), "{command}");
+        }
+        for command in [
+            r#"git branch -d "$name""#,
+            r#"git switch "$BRANCH""#,
+            r#"git branch -D -- "$name""#,
+        ] {
+            assert!(!actual(temp.path(), command).is_empty(), "{command}");
+        }
+    }
+
+    #[test]
+    fn f13_unstage_keeps_worktree_changes() {
+        let (temp, _repo) = fixture();
+        std::fs::write(temp.path().join("src/a"), "dirty").unwrap();
+        assert!(actual(temp.path(), "git restore --staged .").is_empty());
+        assert!(actual(temp.path(), "git restore -S .").is_empty());
+        assert!(!actual(temp.path(), "git restore --staged --worktree .").is_empty());
+    }
+
+    #[test]
+    fn real_dirty_clean_file_restore_and_alias_pairs() {
+        let (temp, repo) = fixture();
+        assert!(actual(temp.path(), "git reset --hard").is_empty());
+        std::fs::write(temp.path().join("src/a"), "dirty\n").unwrap();
+        for command in ["git reset --hard", "git checkout -- .", "git restore src"] {
+            assert!(!actual(temp.path(), command).is_empty(), "{command}");
+        }
+        assert!(actual(temp.path(), "git restore src/a").is_empty());
+        assert!(!actual(&temp.path().join("src"), "git restore .").is_empty());
+        repo.config()
+            .unwrap()
+            .set_str("alias.wipe", "reset --hard")
+            .unwrap();
+        assert!(!actual(temp.path(), "git wipe").is_empty());
+        std::fs::remove_dir_all(temp.path().join("src")).unwrap();
+        assert!(!actual(temp.path(), "git restore src").is_empty());
+    }
+    #[test]
+    fn retargets_use_actual_tree_and_foreign_policy() {
+        let (first, _repo) = fixture();
+        let (second, _other) = fixture();
+        std::fs::write(second.path().join("src/a"), "dirty\n").unwrap();
+        for command in [
+            format!("git -C '{}' reset --hard", second.path().display()),
+            format!("cd '{}' && git reset --hard", second.path().display()),
+        ] {
+            assert!(!actual(first.path(), &command).is_empty(), "{command}");
+        }
+        std::fs::create_dir(second.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            second.path().join(".codeflow/policy.json"),
+            r#"{"schema_version":1,"git":{"discard_uncommitted":"off"}}"#,
+        )
+        .unwrap();
+        // Uncommitted local policy cannot relax the committed authority.
+        assert!(!actual(
+            first.path(),
+            &format!("git -C '{}' reset --hard", second.path().display())
+        )
+        .is_empty());
     }
 }

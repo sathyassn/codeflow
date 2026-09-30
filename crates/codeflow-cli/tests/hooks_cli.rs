@@ -128,6 +128,15 @@ fn write_policy(dir: &Path, json: &str) {
     std::fs::write(cf.join("policy.json"), json).unwrap();
 }
 
+fn write_agent_policy(dir: &Path, json: &str) {
+    write_policy(dir, json);
+    git(dir, &["add", ".codeflow/policy.json"]);
+    git(
+        dir,
+        &["commit", "--allow-empty", "-m", "chore: fixture policy"],
+    );
+}
+
 /// The protected-branch policy of the retargeting fixtures. Their scratch
 /// repositories commit at a root checkout on a feature branch on purpose,
 /// to probe protected-branch targeting, so the root-checkout rule
@@ -320,8 +329,8 @@ fn git_guard_judges_the_repository_a_command_targets() {
         std::fs::create_dir_all(dir).unwrap();
         init_repo(dir, branch);
     }
-    write_policy(&session, TARGETING_POLICY);
-    write_policy(&scratch, TARGETING_POLICY);
+    write_agent_policy(&session, TARGETING_POLICY);
+    write_agent_policy(&scratch, TARGETING_POLICY);
     let s = scratch.to_string_lossy();
     let b = bare.to_string_lossy();
     let sg = session.join(".git");
@@ -385,8 +394,8 @@ fn git_guard_blocks_targets_it_cannot_prove() {
         std::fs::create_dir_all(dir).unwrap();
         init_repo(dir, branch);
     }
-    write_policy(&session, TARGETING_POLICY);
-    write_policy(&feature, TARGETING_POLICY);
+    write_agent_policy(&session, TARGETING_POLICY);
+    write_agent_policy(&feature, TARGETING_POLICY);
     // A directory literally named `$R` inside the session, a repository on main.
     let literal = session.join("$R");
     std::fs::create_dir_all(&literal).unwrap();
@@ -507,7 +516,7 @@ fn git_guard_uncertainty_keeps_the_protected_commit_check() {
     for local in ["off", "warn", "block"] {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path(), "main");
-        write_policy(
+        write_agent_policy(
             tmp.path(),
             &format!(
                 r#"{{"git":{{"protected_branches":["main","master"],"commit_to_protected":"block","local_ref_protection":"{local}"}}}}"#
@@ -540,7 +549,7 @@ fn git_guard_resolves_aliases_and_rebase_branches() {
     for (dir, branch) in [(&main, "main"), (&feat, "feat/x")] {
         std::fs::create_dir_all(dir).unwrap();
         init_repo(dir, branch);
-        write_policy(dir, TARGETING_POLICY);
+        write_agent_policy(dir, TARGETING_POLICY);
     }
     let inc = tmp.path().join("aliases.ini");
     std::fs::write(&inc, "[alias]\n    x = commit\n").unwrap();
@@ -618,7 +627,7 @@ fn git_guard_round_5_boundaries() {
         if on != "main" {
             git(&dir, &["checkout", "-q", on]);
         }
-        write_policy(&dir, TARGETING_POLICY);
+        write_agent_policy(&dir, TARGETING_POLICY);
         dir
     };
     let commit = "commit --allow-empty -m \"fix: probe\"";
@@ -780,7 +789,7 @@ fn git_guard_honors_policy_glob_extension() {
     // code change.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "release/9.9");
-    write_policy(
+    write_agent_policy(
         dir.path(),
         r#"{"schema_version":1,"git":{"protected_branches":["main","release/*"]}}"#,
     );
@@ -1260,7 +1269,7 @@ fn exec_guard_classifies_every_review_probe() {
     // argument roles, through the real hook at the block level.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
-    write_policy(
+    write_agent_policy(
         dir.path(),
         r#"{"security": {"headless_peer_runs": "block"}}"#,
     );
@@ -1313,7 +1322,7 @@ fn exec_guard_flags_headless_peer_runs_per_level() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         if level != "default" {
-            write_policy(
+            write_agent_policy(
                 dir.path(),
                 &format!(r#"{{"security": {{"headless_peer_runs": "{level}"}}}}"#),
             );
@@ -4234,11 +4243,10 @@ fn push_set_does_not_run_tree_checks_with_an_uninitialized_submodule() {
 }
 
 /// SPC-013 R-85: the shims probe the binary's hook capability first. An
-/// older binary gets a warning naming the upgrade order and still runs the
-/// checks it has; the current binary dispatches silently.
+/// older binary refuses with the install command; the current binary dispatches.
 #[cfg(unix)]
 #[test]
-fn hook_shims_warn_and_fall_back_when_the_binary_is_older() {
+fn hook_shims_refuse_when_the_binary_is_older() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let old_bin = dir.path().join("old-bin");
@@ -4271,15 +4279,12 @@ fn hook_shims_warn_and_fall_back_when_the_binary_is_older() {
         let old = run(&old_bin);
         let stderr = String::from_utf8_lossy(&old.stderr);
         assert!(
-            stderr.contains("older than these hooks"),
+            stderr.contains("missing, older or failed"),
             "{stage}: {stderr}"
         );
-        assert!(stderr.contains("new binary first"), "{stage}: {stderr}");
-        assert_eq!(
-            String::from_utf8_lossy(&old.stdout).trim(),
-            format!("dispatched git-hook {stage} ARG"),
-            "{stage}: the older binary still runs its checks"
-        );
+        assert!(stderr.contains("codeflow update"), "{stage}: {stderr}");
+        assert_eq!(old.status.code(), Some(1));
+        assert!(old.stdout.is_empty(), "older binary must not dispatch");
         let new = run(&new_bin);
         let stderr = String::from_utf8_lossy(&new.stderr);
         assert!(
@@ -5048,7 +5053,7 @@ fn task_new_issues_through_the_registry_push_with_an_older_codeflow_first_on_pat
     let control = git_at(&root, &path, &["push", "-q", "origin", REGISTRY_LINE]);
     assert!(!control.status.success(), "{}", both(&control));
     assert!(
-        both(&control).contains("stub codeflow on PATH refused"),
+        both(&control).contains("missing, older or failed"),
         "{}",
         both(&control)
     );
@@ -5182,7 +5187,7 @@ fn a_missing_or_non_executable_designated_binary_fails_the_hook() {
             both(&out)
         );
         assert!(
-            both(&out).contains("missing or not executable"),
+            both(&out).contains("missing, older or failed"),
             "{}: {}",
             designated.display(),
             both(&out)

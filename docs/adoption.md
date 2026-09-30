@@ -377,6 +377,41 @@ set is kept.
 | `git.work_planning` | `block` or `warn`, default `block` | The level at which `work start` and `codeflow ci` report the planning checks: a valid workgraph, a record for the task the branch carries, and that record anchored on its target. Pre-commit does not run them |
 | `git.conflict_markers` | default `block` | Reported as added. The pre-commit hook and `codeflow ci` refuse an unresolved conflict marker on a line a change adds to a text file; existing lines are not judged. A file that must hold markers, such as a test fixture or a page about git, sets `conflict-marker-size` for its path in `.gitattributes` to a length its markers do not have. A team that wants a softer start sets the key to `warn` or `off` in a reviewed policy change |
 
+### Refusals and operator relief
+
+Agent sessions are judged by the landed policy: the stricter of the
+remote's default branch and the declared target, read from the
+remote-tracking refs, so a local edit, commit or branch cannot relax it.
+With no remote, or before the first fetch, the guards read `HEAD`, and
+every refusal names the source.
+
+Under the shipped defaults, the guards refuse the wrapped, flag-led and
+interpreter forms of privilege escalation, package or gist publishing,
+release and tag changes, repository or account changes, secret-store
+reads and user-level persistence. Git-guard also refuses loss of local-only
+work and changes to the tracking refs and transport settings that decide
+the landed policy, and edit-guard refuses enforcement-path edits through
+Codex `apply_patch` and Grok `write` or `search_replace`. Commands inside
+opaque child programs are not inspected. Ordinary builds, a task-branch
+push and a single-file restore stay ordinary work.
+
+A refusal names the policy rule and the operator's route. Project relief
+is that rule's existing level, such as `security.privilege_escalation`,
+`security.outward_actions`, `security.secret_reads` or
+`git.discard_uncommitted`, landed through a reviewed change, together with
+any native deny that still applies; the native presets and the guards are
+separate checks, and the agent never edits enforcement files to clear its
+own refusal. `security.headless_peer_runs` is the only relief for a
+headless peer run; `security.headless_opt_in` is ignored with a warning
+and removed by `codeflow update`. The `security.dangerous_commands` floor
+cannot be lowered.
+
+The hooks use contract 3: a missing or older `codeflow` binary is refused
+with the install command, so install the new binary before
+`codeflow update`. Interactive Codex asks to trust the project's hooks
+once per folder, including each linked worktree, and again after the
+hooks file changes.
+
 ### The daily flow
 
 One task, one pull request, and a check at every step.

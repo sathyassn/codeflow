@@ -474,6 +474,7 @@ fn guard(cwd: &Path, policy: &GitPolicy, command: &str) -> Vec<Violation> {
         pr_base_lookup: None,
         dir_target_lookup: Some(&dir_target),
         alias_lookup: None,
+        discard_lookup: Some(&|_| Ok(None)),
         root_checkout: root.as_ref(),
     };
     evaluate(command, &ctx)

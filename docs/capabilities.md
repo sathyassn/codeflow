@@ -196,7 +196,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
@@ -209,6 +209,15 @@ authoritative perimeter (ADR-0017). Rule levels are per-repository policy
 values. The anti-bypass layer has no off switch: the strict policy validator,
 the gate-context token for protected-branch advances, and the guard's refusal
 of override variables set in-session. Secret scanning fails closed.
+Agent sessions are judged by the landed policy: the stricter of the
+remote's default branch and the declared target, with `HEAD` only when there is
+no remote or no tracking ref yet. The session checks refuse wrapped and
+interpreter action families, loss of local-only work, edits to enforcement
+paths through Codex and Grok file tools, and changes to the tracking refs and
+transport settings that decide that authority. A missing or older hook binary
+is refused with the install and update commands, and `doctor` and orient show
+the policy source and local drift. Commands hidden inside opaque child programs
+are outside this parsing.
 
 Other checks on these planes:
 

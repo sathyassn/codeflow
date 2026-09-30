@@ -367,10 +367,14 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
+    // A pull request context: `--into`, or a host's pull request variables,
+    // whether or not the host supplied the body.
+    let pr_context = args.into.is_some() || is_pr_event(|key| std::env::var(key).ok());
     let tracked_claim = work_checks(
         &root,
         git,
         pr_body.as_deref(),
+        pr_context,
         &names,
         &base_candidates,
         &head,
@@ -516,6 +520,7 @@ fn work_checks<'a>(
     root: &Path,
     git: &GitPolicy,
     pr_body: Option<&str>,
+    pr_context: bool,
     names: &Names<'_>,
     base_candidates: &'a [String],
     head: &str,
@@ -530,9 +535,35 @@ fn work_checks<'a>(
         target: line_target,
     });
     let branch = names.branch;
-    let class = pr_body.and_then(|body| {
-        classification::dispatch(root, git, body, branch, range_parts.as_ref(), tagged, ran)
-    });
+    // A release range (SPC-013 R-120) is judged by the release checks: a
+    // release head always, and with no body also a range into a release
+    // branch.
+    let release = branch
+        .starts_with("integration/")
+        .then(|| acceptance::release_scope(root, names).ok().flatten())
+        .flatten()
+        .map(|(_, scope)| (scope.head, scope.release()));
+    let release_head = release.is_some_and(|(head, _)| head);
+    let release_range = release.is_some_and(|(_, range)| range);
+    let class = match pr_body {
+        Some(body) => classification::dispatch(
+            root,
+            git,
+            body,
+            branch,
+            range_parts.as_ref(),
+            release_head,
+            tagged,
+            ran,
+        ),
+        // A pull request whose host did not supply the body is still judged
+        // on its line; a plain push is not classified (TSK-104).
+        None if pr_context && !release_range => {
+            classification::bodyless_line_check(root, branch, range_parts.as_ref(), tagged, ran);
+            None
+        }
+        None => None,
+    };
     acceptance::dispatch(
         root,
         git,

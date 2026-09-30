@@ -50,8 +50,6 @@ pub enum KeyKind {
     Profiles,
     /// The PR-section mapping object (SPC-013 R-84).
     SectionMapping,
-    /// The headless opt-in object: `families` and `reason` (ADR-0075 D4).
-    HeadlessOptIn,
     /// A list of argument-bound retry entry objects (TSK-174).
     RetryEntries,
 }
@@ -67,7 +65,7 @@ impl KeyKind {
             Self::String => "string",
             Self::Enum(_) => "enum",
             Self::Profiles => "profile list",
-            Self::SectionMapping | Self::HeadlessOptIn => "object",
+            Self::SectionMapping => "object",
             Self::RetryEntries => "entry list",
         }
     }
@@ -94,7 +92,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 65] = [
+pub const SCHEMA: [KeySpec; 64] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -184,8 +182,8 @@ pub const SCHEMA: [KeySpec; 65] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
-        notes: "git-guard only (ADR-0009); suspended only in the \
-                pre-first-commit bootstrap window.",
+        notes: "Agent guards (ADR-0009). Local-edit relief never disables protection \
+                of remote-tracking refs, packed-refs or Git config authority metadata.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {
@@ -419,7 +417,7 @@ pub const SCHEMA: [KeySpec; 65] = [
     KeySpec {
         path: "git.automation_profiles",
         kind: KeyKind::Profiles,
-        valid: "an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}}",
+        valid: "an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}, task: optional task line}",
         purpose: "Trusted bots whose pull requests skip branch naming and the commit message shape rules (SPC-013 R-82).",
         notes: "Applies in `codeflow ci` only when the actor the workflow passes \
                 and the head branch both match, read from the target side of \
@@ -569,16 +567,8 @@ pub const SCHEMA: [KeySpec; 65] = [
         valid: LEVEL_VALID,
         purpose: "Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate).",
         notes: "Default block (ADR-0075 D4): a project that needs a headless \
-                run names its family in security.headless_opt_in. `codeflow \
+                run sets security.headless_peer_runs to warn or off. `codeflow \
                 update` moves a project still at the old warn default to block.",
-    },
-    KeySpec {
-        path: "security.headless_opt_in",
-        kind: KeyKind::HeadlessOptIn,
-        valid: "{families: [claude | codex | grok, ...], reason: non-empty string}",
-        purpose: "The catalog families whose headless runs this project allows, with its reason (ADR-0075 D4).",
-        notes: "Absent by default. Config decides; whether an interactive \
-                harness is detected only shapes the message and doctor's report.",
     },
     KeySpec {
         path: "security.script_bypass",
@@ -746,11 +736,16 @@ fn show_value(v: &Value) -> String {
 /// Keys removed from the policy schema that an older file may still carry:
 /// `(key, why)`. Validation accepts them, [`deprecation_warnings`] names
 /// them, and `codeflow update` deletes them.
-pub const DEPRECATED_KEYS: &[(&str, &str)] = &[(
-    "human_authorization",
-    "it accepted only \"none\" and changed nothing (removed in TSK-137, ADR-0009 \
-     amendment)",
-)];
+pub const DEPRECATED_KEYS: &[(&str, &str)] = &[
+    (
+        "human_authorization",
+        "it accepted only \"none\" and changed nothing (removed in TSK-137, ADR-0009 amendment)",
+    ),
+    (
+        "security.headless_opt_in",
+        "it never changed enforcement; security.headless_peer_runs is the sole policy level for headless runs (TSK-188)",
+    ),
+];
 
 fn deprecated_key(key: &str) -> Option<&'static str> {
     DEPRECATED_KEYS
@@ -766,25 +761,24 @@ pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
     let Ok(data) = std::fs::read_to_string(root.join(".codeflow").join("policy.json")) else {
         return Vec::new();
     };
-    let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&data) else {
+    let Ok(value) = serde_json::from_str::<Value>(&data) else {
         return Vec::new();
     };
-    let mut warnings: Vec<_> = obj
-        .keys()
-        .filter_map(|key| {
-            deprecated_key(key).map(|why| {
-                crate::remedy::Finding::new(
-                    format!("policy key {key} is deprecated and ignored: {why}"),
-                    crate::remedy::POLICY_DEPRECATED.with(&[("key", key)]),
-                )
-            })
+    let mut warnings: Vec<_> = DEPRECATED_KEYS
+        .iter()
+        .filter(|(key, _)| {
+            value
+                .pointer(&format!("/{}", key.replace('.', "/")))
+                .is_some()
+        })
+        .map(|(key, why)| {
+            crate::remedy::Finding::new(
+                format!("policy key {key} is deprecated and ignored: {why}"),
+                crate::remedy::POLICY_DEPRECATED.with(&[("key", key)]),
+            )
         })
         .collect();
-    if obj
-        .get("git")
-        .and_then(Value::as_object)
-        .is_some_and(|git| git.contains_key("direct_changes"))
-    {
+    if value.pointer("/git/direct_changes").is_some() {
         warnings.push(crate::remedy::Finding::new(
             "policy key git.direct_changes is retired and ignored; every PR names its task or epic",
             crate::remedy::POLICY_DEPRECATED.with(&[("key", "git.direct_changes")]),
@@ -956,6 +950,9 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
 /// Validate one leaf `path`/`value` pair against its [`KeySpec`]; a path the
 /// schema does not know is an unknown-key error.
 fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    if deprecated_key(path).is_some() {
+        return;
+    }
     validate_root_checkout_key(path, value, errors);
     let Some(spec) = spec_for(path) else {
         errors.push(PolicyError {
@@ -1025,7 +1022,6 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
         },
         KeyKind::Profiles => validate_profiles(path, value, errors),
         KeyKind::SectionMapping => validate_mapping(path, value, errors),
-        KeyKind::HeadlessOptIn => validate_headless_opt_in(path, value, errors),
         KeyKind::RetryEntries => validate_retry_entries(path, value, errors),
         KeyKind::Enum(values) => {
             if !value.as_str().is_some_and(|s| values.contains(&s)) {
@@ -1170,56 +1166,6 @@ fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
 
 /// Validate `git.pr_section_mapping`: an object with a known `state`, an
 /// optional `headings` map of strings, and `decided` as `none` or a date.
-/// Validate `security.headless_opt_in`: an object with a non-empty
-/// `families` list of catalog family ids and a non-empty `reason`, and no
-/// other field.
-fn validate_headless_opt_in(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
-    let Some(obj) = value.as_object() else {
-        errors.push(PolicyError::invalid_value(
-            path,
-            value,
-            "an object with families and reason",
-        ));
-        return;
-    };
-    for key in obj.keys() {
-        if !matches!(key.as_str(), "families" | "reason") {
-            nested_error(
-                errors,
-                path,
-                &format!("unknown field `{key}`; expected families, reason"),
-            );
-        }
-    }
-    let families = super::policy::HEADLESS_FAMILIES;
-    let families_ok = obj
-        .get("families")
-        .and_then(Value::as_array)
-        .is_some_and(|list| {
-            !list.is_empty()
-                && list
-                    .iter()
-                    .all(|f| f.as_str().is_some_and(|f| families.contains(&f)))
-        });
-    if !families_ok {
-        nested_error(
-            errors,
-            path,
-            &format!(
-                "`families` must be a non-empty array of {}",
-                families.join(", ")
-            ),
-        );
-    }
-    if obj
-        .get("reason")
-        .and_then(Value::as_str)
-        .is_none_or(|r| r.trim().is_empty())
-    {
-        nested_error(errors, path, "`reason` must be a non-empty string");
-    }
-}
-
 /// Validate `security.sandbox_retry_allow` as far as this unit owns it: an
 /// array of objects, each naming a non-empty `program`. The retry check
 /// (TSK-174) owns the meaning of every other field.
@@ -1307,6 +1253,16 @@ fn validate_mapping(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn automation_profile_schema_names_the_task_field() {
+        assert!(schema()
+            .iter()
+            .find(|key| key.path == "git.automation_profiles")
+            .unwrap()
+            .valid
+            .contains("task"));
+    }
+
     /// Collect every dotted leaf path in a serialized policy JSON object.
     fn leaf_paths(value: &Value, prefix: &str, out: &mut Vec<String>) {
         match value {
@@ -1328,11 +1284,7 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 3] = [
-            "git.pr_section_mapping",
-            "git.release_branch_pattern",
-            "security.headless_opt_in",
-        ];
+        const OPTIONAL: [&str; 2] = ["git.pr_section_mapping", "git.release_branch_pattern"];
         // The drift guard: every leaf the default Policy serializes must be in
         // the schema, and every schema path must be a real serde leaf — a new
         // field (or a renamed one) fails this test until the registry follows.
@@ -1520,24 +1472,30 @@ mod tests {
     }
 
     #[test]
-    fn test_headless_opt_in_takes_catalog_families_with_a_reason() {
-        let ok =
-            r#"{"security": {"headless_opt_in": {"families": ["codex"], "reason": "CI host"}}}"#;
-        assert!(validate_policy_str(ok).is_ok());
-        for bad in [
-            r#"{"security": {"headless_opt_in": {"families": ["codex-cli"], "reason": "x"}}}"#,
-            r#"{"security": {"headless_opt_in": {"families": [], "reason": "x"}}}"#,
-            r#"{"security": {"headless_opt_in": {"families": ["grok"], "reason": " "}}}"#,
-            r#"{"security": {"headless_opt_in": {"harnesses": ["grok"], "reason": "x"}}}"#,
-            r#"{"security": {"headless_opt_in": ["codex"]}}"#,
-        ] {
-            let errors = validate_policy_str(bad).unwrap_err();
-            assert!(
-                errors
-                    .iter()
-                    .all(|e| e.key.starts_with("security.headless_opt_in")),
-                "{bad}: {errors:?}"
-            );
+    fn retired_headless_opt_in_validates_warns_and_never_relaxes() {
+        let data = r#"{"security":{"headless_opt_in":{"families":["codex"],"reason":"CI"}}}"#;
+        assert!(validate_policy_str(data).is_ok());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(dir.path().join(".codeflow/policy.json"), data).unwrap();
+        let warnings = deprecation_warnings(dir.path());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0]
+            .text
+            .contains("security.headless_opt_in is deprecated and ignored"));
+        assert!(warnings[0].text.contains("security.headless_peer_runs"));
+        let policy: Policy = serde_json::from_str(data).unwrap();
+        assert!(
+            super::super::exec_guard::evaluate("codex exec task", &policy.security)
+                .iter()
+                .any(|v| v.rule == "security.headless_peer_runs"
+                    && v.level == super::super::PolicyLevel::Block)
+        );
+        for level in ["block", "warn", "off"] {
+            assert!(validate_policy_str(&format!(
+                r#"{{"security":{{"headless_peer_runs":"{level}"}}}}"#
+            ))
+            .is_ok());
         }
     }
 

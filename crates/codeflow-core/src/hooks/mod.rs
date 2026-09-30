@@ -30,14 +30,18 @@
 pub mod adoption;
 pub mod conflict_markers;
 pub mod delegate_turn;
+pub mod edit_guard;
 pub mod exec_guard;
+pub mod git_discard;
 pub mod git_guard;
 pub mod git_hook;
 mod git_target;
 pub mod guidance;
+pub mod landed_policy;
 pub mod orient;
 pub mod policy;
 pub mod policy_schema;
+pub mod ref_authority;
 pub mod repo;
 pub mod scan;
 pub mod session_summary;

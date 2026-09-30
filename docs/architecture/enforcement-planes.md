@@ -90,19 +90,42 @@ editable.
 
 ### in-session guards
 
-Two PreToolUse (Bash) handlers add fast, pre-git feedback.
+Three PreToolUse handlers add fast, pre-git feedback.
 
 | Handler | Policy section | Verdict |
 |---|---|---|
-| `git-guard` | git policy | blocks the git rows above, the PR-content checks, and structural override-token laundering |
-| `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5) |
+| `git-guard` | git policy | blocks the git rows above, the PR-content checks, structural override-token laundering, discards of local-only work, and changes to the tracking refs and transport settings that decide policy authority |
+| `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5); outward action families, secret-store reads and interpreter literals refuse at their rule's level |
+| `edit-guard` | the action table's enforcement paths | native file edits (Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths refuse, including patch move sources and destinations |
 
 | Harness | Wiring | Condition |
 |---|---|---|
 | Claude Code | `.claude/settings.json` | laid by the scaffold from `--minimal` up |
-| Interactive Codex | `.codex/hooks.json` | byte-compatible PreToolUse payload (ADR-0008); the project's `.codex/` layer must be trusted |
-| Grok Build | `.grok/hooks/codeflow.json` | ADR-0008 analog; project hooks load only after `/hooks-trust` or `--trust` |
+| Interactive Codex | `.codex/hooks.json`, with edit-guard | byte-compatible PreToolUse payload (ADR-0008); the project's `.codex/` layer must be trusted, and Codex asks again for each new folder or worktree |
+| Grok Build | `.grok/hooks/codeflow.json`, with edit-guard | ADR-0008 analog; project hooks load only after `/hooks-trust` or `--trust` |
 | Headless `codex exec`, `grok -p` | none | project PreToolUse hooks do not run, so those invocations are not work-session lanes and rely on the git-hook plane |
+
+Agent sessions are judged by the landed policy. The guards read
+`.codeflow/policy.json` and project settings from the configured remote's
+default branch and the declared target, taking the stricter level key by key,
+so a local checkout, commit, rebase or stash cannot relax them. They read
+`HEAD` only when there is no remote or the remote has no tracking refs yet,
+and the working copy only on an unborn `HEAD`; every refusal and `doctor`
+name the source. Ref plumbing on `refs/remotes`, fetch or pull into an
+explicit tracking destination or from another source, remote identity
+changes, writes to transport configuration, the global Git config files and
+the common Git directory's refs and config cannot replace that authority.
+Fetch, pull and remote update compare each selected remote's effective URL
+with its configured URL. Once a tracking ref exists, missing authority
+refuses the call and names `git fetch`, or the operator's
+`git remote set-head <remote> --auto`. `doctor` and orient report the source
+and any local policy drift; they do not detect earlier movement of a
+tracking ref.
+
+Contract-3 git shims exit 1 and harness wrappers exit 2 when the `codeflow`
+binary is missing or older, printing the installer and `codeflow update`.
+The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
+PowerShell as the hook runner is unsupported.
 
 The deterministic shell plane accepts both Bash and PowerShell payloads and
 keeps its catastrophic classifier non-relaxable across Unix and macOS roots and

@@ -4,8 +4,14 @@
       {
         "matcher": "^(Bash|PowerShell)$",
         "hooks": [
-          { "type": "command", "command": "codeflow hook git-guard", "timeout": 10 },
-          { "type": "command", "command": "codeflow hook exec-guard", "timeout": 10 }
+          { "type": "command", "command": "codeflow hook git-guard --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then echo \"codeflow: hook refused or binary missing/older; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; fi", "timeout": 10 },
+          { "type": "command", "command": "codeflow hook exec-guard --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then echo \"codeflow: hook refused or binary missing/older; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; fi", "timeout": 10 }
+        ]
+      },
+      {
+        "matcher": "^(write|search_replace|Edit|Write)$",
+        "hooks": [
+          { "type": "command", "command": "codeflow hook edit-guard --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then echo \"codeflow: hook refused or binary missing/older; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; fi", "timeout": 10 }
         ]
       }
     ]

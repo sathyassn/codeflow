@@ -43,7 +43,7 @@ const TABLE_JSON: &str = include_str!("actions.json");
 pub const TESTED_FLOORS: &[TestedFloor] = &[TestedFloor {
     harness: "codex-cli",
     feature: "permission profiles (`cf-guard`, `cf-builder`) with the network proxy",
-    version: "0.157.1",
+    version: "0.159.1",
 }];
 
 /// One recorded tested floor.

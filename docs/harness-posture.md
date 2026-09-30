@@ -26,7 +26,7 @@ what an operator still has to decide.
 
 | Harness | What the shipped preset enables | What stays gated |
 |---|---|---|
-| Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests, ask rules for destructive source-control operations; plugin turns pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; unsandboxed retry only when auto-classified for a trusted installed tool that needs host state, which enables the official Codex plugin without a general bypass; auto mode and classifier policy are never taken from the repository, so project `acceptEdits` remains the ordinary fallback (ADR-0026, ADR-0029) |
+| Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests, ask rules for destructive source-control operations; plugin turns pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; an unsandboxed retry only when the native configuration permits it, auto-classified for a trusted installed tool that needs host state such as the official Codex plugin; the guards judge the retried command under the same policy, a retry never lifts a destructive, privileged, publishing, secret-read or enforcement-file refusal, and a delegated seat that runs sandboxed denies the retry natively; auto mode and classifier policy are never taken from the repository, so project `acceptEdits` remains the ordinary fallback (ADR-0026, ADR-0029) |
 | Codex | Guarded workspace permission profile (no `sandbox_mode` key), live search, reviewer-subagent escalation review, workspace key-file denies, the current primary seat's configured fallback, the default secret-bearing environment filter, `approval_policy = "never"`, `model_reasoning_effort = "high"`, production `--sandbox danger-full-access`, which turns the OS sandbox off for that process | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
 | Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload | The hooks load only after the one-time `/hooks-trust` (or `--trust`); the doctor check reports structural wiring, not trust state (ADR-0054) |
 
@@ -74,17 +74,22 @@ own tokens.
 |---|---|---|
 | `default_permissions` | `cf-guard`, extending `:workspace` | the profile is the only sandbox configuration, because a `sandbox_mode` key would shadow it |
 | egress | broad public egress, exact loopback for local UI tests, live search | private destinations and arbitrary Unix sockets stay closed when a session is launched without `--sandbox danger-full-access` |
-| `approval_policy` | `never`, with production `--sandbox danger-full-access` (ADR-0055) | that OS sandbox is off for the process; git-guard, exec-guard, git hooks, and CI remain the floor |
+| `approval_policy` | `never`; a reviewer or consult seat launches with no `--sandbox` flag, a builder seat with `--sandbox danger-full-access` (ADR-0055) | under `cf-guard` the seat gets workspace writes and deletes, read-only enforcement files, no Unix sockets and no local binding; with full access the OS sandbox is off for the process and git-guard, exec-guard, edit-guard, git hooks and CI remain the floor |
+| secret-file denies | `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `.netrc`, `id_rsa*`, `id_ed25519*`, at the workspace root only | the recursive `**/` forms made Codex refuse every directory delete, so a nested secret file, such as `sub/.env` or a linked worktree's `.env`, stays readable, changeable and deletable by the seat |
+| `cf-builder` profile | defined, not selected | its spike ran fetch, worktree add, commit and builds unattended but could not push to a remote outside the workspace root (ADR-0075 D1) |
 | environment | Codex's default `KEY`/`SECRET`/`TOKEN` scrub is kept (ADR-0025, ADR-0026) | the shell does not inherit provider secrets |
 | `approvals_reviewer` | `approvals_reviewer = "auto_review"` | vestigial under `never`: it is not a human gate and does not fire on-request prompts |
 
 `.codex/hooks.json` wires `codeflow hook git-guard` and
-`codeflow hook exec-guard` onto Codex's `PreToolUse` (Bash) event, and
-`config.toml` enables the hooks engine. The `.codex/` starter is part of the
-enforcement floor, shipped from `--minimal` up. Codex loads a project's
-`.codex/hooks.json` only when that project's `.codex/` layer is trusted: run
-`/hooks` inside an interactive `codex` session once to trust the CodeFlow
-hooks. Codex's hook payload is byte-compatible with Claude's, so the same
+`codeflow hook exec-guard` onto Codex's `PreToolUse` (Bash) event and
+`codeflow hook edit-guard` onto its `apply_patch` edits, each with
+`--contract 3`, and `config.toml` enables the hooks engine. The `.codex/`
+starter is part of the enforcement floor, shipped from `--minimal` up. Codex
+loads a project's `.codex/hooks.json` only when that project's `.codex/` layer
+is trusted: run `/hooks` inside an interactive `codex` session to trust the
+CodeFlow hooks. Codex records that trust against the absolute path of the
+hooks file, so each new clone or linked worktree asks again, and a changed
+hooks file, such as the move to contract 3, asks again too. Codex's hook payload is byte-compatible with Claude's, so the same
 binaries run unchanged.
 
 `session-orient` is wired for Codex `SessionStart` too, for all sources

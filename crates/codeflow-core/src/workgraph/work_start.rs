@@ -334,7 +334,7 @@ pub fn resolve_work_target_checked(
 /// (`branch.<name>.remote` and `.merge`) may replace it: another remote's
 /// same-named branch, such as a fork's `origin/main` beside an
 /// `upstream/main` the branch tracks, is not the integration target. With no
-/// configured upstream the local branch is kept.
+/// configured upstream, a same-named origin tracking ref is the fetched target.
 fn local_or_upstream(
     repo: &Repository,
     local: &str,
@@ -351,6 +351,10 @@ fn local_or_upstream(
         .branch_upstream_name(local_ref)
         .ok()
         .and_then(|name| name.as_str().ok().map(str::to_owned))
+        .or_else(|| {
+            let remote = format!("refs/remotes/origin/{local}");
+            repo.find_reference(&remote).ok().map(|_| remote)
+        })
     else {
         return keep();
     };
@@ -2640,7 +2644,7 @@ mod tests {
     }
 
     #[test]
-    fn a_target_without_a_configured_upstream_stays_local() {
+    fn a_target_without_a_configured_upstream_uses_fetched_origin() {
         let dir = fixture();
         add_remote(dir.path(), "origin", false);
         git(
@@ -2651,8 +2655,8 @@ mod tests {
         let resolved = resolve_work_target_checked(dir.path(), Some("main"))
             .unwrap()
             .unwrap();
-        assert_eq!(resolved.target, "main");
-        assert_eq!(resolved.note, None);
+        assert_eq!(resolved.target, "refs/remotes/origin/main");
+        assert!(resolved.note.is_some());
     }
 
     #[test]

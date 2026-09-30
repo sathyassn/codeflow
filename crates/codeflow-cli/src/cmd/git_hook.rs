@@ -24,7 +24,7 @@ pub enum StageName {
 
 /// The capability the current hook shims need. A shim whose probe does not
 /// print exactly this line warns that the binary is older than the shims.
-pub const HOOK_CAPABILITY: &str = "hooks 2";
+pub const HOOK_CAPABILITY: &str = "hooks 3";
 /// The stage names the dispatcher accepts, as git and the shims spell them.
 /// The generated policy reference is checked against exactly this set; the
 /// shims' capability probe is not a git hook stage.

@@ -660,3 +660,42 @@ fn clears_hook_stdin_unread_for_a_branch_name_that_is_not_utf8() {
     let after = run_printed(&root, "git push", &[], &["-q", "origin", "feat/cafe"]);
     assert!(!after.contains(finding), "{after}");
 }
+
+#[test]
+fn clears_discard_local_work() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    write(root, "seed.txt", "locally changed\n");
+    prove(
+        "DISCARD_LOCAL_WORK",
+        "git.discard_uncommitted",
+        || guard(root, "git-guard", "git reset --hard"),
+        |printed| {
+            let step = printed_command(printed, "DISCARD_LOCAL_WORK", None);
+            assert_eq!(step, "git stash push");
+            assert_passes(root, "git-guard", &step);
+            run_printed(root, &step, &[], &[]);
+        },
+    );
+    assert!(text(&run("git", root, &["stash", "show", "-p"])).contains("locally changed"));
+}
+
+#[test]
+fn clears_push_without_follow_tags() {
+    let dir = with_origin();
+    let root = dir.path();
+    git(root, &["config", "push.followTags", "true"]);
+    let printed = refused(
+        root,
+        "exec-guard",
+        "git push origin feat/x",
+        "security.outward_actions",
+        "PUSH_WITHOUT_FOLLOW_TAGS",
+    );
+    let step = printed_command(&printed, "PUSH_WITHOUT_FOLLOW_TAGS", None)
+        .replace("<remote>", "origin")
+        .replace("<branch>", "feat/x");
+    assert_passes(root, "exec-guard", &step);
+    run_printed(root, &step, &[], &[]);
+    assert_eq!(head(root, "origin/feat/x"), head(root, "feat/x"));
+}

@@ -2,7 +2,10 @@
 //!
 //! A tracked range names its task, a planning range names its epic, and an
 //! integration line names the epic verified by its history. Every PR names
-//! exactly one unit, including projects without durable tracking.
+//! exactly one unit, including projects without durable tracking. The one
+//! exception is the workspace root branch the target's `git.root_branch`
+//! names (ADR-0074): it collects small workspace edits and carries no
+//! `Task:` line.
 
 use std::path::Path;
 
@@ -88,6 +91,10 @@ pub(super) enum Class {
     /// An epic's integration line landing on its target; each task on it was
     /// classified when it landed on the line.
     EpicLine(String),
+    /// The workspace root branch the target's `git.root_branch` names
+    /// (ADR-0074); small edits land on it directly, and each nested project
+    /// lands through its own repository.
+    RootBranch(String),
 }
 
 /// What the classifier reads.
@@ -101,6 +108,8 @@ pub(super) struct Input<'a> {
     /// For an `integration/` head: the epic it lands, or why it is not a
     /// verified epic line.
     pub epic_line: Option<Result<String, String>>,
+    /// Whether the head is the branch the target's `git.root_branch` names.
+    pub root_branch: bool,
 }
 
 /// Resolve the class, or the reason the pull request has none.
@@ -148,6 +157,7 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
         Some(TaskLine::Malformed(value) | TaskLine::Unit(value)) => Err(format!(
             "`Task: {value}` is neither `TSK-NNN` nor `EPC-NNN`"
         )),
+        None if input.root_branch => Ok(Class::RootBranch(input.branch.to_string())),
         None => Err(
             "no `Task:` line; name the task, or the epic for a planning change or integration line"
                 .into(),
@@ -166,6 +176,21 @@ pub(super) struct Range<'a> {
     pub target: &'a str,
 }
 
+/// The branch `git.root_branch` names in the policy at `base`. It is read at
+/// the target, so a pull request cannot name its own head as the root.
+pub(super) fn root_branch_at(root: &Path, base: &str) -> Option<String> {
+    let out = codeflow_core::git::command()
+        .arg("-C")
+        .arg(root)
+        .args(["show", &format!("{base}:.codeflow/policy.json")])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())?;
+    let policy: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let name = policy["git"]["root_branch"].as_str()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 /// Whether durable work tracking is on at the head or at the target, so a
 /// pull request cannot switch it off for itself.
 pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool, String> {
@@ -177,17 +202,85 @@ pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool
     }
 }
 
+/// With durable tracking on, an `integration/*` head that is not a release
+/// branch lands only as a verified epic line or as the root branch the
+/// target's policy names, whatever the body's `Task:` line says. Judged
+/// before any body-specific class, so naming a task cannot admit an
+/// unverified line. Returns whether the head is eligible.
+fn integration_line_eligible(
+    root: &Path,
+    branch: &str,
+    range: &Range<'_>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) -> bool {
+    if !branch.starts_with("integration/")
+        || root_branch_at(root, range.base).as_deref() == Some(branch)
+    {
+        return true;
+    }
+    match check_epic_line(root, branch, range.target, range.base, range.head) {
+        Ok(_) => true,
+        Err(reason) => {
+            push(
+                tagged,
+                RULE,
+                format!("'{branch}' is not a verified epic line or the workspace root branch: {reason}"),
+                "land an integration/ branch as its epic's verified line or as the branch `git.root_branch` names; other work goes on a task or planning branch",
+            );
+            false
+        }
+    }
+}
+
+/// A pull request whose host supplied no body (a Bitbucket description it
+/// cannot read) still has its `integration/*` head judged, when durable
+/// tracking is on; the body-specific classes wait for the body.
+pub(super) fn bodyless_line_check(
+    root: &Path,
+    branch: &str,
+    range: Option<&Range<'_>>,
+    tagged: &mut Vec<super::TaggedViolation>,
+    ran: &mut Vec<&str>,
+) {
+    let Some(range) = range else {
+        return;
+    };
+    if !branch.starts_with("integration/") || !matches!(tracking_on(root, Some(range)), Ok(true)) {
+        return;
+    }
+    ran.push("classification");
+    integration_line_eligible(root, branch, range, tagged);
+}
+
+/// Where durable tracking is off: whether the body names exactly one unit
+/// that matches the branch, or the range is on the root branch the target's
+/// policy names, which carries no `Task:` line.
+fn names_its_unit(root: &Path, body: &str, branch: &str, range: Option<&Range<'_>>) -> bool {
+    match task_lines(body).as_slice() {
+        [TaskLine::Tracked(id)] => {
+            task_id_from_branch(root, branch).is_none_or(|carried| carried == *id)
+        }
+        [TaskLine::Epic(_) | TaskLine::Unit(_)] => task_id_from_branch(root, branch).is_none(),
+        [] => {
+            range.is_some_and(|range| root_branch_at(root, range.base).as_deref() == Some(branch))
+        }
+        _ => false,
+    }
+}
+
 /// Run the classification for `codeflow ci`. Classification judges the
 /// whole range against the target's own state: tracking is on when it is on
 /// at the target or at the head, and the paths are the range's diff from
 /// the merge-base, merge resolutions included. Returns the validated class,
 /// or `None` when the pull request was not classified.
+#[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
     body: &str,
     branch: &str,
     range: Option<&Range<'_>>,
+    release_head: bool,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
@@ -195,17 +288,7 @@ pub(super) fn dispatch(
         Ok(true) => {}
         Ok(false) => {
             ran.push("classification");
-            let lines = task_lines(body);
-            let valid = match lines.as_slice() {
-                [TaskLine::Tracked(id)] => {
-                    task_id_from_branch(root, branch).is_none_or(|carried| carried == *id)
-                }
-                [TaskLine::Epic(_) | TaskLine::Unit(_)] => {
-                    task_id_from_branch(root, branch).is_none()
-                }
-                _ => false,
-            };
-            if !valid {
+            if !names_its_unit(root, body, branch, range) {
                 push(tagged, RULE, "the PR must have exactly one non-empty, non-placeholder Task: unit name matching its branch".into(), HINT);
             }
             return None;
@@ -241,6 +324,9 @@ pub(super) fn dispatch(
             return None;
         }
     };
+    if !release_head && !integration_line_eligible(root, branch, range, tagged) {
+        return None;
+    }
     let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
     selection_check(root, branch, range, &files, tagged);
     let input = Input {
@@ -251,6 +337,7 @@ pub(super) fn dispatch(
         epic_line: branch
             .starts_with("integration/")
             .then(|| check_epic_line(root, branch, range.target, range.base, range.head)),
+        root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
     };
     let class = match classify(&input) {
         Ok(class) => class,
@@ -286,6 +373,9 @@ pub(super) fn dispatch(
         Class::PlanningOnly => println!("codeflow ci: pull request class: planning-only"),
         Class::EpicLine(epic) => {
             println!("codeflow ci: pull request class: epic integration line of {epic}");
+        }
+        Class::RootBranch(name) => {
+            println!("codeflow ci: pull request class: workspace root branch {name}");
         }
     }
     Some(class)
@@ -548,6 +638,7 @@ mod tests {
             files,
             branch_task: None,
             epic_line: None,
+            root_branch: false,
         }
     }
 
@@ -586,6 +677,42 @@ mod tests {
         let mut line = input("Task: EPC-001", "integration/EPC-001-work", &code);
         line.epic_line = Some(Ok("EPC-001".into()));
         assert_eq!(classify(&line), Ok(Class::EpicLine("EPC-001".into())));
+        let mut root = input(
+            "",
+            codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH,
+            &code,
+        );
+        root.root_branch = true;
+        assert_eq!(
+            classify(&root),
+            Ok(Class::RootBranch(
+                codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH.into()
+            ))
+        );
+    }
+
+    #[test]
+    fn only_the_named_root_branch_goes_without_a_task_line() {
+        let code = paths(&["src/lib.rs"]);
+        // Another integration/ head, or the root's name when the target's
+        // policy does not name it, still needs its unit.
+        assert!(classify(&input(
+            "",
+            codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH,
+            &code
+        ))
+        .unwrap_err()
+        .contains("no `Task:` line"));
+        // The root branch is no epic line, so an epic name does not fit it.
+        let mut named = input(
+            "Task: EPC-001",
+            codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH,
+            &code,
+        );
+        named.root_branch = true;
+        assert!(classify(&named)
+            .unwrap_err()
+            .contains("not a verified epic line"));
     }
 
     #[test]
