@@ -52,8 +52,10 @@ pub(crate) struct EmbeddedAssets;
 /// presentation sets it to its own process id, so the service closes the
 /// session and exits once that process is gone, even when the process was
 /// killed before it could close the session. Unset, the service keeps running
-/// until close or idle expiry. Only Unix follows the owner; elsewhere the
-/// variable is checked and then ignored.
+/// until close or idle expiry. The service takes a kernel handle on the owner
+/// when it starts, so it sees the exit before anything reaps the owner, and a
+/// later process that reuses the number cannot keep it alive. Only Linux and
+/// macOS follow the owner; elsewhere the variable is checked and then ignored.
 pub const OWNER_PID_ENV: &str = "CF_PRESENT_OWNER_PID";
 
 const BOOTSTRAP_HANDOFF: &str = "<!doctype html><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"><title>Opening presentation</title><script>location.replace('/app/')</script>";
@@ -221,7 +223,7 @@ struct ReviewResponse {
 
 /// Run one session-scoped service until close or idle expiry.
 pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
-    let owner = owner_process()?;
+    let owner = owner_lifeline()?;
     let store = SessionStore::discover(&project)?;
     let _service_lease = store.acquire_service_lease(session_id)?;
     let session = store.load(session_id)?;
@@ -1241,37 +1243,167 @@ fn write_bootstrap(path: &std::path::Path, html: &str) -> Result<()> {
         .map_err(|error| PresentError::io(path, error))
 }
 
-/// The process named by [`OWNER_PID_ENV`], if the variable is set.
-fn owner_process() -> Result<Option<i32>> {
+/// A handle on the process named by [`OWNER_PID_ENV`], if the variable is set.
+fn owner_lifeline() -> Result<Option<OwnerLifeline>> {
     let Some(value) = std::env::var_os(OWNER_PID_ENV) else {
         return Ok(None);
     };
-    value
+    let pid = value
         .to_str()
         .and_then(|value| value.parse::<i32>().ok())
         .filter(|pid| *pid > 0)
-        .map(Some)
         .ok_or_else(|| {
             PresentError::ServiceUnavailable(format!("{OWNER_PID_ENV} is not a process id"))
-        })
+        })?;
+    OwnerLifeline::watch(pid).map_err(|error| {
+        PresentError::ServiceUnavailable(format!(
+            "{OWNER_PID_ENV} names no running process ({error})"
+        ))
+    })
 }
 
-#[cfg(unix)]
-fn process_is_running(pid: i32) -> bool {
-    // SAFETY: signal 0 sends nothing; it only asks whether the process exists.
-    let probed = unsafe { libc::kill(pid, 0) };
-    probed == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+/// A kernel handle on the owner, taken while it runs. It reports the owner's
+/// exit when the exit happens, before any parent reaps the process, and it
+/// stays bound to that process when a later one reuses its number.
+struct OwnerLifeline {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    handle: std::os::fd::OwnedFd,
+    exited: bool,
 }
 
-#[cfg(not(unix))]
-fn process_is_running(_pid: i32) -> bool {
-    true
+impl OwnerLifeline {
+    /// Watches `pid` through a pidfd.
+    #[cfg(target_os = "linux")]
+    fn watch(pid: i32) -> std::io::Result<Option<Self>> {
+        use std::os::fd::FromRawFd as _;
+        // SAFETY: pidfd_open takes a process id and flags, and returns a new
+        // descriptor or -1.
+        let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let descriptor = i32::try_from(descriptor)
+            .map_err(|_| std::io::Error::other("pidfd is out of range"))?;
+        // SAFETY: the kernel just returned this descriptor and nothing else
+        // owns it.
+        let handle = unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) };
+        Ok(Some(Self {
+            handle,
+            exited: false,
+        }))
+    }
+
+    /// Watches `pid` through a kqueue that reports its exit.
+    #[cfg(target_os = "macos")]
+    fn watch(pid: i32) -> std::io::Result<Option<Self>> {
+        use std::os::fd::{AsRawFd as _, FromRawFd as _};
+        let ident =
+            usize::try_from(pid).map_err(|_| std::io::Error::other("process id is negative"))?;
+        // SAFETY: kqueue takes no arguments and returns a new descriptor or -1.
+        let queue = unsafe { libc::kqueue() };
+        if queue < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: the kernel just returned this descriptor and nothing else
+        // owns it.
+        let handle = unsafe { std::os::fd::OwnedFd::from_raw_fd(queue) };
+        let change = libc::kevent {
+            ident,
+            filter: libc::EVFILT_PROC,
+            flags: libc::EV_ADD,
+            fflags: libc::NOTE_EXIT,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        // SAFETY: one valid change and no event buffer. Registration fails
+        // with ESRCH once the process has exited, reaped or not.
+        let registered = unsafe {
+            libc::kevent(
+                handle.as_raw_fd(),
+                &raw const change,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        if registered < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Some(Self {
+            handle,
+            exited: false,
+        }))
+    }
+
+    /// Other platforms do not follow the owner.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[allow(clippy::unnecessary_wraps)]
+    fn watch(_pid: i32) -> std::io::Result<Option<Self>> {
+        Ok(None)
+    }
+
+    /// Whether the owner has exited, without waiting.
+    fn has_exited(&mut self) -> bool {
+        if !self.exited {
+            self.exited = self.exit_reported();
+        }
+        self.exited
+    }
+
+    #[cfg(target_os = "linux")]
+    fn exit_reported(&self) -> bool {
+        use std::os::fd::AsRawFd as _;
+        let mut poll = libc::pollfd {
+            fd: self.handle.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd and a zero timeout. A pidfd becomes
+        // readable when its process exits.
+        unsafe { libc::poll(&raw mut poll, 1, 0) > 0 }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn exit_reported(&self) -> bool {
+        use std::os::fd::AsRawFd as _;
+        let mut event = libc::kevent {
+            ident: 0,
+            filter: 0,
+            flags: 0,
+            fflags: 0,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        let now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: no changes, room for one event and a zero timeout. The exit
+        // event is delivered once, which `has_exited` keeps.
+        let ready = unsafe {
+            libc::kevent(
+                self.handle.as_raw_fd(),
+                std::ptr::null(),
+                0,
+                &raw mut event,
+                1,
+                &raw const now,
+            )
+        };
+        ready > 0 && event.fflags & libc::NOTE_EXIT != 0
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn exit_reported(&self) -> bool {
+        false
+    }
 }
 
-async fn monitor_session(state: AppState, owner: Option<i32>) {
+async fn monitor_session(state: AppState, mut owner: Option<OwnerLifeline>) {
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        if owner.is_some_and(|pid| !process_is_running(pid)) {
+        if owner.as_mut().is_some_and(OwnerLifeline::has_exited) {
             let _ = state.store.close(state.session_id);
             cleanup_owned_browser(&state);
             state.shutdown.notify_waiters();
