@@ -4,7 +4,12 @@ const MAX_EAGER_ENHANCEMENT_MILLISECONDS = 5_000;
 export function enhanceDocument(root: HTMLElement, eager = false): () => void {
   for (const stage of root.querySelectorAll<SVGSVGElement>(".block--html .cf-stage-svg")) {
     const width = stage.viewBox.baseVal.width;
-    if (Number.isFinite(width) && width > 0) stage.style.minWidth = `${Math.ceil(width * 0.75)}px`;
+    if (!Number.isFinite(width) || width <= 0) continue;
+    stage.style.minWidth = `${Math.ceil(width * 0.75)}px`;
+    // A floored stage pans inside its host, so the host takes keyboard focus
+    // and can be scrolled without a pointer.
+    const host = stage.closest<HTMLElement>(".cf-stage-host");
+    if (host && !host.hasAttribute("tabindex")) host.tabIndex = 0;
   }
   const targets = [
     ...root.querySelectorAll<HTMLElement>("code[data-cf-language]"),
