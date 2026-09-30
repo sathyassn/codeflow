@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-29-outcome-first-catalog-routing-visual-doctrine-and-process-round-v1",
+  "cases_version": "2026-09-29-outcome-first-catalog-routing-visual-doctrine-and-process-round-v2",
   "full_trials": 3,
   "cases": [
     {
@@ -7284,7 +7284,7 @@
           "required_checks_green_at_head",
           "review_approval_confirmed_at_head",
           "landed_by_sanctioned_integration_route",
-          "gate_rerun_on_integration_tip",
+          "landed_state_confirmed_against_candidate_evidence",
           "landing_reported_in_one_line"
         ],
         "references": [

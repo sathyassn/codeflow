@@ -293,7 +293,7 @@
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "92e6908feaf2b69e985b8b2cf0a00886d48799f8d1725cafdc6f0d7d084f8b28",
+      "sha256": "bdd5bd13a13cb0651c400756777d322ef1c432d0de29b83e9dcca22be667d2ce",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -335,7 +335,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "5a2afe8d864a05d020e55ec73cb994e7e7608574da90233fb6d6e37c84983588",
+      "sha256": "509c963216eb02176e3e255ff58ce6ba376407a546b48130f8fb74645ca274a1",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -407,7 +407,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "35ca19211be95aa5246e0d09e3efcb4b044c2f025392e0be1b2d00eae32439b9",
+      "sha256": "fd1324cd22ffcfaf398ee15ab34a299dd0a40c6f5581519bbad271af7049c90f",
       "exec": false
     },
     ".agents/skills/cf-method/references/delivery-process.md": {
@@ -1109,7 +1109,7 @@
     ".claude/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "92e6908feaf2b69e985b8b2cf0a00886d48799f8d1725cafdc6f0d7d084f8b28",
+      "sha256": "bdd5bd13a13cb0651c400756777d322ef1c432d0de29b83e9dcca22be667d2ce",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -1151,7 +1151,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "5a2afe8d864a05d020e55ec73cb994e7e7608574da90233fb6d6e37c84983588",
+      "sha256": "509c963216eb02176e3e255ff58ce6ba376407a546b48130f8fb74645ca274a1",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1223,7 +1223,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "35ca19211be95aa5246e0d09e3efcb4b044c2f025392e0be1b2d00eae32439b9",
+      "sha256": "fd1324cd22ffcfaf398ee15ab34a299dd0a40c6f5581519bbad271af7049c90f",
       "exec": false
     },
     ".claude/skills/cf-method/references/delivery-process.md": {
