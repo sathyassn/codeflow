@@ -122,9 +122,11 @@ Parallelize independent work when it shortens the critical path, but make
 the settled task graph, file ownership, and integration order explicit
 first. Use the orchestrator's canonical node and edge notation for
 multi-task work (standard and full tiers); a change of outcome, cross-task
-interface, dependency graph or safety boundary goes through one reviewed
-epic amendment, while ordinary in-node detail does not. Each parallel task
-gets one owner, branch, and worktree; never let two sessions write the same
+interface, dependency graph or safety boundary creates a new plan version
+that both seats approve (CodeFlow ADR-0076); a reassignment, a follow-up
+or another task's criteria change rides in the batched epic amendment with
+one other-lineage reviewer; ordinary in-node detail needs neither. Each
+parallel task gets one owner, branch, and worktree; never let two sessions write the same
 worktree or concurrently edit a shared contract, schema, migration, or other
 merge hotspot. The host sets a bounded
 concurrency cap from available CPU, memory, disk, and tool limits, monitors
