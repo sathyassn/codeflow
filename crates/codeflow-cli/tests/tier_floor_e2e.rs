@@ -866,6 +866,18 @@ fn headless_peer_runs_block_in_every_harness_wiring_at_every_tier() {
             serde_json::to_string_pretty(&policy).unwrap(),
         )
         .unwrap();
+        // AC-1 without a remote reads HEAD, not an uncommitted policy edit.
+        git_ok(
+            &root,
+            &["switch", "-qc", "feat/policy-warning"],
+            "policy branch",
+        );
+        git_ok(&root, &["add", ".codeflow/policy.json"], "stage policy");
+        git_ok(
+            &root,
+            &["commit", "-qm", "chore: record warning policy"],
+            "commit policy",
+        );
         for wiring in [
             ".claude/settings.json",
             ".codex/hooks.json",

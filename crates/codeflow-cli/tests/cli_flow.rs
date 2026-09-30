@@ -670,13 +670,13 @@ fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
     );
     git(dir.path(), &["switch", "-c", "task/TSK-001-implement"]);
 
-    // Without a configured upstream, local `main` stays the target.
+    // AC-6: without an upstream, the newer fetched origin target is used.
     let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
-    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("not present at the merge-base"),
+        stdout(&output).contains("refs/remotes/origin/main"),
         "{}",
-        stderr(&output)
+        stdout(&output)
     );
 
     // A fork: `main` tracks `upstream/main`, which lacks the planning. The

@@ -121,7 +121,13 @@ mod tests {
         let opts = Options {
             project_dir: dir.path().to_string_lossy().into_owned(),
             look_path: Some(|name| Ok(format!("/stub/bin/{name}"))),
-            exec_command: Some(|_, _| Ok(String::new())),
+            exec_command: Some(|_, args| {
+                Ok(if args == ["git-hook", "capabilities"] {
+                    "hooks 3".into()
+                } else {
+                    String::new()
+                })
+            }),
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
             qualification_dir: None,
             harness_home: Some(dir.path().join("home")),
