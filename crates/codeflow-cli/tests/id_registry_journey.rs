@@ -113,6 +113,8 @@ fn project_with_remote() -> (tempfile::TempDir, PathBuf, PathBuf) {
     git(&root, &["switch", "-q", "-c", LINE]);
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["push", "-q", "origin", LINE]);
+    // AC-1 reads landed policy: fetch the advertised main as well as the line.
+    git(&root, &["fetch", "-q", "origin"]);
     // `init` committed a scaffold holding records (ADR-0001), so a
     // maintainer seeds the registry once before the first issue (R-6, R-24).
     let before = codeflow(&root, &["epic", "new", "too early"]);

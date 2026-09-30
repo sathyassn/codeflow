@@ -2137,7 +2137,7 @@ fn check_authority(
     if moved.transport_env
         && git_subcommand(args).is_some_and(|(sub, rest)| {
             matches!(sub, "fetch" | "pull" | "push")
-                || super::ref_authority::remote_update_args(sub, rest).is_some()
+                || super::ref_authority::remote_transport_args(sub, rest).is_some()
         })
     {
         violations.push(Violation::always_blocking(

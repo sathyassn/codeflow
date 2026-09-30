@@ -383,7 +383,10 @@ Agent sessions are judged by the landed policy: the stricter of the
 remote's default branch and the declared target, read from the
 remote-tracking refs, so a local edit, commit or branch cannot relax it.
 With no remote, or before the first fetch, the guards read `HEAD`, and
-every refusal names the source.
+every refusal names the source. When the remote HEAD is not set, as after
+`git init`, `git remote add` and `git push -u`, they read `main` and
+`master`, stricter wins; a custom default branch needs the operator's
+`git remote set-head origin --auto`.
 
 Under the shipped defaults, the guards refuse the wrapped, flag-led and
 interpreter forms of privilege escalation, package or gist publishing,

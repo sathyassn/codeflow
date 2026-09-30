@@ -282,7 +282,7 @@ catalog! {
         "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
     /// Deleting a protected branch.
     PROTECTED_DELETE = Step::Edit(".codeflow/policy.json"),
-        "protected branches are never deleted; if it is truly intended, first remove the entry from git.protected_branches in `.codeflow/policy.json`";
+        "protected branches are never deleted; if it is truly intended, first remove the entry from git.protected_branches in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
     /// Rewriting protected history.
     PROTECTED_REWRITE = Step::Git("git revert"),
         "undo it with `git revert` instead, and rebase feature branches in their own worktree; protected history is append-only";
@@ -294,7 +294,7 @@ catalog! {
         "push without force after `git pull --rebase`; the project restricts force-pushes with git.force_push_unprotected in `.codeflow/policy.json`";
     /// A `gh pr merge` into a protected base.
     PR_MERGE_PROTECTED = Step::Edit(".codeflow/policy.json"),
-        "PR merges into protected branches are performed by a human (GitHub UI / their own terminal) or explicitly sanctioned by git.pr_merge_to_protected in `.codeflow/policy.json`";
+        "PR merges into protected branches are performed by a human (GitHub UI / their own terminal) or explicitly sanctioned by git.pr_merge_to_protected in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
     /// A branch name outside the prefixes.
     BRANCH_NAME = Step::Git("git branch"),
         "rename it with `git branch -m <prefix>/<kebab-name>`, with a sanctioned prefix: {prefixes}";
@@ -604,7 +604,7 @@ catalog! {
 
     /// An action reserved for the operator, including a secret-store read.
     OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),
-        "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`";
+        "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
 
     /// A branch push that would include tags because of effective Git config.
     PUSH_WITHOUT_FOLLOW_TAGS = Step::Git("git push"),
@@ -612,5 +612,31 @@ catalog! {
 
     /// A privilege escalation proposed from a session.
     PRIVILEGE_ESCALATION = Step::Edit(".codeflow/policy.json"),
-        "privilege escalation needs applicable operator authority: an operator runs it outside the session; {enforcement}; the effective harness may show no permission prompt (security.privilege_escalation in `.codeflow/policy.json`)";
+        "privilege escalation needs applicable operator authority: an operator runs it outside the session; {enforcement}; the effective harness may show no permission prompt (security.privilege_escalation in `.codeflow/policy.json`); session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn policy_relaxation_routes_require_every_named_source() {
+        for remedy in [
+            &super::PROTECTED_DELETE,
+            &super::PR_MERGE_PROTECTED,
+            &super::OUTWARD_ACTION,
+            &super::PRIVILEGE_ESCALATION,
+        ] {
+            assert!(
+                remedy
+                    .text
+                    .contains("on every branch named as a policy source"),
+                "{}: {}",
+                remedy.name,
+                remedy.text
+            );
+            assert!(remedy.text.contains("fetches"));
+            assert!(remedy
+                .text
+                .contains("HEAD while no remote-tracking refs exist"));
+        }
+    }
 }

@@ -108,7 +108,12 @@ Three PreToolUse handlers add fast, pre-git feedback.
 Agent sessions are judged by the landed policy. The guards read
 `.codeflow/policy.json` and project settings from the configured remote's
 default branch and the declared target, taking the stricter level key by key,
-so a local checkout, commit, rebase or stash cannot relax them. They read
+so a local checkout, commit, rebase or stash cannot relax them. When the remote
+HEAD is not set, as after `git init`, `git remote add` and `git push -u`,
+every existing `main` and `master` tracking ref contributes, stricter wins, so
+a fetch that adds one cannot weaken them; a custom default branch needs the
+operator's `git remote set-head <remote> --auto`, which `doctor` names, and a
+dangling remote HEAD refuses. They read
 `HEAD` only when there is no remote or the remote has no tracking refs yet,
 and the working copy only on an unborn `HEAD`; every refusal and `doctor`
 name the source. Ref plumbing on `refs/remotes`, fetch or pull into an
