@@ -18,7 +18,7 @@ const repoRoot = resolve(webRoot, "../../..");
 // A figure block the grammar draws with no rule failure (the portal's state specimen).
 const figureDeclaration = await readFile(join(repoRoot, "docs-portal/tests/fixtures/figures/05-state.json"), "utf8");
 const manifest = JSON.parse(await readFile(join(assetsRoot, "manifest.json"), "utf8"));
-const assets = new Map(manifest.service.assets.map((asset) => [asset.request_path, asset]));
+const assets = new Map(manifest.service.assets.filter((asset) => asset.content_encoding === "br").map((asset) => [asset.request_path, asset]));
 const appPath = manifest.service.entrypoints["present.app"];
 const stylePath = manifest.service.entrypoints["present.style"];
 const prepaint = manifest.service.inline["present.prepaint"].source;

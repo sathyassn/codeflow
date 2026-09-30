@@ -24,7 +24,8 @@ publication date._
   reports framing, anchor and form faults without a browser. Export includes
   the private conversation only with `--with-notes`. Codex model wake still
   depends on upstream CLI background tasks; a bounded wait on the agent's next
-  turn delivers stored events until that support arrives.
+  turn delivers stored events until that support arrives. Safari on loopback
+  HTTP receives deterministic gzip assets; Brotli remains preferred.
 
 <!-- codeflow:release-impact minor -->
 - **Portable pull request checks.** `codeflow ci` reads Markdown sections,

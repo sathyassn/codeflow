@@ -26,6 +26,7 @@ const engines = {
 const selected = process.env.CF_PRESENT_ENGINES?.split(",") ?? Object.keys(engines);
 const widths = process.env.CF_PRESENT_WIDTHS?.split(",").map(Number) ?? [1280,375];
 const results = [];
+const manifest = JSON.parse(await readFile(join(repo,"crates/codeflow-present/assets/manifest.json"),"utf8"));
 for (const engine of selected) for (const width of widths) {
   const root = await mkdtemp(join(evidence,`${engine}-${width}-`));
   const project = join(root,"project");
@@ -54,7 +55,12 @@ for (const engine of selected) for (const width of widths) {
     context = await browser.launchPersistentContext(join(root,"profile"),{executablePath,headless:true,viewport:{width,height:900}});
     const page = context.pages()[0] ?? await context.newPage();
     const errors=[]; page.on("pageerror",e => { errors.push(e.message); console.error(`${engine} page error: ${e.message}`); });
+    const requestedAssets = new Map();
     page.on("response", async response => {
+      const path = new URL(response.url()).pathname;
+      if (path.startsWith("/app/assets/") && response.status() === 200) {
+        requestedAssets.set(path, response.headers()["content-encoding"]);
+      }
       if (response.status() >= 400 && response.url().includes("/app/assets/")) console.error(`${engine} asset ${response.status()} ${response.url()} accept-encoding=${(await response.request().allHeaders())["accept-encoding"]}`);
     });
     await page.goto(pathToFileURL(bootstrap).href,{waitUntil:"commit"});
@@ -130,7 +136,16 @@ for (const engine of selected) for (const width of widths) {
     assert.deepEqual(errors,[]);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
     assert.equal(overflow,false,`${engine}/${width} horizontal overflow`);
-    results.push({engine,version:context.browser()?.version() ?? "persistent",width,checks:12,session:id});
+    const assets = [...requestedAssets].map(([path, encoding]) => {
+      const asset = manifest.service.assets.find(a => a.request_path === path && a.content_encoding === encoding);
+      assert.ok(asset, `unmanifested representation: ${path} ${encoding}`);
+      return {path, encoding, bytes:asset.encoded_bytes};
+    });
+    assert.ok(assets.length > 0);
+    if (engine === "webkit") assert.ok(assets.every(a => a.encoding === "gzip"));
+    const encodedBytes = assets.reduce((sum,a) => sum+a.bytes,0);
+    console.log(`${engine} ${width}px: ${encodedBytes} encoded service bytes across ${assets.length} unique assets (${[...new Set(assets.map(a => a.encoding))].join(",")})`);
+    results.push({assets,encodedBytes,engine,version:context.browser()?.version() ?? "persistent",width,checks:12,session:id});
     console.log(`${engine} ${width}px: 12 checks passed; open, comment, answer, reply, reopen, diff, carry, reload, delete, revision, route refusal, layout`);
   } catch(error) {
     if (context) { const page = context.pages()[0]; if (page) await page.screenshot({path:join(evidence,`${engine}-${width}-failure.png`),fullPage:true}).catch(()=>{}); }

@@ -21,6 +21,7 @@
     "check:real-browser": "node scripts/real-browser-check.mjs",
     "check:windows-profile-confinement": "node scripts/windows-qualification-scope-check.mjs",
     "supply-chain": "node scripts/supply-chain.mjs",
+    "check:transport": "node scripts/transport-check.mjs",
     "check:conversation": "node scripts/conversation-browser-check.mjs"
   },
   "dependencies": {
