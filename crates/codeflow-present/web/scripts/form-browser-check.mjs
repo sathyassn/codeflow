@@ -246,6 +246,8 @@ try {
     await page.waitForTimeout(50);
   }
   assert.deepEqual(await stateOf(form), staleCorrection, "late notice: a notice for the form's own revision changed it");
+  // Later polls reach the service directly, as in any other run.
+  await page.unroute("**/app/api/events/poll");
   await refuseOnce((body) => { body.values.home = "cloud"; });
   await form.locator("[data-cf-form-action='confirm']").click();
   await waitState(form, "editing");
