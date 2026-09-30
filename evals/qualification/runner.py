@@ -310,9 +310,96 @@ def handle_startup(pane: str, harness: str, repository: Path, screen: str,
     return False
 
 
+# Codex CLI idle frame, captured live: the empty composer, one blank line, the
+# status line (model and effort, then cwd, then volatile title and branch) and
+# the shortcuts footer, whose right side may carry a volatile warning count.
+CODEX_EMPTY = "› Ask Codex to do anything"
+CODEX_SHORTCUTS = re.compile(r"  \? for shortcuts(?: {2,}⚠ \d+ warnings? · f2 to view)?")
+CODEX_EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
+# Above the composer: no second cursor or menu row and no confirm hint.
+CODEX_DIALOG = re.compile(r"(?i)^\s*[│┃]?\s*[›❯]|\b(?:enter|esc)\b.*\b(?:confirm|continue|cancel|quit|skip|select)\b")
+CODEX_FOLD = re.compile(r"\[Pasted Content (\d+) chars\]")
+
+
+def codex_expectation(native: list[str], repository: Path) -> dict:
+    """The caller's requested model and effort, for Codex frame checks."""
+    model = effort = None
+    index = 0
+    while index < len(native):
+        flag, separator, value = native[index].partition("=")
+        index += 1
+        if not separator and index < len(native):
+            value = native[index]; index += 1
+        if flag == "--model":
+            model = value
+        elif flag == "-c":
+            effort = value.partition("=")[2].strip("\"'")
+    if not model:
+        raise Refused("refused native flag: --model (required so Codex readiness can verify the model)", "--model")
+    return {"model": model, "effort": effort, "repository": repository}
+
+
+def codex_status(line: str, model: str, effort: str | None, repository: Path) -> bool:
+    parts = line[2:].split(" · ") if line.startswith("  ") else []
+    if len(parts) < 2 or parts[1] != str(repository):
+        return False
+    label = parts[0].split(" ")
+    if len(label) > 2 or label[0].lower() != model.lower():
+        return False
+    shown = label[1] if len(label) == 2 else None
+    if shown is not None and shown not in CODEX_EFFORTS:
+        return False
+    return effort is None or shown == effort
+
+
+def codex_composer(screen: str, model: str, effort: str | None, repository: Path) -> str | None:
+    """Composer text of an exact Codex frame: "" when idle, None when unknown.
+
+    The idle frame is pinned whole. With input pending, the footer below the
+    status line was not captured, so it is not pinned and may be absent; a
+    bottom-pane dialog replaces the composer, which is checked in full.
+    """
+    lines = [line.rstrip() for line in screen.splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    if len(lines) >= 3 and codex_status(lines[-1], model, effort, repository):
+        status, footer = len(lines) - 1, None
+    elif len(lines) >= 4 and codex_status(lines[-2], model, effort, repository):
+        status, footer = len(lines) - 2, lines[-1]
+    else:
+        return None
+    if lines[status - 1]:
+        return None
+    top = max((i for i, line in enumerate(lines[:status - 1]) if line == "›" or line.startswith("› ")), default=None)
+    if top is None or any(CODEX_DIALOG.search(line) for line in lines[:top]):
+        return None
+    body = lines[top:status - 1]
+    if body == [CODEX_EMPTY]:
+        return "" if footer is not None and CODEX_SHORTCUTS.fullmatch(footer) else None
+    if any(line and not line.startswith("  ") for line in body[1:]):
+        return None
+    text = "\n".join([body[0][2:], *(line[2:] for line in body[1:])]).strip()
+    return text or None
+
+
+def codex_holds(text: str | None, prompt: str) -> bool:
+    if not text:
+        return False
+    fold = CODEX_FOLD.fullmatch(text)
+    if fold:
+        return int(fold.group(1)) in {len(prompt), len(prompt.rstrip("\n"))}
+    return "".join(text.split()) == "".join(prompt.split())
+
+
+def frame_event(harness: str, stage: str, screen: str) -> dict:
+    return {"harness": harness, "stage": stage,
+            "screen_sha256": "sha256:" + hashlib.sha256(screen.encode()).hexdigest(), "time": time.time()}
+
+
 def wait_ready(pane: str, seconds: float, harness: str | None = None,
                repository: Path | None = None, acceptances: list | None = None,
-               display_choices: list | None = None, branch: str | None = None) -> dict:
+               display_choices: list | None = None, branch: str | None = None,
+               codex: dict | None = None, frames: list | None = None) -> dict:
     end = time.monotonic() + seconds
     acceptances = acceptances if acceptances is not None else []
     display_choices = display_choices if display_choices is not None else []
@@ -327,10 +414,14 @@ def wait_ready(pane: str, seconds: float, harness: str | None = None,
                     trust_pending = True
             if harness == "grok" and not grok_authenticated_editor(screen):
                 trust_pending = True
+            if harness == "codex" and (codex is None or codex_composer(screen, **codex) != ""):
+                trust_pending = True
             if not screen.strip():
                 trust_pending = True
         current = state(pane)
         if not trust_pending and current.get("agent_status") in {"idle", "done"}:
+            if harness == "codex" and frames is not None:
+                frames.append(frame_event("codex", "ready", screen))
             return current
         if (not trust_pending and current.get("agent_status") == "blocked") or time.monotonic() >= end:
             raise Refused("seat did not become ready; inspect its native UI before any delivery")
@@ -389,6 +480,33 @@ def deliver_claude(pane: str, prompt: str, initial: dict, seconds: float,
     if not started(pane, initial, seconds):
         raise Refused("turn not confirmed after two verified Enters; inspect without resending")
     return 2
+
+
+def deliver_codex(pane: str, prompt: str, initial: dict, seconds: float, codex: dict,
+                  frames: list, evidence: Path | None = None) -> int:
+    """Paste only into the verified empty composer; one Enter, never a second."""
+    if not prompt.strip() or len(prompt.encode("utf-8")) > 256 * 1024:
+        raise Refused("prompt must be nonempty and at most 256 KiB; nothing sent")
+    def capture(name: str) -> str:
+        screen = herdr("pane", "read", pane, "--source", "visible", text=True)
+        if evidence is not None:
+            (evidence / name).write_text(screen, encoding="utf-8")
+        return screen
+
+    before = capture("editor-before.txt")
+    if codex_composer(before, **codex) != "":
+        raise Refused("no verified empty Codex composer; nothing sent")
+    frames.append(frame_event("codex", "before-paste", before))
+    herdr("pane", "send-text", pane, prompt)
+    time.sleep(2)
+    pending = capture("editor-pasted.txt")
+    if not codex_holds(codex_composer(pending, **codex), prompt):
+        raise Refused("the visible Codex composer does not hold this prompt; no Enter sent")
+    frames.append(frame_event("codex", "pending", pending))
+    herdr("pane", "send-keys", pane, "Enter")
+    if not started(pane, initial, seconds):
+        raise Refused("turn not confirmed after one verified Enter; inspect without resending")
+    return 1
 
 
 AUTH_REFUSAL = "evaluator home not signed in: run prepare-eval-homes"
@@ -535,8 +653,8 @@ def print_hook_review(record_path: Path) -> str:
     environment = record["subject_environment"]
     config_snapshot(environment)
     assignments = [shlex.quote(f"{key}={value}") for key, value in environment.items() if key != "TERM"]
-    native = ["codex", "--ask-for-approval", "never", "--sandbox", "danger-full-access",
-              *kit.trial_native_args("codex", environment)]
+    # Review only: read-only sandbox and Codex's default approval policy.
+    native = ["codex", "--sandbox", "read-only", *kit.trial_native_args("codex", environment)]
     command = "env -i " + " ".join(assignments) + ' TERM="${TERM:-xterm-256color}" ' + shlex.join(native)
     return ("Run this command once in an app terminal. No harness was launched.\n"
             "This fresh disposable fixture carries the trial hooks. Accept its exact-path\n"
@@ -574,6 +692,7 @@ def launch(args) -> None:
         raise Refused("output already exists; never reuse a trial launch")
     try:
         permissions = permission_flags(args.harness, native, repository)
+        codex = codex_expectation(native, repository) if args.harness == "codex" else None
     except Refused as exc:
         args.output.mkdir(parents=True)
         write(args.output / "launch.json", {"harness": args.harness, "status": "refused",
@@ -591,7 +710,7 @@ def launch(args) -> None:
            "observation": observation,
            "observation_limitations": ["Only explicitly declared watch directories are observed. Harness TMPDIR is unobserved; planted controls must be outside it."],
            "authentication": authentication,
-           "instruction_ancestors": ancestry, "trust_acceptances": [], "display_choices": [],
+           "instruction_ancestors": ancestry, "trust_acceptances": [], "display_choices": [], "verified_frames": [],
            "status": "prepared", "started_at": time.time()}
     write(args.output / "launch.json", run)
     try:
@@ -630,7 +749,8 @@ def launch(args) -> None:
             run["launch_response"] = recover_registration(
                 run["pane"], f"eval-{trial.name}", args.harness, repository, start_args)
         try:
-            initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"], run["display_choices"], record.get("branch"))
+            initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"],
+                                 run["display_choices"], record.get("branch"), codex=codex, frames=run["verified_frames"])
         except Refused as exc:
             if args.harness == "grok":
                 raise Refused(AUTH_REFUSAL) from exc
@@ -646,6 +766,9 @@ def launch(args) -> None:
         prompt = (repository / "TASK.md").read_text(encoding="utf-8")
         if args.harness == "claude":
             run["enters"] = deliver_claude(run["pane"], prompt, initial, args.start_timeout, record.get("branch"), args.output)
+        elif args.harness == "codex":
+            run["enters"] = deliver_codex(run["pane"], prompt, initial, args.start_timeout, codex,
+                                          run["verified_frames"], args.output)
         else:
             helper = ROOT / "assets/base/agents/skills/cf-herdr/scripts/deliver.py"
             done = subprocess.run([sys.executable, "-B", str(helper), "--pane", run["pane"],

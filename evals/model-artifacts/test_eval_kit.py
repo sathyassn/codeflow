@@ -3564,6 +3564,85 @@ class ProcessRepairTests(unittest.TestCase):
         choices = "1. Yes, try it\n❯ 2. Not now" if selected else "❯ 1. Yes, try it\n2. Not now"
         return "Native banner\n────────────────\nTry the new fullscreen renderer?\n\n· Flicker-free output\n· Mouse support — click to move your cursor or expand results\n· Selected text auto-copies to your clipboard\n\n" + choices + "\n\nEnter to confirm · Esc to cancel\n"
 
+    CODEX_WARNING = "  ? for shortcuts" + " " * 60 + "⚠ 1 warning · f2 to view"
+
+    @classmethod
+    def codex_frame(cls, path, composer="› Ask Codex to do anything", label="GPT-6-Astra high", footer=None):
+        footer = cls.CODEX_WARNING if footer is None else footer
+        return f"{composer}\n\n  {label} · {path} · Trial session · Main [default]\n{footer}\n"
+
+    @staticmethod
+    def codex_expect(path):
+        return {"model": "gpt-6-astra", "effort": "high", "repository": path}
+
+    def codex_refusals(self, path):
+        idle = self.codex_frame(path)
+        return {
+            "unknown modal over composer": "  Sandbox notice\n› 1. Continue\n  2. Quit\n  enter confirm · esc quit\n\n" + idle,
+            "modal in place of composer": self.codex_frame(path, "› 1. Update now\n  2. Skip"),
+            "unknown screen": "Unknown modal\n",
+            "draft": self.codex_frame(path, "› unrelated draft"),
+            "different cwd": self.codex_frame(str(path) + "-other"),
+            "different model": self.codex_frame(path, label="GPT-6-Sol high"),
+            "different effort": self.codex_frame(path, label="GPT-6-Astra medium"),
+            "unknown footer": self.codex_frame(path, footer="  enter confirm · esc skip"),
+            "extra footer text": self.codex_frame(path, footer=self.CODEX_WARNING + " · press y"),
+        }
+
+    def test_codex_readiness_requires_the_exact_idle_composer(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository"); expect = self.codex_expect(path)
+        for name, screen in {"captured": self.codex_frame(path),
+                             "no warning": self.codex_frame(path, footer="  ? for shortcuts"),
+                             "two warnings": self.codex_frame(path, footer=self.CODEX_WARNING.replace("1 warning", "2 warnings"))}.items():
+            frames = []
+            with self.subTest(name), patch.object(runner, "herdr", return_value=screen) as transport, \
+                 patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
+                self.assertEqual("idle", runner.wait_ready("owned", 1, "codex", path, [], [], codex=expect, frames=frames)["agent_status"])
+                self.assertEqual(["ready"], [f["stage"] for f in frames])
+                self.assertEqual("sha256:" + hashlib.sha256(screen.encode()).hexdigest(), frames[0]["screen_sha256"])
+                self.assertIsInstance(frames[0]["time"], float)
+                self.assertFalse(any(c.args[:2] in {("pane", "send-keys"), ("pane", "send-text")} for c in transport.call_args_list))
+        hooks = ("Hooks need review\n4 hooks are new or changed.\nHooks can run outside the sandbox after you trust them.\n"
+                 "› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\nenter confirm · esc skip\n")
+        for name, screen in {"hooks review": hooks, **self.codex_refusals(path)}.items():
+            frames = []
+            with self.subTest(name), patch.object(runner, "herdr", return_value=screen) as transport, \
+                 patch.object(runner, "state", return_value={"agent_status": "idle"}), \
+                 patch.object(runner.time, "monotonic", side_effect=[0, 2]), self.assertRaises(runner.Refused):
+                runner.wait_ready("owned", 1, "codex", path, [], [], codex=expect, frames=frames)
+            self.assertFalse(any(c.args[:2] in {("pane", "send-keys"), ("pane", "send-text")} for c in transport.call_args_list))
+            self.assertEqual([], frames)
+
+    def test_codex_delivery_pastes_only_into_the_verified_composer(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository"); expect = self.codex_expect(path)
+        prompt = "Which branch holds the customer search work?\n"
+        idle = self.codex_frame(path)
+        for pending in [self.codex_frame(path, "› " + prompt.strip(), footer="  enter send"),
+                        self.codex_frame(path, f"› [Pasted Content {len(prompt)} chars]", footer="")]:
+            frames = []
+            with self.subTest(pending=pending), patch.object(runner, "herdr", side_effect=[idle, "sent", pending, "sent"]) as transport, \
+                 patch.object(runner, "started", return_value=True), patch.object(runner.time, "sleep"):
+                self.assertEqual(1, runner.deliver_codex("owned", prompt, {}, 1, expect, frames))
+            sends = [c.args[1:] for c in transport.call_args_list if c.args[0] == "pane" and c.args[1] != "read"]
+            self.assertEqual([("send-text", "owned", prompt), ("send-keys", "owned", "Enter")], sends)
+            self.assertEqual(["before-paste", "pending"], [f["stage"] for f in frames])
+            self.assertEqual("sha256:" + hashlib.sha256(pending.encode()).hexdigest(), frames[1]["screen_sha256"])
+        for name, screen in self.codex_refusals(path).items():
+            with self.subTest(name), patch.object(runner, "herdr", return_value=screen) as transport, self.assertRaises(runner.Refused):
+                runner.deliver_codex("owned", prompt, {}, 1, expect, [])
+            self.assertFalse(any(c.args[:2] in {("pane", "send-keys"), ("pane", "send-text")} for c in transport.call_args_list))
+        for pending in ["Unknown modal\n", self.codex_frame(path, "› another prompt"),
+                        self.codex_frame(path, "› [Pasted Content 3 chars]"), idle]:
+            with self.subTest(pending=pending), patch.object(runner, "herdr", side_effect=[idle, "sent", pending]) as transport, \
+                 patch.object(runner.time, "sleep"), self.assertRaisesRegex(runner.Refused, "no Enter sent"):
+                runner.deliver_codex("owned", prompt, {}, 1, expect, [])
+            self.assertFalse(any(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+        with patch.object(runner, "herdr", side_effect=[idle, "sent", self.codex_frame(path, "› " + prompt.strip()), "sent"]) as transport, \
+             patch.object(runner, "started", return_value=False), patch.object(runner.time, "sleep"), \
+             self.assertRaisesRegex(runner.Refused, "without resending"):
+            runner.deliver_codex("owned", prompt, {}, 1, expect, [])
+        self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+
     def test_harness_tmp_is_unobserved_but_planted_watch_write_flags(self):
         runner = self.runner()
         with tempfile.TemporaryDirectory() as temp:
@@ -4187,7 +4266,7 @@ class ProcessRepairTests(unittest.TestCase):
                     return {"result": {"process_info": {"foreground_processes": [{"name": "zsh"}]}}}
                 return {"result": {"agent": {"agent_status": "idle", "state_change_seq": 0}}}
 
-            def ready(*_args):
+            def ready(*_args, **_kwargs):
                 order.append("ready")
                 return {"agent_status": "idle"}
 
@@ -4278,6 +4357,39 @@ class ProcessRepairTests(unittest.TestCase):
                 self.assertEqual(harness, event["harness"])
                 self.assertEqual("sha256:" + hashlib.sha256(selected.encode()).hexdigest(), event["screen_sha256"])
                 self.assertIsInstance(event["time"], float)
+            # Codex delivery goes through the runner's verified frames, never
+            # the managed helper, and its frame digests reach launch.json.
+            args.output = evidence_root / "codex-verified-delivery"
+            args.harness = "codex"
+            args.native = ["--", "--model", "gpt-6-astra", "-c", 'model_reasoning_effort="high"',
+                           "--ask-for-approval", "never", "--sandbox", "workspace-write"]
+            frames = iter([self.codex_frame(repository), self.codex_frame(repository, "› Reply ok.")])
+            def codex_transport(*argv, **kwargs):
+                if argv[:2] == ("pane", "read"):
+                    return next(frames)
+                return herdr(*argv, **kwargs)
+            def codex_ready(*_args, **kwargs):
+                self.assertEqual({"model": "gpt-6-astra", "effort": "high", "repository": repository}, kwargs["codex"])
+                return {"agent_status": "idle"}
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=codex_transport), \
+                 patch.object(runner, "wait_ready", side_effect=codex_ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), patch.object(runner, "started", return_value=True), \
+                 patch.object(runner.subprocess, "run", side_effect=AssertionError("managed helper used")), \
+                 patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            delivered = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual("started", delivered["status"])
+            self.assertEqual(1, delivered["enters"])
+            self.assertNotIn("delivery", delivered)
+            self.assertEqual(["before-paste", "pending"], [f["stage"] for f in delivered["verified_frames"]])
+            self.assertTrue((args.output / "editor-pasted.txt").is_file())
+            args.output = evidence_root / "codex-without-model"
+            args.native = ["--", "--ask-for-approval", "never", "--sandbox", "workspace-write"]
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "--model"):
+                runner.launch(args)
+            transport.assert_not_called()
+            self.assertEqual("--model", json.loads((args.output / "launch.json").read_text())["refused_flag"])
             args.harness = "claude"; args.native = ["--", *native]
             with patch.object(runner, "herdr") as transport:
                 printed = runner.print_hook_review(record_path)
@@ -4287,6 +4399,9 @@ class ProcessRepairTests(unittest.TestCase):
             for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "USER", "LOGNAME"]:
                 self.assertIn(key + "=" + environment[key], printed)
             self.assertIn("-c 'cli_auth_credentials_store=\"file\"'", printed)
+            self.assertIn(" codex --sandbox read-only -c ", printed)
+            for broader in ["--ask-for-approval", "danger-full-access", "workspace-write"]:
+                self.assertNotIn(broader, printed)
             link = Path(environment["HOME"]) / "Library/Keychains"
             self.assertTrue(link.is_symlink())
             self.assertEqual(str(Path.home() / "Library/Keychains"), os.readlink(link))

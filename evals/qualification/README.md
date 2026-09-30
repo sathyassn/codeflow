@@ -60,7 +60,10 @@ python3 evals/qualification/runner.py print-hook-review \
 ```
 
 This validates the unused fixture and prints an isolated native Codex command;
-it does not launch Codex or answer any screen. Run the printed command once
+it does not launch Codex or answer any screen. The command keeps the
+dedicated `CODEX_HOME`, the file credential store and the disposable HOME,
+and starts Codex with `--sandbox read-only` and its default approval policy,
+since the session only reviews hooks. Run the printed command once
 in an app terminal, accept that fixture's folder, review the hooks and trust
 them yourself. Use `/hooks` if needed. Exit without submitting `TASK.md`.
 The review covers `.codex/hooks.json`: the PreToolUse `git-guard` and
@@ -112,9 +115,9 @@ not a guarantee that a remote subscription or token will remain valid.
 During startup, the runner may accept only Claude's workspace-trust or
 Codex's project-trust dialog naming this trial's exact materialized subject
 path (see the [Codex trust renderer][codex-trust]). It re-reads the visible
-pane before each selection key and confirmation,
-requires the affirmative choice visibly selected for menu dialogs, and records harness,
-path, screen-text SHA-256 and time in `trust_acceptances`. This implements
+pane before each selection key and confirmation, requires the affirmative
+choice visibly selected for menu dialogs, and records harness, path,
+screen-text SHA-256 and time in `trust_acceptances`. This implements
 the operator's standing authorization for harness-created disposable samples.
 A different path, truncated path, import dialog or other trust prompt
 refuses. The kit never writes trust grants into config. This workspace
@@ -175,6 +178,9 @@ For Claude's exact "Try the new fullscreen renderer?" dialog it selects
 choice in `launch.json`. This keeps the current renderer; the kit writes no
 setting to suppress the dialog. Unknown or changed dialogs still refuse,
 and the strict empty-editor check runs before any trial prompt is pasted.
+The Grok match is pinned to the `Grok Build 1.0.44 [stable]` footer, so an
+upgraded Grok fails closed until its trust and welcome screens are captured
+again and the runner is updated.
 
 A new tab has its own cwd and environment; no existing pane is reused. The
 runner waits for shell readiness before starting a seat, then for seat readiness
@@ -185,13 +191,28 @@ Claude delivery recognizes only the complete editor frame
 proven by the release harness, plus the observed branch status row only
 when its branch equals the signed fixture record. That row may show the
 known effort label or `ctrl+g to edit in Nvim` hint. Editor captures retain
-the actual before-paste and pending-input screens in the evidence folder. It sends at most two
-Enters, the second only
-when that frame still holds this trial's unsent prompt. An empty editor is
-never evidence of pending input. Unknown frames, dialogs and unreadable panes
-stop delivery. Codex and Grok keep the managed helper's one-Enter refusal.
-No prompt is automatically resent. A refusal retains the created tab IDs for
-inspection and cleanup by the primary.
+the actual before-paste and pending-input screens in the evidence folder.
+It sends at most two Enters, the second only when that frame still holds
+this trial's unsent prompt. An empty editor is never evidence of pending
+input. Unknown frames, dialogs and unreadable panes stop delivery.
+
+Codex readiness and delivery use the captured idle frame, not Herdr status
+alone: the empty composer line `› Ask Codex to do anything`, one blank line,
+the status line and the `? for shortcuts` footer. The status line must show
+the requested `--model` label (case-insensitive), the requested effort when
+one is passed, and this fixture's repository path as the cwd; the session
+title, branch and warning count are not required. Codex trials must pass
+`--model`. Any other frame refuses without a key: a dialog, a draft, another
+cwd or model, or a changed placeholder. The runner re-reads that frame just
+before pasting, then sends one Enter only when the composer holds this
+prompt, as text or as `[Pasted Content N chars]` with this prompt's length.
+The footer under pending input was not captured and is not checked. The
+ready, before-paste and pending frame digests and times are recorded in
+`verified_frames` in `launch.json`, with the screens in the evidence folder.
+There is no second Enter. Grok keeps the managed helper's one-Enter refusal
+after its authenticated-welcome check. No prompt is automatically resent.
+A refusal retains the created tab IDs for inspection and cleanup by the
+primary.
 
 `finish` is a manual observation boundary. Run it after the primary verifies
 the native turn finished, including any peer work, and before cleanup. Copy
@@ -232,8 +253,9 @@ overrun it. Entry count and elapsed time are retained with each snapshot.
 
 Writes inside pre-existing top-level directories of `/private/tmp` are
 unobserved, except within separately watched roots. Harness TMPDIR is
-unobserved in its entirety. Writes outside declared directories, startup writes before readiness,
-and transient entries gone before the final snapshot are also unobserved.
+unobserved in its entirety. Writes outside declared directories, startup
+writes before readiness, and transient entries gone before the final
+snapshot are also unobserved.
 The comparison records these limits. Changes are not attributed to the subject.
 This is a bounded diagnostic, not host confinement or a tamper-resistant
 audit. Run trials sequentially when attribution would otherwise be ambiguous.
