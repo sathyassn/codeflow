@@ -852,7 +852,7 @@ fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&
     integrity_target(&normalize_path(token)).or_else(|| {
         let base = integrity_disk_case(payload_cwd);
         let path = integrity_disk_case(&cwd.join(token));
-        if let Some(protected) = root_dot_pattern_target(&path, &base) {
+        if let Some(protected) = root_dot_pattern_target(&path) {
             return Some(protected);
         }
         // A derived absolute path is not a typed scratch-copy exemption.
@@ -865,16 +865,20 @@ fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&
     })
 }
 
-// Only explicit dot-patterns at the project root can reach these hidden
+// Only explicit dot-patterns at a repository root can reach these hidden
 // directories; ordinary root globs and patterns below other paths stay ordinary.
-fn root_dot_pattern_target(path: &Path, payload_cwd: &Path) -> Option<&'static str> {
+// The pattern's own directory decides, wherever the command runs from.
+fn root_dot_pattern_target(path: &Path) -> Option<&'static str> {
     let pattern = path.file_name()?.to_str()?;
     if !pattern.starts_with('.') || !pattern.contains(['*', '?', '[', '{']) {
         return None;
     }
-    let project_root = super::RepoInfo::discover(payload_cwd)
-        .map_or_else(|| payload_cwd.to_path_buf(), |repo| repo.root);
-    if path.parent()?.canonicalize().ok()? != project_root.canonicalize().ok()? {
+    let parent = path.parent()?.canonicalize().ok()?;
+    let root = super::RepoInfo::discover(&parent)?
+        .root
+        .canonicalize()
+        .ok()?;
+    if parent != root {
         return None;
     }
     INTEGRITY_PREFIXES

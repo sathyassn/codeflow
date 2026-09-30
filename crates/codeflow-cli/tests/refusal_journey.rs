@@ -738,6 +738,15 @@ fn r5_n2_root_dot_patterns_match_protected_names_only() {
             project.check_shell(cwd, command, false);
         }
     }
+    // A cwd outside the project still reaches its root; a directory in no
+    // repository holds nothing protected.
+    let outside = project.temp.path();
+    for command in ["rm -rf project/.*", "cd project && rm -rf .c*"] {
+        project.check_shell(outside, command, true);
+    }
+    for command in ["rm -rf .*", "rm -rf .c*"] {
+        project.check_shell(outside, command, false);
+    }
     for command in [
         "rm -rf .*",
         "rm -rf .c*",
