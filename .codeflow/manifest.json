@@ -1397,7 +1397,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "d8e6db825a8cf309090c6a74343ad88c1f6ccec0ebf807dae62d9567e003c672",
+      "sha256": "b4e92fc3248faca935c0becc9605946568bc2712e6acc6c030caeeb58c848ebb",
       "exec": false
     },
     ".codex/hooks.json": {
