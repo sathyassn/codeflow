@@ -61,8 +61,8 @@ Also in 3.0.0 (TSK-190):
   works only for a path with no dots in it. Separately, Codex runs a
   project's hooks only after a person grants a one-time hook-trust prompt,
   stored as `hooks.state` with a `trusted_hash` in `~/.codex/config.toml`;
-  a changed `hooks.json` needs the grant again. Both stay operator steps
-  (decision 8) until TSK-174 and TSK-175 settle the launch form.
+  a changed `hooks.json` needs the grant again. Both stay operator steps;
+  the 2026-09-29 amendment below drops decision 8's queue.
 
 Follows in 3.1:
 
