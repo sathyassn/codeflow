@@ -25,7 +25,8 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, Args};
 use codeflow_core::hooks::{
-    delegate_turn, exec_guard, git_guard, guidance, orient, policy::Policy, session_summary,
+    delegate_turn, edit_guard, exec_guard, git_guard, guidance, orient, policy::Policy,
+    session_summary,
 };
 
 // Large enough for the maximum decoded terminal message even when every byte
@@ -40,6 +41,8 @@ pub enum HookName {
     /// `PreToolUse` (Bash/PowerShell): enforce policy.json `security` rules (dangerous
     /// commands, privilege escalation). Harness-agnostic — also serves Codex.
     ExecGuard,
+    /// Native file edits: refuse changes to enforcement paths.
+    EditGuard,
     /// `SessionStart` and `UserPromptSubmit`: the advisory entry, dispatched
     /// on the payload's event (the digest and guidance, or one rule line).
     SessionOrient,
@@ -101,6 +104,7 @@ pub fn run(args: &HookArgs) -> i32 {
     match args.name {
         HookName::GitGuard => git_guard(&stdin),
         HookName::ExecGuard => exec_guard(&stdin),
+        HookName::EditGuard => edit_guard(&stdin),
         HookName::SessionOrient => session_orient(&stdin),
         HookName::PromptReminder => {
             prompt_reminder(&stdin);
@@ -246,6 +250,10 @@ fn git_guard(stdin: &str) -> i32 {
     // as git reads it where the command runs (TSK-112).
     let alias_cwd = cwd.clone();
     let alias = move |query: &git_guard::AliasQuery<'_>| git_guard::read_alias(&alias_cwd, query);
+    let discard_cwd = cwd.clone();
+    let discard = move |query: &git_guard::DiscardQuery<'_>| {
+        codeflow_core::hooks::git_discard::inspect(&discard_cwd, query.target, query.intent)
+    };
     let ctx = git_guard::GuardContext {
         policy: &policy.git,
         current_branch: &branch,
@@ -253,9 +261,10 @@ fn git_guard(stdin: &str) -> i32 {
         pr_base_lookup: Some(&lookup),
         dir_target_lookup: Some(&dir_target),
         alias_lookup: Some(&alias),
+        discard_lookup: Some(&discard),
         root_checkout: root_checkout.as_ref(),
     };
-    let report = git_guard::evaluate_report(command, &ctx);
+    let report = git_guard::evaluate_report_at(command, &ctx, &cwd);
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
 }
 
@@ -303,8 +312,54 @@ fn exec_guard(stdin: &str) -> i32 {
     // `secret_scan`, a dangerous command is never graced), so a plain load is
     // enough — no need for `load_effective`.
     let policy = Policy::load(&root);
-    let violations = exec_guard::evaluate(command, &policy.security);
+    let violations = exec_guard::evaluate_at(
+        command,
+        &policy.security,
+        policy.git.hook_integrity,
+        &cwd,
+        &root,
+    );
     super::render_outcome("exec-guard", &root, &violations, &[], 2)
+}
+
+fn edit_guard(stdin: &str) -> i32 {
+    let request = match edit_guard::parse_payload(stdin) {
+        Ok(Some(request)) => request,
+        Ok(None) => return 0,
+        Err(error) => {
+            eprintln!("codeflow edit-guard: git.hook_integrity: cannot inspect edit payload: {error}; the operator repairs the edit hook payload in {HARNESS_HOOK_FILES}");
+            return 2;
+        }
+    };
+    let cwd = request
+        .cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| ".".into());
+    let root = super::project_root(&cwd);
+    let policy = Policy::load(&root);
+    let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+    else {
+        eprintln!("codeflow edit-guard: git.hook_integrity: cannot resolve home; the operator repairs the hook process environment");
+        return 2;
+    };
+    let repo = codeflow_core::hooks::RepoInfo::discover(&root);
+    let context = edit_guard::EditContext {
+        cwd: &cwd,
+        root: &root,
+        home: &home,
+        git_common_dir: repo.as_ref().map(|repo| repo.common_dir.as_path()),
+        level: policy.git.hook_integrity,
+    };
+    match edit_guard::evaluate(&request, &context) {
+        Ok(findings) => super::render_outcome("edit-guard", &root, &findings, &[], 2),
+        Err(error) => {
+            eprintln!("codeflow edit-guard: git.hook_integrity: cannot inspect edit target: {error}; the operator inspects the named path before editing");
+            2
+        }
+    }
 }
 
 /// Resolve a `gh pr merge <arg>` target to its base branch via `gh pr view`

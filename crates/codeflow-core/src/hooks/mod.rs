@@ -30,7 +30,9 @@
 pub mod adoption;
 pub mod conflict_markers;
 pub mod delegate_turn;
+pub mod edit_guard;
 pub mod exec_guard;
+pub mod git_discard;
 pub mod git_guard;
 pub mod git_hook;
 mod git_target;

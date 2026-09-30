@@ -12,9 +12,10 @@ use std::path::PathBuf;
 /// Every `codeflow hook` subcommand codeflow ships. A command naming anything
 /// else is a typo caught here. (Codex wires a subset — it has no `SessionEnd`
 /// event, so `session-summary` is not expected, but it stays a *known* name.)
-const KNOWN_HOOKS: [&str; 4] = [
+const KNOWN_HOOKS: [&str; 5] = [
     "git-guard",
     "exec-guard",
+    "edit-guard",
     "session-orient",
     "session-summary",
 ];
@@ -189,7 +190,7 @@ fn dogfood_grok_hooks_share_pretooluse_and_wire_no_advisory_hook() {
     )
     .unwrap();
     assert_eq!(
-        grok["hooks"]["PreToolUse"], codex["hooks"]["PreToolUse"],
+        grok["hooks"]["PreToolUse"][0], codex["hooks"]["PreToolUse"][0],
         "Grok PreToolUse must stay the same git-guard/exec-guard payload as Codex"
     );
     let events: Vec<&String> = grok["hooks"].as_object().unwrap().keys().collect();
@@ -322,4 +323,26 @@ fn the_codex_exec_guard_wiring_holds_the_round_four_probes() {
         }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+#[test]
+fn native_edit_tools_are_wired_to_the_edit_guard() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (harness, tools) in [
+        ("codex", vec!["apply_patch", "Edit", "Write"]),
+        ("grok", vec!["write", "search_replace", "Edit", "Write"]),
+    ] {
+        let value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(format!("assets/base/{harness}/hooks.json")))
+                .unwrap(),
+        )
+        .unwrap();
+        let entry = &value["hooks"]["PreToolUse"][1];
+        let matcher = regex::Regex::new(entry["matcher"].as_str().unwrap()).unwrap();
+        for tool in tools {
+            assert!(matcher.is_match(tool), "{harness}: {tool}");
+        }
+        assert!(!matcher.is_match("Bash"));
+        assert_eq!(entry["hooks"][0]["command"], "codeflow hook edit-guard");
+    }
 }
