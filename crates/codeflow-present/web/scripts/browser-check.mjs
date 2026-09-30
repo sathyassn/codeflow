@@ -410,6 +410,7 @@ async function checkPhoneSurface(browser, origin) {
     await peek.locator(".hd").dispatchEvent("pointerup", { clientY: 700 });
     await fresh.locator("[data-testid=notes-dock][data-expanded='true']").waitFor();
     assert.ok((await peek.boundingBox()).height <= Math.min(760 * 0.46, 440) + 1, "the expanded sheet is taller than the dock");
+    process.stdout.write("375 px surface passed: notes peek, pull to expand, html stage floor and pan, no block ids in the rail, chip clear of its target\n");
   } finally { await context.close(); }
 }
 
@@ -907,9 +908,15 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     && !document.querySelector('[data-testid="composer"]')
     && !document.getElementById("cf-present-document")?.hasAttribute("data-cf-capture-mode")
   );
-  // At phone width the notes sheet opens on request: Comment, when armed.
+  // At phone width Comment, when armed, opens a closed sheet (as a peek while
+  // it holds no note) and expands a peek.
   async function openSheet() {
-    if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) !== "true" || (await page.locator("#cf-feedback-panel").getAttribute("data-expanded")) !== "true") {
+    const panel = page.locator("#cf-feedback-panel");
+    if ((await panel.getAttribute("data-open")) !== "true") {
+      await page.locator("#cf-comment-toggle").click();
+      await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
+    }
+    if ((await panel.getAttribute("data-expanded")) !== "true") {
       await page.locator("#cf-comment-toggle").click();
       await page.locator("#cf-feedback-panel[data-expanded='true']").waitFor();
     }

@@ -732,7 +732,12 @@ async function armComment(page) {
     await page.locator("#cf-comment-toggle").click();
     await page.locator(".cf-hint.on").waitFor();
   }
-  // At desktop width the rail sits beside the document; where it covers it, close it.
+  await closeCoveringRail(page);
+}
+
+// At desktop width the rail sits beside the document; where it covers it (the
+// phone sheet, expanded after a pin or a save), close it.
+async function closeCoveringRail(page) {
   if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true" && await page.locator(".cf-feedback-close").isVisible()) {
     await page.locator(".cf-feedback-close").click({ force: true });
     await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false");
@@ -916,11 +921,12 @@ async function chip(page, kind) {
   return `${kind}: ${composerQuote}`;
 }
 
-// At phone width the rail is a bottom sheet (QA defect 7): taking, saving and
-// reopening a note leave it closed so the target stays in view; the float keeps
-// ESC on screen; the Comment button opens the sheet, and the save hint goes
-// with it; Done leaves Comment. With no gutter beside a full-width block, a
-// marker sits above the line it marks, never on its words (P2-3).
+// At phone width the rail is a bottom sheet: arming Comment opens it as a
+// 56 px peek, so an empty sheet covers little; a pin or a saved note expands
+// it (TSK-122 AC-6, TSK-192 AC-3); closed, the Comment button reopens it; the
+// float keeps ESC on screen; Done leaves Comment. With no gutter beside a
+// full-width block, a marker sits above the line it marks, never on its words
+// (P2-3).
 async function phoneWidth(page) {
   const step = async (name, action) => {
     try {
@@ -930,6 +936,10 @@ async function phoneWidth(page) {
     }
   };
   const sheetOpen = async () => (await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true";
+  const sheetIs = (open, expanded) => page.waitForFunction(([open, expanded]) => {
+    const panel = document.getElementById("cf-feedback-panel");
+    return panel?.getAttribute("data-open") === open && panel.getAttribute("data-expanded") === expanded;
+  }, [open, expanded], { timeout: 5000 });
   const markerClear = async (rect, what) => {
     const marker = await page.getByTestId("note-marker").first().boundingBox();
     const overlaps = marker.x < rect.x + rect.width && rect.x < marker.x + marker.width && marker.y < rect.y + rect.height && rect.y < marker.y + marker.height;
@@ -942,7 +952,8 @@ async function phoneWidth(page) {
     await step("arm Comment", async () => {
       await page.locator("#cf-comment-toggle").click();
       await page.locator(".cf-hint.on").waitFor();
-      assert.equal(await sheetOpen(), false, "the sheet opened on arming");
+      await sheetIs("true", "false");
+      assert.ok((await page.locator("#cf-feedback-panel").boundingBox()).height <= 57, "the peek is taller than 56 px");
     });
     await reveal(page, "prose");
     const heading = await page.locator("[data-cf-block-id='prose'] h2").boundingBox();
@@ -950,20 +961,19 @@ async function phoneWidth(page) {
       await page.mouse.click(heading.x + heading.width - 4, heading.y + heading.height / 2);
       const escape = await page.getByTestId("float-esc").boundingBox();
       assert.ok(escape.x >= 0 && escape.x + escape.width <= 375, `ESC at ${escape.x}..${escape.x + escape.width} of 375`);
-      assert.equal(await sheetOpen(), false, "the sheet opened on a gesture");
+      await sheetIs("true", "true");
     });
     await step("save", async () => {
       await page.getByTestId("float-comment").click();
       await saveNote(page, "phone: kept in view");
-      assert.equal(await sheetOpen(), false, "the sheet opened on save");
-      await page.getByTestId("toast").getByText(/The Comment button opens your notes and Submit\./u).waitFor();
+      await sheetIs("true", "true");
       await markerClear(await page.locator("[data-cf-block-id='prose'] h2").boundingBox(), "the heading");
     });
-    await step("Comment opens the sheet", async () => {
+    await step("Comment reopens the sheet", async () => {
+      await page.locator(".cf-feedback-close").click();
+      assert.equal(await sheetOpen(), false, "Close left the sheet open");
       await page.locator("#cf-comment-toggle").click();
-      await page.waitForFunction(() => document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "true");
-      // Well inside the hint's own 3.4 s: opening the sheet dismissed it.
-      await page.getByTestId("toast").waitFor({ state: "detached", timeout: 1000 });
+      await sheetIs("true", "true");
       await page.locator(".cf-feedback-close").click();
     });
     await step("reopen from the pin", async () => {
@@ -1017,6 +1027,7 @@ async function closeMarkers(page, width) {
     await page.getByTestId("composer-text").fill(body);
     await page.getByTestId("composer-save").click();
     await page.getByTestId("composer").waitFor({ state: "detached" });
+    await closeCoveringRail(page);
   };
   // Each anchor is measured when the layout is checked, so a check after a
   // resize compares the markers with the lines where they are now.
@@ -1143,6 +1154,7 @@ async function closeMarkers(page, width) {
       assert.equal(await page.getByTestId("composer-text").inputValue(), body, `close markers at ${width} px, marker ${i + 1} (${what}) opened another note`);
       await page.getByTestId("composer-cancel").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });
+      await closeCoveringRail(page);
     }
     if (width < 800) {
       // Armed at phone width, the rail stays closed; widened, the desktop
@@ -1161,6 +1173,7 @@ async function closeMarkers(page, width) {
       await marker.click();
       await page.getByTestId("composer-delete").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });
+      await closeCoveringRail(page);
     }
     await page.setViewportSize({ width: 1280, height: 900 });
   }
