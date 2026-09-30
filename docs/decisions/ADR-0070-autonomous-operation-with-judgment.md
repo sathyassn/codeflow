@@ -1,5 +1,6 @@
 ---
 id: ADR-0070
+uid: ae03f88c-a953-404b-a65f-a652b76306c7
 title: "Autonomous operation with judgment"
 status: accepted
 date: 2026-09-23
