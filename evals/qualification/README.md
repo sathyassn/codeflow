@@ -49,10 +49,24 @@ Run the printed native commands yourself and complete each harness's sign-in.
 The command only creates folders and missing non-secret settings; it never
 signs in, reads credentials, or overwrites existing config. Claude uses
 `/login`, Codex uses its ChatGPT sign-in, and Grok uses browser approval.
-For hook-dependent Codex fixtures, open `/hooks` and review and trust the
-fixture's hooks once. Codex records hook trust by content hash, and the
-materialized hook files are byte-identical across cases and paths. That one
-operator review covers trials until hook contents change. No trust is seeded.
+For hook-dependent Codex fixtures, materialize a fresh fixture with the
+current binary, then print the operator command:
+
+```sh
+python3 evals/qualification/runner.py print-hook-review \
+  --record <fresh-fixture-record>
+```
+
+This validates the unused fixture and prints an isolated native Codex command;
+it does not launch Codex or answer any screen. Run the printed command once
+in an app terminal, accept that fixture's folder, review the hooks and trust
+them yourself. Use `/hooks` if needed. Exit without submitting `TASK.md`.
+The review covers `.codex/hooks.json`: the PreToolUse `git-guard` and
+`exec-guard` commands, plus `session-orient` at SessionStart and
+UserPromptSubmit. These invoke the pinned fixture `codeflow` binary.
+Codex records hook trust by content hash; the materialized hook files are
+byte-identical across cases and paths. One operator review covers trials
+until hook contents change. No trust is seeded or selected by the kit.
 
 `HOME`, `TMPDIR`, `CODEFLOW_HOME` and `XDG_CONFIG_HOME` stay disposable per
 trial. `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME` point respectively to
@@ -93,8 +107,8 @@ not a guarantee that a remote subscription or token will remain valid.
 During startup, the runner may accept only Claude's workspace-trust or
 Codex's project-trust dialog naming this trial's exact materialized subject
 path (see the [Codex trust renderer][codex-trust]). It re-reads the visible
-pane before each selection key and Enter,
-requires the affirmative choice visibly selected, and records harness,
+pane before each selection key and confirmation,
+requires the affirmative choice visibly selected for menu dialogs, and records harness,
 path, screen-text SHA-256 and time in `trust_acceptances`. This implements
 the operator's standing authorization for harness-created disposable samples.
 A different path, truncated path, import dialog or other trust prompt
@@ -148,13 +162,26 @@ and the native theme dialog; the onboarding key is not a stable settings API.
 The kit seeds only a missing file. A changed first-run UI is a refusal for
 inspection, not permission to invent flags or answer login automatically.
 
+The runner accepts Grok's observed 1.0.44 workspace-trust dialog only when
+its wording and full repository path match the disposable fixture. The
+record includes the screen digest and time, just as for Claude and Codex.
+For Claude's exact "Try the new fullscreen renderer?" dialog it selects
+"Not now", verifies that selection before Enter, and records the display
+choice in `launch.json`. This keeps the current renderer; the kit writes no
+setting to suppress the dialog. Unknown or changed dialogs still refuse,
+and the strict empty-editor check runs before any trial prompt is pasted.
+
 A new tab has its own cwd and environment; no existing pane is reused. The
 runner waits for shell readiness before starting a seat, then for seat readiness
 before taking the `before.json` baseline, then delivering the prompt.
 Startup writes before readiness are not counted. If startup refuses before
 readiness, no baseline exists and `finish` flags incomplete observation.
 Claude delivery recognizes only the complete editor frame
-proven by the release harness. It sends at most two Enters, the second only
+proven by the release harness, plus the observed branch status row only
+when its branch equals the signed fixture record. That row may show the
+known effort label or `ctrl+g to edit in Nvim` hint. Editor captures retain
+the actual before-paste and pending-input screens in the evidence folder. It sends at most two
+Enters, the second only
 when that frame still holds this trial's unsent prompt. An empty editor is
 never evidence of pending input. Unknown frames, dialogs and unreadable panes
 stop delivery. Codex and Grok keep the managed helper's one-Enter refusal.

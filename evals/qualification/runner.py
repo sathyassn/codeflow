@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -132,7 +133,8 @@ def compare(before: dict, after: dict) -> dict:
                           "observed. Changes are not attributed to the subject."}
 
 
-# The same whole-frame grammar as release-qualification/lib.sh at 97f714b61.
+# Whole-frame grammar from release-qualification/lib.sh at 97f714b61,
+# plus the observed branch/effort row only for the registered fixture branch.
 # Empty is accepted only before pasting. It is never proof for a second Enter.
 FOOTER = re.compile(r"  (?:⏸ manual mode on|⏵⏵ bypass permissions on \(shift\+tab to cycle\)|paste again to expand)(?: · (?:\? for shortcuts|← for agents))*")
 FOLD = re.compile(r"\[Pasted text #\d+ \+\d+ lines\]")
@@ -140,7 +142,7 @@ DIRECTIVE = "Carry out the pasted instructions."
 PLACEHOLDER = re.compile(r'Try "[^"\n]+"')
 
 
-def editor(screen: str) -> str | None:
+def editor(screen: str, branch: str | None = None) -> str | None:
     raw = screen.splitlines()
     lines = [line.rstrip() for line in raw]
     rules = [i for i, line in enumerate(lines) if re.fullmatch(r"\s*─+\s*", line)]
@@ -149,7 +151,8 @@ def editor(screen: str) -> str | None:
     top, bottom = rules[-2:]
     body = lines[top + 1:bottom]
     footer = [line for line in lines[bottom + 1:] if line]
-    if len(footer) == 2 and footer[0] == "  codeflow-qualify":
+    if len(footer) == 2 and (footer[0] == "  codeflow-qualify" or (
+            branch is not None and re.fullmatch(r"  " + re.escape(branch) + r"(?: +(?:● (?:low|medium|high|xhigh|max) · /effort|ctrl\+g to edit in Nvim))?", footer[0]))):
         footer = footer[1:]
     if len(footer) != 1 or not FOOTER.fullmatch(footer[0]) or not body:
         return None
@@ -172,8 +175,11 @@ def editor(screen: str) -> str | None:
     return "\n".join([first, *rest]).strip()
 
 
-def visible(pane: str) -> str | None:
-    return editor(herdr("pane", "read", pane, "--source", "visible", text=True))
+def visible(pane: str, branch: str | None = None, evidence: Path | None = None) -> str | None:
+    screen = herdr("pane", "read", pane, "--source", "visible", text=True)
+    if evidence is not None:
+        evidence.write_text(screen, encoding="utf-8")
+    return editor(screen, branch)
 
 
 def state(pane: str) -> dict:
@@ -196,6 +202,16 @@ def trust_choice(screen: str, harness: str, repository: Path) -> str | None:
     lines = [line.strip() for line in screen.splitlines()]
     if any(re.search(r"(?i)^(?:[❯›>]\s*)?(?:allow external .*imports|external imports:|import .*settings|.*hooks.*(?:review|trust))", line) for line in lines):
         raise Refused("trust or import prompt is not authorized")
+    if harness == "grok" and "Do you trust the contents of this directory?" in lines:
+        body = [line for line in lines[lines.index("Do you trust the contents of this directory?"):] if line]
+        body = [line if i == 1 else " ".join(line.split()) for i, line in enumerate(body)]
+        expected = ["Do you trust the contents of this directory?", str(repository),
+                    "Grok Build may run or modify contents in this directory,", "posing security risks.",
+                    "Yes, proceed y", "No, quit n"]
+        if (body[:6] != expected or len(body) != 7
+                or not re.fullmatch(r"Grok Build 1\.0\.44 \[stable\]", body[-1])):
+            raise Refused("unrecognized Grok trust dialog or different subject path")
+        return "grok-yes"
     header = {"claude": "Accessing workspace:", "codex": "Folder access"}.get(harness)
     suspicious = re.search(r"(?i)do you trust|trust (?:this|the) (?:folder|directory|project)|one you trust|folder access|accessing workspace:", screen)
     if not header or header not in lines:
@@ -239,25 +255,78 @@ def accept_workspace_trust(pane: str, harness: str, repository: Path, screen: st
         current = herdr("pane", "read", pane, "--source", "visible", text=True)
         if trust_choice(current, harness, repository) != "yes":
             raise Refused("trust choice not visibly selected; no Enter sent")
-    herdr("pane", "send-keys", pane, "Enter")
+    herdr("pane", "send-keys", pane, "y" if harness == "grok" else "Enter")
     return {"harness": harness, "path": str(repository),
             "screen_sha256": "sha256:" + hashlib.sha256(current.encode()).hexdigest(), "time": time.time()}
 
 
+def renderer_choice(screen: str) -> str | None:
+    lines = [line.strip() for line in screen.splitlines() if line.strip()]
+    title = "Try the new fullscreen renderer?"
+    if title not in lines:
+        return None
+    rules = [i for i, line in enumerate(lines) if re.fullmatch("─+", line)]
+    if not rules:
+        raise Refused("unrecognized renderer dialog")
+    body = lines[rules[-1] + 1:]
+    fixed = [title, "· Flicker-free output",
+             "· Mouse support — click to move your cursor or expand results",
+             "· Selected text auto-copies to your clipboard"]
+    for choice, options in [("yes", ["❯ 1. Yes, try it", "2. Not now"]),
+                            ("no", ["1. Yes, try it", "❯ 2. Not now"])]:
+        if body == [*fixed, *options, "Enter to confirm · Esc to cancel"]:
+            return choice
+    raise Refused("unrecognized renderer dialog; no display choice sent")
+
+
+def decline_renderer(pane: str, screen: str) -> dict | None:
+    choice = renderer_choice(screen)
+    if choice is None:
+        return None
+    current = herdr("pane", "read", pane, "--source", "visible", text=True)
+    if renderer_choice(current) != choice:
+        raise Refused("renderer dialog changed before key delivery")
+    if choice == "yes":
+        herdr("pane", "send-keys", pane, "Down")
+        time.sleep(0.2)
+        current = herdr("pane", "read", pane, "--source", "visible", text=True)
+        if renderer_choice(current) != "no":
+            raise Refused("Not now not visibly selected; no Enter sent")
+    herdr("pane", "send-keys", pane, "Enter")
+    return {"harness": "claude", "dialog": "fullscreen-renderer", "choice": "Not now",
+            "screen_sha256": "sha256:" + hashlib.sha256(current.encode()).hexdigest(), "time": time.time()}
+
+
+def handle_startup(pane: str, harness: str, repository: Path, screen: str,
+                   acceptances: list, display_choices: list) -> bool:
+    if trust_choice(screen, harness, repository) is not None:
+        if not acceptances:
+            acceptances.append(accept_workspace_trust(pane, harness, repository, screen))
+        return True
+    if harness == "claude" and renderer_choice(screen) is not None:
+        if not display_choices:
+            display_choices.append(decline_renderer(pane, screen))
+        return True
+    return False
+
+
 def wait_ready(pane: str, seconds: float, harness: str | None = None,
-               repository: Path | None = None, acceptances: list | None = None) -> dict:
+               repository: Path | None = None, acceptances: list | None = None,
+               display_choices: list | None = None, branch: str | None = None) -> dict:
     end = time.monotonic() + seconds
-    accepted = bool(acceptances)
+    acceptances = acceptances if acceptances is not None else []
+    display_choices = display_choices if display_choices is not None else []
     while True:
         trust_pending = False
         if harness is not None:
             screen = herdr("pane", "read", pane, "--source", "visible", text=True)
-            choice = trust_choice(screen, harness, repository)
-            trust_pending = choice is not None
-            if trust_pending and not accepted:
-                event = accept_workspace_trust(pane, harness, repository, screen)
-                acceptances.append(event)
-                accepted = True
+            trust_pending = handle_startup(pane, harness, repository, screen, acceptances, display_choices)
+            if harness == "claude":
+                body = editor(screen, branch)
+                if body is None or (body != "" and not PLACEHOLDER.fullmatch(body)):
+                    trust_pending = True
+            if harness == "grok" and not grok_authenticated_editor(screen):
+                trust_pending = True
             if not screen.strip():
                 trust_pending = True
         current = state(pane)
@@ -289,19 +358,23 @@ def holds(text: str | None, prompt: str) -> bool:
     )
 
 
-def deliver_claude(pane: str, prompt: str, initial: dict, seconds: float) -> int:
+def deliver_claude(pane: str, prompt: str, initial: dict, seconds: float,
+                   branch: str | None = None, evidence: Path | None = None) -> int:
     if not prompt.strip() or len(prompt.encode("utf-8")) > 256 * 1024:
         raise Refused("prompt must be nonempty and at most 256 KiB; nothing sent")
-    initial_text = visible(pane)
+    def capture(name: str) -> str | None:
+        return visible(pane, branch, evidence / name if evidence is not None else None)
+
+    initial_text = capture("editor-before.txt")
     if initial_text is None or (initial_text != "" and not PLACEHOLDER.fullmatch(initial_text)):
         raise Refused("no verified empty or placeholder Claude editor; nothing sent")
     herdr("pane", "send-text", pane, prompt)
     time.sleep(2)
-    pending = visible(pane)
+    pending = capture("editor-pasted.txt")
     if pending is not None and FOLD.fullmatch(pending):
         herdr("pane", "send-text", pane, DIRECTIVE)
         time.sleep(0.3)
-        pending = visible(pane)
+        pending = capture("editor-folded.txt")
         if pending is None or not re.fullmatch(FOLD.pattern + re.escape(DIRECTIVE), pending):
             raise Refused("fold directive not visible in the editor; no Enter sent")
     if not holds(pending, prompt):
@@ -310,7 +383,7 @@ def deliver_claude(pane: str, prompt: str, initial: dict, seconds: float) -> int
     if started(pane, initial, seconds):
         return 1
     # Never press on history, an empty editor, a dialog or an unreadable pane.
-    if not holds(visible(pane), prompt):
+    if not holds(capture("editor-second-enter.txt"), prompt):
         raise Refused("turn not confirmed and no verified pending prompt; no second Enter")
     herdr("pane", "send-keys", pane, "Enter")
     if not started(pane, initial, seconds):
@@ -349,11 +422,11 @@ def check_evaluator_auth(harness: str, environment: dict[str, str], cwd: Path) -
 def grok_authenticated_editor(screen: str) -> bool:
     # Public Grok welcome renderer: these menu rows require AuthState::Done
     # with access. Pending login can paint a prompt too, so prompt alone fails.
-    if re.search(r"(?im)^\s*(?:Login with .+|Approve in your browser to finish signing in\.|A browser window will open for authentication\.|Switch account(?:\s+.*)?)\s*$", screen):
+    if re.search(r"(?im)^\s*[│┃]?[ \t\u2800-\u28ff]*(?:Login with .+|Approve in your browser to finish signing in\.|A browser window will open for authentication\.|Switch account(?:\s+.*)?)[ \t]*[│┃]?\s*$", screen):
         return False
     lines = [line.strip() for line in screen.splitlines()]
-    return (bool(re.search(r"(?m)^\s*New worktree\s+ctrl\+w\s*$", screen))
-            and bool(re.search(r"(?m)^\s*Resume session\s+ctrl\+r\s*$", screen))
+    return (bool(re.search(r"(?m)^\s*[│┃]?[ \t\u2800-\u28ff]*New worktree[ \t]+ctrl\+w[ \t]*[│┃]?\s*$", screen))
+            and bool(re.search(r"(?m)^\s*[│┃]?[ \t\u2800-\u28ff]*Resume session[ \t]+ctrl\+r[ \t]*[│┃]?\s*$", screen))
             and any(re.fullmatch(r"[│┃]?\s*[❯>]\s*(?:Type a message\.\.\.)?\s*[│┃]?", line) for line in lines))
 
 
@@ -434,8 +507,8 @@ def config_drift(before: dict, after: dict) -> list[str]:
     return ["evaluator_config_drift"] if before != after else []
 
 
-def launch(args) -> None:
-    record = kit.load_json(args.record)
+def load_fixture(record_path: Path) -> tuple[dict, Path, dict]:
+    record = kit.load_json(record_path)
     if not kit.registration_verifies(record):
         raise Refused("fixture record signature is missing or changed; use its evaluator key")
     repository = Path(record["path"]).resolve()
@@ -447,13 +520,35 @@ def launch(args) -> None:
     if kit.executable_digest(binary) != record["codeflow_executable"]["sha256"]:
         raise Refused("subject binary changed since materialization")
     trial = repository.parent
-    ancestry = {"run": kit.check_instruction_ancestors(args.record.resolve().parent.parent),
+    ancestry = {"run": kit.check_instruction_ancestors(record_path.resolve().parent.parent),
                 "subject": kit.check_instruction_ancestors(trial)}
     environment = record["subject_environment"]
     for key, path in {"HOME": trial / "home", "TMPDIR": trial / "tmp",
                       "CODEFLOW_HOME": trial / "home/.codeflow", "XDG_CONFIG_HOME": trial / "home/.config"}.items():
         if environment.get(key) != str(path):
             raise Refused(f"materialize with the current kit: {key} must be {path}")
+    return record, repository, ancestry
+
+
+def print_hook_review(record_path: Path) -> str:
+    record, repository, _ancestry = load_fixture(record_path)
+    environment = record["subject_environment"]
+    config_snapshot(environment)
+    assignments = [shlex.quote(f"{key}={value}") for key, value in environment.items() if key != "TERM"]
+    native = ["codex", "--ask-for-approval", "never", "--sandbox", "danger-full-access",
+              *kit.trial_native_args("codex", environment)]
+    command = "env -i " + " ".join(assignments) + ' TERM="${TERM:-xterm-256color}" ' + shlex.join(native)
+    return ("Run this command once in an app terminal. No harness was launched.\n"
+            "This fresh disposable fixture carries the trial hooks. Accept its exact-path\n"
+            "folder prompt, review the hooks, then trust them yourself. Use /hooks if needed.\n"
+            "Do not submit TASK.md. Exit Codex after review; keep the evaluator home.\n\n"
+            f"(cd {shlex.quote(str(repository))} && {command})\n")
+
+
+def launch(args) -> None:
+    record, repository, ancestry = load_fixture(args.record)
+    trial = repository.parent
+    environment = record["subject_environment"]
     native = args.native[1:] if args.native[:1] == ["--"] else args.native
     watched = sorted({str(Path(p).resolve()) for p in
                       [environment["TMPDIR"], "/private/tmp", *args.watch_dir]})
@@ -483,7 +578,7 @@ def launch(args) -> None:
            "native_args": native, "permission_flags": permissions,
            "environment": environment, "declared_directories": watched,
            "observation": observation, "authentication": authentication,
-           "instruction_ancestors": ancestry, "trust_acceptances": [],
+           "instruction_ancestors": ancestry, "trust_acceptances": [], "display_choices": [],
            "status": "prepared", "started_at": time.time()}
     write(args.output / "launch.json", run)
     try:
@@ -510,10 +605,9 @@ def launch(args) -> None:
             # Herdr may report not-ready with or without a registered native seat.
             # Reuse only the exact seat; otherwise register this same pane.
             screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
-            event = accept_workspace_trust(run["pane"], args.harness, repository, screen)
-            if event is None:
+            if not handle_startup(run["pane"], args.harness, repository, screen,
+                                  run["trust_acceptances"], run["display_choices"]):
                 raise exc
-            run["trust_acceptances"].append(event)
             run["initial_start_error"] = str(exc)
             write(args.output / "launch.json", run)
             time.sleep(0.2)
@@ -523,7 +617,7 @@ def launch(args) -> None:
             run["launch_response"] = recover_registration(
                 run["pane"], f"eval-{trial.name}", args.harness, repository, start_args)
         try:
-            initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"])
+            initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"], run["display_choices"], record.get("branch"))
         except Refused as exc:
             if args.harness == "grok":
                 raise Refused(AUTH_REFUSAL) from exc
@@ -538,7 +632,7 @@ def launch(args) -> None:
         write(args.output / "before.json", snapshot(watched, **observation))
         prompt = (repository / "TASK.md").read_text(encoding="utf-8")
         if args.harness == "claude":
-            run["enters"] = deliver_claude(run["pane"], prompt, initial, args.start_timeout)
+            run["enters"] = deliver_claude(run["pane"], prompt, initial, args.start_timeout, record.get("branch"), args.output)
         else:
             helper = ROOT / "assets/base/agents/skills/cf-herdr/scripts/deliver.py"
             done = subprocess.run([sys.executable, "-B", str(helper), "--pane", run["pane"],
@@ -601,6 +695,8 @@ def main() -> int:
     start.add_argument("--snapshot-seconds", type=float, default=10)
     start.add_argument("--start-timeout", type=float, default=30)
     start.add_argument("native", nargs=argparse.REMAINDER)
+    review = sub.add_parser("print-hook-review", help="print an isolated native Codex hook-review command; never launch")
+    review.add_argument("--record", type=Path, required=True)
     end = sub.add_parser("finish")
     end.add_argument("--output", type=Path, required=True)
     args = cli.parse_args()
@@ -611,6 +707,8 @@ def main() -> int:
             if args.max_entries <= 0 or not 0 < args.snapshot_seconds <= 60:
                 raise Refused("snapshot limits require positive entries and seconds in (0, 60]")
             launch(args)
+        elif args.command == "print-hook-review":
+            print(print_hook_review(args.record), end="")
         else:
             finish(args)
     except (Refused, OSError, subprocess.SubprocessError, KeyError, ValueError, kit.EvalError) as exc:

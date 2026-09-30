@@ -3555,6 +3555,52 @@ class ProcessRepairTests(unittest.TestCase):
         choices = "› 1. Trust and continue\n  2. Quit" if selected else "  1. Trust and continue\n› 2. Quit"
         return f"Folder access\n {path}\n\nTrust this folder? Codex can read, edit, and run files here,\nsubject to your permission settings.\n{choices}\nenter continue · esc quit\n"
 
+    @staticmethod
+    def grok_trust(path):
+        return f"Do you trust the contents of this directory?\n{path}\n\nGrok Build may run or modify contents in this directory,\nposing security risks.\n\nYes, proceed                 y\nNo, quit                     n\n\nGrok Build  1.0.44 [stable]\n"
+
+    @staticmethod
+    def renderer_screen(selected=False):
+        choices = "1. Yes, try it\n❯ 2. Not now" if selected else "❯ 1. Yes, try it\n2. Not now"
+        return "Native banner\n────────────────\nTry the new fullscreen renderer?\n\n· Flicker-free output\n· Mouse support — click to move your cursor or expand results\n· Selected text auto-copies to your clipboard\n\n" + choices + "\n\nEnter to confirm · Esc to cancel\n"
+
+    def test_grok_exact_trust_accepts_but_near_misses_refuse(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository")
+        screen = self.grok_trust(path)
+        with patch.object(runner, "herdr", side_effect=[screen, "sent"]) as transport:
+            event = runner.accept_workspace_trust("owned", "grok", path, screen)
+        self.assertEqual(("pane", "send-keys", "owned", "y"), transport.call_args_list[-1].args)
+        self.assertEqual(str(path), event["path"])
+        self.assertEqual("sha256:" + hashlib.sha256(screen.encode()).hexdigest(), event["screen_sha256"])
+        self.assertIsInstance(event["time"], float)
+        for bad in [screen.replace(str(path), str(path) + "-other"),
+                    screen.replace("posing security risks.", "also imports personal settings."),
+                    screen.replace("Yes, proceed", "Yes, import"),
+                    screen + "Import settings?\n"]:
+            with self.subTest(bad=bad), patch.object(runner, "herdr") as transport, self.assertRaises(runner.Refused):
+                runner.accept_workspace_trust("owned", "grok", path, bad)
+            transport.assert_not_called()
+        with patch.object(runner, "herdr", return_value=screen.replace(str(path), "/other")) as transport, self.assertRaises(runner.Refused):
+            runner.accept_workspace_trust("owned", "grok", path, screen)
+        self.assertEqual(1, transport.call_count)
+
+    def test_claude_renderer_exact_not_now_and_near_miss_refusal(self):
+        runner = self.runner(); screen = self.renderer_screen(); selected = self.renderer_screen(True)
+        with patch.object(runner, "herdr", side_effect=[screen, "sent", selected, "sent"]) as transport:
+            event = runner.decline_renderer("owned", screen)
+        self.assertEqual(["Down", "Enter"], [c.args[-1] for c in transport.call_args_list if c.args[:2] == ("pane", "send-keys")])
+        self.assertEqual("Not now", event["choice"])
+        self.assertEqual("sha256:" + hashlib.sha256(selected.encode()).hexdigest(), event["screen_sha256"])
+        self.assertIsInstance(event["time"], float)
+        for bad in [screen.replace("Not now", "Trust now"), screen.replace("Flicker-free", "Different"),
+                    screen + "Import personal settings?\n", screen.replace("2. Not now", "2. Not now (also import)")]:
+            with self.subTest(bad=bad), patch.object(runner, "herdr") as transport, self.assertRaises(runner.Refused):
+                runner.decline_renderer("owned", bad)
+            transport.assert_not_called()
+        with patch.object(runner, "herdr", side_effect=[screen, "sent", screen]) as transport, self.assertRaises(runner.Refused):
+            runner.decline_renderer("owned", screen)
+        self.assertEqual(["Down"], [c.args[-1] for c in transport.call_args_list if c.args[:2] == ("pane", "send-keys")])
+
     def test_exact_workspace_trust_is_verified_before_each_key_and_recorded(self):
         runner = self.runner(); path = Path("/disposable/subject/repository")
         for harness in ["claude", "codex"]:
@@ -3583,10 +3629,51 @@ class ProcessRepairTests(unittest.TestCase):
                     runner.accept_workspace_trust("own-pane", harness, path, screen)
                 transport.assert_not_called()
 
+    def test_grok_boxed_authenticated_welcome_and_signin_refusal(self):
+        runner = self.runner()
+        screen = "│ ⠀⢀⠞  New worktree                ctrl+w  │\n│ ⠐⠁  Resume session                 ctrl+r  │\n│ ❯                       │\n"
+        self.assertTrue(runner.grok_authenticated_editor(screen))
+        for bad in [screen.replace("Resume session", "Resume something"),
+                    screen + "│ ⠀ Login with grok.com    │\n",
+                    screen + "│ Approve in your browser to finish signing in. │\n"]:
+            self.assertFalse(runner.grok_authenticated_editor(bad))
+
+    def test_claude_branch_status_requires_the_recorded_branch(self):
+        runner = self.runner()
+        screen = '────────\n❯ Try "how do I log an error?"\n────────\n  test/customer-search-brief                  ● high · /effort\n  ⏸ manual mode on · ← for agents\n'
+        self.assertEqual('Try "how do I log an error?"', runner.editor(screen, "test/customer-search-brief"))
+        pending = screen.replace('Try "how do I log an error?"', "trial prompt").replace("                  ● high · /effort", "")
+        self.assertTrue(runner.holds(runner.editor(pending, "test/customer-search-brief"), "trial prompt"))
+        self.assertIsNone(runner.editor(pending, "test/other"))
+        edit_hint = pending.replace("  test/customer-search-brief\n", "  test/customer-search-brief       ctrl+g to edit in Nvim\n")
+        self.assertTrue(runner.holds(runner.editor(edit_hint, "test/customer-search-brief"), "trial prompt"))
+        self.assertIsNone(runner.editor(edit_hint.replace("ctrl+g", "allow import"), "test/customer-search-brief"))
+        self.assertIsNone(runner.editor(screen))
+        self.assertIsNone(runner.editor(screen, "test/other"))
+        self.assertIsNone(runner.editor(screen.replace("● high", "unrecognized"), "test/customer-search-brief"))
+        occupied = screen.replace('Try "how do I log an error?"', "unrelated draft")
+        with patch.object(runner, "herdr", return_value=occupied) as transport, self.assertRaises(runner.Refused):
+            runner.deliver_claude("owned", "trial prompt", {}, 1, "test/customer-search-brief")
+        self.assertFalse(any(c.args[:2] == ("pane", "send-text") for c in transport.call_args_list))
+
+    def test_claude_readiness_waits_for_renderer_then_verified_editor(self):
+        runner = self.runner(); events = []; displays = []
+        screen = self.renderer_screen(); selected = self.renderer_screen(True)
+        idle = "────────\n❯ \n────────\n  ⏸ manual mode on\n"
+        with patch.object(runner, "herdr", side_effect=["Native startup banner", screen, screen, "sent", selected, "sent", idle]), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
+            runner.wait_ready("owned", 1, "claude", Path("/subject"), events, displays)
+        self.assertEqual(1, len(displays))
+        self.assertEqual("Not now", displays[0]["choice"])
+        with patch.object(runner, "herdr", return_value="Unknown modal"), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), \
+             patch.object(runner.time, "monotonic", side_effect=[0, 2]), self.assertRaises(runner.Refused):
+            runner.wait_ready("owned", 1, "claude", Path("/subject"), [], [])
+
     def test_workspace_trust_runs_before_blocked_seat_is_rejected(self):
         runner = self.runner(); path = Path("/disposable/subject/repository"); events = []
         screen = self.trust_screen("claude", path)
-        with patch.object(runner, "herdr", side_effect=[screen, screen, {}, "idle editor"]), \
+        with patch.object(runner, "herdr", side_effect=[screen, screen, {}, "────────\n❯ \n────────\n  ⏸ manual mode on\n"]), \
              patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
             self.assertEqual("idle", runner.wait_ready("pane", 1, "claude", path, events)["agent_status"])
         self.assertEqual(1, len(events))
@@ -4122,6 +4209,46 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual(str(repository), accepted["trust_acceptances"][0]["path"])
             self.assertEqual("sha256:" + hashlib.sha256(trust.encode()).hexdigest(), accepted["trust_acceptances"][0]["screen_sha256"])
             self.assertIn("config_start", accepted)
+            # Both newly authorized startup actions survive into launch.json,
+            # even if later readiness refuses. No model prompt is delivered.
+            for harness, screen, selected in [
+                ("grok", self.grok_trust(repository), self.grok_trust(repository)),
+                ("claude", self.renderer_screen(), self.renderer_screen(True)),
+            ]:
+                args.output = root / (harness + "-startup-record")
+                args.harness = harness
+                args.native = ["--", "--always-approve"] if harness == "grok" else ["--", *native]
+                frames = iter([screen, screen, selected, "idle"] if harness == "claude" else [screen, screen, "idle"])
+                def startup_transport(*argv, **kwargs):
+                    if argv[:2] == ("agent", "start"):
+                        raise runner.Refused("agent_not_ready")
+                    if argv[:2] == ("pane", "read"):
+                        return next(frames)
+                    if argv[:2] == ("agent", "get"):
+                        return {"result": {"agent": {"name": "eval-trial", "pane_id": "owned-pane",
+                                                    "agent": harness, "cwd": str(repository)}}}
+                    return herdr(*argv, **kwargs)
+                with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                     patch.object(runner, "herdr", side_effect=startup_transport), \
+                     patch.object(runner, "wait_ready", side_effect=runner.Refused("later readiness refused")), \
+                     patch.object(runner.time, "sleep"), self.assertRaises(runner.Refused):
+                    runner.launch(args)
+                logged = json.loads((args.output / "launch.json").read_text())
+                event = logged["display_choices" if harness == "claude" else "trust_acceptances"][0]
+                self.assertEqual(harness, event["harness"])
+                self.assertEqual("sha256:" + hashlib.sha256(selected.encode()).hexdigest(), event["screen_sha256"])
+                self.assertIsInstance(event["time"], float)
+            args.harness = "claude"; args.native = ["--", *native]
+            with patch.object(runner, "herdr") as transport:
+                printed = runner.print_hook_review(record_path)
+            transport.assert_not_called()
+            self.assertIn("cd " + str(repository), printed)
+            self.assertIn("CODEX_HOME=" + environment["CODEX_HOME"], printed)
+            for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "USER", "LOGNAME"]:
+                self.assertIn(key + "=" + environment[key], printed)
+            self.assertIn('cli_auth_credentials_store="file"', printed)
+            self.assertIn("review the hooks", printed)
+            self.assertNotIn("TASK.md'", printed)
             (root / "AGENTS.md").write_text("new ancestor instructions")
             args.output = root / "ancestor-refusal"
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.kit.EvalError, "ancestor instructions"):
