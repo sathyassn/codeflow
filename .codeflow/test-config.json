@@ -267,7 +267,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "npm run deps:install --prefix docs-portal && node --test evals/model-artifacts/visual_controls.test.mjs"
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal && node --test evals/model-artifacts/visual_controls.test.mjs\""
         }
       },
       "timeout_seconds": 300
