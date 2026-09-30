@@ -92,10 +92,14 @@ launch, the runner checks:
   `hooks.state` trust records). Malformed or unreadable config refuses.
   Config in profiles receives the same checks.
 - Installed and cached plugins under `plugins`/`.plugins`, plus configured
-  local marketplace sources, are inspected. A `hooks` key in a plugin's
-  `.codex-plugin/plugin.json`, a `hooks.json` anywhere in the tree, or any
-  `hooks` directory refuses, even for a disabled plugin. Symlinked,
-  unreadable or non-regular paths and invalid manifests refuse. Inspection
+  local marketplace sources, are inspected. The runner reads root `plugin.json`
+  (Agent Plugins) and `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`
+  and `.cursor-plugin/plugin.json`, including fallbacks beside a root manifest.
+  Any `hooks` key anywhere in any manifest, including extensions and inline
+  definitions, refuses regardless of the referenced filename. A `hooks.json`
+  anywhere in the tree or any `hooks` directory also refuses, even for a
+  disabled plugin. Cached plugin/version folders without a parseable manifest,
+  symlinked, unreadable or non-regular paths, and invalid manifests refuse. Inspection
   is capped at 100,000 entries and ten seconds per tree; either cap refuses.
   Enabled plugins must match an inspected name and marketplace. A configured
   marketplace must have an inspectable local source or cached plugins on
@@ -110,7 +114,8 @@ Hook-free plugins are allowed. Account-managed curated plugins add skills
 and apps to the subject's context; that contribution is recorded rather than
 refused. `hook_trust.plugins` in `launch.json` lists each inspected plugin's
 name, declared version (null if absent), source, marketplace, path, skills
-and apps presence, and manifest SHA-256. This is a disk inventory, not proof
+and apps presence, every manifest's SHA-256, and a digest of entry metadata
+(paths, modes, sizes and mtimes). This is a disk inventory, not proof
 that each plugin was enabled or used. Trace review must account for it.
 
 These checks restrict bypass to the reviewed shipped hook commands and
@@ -126,11 +131,26 @@ stay fresh. No stable path or archive lifecycle is used.
 `checks` results (`passed`, `refused` or `not_checked`). For bypass launches,
 exact `native_args` and `permission_flags` include the flag. Default review
 launches record no flag use and leave bypass-specific checks `not_checked`.
-A failed preflight records its results and launches no seat. This is a
-startup check, not a filesystem barrier: changes after the check and
-system-managed hook sources are not ruled out. Existing config-drift and
-trace review remain necessary. The native dry trial is separate evidence;
-this runner change alone does not prove the native flag took effect.
+A failed preflight records its results and launches no seat. For bypass
+launches, `config_preflight` includes that plugin inventory. After readiness,
+the runner inspects plugins again in `config_start` and refuses prompt
+delivery on any inventory change, including a new plugin, or an unsafe or
+unreadable source. At finish, `config_finish` includes another inspection;
+changes flag `evaluator_config_drift`, and unsafe or unreadable sources flag
+`evaluator_config_unreadable`.
+
+These are checks at three points, not a filesystem barrier. A plugin
+SessionStart hook downloaded during startup could run before readiness;
+the refusal prevents prompt delivery but cannot undo that execution.
+Changes between checks, content edits preserving entry metadata outside
+manifests, and system-managed hook sources remain outside the guarantee.
+Validity flags and trace review remain necessary. Native dry trials are
+separate evidence; this runner change alone does not prove the native flag
+took effect.
+
+If a bypass launch refuses stale `hooks.state` records, the operator backs
+up the evaluator home's `config.toml`, then removes only those tables before
+retrying. The runner never edits that file or removes trust records.
 
 `HOME`, `TMPDIR`, `CODEFLOW_HOME` and `XDG_CONFIG_HOME` stay disposable per
 trial. `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME` point respectively to

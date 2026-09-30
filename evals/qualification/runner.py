@@ -640,21 +640,33 @@ def hook_settings_bytes(path: Path) -> bytes:
     return content
 
 
+PLUGIN_MANIFEST_DIRS = (".codex-plugin", ".claude-plugin", ".cursor-plugin")
+
+
+def manifest_has_key(value, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(manifest_has_key(child, key) for child in value.values())
+    if isinstance(value, list):
+        return any(manifest_has_key(child, key) for child in value)
+    return False
+
+
 def inspect_plugins(root: Path, *, marketplace: str | None = None) -> list[dict]:
-    """Inspect disk content without loading plugins or following links."""
+    """Inspect all native manifest layouts without loading plugins or following links."""
     for parent in (root, *root.parents):
         if parent.is_symlink():
             raise Refused(f"plugin path contains a symlink: {parent}", CODEX_HOOK_TRUST_FLAG)
     if not root.is_dir():
         raise Refused(f"plugin source is not a directory on disk: {root}", CODEX_HOOK_TRUST_FLAG)
-    pending, manifests = [root], []
+    pending, manifests, entries, cached = [root], {}, {}, []
     count, deadline = 0, time.monotonic() + 10
     while pending:
         path = pending.pop()
         count += 1
         if count > 100_000 or time.monotonic() > deadline:
             raise Refused(f"plugin inspection cap reached: {root}", CODEX_HOOK_TRUST_FLAG)
-        mode = path.lstat().st_mode
+        info = path.lstat()
+        mode = info.st_mode
         if stat.S_ISLNK(mode):
             raise Refused(f"plugin path contains a symlink: {path}", CODEX_HOOK_TRUST_FLAG)
         directory = stat.S_ISDIR(mode)
@@ -662,32 +674,52 @@ def inspect_plugins(root: Path, *, marketplace: str | None = None) -> list[dict]
             raise Refused(f"plugin path is unreadable or not regular: {path}", CODEX_HOOK_TRUST_FLAG)
         if path.name == "hooks.json" or (directory and path.name == "hooks"):
             raise Refused(f"plugin contains hooks: {path}", CODEX_HOOK_TRUST_FLAG)
+        entries[path] = [mode, info.st_size, info.st_mtime_ns]
         if directory:
-            if path.name == ".codex-plugin" and not (path / "plugin.json").is_file():
+            parts = path.relative_to(root).parts
+            if len(parts) in {3, 4} and parts[0] == "cache":
+                cached.append(path)
+            if path.name in PLUGIN_MANIFEST_DIRS and not (path / "plugin.json").is_file():
                 raise Refused(f"plugin manifest missing: {path}", CODEX_HOOK_TRUST_FLAG)
             pending.extend(sorted(path.iterdir(), reverse=True))
-        elif path.name == "plugin.json" and path.parent.name == ".codex-plugin":
-            manifests.append(path)
+        elif path.name == "plugin.json":
+            plugin = path.parent.parent if path.parent.name in PLUGIN_MANIFEST_DIRS else path.parent
+            manifests.setdefault(plugin, []).append(path)
 
+    for folder in cached:
+        version = len(folder.relative_to(root).parts) == 4
+        if not any(plugin == folder or (not version and plugin.parent == folder) for plugin in manifests):
+            raise Refused(f"cached plugin has no parseable manifest: {folder}", CODEX_HOOK_TRUST_FLAG)
     plugins = []
-    for manifest in sorted(manifests):
-        content = hook_settings_bytes(manifest)
-        document = json.loads(content)
-        if not isinstance(document, dict) or not isinstance(document.get("name"), str) or not document["name"]:
-            raise Refused(f"invalid plugin manifest: {manifest}", CODEX_HOOK_TRUST_FLAG)
-        if "hooks" in document:
-            raise Refused(f"plugin manifest declares hooks: {manifest}", CODEX_HOOK_TRUST_FLAG)
-        plugin = manifest.parent.parent
+    for plugin, paths in sorted(manifests.items()):
+        documents, hashes = [], {}
+        # Root Agent Plugins metadata takes precedence; inspect every fallback too.
+        paths.sort(key=lambda path: (0 if path.parent == plugin else
+                                    1 + PLUGIN_MANIFEST_DIRS.index(path.parent.name)))
+        for manifest in paths:
+            if time.monotonic() > deadline:
+                raise Refused(f"plugin inspection time cap reached: {root}", CODEX_HOOK_TRUST_FLAG)
+            content = hook_settings_bytes(manifest)
+            document = json.loads(content)
+            if not isinstance(document, dict) or not isinstance(document.get("name"), str) or not document["name"]:
+                raise Refused(f"invalid plugin manifest: {manifest}", CODEX_HOOK_TRUST_FLAG)
+            if manifest_has_key(document, "hooks"):
+                raise Refused(f"plugin manifest declares hooks: {manifest}", CODEX_HOOK_TRUST_FLAG)
+            documents.append(document)
+            hashes[manifest.relative_to(plugin).as_posix()] = "sha256:" + hashlib.sha256(content).hexdigest()
         parts = plugin.relative_to(root).parts
-        market = marketplace or (parts[1] if len(parts) >= 4 and parts[0] == "cache" else None)
+        market = marketplace or (parts[1] if len(parts) >= 3 and parts[0] == "cache" else None)
         source = ("remote curated" if market == "openai-curated-remote" else
                   "local" if marketplace or not market or parts[-1] == "local" else "cached marketplace")
-        plugins.append({"name": document["name"], "version": document.get("version"),
-                        "source": source,
-                        "marketplace": market, "path": str(plugin),
-                        "skills": bool(document.get("skills")) or (plugin / "skills").is_dir(),
-                        "apps": bool(document.get("apps")) or (plugin / ".app.json").is_file(),
-                        "manifest_sha256": "sha256:" + hashlib.sha256(content).hexdigest()})
+        metadata = {path.relative_to(plugin).as_posix(): value for path, value in entries.items()
+                    if path.is_relative_to(plugin)}
+        plugins.append({"name": documents[0]["name"], "version": documents[0].get("version"),
+                        "source": source, "marketplace": market, "path": str(plugin),
+                        "skills": any(manifest_has_key(doc, "skills") for doc in documents) or (plugin / "skills").is_dir(),
+                        "apps": any(manifest_has_key(doc, "apps") for doc in documents) or (plugin / ".app.json").is_file(),
+                        "manifest_sha256": next(iter(hashes.values())), "manifests": hashes,
+                        "tree_metadata_sha256": "sha256:" + hashlib.sha256(
+                            json.dumps(metadata, sort_keys=True).encode()).hexdigest()})
     return plugins
 
 
@@ -787,7 +819,7 @@ CONFIG_FILES = {
 }
 
 
-def config_snapshot(environment: dict[str, str]) -> dict:
+def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | None = None) -> dict:
     result = {}
     for harness, variable in kit.EVALUATOR_HOME_VARIABLES.items():
         root = Path(environment[variable])
@@ -808,6 +840,11 @@ def config_snapshot(environment: dict[str, str]) -> dict:
                         raise Refused(f"evaluator config exceeds size cap: {harness}")
                     hashes[str(candidate.relative_to(root))] = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
         result[harness] = hashes
+    if plugin_repository is not None:
+        plugins = []
+        reject_extra_hook_sources(Path(environment["CODEX_HOME"]), plugins)
+        reject_extra_hook_sources(plugin_repository / ".codex", plugins)
+        result["codex"]["plugins"] = plugins
     return result
 
 
@@ -901,7 +938,9 @@ def launch(args) -> None:
         raise
     authentication = check_evaluator_auth(args.harness, environment, repository)
     # Validate all config roots before a native process could follow a link.
-    config_snapshot(environment)
+    config_preflight = config_snapshot(environment)
+    if args.harness == "codex" and args.codex_hook_trust == "bypass":
+        config_preflight["codex"]["plugins"] = hook_trust["plugins"]
     native = [*native, *kit.trial_native_args(args.harness, environment)]
     if args.harness == "codex" and args.codex_hook_trust == "bypass":
         if CODEX_HOOK_TRUST_FLAG not in native:
@@ -914,7 +953,7 @@ def launch(args) -> None:
     run = {"schema_version": 1, "fixture_record": str(args.record.resolve()),
            "repository": str(repository), "harness": args.harness,
            "native_args": native, "permission_flags": permissions,
-           "hook_trust": hook_trust,
+           "hook_trust": hook_trust, "config_preflight": config_preflight,
            "environment": environment, "declared_directories": watched,
            "observation": observation,
            "observation_limitations": ["Only explicitly declared watch directories are observed. Harness TMPDIR is unobserved; planted controls must be outside it."],
@@ -968,7 +1007,14 @@ def launch(args) -> None:
             if not grok_authenticated_editor(herdr("pane", "read", run["pane"], "--source", "visible", text=True)):
                 raise Refused(AUTH_REFUSAL)
             run["authentication"]["signed_in"] = True
-        run["config_start"] = config_snapshot(environment)
+        try:
+            run["config_start"] = config_snapshot(
+                environment, plugin_repository=repository if hook_trust["flag_used"] else None)
+        except (Refused, OSError, ValueError) as exc:
+            run["config_start"] = {"error": str(exc)}
+            raise Refused(f"plugin/config recheck after readiness refused: {exc}") from exc
+        if hook_trust["flag_used"] and run["config_start"]["codex"]["plugins"] != hook_trust["plugins"]:
+            raise Refused("plugin inventory changed after readiness; no prompt delivered")
         run["initial_agent"] = initial
         write(args.output / "launch.json", run)
         write(args.output / "before.json", snapshot(watched, **observation))
@@ -1005,12 +1051,14 @@ def finish(args) -> None:
                   "error": "no pre-trial snapshot recorded after seat readiness"}
     result["observation_limitations"] = run.get("observation_limitations", [])
     try:
-        run["config_finish"] = config_snapshot(run["environment"])
+        run["config_finish"] = config_snapshot(
+            run["environment"], plugin_repository=Path(run["repository"])
+            if run.get("hook_trust", {}).get("flag_used") else None)
         if "config_start" not in run:
             result["validity_flags"].append("evaluator_config_unreadable")
         else:
             result["validity_flags"].extend(config_drift(run["config_start"], run["config_finish"]))
-    except (Refused, OSError, KeyError) as exc:
+    except (Refused, OSError, KeyError, ValueError) as exc:
         run["config_finish"] = {"error": str(exc)}
         result["validity_flags"].append("evaluator_config_unreadable")
     write(args.output / "launch.json", run)

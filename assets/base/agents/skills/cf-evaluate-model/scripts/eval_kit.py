@@ -2238,13 +2238,14 @@ Codex: choose the ChatGPT sign-in and complete it; exit when signed in.
 Grok: approve the browser sign-in yourself; exit when signed in. Do not import personal settings.
 Only these dedicated config folders persist. Never copy personal harness files.
 Setup directories are disposable; close the seat before removing its printed setup directory.
-The qualification runner defaults to manual hook review; it never adds a bypass
-unless the person running the evaluation chooses --codex-hook-trust=bypass on that
-launch. That option skips per-folder review for this evaluation trial only, using
-the dedicated Codex evaluator home after refusing user and plugin hooks and verifying
-the shipped contract-3 fixture commands. Hook-free plugins are inspected and recorded;
-curated plugins can add skills and apps. No trust is written or preference saved.
-This setup helper and an operator's own interactive Codex still use /hooks review.
+Adopters: in your own interactive Codex, review each materialized fixture's hooks
+with /hooks before a hook-dependent trial. The setup helper grants no hook trust.
+CodeFlow's repository-only runner (evals/qualification/runner.py, not installed
+into adopter projects) defaults to that same manual review. Its optional
+--codex-hook-trust=bypass requires an explicit choice on each evaluation launch,
+the dedicated evaluator home and verified shipped contract-3 hooks. It refuses
+user and plugin hooks, records hook-free plugins including skills/apps, and
+rechecks plugins before prompt delivery and at finish. No trust or preference is saved.
 Manual trust is keyed by absolute hooks-file path and a per-hook hash; a review in
 one fixture does not carry to another. Setup grants no trust.
 Trials refuse missing or unconfirmed sign-ins: evaluator home not signed in: run prepare-eval-homes

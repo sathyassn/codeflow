@@ -4275,7 +4275,8 @@ class ProcessRepairTests(unittest.TestCase):
                     runner.codex_hook_preflight(env, repo)
                 forbidden.unlink()
             (home / "plugins/cache/market/plugin").mkdir(parents=True)
-            self.assertEqual([], runner.codex_hook_preflight(env, repo)["plugins"])
+            with self.assertRaisesRegex(runner.Refused, "manifest"):
+                runner.codex_hook_preflight(env, repo)
             shutil.rmtree(home / "plugins")
             original = json.loads(shipped)
             variants = []
@@ -4371,6 +4372,96 @@ class ProcessRepairTests(unittest.TestCase):
             (local / "tool/hooks").mkdir()
             with self.assertRaisesRegex(runner.Refused, "hooks"):
                 runner.codex_hook_preflight(env, repo)
+
+    def test_codex_all_manifest_layouts_refuse_hooks_and_record_plugins(self):
+        runner = self.runner()
+        layouts = [".codex-plugin/plugin.json", ".claude-plugin/plugin.json",
+                   ".cursor-plugin/plugin.json", "plugin.json"]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve() / "plugins"
+            plugin = root / "cache/openai-curated-remote/example/1"
+            for layout in layouts:
+                for hooks in ["./lifecycle.json", ["./custom.json"], {"SessionStart": []}]:
+                    with self.subTest(layout=layout, hooks=hooks):
+                        shutil.rmtree(root, ignore_errors=True)
+                        manifest = plugin / layout
+                        manifest.parent.mkdir(parents=True)
+                        value = {"name": "example", "version": "1", "hooks": hooks}
+                        if layout == "plugin.json":
+                            value = {"name": "example", "version": "1",
+                                     "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+                                     "extensions": {"com.openai": {"hooks": hooks}}}
+                            other = plugin / ".codex-plugin/plugin.json"
+                            other.parent.mkdir()
+                            other.write_text('{"name":"example","version":"1"}')
+                        manifest.write_text(json.dumps(value))
+                        with self.assertRaisesRegex(runner.Refused, "hooks"):
+                            runner.inspect_plugins(root)
+                shutil.rmtree(root)
+                manifest = plugin / layout
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text('{"name":"example","version":"1"}')
+                with self.subTest(record=layout):
+                    inventory = runner.inspect_plugins(root)
+                    self.assertEqual(1, len(inventory))
+                    self.assertIn(layout, inventory[0]["manifests"])
+                    self.assertEqual("example", inventory[0]["name"])
+            for contents in [None, "not json", "[]", "{}"]:
+                shutil.rmtree(root)
+                plugin.mkdir(parents=True)
+                if contents is not None:
+                    (plugin / "plugin.json").write_text(contents)
+                with self.subTest(contents=contents), self.assertRaises((runner.Refused, ValueError)):
+                    runner.inspect_plugins(root)
+
+    def test_finish_flags_plugin_inventory_changes(self):
+        import argparse
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve()):
+            root = Path(temp).resolve()
+            runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(root / "trial", root / "bin/codeflow", [])
+            repo = root / "repository"
+            (repo / ".codex").mkdir(parents=True)
+            plugin = Path(env["CODEX_HOME"]) / "plugins/cache/openai-curated-remote/example/1"
+            manifest = plugin / ".codex-plugin/plugin.json"
+            manifest.parent.mkdir(parents=True)
+            clean = '{"name":"example","version":"1"}'
+            manifest.write_text(clean)
+            baseline = runner.config_snapshot(env, plugin_repository=repo)
+            self.assertEqual("example", baseline["codex"]["plugins"][0]["name"])
+            runner.write(root / "before.json", runner.snapshot([]))
+            for variant in ["unchanged", "new", "changed", "removed", "hook"]:
+                manifest.write_text(clean)
+                record = {"declared_directories": [], "observation": {}, "repository": str(repo),
+                          "environment": env, "config_start": runner.config_snapshot(env, plugin_repository=repo),
+                          "hook_trust": {"flag_used": True}, "status": "started"}
+                runner.write(root / "launch.json", record)
+                extra = plugin.parent.parent / "added/1/.claude-plugin/plugin.json"
+                if variant == "new":
+                    extra.parent.mkdir(parents=True)
+                    extra.write_text('{"name":"added","version":"1"}')
+                elif variant == "changed":
+                    manifest.write_text('{"name":"example","version":"2"}')
+                elif variant == "removed":
+                    shutil.rmtree(plugin.parent)
+                elif variant == "hook":
+                    manifest.write_text('{"name":"example","hooks":"./custom.json"}')
+                with patch("sys.stdout", io.StringIO()):
+                    runner.finish(argparse.Namespace(output=root))
+                saved = json.loads((root / "launch.json").read_text())
+                flags = json.loads((root / "observation.json").read_text())["validity_flags"]
+                if variant == "unchanged":
+                    self.assertEqual([], flags)
+                    self.assertEqual(record["config_start"], saved["config_finish"])
+                elif variant == "hook":
+                    self.assertIn("evaluator_config_unreadable", flags)
+                else:
+                    self.assertIn("evaluator_config_drift", flags)
+                    self.assertIn("plugins", saved["config_finish"]["codex"])
+                if extra.exists():
+                    shutil.rmtree(extra.parent.parent.parent)
+                manifest.parent.mkdir(parents=True, exist_ok=True)
 
     def test_codex_hook_trust_cli_is_opt_in(self):
         runner = self.runner()
@@ -4604,6 +4695,34 @@ class ProcessRepairTests(unittest.TestCase):
             cached = Path(environment["CODEX_HOME"]) / "plugins/cache/openai-curated-remote/example/1/.codex-plugin/plugin.json"
             cached.parent.mkdir(parents=True)
             cached.write_text('{"name":"example","version":"1","apps":"./.app.json"}')
+            clean_plugin = cached.read_text()
+            for mutation in ["new", "changed", "removed", "hook"]:
+                args.output = evidence_root / ("codex-startup-plugin-" + mutation)
+                extra = cached.parents[3] / "added/1/.cursor-plugin/plugin.json"
+                def changing_ready(*_args, **_kwargs):
+                    if mutation == "new":
+                        extra.parent.mkdir(parents=True)
+                        extra.write_text('{"name":"added","version":"1"}')
+                    elif mutation == "changed":
+                        cached.write_text('{"name":"example","version":"2"}')
+                    elif mutation == "removed":
+                        shutil.rmtree(cached.parent.parent)
+                    else:
+                        cached.write_text('{"name":"example","hooks":"./custom.json"}')
+                    return {"agent_status": "idle"}
+                with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                     patch.object(runner, "herdr", side_effect=herdr), \
+                     patch.object(runner, "wait_ready", side_effect=changing_ready), \
+                     patch.object(runner, "deliver_codex", return_value=1) as delivery, patch.object(runner.time, "sleep"), \
+                     self.assertRaisesRegex(runner.Refused, "plugin"):
+                    runner.launch(args)
+                delivery.assert_not_called()
+                self.assertEqual("refused", json.loads((args.output / "launch.json").read_text())["status"])
+                if extra.exists():
+                    shutil.rmtree(extra.parent.parent.parent)
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                cached.write_text(clean_plugin)
+            args.output = evidence_root / "codex-verified-delivery-opt-in"
             frames = iter([self.codex_frame(repository), self.codex_frame(repository, "› Reply ok.")])
             def codex_transport(*argv, **kwargs):
                 if argv[:2] == ("pane", "read"):
@@ -4628,6 +4747,8 @@ class ProcessRepairTests(unittest.TestCase):
             trust = delivered["hook_trust"]
             self.assertEqual({"option", "flag_used", "evaluator_home", "hooks_sha256", "checks", "plugins"}, set(trust))
             self.assertEqual("bypass", trust["option"])
+            self.assertEqual(trust["plugins"], delivered["config_start"]["codex"]["plugins"])
+            self.assertEqual(trust["plugins"], delivered["config_preflight"]["codex"]["plugins"])
             self.assertEqual("example", trust["plugins"][0]["name"])
             self.assertEqual("sha256:" + hashlib.sha256(cached.read_bytes()).hexdigest(), trust["plugins"][0]["manifest_sha256"])
             self.assertTrue(trust["flag_used"])
@@ -4746,11 +4867,13 @@ class ProcessRepairTests(unittest.TestCase):
             (root / ".gitignore").write_text(".worktrees/\n")
             (root / "README.md").write_text("fixture\n")
             eval_kit.reset_fixture_history(root, "test/worktree-closeout", install_hooks=False)
-            eval_kit.configure_closeout_inventory(root, ROOT / "target/release/codeflow")
+            codeflow = (Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).expanduser().resolve()
+                        / "release" / "codeflow")
+            eval_kit.configure_closeout_inventory(root, codeflow)
             records = eval_kit.git_output(["worktree", "list", "--porcelain"], root)
             self.assertEqual("refs/remotes/origin/main", eval_kit.git_output(["symbolic-ref", "refs/remotes/origin/HEAD"], root).strip())
             self.assertEqual("main", eval_kit.git_output(["--git-dir", str(root.parent / "origin.git"), "branch", "--format=%(refname:short)"], root).strip())
-            status = subprocess.check_output([str(ROOT / "target/release/codeflow"), "status"], cwd=root, text=True)
+            status = subprocess.check_output([str(codeflow), "status"], cwd=root, text=True)
             self.assertEqual(status, (root / "CODEFLOW_STATUS.txt").read_text())
             self.assertNotIn("removable branch main", status)
             self.assertNotIn("removable branch test/stale", status)
