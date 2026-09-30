@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import time
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 KIT_PATH = ROOT / "assets/base/agents/skills/cf-evaluate-model/scripts/eval_kit.py"
@@ -518,7 +519,9 @@ AUTH_REFUSAL = "evaluator home not signed in: run prepare-eval-homes"
 
 def check_evaluator_auth(harness: str, environment: dict[str, str], cwd: Path) -> dict:
     folder = kit.evaluator_homes()[harness]
-    if environment.get(kit.EVALUATOR_HOME_VARIABLES[harness]) != str(folder) or not kit.evaluator_directory(folder):
+    configured = environment.get(kit.EVALUATOR_HOME_VARIABLES[harness])
+    matches = (bool(configured) and Path(configured).resolve() == folder.resolve()) if harness == "codex" else configured == str(folder)
+    if not matches or not kit.evaluator_directory(folder):
         raise Refused(AUTH_REFUSAL)
     if harness == "grok":
         # No status command in Grok Build. Its authenticated welcome is checked
@@ -552,7 +555,8 @@ def grok_authenticated_editor(screen: str) -> bool:
             and any(re.fullmatch(r"[│┃]?\s*[❯>]\s*(?:Type a message\.\.\.)?\s*[│┃]?", line) for line in lines))
 
 
-def permission_flags(harness: str, native: list[str], cwd: Path | None = None) -> dict[str, str]:
+def permission_flags(harness: str, native: list[str], cwd: Path | None = None,
+                     *, environment: dict[str, str] | None = None) -> dict[str, str]:
     allowed = {"claude": {"--model", "--effort", "--permission-mode"},
                "codex": {"--model", "-c", "--ask-for-approval", "--sandbox"},
                "grok": {"--model", "--reasoning-effort", "--permission-mode", "--always-approve"}}[harness]
@@ -561,10 +565,15 @@ def permission_flags(harness: str, native: list[str], cwd: Path | None = None) -
     personal = [Path.home() / name for name in (".claude", ".claude.json", ".codex", ".grok")]
     while index < len(native):
         flag, separator, value = native[index].partition("=")
+        if flag == CODEX_HOOK_TRUST_FLAG:
+            if harness != "codex":
+                raise Refused(f"{flag} is only authorized for Codex trials", flag)
+            dedicated_codex_home(environment or {})
+            allowed.add(flag)
         if flag not in allowed or flag in values:
             raise Refused(f"refused native flag: {flag if flag.startswith('-') else '<positional>'}", flag if flag.startswith('-') else "<positional>")
         index += 1
-        if flag == "--always-approve":
+        if flag in {"--always-approve", CODEX_HOOK_TRUST_FLAG}:
             if separator or "--permission-mode" in values:
                 raise Refused(f"refused native flag: {flag}", flag)
             value = "true"
@@ -591,7 +600,97 @@ def permission_flags(harness: str, native: list[str], cwd: Path | None = None) -
     for flag in required:
         if flag not in values:
             raise Refused(f"refused native flag: {flag} (required)", flag)
+    if CODEX_HOOK_TRUST_FLAG in values:
+        required = (*required, CODEX_HOOK_TRUST_FLAG)
     return {flag: values[flag] for flag in required}
+
+
+CODEX_HOOK_TRUST_FLAG = "--dangerously-bypass-hook-trust"
+
+
+def dedicated_codex_home(environment: dict[str, str]) -> Path:
+    expected = kit.evaluator_homes()["codex"]
+    value = environment.get("CODEX_HOME")
+    try:
+        candidate = Path(value).expanduser().absolute() if value else None
+        personal = Path.home() / ".codex"
+        matches = (candidate is not None and candidate != personal and personal not in candidate.parents
+                   and candidate.resolve() == expected.resolve()
+                   and not expected.is_symlink() and not expected.parent.is_symlink())
+    except (OSError, RuntimeError) as exc:
+        raise Refused("cannot resolve the dedicated evaluator home", CODEX_HOOK_TRUST_FLAG) from exc
+    if not matches:
+        raise Refused(f"{CODEX_HOOK_TRUST_FLAG} requires the dedicated evaluator home "
+                      "~/.codeflow-eval/codex; other or personal CODEX_HOME paths are refused", CODEX_HOOK_TRUST_FLAG)
+    return expected.resolve()
+
+
+def hook_settings_bytes(path: Path) -> bytes:
+    if path.is_symlink():
+        raise Refused(f"hook source contains a symlink: {path}", CODEX_HOOK_TRUST_FLAG)
+    if not path.is_file():
+        raise Refused(f"hook source is not a regular file: {path}", CODEX_HOOK_TRUST_FLAG)
+    with path.open("rb") as stream:
+        content = stream.read(kit.MAX_SETTINGS_BYTES + 1)
+    if len(content) > kit.MAX_SETTINGS_BYTES:
+        raise Refused(f"hook source exceeds size cap: {path}", CODEX_HOOK_TRUST_FLAG)
+    return content
+
+
+def reject_extra_hook_sources(root: Path) -> None:
+    config = root / "config.toml"
+    if config.exists() or config.is_symlink():
+        document = tomllib.loads(hook_settings_bytes(config).decode("utf-8"))
+        def visit(table: dict, features: bool = False) -> None:
+            for key, value in table.items():
+                # [features].hooks enables the shipped mechanism, not a handler.
+                if key in {"hooks", "plugins", "marketplaces"} and not (features and isinstance(value, bool)):
+                    raise Refused(f"hooks or plugins are not allowed in {config} ({key})", CODEX_HOOK_TRUST_FLAG)
+                if isinstance(value, dict):
+                    visit(value, key == "features")
+        visit(document)
+    for name in ("plugins", ".plugins"):
+        path = root / name
+        if path.is_symlink() or (path.exists() and (not path.is_dir() or any(path.iterdir()))):
+            raise Refused(f"plugins are not allowed in the trial hook sources: {path}", CODEX_HOOK_TRUST_FLAG)
+
+
+def codex_hook_preflight(environment: dict[str, str], repository: Path,
+                         evidence: dict | None = None) -> dict:
+    """Inspect only non-secret settings; never grant trust or change config."""
+    result = evidence if evidence is not None else {}
+    result.update(flag_used=False, evaluator_home=None, hooks_sha256=None,
+                  checks={"evaluator_home": "not_checked", "fixture_hooks": "not_checked"})
+    stage = "evaluator_home"
+    try:
+        home = dedicated_codex_home(environment)
+        result["evaluator_home"] = str(home)
+        if not kit.evaluator_directory(home):
+            raise Refused("dedicated evaluator home is missing, unreadable or contains symlinks", CODEX_HOOK_TRUST_FLAG)
+        if (home / "hooks.json").exists() or (home / "hooks.json").is_symlink():
+            raise Refused("user-level hooks.json is not allowed in the dedicated evaluator home", CODEX_HOOK_TRUST_FLAG)
+        reject_extra_hook_sources(home)
+        result["checks"][stage] = "passed"
+        stage = "fixture_hooks"
+        kit.refuse_symlink_components(repository / ".codex", repository)
+        reject_extra_hook_sources(repository / ".codex")
+        content = hook_settings_bytes(repository / ".codex/hooks.json")
+        result["hooks_sha256"] = "sha256:" + hashlib.sha256(content).hexdigest()
+        expected = json.loads(hook_settings_bytes(ROOT / "assets/base/codex/hooks.json"))
+        if json.loads(content) != expected:
+            raise Refused("trial hooks must exactly match the shipped contract-3 hook definitions", CODEX_HOOK_TRUST_FLAG)
+        for groups in expected["hooks"].values():
+            for group in groups:
+                for hook in group["hooks"]:
+                    if not re.match(r"^codeflow hook [a-z][a-z-]* --contract 3;", hook["command"]):
+                        raise Refused("shipped hooks must use contract-3 wrappers", CODEX_HOOK_TRUST_FLAG)
+        result["checks"][stage] = "passed"
+        return result
+    except (Refused, OSError, ValueError, KeyError, TypeError, kit.EvalError) as exc:
+        result["checks"][stage] = "refused"
+        if isinstance(exc, Refused):
+            raise
+        raise Refused(f"cannot verify Codex {stage}: {exc}", CODEX_HOOK_TRUST_FLAG) from exc
 
 
 CONFIG_FILES = {
@@ -682,7 +781,7 @@ def watch_directories(environment: dict[str, str], declared: list[str]) -> list[
 def launch(args) -> None:
     record, repository, ancestry = load_fixture(args.record)
     trial = repository.parent
-    environment = record["subject_environment"]
+    environment = dict(record["subject_environment"])
     native = args.native[1:] if args.native[:1] == ["--"] else args.native
     watched = watch_directories(environment, args.watch_dir)
     observation = {"shallow": ["/private/tmp"],
@@ -694,22 +793,34 @@ def launch(args) -> None:
             raise Refused("runner evidence must live outside declared directories")
     if args.output.exists():
         raise Refused("output already exists; never reuse a trial launch")
+    hook_trust = {"flag_used": False, "evaluator_home": None, "hooks_sha256": None,
+                  "checks": {"evaluator_home": "not_checked", "fixture_hooks": "not_checked"}}
     try:
-        permissions = permission_flags(args.harness, native, repository)
+        permissions = permission_flags(args.harness, native, repository, environment=environment)
         codex = codex_expectation(native, repository) if args.harness == "codex" else None
+        if args.harness == "codex":
+            codex_hook_preflight(environment, repository, hook_trust)
+            environment["CODEX_HOME"] = hook_trust["evaluator_home"]
     except Refused as exc:
         args.output.mkdir(parents=True)
         write(args.output / "launch.json", {"harness": args.harness, "status": "refused",
-                                           "refused_flag": exc.flag, "error": str(exc)})
+                                           "refused_flag": exc.flag, "error": str(exc),
+                                           "hook_trust": hook_trust})
         raise
     authentication = check_evaluator_auth(args.harness, environment, repository)
     # Validate all config roots before a native process could follow a link.
     config_snapshot(environment)
     native = [*native, *kit.trial_native_args(args.harness, environment)]
+    if args.harness == "codex":
+        if CODEX_HOOK_TRUST_FLAG not in native:
+            native.append(CODEX_HOOK_TRUST_FLAG)
+        permissions[CODEX_HOOK_TRUST_FLAG] = "true"
+        hook_trust["flag_used"] = True
     args.output.mkdir(parents=True)
     run = {"schema_version": 1, "fixture_record": str(args.record.resolve()),
            "repository": str(repository), "harness": args.harness,
            "native_args": native, "permission_flags": permissions,
+           "hook_trust": hook_trust,
            "environment": environment, "declared_directories": watched,
            "observation": observation,
            "observation_limitations": ["Only explicitly declared watch directories are observed. Harness TMPDIR is unobserved; planted controls must be outside it."],

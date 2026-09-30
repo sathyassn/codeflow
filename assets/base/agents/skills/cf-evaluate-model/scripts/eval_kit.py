@@ -2238,11 +2238,12 @@ Codex: choose the ChatGPT sign-in and complete it; exit when signed in.
 Grok: approve the browser sign-in yourself; exit when signed in. Do not import personal settings.
 Only these dedicated config folders persist. Never copy personal harness files.
 Setup directories are disposable; close the seat before removing its printed setup directory.
-For a materialized Codex fixture, launch with the recorded subject environment,
-open /hooks, review and trust the fixture's hooks before running a hook-dependent trial.
-Codex hook trust is keyed by the hooks file's absolute path and a per-hook hash.
-A review in one fixture does not carry to another, even with identical hooks.
-A new path or changed hook needs human-authorized acceptance; setup grants no trust.
+The qualification runner adds --dangerously-bypass-hook-trust only for Codex
+using the dedicated evaluator home, after refusing user hooks/plugins and verifying
+that the fixture hooks match the shipped contract-3 commands. No trust is written.
+This setup helper and an operator's own interactive Codex still use /hooks review.
+Manual trust is keyed by absolute hooks-file path and a per-hook hash; a review in
+one fixture does not carry to another. Setup grants no trust.
 Trials refuse missing or unconfirmed sign-ins: evaluator home not signed in: run prepare-eval-homes
 '''
 

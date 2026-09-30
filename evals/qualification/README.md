@@ -5,6 +5,7 @@ kit fixture record. TSK-194 can use it for seat qualification. It does not
 install into consuming projects, authenticate accounts, grade its own subject,
 or treat a terminal status as proof that the model completed the task.
 
+Use Python 3.11 or newer (the runner parses TOML with `tomllib`).
 Materialize with the current binary and kit first. The run root and subject
 ancestors must contain no `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or
 `.claude` entry. The kit checks at materialization and launch, recording the
@@ -51,8 +52,8 @@ Run the printed native commands yourself and complete each harness's sign-in.
 The command only creates folders and missing non-secret settings; it never
 signs in, reads credentials, or overwrites existing config. Claude uses
 `/login`, Codex uses its ChatGPT sign-in, and Grok uses browser approval.
-For hook-dependent Codex fixtures, materialize a fresh fixture with the
-current binary, then print the operator command:
+For an operator's own interactive Codex hook review, materialize a fresh
+fixture with the current binary, then print the operator command:
 
 ```sh
 python3 evals/qualification/runner.py print-hook-review \
@@ -66,14 +67,45 @@ and starts Codex with `--sandbox read-only` and its default approval policy,
 since the session only reviews hooks. Run the printed command once
 in an app terminal, accept that fixture's folder, review the hooks and trust
 them yourself. Use `/hooks` if needed. Exit without submitting `TASK.md`.
-The review covers `.codex/hooks.json`: the PreToolUse `git-guard` and
-`exec-guard` commands, plus `session-orient` at SessionStart and
-UserPromptSubmit. These invoke the pinned fixture `codeflow` binary.
-Codex keys hook trust by the hooks file's absolute path and a per-hook hash.
-A review in one fixture does not carry to another, even with identical hooks.
-A new path or changed hook needs human-authorized acceptance. No trust is
-seeded or selected by the kit; it refuses at "Hooks need review", names the
-trial's fixture path and the dedicated evaluator home, and sends no key.
+The review covers `.codex/hooks.json`: the PreToolUse `git-guard`,
+`exec-guard` and `edit-guard` commands, plus `session-orient` at SessionStart
+and UserPromptSubmit. These invoke the pinned fixture `codeflow` binary.
+Codex keys manual hook trust by the hooks file's absolute path and a per-hook
+hash. A review in one fixture does not carry to another. The printed helper
+and an operator's own interactive Codex still review hooks through `/hooks`.
+
+For qualification trials only, the operator authorized
+`--dangerously-bypass-hook-trust` on 2026-09-30. The runner appends it once
+only for Codex with `CODEX_HOME` resolving to `~/.codeflow-eval/codex`.
+Caller requests for that flag are accepted only in this same scope; another
+home or harness refuses. Before any seat is launched, the runner checks:
+
+- The dedicated home has no `hooks.json`, TOML hooks entries (including old
+  `hooks.state` trust records), plugin or marketplace configuration, or
+  populated `plugins`/`.plugins` directory. Empty plugin directories are
+  harmless; files or links in their place refuse. Malformed or unreadable
+  config refuses. Config in profiles receives the same checks.
+- The fixture's `.codex/hooks.json` matches the complete shipped definition
+  in `assets/base/codex/hooks.json`, including matchers, handlers and the
+  `codeflow hook <name> --contract 3` wrappers. Missing, extra or changed
+  definitions refuse. Fixture TOML hooks, plugin configuration and plugin
+  directories also refuse. Symlinked hook/config sources refuse.
+
+These checks let the dedicated evaluator launch bypass per-folder hook
+review for verified shipped commands. The runner never writes trust grants,
+removes existing trust records, or touches the operator's personal `~/.codex`.
+An unexpected "Hooks need review" screen still refuses without a key.
+Existing exact-path workspace-trust checks remain in force; trial paths
+stay fresh. No stable path or archive lifecycle is used.
+
+`launch.json` records `hook_trust.flag_used`, the resolved `evaluator_home`,
+`hooks_sha256`, and both `checks` results (`passed`, `refused` or
+`not_checked`). Exact `native_args` and `permission_flags` include the flag.
+A failed preflight records its results and launches no seat. This is a
+startup check, not a filesystem barrier: changes after the check and
+system-managed hook sources are not ruled out. Existing config-drift and
+trace review remain necessary. The native dry trial is separate evidence;
+this runner change alone does not prove the native flag took effect.
 
 `HOME`, `TMPDIR`, `CODEFLOW_HOME` and `XDG_CONFIG_HOME` stay disposable per
 trial. `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `GROK_HOME` point respectively to
@@ -127,7 +159,8 @@ acceptance is separate from the operator's review of that fixture's Codex hooks.
 
 Caller arguments use a per-harness allowlist: Claude model, effort and
 permission mode; Codex model, reasoning effort (`-c model_reasoning_effort`),
-approval policy and sandbox; Grok model, reasoning effort and permission mode
+approval policy, sandbox and the scoped hook-trust flag above; Grok model,
+reasoning effort and permission mode
 or always-approve. No other config, directory, plugin, agent or profile flag
 is accepted. Values resolving under personal harness folders are refused.
 The refused flag name is recorded in `launch.json`. State-control arguments

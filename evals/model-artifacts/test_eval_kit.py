@@ -4223,6 +4223,103 @@ class ProcessRepairTests(unittest.TestCase):
             snap = runner.snapshot([temp], max_seconds=10)
             self.assertIn("directory_observation_time_cap", runner.compare(snap, snap)["validity_flags"])
 
+    def test_codex_hook_trust_checks_home_sources_and_shipped_definition(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            home = Path(temp) / ".codeflow-eval/codex"
+            home.mkdir(parents=True)
+            repo = Path(temp) / "fixture/repository"
+            (repo / ".codex").mkdir(parents=True)
+            hooks = repo / ".codex/hooks.json"
+            shipped = (ROOT / "assets/base/codex/hooks.json").read_bytes()
+            hooks.write_bytes(shipped)
+            config = home / "config.toml"
+            config.write_text('cli_auth_credentials_store = "file"\n[features]\nhooks = true\n')
+            env = {"CODEX_HOME": str(home)}
+            result = runner.codex_hook_preflight(env, repo)
+            self.assertEqual(str(home.resolve()), result["evaluator_home"])
+            self.assertEqual("sha256:" + hashlib.sha256(shipped).hexdigest(), result["hooks_sha256"])
+            self.assertEqual({"evaluator_home": "passed", "fixture_hooks": "passed"}, result["checks"])
+            alias = Path(temp) / "alias"
+            alias.symlink_to(home, target_is_directory=True)
+            self.assertEqual(result, runner.codex_hook_preflight({"CODEX_HOME": str(alias)}, repo))
+            alias.unlink()
+            alias.symlink_to(Path(temp) / "elsewhere", target_is_directory=True)
+            with self.assertRaisesRegex(runner.Refused, "dedicated evaluator home"):
+                runner.codex_hook_preflight({"CODEX_HOME": str(alias)}, repo)
+            personal = Path(temp) / ".codex"
+            personal.symlink_to(home, target_is_directory=True)
+            with self.assertRaisesRegex(runner.Refused, "personal"):
+                runner.codex_hook_preflight({"CODEX_HOME": str(personal)}, repo)
+            personal.unlink()
+            for value in [str(Path(temp) / ".codex"), str(home) + "-other", ""]:
+                with self.subTest(home=value), self.assertRaisesRegex(runner.Refused, "dedicated evaluator home"):
+                    runner.codex_hook_preflight({"CODEX_HOME": value}, repo)
+            for text in ['[hooks]\n', '[hooks.state.example]\ntrusted_hash = "sha256:old"\n',
+                         '[plugins.example]\nenabled = true\n', '[marketplaces.example]\nsource = "local"\n',
+                         '[profiles.example.hooks]\n', 'malformed = [']:
+                config.write_text(text)
+                with self.subTest(config=text), self.assertRaises(runner.Refused):
+                    runner.codex_hook_preflight(env, repo)
+            config.write_text('cli_auth_credentials_store = "file"\n')
+            (home / "plugins").mkdir()
+            self.assertEqual("passed", runner.codex_hook_preflight(env, repo)["checks"]["evaluator_home"])
+            (home / "plugins").rmdir()
+            # No hook trust state is ever written by the preflight.
+            self.assertEqual('cli_auth_credentials_store = "file"\n', config.read_text())
+            for name in ["hooks.json", "plugins", ".plugins"]:
+                forbidden = home / name
+                forbidden.write_text("{}")
+                with self.subTest(path=name), self.assertRaises(runner.Refused):
+                    runner.codex_hook_preflight(env, repo)
+                forbidden.unlink()
+            (home / "plugins/cache/market/plugin").mkdir(parents=True)
+            with self.assertRaisesRegex(runner.Refused, "plugins"):
+                runner.codex_hook_preflight(env, repo)
+            shutil.rmtree(home / "plugins")
+            original = json.loads(shipped)
+            variants = []
+            changed = copy.deepcopy(original)
+            changed["hooks"]["PreToolUse"][0]["hooks"][0]["command"] += "; echo injected"
+            variants.append(changed)
+            changed = copy.deepcopy(original)
+            changed["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = "codeflow hook git-guard --contract 3"
+            variants.append(changed)
+            changed = copy.deepcopy(original)
+            changed["hooks"]["PreToolUse"][0]["matcher"] = ".*"
+            variants.extend([changed, {"hooks": {}}, {"hooks": {"Unknown": []}}])
+            for value in variants:
+                hooks.write_text(json.dumps(value))
+                with self.subTest(hooks=value), self.assertRaisesRegex(runner.Refused, "shipped"):
+                    runner.codex_hook_preflight(env, repo)
+            hooks.write_bytes(shipped)
+            (repo / ".codex/config.toml").write_text('[hooks]\n')
+            with self.assertRaisesRegex(runner.Refused, "hooks"):
+                runner.codex_hook_preflight(env, repo)
+            (repo / ".codex/config.toml").unlink()
+            hooks.unlink()
+            hooks.symlink_to(ROOT / "assets/base/codex/hooks.json")
+            with self.assertRaisesRegex(runner.Refused, "symlink"):
+                runner.codex_hook_preflight(env, repo)
+
+    def test_codex_hook_flag_allowlist_is_scoped_to_the_dedicated_home(self):
+        runner = self.runner()
+        flag = "--dangerously-bypass-hook-trust"
+        native = ["--ask-for-approval", "never", "--sandbox", "workspace-write", flag]
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            home = Path(temp) / ".codeflow-eval/codex"
+            environment = {"CODEX_HOME": str(home)}
+            self.assertEqual("true", runner.permission_flags("codex", native, environment=environment)[flag])
+            for env in [None, {"CODEX_HOME": str(Path(temp) / ".codex")}, {"CODEX_HOME": str(home) + "-other"}]:
+                with self.subTest(env=env), self.assertRaisesRegex(runner.Refused, "dedicated evaluator home"):
+                    runner.permission_flags("codex", native, environment=env)
+            for harness, args in [("claude", ["--permission-mode", "auto"]), ("grok", ["--always-approve"])]:
+                with self.subTest(harness=harness), self.assertRaisesRegex(runner.Refused, "only.*Codex"):
+                    runner.permission_flags(harness, [*args, flag], environment=environment)
+            for extra in [[flag], [flag + "=true"]]:
+                with self.assertRaises(runner.Refused):
+                    runner.permission_flags("codex", [*native, *extra], environment=environment)
+
     def test_permission_flags_are_explicit_and_headless_is_refused(self):
         runner = self.runner()
         for harness, native, expected in [
@@ -4249,6 +4346,8 @@ class ProcessRepairTests(unittest.TestCase):
             repository = root / "subjects/trial/repository"
             repository.mkdir(parents=True)
             (repository / "TASK.md").write_text("Reply ok.\n")
+            (repository / ".codex").mkdir()
+            (repository / ".codex/hooks.json").write_bytes((ROOT / "assets/base/codex/hooks.json").read_bytes())
             (repository.parent / "tmp").mkdir()
             with patch.object(runner.kit.sys, "platform", "darwin"):
                 runner.kit.prepare_subject_home(repository.parent / "home")
@@ -4303,6 +4402,7 @@ class ProcessRepairTests(unittest.TestCase):
             saved = json.loads((args.output / "launch.json").read_text())
             self.assertEqual("started", saved["status"])
             self.assertEqual(native, saved["native_args"])
+            self.assertNotIn("--dangerously-bypass-hook-trust", saved["native_args"])
             self.assertEqual(["/private/tmp"], saved["observation"]["shallow"])
             self.assertEqual([str(root / "watched")], saved["declared_directories"])
             self.assertNotIn(environment["TMPDIR"], saved["declared_directories"])
@@ -4365,6 +4465,7 @@ class ProcessRepairTests(unittest.TestCase):
                      patch.object(runner.time, "sleep"), self.assertRaises(runner.Refused):
                     runner.launch(args)
                 logged = json.loads((args.output / "launch.json").read_text())
+                self.assertNotIn("--dangerously-bypass-hook-trust", logged["native_args"])
                 event = logged["display_choices" if harness == "claude" else "trust_acceptances"][0]
                 self.assertEqual(harness, event["harness"])
                 self.assertEqual("sha256:" + hashlib.sha256(selected.encode()).hexdigest(), event["screen_sha256"])
@@ -4393,9 +4494,44 @@ class ProcessRepairTests(unittest.TestCase):
             delivered = json.loads((args.output / "launch.json").read_text())
             self.assertEqual("started", delivered["status"])
             self.assertEqual(1, delivered["enters"])
+            flag = "--dangerously-bypass-hook-trust"
+            self.assertEqual(1, delivered["native_args"].count(flag))
+            self.assertEqual("true", delivered["permission_flags"][flag])
+            trust = delivered["hook_trust"]
+            self.assertEqual({"flag_used", "evaluator_home", "hooks_sha256", "checks"}, set(trust))
+            self.assertTrue(trust["flag_used"])
+            self.assertEqual(str(Path(environment["CODEX_HOME"]).resolve()), trust["evaluator_home"])
+            self.assertEqual("sha256:" + hashlib.sha256((repository / ".codex/hooks.json").read_bytes()).hexdigest(), trust["hooks_sha256"])
+            self.assertEqual({"evaluator_home": "passed", "fixture_hooks": "passed"}, trust["checks"])
+            self.assertIn(flag, next(c for c in reversed(calls) if c[:2] == ("agent", "start")))
             self.assertNotIn("delivery", delivered)
+            # A caller-supplied scoped flag is retained exactly once.
+            args.output = evidence_root / "codex-caller-hook-flag"
+            args.native.append(flag)
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=codex_ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_codex", return_value=1), patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            caller = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual(1, caller["native_args"].count(flag))
+            self.assertTrue(caller["hook_trust"]["flag_used"])
+            args.native.pop()
             self.assertEqual(["before-paste", "pending"], [f["stage"] for f in delivered["verified_frames"]])
-            self.assertTrue((args.output / "editor-pasted.txt").is_file())
+            self.assertTrue((evidence_root / "codex-verified-delivery/editor-pasted.txt").is_file())
+            # A user hook prevents all transport and leaves a refusal record.
+            user_hooks = Path(environment["CODEX_HOME"]) / "hooks.json"
+            user_hooks.write_text("{}")
+            args.output = evidence_root / "codex-extra-hook-refused"
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "user-level hooks"):
+                runner.launch(args)
+            transport.assert_not_called()
+            refused = json.loads((args.output / "launch.json").read_text())
+            self.assertFalse(refused["hook_trust"]["flag_used"])
+            self.assertEqual({"evaluator_home": "refused", "fixture_hooks": "not_checked"}, refused["hook_trust"]["checks"])
+            self.assertEqual(flag, refused["refused_flag"])
+            user_hooks.unlink()
             args.output = evidence_root / "codex-without-model"
             args.native = ["--", "--ask-for-approval", "never", "--sandbox", "workspace-write"]
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "--model"):
@@ -4419,6 +4555,7 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual(str(Path.home() / "Library/Keychains"), os.readlink(link))
             self.assertEqual(["Keychains"], [p.name for p in link.parent.iterdir()])
             self.assertIn("review the hooks", printed)
+            self.assertNotIn("--dangerously-bypass-hook-trust", printed)
             self.assertNotIn("TASK.md'", printed)
             (root / "AGENTS.md").write_text("new ancestor instructions")
             args.output = evidence_root / "ancestor-refusal"
