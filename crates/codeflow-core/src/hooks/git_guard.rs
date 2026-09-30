@@ -452,7 +452,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
         // A `cd <dir>` (as its own simple command) retargets later git ops.
         if let Some(dir) = cd_target(&tokens) {
             if top_level {
-                if tokens[0] == "cd" {
+                if tokens[0] == "cd" || plain_pushd(&tokens) {
                     shell.cd(&dir);
                 } else {
                     shell.observe(&tokens[0], &tokens[1..]);
@@ -780,6 +780,11 @@ fn hook_skip_env(tokens: &[String]) -> Option<&'static str> {
     None
 }
 
+// Only the directory form has cd semantics; stack indexes and `-n` do not.
+fn plain_pushd(tokens: &[String]) -> bool {
+    tokens.len() == 2 && tokens[0] == "pushd" && !tokens[1].starts_with(['+', '-'])
+}
+
 /// A `cd <dir>`/`pushd <dir>` simple command that retargets later git ops.
 fn cd_target(tokens: &[String]) -> Option<String> {
     let first = tokens.first()?.as_str();
@@ -859,6 +864,17 @@ fn integrity_disk_case(path: &Path) -> PathBuf {
 }
 
 fn integrity_target(path: &str) -> Option<&'static str> {
+    // A final-component pattern can empty the directory that contains it.
+    let target = Path::new(path);
+    let path = if target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains(['*', '?', '[', '{']))
+    {
+        target.parent().and_then(Path::to_str).unwrap_or(path)
+    } else {
+        path
+    };
     INTEGRITY_PREFIXES
         .iter()
         .chain(INTEGRITY_FILES.iter())
@@ -964,6 +980,57 @@ fn redirect_integrity_path(
     None
 }
 
+fn rsync_dry_run(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        arg == "--dry-run"
+            || arg
+                .strip_prefix('-')
+                .is_some_and(|flags| !flags.starts_with('-') && flags.contains('n'))
+    })
+}
+
+// Find's traversal roots are separate from predicate operands and -exec data.
+fn find_mutating_roots(args: &[String]) -> Option<&[String]> {
+    let start = args
+        .iter()
+        .take_while(|arg| matches!(arg.as_str(), "-H" | "-L" | "-P"))
+        .count();
+    let rest = &args[start..];
+    let end = rest
+        .iter()
+        .position(|arg| arg.starts_with('-') || matches!(arg.as_str(), "!" | "("))
+        .unwrap_or(rest.len());
+    let roots = &rest[..end];
+    let mut at = end;
+    while let Some(arg) = rest.get(at) {
+        match arg.as_str() {
+            "-delete" => return Some(roots),
+            "-exec" | "-execdir" => {
+                let tail = &rest[at + 1..];
+                let end = tail
+                    .iter()
+                    .position(|arg| matches!(arg.as_str(), ";" | "+"))
+                    .unwrap_or(tail.len());
+                if strip_launchers(&tail[..end])
+                    .is_some_and(|(program, _)| matches!(basename(program), "rm" | "chmod"))
+                {
+                    return Some(roots);
+                }
+                at += end + 1;
+            }
+            "-name" | "-iname" | "-path" | "-ipath" | "-wholename" | "-iwholename" | "-regex"
+            | "-iregex" | "-type" | "-xtype" | "-user" | "-group" | "-uid" | "-gid" | "-perm"
+            | "-size" | "-links" | "-inum" | "-mtime" | "-mmin" | "-atime" | "-amin" | "-ctime"
+            | "-cmin" | "-newer" | "-anewer" | "-cnewer" | "-newermt" | "-maxdepth"
+            | "-mindepth" | "-printf" | "-fprint" | "-fprint0" | "-fls" => at += 1,
+            "-fprintf" => at += 2,
+            _ => {}
+        }
+        at += 1;
+    }
+    None
+}
+
 /// Block a Bash write/remove that would disarm or falsify the enforcement
 /// plane: a redirect into, or a mutating command targeting, the hook shims
 /// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
@@ -984,16 +1051,24 @@ fn integrity_write_violation(
     let (program, args) = strip_launchers(tokens)?;
     let cmd = basename(program);
 
-    if matches!(
-        cmd,
-        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "install"
-    ) {
-        if let Some(p) = arg_integrity_path(args, cwd, payload_cwd) {
-            return Some(hook_integrity_violation(
-                level,
-                format!("`{cmd}` targets the integrity path `{p}`"),
-            ));
+    let write_args = match cmd {
+        "find" => find_mutating_roots(args),
+        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "install" => {
+            Some(args)
         }
+        _ => None,
+    };
+    if let Some(p) = write_args.and_then(|paths| {
+        if paths.is_empty() && cmd == "find" {
+            token_integrity_path(".", cwd, payload_cwd)
+        } else {
+            arg_integrity_path(paths, cwd, payload_cwd)
+        }
+    }) {
+        return Some(hook_integrity_violation(
+            level,
+            format!("`{cmd}` targets the integrity path `{p}`"),
+        ));
     }
     if cmd == "dd" {
         if let Some(p) = args
@@ -1015,7 +1090,7 @@ fn integrity_write_violation(
             ));
         }
     }
-    if matches!(cmd, "cp" | "ln") {
+    if matches!(cmd, "cp" | "ln") || (cmd == "rsync" && !rsync_dry_run(args)) {
         // Only the destination is written. A copy or link from an integrity
         // path leaves that source in place.
         if let Some(dest) = args.iter().rev().find(|a| !a.starts_with('-')) {
@@ -7258,13 +7333,12 @@ mod tests {
         assert!(has_rule(&r.violations, "git.commit_to_protected"));
     }
 
-    // Forms the tracker cannot follow stay unknown: `pushd` (its `-n` does
+    // Forms the tracker cannot follow stay unknown: `pushd -n` (it does
     // not move), a negated `cd`, and an assignment whose redirection can fail.
     #[test]
     fn test_tsk112_unmodeled_moves_stay_unknown() {
         for (cmd, session) in [
             ("pushd -n /scratch && git commit -m x", "main"),
-            ("pushd /scratch && git commit -m x", "main"),
             ("! cd /scratch-main && git commit -m x", "feat/s"),
             (
                 "R=/scratch-main; export R=/scratch > /absent/x; git -C \"$R\" commit -m x",
@@ -7282,6 +7356,14 @@ mod tests {
                 r.violations
             );
         }
+    }
+
+    #[test]
+    fn q4_plain_pushd_has_cd_semantics() {
+        let allowed = report("pushd /scratch && git commit -m x", "main");
+        assert!(allowed.violations.is_empty(), "{:?}", allowed.violations);
+        let denied = report("pushd /scratch-main && git commit -m x", "feat/s");
+        assert!(has_rule(&denied.violations, "git.commit_to_protected"));
     }
 
     // A commit message built by a heredoc substitution keeps the line flat.

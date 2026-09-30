@@ -447,35 +447,59 @@ EOF",
 }
 
 #[cfg(target_os = "macos")]
+fn claude_tempdir() -> tempfile::TempDir {
+    let supplied = std::env::temp_dir();
+    let base = if supplied.to_string_lossy().contains("/tmp/claude") {
+        supplied
+    } else {
+        PathBuf::from("/tmp")
+    };
+    tempfile::Builder::new()
+        .prefix("claude-tsk188-r1-")
+        .tempdir_in(base)
+        .unwrap()
+}
+
+#[cfg(target_os = "macos")]
 #[test]
-fn r1_integrity_paths_inside_and_outside_claude_tmp() {
-    let local = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tsk188-r3-fixtures");
-    std::fs::create_dir_all(&local).unwrap();
-    for base in [std::path::Path::new("/tmp"), local.as_path()] {
-        let temp = tempfile::Builder::new()
-            .prefix("claude-tsk188-r1-")
-            .tempdir_in(base)
-            .unwrap();
-        let project = Project::from_temp(temp);
-        for path in [".CODEFLOW/policy.json", ".codeflow/policy.json"] {
-            project.check_shell(
-                &project.root,
-                &format!("cat > {path} <<'EOF'\nx\nEOF"),
-                true,
-            );
-            project.check_shell(
-                &project.root,
-                &format!("printf x > {}", project.root.join(path).display()),
-                true,
-            );
-        }
-        project.check_shell(&project.root, "printf x > .CODEFLOW/notes.md", false);
+fn q2_claude_fixture_stays_under_supplied_tmpdir() {
+    let temp = claude_tempdir();
+    let supplied = std::env::temp_dir();
+    if supplied.to_string_lossy().contains("/tmp/claude") {
+        assert!(
+            temp.path().starts_with(&supplied),
+            "fixture {} escaped supplied {}",
+            temp.path().display(),
+            supplied.display()
+        );
+    } else {
+        assert!(temp.path().to_string_lossy().starts_with("/tmp/claude-"));
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn r1_integrity_paths_in_claude_tmp() {
+    let temp = claude_tempdir();
+    let project = Project::from_temp(temp);
+    for path in [".CODEFLOW/policy.json", ".codeflow/policy.json"] {
         project.check_shell(
             &project.root,
-            "printf x > /tmp/claude-tsk188-other/.codeflow/policy.json",
-            false,
+            &format!("cat > {path} <<'EOF'\nx\nEOF"),
+            true,
+        );
+        project.check_shell(
+            &project.root,
+            &format!("printf x > {}", project.root.join(path).display()),
+            true,
         );
     }
+    project.check_shell(&project.root, "printf x > .CODEFLOW/notes.md", false);
+    project.check_shell(
+        &project.root,
+        "printf x > /tmp/claude-tsk188-other/.codeflow/policy.json",
+        false,
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -565,6 +589,119 @@ fn r4_integrity_ancestor_directories_are_protected() {
         "mv .codeflow/notes.md notes.md",
         "cp .codeflow/policy.json notes.md",
         "cat .codeflow/policy.json",
+    ] {
+        project.check_shell(&project.root, command, false);
+    }
+}
+
+#[test]
+fn q1_integrity_directory_patterns_are_refused() {
+    let project = Project::new();
+    for command in [
+        "rm -rf .codeflow/*",
+        "rm -rf .codeflow/p*",
+        "rm -rf .codeflow/?olicy.json",
+        "rm -rf .codeflow/[p]olicy.json",
+        "rm -rf .codeflow/{policy.json,git-hooks}",
+        "rm -rf .git/*",
+        "cd .codeflow && rm -rf *",
+        "cd .codeflow && rm -rf p*",
+    ] {
+        project.check_shell(&project.root, command, true);
+    }
+    if cfg!(target_os = "macos") {
+        project.check_shell(&project.root, "rm -rf .CODEFLOW/*", true);
+        project.check_shell(&project.root, "cd .CODEFLOW && rm -rf *", true);
+    }
+    for command in [
+        "rm -rf stuff/*",
+        "rm -rf src/*.rs",
+        "rm -rf stuff/?otes",
+        "rm -rf stuff/[ab]*",
+        "rm -rf stuff/{a,b}",
+        "cd src && rm -rf *",
+        "ls .codeflow/*",
+        "rm -rf .codeflow/notes.md",
+    ] {
+        project.check_shell(&project.root, command, false);
+    }
+}
+
+#[test]
+fn q3_find_mutations_protect_explicit_roots() {
+    let project = Project::new();
+    for command in [
+        "find .codeflow -delete",
+        "find .codeflow -type f -delete",
+        "find .git -delete",
+        "find .codeflow -exec rm -rf {} +",
+        "find .git/hooks -type f -exec chmod -x {} \\;",
+        "find .codeflow -execdir rm -rf {} +",
+        "find .codeflow -execdir chmod 000 {} \\;",
+        "find -H .codeflow -delete",
+        "cd .codeflow && find . -delete",
+    ] {
+        project.check_shell(&project.root, command, true);
+    }
+    if cfg!(target_os = "macos") {
+        project.check_shell(&project.root, "find .CODEFLOW -delete", true);
+    }
+    for command in [
+        "find .codeflow -name '*.json'",
+        "find .codeflow -name -delete",
+        "find .codeflow -exec echo -delete {} +",
+        "find .codeflow -exec cat {} +",
+        "find stuff -delete",
+        "find src -exec rm {} +",
+        "find . -name '*.rs' -delete",
+        "find .codeflow -name rm -print",
+    ] {
+        project.check_shell(&project.root, command, false);
+    }
+}
+
+#[test]
+fn q3_rsync_checks_destination_only() {
+    let project = Project::new();
+    for command in [
+        "rsync -a stuff/ .codeflow/",
+        "rsync --delete stuff/ .codeflow/",
+        "rsync -a --delete stuff/ .git/hooks/",
+        "cd .codeflow && rsync -a ../stuff/ .",
+    ] {
+        project.check_shell(&project.root, command, true);
+    }
+    if cfg!(target_os = "macos") {
+        project.check_shell(&project.root, "rsync -a stuff/ .CODEFLOW/", true);
+    }
+    for command in [
+        "rsync -a .codeflow/ backup/",
+        "rsync -a --delete .git/hooks/ backup/",
+        "rsync -a stuff/ ordinary/",
+        "rsync -a notes.md .codeflow/notes.md",
+        "rsync --dry-run -a stuff/ .codeflow/",
+        "rsync -an stuff/ .codeflow/",
+    ] {
+        project.check_shell(&project.root, command, false);
+    }
+}
+
+#[test]
+fn q4_plain_pushd_tracks_integrity_directory() {
+    let project = Project::new();
+    for command in [
+        "pushd .codeflow && printf x > policy.json",
+        "pushd .codeflow && rm -rf *",
+        "pushd .git && rm -rf hooks",
+        "pushd src && printf x > ../.codeflow/policy.json",
+    ] {
+        project.check_shell(&project.root, command, true);
+    }
+    for command in [
+        "pushd src && printf x > notes.md",
+        "pushd .codeflow && cat policy.json",
+        "pushd .codeflow && printf x > notes.md",
+        "pushd -n .codeflow && printf x > policy.json",
     ] {
         project.check_shell(&project.root, command, false);
     }
