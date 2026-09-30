@@ -1023,30 +1023,57 @@ fn mark_parts(item: &Value, mark_name: &str, mark: &Mark) -> Rendered {
             number(item, "w")?,
             number(item, "h")?,
         );
-        let rx = item
-            .get("rx")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0)
-            .min(h / 2.0)
-            .min(6.0);
-        let start = x + w - 14.0;
-        let _ = write!(
-            parts,
-            "<path class=\"cf-m-cap\" d=\"M{} {}H{}Q{} {} {} {}V{}Q{} {} {} {}H{}Z\"/>",
-            num(start),
-            num(y),
-            num(x + w - rx),
-            num(x + w),
-            num(y),
-            num(x + w),
-            num(y + rx),
-            num(y + h - rx),
-            num(x + w),
-            num(y + h),
-            num(x + w - rx),
-            num(y + h),
-            num(start)
-        );
+        if h > w {
+            let rx = item
+                .get("rx")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                .min(w / 2.0)
+                .min(6.0);
+            let start = y + h - 14.0;
+            let _ = write!(
+                parts,
+                "<path class=\"cf-m-cap\" d=\"M{} {}H{}V{}Q{} {} {} {}H{}Q{} {} {} {}Z\"/>",
+                num(x),
+                num(start),
+                num(x + w),
+                num(y + h - rx),
+                num(x + w),
+                num(y + h),
+                num(x + w - rx),
+                num(y + h),
+                num(x + rx),
+                num(x),
+                num(y + h),
+                num(x),
+                num(y + h - rx)
+            );
+        } else {
+            let rx = item
+                .get("rx")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                .min(h / 2.0)
+                .min(6.0);
+            let start = x + w - 14.0;
+            let _ = write!(
+                parts,
+                "<path class=\"cf-m-cap\" d=\"M{} {}H{}Q{} {} {} {}V{}Q{} {} {} {}H{}Z\"/>",
+                num(start),
+                num(y),
+                num(x + w - rx),
+                num(x + w),
+                num(y),
+                num(x + w),
+                num(y + rx),
+                num(y + h - rx),
+                num(x + w),
+                num(y + h),
+                num(x + w - rx),
+                num(y + h),
+                num(start)
+            );
+        }
     }
     if item.get("cross").is_some() || mark.cross.is_some() {
         let (cx, cy, size) = match item.get("cross") {

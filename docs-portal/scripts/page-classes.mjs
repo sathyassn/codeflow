@@ -131,6 +131,11 @@ export const PAGE_CLASSES = Object.freeze({
       ...UTILITY_CHROME,
       PROVENANCE,
       Object.freeze({
+        id: "page-class-marker",
+        demand: "the explanatory page-class marker",
+        unmet: (observation) => observation.pageClassMarker === "explanatory" ? null : "data-cf-page-class is absent or differs",
+      }),
+      Object.freeze({
         id: "altitude-trio",
         demand: `the altitude trio ${ALTITUDE_PANELS.join(", ")}`,
         unmet: (observation) => {

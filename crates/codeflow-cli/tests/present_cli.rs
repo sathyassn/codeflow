@@ -17,12 +17,21 @@ use std::{
 #[path = "support/json_schema.rs"]
 mod json_schema;
 
+use codeflow_present::service::OWNER_PID_ENV;
+
+/// Runs `codeflow` for a test. A service it starts exits once this test
+/// process is gone, so a stopped or killed test run leaves no server behind.
 fn codeflow(project: &Path, home: &Path, args: &[&str]) -> Output {
+    codeflow_owned_by(project, home, args, std::process::id())
+}
+
+fn codeflow_owned_by(project: &Path, home: &Path, args: &[&str], owner: u32) -> Output {
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
         .args(args)
         .current_dir(project)
         .env("HOME", home)
         .env("XDG_STATE_HOME", home.join("state"))
+        .env(OWNER_PID_ENV, owner.to_string())
         .output()
         .unwrap()
 }
@@ -130,6 +139,215 @@ fn crashed_service_close_then_selected_clear_converges() {
         &["present", "clear", &session_id, "--older-than", "0h"],
     ));
     assert!(cleared.contains(&format!("removed {session_id}")));
+}
+
+/// Opens a presentation whose service follows `owner` and returns the session
+/// id and the service's process id once the service is serving.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_owned_by(fixture: &TestProject, owner: u32) -> (String, i32) {
+    let opened = require_success(&codeflow_owned_by(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "open",
+            fixture.project.join("first.json").to_str().unwrap(),
+            "--no-launch",
+        ],
+        owner,
+    ));
+    let session_id = opened.split_whitespace().nth(1).unwrap().to_string();
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    assert_eq!(listed[0]["id"], session_id.as_str());
+    let pid = i32::try_from(listed[0]["service_pid"].as_u64().unwrap()).unwrap();
+    thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "the service stopped while its owner runs"
+    );
+    (session_id, pid)
+}
+
+/// Asserts that the service `pid` exits within ten seconds and that it
+/// closed `session_id` on the way out.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_service_follows_owner(fixture: &TestProject, session_id: &str, pid: i32) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    let outlived = unsafe { libc::kill(pid, 0) } == 0;
+    if outlived {
+        require_success(&codeflow(
+            &fixture.project,
+            &fixture.home,
+            &["present", "close", session_id],
+        ));
+    }
+    assert!(!outlived, "the service outlived its owner");
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    assert_eq!(listed[0]["id"], session_id);
+    assert_eq!(listed[0]["status"], "closed", "{listed}");
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn service_exits_once_its_owner_process_is_gone() {
+    let fixture = setup_project();
+    let mut owner = Command::new("sleep").arg("60").spawn().unwrap();
+    let (session_id, pid) = open_owned_by(&fixture, owner.id());
+
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    assert_service_follows_owner(&fixture, &session_id, pid);
+
+    let refused = codeflow_owned_by(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "open",
+            fixture.project.join("first.json").to_str().unwrap(),
+            "--no-launch",
+        ],
+        0,
+    );
+    assert!(!refused.status.success(), "an owner of 0 was accepted");
+}
+
+/// An owner that has exited but that no parent has reaped still holds its
+/// process id. The service must follow the exit, not the id.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn service_exits_when_its_owner_exits_unreaped() {
+    let fixture = setup_project();
+    let mut owner = Command::new("sh")
+        .args(["-c", "read line"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (session_id, pid) = open_owned_by(&fixture, owner.id());
+
+    drop(owner.stdin.take());
+    let owner_pid = libc::id_t::from(owner.id());
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let waited = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            owner_pid,
+            &raw mut info,
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    };
+    assert_eq!(waited, 0, "the owner did not exit");
+
+    assert_service_follows_owner(&fixture, &session_id, pid);
+    owner.wait().unwrap();
+}
+
+/// Forks a child that exits at once and reaps it, returning its process id.
+#[cfg(target_os = "macos")]
+fn spend_process_id() -> i32 {
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0, "fork failed");
+    if child == 0 {
+        unsafe { libc::_exit(0) };
+    }
+    unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
+    child
+}
+
+/// Forks children until one takes `target`, which then blocks until the
+/// returned pipe end is dropped. Returns `None` when another process took
+/// the id first.
+#[cfg(target_os = "macos")]
+fn hold_process_id(target: i32) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd as _;
+    let mut ends = [0; 2];
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    let (read_end, write_end) = unsafe {
+        (
+            std::os::fd::OwnedFd::from_raw_fd(ends[0]),
+            std::os::fd::OwnedFd::from_raw_fd(ends[1]),
+        )
+    };
+    for _ in 0..256 {
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            use std::os::fd::AsRawFd as _;
+            if unsafe { libc::getpid() } == target {
+                unsafe { libc::close(write_end.as_raw_fd()) };
+                let mut byte = 0_u8;
+                unsafe { libc::read(read_end.as_raw_fd(), (&raw mut byte).cast(), 1) };
+            }
+            unsafe { libc::_exit(0) };
+        }
+        if child == target {
+            return Some(write_end);
+        }
+        unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
+        if child > target {
+            return None;
+        }
+    }
+    None
+}
+
+/// A process that reuses the owner's id must not keep the service alive.
+/// macOS hands out ids in order up to 99999, so the test cycles through the
+/// id space until the next id is the owner's, stops the owner and takes its
+/// id at once. That spends about 100000 forks, so the test is opt-in; run it
+/// alone, since other tests widen the gap between the owner's exit and reuse.
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "slow: cycles the process id space to force a real reuse"]
+fn service_ignores_a_process_that_reuses_its_owner_id() {
+    let fixture = setup_project();
+    for _ in 0..3 {
+        let mut owner = Command::new("sleep").arg("600").spawn().unwrap();
+        let target = i32::try_from(owner.id()).unwrap();
+        let (session_id, pid) = open_owned_by(&fixture, owner.id());
+        let deadline = Instant::now() + Duration::from_secs(600);
+        loop {
+            let spent = spend_process_id();
+            if spent < target && target - spent <= 8 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "could not cycle the id space");
+        }
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        let Some(holder) = hold_process_id(target) else {
+            require_success(&codeflow(
+                &fixture.project,
+                &fixture.home,
+                &["present", "close", &session_id],
+            ));
+            continue;
+        };
+        assert_eq!(
+            unsafe { libc::kill(target, 0) },
+            0,
+            "the reused owner id is not live"
+        );
+        assert_service_follows_owner(&fixture, &session_id, pid);
+        drop(holder);
+        unsafe { libc::waitpid(target, std::ptr::null_mut(), 0) };
+        return;
+    }
+    panic!("another process took the owner id three times");
 }
 
 fn start_profile_writer(

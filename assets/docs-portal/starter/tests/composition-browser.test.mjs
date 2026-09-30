@@ -109,7 +109,7 @@ test("a hollow carrier, or one inside another carrier, does not count", { skip: 
   const panel = (name, body) => `<section class="portal-altitude" data-altitude="${name}" id="portal-panel-${name}">${body}</section>`;
   const document = (concept, architecture, technical) =>
     `<h1>Composed page</h1><div class="portal-provenance">source</div><button data-testid="portal-display-btn">Display</button>` +
-    `<div class="sl-markdown-content">${panel("concept", concept)}${panel("architecture", architecture)}${panel("technical", technical)}</div>`;
+    `<div class="sl-markdown-content" data-cf-page-class="explanatory">${panel("concept", concept)}${panel("architecture", architecture)}${panel("technical", technical)}</div>`;
   const chrome = { headings: 1, provenance: true, displayControls: 1, commentChrome: 0 };
   const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
   try {

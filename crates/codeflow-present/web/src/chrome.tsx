@@ -72,6 +72,7 @@ interface PendingPin {
   readonly captured: CapturedTarget;
   readonly clientX: number;
   readonly clientY: number;
+  readonly targetRect?: DOMRect;
   /** The element an element pin resolved to, for "select enclosing". */
   readonly element?: Element;
   /** The top of the selected line, where a text note's marker points. */
@@ -173,6 +174,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const [eventMessage, setEventMessage] = useState<string | null>(null);
   const [commentMode, setCommentMode] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [sheetExpanded, setSheetExpanded] = useState(false);
   const [captureMode, setCaptureMode] = useState<CaptureMode>(null);
   const [regionDraft, setRegionDraft] = useState<RegionDraft | null>(null);
   const [markerEpoch, setMarkerEpoch] = useState(0);
@@ -247,6 +249,23 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   useLayoutEffect(() => {
     const float = floatRef.current;
     if (!float) return;
+    const target = pendingPin?.targetRect;
+    if (target) {
+      const width = float.offsetWidth;
+      const height = float.offsetHeight;
+      const clampTop = (top: number) => Math.min(Math.max(8, top), window.innerHeight - height - 8);
+      let left = Math.min(Math.max(8, target.left), window.innerWidth - width - 8);
+      let top = target.top - height - 8;
+      if (top < 8 && target.right + width + 8 <= window.innerWidth - 8) {
+        left = target.right + 8;
+        top = clampTop(target.top);
+      } else if (top < 8 && target.left - width - 8 >= 8) {
+        left = target.left - width - 8;
+        top = clampTop(target.top);
+      } else if (top < 8) top = clampTop(target.bottom + 8);
+      float.style.left = `${left}px`;
+      float.style.top = `${top}px`;
+    }
     const overflow = float.getBoundingClientRect().right - (window.innerWidth - 8);
     if (overflow > 0) float.style.left = `${Math.max(8, float.offsetLeft - overflow)}px`;
   }, [pendingPin, composerOpen]);
@@ -319,9 +338,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       window.getSelection()?.removeAllRanges();
       setStatus(notesCountRef.current ? `${notesCountRef.current} note${notesCountRef.current === 1 ? "" : "s"} queued · Comment off` : "Ready for review.");
     } else {
-      // Where the rail is a bottom sheet it would cover half the document;
-      // the Comment button opens it on request (QA defect 7).
-      setPanelOpen(!sheetLayout());
+      setPanelOpen(true);
+      setSheetExpanded(!sheetLayout() || notesCountRef.current > 0);
       setHintMode("element");
       setStatus(COMMENT_INSTRUCTION);
     }
@@ -921,10 +939,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     }
     if (!commentModeRef.current) armComment(true);
     else if (!sheetLayout()) setPanelOpen(true);
+    setSheetExpanded(true);
+    // The chip is placed off the pinned part's box: the element, or the
+    // selected text.
+    const selection = captured.selector ? getSelection() : null;
+    const targetRect = opts?.element?.getBoundingClientRect()
+      ?? (selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : undefined);
     setPendingPin({
       captured,
       clientX,
       clientY,
+      ...(targetRect ? { targetRect } : {}),
       ...(opts?.element ? { element: opts.element } : {}),
       ...(opts?.lineTop !== undefined ? { lineTop: opts.lineTop } : {}),
     });
@@ -1022,7 +1047,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setComposerBody("");
     setEditingId(null);
     if (!sheetLayout()) setPanelOpen(true);
-    else if (!panelOpen) showToast("Note saved. The Comment button opens your notes and Submit.");
+    else {
+      setPanelOpen(true);
+      setSheetExpanded(true);
+    }
   }
   saveComposerRef.current = () => {
     void saveComposer();
@@ -1229,7 +1257,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setEventMessage(event.message ?? null);
     // Forms keep their drafts in the page and show the notice themselves.
     if (event.kind === "revision") {
-      documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: event.kind }));
+      const revision = Number(event.cursor.split(":", 1)[0]);
+      if (!Number.isSafeInteger(revision) || revision <= config.revision) return;
+      documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: { kind: "revision", revision } }));
       const notice = "A newer document revision is available. Finish or discard this review before reloading.";
       setStatus(notice);
       showToast(notice, { sticky: true });
@@ -1322,7 +1352,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             aria-pressed={commentMode}
             title={commentMode ? "Exit Comment mode (C or Esc)" : "Comment mode (C)"}
             onClick={() => {
-              if (commentMode && !panelOpen) setPanelOpen(true);
+              if (commentMode && !panelOpen) { setPanelOpen(true); setSheetExpanded(notes.length > 0); }
+              else if (commentMode && sheetLayout() && !sheetExpanded) setSheetExpanded(true);
               else armComment(!commentMode);
             }}
           >
@@ -1550,13 +1581,18 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         id="cf-feedback-panel"
         class="cf-dock"
         data-open={railVisible ? "true" : "false"}
+        data-expanded={sheetExpanded ? "true" : "false"}
         data-testid="notes-dock"
         aria-label="Review notes"
         aria-labelledby="cf-feedback-title"
         hidden={!railVisible}
         ref={dockRef}
       >
-        <div class="hd">
+        <div class="hd" onPointerDown={(event) => { dockRef.current?.setAttribute("data-drag-start", String(event.clientY)); }} onPointerUp={(event) => {
+          const start = Number(dockRef.current?.getAttribute("data-drag-start"));
+          if (Number.isFinite(start) && start - event.clientY >= 20) setSheetExpanded(true);
+          dockRef.current?.removeAttribute("data-drag-start");
+        }}>
           <b id="cf-feedback-title">Notes</b>
           <span id="dockCount" class="cf-count" aria-label={`${notes.length} pending notes`}>
             {notes.length}

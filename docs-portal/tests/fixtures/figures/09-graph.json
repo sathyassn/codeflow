@@ -8,7 +8,7 @@
     "idea": "Six tasks form the critical path from the doctrine to the closeout; three run beside it.",
     "title": "The nine tasks of EPC-016 and their sixteen dependencies",
     "kicker": "Task graph of one epic",
-    "description": "Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy accent arcs mark the critical path 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.",
+    "description": "Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy accent arcs without heads mark the critical path; ranks give their direction. Ordinary headed arcs mark the other dependencies. The critical path is 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.",
     "caption": "The doctrine, the kit, the runtime, the chrome, the pages and the closeout are the critical path, and the evaluation cases, Agent OS and the annotation fixes run beside it.",
     "states": [
       {
@@ -46,113 +46,108 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M75 171L155 229",
+          "d": "M82 176L148 224",
           "head": "end",
           "id": "m1"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M78 157L502 83",
+          "d": "M87 155L493 85",
           "head": "end",
           "id": "m2"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M78 162L502 208",
+          "d": "M87 163L493 207",
           "head": "end",
           "id": "m3"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M307 154L503 86",
+          "d": "M315 151L495 89",
           "head": "end",
           "id": "m4"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M308 164L502 206",
+          "d": "M316 166L494 204",
           "head": "end",
           "id": "m5"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M306 169L504 281",
+          "d": "M314 173L496 277",
           "head": "end",
           "id": "m6"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M417 167L503 203",
+          "d": "M425 170L495 200",
           "head": "end",
           "id": "m7"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M412 173L508 277",
+          "d": "M418 180L502 270",
           "head": "end",
           "id": "m8"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M188 237L642 163",
+          "d": "M197 236L633 164",
           "head": "end",
           "id": "m9"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M537 204L643 166",
+          "d": "M545 201L635 169",
           "head": "end",
           "id": "m10"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M533 278L647 172",
+          "d": "M540 272L640 178",
           "head": "end",
           "id": "m11"
         },
         {
           "state": "done",
           "shape": "path",
-          "d": "M76 151L154 109",
-          "head": "end",
+          "d": "M84 147L146 113",
           "id": "m12"
         },
         {
           "state": "done",
           "shape": "path",
-          "d": "M186 108L274 152",
-          "head": "end",
+          "d": "M194 112L266 148",
           "id": "m13"
         },
         {
           "state": "done",
           "shape": "path",
-          "d": "M308 160H382",
-          "head": "end",
+          "d": "M317 160H373",
           "id": "m14"
         },
         {
           "state": "done",
           "shape": "path",
-          "d": "M415 150L505 90",
-          "head": "end",
+          "d": "M422 145L498 95",
           "id": "m15"
         },
         {
           "state": "done",
           "shape": "path",
-          "d": "M536 89L644 151",
-          "head": "end",
+          "d": "M543 93L637 147",
           "id": "m16"
         },
         {
@@ -398,36 +393,31 @@
           "state": "done",
           "id": "c058-070",
           "shape": "path",
-          "d": "M156.8 49.1L113.2 84.9",
-          "head": "end"
+          "d": "M156.8 49.1L113.2 84.9"
         },
         {
           "state": "done",
           "id": "c070-059",
           "shape": "path",
-          "d": "M113.2 123.1L156.8 158.9",
-          "head": "end"
+          "d": "M113.2 123.1L156.8 158.9"
         },
         {
           "state": "done",
           "id": "c059-060",
           "shape": "path",
-          "d": "M180 208L180 222",
-          "head": "end"
+          "d": "M180 208L180 222"
         },
         {
           "state": "done",
           "id": "c060-061",
           "shape": "path",
-          "d": "M154.5 267.7L85.5 310.3",
-          "head": "end"
+          "d": "M154.5 267.7L85.5 310.3"
         },
         {
           "state": "done",
           "id": "c061-064",
           "shape": "path",
-          "d": "M85.5 341.7L154.5 384.3",
-          "head": "end"
+          "d": "M85.5 341.7L154.5 384.3"
         },
         {
           "state": "node",

@@ -23,6 +23,7 @@ const CARRIED = Object.freeze({
   technical: Object.freeze({ figure: 1, stage: 0, table: 2, list: 1, pre: 1 }),
 });
 const COMPLIANT_OBSERVATION = Object.freeze({
+  pageClassMarker: "explanatory",
   headings: 1, provenance: true, displayControls: 2, commentChrome: 0,
   altitudePanels: [...ALTITUDE_PANELS], panelCarriers: CARRIED, pointerColumns: [], pointerRows: 0,
   sourceRegions: 0, companions: 3, headFigures: 0, tables: 2,
@@ -116,7 +117,7 @@ test("the page-class rules are declared once and enumerate what each class must 
     ["record-pointer", "record pointer page"],
   ]);
   assert.deepEqual(PAGE_CLASSES.explanatory.requirements.map((requirement) => requirement.id), [
-    "single-heading", "display-control", "no-present-chrome", "provenance-line", "altitude-trio",
+    "single-heading", "display-control", "no-present-chrome", "provenance-line", "page-class-marker", "altitude-trio",
     "concept-carrier", "architecture-carrier", "technical-carrier", "bound-figures",
   ]);
   // An illustrated source needs a figure at its head and no trio; a
@@ -254,6 +255,7 @@ test("the utility chrome rules refuse a bare shell, a second heading and present
     [{ displayControls: 0 }, "lacks a visible Display control: no visible Display control"],
     [{ commentChrome: 1 }, "lacks no present Comment chrome: 1 present Comment element(s)"],
     [{ provenance: false }, "lacks the visible source provenance line: no visible provenance line"],
+    [{ pageClassMarker: null }, "lacks the explanatory page-class marker: data-cf-page-class is absent or differs"],
     [{ altitudePanels: [] }, "missing concept, architecture, technical; present none"],
   ];
   for (const [override, expected] of cases) {

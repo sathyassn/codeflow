@@ -36,6 +36,13 @@ try {
 
   const manifest = JSON.parse(await readFile(join(first, "manifest.json"), "utf8"));
   checkManifest(manifest);
+  const exportBytes = await readFile(join(first, manifest.export["present.export"].stored_path));
+  checkExportGzipHeader(exportBytes);
+  const altered = Buffer.from(exportBytes);
+  altered[9] = 3;
+  let rejected = false;
+  try { checkExportGzipHeader(altered); } catch { rejected = true; }
+  if (!rejected) throw new Error("The export check accepted an OS-dependent gzip header");
   process.stdout.write(`cf-present web checks passed; reproducible tree ${firstDigest}\n`);
 } finally {
   await rm(scratch, { recursive: true, force: true });
@@ -139,6 +146,12 @@ function checkManifest(manifest) {
   }
   if (!manifest.service.inline["present.prepaint"]?.csp_sha256?.startsWith("sha256-")) {
     throw new Error("Pre-paint script is missing its CSP hash");
+  }
+}
+
+function checkExportGzipHeader(bytes) {
+  if (bytes.length < 10 || bytes[0] !== 0x1f || bytes[1] !== 0x8b || bytes[2] !== 8 || bytes[9] !== 255) {
+    throw new Error("Export gzip header must use the fixed OS byte 255");
   }
 }
 

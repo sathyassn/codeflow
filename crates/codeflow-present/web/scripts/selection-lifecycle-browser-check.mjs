@@ -49,6 +49,8 @@ export async function checkSelectionLifecycle(browser, origin) {
       await page.getByTestId("composer").waitFor({ state: "detached" });
       posts.length = 0;
       await page.getByTestId("submit-all").click();
+      // A previous submit can leave this toast visible while the next one runs.
+      await page.locator('.cf-chrome-frame[data-commenting="false"]').waitFor({ state: "attached" });
       await page.getByTestId("toast").getByText(/Review received/).waitFor();
       assert.equal(posts.length, 1);
       assert.equal(posts[0].notes.length, 1);

@@ -138,6 +138,8 @@ export async function buildAssets(assetsRoot = defaultAssetsRoot) {
 
     const exportRaw = await readFile(rawExport);
     const exportEncoded = gzipSync(exportRaw, { level: 9, mtime: 0 });
+    // Node writes the host OS in this byte; normalize it for portable assets.
+    exportEncoded[9] = 255;
     const exportHash = sha256Hex(exportEncoded);
     const exportStoredPath = `export/renderer-${exportHash.slice(0, 16)}.js.gz`;
     await writeFile(join(staging, exportStoredPath), exportEncoded);

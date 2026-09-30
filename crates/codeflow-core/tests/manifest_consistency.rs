@@ -956,8 +956,9 @@ fn portal_bundle_is_single_complete_and_bounded() {
     let browser = std::fs::read_to_string(bundle.join("scripts/browser-verify.mjs"))
         .expect("portal browser verifier is readable");
     assert!(
-        browser.contains("env: hardenedChildEnvironment(process.env, { BROWSER: \"none\" })")
-            && browser.contains("env: hardenedChildEnvironment(),"),
+        browser.contains(
+            "serveBuiltSite({ directory: path.join(root, \"dist\"), base: config.base })"
+        ) && browser.contains("env: hardenedChildEnvironment(),"),
         "portal preview and browser children must receive the shared allowlisted environment"
     );
     assert!(
@@ -2150,12 +2151,12 @@ fn chat_form_measures(family: &str) -> &'static [(&'static str, usize)] {
     match family {
         "flow" => &[("|", 2), ("(H)", 1)],
         "structure" => &[("[ .", 4)],
-        "layering" => &[("*", 4)],
+        "layering" => &[("*", 9)],
         "sequence" => &[("->|", 3), ("<==", 2)],
         "state" => &[("[", 7)],
         "coverage" => &[("#", 12), ("X", 1)],
         "derivation" => &[("<~>", 2)],
-        "graph" => &[("==>", 5), ("<-", 11)],
+        "graph" => &[("====", 5), ("<-", 11)],
         _ => &[],
     }
 }
