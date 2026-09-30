@@ -92,7 +92,8 @@ repository, uses workspace mode instead: see
 There `codeflow ci` accepts a range on the root branch the target's policy
 names, as it accepts a verified epic line. With durable tracking, it
 refuses a pull request from any other `integration/*` branch that is not a
-verified epic line or a release branch, whatever its `Task:` line.
+verified epic line or a release branch, whatever its `Task:` line and also
+when the host supplies no body.
 
 ## What each tier installs
 

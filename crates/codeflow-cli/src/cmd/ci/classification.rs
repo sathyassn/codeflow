@@ -232,6 +232,26 @@ fn integration_line_eligible(
     }
 }
 
+/// A pull request whose host supplied no body (a Bitbucket description it
+/// cannot read) still has its `integration/*` head judged, when durable
+/// tracking is on; the body-specific classes wait for the body.
+pub(super) fn bodyless_line_check(
+    root: &Path,
+    branch: &str,
+    range: Option<&Range<'_>>,
+    tagged: &mut Vec<super::TaggedViolation>,
+    ran: &mut Vec<&str>,
+) {
+    let Some(range) = range else {
+        return;
+    };
+    if !branch.starts_with("integration/") || !matches!(tracking_on(root, Some(range)), Ok(true)) {
+        return;
+    }
+    ran.push("classification");
+    integration_line_eligible(root, branch, range, tagged);
+}
+
 /// Where durable tracking is off: whether the body names exactly one unit
 /// that matches the branch, or the range is on the root branch the target's
 /// policy names, which carries no `Task:` line.

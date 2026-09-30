@@ -1248,8 +1248,12 @@ publication date._
   any criteria change on it. The branch is read from the policy on the
   target. With durable tracking, a pull request from any other
   `integration/*` branch that is neither a verified epic line nor a release
-  branch is refused whatever its `Task:` line; before, `Task: TSK-NNN` let
-  one through (TSK-190).
+  branch is refused whatever its `Task:` line, and also when the host
+  supplies no body (a Bitbucket description `ci` cannot read); before,
+  `Task: TSK-NNN` or a missing body let one through. A plain push with no
+  pull request context, the minimal tier, and a range into a release
+  branch, which the release checks judge, are not judged this way
+  (TSK-190).
 
 <!-- codeflow:release-impact patch -->
 - **An approved spec is amended until it ships, and frozen after.** The

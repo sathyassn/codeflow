@@ -644,6 +644,41 @@ fn ci(root: &Path, branch: &str, body: Option<&str>) -> Output {
         .expect("codeflow ci runs")
 }
 
+/// `codeflow ci` as the shipped Bitbucket pipeline runs it for a pull
+/// request from `branch` into `destination` whose description is not
+/// available: the PR variables are set and no body is supplied.
+fn ci_bitbucket(root: &Path, branch: &str, destination: &str) -> Output {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    Command::new(&exe)
+        .args([
+            "ci",
+            "--base",
+            destination,
+            "--head",
+            "HEAD",
+            "--branch",
+            branch,
+        ])
+        .current_dir(root)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("BITBUCKET_PR_ID", "190")
+        .env("BITBUCKET_BRANCH", branch)
+        .env("BITBUCKET_PR_DESTINATION_BRANCH", destination)
+        .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_NAME")
+        .env_remove("GITHUB_HEAD_REF")
+        .env_remove("GITHUB_BASE_REF")
+        .env_remove("CI_PIPELINE_SOURCE")
+        .env_remove("CI_MERGE_REQUEST_IID")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("codeflow ci runs")
+}
+
 /// TSK-190 AC-3 (journey): a full-tier umbrella whose `main` the operator
 /// moved forward holds a task record. A range on the root branch that
 /// widens that record's criteria and adds code passes `codeflow ci` as the
@@ -730,6 +765,26 @@ fn journey_ci_accepts_the_workspace_root_branch_and_no_other_line() {
     assert!(!other.status.success(), "{said}");
     assert!(said.contains(UNVERIFIED_LINE), "{said}");
     assert!(!said.contains("pull request class: tracked"), "{said}");
+
+    // A pull request whose body the host does not supply (Bitbucket) is
+    // still judged on its line, into `main` and into an epic line alike; a
+    // plain push with no pull request context is not classified.
+    git(&root, &["branch", "integration/EPC-001-line", "main"]);
+    git(&root, &["switch", "-q", "-c", "integration/code", "main"]);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+    git(&root, &["add", "-A"]);
+    let code = git_as(&root, None, &["commit", "-m", "feat: add a function"]);
+    assert!(code.status.success(), "{}", both(&code));
+    for destination in ["main", "integration/EPC-001-line"] {
+        let other = ci_bitbucket(&root, "integration/code", destination);
+        let said = both(&other);
+        assert!(!other.status.success(), "into {destination}: {said}");
+        assert!(said.contains(UNVERIFIED_LINE), "into {destination}: {said}");
+    }
+    let pushed = ci(&root, "integration/code", None);
+    let said = both(&pushed);
+    assert!(pushed.status.success(), "{said}");
 }
 
 /// What `codeflow ci` says for an `integration/` head that is neither a
@@ -773,4 +828,10 @@ fn journey_ci_accepts_the_root_branch_at_the_minimal_tier() {
     let said = both(&other);
     assert!(!other.status.success(), "{said}");
     assert!(said.contains("work.classification"), "{said}");
+    // Without durable tracking there are no epic records to prove a line
+    // by, so a body-less pull request is not judged on its line.
+    let bodyless = ci_bitbucket(&root, "integration/other", "main");
+    let said = both(&bodyless);
+    assert!(bodyless.status.success(), "{said}");
+    assert!(!said.contains(UNVERIFIED_LINE), "{said}");
 }

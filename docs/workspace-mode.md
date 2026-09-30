@@ -137,4 +137,6 @@ switches nothing; it says the folder looks like a workspace and names
   from the policy on the target, so a pull request cannot name its own
   branch as the root. With durable tracking, a pull request from any other
   `integration/*` branch that is not a verified epic line or a release
-  branch is refused whatever its `Task:` line.
+  branch is refused whatever its `Task:` line, including a pull request
+  whose host supplies no body. A plain push outside a pull request is not
+  judged this way.
