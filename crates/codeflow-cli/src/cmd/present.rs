@@ -203,41 +203,7 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<i32> {
             session_id,
             file,
             revision,
-        } => {
-            let bytes = if let Some(path) = file {
-                read_document(path)?
-            } else {
-                let id = parse_id(
-                    session_id
-                        .as_deref()
-                        .expect("clap requires session or file"),
-                )?;
-                let record = match revision {
-                    Some(n) => store.revision(id, *n)?,
-                    None => store.current_revision(id)?,
-                };
-                match record.content {
-                    codeflow_present::state::RevisionContent::Supported { document } => {
-                        serde_json::to_vec(&document)?
-                    }
-                    codeflow_present::state::RevisionContent::Unsupported { raw, .. } => {
-                        raw.into_bytes()
-                    }
-                    codeflow_present::state::RevisionContent::Retired { document, .. } => {
-                        serde_json::to_vec(&document)?
-                    }
-                }
-            };
-            let faults = codeflow_present::document::check_document(&bytes);
-            for fault in &faults {
-                println!("{}", serde_json::to_string(fault)?);
-            }
-            println!(
-                "{}",
-                serde_json::json!({"faults":faults.len(),"valid":faults.is_empty()})
-            );
-            Ok(if faults.is_empty() { 0 } else { 9 })
-        }
+        } => check(&store, session_id.as_deref(), file.as_deref(), *revision),
         PresentCommand::Feedback {
             session_id,
             follow,
@@ -302,6 +268,41 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<i32> {
         }
         other => run_command(&store, project, other).map(|()| 0),
     }
+}
+
+fn check(
+    store: &SessionStore,
+    session_id: Option<&str>,
+    file: Option<&Path>,
+    revision: Option<u64>,
+) -> codeflow_present::Result<i32> {
+    let bytes = if let Some(path) = file {
+        read_document(path)?
+    } else {
+        let id = parse_id(session_id.expect("clap requires session or file"))?;
+        let record = match revision {
+            Some(n) => store.revision(id, n)?,
+            None => store.current_revision(id)?,
+        };
+        match record.content {
+            codeflow_present::state::RevisionContent::Supported { document } => {
+                serde_json::to_vec(&document)?
+            }
+            codeflow_present::state::RevisionContent::Unsupported { raw, .. } => raw.into_bytes(),
+            codeflow_present::state::RevisionContent::Retired { document, .. } => {
+                serde_json::to_vec(&document)?
+            }
+        }
+    };
+    let faults = codeflow_present::document::check_document(&bytes);
+    for fault in &faults {
+        println!("{}", serde_json::to_string(fault)?);
+    }
+    println!(
+        "{}",
+        serde_json::json!({"faults":faults.len(),"valid":faults.is_empty()})
+    );
+    Ok(if faults.is_empty() { 0 } else { 9 })
 }
 
 fn run_command(
