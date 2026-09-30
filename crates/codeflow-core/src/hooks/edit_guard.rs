@@ -226,9 +226,6 @@ fn absolute_target(path: &Path, cwd: &Path, home: &Path) -> PathBuf {
 /// # Errors
 /// Returns an error when the context or a target cannot be resolved safely.
 pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Violation>, EditError> {
-    if !ctx.level.is_active() {
-        return Ok(Vec::new());
-    }
     let cwd = request.cwd.as_deref().unwrap_or(ctx.cwd);
     for path in [cwd, ctx.root, ctx.home]
         .into_iter()
@@ -241,7 +238,11 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
             )));
         }
     }
-    let protected = enforcement_patterns(ctx)?;
+    let protected = if ctx.level.is_active() {
+        enforcement_patterns(ctx)?
+    } else {
+        Vec::new()
+    };
     let mut seen = BTreeSet::new();
     let mut violations = Vec::new();
     for path in &request.paths {
@@ -250,12 +251,20 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
         let resolved = normalized(&absolute, true)?;
         for candidate in [&lexical, &resolved] {
             let text = path_text(candidate)?;
-            if protected.iter().any(|pattern| covers(&text, pattern))
+            let authority = repository_authority_target(candidate, ctx.root, false);
+            if (authority
+                || (ctx.level.is_active()
+                    && (protected.iter().any(|pattern| covers(&text, pattern))
+                        || repository_enforcement_target(candidate, ctx.root, false))))
                 && seen.insert(lexical.clone())
             {
                 violations.push(Violation::new(
                     "git.hook_integrity",
-                    ctx.level,
+                    if authority {
+                        PolicyLevel::Block
+                    } else {
+                        ctx.level
+                    },
                     format!(
                         "file edit targets the enforcement path `{}`",
                         lexical.display()
@@ -445,6 +454,161 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
         }
     }
     Ok(result)
+}
+
+pub(crate) const AUTHORITY_PATH: &str = "remote-tracking policy metadata";
+
+// File edits cannot establish which config keys are safe. The Git command
+// checker still permits ordinary `git config --global user.name ...` updates.
+fn global_git_config_target(target: &Path, root: &Path) -> bool {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let mut paths = Vec::new();
+    if let Some(home) = &home {
+        paths.push(home.join(".gitconfig"));
+    }
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.map(|home| home.join(".config")));
+    if let Some(xdg) = xdg {
+        paths.push(xdg.join("git/config"));
+    }
+    // /dev/null deliberately disables global config; writes cannot change its contents.
+    if let Some(path) = std::env::var_os("GIT_CONFIG_GLOBAL")
+        .filter(|s| !s.is_empty() && s != std::ffi::OsStr::new("/dev/null"))
+    {
+        paths.push(root.join(path));
+    }
+    [false, true].into_iter().any(|resolve| {
+        normalized(target, resolve).is_ok_and(|target| {
+            paths
+                .iter()
+                .any(|path| normalized(path, resolve).is_ok_and(|path| path == target))
+        })
+    })
+}
+
+/// Authority metadata cannot be relaxed by a policy read from that metadata.
+pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors: bool) -> bool {
+    if global_git_config_target(target, root) {
+        return true;
+    }
+    let Ok(repo) = git2::Repository::discover(root) else {
+        return false;
+    };
+    let mut paths = vec![
+        ("refs/remotes".to_string(), true),
+        ("packed-refs".to_string(), false),
+        ("config".to_string(), false),
+        ("config.worktree".to_string(), false),
+    ];
+    if let Ok(names) = repo.worktrees() {
+        for name in names.iter().flatten().flatten() {
+            paths.push((format!("worktrees/{name}/config.worktree"), false));
+        }
+    }
+    for resolve in [false, true] {
+        let (Ok(target), Ok(common)) = (
+            normalized(target, resolve),
+            normalized(repo.commondir(), resolve),
+        ) else {
+            continue;
+        };
+        if !target.starts_with(&common) {
+            continue;
+        }
+        for (name, directory) in &paths {
+            let Ok(protected) = normalized(&common.join(name), resolve) else {
+                continue;
+            };
+            if target == protected
+                || (*directory && target.starts_with(&protected))
+                || (ancestors && protected.starts_with(&target))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Resolve enforcement paths in every checkout sharing this repository.
+/// Native edits protect files; shell writes also protect their ancestors.
+pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestors: bool) -> bool {
+    let Ok(repo) = git2::Repository::discover(root) else {
+        return false;
+    };
+    let mut roots = Vec::new();
+    if let Some(workdir) = repo.workdir() {
+        roots.push(workdir.to_path_buf());
+    }
+    if let Ok(main) = git2::Repository::open(repo.commondir()) {
+        if let Some(workdir) = main.workdir() {
+            roots.push(workdir.to_path_buf());
+        }
+    }
+    if let Ok(names) = repo.worktrees() {
+        for name in names.iter().flatten().flatten() {
+            if let Ok(tree) = repo.find_worktree(name) {
+                roots.push(tree.path().to_path_buf());
+            }
+        }
+    }
+    // Reuse the action table's repository paths for every checkout; home
+    // paths remain scoped to the caller's home in enforcement_patterns.
+    let patterns: Vec<_> = actions::table()
+        .claude_edit_denies
+        .iter()
+        .filter_map(|rule| {
+            rule.strip_prefix("Edit(/")
+                .and_then(|s| s.strip_suffix(')'))
+        })
+        .map(|relative| {
+            relative
+                .strip_suffix("/**")
+                .map_or((relative, false), |prefix| (prefix, true))
+        })
+        .collect();
+    let mut ancestor_bases = vec![repo.commondir().to_path_buf()];
+    let mut protected = Vec::new();
+    for root in roots {
+        for (relative, directory) in &patterns {
+            protected.push((root.join(relative), *directory));
+            if let Some(base) = Path::new(relative).components().next() {
+                ancestor_bases.push(root.join(base));
+            }
+        }
+    }
+    for (name, directory) in [
+        ("hooks", true),
+        ("refs/remotes", true),
+        ("packed-refs", false),
+        ("config", false),
+    ] {
+        protected.push((repo.commondir().join(name), directory));
+    }
+    for resolve in [false, true] {
+        let Ok(target) = normalized(target, resolve) else {
+            continue;
+        };
+        for (path, directory) in &protected {
+            let Ok(path) = normalized(path, resolve) else {
+                continue;
+            };
+            if target == path
+                || (*directory && target.starts_with(&path))
+                || (ancestors
+                    && path.starts_with(&target)
+                    && ancestor_bases.iter().any(|base| {
+                        normalized(base, resolve).is_ok_and(|base| target.starts_with(base))
+                    }))
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]

@@ -1630,13 +1630,9 @@ fn fresh_scaffolds_install_the_turn_rules_in_the_adapter_and_update_brings_them(
 /// on stdin, the way a harness does, with `exe` standing in for `codeflow`.
 fn run_wired_hook_with(exe: &Path, dir: &Path, command: &str, payload: &str) -> Output {
     use std::io::Write as _;
-    let args: Vec<&str> = command
-        .strip_prefix("codeflow ")
-        .unwrap_or_else(|| panic!("not a codeflow hook: {command}"))
-        .split_whitespace()
-        .collect();
-    let mut child = Command::new(exe)
-        .args(&args)
+    let command = command.replacen("codeflow ", &format!("'{}' ", exe.display()), 1);
+    let mut child = Command::new("sh")
+        .args(["-c", &command])
         .current_dir(dir)
         .env("CODEFLOW_HOME", isolated_home())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -1733,16 +1729,17 @@ fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
             ("claude", &claude, CLAUDE_SOURCES),
             ("codex", &codex, CODEX_SOURCES),
         ] {
-            assert_eq!(
-                wired_hooks(file, "SessionStart"),
-                vec![(Some(sources.to_string()), ADVISORY.to_string())],
-                "{flag} {harness}: SessionStart wiring"
-            );
-            assert_eq!(
-                wired_hooks(file, "UserPromptSubmit"),
-                vec![(None, ADVISORY.to_string())],
-                "{flag} {harness}: UserPromptSubmit wiring"
-            );
+            let session = wired_hooks(file, "SessionStart");
+            assert_eq!(session.len(), 1);
+            assert_eq!(session[0].0.as_deref(), Some(sources));
+            assert!(session[0]
+                .1
+                .starts_with("codeflow hook session-orient --contract 3"));
+            let prompts = wired_hooks(file, "UserPromptSubmit");
+            assert_eq!(prompts.len(), 1);
+            assert!(prompts[0]
+                .1
+                .starts_with("codeflow hook session-orient --contract 3"));
 
             let startup = run_wired_hook(&root, ADVISORY, &start("startup"));
             assert_eq!(startup.status.code(), Some(0));
@@ -1824,6 +1821,7 @@ fn older_binary_stub(dir: &Path) -> PathBuf {
         &source,
         r##"use std::io::Read;
 fn main() {
+    if std::env::args().any(|arg| arg == "--contract") { std::process::exit(2); }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
@@ -1854,13 +1852,13 @@ fn main() {
 }
 
 /// TSK-128 F1: version skew. An updated project on a machine whose
-/// `codeflow` is older must not have its prompts refused. Every advisory
+/// `codeflow` is older must refuse the contract-3 hook. Every advisory
 /// command both hosts wire, run by the older-binary stub with each event,
 /// exits 0 (the old binary prints its digest; the reminder is simply
 /// missing until the machine upgrades). The control shows the stub refuses
 /// an unknown hook name with 2, which is what a new command name would do.
 #[test]
-fn older_binary_never_refuses_a_prompt_through_either_host() {
+fn older_binary_refuses_contract_three_through_either_host() {
     let stubs = tempfile::tempdir().unwrap();
     let old = older_binary_stub(stubs.path());
     let (_tmp, root) = fresh("--standard");
@@ -1891,8 +1889,8 @@ fn older_binary_never_refuses_a_prompt_through_either_host() {
                 let out = run_wired_hook_with(&old, &root, &command, &payload);
                 assert_eq!(
                     out.status.code(),
-                    Some(0),
-                    "{host} {event}: `{command}` would refuse the prompt with an older binary: {}",
+                    Some(2),
+                    "{host} {event}: `{command}` must refuse with an older binary: {}",
                     String::from_utf8_lossy(&out.stderr)
                 );
             }
@@ -1920,10 +1918,12 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
     assert!(managed_block(&agents).is_some(), "no managed block");
     let claude: serde_json::Value =
         serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
-    assert_eq!(
-        wired_hooks(&claude, "SessionStart"),
-        vec![(Some(CLAUDE_SOURCES.to_string()), ADVISORY.to_string())]
-    );
+    let wired = wired_hooks(&claude, "SessionStart");
+    assert_eq!(wired.len(), 1);
+    assert_eq!(wired[0].0.as_deref(), Some(CLAUDE_SOURCES));
+    assert!(wired[0]
+        .1
+        .starts_with("codeflow hook session-orient --contract 3"));
     let startup = run_wired_hook(&root, ADVISORY, &start("startup"));
     assert_eq!(startup.status.code(), Some(0));
     assert!(String::from_utf8(startup.stdout)

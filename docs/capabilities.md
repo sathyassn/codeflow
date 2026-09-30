@@ -140,7 +140,12 @@ pre-push branch naming and protected-branch rules) and the Claude
 the `gh pr merge` and PR-body checks no client hook can see). The session
 checks also refuse parsed wrapped and interpreter action families, covered
 loss of local-only Git work, and enforcement-path edits through native Codex
-and Grok file tools. Commands that cannot be inspected inside opaque child
+and Grok file tools. Agent policy comes from the landed default and target
+refs, taking the stricter levels, with HEAD as the explicit no-remote or
+empty-tracking-namespace fallback. Authority-ref and transport changes are
+operator-owned. Missing or older hook binaries refuse with installation and
+update commands; doctor and orient show the source and local policy drift.
+Commands that cannot be inspected inside opaque child
 programs remain outside this parsing guarantee. Two are the
 authoritative perimeter — CI, which re-runs the same checks through the
 `codeflow ci` binary (the same Rust functions the hooks call, so no inline

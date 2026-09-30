@@ -45,7 +45,28 @@ publication date._
 > 6. A project that adopted the bundled portal follows the ownership table
 >    in `docs/releasing.md` before its next portal update.
 
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **Tracking authority transport checks.** Fetch, pull and remote update reject
+  URL rewrites and configuration overrides; fetch and pull also reject arbitrary
+  tracking-ref destinations. Direct writes to global Git config
+  files are refused while ordinary config reads and user-name updates pass.
+
 ### Added
+
+<!-- codeflow:release-impact major -->
+- **Landed policy authority.** Agent guards read landed policy and protect
+  its remote-tracking authority.
+  Local policy edits cannot relax it. Contract-3 hooks refuse a missing or
+  older binary. Install the new binary before `codeflow update`; configure
+  the remote HEAD with operator `git remote set-head origin --auto` when
+  needed. Doctor and orient report policy sources and local drift.
+
+<!-- codeflow:release-impact minor -->
+- **Fetched work targets.** Work claims discover records on fetched target
+  branches. Work start prefers a fetched origin target when a local branch
+  without an upstream is stale. The automation profile schema also documents its `task` field.
 
 <!-- codeflow:release-impact major -->
 - **Agent sessions refuse instead of prompting (ADR-0075).** The Claude,

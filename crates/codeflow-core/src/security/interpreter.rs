@@ -64,6 +64,18 @@ pub(crate) fn evaluate(
             }
             // Only path-like literals need filesystem metadata. Ordinary code
             // identifiers cannot be enforcement paths.
+            let authority = (word.contains('/') || word.starts_with('.'))
+                && crate::hooks::edit_guard::repository_authority_target(
+                    &cwd.join(&word),
+                    root,
+                    false,
+                );
+            if authority {
+                violations.push(Violation::always_blocking("git.hook_integrity",
+                    format!("interpreter code names policy authority metadata `{word}`"),
+                    "the operator manages remote-tracking authority; use the configured remote's ordinary fetch"));
+                continue;
+            }
             if integrity.is_active() && (word.contains('/') || word.starts_with('.')) {
                 match crate::hooks::edit_guard::enforcement_path(&word, cwd, root, home) {
                     Ok(false) => {}

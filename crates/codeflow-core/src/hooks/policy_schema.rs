@@ -182,8 +182,8 @@ pub const SCHEMA: [KeySpec; 64] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
-        notes: "git-guard only (ADR-0009); suspended only in the \
-                pre-first-commit bootstrap window.",
+        notes: "Agent guards (ADR-0009). Local-edit relief never disables protection \
+                of remote-tracking refs, packed-refs or Git config authority metadata.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {
@@ -417,7 +417,7 @@ pub const SCHEMA: [KeySpec; 64] = [
     KeySpec {
         path: "git.automation_profiles",
         kind: KeyKind::Profiles,
-        valid: "an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}}",
+        valid: "an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}, task: optional task line}",
         purpose: "Trusted bots whose pull requests skip branch naming and the commit message shape rules (SPC-013 R-82).",
         notes: "Applies in `codeflow ci` only when the actor the workflow passes \
                 and the head branch both match, read from the target side of \
@@ -1252,6 +1252,16 @@ fn validate_mapping(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automation_profile_schema_names_the_task_field() {
+        assert!(schema()
+            .iter()
+            .find(|key| key.path == "git.automation_profiles")
+            .unwrap()
+            .valid
+            .contains("task"));
+    }
 
     /// Collect every dotted leaf path in a serialized policy JSON object.
     fn leaf_paths(value: &Value, prefix: &str, out: &mut Vec<String>) {

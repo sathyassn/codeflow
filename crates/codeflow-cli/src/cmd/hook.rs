@@ -25,8 +25,7 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, Args};
 use codeflow_core::hooks::{
-    delegate_turn, edit_guard, exec_guard, git_guard, guidance, orient, policy::Policy,
-    session_summary,
+    delegate_turn, edit_guard, exec_guard, git_guard, guidance, orient, session_summary,
 };
 
 // Large enough for the maximum decoded terminal message even when every byte
@@ -66,6 +65,9 @@ pub enum HookName {
         .multiple(false)
 ))]
 pub struct HookArgs {
+    /// Required installed hook contract. Older binaries reject this flag.
+    #[arg(long)]
+    pub contract: Option<u32>,
     /// Hook to run (reads the Claude Code hook payload from stdin).
     #[arg(value_enum)]
     pub name: HookName,
@@ -83,6 +85,13 @@ pub struct HookArgs {
 /// Run the hook; returns the process exit code.
 #[must_use]
 pub fn run(args: &HookArgs) -> i32 {
+    if args.contract.is_some_and(|version| version != 3) {
+        eprintln!(
+            "codeflow: unsupported hook contract; {}; then codeflow update",
+            codeflow_core::hooks::landed_policy::INSTALL
+        );
+        return 2;
+    }
     let stdin = if matches!(args.name, HookName::DelegateTurn) && args.state_dir.is_some() {
         match read_bounded_utf8(std::io::stdin(), MAX_SCHEMA_HOOK_INPUT_BYTES) {
             Ok(stdin) => stdin,
@@ -230,7 +239,17 @@ fn git_guard(stdin: &str) -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
     let root = super::project_root(&cwd);
-    let (policy, _armed) = Policy::load_effective(&root);
+    let authority = match codeflow_core::hooks::landed_policy::load(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
+                return 0;
+            }
+            eprintln!("codeflow git-guard: {error}");
+            return 2;
+        }
+    };
+    let policy = &authority.policy;
     let branch = codeflow_core::hooks::RepoInfo::discover(&root)
         .map(|i| i.branch)
         .unwrap_or_default();
@@ -265,6 +284,9 @@ fn git_guard(stdin: &str) -> i32 {
         root_checkout: root_checkout.as_ref(),
     };
     let report = git_guard::evaluate_report_at(command, &ctx, &cwd);
+    if !report.violations.is_empty() {
+        eprintln!("policy source: {}", authority.source);
+    }
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
 }
 
@@ -308,10 +330,18 @@ fn exec_guard(stdin: &str) -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
     let root = super::project_root(&cwd);
-    // The `security` section is not touched by bootstrap grace (like
-    // `secret_scan`, a dangerous command is never graced), so a plain load is
-    // enough — no need for `load_effective`.
-    let policy = Policy::load(&root);
+    // Security levels use the same committed authority as the Git guard.
+    let authority = match codeflow_core::hooks::landed_policy::load(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
+                return 0;
+            }
+            eprintln!("codeflow hook: {error}");
+            return 2;
+        }
+    };
+    let policy = &authority.policy;
     let violations = exec_guard::evaluate_at(
         command,
         &policy.security,
@@ -319,6 +349,9 @@ fn exec_guard(stdin: &str) -> i32 {
         &cwd,
         &root,
     );
+    if !violations.is_empty() {
+        eprintln!("policy source: {}", authority.source);
+    }
     super::render_outcome("exec-guard", &root, &violations, &[], 2)
 }
 
@@ -337,7 +370,14 @@ fn edit_guard(stdin: &str) -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
     let root = super::project_root(&cwd);
-    let policy = Policy::load(&root);
+    let authority = match codeflow_core::hooks::landed_policy::load(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow hook: {error}");
+            return 2;
+        }
+    };
+    let policy = &authority.policy;
     let Some(home) = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
@@ -354,7 +394,12 @@ fn edit_guard(stdin: &str) -> i32 {
         level: policy.git.hook_integrity,
     };
     match edit_guard::evaluate(&request, &context) {
-        Ok(findings) => super::render_outcome("edit-guard", &root, &findings, &[], 2),
+        Ok(findings) => {
+            if !findings.is_empty() {
+                eprintln!("policy source: {}", authority.source);
+            }
+            super::render_outcome("edit-guard", &root, &findings, &[], 2)
+        }
         Err(error) => {
             eprintln!("codeflow edit-guard: git.hook_integrity: cannot inspect edit target: {error}; the operator inspects the named path before editing");
             2

@@ -312,6 +312,11 @@ fn ordinary_and_discard_journey(project: &Project) {
             .unwrap(),
     );
     project.git(&["push", "origin", "task/x"]);
+    project.git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/task/x",
+    ]);
     std::fs::write(project.root.join("README.md"), "local work\n").unwrap();
     for harness in ["claude", "codex", "grok"] {
         for command in [
@@ -781,3 +786,7 @@ fn r5_n2_root_dot_patterns_match_protected_names_only() {
         project.check_shell(&project.root, command, false);
     }
 }
+
+#[cfg(unix)]
+#[path = "refusal_journey/landed.rs"]
+mod landed;
