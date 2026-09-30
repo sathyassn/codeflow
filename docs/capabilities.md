@@ -451,10 +451,11 @@ drive such a change, and plan, design, security or irreversible work. It
 selects the smallest complete outcome mode, so research or planning work
 stops before implementation. Planning, review and batch landing follow
 [how work moves to main](delivery.md) (ADR-0076).
-Both seats discover independently from one immutable brief. Claude drafts
-the one plan, Codex challenges it, and both approve one version before
-implementation; material product or visual work also records a
-`DESIGN_INTENT` in that plan (ADR-0043, ADR-0051).
+Both seats independently discover from the same immutable brief before
+either sees the other's findings. Claude then drafts the one plan, Codex
+challenges it, and both approve one version before implementation; material
+product or visual work also records a `DESIGN_INTENT` in that plan
+(ADR-0043, ADR-0051).
 
 The work records a plan produces are judged by one core (SPC-013):
 
