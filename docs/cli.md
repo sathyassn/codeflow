@@ -136,7 +136,8 @@ behave.
 | Command | Argument or flag | What it does |
 |---|---|---|
 | `codeflow hook <NAME>` | | Claude-layer hooks, wired by the settings presets (charter §3.3) |
-| | `<NAME>` | Hook to run (reads the Claude Code hook payload from stdin). One of `git-guard`, `exec-guard`, `session-orient`, `prompt-reminder`, `session-summary`, `delegate-turn`. |
+| | `--contract <CONTRACT>` | Required installed hook contract. Older binaries reject this flag. |
+| | `<NAME>` | Hook to run (reads the Claude Code hook payload from stdin). One of `git-guard`, `exec-guard`, `edit-guard`, `session-orient`, `prompt-reminder`, `session-summary`, `delegate-turn`. |
 | | `--run-id <ID>` | Unique task id for `delegate-turn` (1-64 safe ASCII characters). |
 | | `--result <FILE>` | Absolute owner-only result path for legacy one-shot `delegate-turn`. |
 | | `--state-dir <DIR>` | Absolute owner-only lifecycle directory for schema-v2 `delegate-turn`. |
@@ -179,7 +180,7 @@ behave.
 | `codeflow integrate <BRANCH>` | | Land a branch into a target: flock(rebase to test to ff-merge) |
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
-| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, config, permissions, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
+| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
@@ -254,6 +255,14 @@ behave.
 | | `--confirm` | Confirm responsibility for future runtime reconciliation. Required. |
 | `codeflow present open <DOCUMENT>` | | Open a validated presentation document in an isolated browser profile |
 | | `--no-launch` | Start the service but do not launch a browser window. |
+| `codeflow present reply <SESSION_ID> <EVENT_ID> <TEXT>` | | Reply to a review, note or answer in the thread rail |
+| | `--note <NOTE>` |  |
+| `codeflow present diff <SESSION_ID>` | | Compare blocks and carried feedback between revisions |
+| | `--from <FROM>` | Required. |
+| | `--to <TO>` | Required. |
+| `codeflow present check [SESSION_ID]` | | Check framing, anchors and forms without a browser |
+| | `--file <FILE>` |  |
+| | `--revision <REVISION>` |  |
 | `codeflow present list` | | List presentation sessions for this project |
 | `codeflow present show <SESSION_ID>` | | Reopen an active presentation session |
 | | `--no-launch` | Print the session endpoint and profile without launching. |
@@ -269,7 +278,7 @@ behave.
 | | `--revision <N>` |  |
 | | `--form <BLOCK_ID>` | A form or v2 decision block id. |
 | | `--status <STATUS>` | One of `pending`, `delivered`, `acknowledged`. |
-| | `--kind <KIND>` | One of `review`, `answer`, `amendment`. |
+| | `--kind <KIND>` | One of `review`, `answer`, `amendment`, `reopen`, `tombstone`. |
 | `codeflow present ack <SESSION_ID> <EVENT_ID>` | | Acknowledge a delivered event; acknowledging again changes nothing |
 | `codeflow present resolve <SESSION_ID> <EVENT_ID>` | | Mark one delivered feedback event addressed or dismissed |
 | | `--event-version <EVENT_VERSION>` | Current event version printed by the review surface/history. Required. |
@@ -279,6 +288,7 @@ behave.
 | | `--out <FILE>` | Required. |
 | | `--theme <THEME>` | One of `graphite`, `slate`, `sage`, `editorial`, `instrument`, `technical`, `ink`. Default `editorial`. |
 | | `--mode <MODE>` | One of `system`, `light`, `dark`. Default `system`. |
+| | `--with-notes` | Include the private conversation as a read-only appendix. |
 | `codeflow present clear [SESSION_ID]` | | Remove eligible closed session state |
 | | `--older-than <OLDER_THAN>` | Default `30d`. |
 | | `--dry-run` |  |
