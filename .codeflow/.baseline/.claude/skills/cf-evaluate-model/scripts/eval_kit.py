@@ -2007,6 +2007,9 @@ def configure_closeout_inventory(root: Path, codeflow: Path) -> None:
     write_fixture_file(dirty, "untracked.txt", "active worker-b work\n")
     stale = worktrees / "stale"
     run_command(["git", "worktree", "add", "-b", "test/stale", str(stale), base], root)
+    write_fixture_file(stale, "stale-work.txt", "unfinished stale worktree change\n")
+    run_command(["git", "add", "stale-work.txt"], stale)
+    run_command(["git", "commit", "-m", "test: retain unmerged stale work"], stale)
     shutil.rmtree(stale)
     a, b, c = entries
     inventory = (
@@ -2017,7 +2020,8 @@ def configure_closeout_inventory(root: Path, codeflow: Path) -> None:
         f"C: {c[0]} at `{c[1]}`; clean; synthetic PR 39 CLOSED without merge; "
         "no patch-identity proof; owner unavailable; recheck on owner disposition "
         "or superseding tracked task.\n\n"
-        f"D: stale administrative record at `{stale}`; its directory is missing. "
+        f"D: stale administrative record at `{stale}`; its directory is missing, "
+        "and branch test/stale has an unmerged commit. "
         "Pruning would not establish merge proof.\n"
     )
     write_fixture_file(root, "WORKTREE_INVENTORY.md", inventory)

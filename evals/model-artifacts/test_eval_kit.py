@@ -3609,18 +3609,66 @@ class ProcessRepairTests(unittest.TestCase):
             (root / "planted").write_text("control")
             self.assertIn(str(root / "planted"), runner.compare(before, runner.snapshot([temp], shallow=[temp]))["added"])
 
-    def test_snapshot_excludes_only_declared_scratch(self):
+    def test_top_level_directory_mtime_is_not_observed(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "runtime"; path.mkdir()
+            before = runner.snapshot([temp], shallow=[temp])
+            info = path.stat()
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 10_000_000))
+            after = runner.snapshot([temp], shallow=[temp])
+            self.assertEqual([], runner.compare(before, after)["validity_flags"])
+            (path / "startup.sock").write_text("runtime churn")
+            self.assertEqual([], runner.compare(before, runner.snapshot([temp], shallow=[temp]))["validity_flags"])
+            self.assertIn("pre-existing top-level directories", runner.compare(before, after)["limitation"])
+
+    def test_top_level_entry_changes_still_invalidate(self):
+        runner = self.runner()
+        for change in ["new-file", "new-directory", "file-mtime", "type", "symlink-swap", "removed"]:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); path = root / "entry"
+                if change == "symlink-swap":
+                    path.symlink_to("first-target")
+                elif change not in {"new-file", "new-directory"}:
+                    path.write_text("original")
+                before = runner.snapshot([temp], shallow=[temp])
+                if change == "new-file":
+                    path.write_text("new")
+                elif change == "new-directory":
+                    path.mkdir()
+                elif change == "file-mtime":
+                    info = path.stat()
+                    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 10_000_000))
+                elif change == "type":
+                    path.unlink(); path.mkdir()
+                elif change == "symlink-swap":
+                    replacement = root / "replacement"
+                    replacement.symlink_to("second-target")
+                    replacement.replace(path)
+                else:
+                    path.unlink()
+                result = runner.compare(before, runner.snapshot([temp], shallow=[temp]))
+                self.assertIn("declared_directory_changed", result["validity_flags"])
+                field = "added" if change.startswith("new-") else "removed" if change == "removed" else "changed"
+                self.assertIn(str(path), result[field])
+
+    def test_finish_without_ready_baseline_records_invalid_observation(self):
+        import argparse
         runner = self.runner()
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            own = root / "own"; own.mkdir()
-            other = root / "other"; other.mkdir()
-            before = runner.snapshot([temp], exclusions=[str(own)])
-            (own / "ignored").write_text("evaluator")
-            self.assertEqual([], runner.compare(before, runner.snapshot([temp], exclusions=[str(own)]))["validity_flags"])
-            (other / "observed").write_text("subject")
-            self.assertIn("declared_directory_changed",
-                          runner.compare(before, runner.snapshot([temp], exclusions=[str(own)]))["validity_flags"])
+            runner.write(root / "launch.json", {"declared_directories": [],
+                         "observation": {}, "status": "refused"})
+            with patch("builtins.print"):
+                runner.finish(argparse.Namespace(output=root))
+            result = json.loads((root / "observation.json").read_text())
+            self.assertIn("directory_observation_incomplete", result["validity_flags"])
+            self.assertIn("native_launch_not_confirmed", result["validity_flags"])
+            with patch.object(runner, "snapshot", return_value={
+                    "validity_flags": ["directory_observation_entry_cap"]}), patch("builtins.print"):
+                runner.finish(argparse.Namespace(output=root))
+            result = json.loads((root / "observation.json").read_text())
+            self.assertIn("directory_observation_entry_cap", result["validity_flags"])
 
     def test_stable_unreadable_is_limitation_but_changed_or_new_is_invalid(self):
         runner = self.runner()
@@ -3664,17 +3712,6 @@ class ProcessRepairTests(unittest.TestCase):
             snap = runner.snapshot([temp], max_seconds=10)
             self.assertIn("directory_observation_time_cap", runner.compare(snap, snap)["validity_flags"])
 
-    def test_scratch_exclusion_rejects_shared_parent_and_subject(self):
-        runner = self.runner()
-        with tempfile.TemporaryDirectory(prefix="claude-", dir="/private/tmp") as temp:
-            project = Path(temp) / "project"; project.mkdir()
-            own = project / "session"; own.mkdir()
-            subject = own / "subject"; subject.mkdir()
-            self.assertEqual([str(own)], runner.scratch_exclusions([str(own)], ["/elsewhere/subject"]))
-            for bad, watched in [(temp, []), (str(project), []), (str(own), [str(subject)]), ("/private/tmp", [])]:
-                with self.assertRaises(runner.Refused):
-                    runner.scratch_exclusions([bad], watched)
-
     def test_permission_flags_are_explicit_and_headless_is_refused(self):
         runner = self.runner()
         for harness, native, expected in [
@@ -3693,10 +3730,7 @@ class ProcessRepairTests(unittest.TestCase):
         import argparse
         runner = self.runner()
         (ROOT / "target").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=ROOT / "target") as temp, \
-             tempfile.TemporaryDirectory(prefix="claude-", dir="/private/tmp") as scratch:
-            own = Path(scratch) / "project/session"
-            own.mkdir(parents=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "target") as temp:
             root = Path(temp)
             repository = root / "subjects/trial/repository"
             repository.mkdir(parents=True)
@@ -3715,37 +3749,58 @@ class ProcessRepairTests(unittest.TestCase):
             })
             record_path = root / "fixture.json"
             runner.write(record_path, record)
-            calls = []
+            calls, order = [], []
 
             def herdr(*argv, **_kwargs):
                 calls.append(argv)
+                if argv[:2] == ("agent", "start"):
+                    order.append("start")
                 if argv[:2] == ("tab", "create"):
                     return {"result": {"tab": {"tab_id": "owned-tab"}, "root_pane": {"pane_id": "owned-pane"}}}
                 if argv[:2] == ("pane", "process-info"):
                     return {"result": {"process_info": {"foreground_processes": [{"name": "zsh"}]}}}
                 return {"result": {"agent": {"agent_status": "idle", "state_change_seq": 0}}}
 
+            def ready(*_args):
+                order.append("ready")
+                return {"agent_status": "idle"}
+
+            def snapshot(*_args, **_kwargs):
+                order.append("snapshot")
+                return {"entries": {}, "errors": {}}
+
+            def deliver(*_args):
+                order.append("delivery")
+                return 1
+
             native = ["--model", "chosen-selector", "--permission-mode", "auto"]
             args = argparse.Namespace(record=record_path, output=root / "evidence", harness="claude",
-                                      native=["--", *native], workspace="owned-workspace", watch_dir=[], start_timeout=1, evaluator_scratch_root=[str(own)], max_entries=100_000, snapshot_seconds=10)
+                                      native=["--", *native], workspace="owned-workspace", watch_dir=[], start_timeout=1, max_entries=100_000, snapshot_seconds=10)
             with patch.object(runner, "herdr", side_effect=herdr), \
-                 patch.object(runner, "snapshot", return_value={"entries": {}, "errors": []}), \
-                 patch.object(runner, "deliver_claude", return_value=1), patch.object(runner.time, "sleep"):
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_claude", side_effect=deliver), patch.object(runner.time, "sleep"):
                 runner.launch(args)
+            self.assertEqual(["start", "ready", "snapshot", "delivery"], order)
             saved = json.loads((args.output / "launch.json").read_text())
             self.assertEqual("started", saved["status"])
             self.assertEqual(native, saved["native_args"])
             self.assertEqual(["/private/tmp"], saved["observation"]["shallow"])
             self.assertEqual(100_000, saved["observation"]["max_entries"])
             self.assertEqual(10, saved["observation"]["max_seconds"])
-            self.assertEqual([str(own)], saved["observation"]["exclusions"])
-            self.assertEqual(str(own), saved["recorded_exclusions"][0]["path"])
-            self.assertIn("evaluator primary", saved["recorded_exclusions"][0]["reason"])
             self.assertEqual({"--permission-mode": "auto"}, saved["permission_flags"])
             create = next(c for c in calls if c[:2] == ("tab", "create"))
             for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]:
                 self.assertIn(f"{key}={environment[key]}", create)
             self.assertEqual(native, list(next(c for c in calls if c[:2] == ("agent", "start"))[-len(native):]))
+            args.output = root / "failed-readiness"
+            with patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=runner.Refused("not ready")), \
+                 patch.object(runner, "snapshot") as capture, \
+                 patch.object(runner.time, "sleep"), self.assertRaisesRegex(runner.Refused, "not ready"):
+                runner.launch(args)
+            capture.assert_not_called()
+            self.assertFalse((args.output / "before.json").exists())
             record["path"] = "/another/repository"
             runner.write(record_path, record)
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "signature"):
@@ -3766,6 +3821,8 @@ class ProcessRepairTests(unittest.TestCase):
             status = subprocess.check_output([str(ROOT / "target/release/codeflow"), "status"], cwd=root, text=True)
             self.assertEqual(status, (root / "CODEFLOW_STATUS.txt").read_text())
             self.assertNotIn("removable branch main", status)
+            self.assertNotIn("removable branch test/stale", status)
+            self.assertIn("+", eval_kit.git_output(["cherry", "origin/main", "test/stale"], root))
             stale = root / ".worktrees/stale"
             self.assertFalse(stale.exists())
             self.assertIn(str(stale), records)

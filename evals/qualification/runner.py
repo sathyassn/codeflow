@@ -40,7 +40,7 @@ def write(path: Path, value: dict) -> None:
 
 
 def snapshot(directories: list[str], *, shallow: list[str] | None = None,
-             exclusions: list[str] | None = None, max_entries: int = 100_000,
+             max_entries: int = 100_000,
              max_seconds: float = 10) -> dict:
     """Metadata only, with a streaming walk and cooperative time/entry caps.
 
@@ -50,7 +50,6 @@ def snapshot(directories: list[str], *, shallow: list[str] | None = None,
     """
     started_at = time.monotonic()
     shallow_roots = {"/private/tmp", *(shallow or [])}
-    excluded = [Path(p) for p in exclusions or []]
     entries, errors, flags = {}, {}, []
     roots = set(directories)
 
@@ -64,18 +63,21 @@ def snapshot(directories: list[str], *, shallow: list[str] | None = None,
         return True
 
     def visit(path: Path, depth: int | None, top_level: bool) -> bool:
-        if any(path == skip or path.is_relative_to(skip) for skip in excluded):
-            return True
         if not budget():
             return False
         key = str(path)
         try:
             info = path.lstat()
-            # Root mtimes duplicate direct-entry names and would make a
-            # recorded exclusion's creation/removal invalidate the trial.
-            entries[key] = ([stat.S_IFMT(info.st_mode)] if key in roots else
-                            [stat.S_IFMT(info.st_mode), info.st_mtime_ns] if top_level else
-                            [info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns])
+            kind = stat.S_IFMT(info.st_mode)
+            if key in roots:
+                # Root metadata is a presence/type marker; entries are observed below.
+                entries[key] = [kind]
+            elif top_level:
+                entries[key] = [kind]
+                if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    entries[key].append(info.st_mtime_ns)
+            else:
+                entries[key] = [info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
         except OSError as exc:
             entries[key] = None
             errors[key] = str(exc)
@@ -98,8 +100,7 @@ def snapshot(directories: list[str], *, shallow: list[str] | None = None,
         flags.append("directory_observation_time_cap")
     return {"entries": entries, "errors": errors, "roots": sorted(roots),
             "validity_flags": sorted(set(flags)), "entry_count": len(entries),
-            "elapsed_seconds": elapsed,
-            "exclusions": [str(p) for p in excluded]}
+            "elapsed_seconds": elapsed}
 
 
 def compare(before: dict, after: dict) -> dict:
@@ -122,24 +123,10 @@ def compare(before: dict, after: dict) -> dict:
             "removed": removed, "errors": {"before": old_errors, "after": new_errors},
             "limitations": [{"path": p, "reason": "unreadable in both snapshots with unchanged metadata"}
                             for p in sorted(stable)],
-            "limitation": "Writes outside declared directories, below /private/tmp direct entries "
-                          "(except separately watched roots), in recorded exclusions, and transient entries "
-                          "gone before the final snapshot are not observed. Changes are not attributed to the subject."}
-
-
-def scratch_exclusions(values: list[str], watched: list[str]) -> list[str]:
-    """Accept only specifically declared Claude session scratch roots, not their shared parent."""
-    result = []
-    for value in values:
-        path = Path(value).resolve()
-        parts = path.parts
-        if (not path.is_dir() or len(parts) < 6 or parts[:3] != ("/", "private", "tmp")
-                or not parts[3].startswith("claude-")):
-            raise Refused("evaluator scratch exclusion must be an existing session root below /private/tmp/claude-*/<project>")
-        if any(Path(p).resolve().is_relative_to(path) for p in watched if p != "/private/tmp"):
-            raise Refused("an exclusion must not contain a subject or additional watched root")
-        result.append(str(path))
-    return sorted(set(result))
+            "limitation": "Writes inside pre-existing top-level directories of /private/tmp are unobserved "
+                          "(except separately watched roots). Writes outside declared directories, startup writes "
+                          "before seat readiness, and transient entries gone before the final snapshot are not "
+                          "observed. Changes are not attributed to the subject."}
 
 
 # The same whole-frame grammar as release-qualification/lib.sh at 97f714b61.
@@ -294,8 +281,7 @@ def launch(args) -> None:
     permissions = permission_flags(args.harness, native)
     watched = sorted({str(Path(p).resolve()) for p in
                       [environment["TMPDIR"], "/private/tmp", *args.watch_dir]})
-    exclusions = scratch_exclusions(args.evaluator_scratch_root, watched)
-    observation = {"shallow": ["/private/tmp"], "exclusions": exclusions,
+    observation = {"shallow": ["/private/tmp"],
                    "max_entries": args.max_entries, "max_seconds": args.snapshot_seconds}
     for directory in watched:
         if not Path(directory).is_dir():
@@ -310,11 +296,8 @@ def launch(args) -> None:
            "native_args": native, "permission_flags": permissions,
            "environment": environment, "declared_directories": watched,
            "observation": observation,
-           "recorded_exclusions": [{"path": p, "reason": "evaluator primary Claude Code session scratch root as launched"}
-                                   for p in exclusions],
            "status": "prepared", "started_at": time.time()}
     write(args.output / "launch.json", run)
-    write(args.output / "before.json", snapshot(watched, **observation))
     try:
         argv = ["tab", "create", "--workspace", args.workspace, "--label",
                 f"eval-{record['case_id'][:30]}", "--cwd", str(repository), "--no-focus"]
@@ -335,6 +318,7 @@ def launch(args) -> None:
                                       args.harness, "--pane", run["pane"], "--", *native)
         initial = wait_ready(run["pane"], args.start_timeout)
         run["initial_agent"] = initial
+        write(args.output / "before.json", snapshot(watched, **observation))
         prompt = (repository / "TASK.md").read_text(encoding="utf-8")
         if args.harness == "claude":
             run["enters"] = deliver_claude(run["pane"], prompt, initial, args.start_timeout)
@@ -357,7 +341,12 @@ def launch(args) -> None:
 def finish(args) -> None:
     run = kit.load_json(args.output / "launch.json")
     after = snapshot(run["declared_directories"], **run["observation"])
-    result = compare(kit.load_json(args.output / "before.json"), after)
+    before_path = args.output / "before.json"
+    if before_path.is_file():
+        result = compare(kit.load_json(before_path), after)
+    else:
+        result = {"validity_flags": ["directory_observation_incomplete", *after["validity_flags"]],
+                  "error": "no pre-trial snapshot recorded after seat readiness"}
     if run["status"] != "started":
         result["validity_flags"].append("native_launch_not_confirmed")
     write(args.output / "after.json", after)
@@ -381,7 +370,6 @@ def main() -> int:
     start.add_argument("--workspace", required=True)
     start.add_argument("--harness", choices=["claude", "codex", "grok"], required=True)
     start.add_argument("--watch-dir", action="append", default=[])
-    start.add_argument("--evaluator-scratch-root", action="append", default=[])
     start.add_argument("--max-entries", type=int, default=100_000)
     start.add_argument("--snapshot-seconds", type=float, default=10)
     start.add_argument("--start-timeout", type=float, default=30)

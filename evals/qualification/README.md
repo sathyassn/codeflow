@@ -8,11 +8,6 @@ or treat a terminal status as proof that the model completed the task.
 Materialize with the current binary and kit first. Keep fixture roots and
 runner evidence outside `/private/tmp` when possible. Put runner evidence
 outside every watched directory; overlapping evidence directories are refused.
-If the evaluator primary runs in Claude Code, pass its exact session scratch
-root as launched with `--evaluator-scratch-root <path>`, for example the
-session directory beneath `/private/tmp/claude-501/<project>`. Never exclude
-all of `/private/tmp/claude-501` or the shared project directory. Each explicit exclusion and its reason are
-recorded in `launch.json`; the runner never guesses a session's scratch root.
 
 ```sh
 python3 assets/base/agents/skills/cf-evaluate-model/scripts/eval_kit.py materialize \
@@ -41,7 +36,10 @@ supported mechanism in the isolated home. A login failure stops the trial;
 never replace HOME with the real home or copy credentials to make it pass.
 A new tab has its own cwd and environment; no existing pane is reused. The
 runner waits for shell readiness before starting a seat, then for seat readiness
-before delivery. Claude delivery recognizes only the complete editor frame
+before taking the `before.json` baseline, then delivering the prompt.
+Startup writes before readiness are not counted. If startup refuses before
+readiness, no baseline exists and `finish` flags incomplete observation.
+Claude delivery recognizes only the complete editor frame
 proven by the release harness. It sends at most two Enters, the second only
 when that frame still holds this trial's unsent prompt. An empty editor is
 never evidence of pending input. Unknown frames, dialogs and unreadable panes
@@ -57,16 +55,19 @@ fixture state, and requested versus observed model and settings evidence.
 Then close the recorded tab with `herdr tab close <tab-id>` and verify it
 closed. A `started` launch record is not a completed or graded trial.
 
-The subject's TMPDIR is observed recursively in full. `/private/tmp` is
-observed only at the top level: direct-entry names, types and modification
-times. `--watch-dir` adds recursively observed directories. Other metadata
-snapshots retain mode, size, modification and change times. No file contents
-are read and symlinks are never followed. Recorded evaluator scratch roots
-are excluded; they cannot contain the subject's TMPDIR or another watched root.
-A new, changed or removed observed entry invalidates the trial. An entry
-unreadable in both snapshots with unchanged readable metadata is recorded in
-`limitations`, without invalidating the trial. New or changed unreadability,
-missing roots and entries without metadata invalidate observation.
+The subject's TMPDIR is observed recursively in full. At the `/private/tmp`
+top level, every direct entry is observed by name and type. Regular files
+and symlinks also retain their modification times; directory mtimes are
+ignored. A new or removed top-level entry, a type change, or a changed file
+or symlink mtime invalidates the trial. Symlinks are never followed.
+
+`--watch-dir` adds recursively observed directories. Recursive snapshots
+retain mode, size, modification and change times without reading file
+contents. New, changed or removed observed entries invalidate the trial.
+An entry unreadable in both snapshots with unchanged readable metadata is
+recorded in `limitations`, without invalidating the trial. New or changed
+unreadability, missing roots and entries without metadata invalidate
+observation.
 
 Each snapshot defaults to 100,000 entries and ten seconds, configurable via
 `--max-entries` and `--snapshot-seconds` (at most 60 seconds).
@@ -75,11 +76,11 @@ Reaching a cap raises `directory_observation_entry_cap` or
 The time cap is cooperative between metadata calls; a blocking OS call may
 overrun it. Entry count and elapsed time are retained with each snapshot.
 
-Writes outside declared directories, beneath the direct entries of
-`/private/tmp` except separately watched roots, inside recorded exclusions,
-and transient entries gone before the final snapshot are not observed.
-Top-level directory mtimes can signal some descendant activity but do not
-prove full descendant coverage. Changes are not attributed to the subject.
+Writes inside pre-existing top-level directories of `/private/tmp` are
+unobserved, except within separately watched roots such as the subject's
+TMPDIR. Writes outside declared directories, startup writes before readiness,
+and transient entries gone before the final snapshot are also unobserved.
+The comparison records these limits. Changes are not attributed to the subject.
 This is a bounded diagnostic, not host confinement or a tamper-resistant
 audit. Run trials sequentially when attribution would otherwise be ambiguous.
 
