@@ -39,7 +39,7 @@ const CODEX_PROMPT_BLOCK: &str = r#",
         ]
       }
     ]"#;
-const GROK_GUARDS_END: &str = r#"          { "type": "command", "command": "codeflow hook exec-guard", "timeout": 10 }
+const GROK_GUARDS_END: &str = r#"          { "type": "command", "command": "codeflow hook edit-guard", "timeout": 10 }
         ]
       }
     ]"#;
@@ -110,12 +110,31 @@ impl AssetSource for Overlay {
 }
 
 fn text(source: &DirSource, path: &str) -> String {
-    String::from_utf8(
+    let text = String::from_utf8(
         source
             .read(path)
             .unwrap_or_else(|| panic!("{path} missing")),
     )
-    .unwrap()
+    .unwrap();
+    // Build a pre-contract-3 fixture while preserving its original JSON layout.
+    regex::Regex::new(r#""(?:[^"\\]|\\.)*""#)
+        .unwrap()
+        .replace_all(&text, |capture: &regex::Captures<'_>| {
+            let value: String = serde_json::from_str(&capture[0]).unwrap();
+            if value.starts_with("codeflow hook ") {
+                serde_json::to_string(
+                    &value
+                        .split_whitespace()
+                        .take(3)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+                .unwrap()
+            } else {
+                capture[0].to_string()
+            }
+        })
+        .into_owned()
 }
 
 /// Which older scaffold an overlay serves.
@@ -226,7 +245,12 @@ fn wired(file: &Value, event: &str) -> Vec<(Option<String>, String)> {
                 .into_iter()
                 .flatten()
                 .filter_map(|hook| hook["command"].as_str())
-                .map(move |command| (matcher.clone(), command.to_string()))
+                .map(move |command| {
+                    (
+                        matcher.clone(),
+                        command.split(" --contract 3").next().unwrap().to_string(),
+                    )
+                })
         })
         .collect()
 }
@@ -284,6 +308,25 @@ fn add_adopter_hooks(root: &Path) {
 
 fn assert_current_wiring(root: &Path, label: &str) {
     let settings = json(&root.join(".claude/settings.json"));
+    for path in [
+        ".claude/settings.json",
+        ".codex/hooks.json",
+        ".grok/hooks/codeflow.json",
+    ] {
+        let file = json(&root.join(path));
+        for entries in file["hooks"].as_object().unwrap().values() {
+            for entry in entries.as_array().unwrap() {
+                for hook in entry["hooks"].as_array().unwrap() {
+                    if let Some(command) = hook["command"]
+                        .as_str()
+                        .filter(|c| c.starts_with("codeflow hook "))
+                    {
+                        assert!(command.contains("--contract 3"), "{label}: {command}");
+                    }
+                }
+            }
+        }
+    }
     let start = wired(&settings, "SessionStart");
     assert_eq!(count(&start, ADVISORY), 1, "{label}: {start:?}");
     assert!(

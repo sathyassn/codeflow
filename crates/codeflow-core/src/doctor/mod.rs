@@ -248,6 +248,7 @@ const CHECK_NAMES: &[&str] = &[
     "grok",
     "config",
     "permissions",
+    "policy-source",
     "network",
     "delegates",
     "model-bindings",
@@ -276,6 +277,7 @@ type CheckFn = fn(&Options) -> CheckResult;
 fn check_registry() -> HashMap<&'static str, CheckFn> {
     let mut m: HashMap<&'static str, CheckFn> = HashMap::new();
     m.insert("hooks", check_hooks);
+    m.insert("policy-source", check_policy_source);
     m.insert("claude", check_claude);
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
@@ -350,11 +352,28 @@ fn check_hooks(opts: &Options) -> CheckResult {
         return CheckResult {
             name: "hooks".into(),
             status: Status::Fail,
-            message: "codeflow binary not found in PATH".into(),
+            message: format!(
+                "codeflow binary not found in PATH; {}; then codeflow update",
+                crate::hooks::landed_policy::INSTALL
+            ),
             duration: start.elapsed(),
         };
     };
 
+    if opts
+        .do_exec(&codeflow_bin, &["git-hook", "capabilities"])
+        .map_or(true, |s| s.trim() != "hooks 3")
+    {
+        return CheckResult {
+            name: "hooks".into(),
+            status: Status::Fail,
+            message: format!(
+                "codeflow binary is older than hook contract 3; {}; then codeflow update",
+                crate::hooks::landed_policy::INSTALL
+            ),
+            duration: start.elapsed(),
+        };
+    }
     let mut failing = Vec::new();
     for &(group, subcommand) in HOOK_SUBCOMMANDS {
         if opts
@@ -2840,6 +2859,21 @@ fn check_test_config(opts: &Options) -> CheckResult {
     }
 }
 
+fn check_policy_source(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let (status, message) =
+        match crate::hooks::landed_policy::diagnostic(Path::new(&opts.project_dir)) {
+            Ok(message) => (Status::Pass, message),
+            Err(message) => (Status::Fail, message),
+        };
+    CheckResult {
+        name: "policy-source".into(),
+        status,
+        message,
+        duration: start.elapsed(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The step a warning names, or "" for any other status.
@@ -2896,7 +2930,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 19);
+        assert_eq!(check_names().len(), 20);
     }
 
     #[test]
@@ -4202,7 +4236,14 @@ mod tests {
                 Err("not found".into())
             }
         });
-        opts.exec_command = Some(|_cmd, _args| Ok("help output".to_string()));
+        opts.exec_command = Some(|_cmd, args| {
+            Ok(if args == ["git-hook", "capabilities"] {
+                "hooks 3"
+            } else {
+                "help output"
+            }
+            .to_string())
+        });
         opts
     }
 
@@ -4450,7 +4491,10 @@ mod tests {
             }
         });
         opts.exec_command = Some(|_cmd, args| {
-            // Fail for git-guard, pass for others.
+            // The contract is current; fail just the git-guard handler.
+            if args == ["git-hook", "capabilities"] {
+                return Ok("hooks 3".into());
+            }
             if args.len() >= 2 && args[1] == "git-guard" {
                 Err("unknown subcommand".into())
             } else {

@@ -71,7 +71,11 @@ fn every_hook_command_is_a_known_codeflow_hook() {
             command.starts_with("codeflow hook "),
             "hook command {command:?} must start with \"codeflow hook \""
         );
-        let sub = command.trim_start_matches("codeflow hook ").trim();
+        let sub = command
+            .trim_start_matches("codeflow hook ")
+            .split_whitespace()
+            .next()
+            .unwrap();
         assert!(
             KNOWN_HOOKS.contains(&sub),
             "hook command {command:?} names unknown subcommand {sub:?}"
@@ -89,7 +93,7 @@ fn pretooluse_binds_git_and_exec_guard_on_supported_shells() {
         assert!(
             commands
                 .iter()
-                .any(|c| c == &format!("codeflow hook {hook}")),
+                .any(|c| c.starts_with(&format!("codeflow hook {hook} --contract 3"))),
             "PreToolUse: {hook} not wired"
         );
     }
@@ -117,7 +121,9 @@ fn sessionstart_wires_orient_across_all_sources() {
     let mut commands = Vec::new();
     collect_hook_commands(&start, &mut commands);
     assert!(
-        commands.iter().any(|c| c == "codeflow hook session-orient"),
+        commands
+            .iter()
+            .any(|c| c.starts_with("codeflow hook session-orient --contract 3")),
         "SessionStart: session-orient not wired"
     );
     let matcher = start[0]["matcher"].as_str().unwrap_or_default();
@@ -214,7 +220,8 @@ fn user_prompt_submit_wires_the_stable_advisory_entry() {
     let prompt = v["hooks"]["UserPromptSubmit"].clone();
     let mut commands = Vec::new();
     collect_hook_commands(&prompt, &mut commands);
-    assert_eq!(commands, vec!["codeflow hook session-orient".to_string()]);
+    assert_eq!(commands.len(), 1);
+    assert!(commands[0].starts_with("codeflow hook session-orient --contract 3"));
     assert!(prompt[0].get("matcher").is_none());
     let mut all = Vec::new();
     collect_hook_commands(&v["hooks"], &mut all);
@@ -234,7 +241,7 @@ fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::
     collect_hook_commands(&hooks_json()["hooks"]["PreToolUse"], &mut commands);
     let hook = commands
         .into_iter()
-        .find(|c| c.ends_with("exec-guard"))
+        .find(|c| c.starts_with("codeflow hook exec-guard --contract 3"))
         .expect("exec-guard wired");
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
     let path = std::env::join_paths(
@@ -343,6 +350,9 @@ fn native_edit_tools_are_wired_to_the_edit_guard() {
             assert!(matcher.is_match(tool), "{harness}: {tool}");
         }
         assert!(!matcher.is_match("Bash"));
-        assert_eq!(entry["hooks"][0]["command"], "codeflow hook edit-guard");
+        assert!(entry["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("codeflow hook edit-guard --contract 3"));
     }
 }

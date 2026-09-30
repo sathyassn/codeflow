@@ -48,6 +48,19 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact major -->
+- **Landed policy authority.** Agent guards read landed policy and protect
+  its remote-tracking authority.
+  Local policy edits cannot relax it. Contract-3 hooks refuse a missing or
+  older binary. Install the new binary before `codeflow update`; configure
+  the remote HEAD with operator `git remote set-head origin --auto` when
+  needed. Doctor and orient report policy sources and local drift.
+
+<!-- codeflow:release-impact minor -->
+- **Fetched work targets.** Work claims discover records on fetched target
+  branches. Work start prefers a fetched origin target when a local branch
+  without an upstream is stale. The automation profile schema also documents its `task` field.
+
+<!-- codeflow:release-impact major -->
 - **Agent sessions refuse instead of prompting (ADR-0075).** The Claude,
   Codex and Grok presets are generated from one action table and carry no
   ask rules, so delegated and primary sessions no longer stop on prompts.

@@ -34,12 +34,22 @@ pub(crate) fn evaluate_at(
     families.extend(embedded.families);
     families.sort_unstable();
     families.dedup();
-    if families.contains(&"release") {
-        families.retain(|id| *id != "configured_tag_push");
-    }
+    let release_roots: Vec<_> = families
+        .iter()
+        .filter(|(id, _)| *id == "release")
+        .map(|(_, root)| root.clone())
+        .collect();
+    families.retain(|(id, root)| *id != "configured_tag_push" || !release_roots.contains(root));
     families
         .into_iter()
-        .filter_map(|id| {
+        .filter_map(|(id, root)| {
+            let authority = root.as_deref().map(crate::hooks::landed_policy::load).transpose();
+            let authority = match authority {
+                Ok(value) => value,
+                Err(reason) => return Some(Violation::always_blocking("git.policy_authority", reason, "restore the named remote-tracking policy authority")),
+            };
+            let levels = authority.as_ref().map_or(levels, |a| &a.policy.security);
+            let source = authority.as_ref().map_or(String::new(), |a| format!("; policy source: {}", a.source));
             let level = match id {
                 "privilege" => levels.privilege_escalation,
                 "keychain" => levels.secret_reads,
@@ -50,8 +60,7 @@ pub(crate) fn evaluate_at(
                     return Violation::new(
                         "security.outward_actions",
                         level,
-                        "release action: effective push.followTags config enables tag publication"
-                            .to_string(),
+                        format!("release action: effective push.followTags config enables tag publication{source}"),
                         crate::remedy::PUSH_WITHOUT_FOLLOW_TAGS.remedy(),
                     );
                 }
@@ -63,7 +72,7 @@ pub(crate) fn evaluate_at(
                     },
                     level,
                     format!(
-                        "{id} action: {}",
+                        "{id} action: {}{source}",
                         table()
                             .families
                             .iter()
@@ -79,7 +88,7 @@ pub(crate) fn evaluate_at(
 
 #[derive(Default)]
 struct Parsed {
-    families: Vec<&'static str>,
+    families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
     stdin_interpreter: usize,
     commands: Vec<Vec<String>>,
@@ -118,7 +127,15 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     for segment in expand_commands(command) {
         let mut words = command_argv(&segment);
         strip_reserved_words(&mut words);
-        let args = skip_assignments(&words);
+        let mut assigned = skip_assignments(&words).to_vec();
+        if let Some(setting) = words
+            .iter()
+            .take_while(|s| s.contains('='))
+            .find(|s| s.starts_with("GIT_DIR="))
+        {
+            assigned.splice(0..0, ["env".to_string(), setting.clone()]);
+        }
+        let args = assigned.as_slice();
         let before = out.stdin_interpreter;
         for dir in &directories {
             argv(args, dir.as_deref(), depth + 1, out);
@@ -142,6 +159,7 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // Keep each launcher dispatch beside the shared recursion bound.
 fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 32 {
         return;
@@ -152,6 +170,19 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     let name = program.rsplit('/').next().unwrap_or(program);
     out.commands.push(args.to_vec());
     let rest = &args[1..];
+    if name == "env" {
+        if let (Some(dir), Some(inner)) = (
+            rest.iter().find_map(|s| s.strip_prefix("GIT_DIR=")),
+            skip_env(rest),
+        ) {
+            if inner.first().is_some_and(|s| s == "git") {
+                let mut target = vec!["git".into(), format!("--git-dir={dir}")];
+                target.extend_from_slice(&inner[1..]);
+                argv(&target, cwd, depth + 1, out);
+                return;
+            }
+        }
+    }
     record_interpreter(name, rest, out);
     direct_family(name, rest, cwd, out);
     if name == "git" {
@@ -309,6 +340,12 @@ fn perl_attached_code(arg: &str) -> Option<&str> {
 }
 
 fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Parsed) {
+    let source = (name == "git"
+        && rest
+            .iter()
+            .any(|s| s == "-C" || s == "--git-dir" || s.starts_with("--git-dir=")))
+    .then(|| git_policy_root(cwd, rest))
+    .flatten();
     let mut canonical = vec![name.to_string()];
     canonical.extend(global_args(name, rest).iter().cloned());
     for family in &table().families {
@@ -317,7 +354,7 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
             .iter()
             .any(|rule| prefix(&canonical, &rule.pattern))
         {
-            out.families.push(family_id(&family.id));
+            out.families.push((family_id(&family.id), source.clone()));
         }
     }
     let sub = canonical.get(1).map_or("", String::as_str);
@@ -338,20 +375,28 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
             }
         }
     }
+    if name == "git" && sub == "update-ref" {
+        if let (Some(dir), Some(tag)) = (
+            git_directory(cwd, rest),
+            body.iter().find_map(|a| a.strip_prefix("refs/tags/")),
+        ) {
+            out.created_tags.push((dir, tag.to_owned()));
+        }
+    }
     if name == "git" && sub == "config" && enables_follow_tags(body) {
-        out.families.push("release");
+        out.families.push(("release", source.clone()));
     }
     if name == "git" && sub == "push" {
         if body.iter().any(|a| a == "--mirror") {
-            out.families.push("account");
+            out.families.push(("account", source.clone()));
         }
         if body.iter().any(|a| {
             matches!(a.as_str(), "--tags" | "--follow-tags" | "tag") || a.contains("refs/tags/")
         }) || tag_push(body, cwd, rest, &out.created_tags)
         {
-            out.families.push("release");
+            out.families.push(("release", source.clone()));
         } else if follow_tags(cwd, rest) {
-            out.families.push("configured_tag_push");
+            out.families.push(("configured_tag_push", source.clone()));
         }
     }
     if name == "gh" {
@@ -361,7 +406,7 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
                 .iter()
                 .any(|s| s == "--visibility" || s.starts_with("--visibility="))
         {
-            out.families.push("account");
+            out.families.push(("account", source.clone()));
         }
         if sub == "api"
             && body.iter().enumerate().any(|(i, a)| {
@@ -373,16 +418,16 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
                             .is_some_and(|v| v.eq_ignore_ascii_case("DELETE")))
             })
         {
-            out.families.push("account");
+            out.families.push(("account", source.clone()));
         }
     }
     if name.starts_with("git-credential-") {
-        out.families.push("account");
+        out.families.push(("account", source.clone()));
     }
     if matches!(name, "runuser" | "gsudo.exe" | "runas.exe")
         || (name == "osascript" && rest.join(" ").contains("with administrator privileges"))
     {
-        out.families.push("privilege");
+        out.families.push(("privilege", source.clone()));
     }
     if name.eq_ignore_ascii_case("Set-ExecutionPolicy")
         || (name == "crontab"
@@ -390,7 +435,7 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
                 .iter()
                 .any(|a| matches!(a.as_str(), "-l" | "--help" | "-h")))
     {
-        out.families.push("persistence");
+        out.families.push(("persistence", source.clone()));
     }
 }
 
@@ -482,17 +527,46 @@ fn prefix(args: &[String], pattern: &[PatternToken]) -> bool {
         })
 }
 
-fn git_directory(cwd: Option<&Path>, globals: &[String]) -> Option<PathBuf> {
+fn git_policy_root(cwd: Option<&Path>, globals: &[String]) -> Option<PathBuf> {
     let mut dir = cwd?.to_path_buf();
+    let mut git_dir = None;
     let args = global_args("git", globals);
     let end = globals.len() - args.len();
-    for pair in globals[..end].windows(2) {
-        if pair[0] == "-C" {
-            dir = dir.join(&pair[1]);
+    let mut at = 0;
+    while at < end {
+        match globals[at].as_str() {
+            "-C" => {
+                dir = dir.join(globals.get(at + 1)?);
+                at += 1;
+            }
+            "--git-dir" => {
+                git_dir = Some(globals.get(at + 1)?.clone());
+                at += 1;
+            }
+            value => {
+                if let Some(path) = value.strip_prefix("--git-dir=") {
+                    git_dir = Some(path.to_owned());
+                }
+            }
         }
+        at += 1;
     }
-    let repo = git2::Repository::discover(dir).ok()?;
-    repo.commondir().canonicalize().ok()
+    let repo = if let Some(path) = git_dir {
+        git2::Repository::open(dir.join(path))
+    } else {
+        git2::Repository::discover(dir)
+    }
+    .ok()?;
+    Some(repo.workdir().unwrap_or(repo.path()).to_path_buf())
+}
+
+fn git_directory(cwd: Option<&Path>, globals: &[String]) -> Option<PathBuf> {
+    let root = git_policy_root(cwd, globals)?;
+    git2::Repository::discover(root)
+        .ok()?
+        .commondir()
+        .canonicalize()
+        .ok()
 }
 
 fn tag_push(
