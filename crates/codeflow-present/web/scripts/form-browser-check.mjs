@@ -225,8 +225,9 @@ try {
   const third = JSON.parse(await readFile(fixture, "utf8"));
   third.title = "Forms fixture, revision 3";
   await writeFile(join(project, "forms-3.json"), `${JSON.stringify(third, null, 2)}\n`);
-  // The revision 3 notice is held until the stale refusal has moved the form
-  // to revision 3, the order that once marked it stale (TSK-162).
+  // The revision 3 notice is held until the form uses revision 3 and is
+  // back in editing: the order that once showed "A newer revision exists"
+  // on a form already at the newest revision (TSK-162).
   pollHold = Promise.withResolvers();
   run(["present", "update", sessionId, join(project, "forms-3.json")]);
   await form.locator("[data-cf-form-action='amend']").click();
@@ -234,8 +235,9 @@ try {
   await form.locator("[data-cf-form-action='submit']").click();
   const staleCorrection = await waitState(form, "stale");
   assert.match(staleCorrection.says, /Revision 3 is current\. This question is unchanged there\./u, staleCorrection.says);
-  // The notice for the revision the form already uses changes nothing, so a
-  // refused confirmation below still returns the form to editing.
+  await refuseOnce((body) => { body.values.home = "cloud"; });
+  await form.locator("[data-cf-form-action='confirm']").click();
+  const refusedCorrection = await waitState(form, "editing");
   pollHold.resolve();
   pollHold = null;
   // The page polls again only once it has handled the last answer, so a poll
@@ -245,12 +247,9 @@ try {
     if (Date.now() > handledBy) throw new Error(`late notice: the page never handled revision 3; its polls named ${JSON.stringify(pollCursors)}`);
     await page.waitForTimeout(50);
   }
-  assert.deepEqual(await stateOf(form), staleCorrection, "late notice: a notice for the form's own revision changed it");
+  assert.deepEqual(await stateOf(form), refusedCorrection, "late notice: a notice for the form's own revision changed it");
   // Later polls reach the service directly, as in any other run.
   await page.unroute("**/app/api/events/poll");
-  await refuseOnce((body) => { body.values.home = "cloud"; });
-  await form.locator("[data-cf-form-action='confirm']").click();
-  await waitState(form, "editing");
   const correct = form.locator("[data-cf-form-action='submit']");
   assert.ok(await correct.isVisible(), "refused corrected confirm: no send action");
   assert.equal(await correct.innerText(), "Send correction");
