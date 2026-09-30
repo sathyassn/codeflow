@@ -690,6 +690,15 @@ fn q3_rsync_checks_destination_only() {
 fn q4_plain_pushd_tracks_integrity_directory() {
     let project = Project::new();
     for command in [
+        "pushd .codeflow >/dev/null && printf x > policy.json",
+        "pushd .codeflow 2>/dev/null && printf x > policy.json",
+        "pushd .codeflow &>/dev/null && printf x > policy.json",
+        "pushd .codeflow >/dev/null 2>&1 && printf x > policy.json",
+        "pushd .codeflow > /dev/null && printf x > policy.json",
+        "pushd .codeflow >/dev/null; rm -rf *",
+        "pushd -- .codeflow && printf x > policy.json",
+        "pushd -- .codeflow >/dev/null && rm -rf *",
+        "pushd .git >/dev/null && rm -rf hooks",
         "pushd .codeflow && printf x > policy.json",
         "pushd .codeflow && rm -rf *",
         "pushd .git && rm -rf hooks",
@@ -702,6 +711,49 @@ fn q4_plain_pushd_tracks_integrity_directory() {
         "pushd .codeflow && cat policy.json",
         "pushd .codeflow && printf x > notes.md",
         "pushd -n .codeflow && printf x > policy.json",
+        "pushd -n .codeflow >/dev/null && printf x > policy.json",
+        "pushd +1 >/dev/null && printf x > policy.json",
+        "pushd -1 >/dev/null && printf x > policy.json",
+        "pushd >/dev/null && printf x > policy.json",
+        "pushd -- src >/dev/null && printf x > notes.md",
+    ] {
+        project.check_shell(&project.root, command, false);
+    }
+}
+
+#[test]
+fn r5_n2_root_dot_patterns_match_protected_names_only() {
+    let project = Project::new();
+    for command in [
+        "rm -rf .*",
+        "rm -rf .c*",
+        "rm -rf .[a-z]*",
+        "rm -rf ./.*",
+        "rm -rf .code*",
+        "rm -rf .{codeflow,git}",
+        "rm -rf .?it",
+        "rm -rf .[cg]*",
+        "rm -rf .{cache,codeflow}",
+        "cd src && rm -rf ../.*",
+        "mv .c* backup/",
+        "cp -r stuff/ .code*",
+        "printf x > .code*",
+    ] {
+        project.check_shell(&project.root, command, true);
+    }
+    for command in [
+        "rm -rf *",
+        "rm -rf *.log",
+        "rm -rf .cache*",
+        "rm -rf .*.swp",
+        "rm -rf .{cache,config}",
+        "rm -rf .[ab]*",
+        "rm -rf .gitignore",
+        "rm -rf .ordinary",
+        "rm -rf src/.*",
+        "cd src && rm -rf .*",
+        "ls .*",
+        "cp -r .c* backup/",
     ] {
         project.check_shell(&project.root, command, false);
     }

@@ -452,7 +452,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
         // A `cd <dir>` (as its own simple command) retargets later git ops.
         if let Some(dir) = cd_target(&tokens) {
             if top_level {
-                if tokens[0] == "cd" || plain_pushd(&tokens) {
+                if tokens[0] == "cd" || plain_pushd(segment) {
                     shell.cd(&dir);
                 } else {
                     shell.observe(&tokens[0], &tokens[1..]);
@@ -781,8 +781,18 @@ fn hook_skip_env(tokens: &[String]) -> Option<&'static str> {
 }
 
 // Only the directory form has cd semantics; stack indexes and `-n` do not.
-fn plain_pushd(tokens: &[String]) -> bool {
-    tokens.len() == 2 && tokens[0] == "pushd" && !tokens[1].starts_with(['+', '-'])
+fn plain_pushd(segment: &str) -> bool {
+    let mut tokens = command_argv(segment);
+    strip_reserved_words(&mut tokens);
+    let Some((program, args)) = tokens.split_first() else {
+        return false;
+    };
+    let args = if args.first().is_some_and(|arg| arg == "--") {
+        &args[1..]
+    } else {
+        args
+    };
+    program == "pushd" && matches!(args, [dir] if !dir.starts_with(['+', '-']))
 }
 
 /// A `cd <dir>`/`pushd <dir>` simple command that retargets later git ops.
@@ -842,6 +852,9 @@ fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&
     integrity_target(&normalize_path(token)).or_else(|| {
         let base = integrity_disk_case(payload_cwd);
         let path = integrity_disk_case(&cwd.join(token));
+        if let Some(protected) = root_dot_pattern_target(&path, &base) {
+            return Some(protected);
+        }
         // A derived absolute path is not a typed scratch-copy exemption.
         // Keep relative spellings (including `..`) relative to the tool cwd.
         let target = path
@@ -850,6 +863,42 @@ fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&
             .or_else(|| Path::new(token).is_absolute().then_some(path.as_path()))?;
         integrity_target(&normalize_path(&target.to_string_lossy()))
     })
+}
+
+// Only explicit dot-patterns at the payload root can reach these hidden
+// directories; ordinary root globs and patterns below other paths stay ordinary.
+fn root_dot_pattern_target(path: &Path, payload_cwd: &Path) -> Option<&'static str> {
+    let pattern = path.file_name()?.to_str()?;
+    if !pattern.starts_with('.') || !pattern.contains(['*', '?', '[', '{']) {
+        return None;
+    }
+    if path.parent()?.canonicalize().ok()? != payload_cwd.canonicalize().ok()? {
+        return None;
+    }
+    INTEGRITY_PREFIXES
+        .iter()
+        .chain(INTEGRITY_FILES.iter())
+        .copied()
+        .find(|protected| {
+            protected
+                .split_once('/')
+                .is_some_and(|(root, _)| integrity_glob_matches(pattern, root))
+        })
+}
+
+// Glob handles stars, questions and brackets. Expand comma braces from the
+// innermost pair, without consulting the filesystem or executing the shell.
+fn integrity_glob_matches(pattern: &str, name: &str) -> bool {
+    if let Some((prefix, tail)) = pattern.rsplit_once('{') {
+        if let Some((choices, suffix)) = tail.split_once('}') {
+            if choices.contains(',') {
+                return choices.split(',').any(|choice| {
+                    integrity_glob_matches(&format!("{prefix}{choice}{suffix}"), name)
+                });
+            }
+        }
+    }
+    glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches(name))
 }
 
 fn integrity_disk_case(path: &Path) -> PathBuf {
