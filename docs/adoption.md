@@ -616,7 +616,7 @@ shell access as credential-bearing and tighten that task's tool boundary.
   common private, link-local, and internal-name destinations remain denied. A primary's retry outside the sandbox must be permitted by
   its native
   configuration, and the guards judge the retried command under the same
-  policy. Delegated seats deny that retry natively. CodeFlow has no pinned
+  policy. A delegated seat that runs sandboxed denies that retry natively. CodeFlow has no pinned
   retry allowlist or Herdr command grammar; the named Herdr list is
   unshipped workspace practice. A retry does not lift a destructive,
   privileged, publishing, secret-read or enforcement-file refusal. Claude deliberately ignores

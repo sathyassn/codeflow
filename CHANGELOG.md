@@ -91,9 +91,12 @@ publication date._
     compares with the files 2.1.0 shipped, says so, and adds back every
     shipped deny.
   - Relief: to let agents run one of these actions in a project, remove its
-    deny entry from `.claude/settings.json`; for privilege escalation,
-    which exec-guard also refuses, set `security.privilege_escalation` in
-    `.codeflow/policy.json` as well. To allow headless peer runs, set
+    deny entry from `.claude/settings.json` and relax the policy level
+    exec-guard also checks in `.codeflow/policy.json`:
+    `security.privilege_escalation` for privilege escalation,
+    `security.secret_reads` for keychain reads, and
+    `security.outward_actions` for publishing, release, account and
+    persistence actions. To allow headless peer runs, set
     `security.headless_peer_runs`. Update keeps these changes. A local ask
     rule cannot restore a denied action, because a deny rule wins.
 
