@@ -379,41 +379,12 @@ set is kept.
 
 ### Refusals and operator relief
 
-Agent sessions are judged by the landed policy: the stricter of the
-remote's default branch and the declared target, read from the
-remote-tracking refs, so a local edit, commit or branch cannot relax it.
-With no remote, or before the first fetch, the guards read `HEAD`, and
-every refusal names the source. When the remote HEAD is not set, as after
-`git init`, `git remote add` and `git push -u`, they read `main` and
-`master`, stricter wins; a custom default branch needs the operator's
-`git remote set-head origin --auto`.
-
-Under the shipped defaults, the guards refuse the wrapped, flag-led and
-interpreter forms of privilege escalation, package or gist publishing,
-release and tag changes, repository or account changes, secret-store
-reads and user-level persistence. Git-guard also refuses loss of local-only
-work and changes to the tracking refs and transport settings that decide
-the landed policy, and edit-guard refuses enforcement-path edits through
-Codex `apply_patch` and Grok `write` or `search_replace`. Commands inside
-opaque child programs are not inspected. Ordinary builds, a task-branch
-push and a single-file restore stay ordinary work.
-
-A refusal names the policy rule and the operator's route. Project relief
-is that rule's existing level, such as `security.privilege_escalation`,
-`security.outward_actions`, `security.secret_reads` or
-`git.discard_uncommitted`, landed through a reviewed change, together with
-any native deny that still applies; the native presets and the guards are
-separate checks, and the agent never edits enforcement files to clear its
-own refusal. `security.headless_peer_runs` is the only relief for a
-headless peer run; `security.headless_opt_in` is ignored with a warning
-and removed by `codeflow update`. The `security.dangerous_commands` floor
-cannot be lowered.
-
-The hooks use contract 3: a missing or older `codeflow` binary is refused
-with the install command, so install the new binary before
-`codeflow update`. Interactive Codex asks to trust the project's hooks
-once per folder, including each linked worktree, and again after the
-hooks file changes.
+Agent sessions are judged by the landed policy on the remote, so a local
+edit cannot relax it. A refusal names the rule and the operator's route;
+relief is that rule's level, landed through a reviewed change. Install the
+new binary before `codeflow update`. Detail:
+[enforcement planes](architecture/enforcement-planes.md#in-session-guards)
+and, for Codex hook trust, [harness posture](harness-posture.md).
 
 ### The daily flow
 

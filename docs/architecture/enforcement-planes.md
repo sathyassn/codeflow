@@ -127,8 +127,27 @@ refuses the call and names `git fetch`, or the operator's
 and any local policy drift; they do not detect earlier movement of a
 tracking ref.
 
+Under the shipped defaults, the guards refuse the wrapped, flag-led and
+interpreter forms of privilege escalation, package or gist publishing,
+release and tag changes, repository or account changes, secret-store reads
+and user-level persistence. Commands inside opaque child programs are not
+inspected. Ordinary builds, a task-branch push and a single-file restore
+stay ordinary work.
+
+A refusal names the policy rule and the operator's route. Project relief is
+that rule's existing level, such as `security.privilege_escalation`,
+`security.outward_actions`, `security.secret_reads` or
+`git.discard_uncommitted`, landed through a reviewed change, together with
+any native deny that still applies; the native presets and the guards are
+separate checks, and the agent never edits enforcement files to clear its
+own refusal. `security.headless_peer_runs` is the only relief for a headless
+peer run; `security.headless_opt_in` is ignored with a warning and removed
+by `codeflow update`. The `security.dangerous_commands` floor cannot be
+lowered.
+
 Contract-3 git shims exit 1 and harness wrappers exit 2 when the `codeflow`
-binary is missing or older, printing the installer and `codeflow update`.
+binary is missing or older, printing the installer and `codeflow update`,
+so install the new binary before running `codeflow update`.
 The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
 PowerShell as the hook runner is unsupported.
 

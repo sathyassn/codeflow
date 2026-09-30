@@ -209,15 +209,8 @@ authoritative perimeter (ADR-0017). Rule levels are per-repository policy
 values. The anti-bypass layer has no off switch: the strict policy validator,
 the gate-context token for protected-branch advances, and the guard's refusal
 of override variables set in-session. Secret scanning fails closed.
-Agent sessions are judged by the landed policy: the stricter of the
-remote's default branch and the declared target, with `HEAD` only when there is
-no remote or no tracking ref yet. The session checks refuse wrapped and
-interpreter action families, loss of local-only work, edits to enforcement
-paths through Codex and Grok file tools, and changes to the tracking refs and
-transport settings that decide that authority. A missing or older hook binary
-is refused with the install and update commands, and `doctor` and orient show
-the policy source and local drift. Commands hidden inside opaque child programs
-are outside this parsing.
+Agent sessions are judged by the landed policy on the remote, so a local
+edit, commit or branch cannot relax the session checks.
 
 Other checks on these planes:
 
@@ -256,11 +249,9 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider. On GitHub it requires a PR and green CI and blocks force-push and
 deletion, then reports anything the plan tier cannot apply. `codeflow doctor`
-runs twenty health checks covering hooks, Claude, Codex and Grok wiring,
-config, permissions, the policy source, network, delegates, qualified model
-bindings, the delegate round-trip, repository integrity, the CI perimeter, managed-region drift,
-consuming-project customization, always-loaded instruction size, reading sizes,
-test config, the id registry and adopter fit.
+runs twenty health checks on git hooks and CI, harness wiring, policy and
+config, delegates and models, the repository and managed files, and
+customization and test config.
 
 | Doctor check | Reports |
 |---|---|
@@ -458,16 +449,11 @@ adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR
 work, decided by touched paths: adopter-facing paths, research that will
 drive such a change, and plan, design, security or irreversible work. It
 selects the smallest complete outcome mode, so research or planning work
-stops before implementation. Planning happens once at the breakdown, each
-task lands through one pull request and one review, and reviewed heads land
-in small batches with one full gate (ADR-0076); the flow is on
-[how work moves to main](delivery.md).
-Both seats independently discover from the same immutable brief before
-either sees the other's findings. Claude then drafts the one plan and Codex
-challenges it against its own findings, with no second plan and no
-reconciliation round; the plan names each task's primary, actual executor
-and cross-lineage reviewer, and both seats approve one version before
-implementation. Material product or visual work also records a
+stops before implementation. Planning, review and batch landing follow
+[how work moves to main](delivery.md) (ADR-0076).
+Both seats discover independently from one immutable brief. Claude drafts
+the one plan, Codex challenges it, and both approve one version before
+implementation; material product or visual work also records a
 `DESIGN_INTENT` in that plan (ADR-0043, ADR-0051).
 
 The work records a plan produces are judged by one core (SPC-013):
