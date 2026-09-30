@@ -122,7 +122,7 @@ not be promised in a source or a document.
 | Carrier | Portal (adapter) | Present (runtime blocks) |
 |---------|------------------|--------------------------|
 | Family figure (the default form, `figure-grammar.md`) | Figure block: a declaration file bound in `portal.config.json` `figures` to a route and a panel or section anchor; the adapter draws it with the grammar module, and the figure gate holds it to the twelve rules | `figure` block carrying the declaration; the runtime draws it with the same grammar module (authored binding only) |
-| Subject-led labeled flow | `cf-stage` fence (nodes `NAME \| sublabel @role`, `->` between stages, one `caption:`; roles accent / positive / warn / danger / neutral; limits 6 stages, 5 nodes per stage); the flow family's interim form while the flow specimen fails rule 3 | `html` block: the authored primary stage (utility tokens, labeled nodes, named edges) |
+| Subject-led labeled flow | `cf-stage` fence (nodes `NAME \| sublabel @role`, `->` between stages, one `caption:`; roles accent / positive / warn / danger / neutral; limits 6 stages, 5 nodes per stage); the flow family's interim form | `html` block: the authored primary stage (utility tokens, labeled nodes, named edges) |
 | Altitude trio | depth-2 `## Concept`, `## Architecture`, `## Technical` rendered as a tablist; at least two of the three | block order as attention order; `tabs` only for true peer views |
 | Full-width figure | the figure block; a fenced `text` block only for a chat-grade sketch | `figure` block; `html` only for a static layout the families cannot express |
 | Table | Markdown table | `table` |
