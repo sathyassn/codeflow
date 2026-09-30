@@ -14,7 +14,7 @@ The terms a new reader meets in this guide, each with a short meaning and the pa
 | Cross-lineage review | Review of a unit of work by a model family other than the one that wrote it | [duo orchestration](capabilities/CAP-010-duo-model-orchestration.md) |
 | Delegate | `/cf-delegate`, a full edit handoff to the other vendor's model. It runs only in a worktree on a feature branch, so its commits pass the same gates as yours | [delegation](delegation.md) |
 | Delegate turn | One prompt handed to a peer harness and tracked to a result through the lifecycle commands `codeflow delegate init`, `arm` and `wait` and the `delegate-turn` hook | [architecture](architecture.md) |
-| Doctor | `codeflow doctor`, nineteen health checks that report ok, warn or fail and change no file in the repository | [troubleshooting](troubleshooting.md) |
+| Doctor | `codeflow doctor`, twenty health checks that report ok, warn or fail and change no file in the repository | [troubleshooting](troubleshooting.md) |
 | Duo | The default way non-trivial work runs: a Claude seat and a Codex seat research and plan independently, then reconcile one plan, with Claude leading design | [duo orchestration](capabilities/CAP-010-duo-model-orchestration.md) |
 | Enforcement floor | The git discipline every tier installs: the five git hooks, the CI check, the in-session guards and the armed `policy.json`. It is the same at every tier | [adoption](adoption.md) |
 | Enforcement plane | One of the four places a git rule is checked: git client hooks, in-session guards, CI and remote branch protection. All four read `.codeflow/policy.json` | [enforcement planes](architecture/enforcement-planes.md) |

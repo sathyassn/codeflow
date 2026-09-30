@@ -7,7 +7,7 @@
 
 ## Concept
 
-`codeflow doctor` runs nineteen health checks against a repository and the tools around it.
+`codeflow doctor` runs twenty health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
 `codeflow update` or after a harness change. Doctor only reads and probes, so it
@@ -17,16 +17,17 @@ interactive canary proves it.
 
 ## Architecture
 
-The nineteen checks fall into six groups by the surface each one reads.
+The twenty checks fall into six groups by the surface each one reads.
 
 - **Git hooks and CI.** `hooks` and `ci-perimeter` read the hook subcommands
   of the installed binary, git's active hooks directory and the scaffolded CI
   workflow.
 - **Each harness's wiring.** `claude`, `codex` and `grok` look for each
   harness CLI on PATH and for its project hook files.
-- **Policy and config.** `config`, `permissions` and `adopter-fit` read the
-  `.codeflow/` directory, including `policy.json` and `project.toml`, and
-  whether it is writable.
+- **Policy and config.** `config`, `permissions`, `policy-source` and
+  `adopter-fit` read the `.codeflow/` directory, including `policy.json` and
+  `project.toml`, whether it is writable, and which git ref the agent guards
+  read policy from.
 - **Delegates, model bindings and network.** `delegates`, `model-bindings`,
   `delegate-roundtrip` and `network` probe the peer CLIs, the approved model
   binding records, the binary's delegate lifecycle and a lookup of github.com.
@@ -50,10 +51,10 @@ failed check never hides the others. Each line starts with a status badge.
 - `FAIL` means the check found a broken state.
 
 Doctor exits 0 when no check failed, with or without warnings, and 1 when any
-check failed. Eight checks can fail: `hooks`, `config`, `permissions`,
-`model-bindings`, `delegate-roundtrip`, `repo-integrity`, `id-registry` and
-`adopter-fit`. The other eleven warn at most. `codeflow doctor --list` prints
-the nineteen names and exits 0.
+check failed. Nine checks can fail: `hooks`, `config`, `permissions`,
+`policy-source`, `model-bindings`, `delegate-roundtrip`, `repo-integrity`,
+`id-registry` and `adopter-fit`. The other eleven warn at most.
+`codeflow doctor --list` prints the twenty names and exits 0.
 `codeflow doctor --check <name>` runs one check; an unknown name prints an
 error to stderr and exits 1.
 
@@ -67,6 +68,7 @@ Each row below is one check, in the order doctor prints it.
 | `grok` | Any `.grok/hooks/*.json` file, and whether `grok` is on PATH | Warn whenever a hook file exists, because Grok trust is not readable from outside Grok. Ok when none exists | Once, run `/hooks-trust` in Grok, or start it with `--trust`, so the project hooks load. The warning stays afterwards |
 | `config` | Every `.json` file under `.codeflow/`, parsed recursively | Warn: `.codeflow/` does not exist. Fail: a listed file does not parse, or the directory could not be scanned | Run `codeflow init` when the directory is missing. Repair the JSON in each listed file |
 | `permissions` | The owner write bit on `.codeflow/`, on Unix only | Fail: `.codeflow/` is not writable | Give the owner write permission on `.codeflow/` |
+| `policy-source` | Where the agent guards read `.codeflow/policy.json` and `.codeflow/project.toml`: the remote's default branch and declared target as last fetched, `HEAD` before any tracking ref exists, or the working copy on an unborn `HEAD`. It never fetches | Fail: the source cannot be read, such as several remotes without an `origin`, a missing authority ref or a dangling remote HEAD. Ok names the source and any local policy drift | Run `git fetch`. For an unset or custom default branch, the operator runs `git remote set-head <remote> --auto` ([enforcement planes](architecture/enforcement-planes.md#in-session-guards)) |
 | `network` | Whether `host` is on PATH, then a two-second lookup of github.com | Warn: `host` is missing so the probe was skipped, or the lookup failed, which usually means offline | Nothing is required. Install `host` to enable the probe, or restore the connection |
 | `delegates` | `codex` and `claude` on PATH, `codex login status`, `codex mcp list`, `claude mcp list`, `claude plugin list --json` for an enabled `codex@openai-codex` plugin, and `tmux` on PATH | Warn: cross-vendor delegation is partly unavailable. It is optional, and the message lists each gap | Apply the step each gap names: `codex login`, run the named list command, install `codex@openai-codex` in Claude Code and run `/codex:setup`, or put the missing tool on PATH. Then confirm access with an interactive canary, since status output alone does not prove it |
 | `model-bindings` | Approved binding records in `~/.codeflow/qualified-bindings/` (or under `CODEFLOW_HOME`), `.codeflow/model-selection.json`, each harness's version probe and the recorded settings digests. It also lists the managed worker routes without launching a model | Fail: a binding record or the project selection is invalid, or a selected binding drifted, in which case no override applies. Warn: a binding that is not selected drifted, or a harness version has no external probe. Ok with no local bindings | Requalify a drifted binding with `/cf-evaluate-model`, or correct `.codeflow/model-selection.json`. Leave that file absent or empty to use the shipped ensemble ([model upgrades](model-upgrades.md)) |
