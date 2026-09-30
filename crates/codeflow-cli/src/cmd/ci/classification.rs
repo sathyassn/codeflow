@@ -253,6 +253,7 @@ fn names_its_unit(root: &Path, body: &str, branch: &str, range: Option<&Range<'_
 /// at the target or at the head, and the paths are the range's diff from
 /// the merge-base, merge resolutions included. Returns the validated class,
 /// or `None` when the pull request was not classified.
+#[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
