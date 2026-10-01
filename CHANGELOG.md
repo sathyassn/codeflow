@@ -1787,6 +1787,12 @@ publication date._
   a standing warning on every scaffold until each designated version has a
   full-suite qualification record at high effort on each of its harnesses.
 
+<!-- codeflow:release-impact none -->
+- **Reading the pre-policy entries below.** They are kept exactly as
+  written before the release policy, so two of them describe what has since
+  changed: ADR-0062 replaced the ADR-0061 release automation, and the Grok
+  seat is `grok-primary` on `grok-4.7` in the schema 5 catalog.
+
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
 - **Optional agentic operating and estimation method (ADR-0057).** Standard and
@@ -1799,12 +1805,12 @@ publication date._
 
 - **Grok Build as a first-class host and catalog family (ADR-0054).** Interactive
   `grok` joins Claude Code and Codex as a CodeFlow host. The standing pair
-  remains the Claude judgment seat and the Codex engineering seat; the Grok
-  seat is `grok-primary` on `grok-4.7` in the schema 5 catalog (ADR-0069). Extra-family
+  remains `claude-judgment-primary` and `codex-engineering-primary`;
+  `grok-engineering-primary` is a catalog seat on `grok-4.6` at medium (ADR-0055). Extra-family
   review is named when a routing-policy trigger fires and the family is
   available; unavailable is an evidenced limitation, never a silent third vote.
   Claude produces design in its native session regardless of host. `grok-cli`
-  is catalog-supported with a `grok-cli-version` doctor probe and a
+  is catalog-supported with a `grok-cli-version` doctor probe and a fifteenth
   doctor check for structural `.grok/hooks` wiring. Grok-hosted
   Claude/Codex lanes use Herdr; dated schema-v2 and Codex Herdr canaries
   live in `docs/verification/grok-host-duo-canary-2026-09-07.md` and are
@@ -1819,12 +1825,10 @@ publication date._
 
 ### Changed
 
-- **Human-authorized release automation (ADR-0062).** CodeFlow PRs now declare
-  reviewed release impact in the normal work PR, and `scripts/release.py
-  check-pr` checks it. The version is the latest public release bumped once by
-  the highest pending impact, and cargo-dist remains the sole publisher after a
-  human merges and dispatches. ADR-0062 supersedes ADR-0061's maintained
-  candidate PR and ADR-0012's git-cliff calculation. The v2.1 tag/source
+- **Human-authorized release automation (ADR-0061).** CodeFlow PRs now declare
+  reviewed release impact; git-cliff remains the sole bump calculator while a
+  guarded workflow maintains one candidate PR and cargo-dist remains the sole
+  publisher after a human merges the exact candidate. The v2.1 tag/source
   discrepancy is preserved as explicit provenance, not repaired by moving a
   tag. Consumer projects keep their own version and publication authorities;
   customization, shipping, and review route to one opt-in project policy with
