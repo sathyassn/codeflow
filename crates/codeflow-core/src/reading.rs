@@ -679,6 +679,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     // instructions.
     "AGENTS.md",
     "CLAUDE.md",
+    // The approved plan the orchestrator and cf-ship read before choosing
+    // a landing route (TSK-191).
+    "PLAN.md",
     "TASK.md",
     "index.md",
     "portal.config.json",

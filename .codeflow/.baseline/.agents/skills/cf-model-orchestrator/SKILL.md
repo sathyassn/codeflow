@@ -220,8 +220,8 @@ Run preflight once per session per lane. Recheck it explicitly when a tool,
 binding, permission or selector changed since it ran.
 
 1. Before choosing a landing route, read `PLAN.md` and the landing policy
-   in `README.md` when present, alongside the project operating contract.
-   An existing approved plan controls the target until amended.
+   in the project README when present, alongside the project operating
+   contract. An existing approved plan controls the target until amended.
    Pin the brief: objective, scope, constraints, acceptance criteria, and known
    non-goals. Discover facts yourself and apply the clarity checklist in
    `cf-method`; ask the operator only what `cf-method/references/autonomy.md`

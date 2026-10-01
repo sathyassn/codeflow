@@ -6,8 +6,9 @@ description: Land finished work (docs and capability updates, then a PR through 
 # cf-ship: land finished work
 
 1. Before choosing a landing route, read `PLAN.md` and the landing policy
-   in `README.md` when present, alongside the project operating contract.
-   Resolve any conflict with the approved plan before changing its target.
+   in the project README when present, alongside the project operating
+   contract. Resolve any conflict with the approved plan before changing
+   its target.
    Preconditions: the applicable independent review verdict is `approved` and
    every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
    After review, a task PR's last commit runs `codeflow task status <id>
@@ -48,14 +49,11 @@ description: Land finished work (docs and capability updates, then a PR through 
    `codeflow validate --portal <adopted-root>`; add rendered/browser checks
    matched to UX impact. Non-adopters receive no portal gate.
 4. Assess release impact under the project's adopted policy and the Release
-   impact rules in `references/pr-evidence.md`, which say when to read the
-   release policy. Judge compatibility as the git rules' breaking-change rule
-   says; a misleading commit type is not proof of compatibility. Reconcile
-   the project's authoritative release input and PR explanation; where the
-   project adopts same-PR preparation, include the warranted notes and
-   coupled version updates now, reconciled with the current target and
-   published baseline. A reviewed merge is not permission to publish or
-   deploy.
+   impact rules in `references/pr-evidence.md`. Judge compatibility as the
+   git rules' breaking-change rule says; a misleading commit type is not
+   proof of compatibility. Reconcile the project's authoritative release
+   input and PR explanation. A reviewed merge is not permission to publish
+   or deploy.
 5. Apply `cf-editorial-review` and its copy guide where its description
    triggers it (by consequence). They refine the writing but cannot weaken
    the template, evidence, policy, or no-emoji requirements below.
@@ -69,28 +67,26 @@ description: Land finished work (docs and capability updates, then a PR through 
    opening the PR. No AI attribution or emoji.
 7. After opening, follow
    [references/pr-evidence.md](references/pr-evidence.md), "After opening":
-   no polling by default. The builder's PR carries its cited evidence, and
-   the primary reads hosted results once when it assembles the batch. Only
-   where the adopted policy requires hosted checks green before landing, wait
-   for them with a bounded poll (once a minute, at most thirty minutes).
-   Then fix assertion-red without asking, report infra-incomplete as
-   missing evidence, and report readiness with the PR URL the tool printed.
+   no polling by default. Only where the adopted policy requires hosted
+   checks green before landing, wait for them with a bounded poll (once a
+   minute, at most thirty minutes). Then fix assertion-red without asking,
+   report infra-incomplete as missing evidence, and report readiness with
+   the PR URL the tool printed.
 8. Merge by target once required *checks* are evidenced green, locally or in
    completed CI jobs (a gate is the check, not the job name; the quality
    contract classifies redness). For red or unfinished CI jobs, follow
    [PR checks](references/pr-checks.md#redness-classes). The primary merges a
    green, reviewed PR into an `integration/` branch no protected-branch policy
    covers (`main`, `master`, `.codeflow/policy.json` globs) without fast
-   forward or with
-   `codeflow integrate <branch> --into <target>`, once the full gate is green
-   on that exact candidate (a batch, or a standalone PR as its own). A
-   protected target, including a protected `integration/` glob, is reported
-   ready (on local evidence only as `pr-evidence.md` allows) and **merged by a
-   human**, through the PR or `codeflow integrate`. An agent never merges
-   into a protected target: no `gh pr merge` or by-hand merge there, never
-   `gh pr merge --delete-branch` (step 10 deletes the pushed branch after
-   proof), and override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are
-   human-only.
+   forward or with `codeflow integrate <branch> --into <target>`, once the
+   full gate is green on that exact candidate (a batch, or a standalone PR
+   as its own). A protected target, including a protected `integration/`
+   glob, is reported ready (on local evidence only as `pr-evidence.md`
+   allows) and **merged by a human**, through the PR or
+   `codeflow integrate`. An agent never merges into a protected target: no
+   `gh pr merge` or by-hand merge there, never `gh pr merge --delete-branch`
+   (step 10 deletes the pushed branch after proof), and override envs
+   (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 9. Confirm the landed state with `codeflow status`; report the final epic and
    capability state. After an epic-line landing, only when the project
    configures a release branch matching its release pattern, R-120, and a

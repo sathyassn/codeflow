@@ -824,7 +824,7 @@ fn process_round_guidance_names_the_evidence_before_action() {
             path,
             &[
                 "Before choosing a landing route, read `PLAN.md`",
-                "in `README.md`",
+                "in the project README",
             ],
         );
     }
