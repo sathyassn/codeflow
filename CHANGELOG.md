@@ -69,6 +69,13 @@ publication date._
   upgrade Git.
 
 <!-- codeflow:release-impact patch -->
+- **The docs portal starter no longer pins a vulnerable `fast-uri`.** The
+  starter's development dependency override moves from 3.1.6 to 3.1.8,
+  which fixes GHSA-58mr-gqgx-xq4g, GHSA-qw65-cvwx-89v3 and
+  GHSA-hrr3-gc8f-f4qj. A portal adopted from the starter takes it at its
+  next `codeflow portal setup`.
+
+<!-- codeflow:release-impact patch -->
 - **The release pull request passes classification.** A release pull
   request names its release-integration task (`Task: TSK-NNN`), as SPC-013
   R-120 says. `codeflow ci` judged that body by the task pull request rules
