@@ -47,6 +47,8 @@ const environment = {
   TMPDIR: join(root, "tmp"),
   XDG_STATE_HOME: join(root, "state"),
   LANG: "C.UTF-8",
+  // A service this check starts exits once this process is gone.
+  CF_PRESENT_OWNER_PID: String(process.pid),
 };
 const options = { cwd: project, env: environment, encoding: "utf8", timeout: 60_000 };
 // One CLI command; its exit status, standard output and standard error.
@@ -286,7 +288,7 @@ try {
     run(["present", "ack", sessionId, acked]);
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
-    const rail = await page.locator("[data-testid='feedback-history'] li").evaluateAll((items) => items
+    const rail = await page.locator("[data-testid='feedback-history'] li[data-review]").evaluateAll((items) => items
       .filter((item) => item.querySelector(".cf-history-meta"))
       .map((item) => [...item.querySelector(".cf-history-meta").children].map((part) => part.textContent.trim())));
     assert.equal(rail.length, 2, `rail: ${JSON.stringify(rail)}`);

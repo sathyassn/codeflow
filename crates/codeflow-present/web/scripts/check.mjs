@@ -1,3 +1,4 @@
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,6 +37,29 @@ try {
 
   const manifest = JSON.parse(await readFile(join(first, "manifest.json"), "utf8"));
   checkManifest(manifest);
+  const sbom = JSON.parse(await readFile(join(first, "service-sbom.cdx.json"), "utf8"));
+  if (sbom.components.length !== manifest.service.assets.length) throw new Error("SBOM representation count drift");
+  for (const asset of manifest.service.assets) {
+    const bytes = await readFile(join(first, asset.stored_path));
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const component = sbom.components.find((item) => item["bom-ref"] === asset.stored_path);
+    if (bytes.length !== asset.encoded_bytes || digest !== asset.sha256 || component?.hashes[0]?.content !== digest) {
+      throw new Error(`Manifest/SBOM integrity failed for ${asset.stored_path}`);
+    }
+    if (asset.content_encoding === "gzip") {
+      checkExportGzipHeader(bytes);
+      const br = manifest.service.assets.find((item) => item.request_path === asset.request_path && item.content_encoding === "br");
+      const raw = brotliDecompressSync(await readFile(join(first, br.stored_path)));
+      if (!gunzipSync(bytes).equals(raw)) throw new Error(`Representations differ for ${asset.request_path}`);
+    }
+  }
+  const exportBytes = await readFile(join(first, manifest.export["present.export"].stored_path));
+  checkExportGzipHeader(exportBytes);
+  const altered = Buffer.from(exportBytes);
+  altered[9] = 3;
+  let rejected = false;
+  try { checkExportGzipHeader(altered); } catch { rejected = true; }
+  if (!rejected) throw new Error("The export check accepted an OS-dependent gzip header");
   process.stdout.write(`cf-present web checks passed; reproducible tree ${firstDigest}\n`);
 } finally {
   await rm(scratch, { recursive: true, force: true });
@@ -112,8 +136,12 @@ function checkManifest(manifest) {
   if (manifest.schema_version !== 1) throw new Error("Unexpected asset manifest schema");
   const assets = manifest.service.assets;
   if (!Array.isArray(assets) || !assets.length) throw new Error("Service asset manifest is empty");
-  if (assets.some((asset) => asset.content_encoding !== "br" || !asset.stored_path.endsWith(".br"))) {
-    throw new Error("Service payloads must be Brotli-only");
+  for (const path of new Set(assets.map((asset) => asset.request_path))) {
+    const variants = assets.filter((asset) => asset.request_path === path);
+    if (variants.length !== 2 || !variants.some((a) => a.content_encoding === "br" && a.stored_path.endsWith(".br")) ||
+        !variants.some((a) => a.content_encoding === "gzip" && a.stored_path.endsWith(".gz"))) {
+      throw new Error(`Service asset must have exactly Brotli and gzip variants: ${path}`);
+    }
   }
   const appPath = manifest.service.entrypoints["present.app"];
   const app = assets.find((asset) => asset.request_path === appPath);
@@ -142,6 +170,12 @@ function checkManifest(manifest) {
   }
 }
 
+function checkExportGzipHeader(bytes) {
+  if (bytes.length < 10 || bytes[0] !== 0x1f || bytes[1] !== 0x8b || bytes[2] !== 8 || bytes[3] !== 0 || bytes.readUInt32LE(4) !== 0 || bytes[9] !== 255) {
+    throw new Error("gzip header must have no flags or mtime and fixed OS byte 255");
+  }
+}
+
 // The app entry loads exactly three chunks lazily: syntax highlighting, the
 // figure grammar and the bundled fonts. Anything else is a new lazy path to
 // review, not a silent addition.
@@ -160,6 +194,7 @@ function assertLazyEntryPaths(app) {
 function checkBinaryAttributes() {
   const paths = [
     "crates/codeflow-present/assets/service/qualification.js.br",
+    "crates/codeflow-present/assets/service/qualification.js.gz",
     "crates/codeflow-present/assets/export/qualification.js.gz",
   ];
   const result = spawnSync("git", ["check-attr", "-z", "diff", "merge", "text", "--", ...paths], {

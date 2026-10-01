@@ -1,0 +1,5 @@
+[
+  {"id":"store-choice","status":"changed","notes":[{"carried":true,"source_revision":1,"body":"private deleted body"}],"answers":[{"carried":true,"revision":1,"form":"store-choice"}]},
+  {"id":"new","status":"added","notes":[],"answers":[]},
+  {"id":"d-scope","status":"removed","notes":[],"answers":[]}
+]

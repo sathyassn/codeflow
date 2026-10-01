@@ -30,9 +30,16 @@
       "items": {
         "$ref": "#/$defs/event"
       }
+    },
+    "response_events": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "$ref": "urn:codeflow:schema:present:session-responses:1"
+      }
     }
   },
-  "$comment": "This public history contract excludes capabilities, cookies, service/browser identities, local paths, ports, and private review chrome. The runtime additionally enforces bounded encoded event and history state. Version 2 (SPC-014): notes may carry an entity_selector and revisions may hold schema_version 2 documents. present history prints this version only for a session that holds such data.",
+  "$comment": "This public history contract excludes capabilities, cookies, service/browser identities, local paths, ports, and private review chrome. The runtime additionally enforces bounded encoded event and history state. Version 2 (SPC-014): notes may carry an entity_selector and revisions may hold schema_version 2 documents. present history prints this version only for a session that holds such data. Repository context, source path snapshots and response events are additive v2 history fields; old records omit them. Deleted note bodies, selectors, excerpts and note replies are redacted in this projection.",
   "$defs": {
     "uuid": {
       "type": "string",
@@ -206,6 +213,51 @@
               }
             }
           ]
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commit",
+            "dirty"
+          ],
+          "properties": {
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40,64}$"
+            },
+            "dirty": {
+              "type": "boolean"
+            }
+          }
+        },
+        "snapshots": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "block_id",
+              "path",
+              "commit"
+            ],
+            "properties": {
+              "block_id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "commit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
         }
       }
     },

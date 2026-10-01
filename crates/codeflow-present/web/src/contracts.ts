@@ -210,7 +210,7 @@ export interface SentAnswer {
 
 export interface SessionEvent {
   readonly cursor: string;
-  readonly kind: "feedback_state" | "revision" | "session_closed" | "answer_state";
+  readonly kind: "feedback_state" | "revision" | "session_closed" | "answer_state" | "thread";
   readonly message?: string;
   readonly answers?: readonly AnswerStateEntry[];
   readonly forms?: readonly FormAnswerEntry[];
@@ -287,7 +287,7 @@ function isReviewLimits(value: unknown): value is ChromeConfig["review_limits"] 
   );
 }
 
-function isFeedbackSnapshot(
+export function isFeedbackSnapshot(
   value: unknown,
   limits: ChromeConfig["review_limits"],
 ): value is FeedbackSnapshot {
@@ -367,7 +367,7 @@ function isIdentity(value: unknown): value is NonNullable<ChromeConfig["identity
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

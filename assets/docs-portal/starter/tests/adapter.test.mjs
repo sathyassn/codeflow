@@ -2085,6 +2085,8 @@ test("generated strict-ID previews are source-grounded and keyboard-native", asy
     assert.match(landing, /^title: "Reference"$/m);
     assert.doesNotMatch(landing, /^# Reference$/m);
     const rendered = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
+    // An explanatory page names its class on its search root.
+    assert.match(rendered, /<div data-pagefind-body data-codeflow-search-root="reference\/guide" data-cf-page-class="explanatory">/);
     assert.match(rendered, /<span class="portal-id-preview"><a href="\/system\/decisions\/ADR-0001\/" aria-describedby="portal-preview-[^"]+">ADR-0001<\/a>/);
     assert.match(rendered, /role="tooltip"><strong>Keep source truth<\/strong><span>Status: accepted<\/span><span>Source: <code>docs\/decisions\/ADR-0001.md<\/code><\/span>/);
   } finally { await rm(root, treeRemoval); }

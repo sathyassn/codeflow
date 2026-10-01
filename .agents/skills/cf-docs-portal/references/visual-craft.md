@@ -126,10 +126,10 @@ declared `pass-through` with a reason from the closed set. The doctrine's
 
 ### `cf-stage`: the flow interim
 
-A `cf-stage` fence stays only as the flow family's interim form while the flow
-specimen fails rule 3. Node lines are `NAME | sublabel @accent` (roles
-`accent` / `positive` / `warn` / `danger` / `neutral`), a `->` line separates
-stages (nodes inside one stage are parallel), and one `caption:` line ends it.
+A `cf-stage` fence is the flow family's interim form. Node lines are
+`NAME | sublabel @accent` (roles `accent` / `positive` / `warn` / `danger` /
+`neutral`), a `->` line separates stages (nodes inside one stage are
+parallel), and one `caption:` line ends it.
 The adapter renders it with the `--cf-*` tokens; invalid grammar fails the page
 loudly. A stage counts as a stage, never as the figure a panel demands.
 
