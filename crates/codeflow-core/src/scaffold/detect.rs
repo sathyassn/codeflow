@@ -89,7 +89,7 @@ impl GitDirHooks {
     #[must_use]
     pub fn report_note(&self) -> String {
         format!(
-            "existing git hooks in {dir}: {names}. git no longer runs them once CodeFlow's hooks are wired (core.hooksPath = {CODEFLOW_HOOKS_PATH}); nothing was moved or deleted. Choose one: move each check into the project's CI or a supported hook manager (husky, lefthook), or keep it by calling it from a project-owned hook, a hooks folder set as core.hooksPath whose hooks call both the check and the codeflow shim. `codeflow doctor` warns while they stay in {dir}",
+            "existing git hooks in {dir}: {names}. git no longer runs them once CodeFlow's hooks are wired (core.hooksPath = {CODEFLOW_HOOKS_PATH}); nothing was moved or deleted. For each, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file; (2) keep it: set core.hooksPath to a project-owned hooks folder whose hooks call both the check and the CodeFlow shim. `codeflow doctor` warns while they stay in {dir}",
             dir = self.dir,
             names = self.names.join(", "),
         )
