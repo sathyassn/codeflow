@@ -11,9 +11,7 @@
 use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
-use codeflow_core::workgraph::acceptance::{
-    journey_requirement_at, release_integration_at, JOURNEY_RULE,
-};
+use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::classify::{
     is_planning_path, is_spike_path, path_sets, ProjectPaths,
 };
@@ -90,9 +88,9 @@ pub(super) enum Class {
     /// Tracked work for the task named in the body.
     Tracked { task_id: String },
     /// A release pull request (SPC-013 R-120): a release head whose body
-    /// names the task with `role: release-integration` at the head. The
-    /// release checks judge what the range brings and bind that task's
-    /// completion to the head, so the task rules do not apply.
+    /// names the task the release checks select as its owner. They judge
+    /// what the range brings and bind that task's completion to the head,
+    /// so the task rules do not apply.
     ReleaseIntegration { task_id: String },
     /// The range touches only records and plans.
     PlanningOnly,
@@ -103,6 +101,12 @@ pub(super) enum Class {
     /// (ADR-0074); small edits land on it directly, and each nested project
     /// lands through its own repository.
     RootBranch(String),
+}
+
+/// A release head (SPC-013 R-120) and the one task the release checks
+/// select as the owner of its direct work, when exactly one is eligible.
+pub(super) struct ReleaseHead {
+    pub owner: Option<String>,
 }
 
 /// What the classifier reads.
@@ -288,7 +292,7 @@ pub(super) fn dispatch(
     body: &str,
     branch: &str,
     range: Option<&Range<'_>>,
-    release_head: bool,
+    release: Option<&ReleaseHead>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
@@ -332,7 +336,7 @@ pub(super) fn dispatch(
             return None;
         }
     };
-    if !release_head && !integration_line_eligible(root, branch, range, tagged) {
+    if release.is_none() && !integration_line_eligible(root, branch, range, tagged) {
         return None;
     }
     let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
@@ -347,8 +351,7 @@ pub(super) fn dispatch(
             .then(|| check_epic_line(root, branch, range.target, range.base, range.head)),
         root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
     };
-    let class = match classify(&input).map(|class| release_class(root, release_head, range, class))
-    {
+    let class = match classify(&input).map(|class| release_class(release, class)) {
         Ok(class) => class,
         Err(reason) => {
             push(
@@ -391,15 +394,14 @@ pub(super) fn dispatch(
     Some(class)
 }
 
-/// On a release head, a `Task:` line naming the task with `role:
-/// release-integration` at the head names the release pull request
-/// (SPC-013 R-120). A head that cannot be read keeps the task rules, which
-/// report it.
-fn release_class(root: &Path, release_head: bool, range: &Range<'_>, class: Class) -> Class {
+/// On a release head, a `Task:` line naming the task the release checks
+/// select as its owner names the release pull request (SPC-013 R-120).
+/// Any other task, such as a cancelled holder or one completed before the
+/// range, keeps the task rules.
+fn release_class(release: Option<&ReleaseHead>, class: Class) -> Class {
     match class {
         Class::Tracked { task_id }
-            if release_head
-                && matches!(release_integration_at(root, range.head, &task_id), Ok(true)) =>
+            if release.is_some_and(|release| release.owner.as_deref() == Some(&task_id)) =>
         {
             Class::ReleaseIntegration { task_id }
         }

@@ -537,25 +537,33 @@ fn work_checks<'a>(
     let branch = names.branch;
     // A release range (SPC-013 R-120) is judged by the release checks: a
     // release head always, and with no body also a range into a release
-    // branch.
-    let release = branch
-        .starts_with("integration/")
-        .then(|| acceptance::release_scope(root, names).ok().flatten())
-        .flatten()
+    // branch. The scope is asked once per run, under any release pattern
+    // the default target's policy names, and only for a range that
+    // resolves; the acceptance check asks it for that range anyway.
+    let release = range_parts
+        .as_ref()
+        .and_then(|_| acceptance::release_scope(root, names).ok().flatten())
         .map(|(_, scope)| (scope.head, scope.release()));
     let release_head = release.is_some_and(|(head, _)| head);
     let release_range = release.is_some_and(|(_, range)| range);
     let class = match pr_body {
-        Some(body) => classification::dispatch(
-            root,
-            git,
-            body,
-            branch,
-            range_parts.as_ref(),
-            release_head,
-            tagged,
-            ran,
-        ),
+        Some(body) => {
+            let release = release_head.then(|| classification::ReleaseHead {
+                owner: range_parts
+                    .as_ref()
+                    .and_then(|range| acceptance::release_owner(root, range, names)),
+            });
+            classification::dispatch(
+                root,
+                git,
+                body,
+                branch,
+                range_parts.as_ref(),
+                release.as_ref(),
+                tagged,
+                ran,
+            )
+        }
         // A pull request whose host did not supply the body is still judged
         // on its line; a plain push is not classified (TSK-104).
         None if pr_context && !release_range => {
