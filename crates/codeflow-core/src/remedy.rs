@@ -498,7 +498,7 @@ catalog! {
     /// Hooks in the common git dir that git stops running once the codeflow
     /// shims are wired: the adopter's choice; codeflow moves nothing.
     DOCTOR_GIT_DIR_HOOKS = Step::Edit("{path}"),
-        "choose for each hook named in {path}: either move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file from {path}; or keep it by setting core.hooksPath to a project-owned hooks folder whose hooks call both the check and the codeflow shim, leaving {path} as it is if those hooks call it there; either way `codeflow doctor --check hooks` stops warning";
+        "for each hook named in {path}, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file from {path}; (2) keep it: set core.hooksPath to a project-owned hooks folder whose hooks call both the check and the CodeFlow shim (the files in {path} may stay if those hooks call them). This warning then stops. After (2), `codeflow doctor --check hooks` reads that folder instead: it warns until its hooks call all five CodeFlow shims, then asks for one refused commit to confirm they run";
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";

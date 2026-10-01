@@ -176,7 +176,8 @@ rustdoc and coverage.
 
 ## EPC-018 section of the 3.0.0 release pull request body
 
-The coordinator assembles the release body; this is EPC-018's part.
+The coordinator assembles the release body; this is EPC-018's part. Task
+statuses were brought up to date for the release head on 2026-10-01.
 
 EPC-018 turns model routing into data and gives agents one written rule for
 when to act and when to stop. Seats, product lines and duties now live in the
@@ -207,15 +208,17 @@ reference is the only full list of what belongs to the operator.
   with a faulty control that fails.
 - **Roster.** The operator designated the 2026-09-23 roster (Q2).
   Designation is not qualification: every seat version reads "designated,
-  full suite not run" until TSK-139 runs.
+  full suite not run" until TSK-194 runs the suite once per designated
+  primary seat, after the release.
 - **Evidence.**
   - Validators, `ci`, both doctor checks, the targeted contract tests and
-    the suite check pass at `c72f80396` (recheck above). `codeflow test` as
+    the suite check pass at `c72f80396`, the line tip rechecked on
+    2026-09-28 (the recheck section of this record). `codeflow test` as
     one command is the primary's gate at the task branch head.
   - The native identity canary matched Claude by pinned id. The Codex
     identity matched on the requested and recorded model only, since Codex
     records no served id. Grok served `grok-4.7-build` for `grok-4.7`, which
-    stays recorded as drift until TSK-139 settles it.
+    stays recorded as drift until TSK-194 settles it.
 - **Not verified.** `gpt-5.6-sol` and `gpt-6-luna` were never launched. No
   seat version is qualified. The body-review duty runs once, on the release
   pull request: seat `codex-primary` review and seat `claude-primary`
@@ -232,15 +235,14 @@ reference is the only full list of what belongs to the operator.
   - TSK-083 was not selected. Its trust-prompt fix landed on the harness's
     own line through pull request 578.
 - **Follow-ups.**
-  - TSK-082, the Agent OS mirror: the routing half starts now, and the
-    autonomy half waits for TSK-164.
+  - TSK-082, the Agent OS mirror, is cancelled here and refiled to the
+    agent-os repository after 3.0.0.
   - TSK-164, `blocked`: the autonomy reference after the harness permission
     units.
-  - TSK-139, `blocked`: native qualification after settings units 1 and 3,
-    unit 5's D1 spike and the D10 fixture route.
-  - TSK-125, on `integration/EPC-020-delivery-system`: record
-    reconciliation after this line syncs from `main`. The record is not on
-    this line; it resolves once the release branch merges both lines.
+  - TSK-194, `todo`: one full-suite qualification per designated primary
+    seat on the released binary, after the release. It replaces the
+    cancelled TSK-139.
+  - TSK-125 is cancelled; TSK-195 took over the record reconciliation.
   - The workspace "Seats and models" and trust bullets, and
-    `RELEASE-PLAN.md`, are updated on `docs/workspace` to point at the
-    catalog.
+    `RELEASE-PLAN.md`, are updated on `integration/workspace` (renamed
+    from `docs/workspace` on 2026-09-28) to point at the catalog.
