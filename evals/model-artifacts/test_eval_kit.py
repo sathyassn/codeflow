@@ -3540,6 +3540,9 @@ class ProcessRepairTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("qualification_runner", ROOT / "evals/qualification/runner.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        # Unit tests never start the background peer watcher, which talks to Herdr.
+        module.real_start_peer_watch = getattr(module, "start_peer_watch", None)
+        module.start_peer_watch = lambda output: {"pid": None, "log": str(output / "peers.log")}
         return module
 
     def test_scope_change_fixture_has_in_progress_evidence(self):
@@ -4580,13 +4583,26 @@ class ProcessRepairTests(unittest.TestCase):
             native = ["--model", "chosen-selector", "--permission-mode", "auto"]
             args = argparse.Namespace(record=record_path, output=evidence_root / "evidence", harness="claude",
                                       native=["--", *native], codex_hook_trust="review", workspace="owned-workspace", watch_dir=[str(root / "watched")], start_timeout=1, max_entries=100_000, snapshot_seconds=10)
+            watched = lambda output: order.append("watch") or {"pid": None}  # noqa: E731
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), patch.object(runner, "start_peer_watch", side_effect=watched), \
+                 patch.object(runner, "deliver_claude", side_effect=deliver), patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            # Peers can only be opened after delivery; the watcher is answering by then.
+            self.assertEqual(["start", "ready", "snapshot", "watch", "delivery"], order)
+            self.assertFalse((args.output / "peers.stop").exists())
+            args.output = evidence_root / "delivery-refused"
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
                  patch.object(runner, "herdr", side_effect=herdr), \
                  patch.object(runner, "wait_ready", side_effect=ready), \
                  patch.object(runner, "snapshot", side_effect=snapshot), \
-                 patch.object(runner, "deliver_claude", side_effect=deliver), patch.object(runner.time, "sleep"):
+                 patch.object(runner, "deliver_claude", side_effect=runner.Refused("no Enter sent")), \
+                 patch.object(runner.time, "sleep"), self.assertRaises(runner.Refused):
                 runner.launch(args)
-            self.assertEqual(["start", "ready", "snapshot", "delivery"], order)
+            self.assertTrue((args.output / "peers.stop").exists())
+            args.output = evidence_root / "evidence"
             saved = json.loads((args.output / "launch.json").read_text())
             self.assertEqual("started", saved["status"])
             self.assertEqual(native, saved["native_args"])
@@ -4806,10 +4822,35 @@ class ProcessRepairTests(unittest.TestCase):
             transport.assert_not_called()
             self.assertEqual("--model", json.loads((args.output / "launch.json").read_text())["refused_flag"])
             args.harness = "claude"; args.native = ["--", *native]
-            args.output = evidence_root / "claude-bypass-refused"
+            # On a Claude launch the option covers Codex peers only: the same
+            # checks run, and the native flag never reaches the Claude seat.
+            args.output = evidence_root / "claude-bypass-for-peers"
+            calls.clear()
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_claude", side_effect=deliver), patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            peer_option = json.loads((args.output / "launch.json").read_text())
+            self.assertNotIn(flag, peer_option["native_args"])
+            self.assertNotIn(flag, peer_option["permission_flags"])
+            self.assertNotIn(flag, next(c for c in calls if c[:2] == ("agent", "start")))
+            self.assertEqual("bypass", peer_option["hook_trust"]["option"])
+            self.assertFalse(peer_option["hook_trust"]["flag_used"])
+            self.assertEqual({"evaluator_home": "passed", "fixture_hooks": "passed"}, peer_option["hook_trust"]["checks"])
+            self.assertEqual(peer_option["hook_trust"]["plugins"], peer_option["config_start"]["codex"]["plugins"])
+            context = json.loads((Path(peer_option["peers"]["bin"]) / "context.json").read_text())
+            self.assertEqual("bypass", context["option"])
+            self.assertEqual({"pane": "owned-pane", "ready": True}, context["subject"])
+            create = next(c for c in calls if c[:2] == ("tab", "create"))
+            self.assertIn("PATH=" + peer_option["peers"]["bin"] + os.pathsep, " ".join(create))
+            args.output = evidence_root / "claude-caller-flag-refused"
+            args.native = ["--", *native, flag]
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "only.*Codex"):
                 runner.launch(args)
             transport.assert_not_called()
+            args.native = ["--", *native]
             args.codex_hook_trust = "review"
             with patch.object(runner, "herdr") as transport:
                 printed = runner.print_hook_review(record_path)
@@ -4874,6 +4915,413 @@ class ProcessRepairTests(unittest.TestCase):
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "signature"):
                 runner.launch(args)
             transport.assert_not_called()
+
+    # Peer screens retained from TSK-194's first batch (cases 00 and 11),
+    # with the fixture path as a placeholder.
+    CASE_00_PEER_TRUST = (
+        "\n  Folder access\n  {path}\n\n"
+        "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings."
+        " Folder settings can run code automatically, even without a model\n"
+        "  request. Continue only if you trust these files. Your trust decision will be saved.\n\n"
+        "› 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit\n")
+    CASE_11_PEER_HOOKS = (
+        "\n  Hooks need review\n  5 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n\n\n"
+        "› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\n\n"
+        "  enter confirm · esc skip\n")
+
+    def peer_trial(self, root: Path, option: str = "bypass"):
+        """A materialized-looking trial with fake native executables on PATH."""
+        runner = self.runner()
+        repository = root / "subjects/trial/repository"
+        (repository / ".codex").mkdir(parents=True)
+        (repository / ".codex/hooks.json").write_bytes((ROOT / "assets/base/codex/hooks.json").read_bytes())
+        (repository.parent / "tmp").mkdir()
+        (repository.parent / "home").mkdir()
+        runner.kit.prepare_eval_homes()
+        environment = runner.kit.subject_environment(repository.parent, root / "subjects/bin/codeflow", [])
+        fakes, calls = root / "native", root / "calls"
+        fakes.mkdir(); calls.mkdir()
+        recorder = (f"#!{sys.executable}\nimport json, os, sys, time\n"
+                    f"name = os.path.basename(sys.argv[0])\n"
+                    f"path = {str(calls)!r} + '/' + name + '-' + str(time.time_ns()) + '.json'\n"
+                    "open(path, 'w').write(json.dumps({'argv': sys.argv, 'env': dict(os.environ)}))\n")
+        for name in ["claude", "codex", "grok", "herdr"]:
+            (fakes / name).write_text(recorder)
+            (fakes / name).chmod(0o755)
+        environment["PATH"] = f"{fakes}{os.pathsep}/usr/bin{os.pathsep}/bin"
+        peers = runner.prepare_peers(repository, environment, "trial-workspace", option)
+        hook_trust = {"option": option, "plugins": []}
+        if option == "bypass":
+            hook_trust = runner.codex_hook_preflight(environment, repository, {"option": option})
+            environment["CODEX_HOME"] = hook_trust["evaluator_home"]
+            runner.write_peer_context(peers, environment=dict(environment))
+        run = {"repository": str(repository), "workspace": "trial-workspace", "pane": "subject-pane",
+               "environment": environment, "hook_trust": hook_trust, "peers": peers}
+        runner.write_peer_context(peers, subject={"pane": "subject-pane", "ready": True})
+        return runner, run, repository, environment, calls
+
+    @staticmethod
+    def native_calls(calls: Path) -> list[dict]:
+        order = sorted(calls.glob("*.json"), key=lambda path: int(path.stem.rsplit("-", 1)[1]))
+        return [json.loads(path.read_text()) for path in order]
+
+    @staticmethod
+    def peer_request(run: dict, harness: str = "codex", args=None, **changes) -> dict:
+        args = ["--model", "gpt-6-astra", "-c", "model_reasoning_effort=high", "--ask-for-approval", "never"] if args is None else args
+        request = {"id": "req-1", "harness": harness, "args": args, "pane": "peer-pane", "workspace": "trial-workspace",
+                   "cwd": run["repository"], "environment": dict(run["environment"])}
+        request.update(changes)
+        return request
+
+    def test_peer_launcher_runs_only_the_watchers_answer_with_isolation(self):
+        """A Codex peer started through the trial PATH runs exactly the checked argv."""
+        flag = "--dangerously-bypass-hook-trust"
+        for option in ["bypass", "review"]:
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as temp, \
+                 patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+                runner, run, repository, environment, calls = self.peer_trial(Path(temp).resolve(), option)
+                shim = Path(run["peers"]["bin"]) / "codex"
+                args = ["--model", "gpt-6-astra", "-c", "model_reasoning_effort=high", "--ask-for-approval", "never"]
+                child = subprocess.Popen([str(shim), *args], cwd=repository, stderr=subprocess.PIPE, text=True,
+                                         env={**environment, "HERDR_PANE_ID": "peer-pane", "HERDR_WORKSPACE_ID": "trial-workspace"})
+                record = {"requests": [], "peers": {}}
+                launches = Path(run["peers"]["launches"])
+                with patch.object(runner, "state", return_value={"workspace_id": "trial-workspace"}):
+                    for _ in range(100):
+                        runner.answer_requests(run, record)
+                        if record["requests"]:
+                            break
+                        threading.Event().wait(0.05)
+                _, error = child.communicate(timeout=20)
+                self.assertEqual(0, child.returncode, error)
+                decision = record["requests"][0]["decision"]
+                self.assertTrue(decision["allow"], decision)
+                [native] = self.native_calls(calls)
+                self.assertEqual(decision["argv"], native["argv"])
+                self.assertEqual(run["peers"]["executables"]["codex"], native["argv"][0])
+                self.assertEqual(args, native["argv"][1:len(args) + 1])
+                # The kit's state isolation reaches the peer, as for a top-level seat.
+                self.assertEqual(runner.kit.trial_native_args("codex", environment),
+                                 [a for a in native["argv"][len(args) + 1:] if a != flag])
+                self.assertEqual(1 if option == "bypass" else 0, native["argv"].count(flag))
+                for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]:
+                    self.assertEqual(environment[key], native["env"][key])
+                self.assertTrue(native["env"]["PATH"].startswith(run["peers"]["bin"] + os.pathsep))
+                self.assertEqual(1, len(list(launches.glob("*.decision.json"))))
+                flags, summary = runner.peer_findings(run, {"watcher": {"stopped_at": 1.0}, **record})
+                self.assertEqual([], flags)
+                self.assertEqual(decision["argv"], summary["requests"][0]["argv"])
+
+    def test_peer_launcher_refuses_without_an_answer_and_passes_only_status_calls(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, environment, calls = self.peer_trial(Path(temp).resolve())
+            peers = run["peers"]
+            runner.write_peer_context(peers, decision_seconds=0.3)
+            bin_dir = Path(peers["bin"])
+            env = {**environment, "HERDR_PANE_ID": "peer-pane"}
+            for harness, args in [("codex", ["--version"]), ("codex", ["-c", 'cli_auth_credentials_store="file"', "login", "status"]),
+                                  ("claude", ["auth", "status"]), ("grok", ["--help"])]:
+                done = subprocess.run([str(bin_dir / harness), *args], cwd=repository, env=env, capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, done.returncode, done.stderr)
+                self.assertEqual(args, self.native_calls(calls)[-1]["argv"][1:])
+            count = len(self.native_calls(calls))
+            # No watcher: nothing runs.
+            done = subprocess.run([str(bin_dir / "codex"), "--model", "m"], cwd=repository, env=env,
+                                  capture_output=True, text=True, timeout=20)
+            self.assertEqual(2, done.returncode)
+            self.assertIn("no answer from the trial watcher", done.stderr)
+            self.assertEqual(count, len(self.native_calls(calls)))
+            flags, _ = runner.peer_findings(run, {"watcher": {"stopped_at": 1.0}, "requests": [], "peers": {}})
+            self.assertIn("peer_launch_unanswered", flags)
+            # A refusal or an answer naming another executable runs nothing.
+            for reply in [{"allow": False, "error": "refused by the watcher"},
+                          {"allow": True, "argv": ["/bin/echo", "elsewhere"]}]:
+                runner.write_peer_context(peers, decision_seconds=10)
+                launches = Path(peers["launches"])
+                earlier = set(launches.glob("*.request.json"))
+                child = subprocess.Popen([str(bin_dir / "codex"), "--model", "m"], cwd=repository, env=env,
+                                         stderr=subprocess.PIPE, text=True)
+                for _ in range(200):
+                    pending = [p for p in launches.glob("*.request.json") if p not in earlier]
+                    if pending:
+                        break
+                    threading.Event().wait(0.05)
+                request_id = json.loads(pending[0].read_text())["id"]
+                runner.write(pending[0].with_name(f"{request_id}.decision.json"), {"id": request_id, **reply})
+                _, error = child.communicate(timeout=20)
+                self.assertEqual(2, child.returncode)
+                self.assertIn(reply.get("error", "names another executable"), error)
+                self.assertEqual(count, len(self.native_calls(calls)))
+            # The subject's own start passes once, before readiness only.
+            runner.write_peer_context(peers, subject={"pane": "subject-pane", "ready": False}, decision_seconds=0.3)
+            subject_env = {**environment, "HERDR_PANE_ID": "subject-pane"}
+            done = subprocess.run([str(bin_dir / "claude"), "--permission-mode", "auto"], cwd=repository,
+                                  env=subject_env, capture_output=True, text=True, timeout=20)
+            self.assertEqual(0, done.returncode, done.stderr)
+            self.assertEqual(["--permission-mode", "auto"], self.native_calls(calls)[-1]["argv"][1:])
+            runner.write_peer_context(peers, subject={"pane": "subject-pane", "ready": True})
+            done = subprocess.run([str(bin_dir / "claude"), "-p", "headless"], cwd=repository,
+                                  env=subject_env, capture_output=True, text=True, timeout=20)
+            self.assertEqual(2, done.returncode)
+
+    def test_herdr_launcher_carries_the_trial_environment_and_workspace(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, environment, calls = self.peer_trial(Path(temp).resolve())
+            herdr = Path(run["peers"]["bin"]) / "herdr"
+            done = subprocess.run([str(herdr), "tab", "create", "--cwd", str(repository), "--no-focus"],
+                                  env=environment, capture_output=True, text=True, timeout=20)
+            self.assertEqual(0, done.returncode, done.stderr)
+            argv = self.native_calls(calls)[-1]["argv"]
+            self.assertEqual(["--workspace", "trial-workspace"], argv[argv.index("--workspace"):argv.index("--workspace") + 2])
+            for key, value in environment.items():
+                self.assertIn(f"{key}={value}", argv)
+            self.assertIn(f"PATH={run['peers']['bin']}{os.pathsep}", " ".join(argv))
+            done = subprocess.run([str(herdr), "pane", "split", "w:p1", "--direction", "right"],
+                                  env=environment, capture_output=True, text=True, timeout=20)
+            self.assertEqual(0, done.returncode, done.stderr)
+            self.assertIn(f"CODEX_HOME={environment['CODEX_HOME']}", self.native_calls(calls)[-1]["argv"])
+            done = subprocess.run([str(herdr), "agent", "list"], env=environment, capture_output=True, text=True, timeout=20)
+            self.assertEqual(["agent", "list"], self.native_calls(calls)[-1]["argv"][1:])
+            count = len(self.native_calls(calls))
+            for args in [["tab", "create", "--workspace", "another"], ["tab", "create", "--workspace=another"],
+                         ["workspace", "create", "--cwd", str(repository)], ["worktree", "create", "--branch", "x"],
+                         ["tab", "create", "--env", f"CODEX_HOME={Path(temp) / 'other'}"],
+                         ["tab", "create", "--env=HOME=/elsewhere"]]:
+                with self.subTest(args=args):
+                    done = subprocess.run([str(herdr), *args], env=environment, capture_output=True, text=True, timeout=20)
+                    self.assertEqual(2, done.returncode)
+                    self.assertEqual(count, len(self.native_calls(calls)))
+            flags, _ = runner.peer_findings(run, {"watcher": {"stopped_at": 1.0}, "requests": [], "peers": {}})
+            self.assertEqual(["peer_launch_refused"], flags)
+
+    def test_peer_decision_negative_controls(self):
+        flag = "--dangerously-bypass-hook-trust"
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            root = Path(temp).resolve()
+            runner, run, repository, environment, _calls = self.peer_trial(root)
+            home = Path(environment["CODEX_HOME"])
+            def check(request, workspace="trial-workspace"):
+                with patch.object(runner, "state", return_value={"workspace_id": workspace}):
+                    return runner.peer_decision(run, request)
+            self.assertTrue(check(self.peer_request(run))["allow"])
+            self.assertIn(flag, check(self.peer_request(run))["argv"])
+            claude = check(self.peer_request(run, "claude", ["--model", "opus", "--permission-mode", "auto"]))
+            self.assertTrue(claude["allow"])
+            self.assertNotIn(flag, claude["argv"])
+            grok = check(self.peer_request(run, "grok", ["--always-approve"]))
+            self.assertNotIn(flag, grok["argv"])
+            alias = root / "alias-codex"
+            alias.symlink_to(home, target_is_directory=True)
+            other_env = lambda **values: {**run["environment"], **values}  # noqa: E731
+            refusals = {
+                "another home": self.peer_request(run, environment=other_env(CODEX_HOME=str(root / "other-codex"))),
+                "symlinked home": self.peer_request(run, environment=other_env(CODEX_HOME=str(alias))),
+                "personal home": self.peer_request(run, environment=other_env(CODEX_HOME=str(Path.home() / ".codex"))),
+                "another HOME": self.peer_request(run, environment=other_env(HOME=str(Path.home()))),
+                "memory on": self.peer_request(run, "claude", ["--permission-mode", "auto"],
+                                               environment={k: v for k, v in run["environment"].items() if k != "CLAUDE_CODE_DISABLE_AUTO_MEMORY"}),
+                "wrong path": self.peer_request(run, cwd=str(repository / "sub")),
+                "subject pane": self.peer_request(run, pane="subject-pane"),
+                "no pane": self.peer_request(run, pane=""),
+                "resume": self.peer_request(run, args=["resume", "--last"]),
+                "resume after flags": self.peer_request(run, args=["--model", "m", "resume"]),
+                "history override": self.peer_request(run, args=["-c", 'history.persistence="save-all"']),
+                "memory override": self.peer_request(run, args=["-c", "memories.use_memories=true"]),
+                "profile": self.peer_request(run, args=["--profile", "personal"]),
+                "personal path": self.peer_request(run, args=["--model", "~/.codex/model"]),
+                "headless": self.peer_request(run, args=["exec", "task"]),
+                "claude resume": self.peer_request(run, "claude", ["--resume", "abc"]),
+                "claude continue": self.peer_request(run, "claude", ["--continue"]),
+                "claude settings": self.peer_request(run, "claude", ["--settings", "/outside.json"]),
+                "claude given the codex flag": self.peer_request(run, "claude", ["--permission-mode", "auto", flag]),
+                "grok given the codex flag": self.peer_request(run, "grok", ["--always-approve", flag]),
+                "unknown harness": self.peer_request(run, "gemini"),
+            }
+            for name, request in refusals.items():
+                with self.subTest(name):
+                    decision = check(request)
+                    self.assertFalse(decision["allow"], decision)
+                    self.assertNotIn("argv", decision)
+            self.assertFalse(check(self.peer_request(run), workspace="another-workspace")["allow"])
+            # Hook sources are rechecked at each peer start, not trusted from launch.
+            hooks = repository / ".codex/hooks.json"
+            shipped = hooks.read_bytes()
+            changed = json.loads(shipped)
+            changed["hooks"]["PreToolUse"][0]["hooks"][0]["command"] += "; echo injected"
+            hooks.write_text(json.dumps(changed))
+            self.assertIn("shipped", check(self.peer_request(run))["error"])
+            hooks.write_bytes(shipped)
+            (home / "hooks.json").write_text("{}")
+            self.assertIn("user-level hooks", check(self.peer_request(run))["error"])
+            (home / "hooks.json").unlink()
+            plugin = home / "plugins/cache/openai-curated-remote/example/1/.codex-plugin/plugin.json"
+            plugin.parent.mkdir(parents=True)
+            plugin.write_text('{"name":"example","version":"1","hooks":"./h.json"}')
+            self.assertIn("hooks", check(self.peer_request(run))["error"])
+            plugin.write_text('{"name":"example","version":"1"}')
+            self.assertIn("plugin inventory changed", check(self.peer_request(run))["error"])
+            shutil.rmtree(home / "plugins")
+            self.assertTrue(check(self.peer_request(run))["allow"])
+            # Option omitted: the Codex peer keeps manual hook review.
+            run["hook_trust"] = {"option": "review", "plugins": []}
+            review = check(self.peer_request(run))
+            self.assertTrue(review["allow"])
+            self.assertNotIn(flag, review["argv"])
+            self.assertFalse(check(self.peer_request(run, args=["--model", "m", flag]))["allow"])
+
+    def peer_agent(self, run, **changes):
+        agent = {"pane_id": "peer-pane", "tab_id": "peer-tab", "workspace_id": "trial-workspace", "agent": "codex",
+                 "agent_status": "blocked", "cwd": run["repository"]}
+        agent.update(changes)
+        return agent
+
+    def peer_transport(self, run, screens, processes, agents, keys):
+        screens = iter(screens)
+        def transport(*argv, **_kwargs):
+            if argv[:2] == ("agent", "list"):
+                return {"result": {"agents": agents()}}
+            if argv[:2] == ("pane", "process-info"):
+                return {"result": {"process_info": {"foreground_processes": processes()}}}
+            if argv[:2] == ("pane", "read"):
+                return next(screens)
+            if argv[:2] == ("pane", "send-keys"):
+                keys.append(argv[2:])
+                return "sent"
+            if argv[:2] == ("agent", "get"):
+                return {"result": {"agent": {"workspace_id": "trial-workspace"}}}
+            raise AssertionError(argv)
+        return transport
+
+    def test_peer_watcher_answers_trust_only_for_verified_peers(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, environment, _calls = self.peer_trial(Path(temp).resolve())
+            launches = Path(run["peers"]["launches"])
+            runner.write(launches / "req-1.request.json", self.peer_request(run))
+            trust = self.CASE_00_PEER_TRUST.format(path=repository)
+            idle = self.codex_frame(repository)
+            decided = {}
+            def processes():
+                argv = decided.get("argv")
+                return [{"pid": 7, "name": "codex", "argv0": argv[0], "argv": argv}] if argv else [{"pid": 6, "name": "Python"}]
+            status = {"value": "blocked"}
+            agents = lambda: [self.peer_agent(run, agent_status=status["value"])]  # noqa: E731
+            keys, record = [], {"requests": [], "peers": {}}
+            # Case 00: the exact folder dialog is accepted once the launch is verified.
+            with patch.object(runner, "herdr", side_effect=self.peer_transport(run, [trust, trust, idle], processes, agents, keys)), \
+                 patch.object(runner.time, "sleep"):
+                runner.answer_requests(run, record)
+                decided.update(record["requests"][0]["decision"])
+                runner.watch_once(run, record)
+                status["value"] = "idle"
+                runner.watch_once(run, record)
+                runner.watch_once(run, record)
+            peer = record["peers"]["peer-pane"]
+            self.assertEqual([("peer-pane", "Enter")], keys)
+            self.assertEqual("ready", peer["status"])
+            self.assertTrue(peer["launch_verified"])
+            self.assertEqual(decided["argv"], peer["process"]["argv"])
+            [accepted] = peer["trust_acceptances"]
+            self.assertEqual(("codex", str(repository)), (accepted["harness"], accepted["path"]))
+            self.assertEqual("sha256:" + hashlib.sha256(trust.encode()).hexdigest(), accepted["screen_sha256"])
+            self.assertEqual("passed", peer["plugin_recheck"])
+            self.assertEqual([], runner.peer_findings(run, {"watcher": {"stopped_at": 1.0}, **record})[0])
+            # Every other startup state gets no key and a validity flag.
+            abs_codex = [{"pid": 9, "name": "codex", "argv0": "/opt/elsewhere/codex", "argv": ["/opt/elsewhere/codex"]}]
+            cases = {
+                "case 11 hook review": (True, lambda: decided["argv"], [self.CASE_11_PEER_HOOKS], "startup_refused"),
+                "unrecognized trust": (True, lambda: decided["argv"], ["Do you trust this unknown folder?\n" + str(repository)], "startup_refused"),
+                "trust for another path": (True, lambda: decided["argv"], [self.CASE_00_PEER_TRUST.format(path=str(repository) + "-other")], "startup_refused"),
+                "argv differs from the answer": (True, lambda: decided["argv"][:3], [trust], "unverified"),
+                "absolute path, no answer": (False, None, [trust], "unrecorded"),
+            }
+            for name, (answered, argv, screens, expected) in cases.items():
+                with self.subTest(name):
+                    keys, record = [], {"requests": [], "peers": {}}
+                    if answered:
+                        record["requests"].append({"request": self.peer_request(run), "decision": dict(decided)})
+                    running = (lambda: [{"pid": 8, "name": "codex", "argv0": decided["argv"][0], "argv": argv()}]) if argv else (lambda: abs_codex)
+                    with patch.object(runner, "herdr", side_effect=self.peer_transport(run, screens, running, agents, keys)), \
+                         patch.object(runner, "answer_requests"), patch.object(runner.time, "sleep"):
+                        runner.watch_once(run, record)
+                    self.assertEqual([], keys)
+                    self.assertEqual(expected, record["peers"]["peer-pane"]["status"])
+                    flags = runner.peer_findings(run, {"watcher": {"stopped_at": 1.0}, **record})[0]
+                    self.assertIn(runner.PEER_FLAGS[expected], flags)
+            # A peer in another workspace is never read or answered.
+            keys, record = [], {"requests": [{"request": self.peer_request(run), "decision": dict(decided)}], "peers": {}}
+            with patch.object(runner, "herdr", side_effect=self.peer_transport(
+                    run, [], lambda: self.fail("process read"), lambda: [self.peer_agent(run, workspace_id="another")], keys)), \
+                 patch.object(runner, "answer_requests"):
+                runner.watch_once(run, record)
+            self.assertEqual(([], "outside_workspace"), (keys, record["peers"]["peer-pane"]["status"]))
+            # A verified peer holding pending input never gets an Enter from the watcher.
+            keys, record = [], {"requests": [{"request": self.peer_request(run), "decision": dict(decided)}], "peers": {}}
+            pending = self.codex_frame(repository, "› unsent draft from the subject")
+            with patch.object(runner, "herdr", side_effect=self.peer_transport(
+                    run, [pending, pending], lambda: [{"pid": 8, "name": "codex", "argv": decided["argv"]}],
+                    lambda: [self.peer_agent(run, agent_status="idle")], keys)), patch.object(runner, "answer_requests"):
+                runner.watch_once(run, record)
+                runner.watch_once(run, record)
+            self.assertEqual(([], "ready"), (keys, record["peers"]["peer-pane"]["status"]))
+            # A plugin added after launch is flagged at the peer's readiness.
+            plugin = Path(environment["CODEX_HOME"]) / "plugins/cache/openai-curated-remote/late/1/.codex-plugin/plugin.json"
+            plugin.parent.mkdir(parents=True)
+            plugin.write_text('{"name":"late","version":"1"}')
+            keys, record = [], {"requests": [{"request": self.peer_request(run), "decision": dict(decided)}], "peers": {}}
+            with patch.object(runner, "herdr", side_effect=self.peer_transport(
+                    run, [idle], lambda: [{"pid": 8, "name": "codex", "argv": decided["argv"]}],
+                    lambda: [self.peer_agent(run, agent_status="idle")], keys)), patch.object(runner, "answer_requests"):
+                runner.watch_once(run, record)
+            self.assertEqual("changed", record["peers"]["peer-pane"]["plugin_recheck"])
+            self.assertIn("peer_plugin_drift", runner.peer_findings(run, {"watcher": {"stopped_at": 1.0}, **record})[0])
+
+    def test_peer_watch_lifecycle_and_finish_flags(self):
+        import argparse
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            root = Path(temp).resolve()
+            runner, run, repository, environment, _calls = self.peer_trial(root)
+            output = root / "evidence"
+            output.mkdir()
+            run.update(declared_directories=[], observation={}, status="started", peer_watch={"pid": None})
+            runner.write(output / "launch.json", run)
+            runner.write(output / "before.json", runner.snapshot([]))
+            with patch.object(runner, "herdr", return_value={"result": {"agents": [], "agent": {"agent_status": "done"}}}):
+                thread = threading.Thread(target=runner.watch, args=(argparse.Namespace(output=output, interval=0.05, max_hours=1),))
+                thread.start()
+                try:
+                    for _ in range(200):
+                        if (output / "peers.json").exists():
+                            break
+                        threading.Event().wait(0.05)
+                    with patch("sys.stdout", io.StringIO()):
+                        runner.finish(argparse.Namespace(output=output))
+                finally:
+                    (output / "peers.stop").write_text("")
+                    thread.join(10)
+            self.assertFalse(thread.is_alive())
+            observed = json.loads((output / "observation.json").read_text())
+            self.assertEqual([], [f for f in observed["validity_flags"] if f.startswith("peer_")])
+            self.assertEqual("finish", observed["peers"]["watcher"]["stop_reason"])
+            # A watcher that never stopped, or a changed launcher, invalidates.
+            self.assertIn("peer_watch_incomplete", runner.peer_findings(run, None)[0])
+            shim = Path(run["peers"]["bin"]) / "codex"
+            shim.chmod(0o755)
+            shim.write_text(shim.read_text() + "\n# edited\n")
+            self.assertIn("peer_launcher_changed", runner.peer_findings(run, {"watcher": {"stopped_at": 1.0}, "requests": [], "peers": {}})[0])
+            # The real launcher start refuses when the watcher dies at once.
+            class Exited:
+                pid = 1
+                def poll(self):
+                    return 1
+            with patch.object(runner.subprocess, "Popen", return_value=Exited()), \
+                 self.assertRaisesRegex(runner.Refused, "exited"):
+                runner.real_start_peer_watch(root / "evidence")
+            # Watch roots never overlap the launcher folders.
+            for reserved in runner.peer_folders(repository):
+                reserved.mkdir(exist_ok=True)
+                for declared in [reserved, reserved / "inner"]:
+                    with self.subTest(declared=declared), self.assertRaisesRegex(runner.Refused, "peer launcher"):
+                        runner.watch_directories(environment, [str(declared)], list(runner.peer_folders(repository)))
 
     def test_closeout_inventory_matches_real_local_worktrees(self):
         with tempfile.TemporaryDirectory() as temp:
