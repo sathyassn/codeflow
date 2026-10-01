@@ -4795,7 +4795,6 @@ fn copy_guide_requirements_are_hard_and_owned_by_the_guide() {
     }
 }
 
-
 fn process_fixture(id: &str) -> Value {
     json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json")["fixtures"]
         .as_array()
