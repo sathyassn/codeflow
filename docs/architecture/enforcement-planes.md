@@ -147,7 +147,10 @@ lowered.
 
 Contract-3 git shims exit 1 and harness wrappers exit 2 when the `codeflow`
 binary is missing or older, printing the installer and `codeflow update`,
-so install the new binary before running `codeflow update`.
+so install the new binary before running `codeflow update`. A wrapper also
+exits 2 when a current binary refuses by policy, but then prints only the
+guard's own message: it asks `git-hook capabilities` for `hooks 3` before
+it advises a reinstall.
 The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
 PowerShell as the hook runner is unsupported.
 

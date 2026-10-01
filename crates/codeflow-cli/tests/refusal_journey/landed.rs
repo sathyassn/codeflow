@@ -252,6 +252,14 @@ fn ac3_shims_fail_closed_and_harness_contract_is_wired() {
             std::fs::remove_file(fake).unwrap();
         }
     }
+    wrappers_advise_reinstall_only_for_a_stale_binary(&repo, &assets, &bin);
+}
+
+/// AC-3: every harness wrapper blocks with exit 2 for a missing binary, an
+/// older one and a current one refusing by policy, and only the first two
+/// are told to reinstall.
+fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path, bin: &Path) {
+    use std::os::unix::fs::PermissionsExt;
     for path in [
         "codex/hooks.json",
         "grok/hooks.json",
@@ -270,14 +278,42 @@ fn ac3_shims_fail_closed_and_harness_contract_is_wired() {
         assert!(!hooks.is_empty());
         for command in hooks {
             assert!(command.contains("--contract 3"), "{command}");
-            let out = repo
-                .command("/bin/sh")
-                .args(["-c", &command])
-                .env("PATH", &bin)
-                .output()
-                .unwrap();
-            assert_eq!(out.status.code(), Some(2), "{command}: {out:?}");
-            assert!(String::from_utf8_lossy(&out.stderr).contains("codeflow update"));
+            // A missing binary, an older one (clap rejects `--contract` with
+            // exit 2) and a current one refusing by policy (exit 2) all
+            // block; only the first two are told to reinstall.
+            for (binary, advised) in [
+                (None, true),
+                (
+                    Some(("hooks 2", "error: unexpected argument '--contract'")),
+                    true,
+                ),
+                (Some(("hooks 3", "codeflow git-guard: BLOCKED")), false),
+            ] {
+                let fake = bin.join("codeflow");
+                if let Some((cap, refusal)) = binary {
+                    std::fs::write(&fake, format!("#!/bin/sh\nif [ \"$2\" = capabilities ]; then echo '{cap}'; exit 0; fi\necho \"{refusal}\" >&2\nexit 2\n")).unwrap();
+                    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                }
+                let out = repo
+                    .command("/bin/sh")
+                    .args(["-c", &command])
+                    .env("PATH", bin)
+                    .output()
+                    .unwrap();
+                assert_eq!(out.status.code(), Some(2), "{command}: {out:?}");
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert_eq!(
+                    stderr.contains("codeflow-cli-installer.sh"),
+                    advised,
+                    "{binary:?} {command}: {stderr}"
+                );
+                assert_eq!(stderr.contains("codeflow update"), advised, "{stderr}");
+                if let Some((_, refusal)) = binary {
+                    assert!(stderr.contains(refusal), "{stderr}");
+                    std::fs::remove_file(fake).unwrap();
+                }
+            }
         }
     }
 }
