@@ -43,10 +43,11 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "cf-present project keys in recorded TSK-115 evidence: path hashes, not credentials"
+description = "exact cf-present project keys in recorded TSK-115 evidence: path hashes, not credentials"
 condition = "AND"
 paths = ['''^docs/verification/evidence/tsk-115/ac3-native-run(?:-2)?/present-state\.txt$''']
 regexTarget = "secret"
 regexes = [
-  '''^[0-9a-f]{64}$''',
+  '''^b4320227e2113d521e618f67fa7627132d4fc816795343ecf1f67198a76c806f$''',
+  '''^bc76c634c07de278b6d37b05a93bb3f14c077dcc6263b213bf660747e1d976eb$''',
 ]
