@@ -14,7 +14,7 @@ erratum below, never an edit of the section.
 
 - 2026-09-27, 2.1.0: the `v2.1.0` tag and the published `source.tar.gz`
   identify different commits. The published archive is the release's source;
-  the tag stays where it is. See "Historical bridge into v3" in
+  the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
 
 ## [3.0.0]
@@ -25,8 +25,8 @@ publication date._
 > **Upgrading from 2.1.0.** Take these steps in order; the entries below give
 > the detail.
 >
-> 1. On a planning branch, make the repairs in the breaking migrations list
->    under Changed (coverage scopes, test modes,
+> 1. On a planning branch, make the repairs in the "Breaking migrations" note
+>    in the last Changed section (coverage scopes, test modes,
 >    `security.dangerous_commands`, and what `codeflow validate --docs`
 >    reports), and merge them before updating.
 > 2. Install the 3.0.0 `codeflow` on `PATH`. The hooks run that binary, and
@@ -82,9 +82,12 @@ publication date._
 <!-- codeflow:release-impact patch -->
 - **Hooks in `.git/hooks` on adoption.** Setting `core.hooksPath` stops git
   running a project's own hooks, such as those `pre-commit install` writes.
-  `init` and `update` now name each executable hook in the repository's hooks
-  folder, linked worktrees included, and give the choices; `codeflow doctor`
-  warns while they stay. Nothing is moved, and hooks are not chained.
+  `init` and `update` now name each executable hook in that folder, also
+  when run from a linked worktree, and give two choices: move the check into
+  CI or a hook manager, or keep it in a project-owned hooks folder set as
+  `core.hooksPath` that also calls the CodeFlow shims (see
+  `docs/adoption.md`). `codeflow doctor` warns while they stay. Nothing is
+  moved, and hooks are not chained.
 
 ### Added
 
@@ -1778,12 +1781,12 @@ publication date._
 
 - **Grok Build as a first-class host and catalog family (ADR-0054).** Interactive
   `grok` joins Claude Code and Codex as a CodeFlow host. The standing pair
-  remains `claude-judgment-primary` and `codex-engineering-primary`;
-  `grok-engineering-primary` is a catalog seat on `grok-4.6` at medium (ADR-0055). Extra-family
+  remains the Claude judgment seat and the Codex engineering seat; the Grok
+  seat is `grok-primary` on `grok-4.7` in the schema 5 catalog (ADR-0069). Extra-family
   review is named when a routing-policy trigger fires and the family is
   available; unavailable is an evidenced limitation, never a silent third vote.
   Claude produces design in its native session regardless of host. `grok-cli`
-  is catalog-supported with a `grok-cli-version` doctor probe and a fifteenth
+  is catalog-supported with a `grok-cli-version` doctor probe and a
   doctor check for structural `.grok/hooks` wiring. Grok-hosted
   Claude/Codex lanes use Herdr; dated schema-v2 and Codex Herdr canaries
   live in `docs/verification/grok-host-duo-canary-2026-09-07.md` and are
@@ -1798,10 +1801,12 @@ publication date._
 
 ### Changed
 
-- **Human-authorized release automation (ADR-0061).** CodeFlow PRs now declare
-  reviewed release impact; git-cliff remains the sole bump calculator while a
-  guarded workflow maintains one candidate PR and cargo-dist remains the sole
-  publisher after a human merges the exact candidate. The v2.1 tag/source
+- **Human-authorized release automation (ADR-0062).** CodeFlow PRs now declare
+  reviewed release impact in the normal work PR, and `scripts/release.py
+  check-pr` checks it. The version is the latest public release bumped once by
+  the highest pending impact, and cargo-dist remains the sole publisher after a
+  human merges and dispatches. ADR-0062 supersedes ADR-0061's maintained
+  candidate PR and ADR-0012's git-cliff calculation. The v2.1 tag/source
   discrepancy is preserved as explicit provenance, not repaired by moving a
   tag. Consumer projects keep their own version and publication authorities;
   customization, shipping, and review route to one opt-in project policy with
