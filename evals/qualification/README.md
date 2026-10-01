@@ -85,8 +85,11 @@ for adopters' ordinary sessions. `--codex-hook-trust=review` is the default.
 With that explicit choice, the runner appends
 `--dangerously-bypass-hook-trust` once, only for Codex with `CODEX_HOME`
 resolving to `~/.codeflow-eval/codex`. A caller-supplied native bypass flag
-also requires that choice; another home or harness refuses. Before a bypass
-launch, the runner checks:
+also requires that choice; another home refuses, and so does the flag in a
+Claude or Grok seat's arguments. On a Claude or Grok launch the option runs
+the same checks and covers only the Codex peers that seat opens (see "Peers
+the subject opens"); the native flag never reaches Claude or Grok. Before a
+bypass launch, the runner checks:
 
 - The dedicated home has no `hooks.json` or TOML hooks entries (including old
   `hooks.state` trust records). Malformed or unreadable config refuses.
@@ -360,6 +363,104 @@ process-round case boundaries and all six R-105 scenarios from SPC-013.
 The delivery test suite is offline by default. Its two live Herdr canaries
 require `CF_HERDR_LIVE_CANARY=1`; the primary may opt in when native launch
 is authorized. A live canary is a transport check, not an acceptance trial.
+
+## Peers the subject opens
+
+A subject may open another seat, for example a Codex reviewer in a new Herdr
+tab, as cases 00 and 11 did in TSK-194's first batch. A Herdr tab started by
+the subject gets Herdr's server environment, not the subject's, unless the
+call passes it with `--env`. Without help such a peer would run with the
+operator's HOME and harness folders, and it stops at native trust screens
+that nobody answers.
+
+```text
+ subject seat (trial PATH)          peer tab                         runner watch
+ herdr tab create ...  ──> peer-bin/herdr adds trial --env and workspace
+ herdr agent start --kind codex ──> peer-bin/codex ── request ──> checks start
+                                                    <── argv ───  (or refusal)
+                                    exec exact argv    ── process-info argv match
+                                    folder dialog      <── Enter only after match
+```
+
+At launch the runner writes `peer-bin/` and `peer-launches/` next to the
+fixture (outside the repository, HOME and TMPDIR) and puts `peer-bin` first
+on the trial PATH. It holds copies of `peer_shim.py` named `herdr`, `claude`,
+`codex` and `grok`, and a `context.json`; nothing names the evaluator's
+checkout. Watch roots overlapping these folders are refused.
+
+- `herdr`: `tab create` and `pane split` get every trial environment
+  variable; `tab create` gets the trial's `--workspace` when none is given.
+  Another workspace, `workspace create`, `worktree create|open`, or an `--env`
+  that changes a trial variable is refused. Other Herdr calls pass through.
+- `claude`, `codex`, `grok`: version, help and sign-in status calls pass
+  through. The runner's own seat start passes through once, in the subject's
+  pane, before readiness; `launch.json` records in
+  `peers.subject_start_via_launcher` whether Herdr's launch route reached the
+  trial PATH. Any other start writes a request and waits up to 20 seconds for
+  an answer; without one nothing runs.
+
+After the before snapshot and before prompt delivery, `launch` starts
+`runner.py watch` in the background (`peer_watch` in `launch.json`, log in
+`peers.log`). It answers each request after these checks, and refuses
+otherwise:
+
+- the request comes from its own pane, not the subject's, in the trial's
+  Herdr workspace, with the fixture repository as its working directory;
+- every trial environment variable except TERM and PATH is unchanged, so
+  HOME, TMPDIR, the evaluator homes and the memory switches are the trial's
+  (another, personal or symlinked home refuses);
+- the arguments pass the same per-harness allowlist as a top-level seat, so
+  resume, continue, profiles, config overrides, headless subcommands and
+  personal paths refuse; approval flags are the subject's choice;
+- for Codex with `--codex-hook-trust=bypass`: the dedicated home, user and
+  plugin hook sources and the fixture's shipped hooks are checked again, and
+  the plugin inventory must equal the launch preflight's.
+
+The answer is the exact argv: the real executable found at launch, the
+subject's arguments, the kit's state-isolation arguments (as for a top-level
+seat) and, only for a Codex peer under the bypass option, the native flag.
+The bypass flag is never added to a Claude or Grok peer.
+
+The watcher then reads `herdr agent list`. A pane is a peer once the watcher
+allowed a start there, or once Herdr sees an agent working in the trial's
+folders. It sends keys only to a peer whose foreground process argv, from
+`herdr pane process-info`, equals the answer, and only for the dialogs the
+subject's own startup accepts: the exact-path workspace-trust dialog and
+Claude's renderer prompt. It re-reads the screen before each key and records
+each acceptance per peer. It never pastes text and never presses Enter in an
+editor. Once the peer is idle or working it gets no further keys; for a Codex
+peer under the bypass option the plugin inventory is rechecked then.
+
+`finish` stops the watcher (`peers.stop`, then up to 20 seconds) before the
+final snapshot and writes `peers` into `observation.json`. These validity
+flags invalidate a trial:
+
+| Flag | Meaning |
+|---|---|
+| `peer_launch_refused` | a start or a Herdr call was refused |
+| `peer_launch_unanswered` | a request got no answer |
+| `peer_launch_unrecorded` | a seat ran in a peer pane without an answer: absolute path, another PATH or a raw Herdr call; its dialogs were not answered |
+| `peer_launch_unverified` | the pane's process argv did not match the answer |
+| `peer_outside_trial_workspace` | an agent in the trial's folders ran in another workspace |
+| `peer_startup_refused` | a hook review, an unknown trust screen or another path; no key sent |
+| `peer_not_ready` | an answered peer never became ready |
+| `peer_plugin_drift` | the plugin inventory changed by the peer's readiness |
+| `peer_launcher_changed` | a launcher file or `context.json` changed |
+| `peer_watch_incomplete` | the watcher did not stop cleanly |
+
+Without the bypass option a Codex peer meets its hook review; the watcher
+leaves it unanswered and flags the trial. The launchers arrange qualified
+launches; they are not containment. A subject can start a seat by absolute
+path, with another PATH or through the real Herdr binary, and that seat may
+use the operator's own harness folders. The watcher can only flag it, by
+cwd and process, and only while it runs. A subject that edits the launcher
+files is flagged, not stopped. A peer working outside the trial's folders in
+the trial workspace is not attributed. Native dry runs by the primary are the
+evidence that Herdr's real launch route reaches the trial PATH; these unit
+tests use fake executables and a fake Herdr transport.
+
+`observation.json` lists each peer's tab. After retaining its evidence, the
+primary closes peer tabs the subject left open, as it closes the trial tab.
 
 [grok-welcome]: https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/src/views/welcome/mod.rs
 [claude-onboarding]: https://github.com/anthropics/claude-code/issues/67149
