@@ -816,3 +816,48 @@ fn delegate_source_live_and_baseline_copies_are_byte_identical() {
         problems.join("\n  ")
     );
 }
+
+#[test]
+fn process_round_guidance_names_the_evidence_before_action() {
+    for path in [ORCHESTRATOR, "assets/base/agents/skills/cf-ship/SKILL.md"] {
+        assert_contains(
+            path,
+            &[
+                "Before choosing a landing route, read `PLAN.md`",
+                "in `README.md`",
+            ],
+        );
+    }
+    assert_contains(
+        "assets/base/rules/worktrees.md",
+        &[
+            "Before any removal, read `CODEFLOW_STATUS.txt`",
+            "against current Git state",
+        ],
+    );
+    assert_contains(
+        "assets/base/claude/skills/cf-method/references/project-organization.md",
+        &[
+            "A task branch is not an integration target",
+            "real local or remote-tracking branch",
+            "`codeflow work start`, `codeflow ci` and pre-commit enforce",
+        ],
+    );
+    assert_contains(
+        "assets/base/agents/skills/cf-ship/references/pr-checks.md",
+        &[
+            "timeout 30m gh pr checks <url> --required --watch --interval 60",
+            "do not add a preliminary poll, a parallel poll or a background loop",
+            "Wait for this command to finish before reporting readiness",
+        ],
+    );
+    assert_contains(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
+        &[
+            "refuse agent execution even after approval",
+            "separate controlled operator channel",
+            "checkpoint or backup identity, restore procedure",
+            "do not execute the action to obtain it",
+        ],
+    );
+}

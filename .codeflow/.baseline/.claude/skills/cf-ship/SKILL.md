@@ -5,7 +5,10 @@ description: Land finished work — docs and capability updates, then a PR throu
 
 # cf-ship — land finished work
 
-1. Preconditions: the applicable independent review verdict is `approved` and
+1. Before choosing a landing route, read `PLAN.md` and the landing policy
+   in `README.md` when present, alongside the project operating contract.
+   Resolve any conflict with the approved plan before changing its target.
+   Preconditions: the applicable independent review verdict is `approved` and
    every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
    After review, a task PR's last commit runs `codeflow task status <id>
    complete --acceptance <file>`; its block names the reviewed code commit
@@ -76,11 +79,9 @@ description: Land finished work — docs and capability updates, then a PR throu
 8. Land via a PR **merged by a human** when required *checks* are evidenced
    green (the same `codeflow test` / `validate` / coverage / security targets,
    locally or in completed CI jobs — a gate is the check, not the job name).
-   Classify CI redness with the quality contract: assertion-red blocks;
-   an infra-killed job that only restacks already-green checks does not. If
-   the host merge UI still requires that unfinished job by name, the human
-   waits, reruns, or overrides — that is merge authorization, not a failed
-   test. Or `codeflow integrate <branch> --into <target>` when there is no
+   For red or unfinished CI jobs, follow
+   [PR checks](references/pr-checks.md#redness-classes).
+   Or `codeflow integrate <branch> --into <target>` when there is no
    remote. An agent never merges into a protected branch — no `gh pr merge`
    into a protected base, no by-hand merge, never `gh pr merge --delete-branch`
    (step 10 deletes the pushed branch after proof).

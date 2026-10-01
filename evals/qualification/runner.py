@@ -1,0 +1,1117 @@
+#!/usr/bin/env python3
+"""Launch and observe one native interactive qualification trial.
+
+Repository tooling only. No headless model execution or credential copying.
+Use --help and README.md. A clean snapshot is bounded evidence, not confinement.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import stat
+import subprocess
+import sys
+import time
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[2]
+KIT_PATH = ROOT / "assets/base/agents/skills/cf-evaluate-model/scripts/eval_kit.py"
+spec = importlib.util.spec_from_file_location("qualification_eval_kit", KIT_PATH)
+kit = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(kit)
+
+
+class Refused(RuntimeError):
+    def __init__(self, message: str, flag: str | None = None):
+        super().__init__(message)
+        self.flag = flag
+
+
+def herdr(*args: str, text: bool = False):
+    done = subprocess.run(["herdr", *args], capture_output=True, text=True, timeout=60)
+    if done.returncode:
+        raise Refused(f"herdr {' '.join(args[:2])}: {done.stderr or done.stdout}")
+    return done.stdout if text or args[:2] in {("pane", "send-keys"), ("pane", "send-text")} else json.loads(done.stdout)
+
+
+def write(path: Path, value: dict) -> None:
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def snapshot(directories: list[str], *, shallow: list[str] | None = None,
+             max_entries: int = 100_000,
+             max_seconds: float = 10) -> dict:
+    """Metadata only, with a streaming walk and cooperative time/entry caps.
+
+    /private/tmp is always direct entries only. Other roots are recursive.
+    No symlink targets or file contents are read. A blocking OS metadata call
+    cannot be interrupted by this cooperative deadline.
+    """
+    started_at = time.monotonic()
+    shallow_roots = {"/private/tmp", *(shallow or [])}
+    entries, errors, flags = {}, {}, []
+    roots = set(directories)
+
+    def budget() -> bool:
+        if time.monotonic() - started_at >= max_seconds:
+            flags.append("directory_observation_time_cap")
+            return False
+        if len(entries) >= max_entries:
+            flags.append("directory_observation_entry_cap")
+            return False
+        return True
+
+    def visit(path: Path, depth: int | None, top_level: bool) -> bool:
+        if not budget():
+            return False
+        key = str(path)
+        try:
+            info = path.lstat()
+            kind = stat.S_IFMT(info.st_mode)
+            if key in roots:
+                # Root metadata is a presence/type marker; entries are observed below.
+                entries[key] = [kind]
+            elif top_level:
+                entries[key] = [kind]
+                if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    entries[key].append(info.st_mtime_ns)
+            else:
+                entries[key] = [info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+        except OSError as exc:
+            entries[key] = None
+            errors[key] = str(exc)
+            return True
+        if stat.S_ISDIR(info.st_mode) and depth != 0:
+            try:
+                with os.scandir(path) as children:
+                    for child in children:
+                        if not visit(Path(child.path), None if depth is None else depth - 1, top_level):
+                            return False
+            except OSError as exc:
+                errors[key] = str(exc)
+        return True
+
+    for value in directories:
+        if not visit(Path(value), 1 if value in shallow_roots else None, value in shallow_roots):
+            break
+    elapsed = time.monotonic() - started_at
+    if elapsed >= max_seconds:
+        flags.append("directory_observation_time_cap")
+    return {"entries": entries, "errors": errors, "roots": sorted(roots),
+            "validity_flags": sorted(set(flags)), "entry_count": len(entries),
+            "elapsed_seconds": elapsed}
+
+
+def compare(before: dict, after: dict) -> dict:
+    old, new = before["entries"], after["entries"]
+    added = sorted(set(new) - set(old))
+    changed = sorted(p for p in new.keys() & old.keys() if old[p] != new[p])
+    removed = sorted(set(old) - set(new))
+    old_errors, new_errors = before["errors"], after["errors"]
+    roots = set(before.get("roots", [])) | set(after.get("roots", []))
+    stable = {p for p in old_errors.keys() & new_errors.keys()
+              if p not in roots and p in old and p in new and old[p] == new[p]
+              and old[p] is not None and old_errors[p] == new_errors[p]}
+    incomplete = (set(old_errors) | set(new_errors)) - stable
+    flags = set(before.get("validity_flags", [])) | set(after.get("validity_flags", []))
+    if added or changed or removed:
+        flags.add("declared_directory_changed")
+    if incomplete:
+        flags.add("directory_observation_incomplete")
+    return {"validity_flags": sorted(flags), "added": added, "changed": changed,
+            "removed": removed, "errors": {"before": old_errors, "after": new_errors},
+            "limitations": [{"path": p, "reason": "unreadable in both snapshots with unchanged metadata"}
+                            for p in sorted(stable)],
+            "limitation": "Writes inside pre-existing top-level directories of /private/tmp are unobserved "
+                          "(except separately watched roots). Writes outside declared directories, startup writes "
+                          "before seat readiness, and transient entries gone before the final snapshot are not "
+                          "observed. Changes are not attributed to the subject."}
+
+
+# Whole-frame grammar from release-qualification/lib.sh at 97f714b61,
+# plus the observed branch/effort row only for the registered fixture branch.
+# Empty is accepted only before pasting. It is never proof for a second Enter.
+FOOTER = re.compile(r"  (?:⏸ manual mode on|⏵⏵ bypass permissions on \(shift\+tab to cycle\)|paste again to expand)(?: · (?:\? for shortcuts|← for agents))*")
+FOLD = re.compile(r"\[Pasted text #\d+ \+\d+ lines\]")
+DIRECTIVE = "Carry out the pasted instructions."
+PLACEHOLDER = re.compile(r'Try "[^"\n]+"')
+
+
+def editor(screen: str, branch: str | None = None) -> str | None:
+    raw = screen.splitlines()
+    lines = [line.rstrip() for line in raw]
+    rules = [i for i, line in enumerate(lines) if re.fullmatch(r"\s*─+\s*", line)]
+    if len(rules) < 2:
+        return None
+    top, bottom = rules[-2:]
+    body = lines[top + 1:bottom]
+    footer = [line for line in lines[bottom + 1:] if line]
+    if len(footer) == 2 and (footer[0] == "  codeflow-qualify" or (
+            branch is not None and re.fullmatch(r"  " + re.escape(branch) + r"(?: +(?:● (?:low|medium|high|xhigh|max) · /effort|ctrl\+g to edit in Nvim))?", footer[0]))):
+        footer = footer[1:]
+    if len(footer) != 1 or not FOOTER.fullmatch(footer[0]) or not body:
+        return None
+    # rstrip removes the blank separator in an empty editor.
+    if body[0] == "❯":
+        if raw[top + 1] not in {"❯", "❯ ", "❯\u00a0"}:
+            return None
+        first = ""
+    elif body[0].startswith(("❯ ", "❯\u00a0")):
+        first = body[0][2:]
+        if first.startswith((" ", "\u00a0")):
+            return None
+    else:
+        return None
+    rest = []
+    for line in body[1:]:
+        if re.match(r"^[\s│]*[❯>]", line) or (line and not line.startswith("  ")):
+            return None
+        rest.append(line[2:] if line else "")
+    return "\n".join([first, *rest]).strip()
+
+
+def visible(pane: str, branch: str | None = None, evidence: Path | None = None) -> str | None:
+    screen = herdr("pane", "read", pane, "--source", "visible", text=True)
+    if evidence is not None:
+        evidence.write_text(screen, encoding="utf-8")
+    return editor(screen, branch)
+
+
+def state(pane: str) -> dict:
+    return herdr("agent", "get", pane)["result"]["agent"]
+
+
+def recover_registration(pane: str, name: str, harness: str, repository: Path,
+                         start_args: tuple[str, ...]) -> dict:
+    try:
+        registered = state(pane)
+    except Refused:
+        return herdr(*start_args)
+    expected = {"name": name, "pane_id": pane, "agent": harness, "cwd": str(repository)}
+    if any(registered.get(key) != value for key, value in expected.items()):
+        raise Refused("registered seat identity differs after workspace trust")
+    return {"registered_agent": registered}
+
+
+def trust_choice(screen: str, harness: str, repository: Path) -> str | None:
+    lines = [line.strip() for line in screen.splitlines()]
+    if harness == "codex" and "Hooks need review" in lines:
+        raise Refused(f"hooks for the Codex trial fixture {repository} need one "
+                      "human-authorized acceptance in the dedicated evaluator home "
+                      "~/.codeflow-eval/codex; no key was sent")
+    if any(re.search(r"(?i)^(?:[❯›>]\s*)?(?:allow external .*imports|external imports:|import .*settings|.*hooks.*(?:review|trust))", line) for line in lines):
+        raise Refused("trust or import prompt is not authorized")
+    if harness == "grok" and "Do you trust the contents of this directory?" in lines:
+        body = [line for line in lines[lines.index("Do you trust the contents of this directory?"):] if line]
+        body = [line if i == 1 else " ".join(line.split()) for i, line in enumerate(body)]
+        expected = ["Do you trust the contents of this directory?", str(repository),
+                    "Grok Build may run or modify contents in this directory,", "posing security risks.",
+                    "Yes, proceed y", "No, quit n"]
+        if (body[:6] != expected or len(body) != 7
+                or not re.fullmatch(r"Grok Build 1\.0\.44 \[stable\]", body[-1])):
+            raise Refused("unrecognized Grok trust dialog or different subject path")
+        return "grok-yes"
+    header = {"claude": "Accessing workspace:", "codex": "Folder access"}.get(harness)
+    suspicious = re.search(r"(?i)do you trust|trust (?:this|the) (?:folder|directory|project)|one you trust|folder access|accessing workspace:", screen)
+    if not header or header not in lines:
+        if suspicious:
+            raise Refused("unrecognized trust dialog")
+        return None
+    if lines.count(header) != 1:
+        raise Refused("ambiguous trust dialog")
+    index = lines.index(header) + 1
+    while index < len(lines) and not lines[index]:
+        index += 1
+    path_lines = []
+    while index < len(lines) and lines[index]:
+        path_lines.append(lines[index]); index += 1
+    if "".join(path_lines) != str(repository):
+        raise Refused("trust dialog does not name the exact materialized subject path")
+    if harness == "claude":
+        yes, no, cursor = "Yes, I trust this folder", "No, exit", "❯"
+        valid = "Is this a project you created or one you trust?" in screen and "Enter to confirm · Esc to cancel" in lines
+    else:
+        yes, no, cursor = "1. Trust and continue", "2. Quit", "›"
+        valid = "Trust this folder? Codex can read, edit, and run files here," in screen and any(re.fullmatch(r"enter continue(?: and create sandbox)? · esc quit", line) for line in lines)
+    if valid and f"{cursor} {yes}" in lines and no in lines:
+        return "yes"
+    if valid and f"{cursor} {no}" in lines and yes in lines:
+        return "no"
+    raise Refused("unrecognized trust choices; no acceptance sent")
+
+
+def accept_workspace_trust(pane: str, harness: str, repository: Path, screen: str) -> dict | None:
+    choice = trust_choice(screen, harness, repository)
+    if choice is None:
+        return None
+    # Re-read before each key; never send Enter based on an earlier screen.
+    current = herdr("pane", "read", pane, "--source", "visible", text=True)
+    if trust_choice(current, harness, repository) != choice:
+        raise Refused("trust dialog changed before key delivery")
+    if choice == "no":
+        herdr("pane", "send-keys", pane, "Down" if harness == "claude" else "Up")
+        time.sleep(0.2)
+        current = herdr("pane", "read", pane, "--source", "visible", text=True)
+        if trust_choice(current, harness, repository) != "yes":
+            raise Refused("trust choice not visibly selected; no Enter sent")
+    herdr("pane", "send-keys", pane, "y" if harness == "grok" else "Enter")
+    return {"harness": harness, "path": str(repository),
+            "screen_sha256": "sha256:" + hashlib.sha256(current.encode()).hexdigest(), "time": time.time()}
+
+
+def renderer_choice(screen: str) -> str | None:
+    lines = [line.strip() for line in screen.splitlines() if line.strip()]
+    title = "Try the new fullscreen renderer?"
+    if title not in lines:
+        return None
+    rules = [i for i, line in enumerate(lines) if re.fullmatch("─+", line)]
+    if not rules:
+        raise Refused("unrecognized renderer dialog")
+    body = lines[rules[-1] + 1:]
+    fixed = [title, "· Flicker-free output",
+             "· Mouse support — click to move your cursor or expand results",
+             "· Selected text auto-copies to your clipboard"]
+    for choice, options in [("yes", ["❯ 1. Yes, try it", "2. Not now"]),
+                            ("no", ["1. Yes, try it", "❯ 2. Not now"])]:
+        if body == [*fixed, *options, "Enter to confirm · Esc to cancel"]:
+            return choice
+    raise Refused("unrecognized renderer dialog; no display choice sent")
+
+
+def decline_renderer(pane: str, screen: str) -> dict | None:
+    choice = renderer_choice(screen)
+    if choice is None:
+        return None
+    current = herdr("pane", "read", pane, "--source", "visible", text=True)
+    if renderer_choice(current) != choice:
+        raise Refused("renderer dialog changed before key delivery")
+    if choice == "yes":
+        herdr("pane", "send-keys", pane, "Down")
+        time.sleep(0.2)
+        current = herdr("pane", "read", pane, "--source", "visible", text=True)
+        if renderer_choice(current) != "no":
+            raise Refused("Not now not visibly selected; no Enter sent")
+    herdr("pane", "send-keys", pane, "Enter")
+    return {"harness": "claude", "dialog": "fullscreen-renderer", "choice": "Not now",
+            "screen_sha256": "sha256:" + hashlib.sha256(current.encode()).hexdigest(), "time": time.time()}
+
+
+def handle_startup(pane: str, harness: str, repository: Path, screen: str,
+                   acceptances: list, display_choices: list) -> bool:
+    if trust_choice(screen, harness, repository) is not None:
+        if not acceptances:
+            acceptances.append(accept_workspace_trust(pane, harness, repository, screen))
+        return True
+    if harness == "claude" and renderer_choice(screen) is not None:
+        if not display_choices:
+            display_choices.append(decline_renderer(pane, screen))
+        return True
+    return False
+
+
+# Codex CLI idle frame, captured live: the empty composer, one blank line, the
+# status line (model and effort, then cwd, then volatile title and branch) and
+# the shortcuts footer, whose right side may carry a volatile warning count.
+CODEX_EMPTY = "› Ask Codex to do anything"
+CODEX_SHORTCUTS = re.compile(r"  \? for shortcuts(?: {2,}⚠ \d+ warnings? · f2 to view)?")
+CODEX_EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
+# Above the composer: no second cursor or menu row and no confirm hint.
+CODEX_DIALOG = re.compile(r"(?i)^\s*[│┃]?\s*[›❯]|\b(?:enter|esc)\b.*\b(?:confirm|continue|cancel|quit|skip|select)\b")
+CODEX_FOLD = re.compile(r"\[Pasted Content (\d+) chars\]")
+
+
+def codex_expectation(native: list[str], repository: Path) -> dict:
+    """The caller's requested model and effort, for Codex frame checks."""
+    model = effort = None
+    index = 0
+    while index < len(native):
+        flag, separator, value = native[index].partition("=")
+        index += 1
+        if not separator and index < len(native):
+            value = native[index]; index += 1
+        if flag == "--model":
+            model = value
+        elif flag == "-c":
+            effort = value.partition("=")[2].strip("\"'")
+    if not model:
+        raise Refused("refused native flag: --model (required so Codex readiness can verify the model)", "--model")
+    return {"model": model, "effort": effort, "repository": repository}
+
+
+def codex_status(line: str, model: str, effort: str | None, repository: Path) -> bool:
+    parts = line[2:].split(" · ") if line.startswith("  ") else []
+    if len(parts) < 2 or parts[1] != str(repository):
+        return False
+    label = parts[0].split(" ")
+    if len(label) > 2 or label[0].lower() != model.lower():
+        return False
+    shown = label[1] if len(label) == 2 else None
+    if shown is not None and shown not in CODEX_EFFORTS:
+        return False
+    return effort is None or shown == effort
+
+
+def codex_composer(screen: str, model: str, effort: str | None, repository: Path) -> str | None:
+    """Composer text of an exact Codex frame: "" when idle, None when unknown.
+
+    The idle frame is pinned whole. With input pending, the footer below the
+    status line was not captured, so it is not pinned and may be absent; a
+    bottom-pane dialog replaces the composer, which is checked in full.
+    """
+    lines = [line.rstrip() for line in screen.splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    if len(lines) >= 3 and codex_status(lines[-1], model, effort, repository):
+        status, footer = len(lines) - 1, None
+    elif len(lines) >= 4 and codex_status(lines[-2], model, effort, repository):
+        status, footer = len(lines) - 2, lines[-1]
+    else:
+        return None
+    if lines[status - 1]:
+        return None
+    top = max((i for i, line in enumerate(lines[:status - 1]) if line == "›" or line.startswith("› ")), default=None)
+    if top is None or any(CODEX_DIALOG.search(line) for line in lines[:top]):
+        return None
+    body = lines[top:status - 1]
+    if body == [CODEX_EMPTY]:
+        return "" if footer is not None and CODEX_SHORTCUTS.fullmatch(footer) else None
+    if any(line and not line.startswith("  ") for line in body[1:]):
+        return None
+    text = "\n".join([body[0][2:], *(line[2:] for line in body[1:])]).strip()
+    return text or None
+
+
+def codex_holds(text: str | None, prompt: str) -> bool:
+    if not text:
+        return False
+    fold = CODEX_FOLD.fullmatch(text)
+    if fold:
+        return int(fold.group(1)) in {len(prompt), len(prompt.rstrip("\n"))}
+    return "".join(text.split()) == "".join(prompt.split())
+
+
+def frame_event(harness: str, stage: str, screen: str) -> dict:
+    return {"harness": harness, "stage": stage,
+            "screen_sha256": "sha256:" + hashlib.sha256(screen.encode()).hexdigest(), "time": time.time()}
+
+
+def wait_ready(pane: str, seconds: float, harness: str | None = None,
+               repository: Path | None = None, acceptances: list | None = None,
+               display_choices: list | None = None, branch: str | None = None,
+               codex: dict | None = None, frames: list | None = None) -> dict:
+    end = time.monotonic() + seconds
+    acceptances = acceptances if acceptances is not None else []
+    display_choices = display_choices if display_choices is not None else []
+    while True:
+        trust_pending = False
+        if harness is not None:
+            screen = herdr("pane", "read", pane, "--source", "visible", text=True)
+            trust_pending = handle_startup(pane, harness, repository, screen, acceptances, display_choices)
+            if harness == "claude":
+                body = editor(screen, branch)
+                if body is None or (body != "" and not PLACEHOLDER.fullmatch(body)):
+                    trust_pending = True
+            if harness == "grok" and not grok_authenticated_editor(screen):
+                trust_pending = True
+            if harness == "codex" and (codex is None or codex_composer(screen, **codex) != ""):
+                trust_pending = True
+            if not screen.strip():
+                trust_pending = True
+        current = state(pane)
+        if not trust_pending and current.get("agent_status") in {"idle", "done"}:
+            if harness == "codex" and frames is not None:
+                frames.append(frame_event("codex", "ready", screen))
+            return current
+        if (not trust_pending and current.get("agent_status") == "blocked") or time.monotonic() >= end:
+            raise Refused("seat did not become ready; inspect its native UI before any delivery")
+        time.sleep(0.5)
+
+
+def started(pane: str, initial: dict, seconds: float) -> bool:
+    end = time.monotonic() + seconds
+    while True:
+        current = state(pane)
+        if current.get("agent_status") in {"working", "blocked"} or (
+            current.get("agent_status") == "done"
+            and current.get("state_change_seq", 0) > initial.get("state_change_seq", 0)
+        ):
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.5)
+
+
+def holds(text: str | None, prompt: str) -> bool:
+    return text is not None and bool(text) and (
+        "".join(text.split()) == "".join(prompt.split())
+        or bool(FOLD.fullmatch(text)) or bool(re.fullmatch(FOLD.pattern + re.escape(DIRECTIVE), text))
+    )
+
+
+def deliver_claude(pane: str, prompt: str, initial: dict, seconds: float,
+                   branch: str | None = None, evidence: Path | None = None) -> int:
+    if not prompt.strip() or len(prompt.encode("utf-8")) > 256 * 1024:
+        raise Refused("prompt must be nonempty and at most 256 KiB; nothing sent")
+    def capture(name: str) -> str | None:
+        return visible(pane, branch, evidence / name if evidence is not None else None)
+
+    initial_text = capture("editor-before.txt")
+    if initial_text is None or (initial_text != "" and not PLACEHOLDER.fullmatch(initial_text)):
+        raise Refused("no verified empty or placeholder Claude editor; nothing sent")
+    herdr("pane", "send-text", pane, prompt)
+    time.sleep(2)
+    pending = capture("editor-pasted.txt")
+    if pending is not None and FOLD.fullmatch(pending):
+        herdr("pane", "send-text", pane, DIRECTIVE)
+        time.sleep(0.3)
+        pending = capture("editor-folded.txt")
+        if pending is None or not re.fullmatch(FOLD.pattern + re.escape(DIRECTIVE), pending):
+            raise Refused("fold directive not visible in the editor; no Enter sent")
+    if not holds(pending, prompt):
+        raise Refused("the visible editor does not hold this prompt; no Enter sent")
+    herdr("pane", "send-keys", pane, "Enter")
+    if started(pane, initial, seconds):
+        return 1
+    # Never press on history, an empty editor, a dialog or an unreadable pane.
+    if not holds(capture("editor-second-enter.txt"), prompt):
+        raise Refused("turn not confirmed and no verified pending prompt; no second Enter")
+    herdr("pane", "send-keys", pane, "Enter")
+    if not started(pane, initial, seconds):
+        raise Refused("turn not confirmed after two verified Enters; inspect without resending")
+    return 2
+
+
+def deliver_codex(pane: str, prompt: str, initial: dict, seconds: float, codex: dict,
+                  frames: list, evidence: Path | None = None) -> int:
+    """Paste only into the verified empty composer; one Enter, never a second."""
+    if not prompt.strip() or len(prompt.encode("utf-8")) > 256 * 1024:
+        raise Refused("prompt must be nonempty and at most 256 KiB; nothing sent")
+    def capture(name: str) -> str:
+        screen = herdr("pane", "read", pane, "--source", "visible", text=True)
+        if evidence is not None:
+            (evidence / name).write_text(screen, encoding="utf-8")
+        return screen
+
+    before = capture("editor-before.txt")
+    if codex_composer(before, **codex) != "":
+        raise Refused("no verified empty Codex composer; nothing sent")
+    frames.append(frame_event("codex", "before-paste", before))
+    herdr("pane", "send-text", pane, prompt)
+    time.sleep(2)
+    pending = capture("editor-pasted.txt")
+    if not codex_holds(codex_composer(pending, **codex), prompt):
+        raise Refused("the visible Codex composer does not hold this prompt; no Enter sent")
+    frames.append(frame_event("codex", "pending", pending))
+    herdr("pane", "send-keys", pane, "Enter")
+    if not started(pane, initial, seconds):
+        raise Refused("turn not confirmed after one verified Enter; inspect without resending")
+    return 1
+
+
+AUTH_REFUSAL = "evaluator home not signed in: run prepare-eval-homes"
+
+
+def check_evaluator_auth(harness: str, environment: dict[str, str], cwd: Path) -> dict:
+    folder = kit.evaluator_homes()[harness]
+    configured = environment.get(kit.EVALUATOR_HOME_VARIABLES[harness])
+    matches = (bool(configured) and Path(configured).resolve() == folder.resolve()) if harness == "codex" else configured == str(folder)
+    if not matches or not kit.evaluator_directory(folder):
+        raise Refused(AUTH_REFUSAL)
+    if harness == "grok":
+        # No status command in Grok Build. Its authenticated welcome is checked
+        # after native startup, before snapshot or delivery. No keys are sent.
+        return {"method": "native-welcome", "signed_in": False}
+    argv = (["claude", "auth", "status"] if harness == "claude" else
+            ["codex", "-c", 'cli_auth_credentials_store="file"', "login", "status"])
+    try:
+        done = subprocess.run(argv, env=environment, cwd=cwd, capture_output=True, text=True, timeout=30)
+        if harness == "claude":
+            status = json.loads(done.stdout)
+            confirmed = status.get("loggedIn") is True and status.get("configDirectory") == str(folder)
+        else:
+            confirmed = (done.stdout + done.stderr).strip() == "Logged in using ChatGPT"
+        if done.returncode or not confirmed:
+            raise Refused(AUTH_REFUSAL)
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError) as exc:
+        raise Refused(AUTH_REFUSAL) from exc
+    # Do not retain account details or raw status output.
+    return {"method": "native-status", "command": argv, "signed_in": True}
+
+
+def grok_authenticated_editor(screen: str) -> bool:
+    # Public Grok welcome renderer: these menu rows require AuthState::Done
+    # with access. Pending login can paint a prompt too, so prompt alone fails.
+    if re.search(r"(?im)^\s*[│┃]?[ \t\u2800-\u28ff]*(?:Login with .+|Approve in your browser to finish signing in\.|A browser window will open for authentication\.|Switch account(?:\s+.*)?)[ \t]*[│┃]?\s*$", screen):
+        return False
+    lines = [line.strip() for line in screen.splitlines()]
+    return (bool(re.search(r"(?m)^\s*[│┃]?[ \t\u2800-\u28ff]*New worktree[ \t]+ctrl\+w[ \t]*[│┃]?\s*$", screen))
+            and bool(re.search(r"(?m)^\s*[│┃]?[ \t\u2800-\u28ff]*Resume session[ \t]+ctrl\+r[ \t]*[│┃]?\s*$", screen))
+            and any(re.fullmatch(r"[│┃]?\s*[❯>]\s*(?:Type a message\.\.\.)?\s*[│┃]?", line) for line in lines))
+
+
+def permission_flags(harness: str, native: list[str], cwd: Path | None = None,
+                     *, environment: dict[str, str] | None = None,
+                     codex_hook_trust: str = "review") -> dict[str, str]:
+    allowed = {"claude": {"--model", "--effort", "--permission-mode"},
+               "codex": {"--model", "-c", "--ask-for-approval", "--sandbox"},
+               "grok": {"--model", "--reasoning-effort", "--permission-mode", "--always-approve"}}[harness]
+    values = {}
+    index = 0
+    personal = [Path.home() / name for name in (".claude", ".claude.json", ".codex", ".grok")]
+    while index < len(native):
+        flag, separator, value = native[index].partition("=")
+        if flag == CODEX_HOOK_TRUST_FLAG:
+            if harness != "codex":
+                raise Refused(f"{flag} is only authorized for Codex trials", flag)
+            if codex_hook_trust != "bypass":
+                raise Refused(f"{flag} requires explicit --codex-hook-trust=bypass", flag)
+            dedicated_codex_home(environment or {})
+            allowed.add(flag)
+        if flag not in allowed or flag in values:
+            raise Refused(f"refused native flag: {flag if flag.startswith('-') else '<positional>'}", flag if flag.startswith('-') else "<positional>")
+        index += 1
+        if flag in {"--always-approve", CODEX_HOOK_TRUST_FLAG}:
+            if separator or "--permission-mode" in values:
+                raise Refused(f"refused native flag: {flag}", flag)
+            value = "true"
+        elif not separator:
+            if index == len(native) or native[index].startswith("-"):
+                raise Refused(f"refused native flag: {flag} (missing value)", flag)
+            value = native[index]; index += 1
+        if not value or (harness == "grok" and flag == "--permission-mode" and "--always-approve" in values):
+            raise Refused(f"refused native flag: {flag}", flag)
+        path_value = value.strip("\"'")
+        if path_value.startswith("~/"):
+            path_value = str(Path.home() / path_value[2:])
+        candidate = Path(path_value).expanduser()
+        resolved = (candidate if candidate.is_absolute() else (cwd or Path.cwd()) / candidate).resolve()
+        if any(resolved == folder.resolve() or folder.resolve() in resolved.parents for folder in personal):
+            raise Refused(f"refused native flag: {flag} (personal config path)", flag)
+        if flag == "-c" and not re.fullmatch(r'model_reasoning_effort=(?:"(?:minimal|low|medium|high|xhigh)"|minimal|low|medium|high|xhigh)', value):
+            raise Refused("refused native flag: -c (only model_reasoning_effort is caller-owned)", flag)
+        values[flag] = value
+    required = {"codex": ("--ask-for-approval", "--sandbox"),
+                "claude": ("--permission-mode",), "grok": ("--permission-mode",)}[harness]
+    if harness == "grok" and "--always-approve" in values:
+        required = ("--always-approve",)
+    for flag in required:
+        if flag not in values:
+            raise Refused(f"refused native flag: {flag} (required)", flag)
+    if CODEX_HOOK_TRUST_FLAG in values:
+        required = (*required, CODEX_HOOK_TRUST_FLAG)
+    return {flag: values[flag] for flag in required}
+
+
+CODEX_HOOK_TRUST_FLAG = "--dangerously-bypass-hook-trust"
+
+
+def dedicated_codex_home(environment: dict[str, str]) -> Path:
+    expected = kit.evaluator_homes()["codex"]
+    value = environment.get("CODEX_HOME")
+    try:
+        candidate = Path(value).expanduser().absolute() if value else None
+        personal = Path.home() / ".codex"
+        matches = (candidate is not None and candidate != personal and personal not in candidate.parents
+                   and candidate.resolve() == expected.resolve()
+                   and not expected.is_symlink() and not expected.parent.is_symlink())
+    except (OSError, RuntimeError) as exc:
+        raise Refused("cannot resolve the dedicated evaluator home", CODEX_HOOK_TRUST_FLAG) from exc
+    if not matches:
+        raise Refused(f"{CODEX_HOOK_TRUST_FLAG} requires the dedicated evaluator home "
+                      "~/.codeflow-eval/codex; other or personal CODEX_HOME paths are refused", CODEX_HOOK_TRUST_FLAG)
+    return expected.resolve()
+
+
+def hook_settings_bytes(path: Path) -> bytes:
+    if path.is_symlink():
+        raise Refused(f"hook source contains a symlink: {path}", CODEX_HOOK_TRUST_FLAG)
+    if not path.is_file():
+        raise Refused(f"hook source is not a regular file: {path}", CODEX_HOOK_TRUST_FLAG)
+    with path.open("rb") as stream:
+        content = stream.read(kit.MAX_SETTINGS_BYTES + 1)
+    if len(content) > kit.MAX_SETTINGS_BYTES:
+        raise Refused(f"hook source exceeds size cap: {path}", CODEX_HOOK_TRUST_FLAG)
+    return content
+
+
+PLUGIN_MANIFEST_DIRS = (".codex-plugin", ".claude-plugin", ".cursor-plugin")
+
+
+def manifest_has_key(value, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(manifest_has_key(child, key) for child in value.values())
+    if isinstance(value, list):
+        return any(manifest_has_key(child, key) for child in value)
+    return False
+
+
+def inspect_plugins(root: Path, *, marketplace: str | None = None) -> list[dict]:
+    """Inspect all native manifest layouts without loading plugins or following links."""
+    for parent in (root, *root.parents):
+        if parent.is_symlink():
+            raise Refused(f"plugin path contains a symlink: {parent}", CODEX_HOOK_TRUST_FLAG)
+    if not root.is_dir():
+        raise Refused(f"plugin source is not a directory on disk: {root}", CODEX_HOOK_TRUST_FLAG)
+    pending, manifests, entries, cached = [root], {}, {}, []
+    count, deadline = 0, time.monotonic() + 10
+    while pending:
+        path = pending.pop()
+        count += 1
+        if count > 100_000 or time.monotonic() > deadline:
+            raise Refused(f"plugin inspection cap reached: {root}", CODEX_HOOK_TRUST_FLAG)
+        info = path.lstat()
+        mode = info.st_mode
+        if stat.S_ISLNK(mode):
+            raise Refused(f"plugin path contains a symlink: {path}", CODEX_HOOK_TRUST_FLAG)
+        directory = stat.S_ISDIR(mode)
+        if not (directory or stat.S_ISREG(mode)) or not os.access(path, os.R_OK | (os.X_OK if directory else 0)):
+            raise Refused(f"plugin path is unreadable or not regular: {path}", CODEX_HOOK_TRUST_FLAG)
+        if path.name == "hooks.json" or (directory and path.name == "hooks"):
+            raise Refused(f"plugin contains hooks: {path}", CODEX_HOOK_TRUST_FLAG)
+        entries[path] = [mode, info.st_size, info.st_mtime_ns]
+        if directory:
+            parts = path.relative_to(root).parts
+            if len(parts) in {3, 4} and parts[0] == "cache":
+                cached.append(path)
+            if path.name in PLUGIN_MANIFEST_DIRS and not (path / "plugin.json").is_file():
+                raise Refused(f"plugin manifest missing: {path}", CODEX_HOOK_TRUST_FLAG)
+            pending.extend(sorted(path.iterdir(), reverse=True))
+        elif path.name == "plugin.json":
+            plugin = path.parent.parent if path.parent.name in PLUGIN_MANIFEST_DIRS else path.parent
+            manifests.setdefault(plugin, []).append(path)
+
+    for folder in cached:
+        version = len(folder.relative_to(root).parts) == 4
+        if not any(plugin == folder or (not version and plugin.parent == folder) for plugin in manifests):
+            raise Refused(f"cached plugin has no parseable manifest: {folder}", CODEX_HOOK_TRUST_FLAG)
+    plugins = []
+    for plugin, paths in sorted(manifests.items()):
+        documents, hashes = [], {}
+        # Root Agent Plugins metadata takes precedence; inspect every fallback too.
+        paths.sort(key=lambda path: (0 if path.parent == plugin else
+                                    1 + PLUGIN_MANIFEST_DIRS.index(path.parent.name)))
+        for manifest in paths:
+            if time.monotonic() > deadline:
+                raise Refused(f"plugin inspection time cap reached: {root}", CODEX_HOOK_TRUST_FLAG)
+            content = hook_settings_bytes(manifest)
+            document = json.loads(content)
+            if not isinstance(document, dict) or not isinstance(document.get("name"), str) or not document["name"]:
+                raise Refused(f"invalid plugin manifest: {manifest}", CODEX_HOOK_TRUST_FLAG)
+            if manifest_has_key(document, "hooks"):
+                raise Refused(f"plugin manifest declares hooks: {manifest}", CODEX_HOOK_TRUST_FLAG)
+            documents.append(document)
+            hashes[manifest.relative_to(plugin).as_posix()] = "sha256:" + hashlib.sha256(content).hexdigest()
+        parts = plugin.relative_to(root).parts
+        market = marketplace or (parts[1] if len(parts) >= 3 and parts[0] == "cache" else None)
+        source = ("remote curated" if market == "openai-curated-remote" else
+                  "local" if marketplace or not market or parts[-1] == "local" else "cached marketplace")
+        metadata = {path.relative_to(plugin).as_posix(): value for path, value in entries.items()
+                    if path.is_relative_to(plugin)}
+        plugins.append({"name": documents[0]["name"], "version": documents[0].get("version"),
+                        "source": source, "marketplace": market, "path": str(plugin),
+                        "skills": any(manifest_has_key(doc, "skills") for doc in documents) or (plugin / "skills").is_dir(),
+                        "apps": any(manifest_has_key(doc, "apps") for doc in documents) or (plugin / ".app.json").is_file(),
+                        "manifest_sha256": next(iter(hashes.values())), "manifests": hashes,
+                        "tree_metadata_sha256": "sha256:" + hashlib.sha256(
+                            json.dumps(metadata, sort_keys=True).encode()).hexdigest()})
+    return plugins
+
+
+def reject_extra_hook_sources(root: Path, plugins: list[dict]) -> None:
+    config = root / "config.toml"
+    declarations = {"plugins": [], "marketplaces": []}
+    if config.exists() or config.is_symlink():
+        document = tomllib.loads(hook_settings_bytes(config).decode("utf-8"))
+        def visit(table: dict, features: bool = False) -> None:
+            for key, value in table.items():
+                # Feature booleans enable mechanisms, not handler definitions.
+                if features and isinstance(value, bool):
+                    continue
+                if key == "hooks":
+                    raise Refused(f"hooks are not allowed in {config}", CODEX_HOOK_TRUST_FLAG)
+                if key in declarations:
+                    if not isinstance(value, dict):
+                        raise Refused(f"cannot inspect {key} configuration in {config}", CODEX_HOOK_TRUST_FLAG)
+                    declarations[key].extend(value.items())
+                if isinstance(value, dict):
+                    visit(value, key == "features")
+        visit(document)
+    for name in ("plugins", ".plugins"):
+        path = root / name
+        if path.exists() or path.is_symlink():
+            plugins.extend(inspect_plugins(path))
+    for name, settings in declarations["marketplaces"]:
+        if not isinstance(settings, dict):
+            raise Refused(f"cannot inspect marketplace: {name}", CODEX_HOOK_TRUST_FLAG)
+        if settings.get("enabled") is False:
+            continue
+        if settings.get("source_type") == "local":
+            if not isinstance(settings.get("source"), str) or not settings["source"]:
+                raise Refused(f"cannot inspect local marketplace: {name}", CODEX_HOOK_TRUST_FLAG)
+            source = Path(settings["source"]).expanduser()
+            if not source.is_absolute():
+                source = root / source
+            personal = [Path.home() / entry for entry in (".claude", ".claude.json", ".codex", ".grok")]
+            if any(source.resolve().is_relative_to(path.resolve()) or path.resolve().is_relative_to(source.resolve())
+                   for path in personal):
+                raise Refused("personal harness plugin sources are refused", CODEX_HOOK_TRUST_FLAG)
+            plugins.extend(inspect_plugins(source, marketplace=name))
+        elif not any(plugin["marketplace"] == name for plugin in plugins):
+            raise Refused(f"marketplace is not on disk to inspect: {name}", CODEX_HOOK_TRUST_FLAG)
+    for name, settings in declarations["plugins"]:
+        if not isinstance(settings, dict):
+            raise Refused(f"cannot inspect plugin configuration: {name}", CODEX_HOOK_TRUST_FLAG)
+        if settings.get("enabled") is False:
+            continue
+        if not any(name == f"{plugin['name']}@{plugin['marketplace']}" for plugin in plugins):
+            raise Refused(f"enabled plugin is not on disk to inspect: {name}", CODEX_HOOK_TRUST_FLAG)
+    # One disk manifest can be both cached and explicitly configured.
+    plugins[:] = list({plugin["path"]: plugin for plugin in plugins}.values())
+
+def codex_hook_preflight(environment: dict[str, str], repository: Path,
+                         evidence: dict | None = None) -> dict:
+    """Inspect only non-secret settings; never grant trust or change config."""
+    result = evidence if evidence is not None else {}
+    result.update(flag_used=False, evaluator_home=None, hooks_sha256=None, plugins=[],
+                  checks={"evaluator_home": "not_checked", "fixture_hooks": "not_checked"})
+    stage = "evaluator_home"
+    try:
+        home = dedicated_codex_home(environment)
+        result["evaluator_home"] = str(home)
+        if not kit.evaluator_directory(home):
+            raise Refused("dedicated evaluator home is missing, unreadable or contains symlinks", CODEX_HOOK_TRUST_FLAG)
+        if (home / "hooks.json").exists() or (home / "hooks.json").is_symlink():
+            raise Refused("user-level hooks.json is not allowed in the dedicated evaluator home", CODEX_HOOK_TRUST_FLAG)
+        reject_extra_hook_sources(home, result["plugins"])
+        result["checks"][stage] = "passed"
+        stage = "fixture_hooks"
+        kit.refuse_symlink_components(repository / ".codex", repository)
+        reject_extra_hook_sources(repository / ".codex", result["plugins"])
+        content = hook_settings_bytes(repository / ".codex/hooks.json")
+        result["hooks_sha256"] = "sha256:" + hashlib.sha256(content).hexdigest()
+        expected = json.loads(hook_settings_bytes(ROOT / "assets/base/codex/hooks.json"))
+        if json.loads(content) != expected:
+            raise Refused("trial hooks must exactly match the shipped contract-3 hook definitions", CODEX_HOOK_TRUST_FLAG)
+        for groups in expected["hooks"].values():
+            for group in groups:
+                for hook in group["hooks"]:
+                    if not re.match(r"^codeflow hook [a-z][a-z-]* --contract 3;", hook["command"]):
+                        raise Refused("shipped hooks must use contract-3 wrappers", CODEX_HOOK_TRUST_FLAG)
+        result["checks"][stage] = "passed"
+        return result
+    except (Refused, OSError, ValueError, KeyError, TypeError, kit.EvalError) as exc:
+        result["checks"][stage] = "refused"
+        if isinstance(exc, Refused):
+            raise
+        raise Refused(f"cannot verify Codex {stage}: {exc}", CODEX_HOOK_TRUST_FLAG) from exc
+
+
+CONFIG_FILES = {
+    "claude": ("settings.json", "settings.local.json", "CLAUDE.md", "CLAUDE.local.md", "rules"),
+    "codex": ("config.toml", "AGENTS.md", "AGENTS.override.md", "hooks.json", "rules"),
+    "grok": ("config.toml", "managed_config.toml", "requirements.toml", "GROK.md", "AGENTS.md", "rules"),
+}
+
+
+def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | None = None) -> dict:
+    result = {}
+    for harness, variable in kit.EVALUATOR_HOME_VARIABLES.items():
+        root = Path(environment[variable])
+        if not kit.evaluator_directory(root):
+            raise Refused(f"evaluator config unavailable or contains symlinks: {harness}")
+        hashes = {}
+        for name in CONFIG_FILES[harness]:
+            path = root / name
+            candidates = sorted(path.rglob("*")) if path.is_dir() else [path]
+            for candidate in candidates:
+                # No auth/account stores, session transcripts, or credential files.
+                if candidate.name in {"auth.json", ".credentials.json", "mcp_credentials.json"}:
+                    continue
+                if candidate.is_symlink():
+                    raise Refused(f"evaluator config contains symlink: {harness}")
+                if candidate.is_file():
+                    if candidate.stat().st_size > kit.MAX_SETTINGS_BYTES:
+                        raise Refused(f"evaluator config exceeds size cap: {harness}")
+                    hashes[str(candidate.relative_to(root))] = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
+        result[harness] = hashes
+    if plugin_repository is not None:
+        plugins = []
+        reject_extra_hook_sources(Path(environment["CODEX_HOME"]), plugins)
+        reject_extra_hook_sources(plugin_repository / ".codex", plugins)
+        result["codex"]["plugins"] = plugins
+    return result
+
+
+def config_drift(before: dict, after: dict) -> list[str]:
+    return ["evaluator_config_drift"] if before != after else []
+
+
+def load_fixture(record_path: Path) -> tuple[dict, Path, dict]:
+    record = kit.load_json(record_path)
+    if not kit.registration_verifies(record):
+        raise Refused("fixture record signature is missing or changed; use its evaluator key")
+    repository = Path(record["path"]).resolve()
+    if not repository.is_dir() or not repository.is_relative_to(Path(record["subjects_root"]).resolve()):
+        raise Refused("fixture must be inside its registered subjects root")
+    if kit.tree_digest(repository) != record["fixture_digest"]:
+        raise Refused("fixture changed since materialization; use a fresh trial")
+    binary = Path(record["subject_codeflow"])
+    if kit.executable_digest(binary) != record["codeflow_executable"]["sha256"]:
+        raise Refused("subject binary changed since materialization")
+    trial = repository.parent
+    ancestry = {"run": kit.check_instruction_ancestors(record_path.resolve().parent.parent),
+                "subject": kit.check_instruction_ancestors(trial)}
+    environment = record["subject_environment"]
+    for key, path in {"HOME": trial / "home", "TMPDIR": trial / "tmp",
+                      "CODEFLOW_HOME": trial / "home/.codeflow", "XDG_CONFIG_HOME": trial / "home/.config"}.items():
+        if environment.get(key) != str(path):
+            raise Refused(f"materialize with the current kit: {key} must be {path}")
+    return record, repository, ancestry
+
+
+def print_hook_review(record_path: Path) -> str:
+    record, repository, _ancestry = load_fixture(record_path)
+    environment = record["subject_environment"]
+    config_snapshot(environment)
+    assignments = [shlex.quote(f"{key}={value}") for key, value in environment.items() if key != "TERM"]
+    # Review only: read-only sandbox and Codex's default approval policy.
+    native = ["codex", "--sandbox", "read-only", *kit.trial_native_args("codex", environment)]
+    command = "env -i " + " ".join(assignments) + ' TERM="${TERM:-xterm-256color}" ' + shlex.join(native)
+    return ("Run this command once in an app terminal. No harness was launched.\n"
+            "This fresh disposable fixture carries the trial hooks. Accept its exact-path\n"
+            "folder prompt, review the hooks, then trust them yourself. Use /hooks if needed.\n"
+            "Do not submit TASK.md. Exit Codex after review; keep the evaluator home.\n\n"
+            f"(cd {shlex.quote(str(repository))} && {command})\n")
+
+
+def watch_directories(environment: dict[str, str], declared: list[str]) -> list[str]:
+    roots = sorted({str(Path(value).resolve()) for value in declared})
+    if not roots:
+        raise Refused("declare at least one --watch-dir outside harness TMPDIR")
+    scratch = Path(environment["TMPDIR"]).resolve()
+    for value in roots:
+        root = Path(value)
+        if root == scratch or root.is_relative_to(scratch) or scratch.is_relative_to(root):
+            raise Refused("watch and planted-control roots must not overlap harness TMPDIR")
+    return roots
+
+
+def launch(args) -> None:
+    record, repository, ancestry = load_fixture(args.record)
+    trial = repository.parent
+    environment = dict(record["subject_environment"])
+    native = args.native[1:] if args.native[:1] == ["--"] else args.native
+    watched = watch_directories(environment, args.watch_dir)
+    observation = {"shallow": ["/private/tmp"],
+                   "max_entries": args.max_entries, "max_seconds": args.snapshot_seconds}
+    for directory in watched:
+        if not Path(directory).is_dir():
+            raise Refused(f"declared directory is unavailable: {directory}")
+        if args.output.resolve().is_relative_to(Path(directory)):
+            raise Refused("runner evidence must live outside declared directories")
+    if args.output.exists():
+        raise Refused("output already exists; never reuse a trial launch")
+    hook_trust = {"option": args.codex_hook_trust, "flag_used": False, "evaluator_home": None, "hooks_sha256": None, "plugins": [],
+                  "checks": {"evaluator_home": "not_checked", "fixture_hooks": "not_checked"}}
+    try:
+        if args.codex_hook_trust not in {"review", "bypass"}:
+            raise Refused("unknown Codex hook-trust option", "--codex-hook-trust")
+        if args.codex_hook_trust == "bypass" and args.harness != "codex":
+            raise Refused("--codex-hook-trust=bypass is only authorized for Codex trials", "--codex-hook-trust")
+        permissions = permission_flags(args.harness, native, repository, environment=environment,
+                                       codex_hook_trust=args.codex_hook_trust)
+        codex = codex_expectation(native, repository) if args.harness == "codex" else None
+        if args.harness == "codex" and args.codex_hook_trust == "bypass":
+            codex_hook_preflight(environment, repository, hook_trust)
+            environment["CODEX_HOME"] = hook_trust["evaluator_home"]
+    except Refused as exc:
+        args.output.mkdir(parents=True)
+        write(args.output / "launch.json", {"harness": args.harness, "status": "refused",
+                                           "refused_flag": exc.flag, "error": str(exc),
+                                           "hook_trust": hook_trust})
+        raise
+    authentication = check_evaluator_auth(args.harness, environment, repository)
+    # Validate all config roots before a native process could follow a link.
+    config_preflight = config_snapshot(environment)
+    if args.harness == "codex" and args.codex_hook_trust == "bypass":
+        config_preflight["codex"]["plugins"] = hook_trust["plugins"]
+    native = [*native, *kit.trial_native_args(args.harness, environment)]
+    if args.harness == "codex" and args.codex_hook_trust == "bypass":
+        if CODEX_HOOK_TRUST_FLAG not in native:
+            native.append(CODEX_HOOK_TRUST_FLAG)
+        permissions[CODEX_HOOK_TRUST_FLAG] = "true"
+        hook_trust["flag_used"] = True
+    elif args.harness == "codex":
+        print(print_hook_review(args.record), end="")
+    args.output.mkdir(parents=True)
+    run = {"schema_version": 1, "fixture_record": str(args.record.resolve()),
+           "repository": str(repository), "harness": args.harness,
+           "native_args": native, "permission_flags": permissions,
+           "hook_trust": hook_trust, "config_preflight": config_preflight,
+           "environment": environment, "declared_directories": watched,
+           "observation": observation,
+           "observation_limitations": ["Only explicitly declared watch directories are observed. Harness TMPDIR is unobserved; planted controls must be outside it."],
+           "authentication": authentication,
+           "instruction_ancestors": ancestry, "trust_acceptances": [], "display_choices": [], "verified_frames": [],
+           "status": "prepared", "started_at": time.time()}
+    write(args.output / "launch.json", run)
+    try:
+        argv = ["tab", "create", "--workspace", args.workspace, "--label",
+                f"eval-{record['case_id'][:30]}", "--cwd", str(repository), "--no-focus"]
+        for key, value in environment.items():
+            argv.extend(["--env", f"{key}={value}"])
+        created = herdr(*argv)["result"]
+        run.update(tab=created["tab"]["tab_id"], pane=created["root_pane"]["pane_id"])
+        write(args.output / "launch.json", run)
+        end, idle = time.monotonic() + args.start_timeout, 0
+        while idle < 2:
+            info = herdr("pane", "process-info", "--pane", run["pane"])["result"]["process_info"]
+            processes = info.get("foreground_processes", [])
+            idle = idle + 1 if processes and all(p.get("name") in {"sh", "zsh", "bash"} for p in processes) else 0
+            if time.monotonic() >= end:
+                raise Refused("new pane did not reach an idle shell; no seat started")
+            time.sleep(0.5)
+        start_args = ("agent", "start", f"eval-{trial.name}", "--kind",
+                      args.harness, "--pane", run["pane"], "--", *native)
+        try:
+            run["launch_response"] = herdr(*start_args)
+        except Refused as exc:
+            # Herdr may report not-ready with or without a registered native seat.
+            # Reuse only the exact seat; otherwise register this same pane.
+            screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
+            if not handle_startup(run["pane"], args.harness, repository, screen,
+                                  run["trust_acceptances"], run["display_choices"]):
+                raise exc
+            run["initial_start_error"] = str(exc)
+            write(args.output / "launch.json", run)
+            time.sleep(0.2)
+            screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
+            if trust_choice(screen, args.harness, repository) is not None:
+                raise Refused("accepted trust dialog has not cleared; no repeated key")
+            run["launch_response"] = recover_registration(
+                run["pane"], f"eval-{trial.name}", args.harness, repository, start_args)
+        try:
+            initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"],
+                                 run["display_choices"], record.get("branch"), codex=codex, frames=run["verified_frames"])
+        except Refused as exc:
+            if args.harness == "grok":
+                raise Refused(AUTH_REFUSAL) from exc
+            raise
+        if args.harness == "grok":
+            if not grok_authenticated_editor(herdr("pane", "read", run["pane"], "--source", "visible", text=True)):
+                raise Refused(AUTH_REFUSAL)
+            run["authentication"]["signed_in"] = True
+        try:
+            run["config_start"] = config_snapshot(
+                environment, plugin_repository=repository if hook_trust["flag_used"] else None)
+        except (Refused, OSError, ValueError) as exc:
+            run["config_start"] = {"error": str(exc)}
+            raise Refused(f"plugin/config recheck after readiness refused: {exc}") from exc
+        if hook_trust["flag_used"] and run["config_start"]["codex"]["plugins"] != hook_trust["plugins"]:
+            raise Refused("plugin inventory changed after readiness; no prompt delivered")
+        run["initial_agent"] = initial
+        write(args.output / "launch.json", run)
+        write(args.output / "before.json", snapshot(watched, **observation))
+        prompt = (repository / "TASK.md").read_text(encoding="utf-8")
+        if args.harness == "claude":
+            run["enters"] = deliver_claude(run["pane"], prompt, initial, args.start_timeout, record.get("branch"), args.output)
+        elif args.harness == "codex":
+            run["enters"] = deliver_codex(run["pane"], prompt, initial, args.start_timeout, codex,
+                                          run["verified_frames"], args.output)
+        else:
+            helper = ROOT / "assets/base/agents/skills/cf-herdr/scripts/deliver.py"
+            done = subprocess.run([sys.executable, "-B", str(helper), "--pane", run["pane"],
+                                   "--file", str(repository / "TASK.md"), "--start-timeout",
+                                   str(args.start_timeout)], capture_output=True, text=True, timeout=120)
+            run["delivery"] = {"returncode": done.returncode, "stdout": done.stdout, "stderr": done.stderr}
+            if done.returncode:
+                raise Refused("delivery refused; inspect the recorded result, never resend blindly")
+        run["status"] = "started"
+    except (Refused, OSError, subprocess.SubprocessError, KeyError, ValueError) as exc:
+        run.update(status="refused", error=str(exc))
+        raise
+    finally:
+        write(args.output / "launch.json", run)
+
+
+def finish(args) -> None:
+    run = kit.load_json(args.output / "launch.json")
+    after = snapshot(run["declared_directories"], **run["observation"])
+    before_path = args.output / "before.json"
+    if before_path.is_file():
+        result = compare(kit.load_json(before_path), after)
+    else:
+        result = {"validity_flags": ["directory_observation_incomplete", *after["validity_flags"]],
+                  "error": "no pre-trial snapshot recorded after seat readiness"}
+    result["observation_limitations"] = run.get("observation_limitations", [])
+    try:
+        run["config_finish"] = config_snapshot(
+            run["environment"], plugin_repository=Path(run["repository"])
+            if run.get("hook_trust", {}).get("flag_used") else None)
+        if "config_start" not in run:
+            result["validity_flags"].append("evaluator_config_unreadable")
+        else:
+            result["validity_flags"].extend(config_drift(run["config_start"], run["config_finish"]))
+    except (Refused, OSError, KeyError, ValueError) as exc:
+        run["config_finish"] = {"error": str(exc)}
+        result["validity_flags"].append("evaluator_config_unreadable")
+    write(args.output / "launch.json", run)
+    if run["status"] != "started":
+        result["validity_flags"].append("native_launch_not_confirmed")
+    write(args.output / "after.json", after)
+    if "pane" in run:
+        try:
+            result["final_agent"] = state(run["pane"])
+        except (Refused, subprocess.SubprocessError, ValueError) as exc:
+            result["validity_flags"].append("native_state_unavailable")
+            result["native_error"] = str(exc)
+    write(args.output / "observation.json", result)
+    print(json.dumps(result, indent=2))
+    # The primary retains native transcripts and closes the recorded tab.
+
+
+def main() -> int:
+    cli = argparse.ArgumentParser(description=__doc__)
+    sub = cli.add_subparsers(dest="command", required=True)
+    start = sub.add_parser("launch")
+    start.add_argument("--record", type=Path, required=True)
+    start.add_argument("--output", type=Path, required=True)
+    start.add_argument("--workspace", required=True)
+    start.add_argument("--harness", choices=["claude", "codex", "grok"], required=True)
+    start.add_argument("--codex-hook-trust", choices=["review", "bypass"], default="review",
+                       help="Codex evaluation hook review: review (default), or explicitly bypass after verifying hook sources")
+    start.add_argument("--watch-dir", action="append", default=[])
+    start.add_argument("--max-entries", type=int, default=100_000)
+    start.add_argument("--snapshot-seconds", type=float, default=10)
+    start.add_argument("--start-timeout", type=float, default=30)
+    start.add_argument("native", nargs=argparse.REMAINDER)
+    review = sub.add_parser("print-hook-review", help="print an isolated native Codex hook-review command; never launch")
+    review.add_argument("--record", type=Path, required=True)
+    end = sub.add_parser("finish")
+    end.add_argument("--output", type=Path, required=True)
+    args = cli.parse_args()
+    try:
+        if args.command == "launch":
+            if not 0 < args.start_timeout <= 120:
+                raise Refused("start timeout must be in (0, 120]")
+            if args.max_entries <= 0 or not 0 < args.snapshot_seconds <= 60:
+                raise Refused("snapshot limits require positive entries and seconds in (0, 60]")
+            launch(args)
+        elif args.command == "print-hook-review":
+            print(print_hook_review(args.record), end="")
+        else:
+            finish(args)
+    except (Refused, OSError, subprocess.SubprocessError, KeyError, ValueError, kit.EvalError) as exc:
+        print(f"qualification runner: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

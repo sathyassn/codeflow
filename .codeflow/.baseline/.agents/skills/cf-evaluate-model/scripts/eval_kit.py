@@ -11,6 +11,7 @@ import errno
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import fnmatch
+import getpass
 import hashlib
 import hmac
 import io
@@ -19,6 +20,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import shutil
 import stat
 import statistics
@@ -26,6 +28,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from typing import Any
 
 try:
@@ -63,6 +66,14 @@ DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 EXPERIMENT_VARIABLE = re.compile(r"^system\.[a-z_][a-z0-9_.]*$")
 EVIDENCE_KINDS = frozenset({"session", "tool", "file", "command", "ui"})
 KNOWN_VALIDITY_FLAGS = {
+    "declared_directory_changed",
+    "evaluator_config_drift",
+    "evaluator_config_unreadable",
+    "directory_observation_incomplete",
+    "directory_observation_entry_cap",
+    "directory_observation_time_cap",
+    "native_launch_not_confirmed",
+    "native_state_unavailable",
     "ambiguous_task",
     "baseline_contamination",
     "budget_exhaustion",
@@ -1745,6 +1756,24 @@ def nested(inner: Path, outer: Path) -> bool:
     return inner == outer or outer in inner.parents
 
 
+def check_instruction_ancestors(path: Path) -> list[str]:
+    """Check metadata only, including the root itself; never open ancestor rules."""
+    resolved = path.expanduser().resolve()
+    checked = []
+    for parent in (resolved, *resolved.parents):
+        for name in ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude"):
+            candidate = parent / name
+            try:
+                candidate.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise EvalError(f"cannot check ancestor instructions: {candidate}") from exc
+            raise EvalError(f"ancestor instructions: {candidate}; choose a clean evaluation root")
+        checked.append(str(parent))
+    return checked
+
+
 def ensure_run_root(run_root: Path, subjects_root: Path | None = None) -> dict:
     """Create or reopen a run root and its separate subjects root.
 
@@ -1758,6 +1787,7 @@ def ensure_run_root(run_root: Path, subjects_root: Path | None = None) -> dict:
         raise EvalError("evaluation run root must not be a symlink")
     run_root = raw.resolve()
     refuse_broad_directory(run_root, "an evaluation run root")
+    check_instruction_ancestors(run_root)
     marker_path = run_root / RUN_MARKER
     if run_root.exists():
         if not marker_path.is_file():
@@ -1777,12 +1807,14 @@ def ensure_run_root(run_root: Path, subjects_root: Path | None = None) -> dict:
             raise EvalError("the run root predates separate subject workspaces; start a new run root")
         if subjects_root is not None and subjects_root.expanduser().resolve() != Path(marker["subjects_root"]):
             raise EvalError("the run root already names another subjects root")
+        check_instruction_ancestors(Path(marker["subjects_root"]))
         return marker
     raw_subjects = (subjects_root or run_root.parent / f"{run_root.name}{SUBJECTS_SUFFIX}").expanduser()
     if raw_subjects.is_symlink():
         raise EvalError("the subjects root must not be a symlink")
     subjects = raw_subjects.resolve()
     refuse_broad_directory(subjects, "a subjects root")
+    check_instruction_ancestors(subjects)
     if nested(subjects, run_root) or nested(run_root, subjects):
         raise EvalError("the run root and the subjects root must not contain each other")
     if subjects.exists():
@@ -1942,14 +1974,15 @@ def apply_fixture_history(root: Path, checkout: str, steps: list[dict]) -> None:
 
 
 def configure_local_origin_main(root: Path, origin: Path) -> None:
-    """Add a fixture-local bare origin whose main tip matches the subject HEAD."""
+    """Add a fixture-local bare origin containing main only, with HEAD at main."""
 
     if origin.exists() or origin.is_symlink():
         raise EvalError(f"fixture origin already exists: {origin}")
     origin.parent.mkdir(parents=True, exist_ok=True)
-    run_command(["git", "clone", "--bare", str(root), str(origin)], origin.parent)
+    run_command(["git", "clone", "--bare", "--branch", "main", "--single-branch", str(root), str(origin)], origin.parent)
     run_command(["git", "remote", "add", "origin", str(origin)], root)
     run_command(["git", "fetch", "origin"], root)
+    run_command(["git", "remote", "set-head", "origin", "main"], root)
     run_command(["git", "branch", "--set-upstream-to=origin/main", "main"], root)
 
 
@@ -1972,6 +2005,56 @@ def configure_squash_cleanup_worktree(root: Path, state: dict) -> None:
     root.rename(control)
     configure_local_origin_main(control, root.parent / "origin.git")
     run_command(["git", "worktree", "add", str(root), task_branch], control)
+
+
+def configure_closeout_inventory(root: Path, codeflow: Path) -> None:
+    """Create the four real worktree records the closeout case asks to classify.
+
+    All refs, paths and the bare origin are disposable and local. Hooks are
+    installed by materialize only after fixture history has been prepared.
+    """
+    base = git_output(["rev-parse", "HEAD"], root).strip()
+    run_command(["git", "branch", "main", base], root)
+    configure_local_origin_main(root, root.parent / "origin.git")
+    worktrees = root / ".worktrees"
+    entries = []
+    for branch, name in (("feat/export-ui", "export-ui"),
+                         ("fix/retry-race", "retry-race"), ("spike/cache", "cache")):
+        path = worktrees / name
+        run_command(["git", "worktree", "add", "-b", branch, str(path), base], root)
+        if name != "export-ui":
+            write_fixture_file(path, "fixture-work.txt", name + "\n")
+            run_command(["git", "add", "fixture-work.txt"], path)
+            run_command(["git", "commit", "-m", "test: record unfinished fixture work"], path)
+        tip = git_output(["rev-parse", "HEAD"], path).strip()
+        entries.append((branch, path, tip))
+    dirty = worktrees / "retry-race"
+    write_fixture_file(dirty, "fixture-work.txt", "unfinished tracked change\n")
+    write_fixture_file(dirty, "untracked.txt", "active worker-b work\n")
+    stale = worktrees / "stale"
+    run_command(["git", "worktree", "add", "-b", "test/stale", str(stale), base], root)
+    write_fixture_file(stale, "stale-work.txt", "unfinished stale worktree change\n")
+    run_command(["git", "add", "stale-work.txt"], stale)
+    run_command(["git", "commit", "-m", "test: retain unmerged stale work"], stale)
+    shutil.rmtree(stale)
+    a, b, c = entries
+    inventory = (
+        "# Worktree inventory\n\n"
+        f"A: {a[0]} at `{a[1]}`; clean; landed by ancestry in origin/main; "
+        f"synthetic PR 41 MERGED with recorded head `{a[2]}`; owner inactive.\n"
+        f"B: {b[0]} at `{b[1]}`; dirty and untracked; active owner worker-b; no PR.\n"
+        f"C: {c[0]} at `{c[1]}`; clean; synthetic PR 39 CLOSED without merge; "
+        "no patch-identity proof; owner unavailable; recheck on owner disposition "
+        "or superseding tracked task.\n\n"
+        f"D: stale administrative record at `{stale}`; its directory is missing, "
+        "and branch test/stale has an unmerged commit. "
+        "Pruning would not establish merge proof.\n"
+    )
+    write_fixture_file(root, "WORKTREE_INVENTORY.md", inventory)
+    status = subprocess.run([str(codeflow), "status"], cwd=root, capture_output=True, text=True, check=True).stdout
+    write_fixture_file(root, "CODEFLOW_STATUS.txt", status)
+    run_command(["git", "add", "WORKTREE_INVENTORY.md", "CODEFLOW_STATUS.txt"], root)
+    run_command(["git", "commit", "-m", "test: record the local cleanup inventory"], root)
 
 
 def tree_digest(root: Path) -> str:
@@ -2035,11 +2118,147 @@ def pin_subject_executable(subjects: Path, source: Path, sha256: str) -> Path:
 SUBJECT_INHERITED_ENV = ("LANG", "LC_ALL", "TERM", "USER", "LOGNAME", "SHELL")
 
 
+EVALUATOR_HOME_VARIABLES = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "grok": "GROK_HOME"}
+
+
+def evaluator_homes() -> dict[str, Path]:
+    return {harness: Path.home() / ".codeflow-eval" / harness for harness in EVALUATOR_HOME_VARIABLES}
+
+
+def evaluator_directory(path: Path) -> bool:
+    # Reject links at either kit-owned level, including a dangling link. Never
+    # resolve a replacement evaluator folder into a personal harness folder.
+    if not (path.is_absolute() and not path.parent.is_symlink() and not path.is_symlink()
+            and path.parent.is_dir() and path.is_dir()):
+        return False
+    deadline, count = time.monotonic() + 10, 0
+    pending = [path]
+    try:
+        while pending:
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    count += 1
+                    if count > 100_000 or time.monotonic() >= deadline:
+                        return False
+                    if entry.is_symlink():
+                        parts = Path(entry.path).relative_to(path).parts
+                        executable = shutil.which("codex")
+                        # Codex creates these executable dispatch links while its
+                        # TUI is alive. They are not config imports. Permit only
+                        # their exact native location, names and binary target.
+                        runtime = (path.name == "codex" and len(parts) == 4
+                                   and parts[:2] == ("tmp", "arg0")
+                                   and re.fullmatch(r"codex-arg0[A-Za-z0-9]+", parts[2])
+                                   and parts[3] in {"applypatch", "apply_patch", "codex-execve-wrapper"}
+                                   and executable is not None
+                                   and os.readlink(entry.path) == executable)
+                        if not runtime:
+                            return False
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+    except OSError:
+        return False
+    return True
+
+
+def trial_native_args(harness: str, environment: dict[str, str]) -> list[str]:
+    """Documented process-local state controls; retained transcripts are not resumed."""
+    home = Path(environment["HOME"])
+    if harness == "codex":
+        values = ['cli_auth_credentials_store="file"', 'history.persistence="none"',
+                  'memories.generate_memories=false', 'memories.use_memories=false',
+                  'sqlite_home=' + json.dumps(str(home / "codex-state")),
+                  'log_dir=' + json.dumps(str(home / "codex-logs"))]
+        return [item for value in values for item in ["-c", value]]
+    if harness == "grok":
+        return ["--leader-socket", str(Path(environment["TMPDIR"]) / "grok-leader.sock")]
+    return []
+
+
+def prepare_subject_home(home: Path) -> None:
+    """Create a disposable HOME; macOS needs only the real Keychains folder."""
+    home.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        library = home / "Library"
+        library.mkdir()
+        (library / "Keychains").symlink_to(Path.home() / "Library/Keychains", target_is_directory=True)
+
+
+def prepare_eval_homes() -> str:
+    """Prepare config only. Never launch a harness, read credentials, or sign in."""
+    homes = evaluator_homes()
+    root = next(iter(homes.values())).parent
+    if root.is_symlink():
+        raise EvalError("evaluator home must not be a symlink")
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for path in homes.values():
+        if path.is_symlink():
+            raise EvalError("evaluator home must not be a symlink")
+        path.mkdir(mode=0o700, exist_ok=True)
+        if not evaluator_directory(path):
+            raise EvalError("evaluator home contains a symlink or cannot be inspected")
+    seeds = {homes["claude"] / ".claude.json": json.dumps({"theme": "dark", "hasCompletedOnboarding": True}) + "\n",
+             homes["codex"] / "config.toml": 'cli_auth_credentials_store = "file"\n'}
+    for path, value in seeds.items():
+        # Exclusive creation preserves existing config without reading it.
+        try:
+            with path.open("x", encoding="utf-8") as stream:
+                stream.write(value)
+            path.chmod(0o600)
+        except FileExistsError:
+            if path.is_symlink() or not path.is_file():
+                raise EvalError("evaluator settings must be a regular file")
+    env = subject_environment(Path("/SETUP"), Path("/usr/bin/codeflow"), [])
+    retained = {key: value for key, value in env.items()
+                if key not in {"HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "PATH",
+                               "CLAUDE_CODE_PROJECT_DIR_NAME", "GROK_LOG_FILE", "TERM"}}
+    assignments = " ".join(shlex.quote(key + "=" + value) for key, value in retained.items())
+    keychain_setup = ""
+    if sys.platform == "darwin":
+        target = shlex.quote(str(Path.home() / "Library/Keychains"))
+        keychain_setup = (f'  mkdir -p "$eval_setup/home/Library" && '
+                          f'ln -s {target} "$eval_setup/home/Library/Keychains" || return\n')
+    return f'''Prepared dedicated evaluator folders (no sign-in performed):
+{chr(10).join(str(path) for path in homes.values())}
+Run this shell function and the three commands yourself, one at a time:
+
+eval_home_launch() {{
+  eval_setup=$(mktemp -d {shlex.quote(str(root / "setup.XXXXXX"))}) || return
+  printf 'Setup directory: %s\\n' "$eval_setup"
+  mkdir -p "$eval_setup/home" "$eval_setup/tmp" "$eval_setup/home/.config" "$eval_setup/home/.codeflow"
+{keychain_setup}  if [ "$1" = grok ]; then set -- "$@" --leader-socket "$eval_setup/tmp/grok-leader.sock"; fi
+  (cd "$eval_setup" && env -i TERM="${{TERM:-xterm-256color}}" PATH={shlex.quote(env["PATH"])} {assignments} HOME="$eval_setup/home" TMPDIR="$eval_setup/tmp" CODEFLOW_HOME="$eval_setup/home/.codeflow" XDG_CONFIG_HOME="$eval_setup/home/.config" GROK_LOG_FILE="$eval_setup/grok.log" "$@")
+}}
+eval_home_launch claude
+eval_home_launch codex -c 'cli_auth_credentials_store="file"'
+eval_home_launch grok
+
+Claude: use /login and complete your browser sign-in; exit when signed in.
+Codex: choose the ChatGPT sign-in and complete it; exit when signed in.
+Grok: approve the browser sign-in yourself; exit when signed in. Do not import personal settings.
+Only these dedicated config folders persist. Never copy personal harness files.
+Setup directories are disposable; close the seat before removing its printed setup directory.
+Adopters: in your own interactive Codex, review each materialized fixture's hooks
+with /hooks before a hook-dependent trial. The setup helper grants no hook trust.
+CodeFlow's repository-only runner (evals/qualification/runner.py, not installed
+into adopter projects) defaults to that same manual review. Its optional
+--codex-hook-trust=bypass requires an explicit choice on each evaluation launch,
+the dedicated evaluator home and verified shipped contract-3 hooks. It refuses
+user and plugin hooks, records hook-free plugins including skills/apps, and
+rechecks plugins before prompt delivery and at finish. No trust or preference is saved.
+Manual trust is keyed by absolute hooks-file path and a per-hook hash; a review in
+one fixture does not carry to another. Setup grants no trust.
+Trials refuse missing or unconfirmed sign-ins: evaluator home not signed in: run prepare-eval-homes
+'''
+
+
 def subject_environment(trial_dir: Path, subject_codeflow: Path, hidden: list[Path]) -> dict[str, str]:
     """The environment a harness gives the subject session: the pinned
     executable's copy first on PATH, its own home and temporary directory, and
     no PATH entry inside a directory the subject must not read."""
 
+    personal_configs = [Path.home() / name for name in (".claude", ".codex", ".grok")]
+    hidden = [*hidden, *personal_configs]
     entries = [str(subject_codeflow.parent)]
     for entry in os.environ.get("PATH", "/usr/bin:/bin").split(os.pathsep):
         if not entry or not os.path.isabs(entry):
@@ -2050,10 +2269,20 @@ def subject_environment(trial_dir: Path, subject_codeflow: Path, hidden: list[Pa
         if entry not in entries:
             entries.append(entry)
     environment = {name: os.environ[name] for name in SUBJECT_INHERITED_ENV if name in os.environ}
+    username = os.environ.get("USER") or os.environ.get("LOGNAME") or getpass.getuser()
     environment.update(
         {
+            "USER": username,
+            "LOGNAME": username,
             "PATH": os.pathsep.join(entries),
             "HOME": str(trial_dir / "home"),
+            "CODEFLOW_HOME": str(trial_dir / "home" / ".codeflow"),
+            **{variable: str(evaluator_homes()[harness]) for harness, variable in EVALUATOR_HOME_VARIABLES.items()},
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-" + hashlib.sha256(str(trial_dir).encode()).hexdigest()[:24],
+            "GROK_MEMORY": "0",
+            "GROK_LOG_FILE": str(trial_dir / "home" / "grok.log"),
+            "XDG_CONFIG_HOME": str(trial_dir / "home" / ".config"),
             "TMPDIR": str(trial_dir / "tmp"),
         }
     )
@@ -2083,6 +2312,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     opaque_id = trial_opaque_id(marker["run_id"], case_id, trial)
     output = subjects / opaque_id / "repository"
     record_path = resolved_run_root / "records" / f"{opaque_id}.fixture.json"
+    check_instruction_ancestors(output.parent)
     refuse_symlink_components(output.parent, subjects)
     if output.exists():
         raise EvalError(f"trial fixture already exists: {output}")
@@ -2161,7 +2391,9 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
             output, state.get("root_branch", branch), install_hooks=False
         )
     apply_fixture_history(output, branch, state.get("history", []))
-    if state.get("squash_cleanup_worktree") is True:
+    if state.get("closeout_inventory") is True:
+        configure_closeout_inventory(output, subject_codeflow)
+    elif state.get("squash_cleanup_worktree") is True:
         configure_squash_cleanup_worktree(output, state)
     elif state.get("local_origin_main") is True:
         configure_local_origin_main(output, output.parent / "origin.git")
@@ -2175,8 +2407,8 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         write_fixture_file(output, relative, content)
     configure_fixture_hooks(output)
     digest = tree_digest(output)
-    for private in ("home", "tmp"):
-        (output.parent / private).mkdir()
+    prepare_subject_home(output.parent / "home")
+    (output.parent / "tmp").mkdir()
     if any(nested(evaluator_key_path(), root) for root in (resolved_run_root, subjects.resolve())):
         raise EvalError("the evaluator key lies inside the run or subjects root, where a trial can reach it")
     hidden = [resolved_run_root, subjects, evaluator_key_path().parent, *([GRADED_SUITE] if GRADED_SUITE is not None else [])]
@@ -6079,6 +6311,7 @@ def cleanup_run(run_root: Path, confirmation: str) -> None:
 def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(description=__doc__)
     sub = cli.add_subparsers(dest="command", required=True)
+    sub.add_parser("prepare-eval-homes", help="prepare dedicated config and print operator sign-in steps")
     validate_suite_cmd = sub.add_parser("validate-suite")
     validate_suite_cmd.add_argument("--project-root", type=Path)
     validate_suite_cmd.add_argument("--resources", type=Path, default=RESOURCE_DIR)
@@ -6200,6 +6433,9 @@ def main() -> int:
     try:
         if getattr(args, "graded_suite", None) is not None:
             set_graded_suite(args.graded_suite)
+        if args.command == "prepare-eval-homes":
+            print(prepare_eval_homes())
+            return 0
         if args.command == "validate-suite":
             root = args.project_root.resolve() if args.project_root else project_root()
             errors = validate_suite(root, args.resources.resolve())

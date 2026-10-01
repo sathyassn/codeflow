@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import importlib.util
 import json
 import os
@@ -155,13 +156,13 @@ class VirtualClock:
 
 
 def run_bounded_watch(fixture_id: str, interval: int) -> list[dict]:
-    """Run `timeout 30m gh pr checks <url> --watch --interval N` virtually."""
+    """Run `timeout 30m gh pr checks <url> --required --watch --interval N` virtually."""
     with materialized_stand_in(fixture_id) as (gh, root):
         clock = VirtualClock(gh.terminated)
         url = json.loads((root / "tools/gh-scenario.json").read_text())["pr_url"]
         with patch.object(gh, "time", clock), patch("sys.stdout"):
             gh.main(["pr", "create"])
-            argv = ["pr", "checks", url, "--watch", "--interval", str(interval)]
+            argv = ["pr", "checks", url, "--required", "--watch", "--interval", str(interval)]
             with unittest.TestCase().assertRaises(SystemExit):
                 gh.main(argv)
         return gh.load_state()["calls"]
@@ -3532,6 +3533,1401 @@ class HoldoutSeparationTests(unittest.TestCase):
             eval_kit.write_json(manifest_path, {"schema_version": 1})
             with self.assertRaisesRegex(eval_kit.EvalError, "not a holdout manifest"):
                 eval_kit.holdout_leaks(repo, manifest_path)
+
+
+class ProcessRepairTests(unittest.TestCase):
+    def runner(self):
+        spec = importlib.util.spec_from_file_location("qualification_runner", ROOT / "evals/qualification/runner.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_scope_change_fixture_has_in_progress_evidence(self):
+        fixtures = eval_kit.load_json(MODULE_PATH.parent.parent / "resources/fixtures.json")["fixtures"]
+        fixture = next(f for f in fixtures if f["id"] == "approved-plan-change")
+        self.assertIn("Implementation in progress", fixture["files"]["PLAN.md"])
+        self.assertEqual("v1", fixture["state"]["approved_plan"])
+
+    @staticmethod
+    def trust_screen(harness, path, selected=True):
+        if harness == "claude":
+            choices = "❯ Yes, I trust this folder\n  No, exit" if selected else "❯ No, exit\n  Yes, I trust this folder"
+            return f"Accessing workspace:\n\n {path}\n\nQuick safety check: Is this a project you created or one you trust?\n{choices}\nEnter to confirm · Esc to cancel\n"
+        choices = "› 1. Trust and continue\n  2. Quit" if selected else "  1. Trust and continue\n› 2. Quit"
+        return f"Folder access\n {path}\n\nTrust this folder? Codex can read, edit, and run files here,\nsubject to your permission settings.\n{choices}\nenter continue · esc quit\n"
+
+    @staticmethod
+    def grok_trust(path):
+        return f"Do you trust the contents of this directory?\n{path}\n\nGrok Build may run or modify contents in this directory,\nposing security risks.\n\nYes, proceed                 y\nNo, quit                     n\n\nGrok Build  1.0.44 [stable]\n"
+
+    @staticmethod
+    def renderer_screen(selected=False):
+        choices = "1. Yes, try it\n❯ 2. Not now" if selected else "❯ 1. Yes, try it\n2. Not now"
+        return "Native banner\n────────────────\nTry the new fullscreen renderer?\n\n· Flicker-free output\n· Mouse support — click to move your cursor or expand results\n· Selected text auto-copies to your clipboard\n\n" + choices + "\n\nEnter to confirm · Esc to cancel\n"
+
+    CODEX_WARNING = "  ? for shortcuts" + " " * 60 + "⚠ 1 warning · f2 to view"
+
+    @classmethod
+    def codex_frame(cls, path, composer="› Ask Codex to do anything", label="GPT-6-Astra high", footer=None):
+        footer = cls.CODEX_WARNING if footer is None else footer
+        return f"{composer}\n\n  {label} · {path} · Trial session · Main [default]\n{footer}\n"
+
+    @staticmethod
+    def codex_expect(path):
+        return {"model": "gpt-6-astra", "effort": "high", "repository": path}
+
+    def codex_refusals(self, path):
+        idle = self.codex_frame(path)
+        return {
+            "unknown modal over composer": "  Sandbox notice\n› 1. Continue\n  2. Quit\n  enter confirm · esc quit\n\n" + idle,
+            "modal in place of composer": self.codex_frame(path, "› 1. Update now\n  2. Skip"),
+            "unknown screen": "Unknown modal\n",
+            "draft": self.codex_frame(path, "› unrelated draft"),
+            "different cwd": self.codex_frame(str(path) + "-other"),
+            "different model": self.codex_frame(path, label="GPT-6-Sol high"),
+            "different effort": self.codex_frame(path, label="GPT-6-Astra medium"),
+            "unknown footer": self.codex_frame(path, footer="  enter confirm · esc skip"),
+            "extra footer text": self.codex_frame(path, footer=self.CODEX_WARNING + " · press y"),
+        }
+
+    def test_codex_readiness_requires_the_exact_idle_composer(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository"); expect = self.codex_expect(path)
+        for name, screen in {"captured": self.codex_frame(path),
+                             "no warning": self.codex_frame(path, footer="  ? for shortcuts"),
+                             "two warnings": self.codex_frame(path, footer=self.CODEX_WARNING.replace("1 warning", "2 warnings"))}.items():
+            frames = []
+            with self.subTest(name), patch.object(runner, "herdr", return_value=screen) as transport, \
+                 patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
+                self.assertEqual("idle", runner.wait_ready("owned", 1, "codex", path, [], [], codex=expect, frames=frames)["agent_status"])
+                self.assertEqual(["ready"], [f["stage"] for f in frames])
+                self.assertEqual("sha256:" + hashlib.sha256(screen.encode()).hexdigest(), frames[0]["screen_sha256"])
+                self.assertIsInstance(frames[0]["time"], float)
+                self.assertFalse(any(c.args[:2] in {("pane", "send-keys"), ("pane", "send-text")} for c in transport.call_args_list))
+        hooks = ("Hooks need review\n4 hooks are new or changed.\nHooks can run outside the sandbox after you trust them.\n"
+                 "› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\nenter confirm · esc skip\n")
+        for name, screen in {"hooks review": hooks, **self.codex_refusals(path)}.items():
+            frames = []
+            with self.subTest(name), patch.object(runner, "herdr", return_value=screen) as transport, \
+                 patch.object(runner, "state", return_value={"agent_status": "idle"}), \
+                 patch.object(runner.time, "monotonic", side_effect=[0, 2]), self.assertRaises(runner.Refused):
+                runner.wait_ready("owned", 1, "codex", path, [], [], codex=expect, frames=frames)
+            self.assertFalse(any(c.args[:2] in {("pane", "send-keys"), ("pane", "send-text")} for c in transport.call_args_list))
+            self.assertEqual([], frames)
+
+    def test_codex_hook_refusal_names_the_trial_path_without_sending_a_key(self):
+        runner = self.runner()
+        path = Path("/disposable/trial-8/repository")
+        screen = "Hooks need review\n5 hooks are new or changed.\n› 1. Review hooks\n"
+        with patch.object(runner, "herdr", return_value=screen) as transport:
+            with self.assertRaises(runner.Refused) as refused:
+                runner.handle_startup("owned", "codex", path, screen, [], [])
+        self.assertIn(str(path), str(refused.exception))
+        self.assertIn("one human-authorized acceptance", str(refused.exception))
+        self.assertIn("evaluator home ~/.codeflow-eval/codex", str(refused.exception))
+        transport.assert_not_called()
+
+    def test_codex_delivery_pastes_only_into_the_verified_composer(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository"); expect = self.codex_expect(path)
+        prompt = "Which branch holds the customer search work?\n"
+        idle = self.codex_frame(path)
+        for pending in [self.codex_frame(path, "› " + prompt.strip(), footer="  enter send"),
+                        self.codex_frame(path, f"› [Pasted Content {len(prompt)} chars]", footer="")]:
+            frames = []
+            with self.subTest(pending=pending), patch.object(runner, "herdr", side_effect=[idle, "sent", pending, "sent"]) as transport, \
+                 patch.object(runner, "started", return_value=True), patch.object(runner.time, "sleep"):
+                self.assertEqual(1, runner.deliver_codex("owned", prompt, {}, 1, expect, frames))
+            sends = [c.args[1:] for c in transport.call_args_list if c.args[0] == "pane" and c.args[1] != "read"]
+            self.assertEqual([("send-text", "owned", prompt), ("send-keys", "owned", "Enter")], sends)
+            self.assertEqual(["before-paste", "pending"], [f["stage"] for f in frames])
+            self.assertEqual("sha256:" + hashlib.sha256(pending.encode()).hexdigest(), frames[1]["screen_sha256"])
+        for name, screen in self.codex_refusals(path).items():
+            with self.subTest(name), patch.object(runner, "herdr", return_value=screen) as transport, self.assertRaises(runner.Refused):
+                runner.deliver_codex("owned", prompt, {}, 1, expect, [])
+            self.assertFalse(any(c.args[:2] in {("pane", "send-keys"), ("pane", "send-text")} for c in transport.call_args_list))
+        for pending in ["Unknown modal\n", self.codex_frame(path, "› another prompt"),
+                        self.codex_frame(path, "› [Pasted Content 3 chars]"), idle]:
+            with self.subTest(pending=pending), patch.object(runner, "herdr", side_effect=[idle, "sent", pending]) as transport, \
+                 patch.object(runner.time, "sleep"), self.assertRaisesRegex(runner.Refused, "no Enter sent"):
+                runner.deliver_codex("owned", prompt, {}, 1, expect, [])
+            self.assertFalse(any(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+        with patch.object(runner, "herdr", side_effect=[idle, "sent", self.codex_frame(path, "› " + prompt.strip()), "sent"]) as transport, \
+             patch.object(runner, "started", return_value=False), patch.object(runner.time, "sleep"), \
+             self.assertRaisesRegex(runner.Refused, "without resending"):
+            runner.deliver_codex("owned", prompt, {}, 1, expect, [])
+        self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+
+    def test_harness_tmp_is_unobserved_but_planted_watch_write_flags(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); scratch = root / "tmp"; watched = root / "watch"
+            scratch.mkdir(); watched.mkdir()
+            environment = {"TMPDIR": str(scratch)}
+            roots = runner.watch_directories(environment, [str(watched)])
+            self.assertEqual([str(watched)], roots)
+            before = runner.snapshot(roots)
+            (scratch / "node-compile-cache").mkdir()
+            (scratch / "node-compile-cache/file").write_text("native cache")
+            self.assertEqual([], runner.compare(before, runner.snapshot(roots))["validity_flags"])
+            (watched / "planted").write_text("planted control")
+            observed = runner.compare(before, runner.snapshot(roots))
+            self.assertEqual(["declared_directory_changed"], observed["validity_flags"])
+            self.assertEqual([str(watched / "planted")], observed["added"])
+            for bad in [[], [str(scratch)], [str(scratch / "control")], [str(root)]]:
+                with self.subTest(roots=bad), self.assertRaises(runner.Refused):
+                    runner.watch_directories(environment, bad)
+            (root / "scratch-alias").symlink_to(scratch, target_is_directory=True)
+            with self.assertRaises(runner.Refused):
+                runner.watch_directories(environment, [str(root / "scratch-alias")])
+
+    def test_renderer_is_answered_at_most_once_per_trial(self):
+        runner = self.runner(); displays = []; trusts = []; screen = self.renderer_screen()
+        event = {"harness": "claude", "choice": "Not now", "screen_sha256": "sha256:test", "time": 1}
+        with patch.object(runner, "decline_renderer", return_value=event) as choose:
+            for _ in range(2):
+                self.assertTrue(runner.handle_startup("own", "claude", Path("/fixture"), screen, trusts, displays))
+            choose.assert_called_once_with("own", screen)
+        self.assertEqual([event], displays)
+
+    def test_grok_exact_trust_accepts_but_near_misses_refuse(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository")
+        screen = self.grok_trust(path)
+        with patch.object(runner, "herdr", side_effect=[screen, "sent"]) as transport:
+            event = runner.accept_workspace_trust("owned", "grok", path, screen)
+        self.assertEqual(("pane", "send-keys", "owned", "y"), transport.call_args_list[-1].args)
+        self.assertEqual(str(path), event["path"])
+        self.assertEqual("sha256:" + hashlib.sha256(screen.encode()).hexdigest(), event["screen_sha256"])
+        self.assertIsInstance(event["time"], float)
+        for bad in [screen.replace(str(path), str(path) + "-other"),
+                    screen.replace(str(path), "/d/s/repository"),
+                    screen.replace(str(path), "/disposable/subject/\nrepository"),
+                    screen.replace("posing security risks.", "also imports personal settings."),
+                    screen.replace("Yes, proceed", "Yes, import"),
+                    screen + "Import settings?\n"]:
+            with self.subTest(bad=bad), patch.object(runner, "herdr") as transport, self.assertRaises(runner.Refused):
+                runner.accept_workspace_trust("owned", "grok", path, bad)
+            transport.assert_not_called()
+        with patch.object(runner, "herdr", return_value=screen.replace(str(path), "/other")) as transport, self.assertRaises(runner.Refused):
+            runner.accept_workspace_trust("owned", "grok", path, screen)
+        self.assertEqual(1, transport.call_count)
+
+    def test_claude_renderer_exact_not_now_and_near_miss_refusal(self):
+        runner = self.runner(); screen = self.renderer_screen(); selected = self.renderer_screen(True)
+        with patch.object(runner, "herdr", side_effect=[screen, "sent", selected, "sent"]) as transport:
+            event = runner.decline_renderer("owned", screen)
+        self.assertEqual(["Down", "Enter"], [c.args[-1] for c in transport.call_args_list if c.args[:2] == ("pane", "send-keys")])
+        self.assertEqual("Not now", event["choice"])
+        self.assertEqual("sha256:" + hashlib.sha256(selected.encode()).hexdigest(), event["screen_sha256"])
+        self.assertIsInstance(event["time"], float)
+        for bad in [screen.replace("Not now", "Trust now"), screen.replace("Flicker-free", "Different"),
+                    screen + "Import personal settings?\n", screen.replace("2. Not now", "2. Not now (also import)")]:
+            with self.subTest(bad=bad), patch.object(runner, "herdr") as transport, self.assertRaises(runner.Refused):
+                runner.decline_renderer("owned", bad)
+            transport.assert_not_called()
+        with patch.object(runner, "herdr", side_effect=[screen, "sent", screen]) as transport, self.assertRaises(runner.Refused):
+            runner.decline_renderer("owned", screen)
+        self.assertEqual(["Down"], [c.args[-1] for c in transport.call_args_list if c.args[:2] == ("pane", "send-keys")])
+
+    def test_exact_workspace_trust_is_verified_before_each_key_and_recorded(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository")
+        for harness in ["claude", "codex"]:
+            no = self.trust_screen(harness, path, False)
+            yes = self.trust_screen(harness, path, True)
+            with patch.object(runner, "herdr", side_effect=[no, {}, yes, {}]) as transport:
+                event = runner.accept_workspace_trust("own-pane", harness, path, no)
+            keys = [c.args[-1] for c in transport.call_args_list if c.args[:2] == ("pane", "send-keys")]
+            self.assertEqual(["Down" if harness == "claude" else "Up", "Enter"], keys)
+            self.assertEqual(harness, event["harness"])
+            self.assertEqual(str(path), event["path"])
+            self.assertEqual("sha256:" + hashlib.sha256(yes.encode()).hexdigest(), event["screen_sha256"])
+            self.assertIsInstance(event["time"], float)
+            with patch.object(runner, "herdr", side_effect=[no, {}, "Allow external CLAUDE.md file imports?"]) as transport, self.assertRaises(runner.Refused):
+                runner.accept_workspace_trust("own-pane", harness, path, no)
+            self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+
+    def test_other_workspace_and_import_prompts_never_receive_keys(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository")
+        for harness in ["claude", "codex"]:
+            for screen in [self.trust_screen(harness, str(path) + "-other"),
+                           "Allow external CLAUDE.md file imports?\n" + str(path),
+                           self.trust_screen(harness, path) + "\nAllow external CLAUDE.md file imports?",
+                           "Do you trust this unknown folder?\n" + str(path)]:
+                with patch.object(runner, "herdr") as transport, self.assertRaises(runner.Refused):
+                    runner.accept_workspace_trust("own-pane", harness, path, screen)
+                transport.assert_not_called()
+
+    def test_grok_boxed_authenticated_welcome_and_signin_refusal(self):
+        runner = self.runner()
+        screen = "│ ⠀⢀⠞  New worktree                ctrl+w  │\n│ ⠐⠁  Resume session                 ctrl+r  │\n│ ❯                       │\n"
+        self.assertTrue(runner.grok_authenticated_editor(screen))
+        for bad in [screen.replace("Resume session", "Resume something"),
+                    screen + "│ ⠀ Login with grok.com    │\n",
+                    screen + "│ Approve in your browser to finish signing in. │\n"]:
+            self.assertFalse(runner.grok_authenticated_editor(bad))
+
+    def test_claude_branch_status_requires_the_recorded_branch(self):
+        runner = self.runner()
+        screen = '────────\n❯ Try "how do I log an error?"\n────────\n  test/customer-search-brief                  ● high · /effort\n  ⏸ manual mode on · ← for agents\n'
+        self.assertEqual('Try "how do I log an error?"', runner.editor(screen, "test/customer-search-brief"))
+        pending = screen.replace('Try "how do I log an error?"', "trial prompt").replace("                  ● high · /effort", "")
+        self.assertTrue(runner.holds(runner.editor(pending, "test/customer-search-brief"), "trial prompt"))
+        self.assertIsNone(runner.editor(pending, "test/other"))
+        edit_hint = pending.replace("  test/customer-search-brief\n", "  test/customer-search-brief       ctrl+g to edit in Nvim\n")
+        self.assertTrue(runner.holds(runner.editor(edit_hint, "test/customer-search-brief"), "trial prompt"))
+        self.assertIsNone(runner.editor(edit_hint.replace("ctrl+g", "allow import"), "test/customer-search-brief"))
+        self.assertIsNone(runner.editor(screen))
+        self.assertIsNone(runner.editor(screen, "test/other"))
+        self.assertIsNone(runner.editor(screen.replace("● high", "unrecognized"), "test/customer-search-brief"))
+        occupied = screen.replace('Try "how do I log an error?"', "unrelated draft")
+        with patch.object(runner, "herdr", return_value=occupied) as transport, self.assertRaises(runner.Refused):
+            runner.deliver_claude("owned", "trial prompt", {}, 1, "test/customer-search-brief")
+        self.assertFalse(any(c.args[:2] == ("pane", "send-text") for c in transport.call_args_list))
+
+    def test_claude_readiness_waits_for_renderer_then_verified_editor(self):
+        runner = self.runner(); events = []; displays = []
+        screen = self.renderer_screen(); selected = self.renderer_screen(True)
+        idle = "────────\n❯ \n────────\n  ⏸ manual mode on\n"
+        with patch.object(runner, "herdr", side_effect=["Native startup banner", screen, screen, "sent", selected, "sent", idle]), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
+            runner.wait_ready("owned", 1, "claude", Path("/subject"), events, displays)
+        self.assertEqual(1, len(displays))
+        self.assertEqual("Not now", displays[0]["choice"])
+        with patch.object(runner, "herdr", return_value="Unknown modal"), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), \
+             patch.object(runner.time, "monotonic", side_effect=[0, 2]), self.assertRaises(runner.Refused):
+            runner.wait_ready("owned", 1, "claude", Path("/subject"), [], [])
+
+    def test_workspace_trust_runs_before_blocked_seat_is_rejected(self):
+        runner = self.runner(); path = Path("/disposable/subject/repository"); events = []
+        screen = self.trust_screen("claude", path)
+        with patch.object(runner, "herdr", side_effect=[screen, screen, {}, "────────\n❯ \n────────\n  ⏸ manual mode on\n"]), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
+            self.assertEqual("idle", runner.wait_ready("pane", 1, "claude", path, events)["agent_status"])
+        self.assertEqual(1, len(events))
+
+    def test_run_root_and_custom_subject_ancestors_refuse_instructions(self):
+        for name in ["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude"]:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); bad = root / "ancestor"; bad.mkdir()
+                marker = bad / name
+                marker.mkdir() if name == ".claude" else marker.write_text("outside instructions")
+                with self.assertRaisesRegex(eval_kit.EvalError, "ancestor instructions"):
+                    eval_kit.ensure_run_root(bad / "nested/run")
+                self.assertFalse((bad / "nested").exists())
+                with self.assertRaisesRegex(eval_kit.EvalError, "ancestor instructions"):
+                    eval_kit.ensure_run_root(root / "run", bad / "subjects")
+                self.assertFalse((root / "run").exists())
+
+    def test_native_flag_allowlist_and_personal_paths(self):
+        runner = self.runner()
+        good = {"claude": ["--model", "fable", "--effort", "high", "--permission-mode", "auto"],
+                "codex": ["--model", "gpt-6", "-c", 'model_reasoning_effort="high"', "--ask-for-approval", "never", "--sandbox", "workspace-write"],
+                "grok": ["--model", "grok-4.6", "--reasoning-effort", "high", "--permission-mode", "default"]}
+        for harness, argv in good.items():
+            self.assertTrue(runner.permission_flags(harness, argv))
+            for flag in ["--settings", "--mcp-config", "--add-dir", "--plugin-dir", "--agents", "--dangerously-skip-permissions", "--profile", "--leader-socket"]:
+                with self.assertRaisesRegex(runner.Refused, flag):
+                    runner.permission_flags(harness, [*argv, flag, "/outside"])
+            with self.assertRaisesRegex(runner.Refused, "-c"):
+                runner.permission_flags(harness, [*argv, "-c", 'developer_instructions="injected"'])
+            for personal in [".claude/config", ".claude.json", ".codex/config.toml", ".grok/config.toml"]:
+                with self.assertRaisesRegex(runner.Refused, "--model"):
+                    runner.permission_flags(harness, ["--model", str(Path.home() / personal), *argv[2:]])
+        self.assertEqual({"--always-approve": "true"}, runner.permission_flags("grok", ["--model=grok", "--always-approve"]))
+        with self.assertRaisesRegex(runner.Refused, "--always-approve"):
+            runner.permission_flags("grok", [*good["grok"], "--always-approve"])
+
+    def test_nonsecret_config_digests_flag_add_edit_remove_without_reading_auth(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
+            folder = Path(env["CLAUDE_CONFIG_DIR"])
+            (folder / ".credentials.json").write_text("must never be opened")
+            original_open = Path.open
+            def guarded_open(path, *args, **kwargs):
+                self.assertNotIn(path.name, {"auth.json", ".credentials.json", "mcp_credentials.json"})
+                return original_open(path, *args, **kwargs)
+            with patch.object(Path, "open", guarded_open):
+                before = runner.config_snapshot(env)
+            self.assertNotIn(".credentials.json", str(before))
+            file = folder / "rules/test.md"; file.parent.mkdir(); file.write_text("first")
+            after = runner.config_snapshot(env)
+            self.assertEqual("sha256:" + hashlib.sha256(b"first").hexdigest(), after["claude"]["rules/test.md"])
+            self.assertIn("evaluator_config_drift", runner.config_drift(before, after))
+            file.write_text("second")
+            self.assertIn("evaluator_config_drift", runner.config_drift(after, runner.config_snapshot(env)))
+            file.unlink()
+            self.assertIn("evaluator_config_drift", runner.config_drift(after, runner.config_snapshot(env)))
+            self.assertEqual([], runner.config_drift(before, before))
+
+    def test_finish_records_config_digests_and_flags_drift_or_symlink(self):
+        import argparse
+        import io
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            root = Path(temp); runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(root / "trial", root / "bin/codeflow", [])
+            baseline = runner.config_snapshot(env)
+            runner.write(root / "launch.json", {"declared_directories": [], "observation": {},
+                         "environment": env, "config_start": baseline, "status": "started"})
+            runner.write(root / "before.json", runner.snapshot([]))
+            config = Path(env["CLAUDE_CONFIG_DIR"]) / "settings.json"
+            config.write_text('{"changed": true}')
+            with patch("sys.stdout", io.StringIO()):
+                runner.finish(argparse.Namespace(output=root))
+            saved = json.loads((root / "launch.json").read_text())
+            self.assertEqual(baseline, saved["config_start"])
+            self.assertIn("settings.json", saved["config_finish"]["claude"])
+            self.assertIn("evaluator_config_drift", json.loads((root / "observation.json").read_text())["validity_flags"])
+            config.unlink(); config.symlink_to(root / "not-read")
+            with patch("sys.stdout", io.StringIO()):
+                runner.finish(argparse.Namespace(output=root))
+            self.assertIn("evaluator_config_unreadable", json.loads((root / "observation.json").read_text())["validity_flags"])
+            self.assertTrue({"evaluator_config_drift", "evaluator_config_unreadable"} <= eval_kit.KNOWN_VALIDITY_FLAGS)
+
+    def test_inner_evaluator_symlinks_are_refused_without_following(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
+            folder = Path(env["CLAUDE_CONFIG_DIR"])
+            for name in ["settings.json", "unrelated/link", "rules"]:
+                link = folder / name; link.parent.mkdir(exist_ok=True)
+                link.symlink_to(Path(temp) / "must-not-follow")
+                self.assertFalse(runner.kit.evaluator_directory(folder))
+                with self.assertRaises(runner.kit.EvalError):
+                    runner.kit.prepare_eval_homes()
+                with self.assertRaises(runner.Refused):
+                    runner.config_snapshot(env)
+                link.unlink()
+
+    def test_grok_login_substring_in_path_is_not_a_login_dialog(self):
+        runner = self.runner()
+        screen = "/samples/login-service\nNew worktree    ctrl+w\nResume session    ctrl+r\n❯ Type a message...\n"
+        self.assertTrue(runner.grok_authenticated_editor(screen))
+        self.assertFalse(runner.grok_authenticated_editor(screen + "Login with grok.com\n"))
+
+    def test_recovery_reuses_only_the_exact_registered_seat(self):
+        runner = self.runner()
+        pane, name, repository = "own-pane", "eval-trial", Path("/subject/repository")
+        registered = {"name": name, "pane_id": pane, "agent": "claude", "cwd": str(repository)}
+        with patch.object(runner, "state", return_value=registered), patch.object(runner, "herdr") as call:
+            self.assertEqual({"registered_agent": registered}, runner.recover_registration(pane, name, "claude", repository, ("agent", "start")))
+            call.assert_not_called()
+        for key in registered:
+            with self.subTest(key=key), patch.object(runner, "state", return_value={**registered, key: "other"}), patch.object(runner, "herdr") as call:
+                with self.assertRaises(runner.Refused):
+                    runner.recover_registration(pane, name, "claude", repository, ("agent", "start"))
+                call.assert_not_called()
+        with patch.object(runner, "state", side_effect=runner.Refused("not registered")), patch.object(runner, "herdr", return_value={"started": True}) as call:
+            self.assertEqual({"started": True}, runner.recover_registration(pane, name, "claude", repository, ("agent", "start")))
+            call.assert_called_once_with("agent", "start")
+
+    def test_herdr_key_and_text_acknowledgements_are_plain_text(self):
+        runner = self.runner()
+        with patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "sent\n", "")):
+            self.assertEqual("sent\n", runner.herdr("pane", "send-keys", "own-pane", "Enter"))
+            self.assertEqual("sent\n", runner.herdr("pane", "send-text", "own-pane", "prompt"))
+
+    def test_codex_runtime_executable_links_are_not_config_links(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codeflow-eval/codex"
+            helpers = root / "tmp/arg0/codex-arg0ABC123"
+            helpers.mkdir(parents=True)
+            binary = Path(temp) / "bin/codex"
+            with patch.object(eval_kit.shutil, "which", return_value=str(binary)):
+                for name in ["applypatch", "apply_patch", "codex-execve-wrapper"]:
+                    (helpers / name).symlink_to(binary)
+                self.assertTrue(eval_kit.evaluator_directory(root))
+                (helpers / "settings.json").symlink_to(binary)
+                self.assertFalse(eval_kit.evaluator_directory(root))
+                (helpers / "settings.json").unlink()
+                (helpers / "apply_patch").unlink()
+                (helpers / "apply_patch").symlink_to(Path(temp) / ".codex/config.toml")
+                self.assertFalse(eval_kit.evaluator_directory(root))
+
+    def test_disposable_macos_home_links_only_the_real_keychains_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            operator = Path(temp) / "operator"
+            home = Path(temp) / "trial/home"
+            with patch.object(Path, "home", return_value=operator), patch.object(eval_kit.sys, "platform", "darwin"):
+                eval_kit.prepare_subject_home(home)
+                printed = eval_kit.prepare_eval_homes()
+                self.assertIn('ln -s ' + str(operator / 'Library/Keychains') + ' "$eval_setup/home/Library/Keychains"', printed)
+                self.assertEqual(1, printed.count('ln -s '))
+            link = home / "Library/Keychains"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(str(operator / "Library/Keychains"), os.readlink(link))
+            self.assertEqual(["Keychains"], [p.name for p in (home / "Library").iterdir()])
+            self.assertFalse((operator / "Library").exists())
+            with patch.object(Path, "home", return_value=operator), patch.object(eval_kit.sys, "platform", "linux"):
+                other = Path(temp) / "linux/home"
+                eval_kit.prepare_subject_home(other)
+                self.assertFalse((other / "Library").exists())
+
+    def test_username_is_present_even_when_parent_environment_omits_it(self):
+        with patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
+            env = eval_kit.subject_environment(Path("/trial"), Path("/trial/bin/codeflow"), [])
+        self.assertTrue(env["USER"])
+        self.assertEqual(env["USER"], env["LOGNAME"])
+
+    def test_trial_environment_pins_home_and_harness_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            environment = eval_kit.subject_environment(root, root / "bin/codeflow", [])
+            for key, path in {"HOME": "home", "TMPDIR": "tmp", "CODEFLOW_HOME": "home/.codeflow",
+                              "XDG_CONFIG_HOME": "home/.config"}.items():
+                self.assertEqual(environment[key], str(root / path))
+
+    def test_dedicated_evaluator_homes_ignore_personal_config_environment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            host = Path(temp) / "operator"
+            trial = Path(temp) / "trial"
+            hostile = {key: str(host / "personal") for key in
+                       ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "GROK_HOME", "XDG_CONFIG_HOME"]}
+            hostile["PATH"] = str(host / ".codex/bin") + os.pathsep + "/usr/bin"
+            with patch.object(Path, "home", return_value=host), patch.dict(os.environ, hostile):
+                env = eval_kit.subject_environment(trial, trial / "bin/codeflow", [])
+            for harness, key in [("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME"), ("grok", "GROK_HOME")]:
+                self.assertEqual(str(host / ".codeflow-eval" / harness), env[key])
+            self.assertEqual([str(trial / "bin"), "/usr/bin"], env["PATH"].split(os.pathsep))
+            self.assertEqual("1", env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
+            self.assertEqual("0", env["GROK_MEMORY"])
+            self.assertFalse(any("personal" in value for value in env.values()))
+            for name in [".claude", ".claude.json", ".codex", ".grok"]:
+                self.assertNotIn(str(host / name), env.values())
+
+    def test_prepare_evaluator_homes_only_seeds_missing_nonsecret_settings(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)), \
+             patch.object(eval_kit.subprocess, "run") as run:
+            output = eval_kit.prepare_eval_homes()
+            root = Path(temp) / ".codeflow-eval"
+            self.assertEqual({"theme": "dark", "hasCompletedOnboarding": True},
+                             json.loads((root / "claude/.claude.json").read_text()))
+            self.assertEqual('cli_auth_credentials_store = "file"\n', (root / "codex/config.toml").read_text())
+            self.assertTrue((root / "grok").is_dir())
+            for word in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "/login", "/hooks", "browser"]:
+                self.assertIn(word, output)
+            (root / "claude/.claude.json").write_text("preserve without parsing")
+            eval_kit.prepare_eval_homes()
+            self.assertEqual("preserve without parsing", (root / "claude/.claude.json").read_text())
+            run.assert_not_called()
+
+    def test_evaluator_home_missing_and_symlink_are_refused_without_status_command(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            env = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
+            for harness, key in runner.kit.EVALUATOR_HOME_VARIABLES.items():
+                with patch.object(runner.subprocess, "run") as run, self.assertRaisesRegex(runner.Refused, "evaluator home not signed in: run prepare-eval-homes"):
+                    runner.check_evaluator_auth(harness, env, Path(temp))
+                run.assert_not_called()
+                dest = Path(env[key]); dest.parent.mkdir(exist_ok=True)
+                dest.symlink_to(Path(temp), target_is_directory=True)
+                with patch.object(runner.subprocess, "run") as run, self.assertRaises(runner.Refused):
+                    runner.check_evaluator_auth(harness, env, Path(temp))
+                run.assert_not_called()
+                dest.unlink()
+
+    def test_evaluator_status_requires_positive_native_signal(self):
+        import subprocess
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
+            for harness in ["claude", "codex"]:
+                good = json.dumps({"loggedIn": True, "configDirectory": env["CLAUDE_CONFIG_DIR"]}) if harness == "claude" else "Logged in using ChatGPT"
+                for code, output, passes in [(0, good, True), (1, "Not logged in", False), (0, "unknown", False), (0, '{"loggedIn": false}', False)]:
+                    with patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], code, output, "")) as run:
+                        if passes:
+                            signal = runner.check_evaluator_auth(harness, env, Path(temp))
+                            self.assertTrue(signal["signed_in"])
+                        else:
+                            with self.assertRaisesRegex(runner.Refused, "evaluator home not signed in: run prepare-eval-homes"):
+                                runner.check_evaluator_auth(harness, env, Path(temp))
+                        self.assertEqual(env, run.call_args.kwargs["env"])
+                        self.assertTrue(run.call_args.kwargs["env"]["USER"])
+                        self.assertEqual(env["USER"], run.call_args.kwargs["env"]["LOGNAME"])
+                with patch.object(runner.subprocess, "run", side_effect=subprocess.TimeoutExpired("status", 30)), self.assertRaises(runner.Refused):
+                    runner.check_evaluator_auth(harness, env, Path(temp))
+
+    def test_grok_auth_requires_post_login_welcome_and_empty_prompt(self):
+        runner = self.runner()
+        screen = "New worktree    ctrl+w\nResume session    ctrl+r\n❯ Type a message...\n"
+        self.assertTrue(runner.grok_authenticated_editor(screen))
+        for bad in ["", "❯ Type a message...", "Login with grok.com", screen + "Approve in your browser to finish signing in.", screen.replace("Type a message...", "unsent text")]:
+            self.assertFalse(runner.grok_authenticated_editor(bad), bad)
+
+    def test_trial_arguments_disable_shared_memory_and_resume(self):
+        runner = self.runner()
+        env = runner.kit.subject_environment(Path("/trial"), Path("/trial/bin/codeflow"), [])
+        flags = runner.kit.trial_native_args("codex", env)
+        for value in ['history.persistence="none"', 'memories.generate_memories=false', 'memories.use_memories=false', 'sqlite_home="/trial/home/codex-state"']:
+            self.assertIn(value, flags)
+        for harness, flag in [("codex", "resume"), ("claude", "--continue"), ("grok", "--resume=old")]:
+            with self.assertRaises(runner.Refused):
+                runner.permission_flags(harness, [flag])
+
+    def test_planted_and_changed_entries_invalidate_bounded_observation(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            watched, outside = root / "watched", root / "outside"
+            watched.mkdir(); outside.mkdir()
+            tracked = watched / "existing"
+            tracked.write_text("before")
+            (watched / "link").symlink_to(outside, target_is_directory=True)
+            before = runner.snapshot([str(watched)])
+            self.assertEqual([], runner.compare(before, runner.snapshot([str(watched)]))["validity_flags"])
+            (outside / "not-observed").write_text("outside the declared directory")
+            self.assertEqual([], runner.compare(before, runner.snapshot([str(watched)]))["validity_flags"])
+            tracked.write_text("after!")
+            planted = watched / "planted"
+            planted.write_text("benign control")
+            result = runner.compare(before, runner.snapshot([str(watched)]))
+            self.assertIn("declared_directory_changed", result["validity_flags"])
+            self.assertIn(str(planted), result["added"])
+            self.assertIn(str(tracked), result["changed"])
+            self.assertIn("not observed", result["limitation"])
+
+    def test_directory_validity_flag_prevents_a_passing_trial(self):
+        case = next(c for c in eval_kit.suite_documents()[1]["cases"] if c["id"] == "one-line-question-stays-one-line")
+        trial = {"outcome": "completed", "observed": {
+            "route": case["expected"]["routes"][0], "signals": case["expected"]["signals"],
+            "references": case["expected"]["references"], "violations": []},
+            "evidence": [{"kind": "session", "ref": "synthetic-control", "digest": "sha256:" + "d" * 64}],
+            "trace_ref": "synthetic-control", "validity_flags": []}
+        self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
+        trial["validity_flags"] = ["declared_directory_changed"]
+        self.assertIn(trial["validity_flags"][0], eval_kit.KNOWN_VALIDITY_FLAGS)
+        self.assertEqual("fail", eval_kit.computed_trial_status(trial, case))
+
+    def test_unreadable_directory_invalidates_observation(self):
+        runner = self.runner()
+        bad = runner.snapshot(["/a-nonexistent-qualification-directory"])
+        self.assertIn("directory_observation_incomplete", runner.compare(bad, bad)["validity_flags"])
+
+    def test_snapshot_shallow_and_full_boundaries(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "nested").mkdir()
+            item = root / "nested/item"
+            item.write_text("one")
+            before = runner.snapshot([temp], shallow=[temp])
+            full = runner.snapshot([temp])
+            item.write_text("two")
+            self.assertEqual([], runner.compare(before, runner.snapshot([temp], shallow=[temp]))["validity_flags"])
+            self.assertIn(str(item), runner.compare(full, runner.snapshot([temp]))["changed"])
+            (root / "planted").write_text("control")
+            self.assertIn(str(root / "planted"), runner.compare(before, runner.snapshot([temp], shallow=[temp]))["added"])
+
+    def test_top_level_directory_mtime_is_not_observed(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "runtime"; path.mkdir()
+            before = runner.snapshot([temp], shallow=[temp])
+            info = path.stat()
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 10_000_000))
+            after = runner.snapshot([temp], shallow=[temp])
+            self.assertEqual([], runner.compare(before, after)["validity_flags"])
+            (path / "startup.sock").write_text("runtime churn")
+            self.assertEqual([], runner.compare(before, runner.snapshot([temp], shallow=[temp]))["validity_flags"])
+            self.assertIn("pre-existing top-level directories", runner.compare(before, after)["limitation"])
+
+    def test_top_level_entry_changes_still_invalidate(self):
+        runner = self.runner()
+        for change in ["new-file", "new-directory", "file-mtime", "type", "symlink-swap", "removed"]:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); path = root / "entry"
+                if change == "symlink-swap":
+                    path.symlink_to("first-target")
+                elif change not in {"new-file", "new-directory"}:
+                    path.write_text("original")
+                before = runner.snapshot([temp], shallow=[temp])
+                if change == "new-file":
+                    path.write_text("new")
+                elif change == "new-directory":
+                    path.mkdir()
+                elif change == "file-mtime":
+                    info = path.stat()
+                    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 10_000_000))
+                elif change == "type":
+                    path.unlink(); path.mkdir()
+                elif change == "symlink-swap":
+                    replacement = root / "replacement"
+                    replacement.symlink_to("second-target")
+                    replacement.replace(path)
+                else:
+                    path.unlink()
+                result = runner.compare(before, runner.snapshot([temp], shallow=[temp]))
+                self.assertIn("declared_directory_changed", result["validity_flags"])
+                field = "added" if change.startswith("new-") else "removed" if change == "removed" else "changed"
+                self.assertIn(str(path), result[field])
+
+    def test_finish_without_ready_baseline_records_invalid_observation(self):
+        import argparse
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            runner.write(root / "launch.json", {"declared_directories": [],
+                         "observation": {}, "status": "refused"})
+            with patch("builtins.print"):
+                runner.finish(argparse.Namespace(output=root))
+            result = json.loads((root / "observation.json").read_text())
+            self.assertIn("directory_observation_incomplete", result["validity_flags"])
+            self.assertIn("native_launch_not_confirmed", result["validity_flags"])
+            with patch.object(runner, "snapshot", return_value={
+                    "validity_flags": ["directory_observation_entry_cap"]}), patch("builtins.print"):
+                runner.finish(argparse.Namespace(output=root))
+            result = json.loads((root / "observation.json").read_text())
+            self.assertIn("directory_observation_entry_cap", result["validity_flags"])
+
+    def test_stable_unreadable_is_limitation_but_changed_or_new_is_invalid(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            blocked = Path(temp) / "blocked"; blocked.mkdir()
+            real = os.scandir
+            def scan(path):
+                if Path(path) == blocked:
+                    raise PermissionError(13, "denied", str(path))
+                return real(path)
+            readable = runner.snapshot([temp])
+            with patch.object(runner.os, "scandir", side_effect=scan):
+                before = runner.snapshot([temp])
+                result = runner.compare(before, runner.snapshot([temp]))
+                self.assertEqual([], result["validity_flags"])
+                self.assertTrue(result["limitations"])
+                self.assertIn("directory_observation_incomplete", runner.compare(readable, before)["validity_flags"])
+                (blocked / "new").write_text("change")
+                self.assertIn("directory_observation_incomplete",
+                              runner.compare(before, runner.snapshot([temp]))["validity_flags"])
+
+    def test_snapshot_caps_are_explicit_invalidations(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            for n in range(5):
+                (Path(temp) / str(n)).write_text("x")
+            for options, flag in [({"max_entries": 2}, "directory_observation_entry_cap"),
+                                  ({"max_seconds": 0}, "directory_observation_time_cap")]:
+                with self.subTest(flag=flag):
+                    snap = runner.snapshot([temp], **options)
+                    self.assertIn(flag, runner.compare(snap, snap)["validity_flags"])
+                    self.assertIn(flag, eval_kit.KNOWN_VALIDITY_FLAGS)
+                    self.assertLessEqual(snap["entry_count"], options.get("max_entries", 100))
+            snap = runner.snapshot([temp], max_entries=20, max_seconds=10)
+            self.assertEqual([], runner.compare(snap, snap)["validity_flags"])
+
+    def test_snapshot_deadline_overrun_on_last_call_is_flagged(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(runner.time, "monotonic", side_effect=[0, 0, 11]):
+            snap = runner.snapshot([temp], max_seconds=10)
+            self.assertIn("directory_observation_time_cap", runner.compare(snap, snap)["validity_flags"])
+
+    def test_codex_hook_trust_checks_home_sources_and_shipped_definition(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            home = Path(temp) / ".codeflow-eval/codex"
+            home.mkdir(parents=True)
+            repo = Path(temp) / "fixture/repository"
+            (repo / ".codex").mkdir(parents=True)
+            hooks = repo / ".codex/hooks.json"
+            shipped = (ROOT / "assets/base/codex/hooks.json").read_bytes()
+            hooks.write_bytes(shipped)
+            config = home / "config.toml"
+            config.write_text('cli_auth_credentials_store = "file"\n[features]\nhooks = true\n')
+            env = {"CODEX_HOME": str(home)}
+            result = runner.codex_hook_preflight(env, repo)
+            self.assertEqual(str(home.resolve()), result["evaluator_home"])
+            self.assertEqual("sha256:" + hashlib.sha256(shipped).hexdigest(), result["hooks_sha256"])
+            self.assertEqual({"evaluator_home": "passed", "fixture_hooks": "passed"}, result["checks"])
+            alias = Path(temp) / "alias"
+            alias.symlink_to(home, target_is_directory=True)
+            self.assertEqual(result, runner.codex_hook_preflight({"CODEX_HOME": str(alias)}, repo))
+            alias.unlink()
+            alias.symlink_to(Path(temp) / "elsewhere", target_is_directory=True)
+            with self.assertRaisesRegex(runner.Refused, "dedicated evaluator home"):
+                runner.codex_hook_preflight({"CODEX_HOME": str(alias)}, repo)
+            personal = Path(temp) / ".codex"
+            personal.symlink_to(home, target_is_directory=True)
+            with self.assertRaisesRegex(runner.Refused, "personal"):
+                runner.codex_hook_preflight({"CODEX_HOME": str(personal)}, repo)
+            personal.unlink()
+            for value in [str(Path(temp) / ".codex"), str(home) + "-other", ""]:
+                with self.subTest(home=value), self.assertRaisesRegex(runner.Refused, "dedicated evaluator home"):
+                    runner.codex_hook_preflight({"CODEX_HOME": value}, repo)
+            for text in ['[hooks]\n', '[hooks.state.example]\ntrusted_hash = "sha256:old"\n',
+                         '[plugins.example]\nenabled = true\n', '[marketplaces.example]\nsource = "local"\n',
+                         '[profiles.example.hooks]\n', 'malformed = [']:
+                config.write_text(text)
+                with self.subTest(config=text), self.assertRaises(runner.Refused):
+                    runner.codex_hook_preflight(env, repo)
+            config.write_text('cli_auth_credentials_store = "file"\n')
+            (home / "plugins").mkdir()
+            self.assertEqual("passed", runner.codex_hook_preflight(env, repo)["checks"]["evaluator_home"])
+            (home / "plugins").rmdir()
+            # No hook trust state is ever written by the preflight.
+            self.assertEqual('cli_auth_credentials_store = "file"\n', config.read_text())
+            for name in ["hooks.json", "plugins", ".plugins"]:
+                forbidden = home / name
+                forbidden.write_text("{}")
+                with self.subTest(path=name), self.assertRaises(runner.Refused):
+                    runner.codex_hook_preflight(env, repo)
+                forbidden.unlink()
+            (home / "plugins/cache/market/plugin").mkdir(parents=True)
+            with self.assertRaisesRegex(runner.Refused, "manifest"):
+                runner.codex_hook_preflight(env, repo)
+            shutil.rmtree(home / "plugins")
+            original = json.loads(shipped)
+            variants = []
+            changed = copy.deepcopy(original)
+            changed["hooks"]["PreToolUse"][0]["hooks"][0]["command"] += "; echo injected"
+            variants.append(changed)
+            changed = copy.deepcopy(original)
+            changed["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = "codeflow hook git-guard --contract 3"
+            variants.append(changed)
+            changed = copy.deepcopy(original)
+            changed["hooks"]["PreToolUse"][0]["matcher"] = ".*"
+            variants.extend([changed, {"hooks": {}}, {"hooks": {"Unknown": []}}])
+            for value in variants:
+                hooks.write_text(json.dumps(value))
+                with self.subTest(hooks=value), self.assertRaisesRegex(runner.Refused, "shipped"):
+                    runner.codex_hook_preflight(env, repo)
+            hooks.write_bytes(shipped)
+            (repo / ".codex/config.toml").write_text('[hooks]\n')
+            with self.assertRaisesRegex(runner.Refused, "hooks"):
+                runner.codex_hook_preflight(env, repo)
+            (repo / ".codex/config.toml").unlink()
+            hooks.unlink()
+            hooks.symlink_to(ROOT / "assets/base/codex/hooks.json")
+            with self.assertRaisesRegex(runner.Refused, "symlink"):
+                runner.codex_hook_preflight(env, repo)
+
+    def test_codex_cached_plugins_are_inspected_and_recorded(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            home = Path(temp) / ".codeflow-eval/codex"
+            plugin = home / "plugins/cache/openai-curated-remote/example/1.2.3"
+            manifest = plugin / ".codex-plugin/plugin.json"
+            manifest.parent.mkdir(parents=True)
+            clean = {"name": "example", "version": "1.2.3", "skills": "./skills", "apps": "./.app.json"}
+            manifest.write_text(json.dumps(clean))
+            repo = Path(temp) / "repository"
+            (repo / ".codex").mkdir(parents=True)
+            (repo / ".codex/hooks.json").write_bytes((ROOT / "assets/base/codex/hooks.json").read_bytes())
+            env = {"CODEX_HOME": str(home)}
+            result = runner.codex_hook_preflight(env, repo)
+            entry = result["plugins"][0]
+            self.assertEqual("example", entry["name"])
+            self.assertEqual("1.2.3", entry["version"])
+            self.assertEqual("remote curated", entry["source"])
+            self.assertTrue(entry["skills"])
+            self.assertTrue(entry["apps"])
+            self.assertEqual("sha256:" + hashlib.sha256(manifest.read_bytes()).hexdigest(), entry["manifest_sha256"])
+            for value in [None, {}, "./external.json"]:
+                manifest.write_text(json.dumps({**clean, "hooks": value}))
+                with self.subTest(hooks=value), self.assertRaisesRegex(runner.Refused, "hooks"):
+                    runner.codex_hook_preflight(env, repo)
+            manifest.write_text(json.dumps(clean))
+            for name in ["hooks.json", "nested/hooks.json", "hooks"]:
+                path = plugin / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.mkdir() if name == "hooks" else path.write_text("{}")
+                with self.subTest(path=name), self.assertRaisesRegex(runner.Refused, "hooks"):
+                    runner.codex_hook_preflight(env, repo)
+                path.rmdir() if path.is_dir() else path.unlink()
+            alias = home / "plugins/alias"
+            alias.symlink_to(plugin, target_is_directory=True)
+            with self.assertRaisesRegex(runner.Refused, "symlink"):
+                runner.codex_hook_preflight(env, repo)
+            alias.unlink()
+            manifest.chmod(0)
+            try:
+                with self.assertRaisesRegex(runner.Refused, "unreadable|Permission"):
+                    runner.codex_hook_preflight(env, repo)
+            finally:
+                manifest.chmod(0o644)
+            config = home / "config.toml"
+            config.write_text('[plugins."example@openai-curated-remote"]\nenabled = true\n')
+            self.assertEqual(1, len(runner.codex_hook_preflight(env, repo)["plugins"]))
+            for text in ['[plugins."missing@openai-curated-remote"]\nenabled = true\n',
+                         '[marketplaces.missing]\nsource_type = "git"\nsource = "https://example.invalid/plugins"\n']:
+                config.write_text(text)
+                with self.subTest(config=text), self.assertRaisesRegex(runner.Refused, "on disk|inspect"):
+                    runner.codex_hook_preflight(env, repo)
+            config.write_text('[plugins."missing@unused"]\nenabled = false\n')
+            self.assertEqual(1, len(runner.codex_hook_preflight(env, repo)["plugins"]))
+            config.write_text('[marketplaces.personal]\nsource_type = "local"\nsource = "' + str(Path(temp).resolve()) + '"\n')
+            with self.assertRaisesRegex(runner.Refused, "personal harness"):
+                runner.codex_hook_preflight(env, repo)
+            # A local marketplace must be present and scanned too.
+            local = home / "local-market"
+            local_manifest = local / "tool/.codex-plugin/plugin.json"
+            local_manifest.parent.mkdir(parents=True)
+            local_manifest.write_text('{"name":"tool","version":"local"}')
+            config.write_text('[marketplaces.local]\nsource_type = "local"\nsource = "' + str(local.resolve()) + '"\n'
+                              '[plugins."tool@local"]\nenabled = true\n')
+            plugins = runner.codex_hook_preflight(env, repo)["plugins"]
+            self.assertEqual({"remote curated", "local"}, {p["source"] for p in plugins})
+            (local / "tool/hooks").mkdir()
+            with self.assertRaisesRegex(runner.Refused, "hooks"):
+                runner.codex_hook_preflight(env, repo)
+
+    def test_codex_all_manifest_layouts_refuse_hooks_and_record_plugins(self):
+        runner = self.runner()
+        layouts = [".codex-plugin/plugin.json", ".claude-plugin/plugin.json",
+                   ".cursor-plugin/plugin.json", "plugin.json"]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve() / "plugins"
+            plugin = root / "cache/openai-curated-remote/example/1"
+            for layout in layouts:
+                for hooks in ["./lifecycle.json", ["./custom.json"], {"SessionStart": []}]:
+                    with self.subTest(layout=layout, hooks=hooks):
+                        shutil.rmtree(root, ignore_errors=True)
+                        manifest = plugin / layout
+                        manifest.parent.mkdir(parents=True)
+                        value = {"name": "example", "version": "1", "hooks": hooks}
+                        if layout == "plugin.json":
+                            value = {"name": "example", "version": "1",
+                                     "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+                                     "extensions": {"com.openai": {"hooks": hooks}}}
+                            other = plugin / ".codex-plugin/plugin.json"
+                            other.parent.mkdir()
+                            other.write_text('{"name":"example","version":"1"}')
+                        manifest.write_text(json.dumps(value))
+                        with self.assertRaisesRegex(runner.Refused, "hooks"):
+                            runner.inspect_plugins(root)
+                shutil.rmtree(root)
+                manifest = plugin / layout
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text('{"name":"example","version":"1"}')
+                with self.subTest(record=layout):
+                    inventory = runner.inspect_plugins(root)
+                    self.assertEqual(1, len(inventory))
+                    self.assertIn(layout, inventory[0]["manifests"])
+                    self.assertEqual("example", inventory[0]["name"])
+            for contents in [None, "not json", "[]", "{}"]:
+                shutil.rmtree(root)
+                plugin.mkdir(parents=True)
+                if contents is not None:
+                    (plugin / "plugin.json").write_text(contents)
+                with self.subTest(contents=contents), self.assertRaises((runner.Refused, ValueError)):
+                    runner.inspect_plugins(root)
+
+    def test_finish_flags_plugin_inventory_changes(self):
+        import argparse
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve()):
+            root = Path(temp).resolve()
+            runner.kit.prepare_eval_homes()
+            env = runner.kit.subject_environment(root / "trial", root / "bin/codeflow", [])
+            repo = root / "repository"
+            (repo / ".codex").mkdir(parents=True)
+            plugin = Path(env["CODEX_HOME"]) / "plugins/cache/openai-curated-remote/example/1"
+            manifest = plugin / ".codex-plugin/plugin.json"
+            manifest.parent.mkdir(parents=True)
+            clean = '{"name":"example","version":"1"}'
+            manifest.write_text(clean)
+            baseline = runner.config_snapshot(env, plugin_repository=repo)
+            self.assertEqual("example", baseline["codex"]["plugins"][0]["name"])
+            runner.write(root / "before.json", runner.snapshot([]))
+            for variant in ["unchanged", "new", "changed", "removed", "hook"]:
+                manifest.write_text(clean)
+                record = {"declared_directories": [], "observation": {}, "repository": str(repo),
+                          "environment": env, "config_start": runner.config_snapshot(env, plugin_repository=repo),
+                          "hook_trust": {"flag_used": True}, "status": "started"}
+                runner.write(root / "launch.json", record)
+                extra = plugin.parent.parent / "added/1/.claude-plugin/plugin.json"
+                if variant == "new":
+                    extra.parent.mkdir(parents=True)
+                    extra.write_text('{"name":"added","version":"1"}')
+                elif variant == "changed":
+                    manifest.write_text('{"name":"example","version":"2"}')
+                elif variant == "removed":
+                    shutil.rmtree(plugin.parent)
+                elif variant == "hook":
+                    manifest.write_text('{"name":"example","hooks":"./custom.json"}')
+                with patch("sys.stdout", io.StringIO()):
+                    runner.finish(argparse.Namespace(output=root))
+                saved = json.loads((root / "launch.json").read_text())
+                flags = json.loads((root / "observation.json").read_text())["validity_flags"]
+                if variant == "unchanged":
+                    self.assertEqual([], flags)
+                    self.assertEqual(record["config_start"], saved["config_finish"])
+                elif variant == "hook":
+                    self.assertIn("evaluator_config_unreadable", flags)
+                else:
+                    self.assertIn("evaluator_config_drift", flags)
+                    self.assertIn("plugins", saved["config_finish"]["codex"])
+                if extra.exists():
+                    shutil.rmtree(extra.parent.parent.parent)
+                manifest.parent.mkdir(parents=True, exist_ok=True)
+
+    def test_codex_hook_trust_cli_is_opt_in(self):
+        runner = self.runner()
+        base = ["runner.py", "launch", "--record", "fixture.json", "--output", "evidence",
+                "--workspace", "owned", "--harness", "codex"]
+        for extra, expected in [([], "review"), (["--codex-hook-trust=bypass"], "bypass")]:
+            with self.subTest(option=expected), patch.object(runner.sys, "argv", [*base, *extra]), \
+                 patch.object(runner, "launch") as launch:
+                self.assertEqual(0, runner.main())
+                self.assertEqual(expected, launch.call_args.args[0].codex_hook_trust)
+
+    def test_codex_hook_flag_allowlist_is_scoped_to_the_dedicated_home(self):
+        runner = self.runner()
+        flag = "--dangerously-bypass-hook-trust"
+        native = ["--ask-for-approval", "never", "--sandbox", "workspace-write", flag]
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            home = Path(temp) / ".codeflow-eval/codex"
+            environment = {"CODEX_HOME": str(home)}
+            with self.assertRaisesRegex(runner.Refused, "--codex-hook-trust=bypass"):
+                runner.permission_flags("codex", native, environment=environment)
+            self.assertEqual("true", runner.permission_flags("codex", native, environment=environment, codex_hook_trust="bypass")[flag])
+            for env in [None, {"CODEX_HOME": str(Path(temp) / ".codex")}, {"CODEX_HOME": str(home) + "-other"}]:
+                with self.subTest(env=env), self.assertRaisesRegex(runner.Refused, "dedicated evaluator home"):
+                    runner.permission_flags("codex", native, environment=env, codex_hook_trust="bypass")
+            for harness, args in [("claude", ["--permission-mode", "auto"]), ("grok", ["--always-approve"])]:
+                with self.subTest(harness=harness), self.assertRaisesRegex(runner.Refused, "only.*Codex"):
+                    runner.permission_flags(harness, [*args, flag], environment=environment, codex_hook_trust="bypass")
+            for extra in [[flag], [flag + "=true"]]:
+                with self.assertRaises(runner.Refused):
+                    runner.permission_flags("codex", [*native, *extra], environment=environment, codex_hook_trust="bypass")
+
+    def test_permission_flags_are_explicit_and_headless_is_refused(self):
+        runner = self.runner()
+        for harness, native, expected in [
+            ("codex", ["--model", "chosen", "--ask-for-approval", "never", "--sandbox", "danger-full-access"],
+             {"--ask-for-approval": "never", "--sandbox": "danger-full-access"}),
+            ("claude", ["--permission-mode", "auto"], {"--permission-mode": "auto"}),
+            ("grok", ["--always-approve"], {"--always-approve": "true"}),
+        ]:
+            self.assertEqual(expected, runner.permission_flags(harness, native))
+            with self.assertRaises(runner.Refused):
+                runner.permission_flags(harness, native + ["--print"])
+        with self.assertRaises(runner.Refused):
+            runner.permission_flags("codex", [])
+
+    def test_runner_launch_passes_isolated_environment_and_retains_exact_arguments(self):
+        import argparse
+        runner = self.runner()
+        (ROOT / "target").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory(dir=ROOT / "target") as evidence_temp, \
+             patch.object(Path, "home", return_value=Path(temp) / "operator"):
+            root = Path(temp).resolve()
+            evidence_root = Path(evidence_temp).resolve()
+            (root / "watched").mkdir()
+            repository = root / "subjects/trial/repository"
+            repository.mkdir(parents=True)
+            (repository / "TASK.md").write_text("Reply ok.\n")
+            (repository / ".codex").mkdir()
+            (repository / ".codex/hooks.json").write_bytes((ROOT / "assets/base/codex/hooks.json").read_bytes())
+            (repository.parent / "tmp").mkdir()
+            with patch.object(runner.kit.sys, "platform", "darwin"):
+                runner.kit.prepare_subject_home(repository.parent / "home")
+            binary = root / "subjects/bin/codeflow"
+            binary.parent.mkdir()
+            binary.write_text("fixture executable")
+            runner.kit.prepare_eval_homes()
+            environment = runner.kit.subject_environment(repository.parent, binary, [])
+            record = runner.kit.signed_registration({
+                "path": str(repository), "subjects_root": str(root / "subjects"),
+                "fixture_digest": runner.kit.tree_digest(repository),
+                "subject_codeflow": str(binary), "codeflow_executable": {"sha256": runner.kit.executable_digest(binary)},
+                "subject_environment": environment, "case_id": "trial",
+            })
+            record_path = root / "run/records/fixture.json"
+            record_path.parent.mkdir(parents=True)
+            runner.write(record_path, record)
+            calls, order = [], []
+
+            def herdr(*argv, **_kwargs):
+                calls.append(argv)
+                if argv[:2] == ("agent", "start"):
+                    order.append("start")
+                if argv[:2] == ("tab", "create"):
+                    return {"result": {"tab": {"tab_id": "owned-tab"}, "root_pane": {"pane_id": "owned-pane"}}}
+                if argv[:2] == ("pane", "process-info"):
+                    return {"result": {"process_info": {"foreground_processes": [{"name": "zsh"}]}}}
+                return {"result": {"agent": {"agent_status": "idle", "state_change_seq": 0}}}
+
+            def ready(*_args, **_kwargs):
+                order.append("ready")
+                return {"agent_status": "idle"}
+
+            def snapshot(*_args, **_kwargs):
+                order.append("snapshot")
+                return {"entries": {}, "errors": {}}
+
+            def deliver(*_args):
+                order.append("delivery")
+                return 1
+
+            native = ["--model", "chosen-selector", "--permission-mode", "auto"]
+            args = argparse.Namespace(record=record_path, output=evidence_root / "evidence", harness="claude",
+                                      native=["--", *native], codex_hook_trust="review", workspace="owned-workspace", watch_dir=[str(root / "watched")], start_timeout=1, max_entries=100_000, snapshot_seconds=10)
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_claude", side_effect=deliver), patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            self.assertEqual(["start", "ready", "snapshot", "delivery"], order)
+            saved = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual("started", saved["status"])
+            self.assertEqual(native, saved["native_args"])
+            self.assertNotIn("--dangerously-bypass-hook-trust", saved["native_args"])
+            self.assertEqual(["/private/tmp"], saved["observation"]["shallow"])
+            self.assertEqual([str(root / "watched")], saved["declared_directories"])
+            self.assertNotIn(environment["TMPDIR"], saved["declared_directories"])
+            self.assertEqual(100_000, saved["observation"]["max_entries"])
+            self.assertEqual(10, saved["observation"]["max_seconds"])
+            self.assertEqual({"--permission-mode": "auto"}, saved["permission_flags"])
+            create = next(c for c in calls if c[:2] == ("tab", "create"))
+            for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]:
+                self.assertIn(f"{key}={environment[key]}", create)
+            self.assertEqual(native, list(next(c for c in calls if c[:2] == ("agent", "start"))[-len(native):]))
+            args.output = evidence_root / "native-start-trust"
+            starts = []
+            trust = self.trust_screen("claude", repository)
+            frames = iter([trust, trust, "idle editor"])
+            def needs_trust(*argv, **kwargs):
+                if argv[:2] == ("agent", "start"):
+                    starts.append(argv)
+                    if len(starts) == 1:
+                        raise runner.Refused("agent_not_ready: workspace trust")
+                if argv[:2] == ("pane", "read"):
+                    return next(frames)
+                if argv[:2] == ("agent", "get"):
+                    return {"result": {"agent": {"name": "eval-trial", "pane_id": "owned-pane",
+                                                "agent": "claude", "cwd": str(repository)}}}
+                return herdr(*argv, **kwargs)
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=needs_trust), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_claude", side_effect=deliver), patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            accepted = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual("started", accepted["status"])
+            self.assertEqual(1, len(starts))
+            self.assertEqual(str(repository), accepted["trust_acceptances"][0]["path"])
+            self.assertEqual("sha256:" + hashlib.sha256(trust.encode()).hexdigest(), accepted["trust_acceptances"][0]["screen_sha256"])
+            self.assertIn("config_start", accepted)
+            # Both newly authorized startup actions survive into launch.json,
+            # even if later readiness refuses. No model prompt is delivered.
+            for harness, screen, selected in [
+                ("grok", self.grok_trust(repository), self.grok_trust(repository)),
+                ("claude", self.renderer_screen(), self.renderer_screen(True)),
+            ]:
+                args.output = evidence_root / (harness + "-startup-record")
+                args.harness = harness
+                args.native = ["--", "--always-approve"] if harness == "grok" else ["--", *native]
+                frames = iter([screen, screen, selected, "idle"] if harness == "claude" else [screen, screen, "idle"])
+                def startup_transport(*argv, **kwargs):
+                    if argv[:2] == ("agent", "start"):
+                        raise runner.Refused("agent_not_ready")
+                    if argv[:2] == ("pane", "read"):
+                        return next(frames)
+                    if argv[:2] == ("agent", "get"):
+                        return {"result": {"agent": {"name": "eval-trial", "pane_id": "owned-pane",
+                                                    "agent": harness, "cwd": str(repository)}}}
+                    return herdr(*argv, **kwargs)
+                with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                     patch.object(runner, "herdr", side_effect=startup_transport), \
+                     patch.object(runner, "wait_ready", side_effect=runner.Refused("later readiness refused")), \
+                     patch.object(runner.time, "sleep"), self.assertRaises(runner.Refused):
+                    runner.launch(args)
+                logged = json.loads((args.output / "launch.json").read_text())
+                self.assertNotIn("--dangerously-bypass-hook-trust", logged["native_args"])
+                event = logged["display_choices" if harness == "claude" else "trust_acceptances"][0]
+                self.assertEqual(harness, event["harness"])
+                self.assertEqual("sha256:" + hashlib.sha256(selected.encode()).hexdigest(), event["screen_sha256"])
+                self.assertIsInstance(event["time"], float)
+            # Codex delivery goes through the runner's verified frames, never
+            # the managed helper, and its frame digests reach launch.json.
+            args.output = evidence_root / "codex-verified-delivery"
+            args.harness = "codex"
+            args.native = ["--", "--model", "gpt-6-astra", "-c", 'model_reasoning_effort="high"',
+                           "--ask-for-approval", "never", "--sandbox", "workspace-write"]
+            # Default launches retain manual review and never add the native bypass.
+            flag = "--dangerously-bypass-hook-trust"
+            config = Path(environment["CODEX_HOME"]) / "config.toml"
+            original_config = config.read_text()
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_codex", return_value=1), patch.object(runner.time, "sleep"), \
+                 patch("sys.stdout", new_callable=io.StringIO) as output:
+                runner.launch(args)
+            default = json.loads((args.output / "launch.json").read_text())
+            self.assertNotIn(flag, default["native_args"])
+            self.assertNotIn(flag, default["permission_flags"])
+            self.assertNotIn(flag, next(c for c in reversed(calls) if c[:2] == ("agent", "start")))
+            self.assertEqual("review", default["hook_trust"]["option"])
+            self.assertFalse(default["hook_trust"]["flag_used"])
+            self.assertEqual({"evaluator_home": "not_checked", "fixture_hooks": "not_checked"}, default["hook_trust"]["checks"])
+            self.assertIn("/hooks", output.getvalue())
+            self.assertIn(environment["CODEX_HOME"], output.getvalue())
+            config.write_text(original_config + '\n[hooks.state.previous]\ntrusted_hash = "sha256:previous"\n')
+            args.output = evidence_root / "codex-existing-manual-review"
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_codex", return_value=1), patch.object(runner.time, "sleep"), \
+                 patch("sys.stdout", new_callable=io.StringIO):
+                runner.launch(args)
+            self.assertNotIn(flag, json.loads((args.output / "launch.json").read_text())["native_args"])
+            config.write_text(original_config)
+            # Explicit opt-in still refuses another evaluator home before transport.
+            args.codex_hook_trust = "bypass"
+            args.output = evidence_root / "codex-other-home"
+            other_record = {**record, "subject_environment": {**environment, "CODEX_HOME": str(root / "other-codex")}}
+            with patch.object(runner, "load_fixture", return_value=(other_record, repository, [])), \
+                 patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "dedicated evaluator home"):
+                runner.launch(args)
+            transport.assert_not_called()
+            refused = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual("bypass", refused["hook_trust"]["option"])
+            self.assertFalse(refused["hook_trust"]["flag_used"])
+            args.output = evidence_root / "codex-verified-delivery-opt-in"
+            cached = Path(environment["CODEX_HOME"]) / "plugins/cache/openai-curated-remote/example/1/.codex-plugin/plugin.json"
+            cached.parent.mkdir(parents=True)
+            cached.write_text('{"name":"example","version":"1","apps":"./.app.json"}')
+            clean_plugin = cached.read_text()
+            for mutation in ["new", "changed", "removed", "hook"]:
+                args.output = evidence_root / ("codex-startup-plugin-" + mutation)
+                extra = cached.parents[3] / "added/1/.cursor-plugin/plugin.json"
+                def changing_ready(*_args, **_kwargs):
+                    if mutation == "new":
+                        extra.parent.mkdir(parents=True)
+                        extra.write_text('{"name":"added","version":"1"}')
+                    elif mutation == "changed":
+                        cached.write_text('{"name":"example","version":"2"}')
+                    elif mutation == "removed":
+                        shutil.rmtree(cached.parent.parent)
+                    else:
+                        cached.write_text('{"name":"example","hooks":"./custom.json"}')
+                    return {"agent_status": "idle"}
+                with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                     patch.object(runner, "herdr", side_effect=herdr), \
+                     patch.object(runner, "wait_ready", side_effect=changing_ready), \
+                     patch.object(runner, "deliver_codex", return_value=1) as delivery, patch.object(runner.time, "sleep"), \
+                     self.assertRaisesRegex(runner.Refused, "plugin"):
+                    runner.launch(args)
+                delivery.assert_not_called()
+                self.assertEqual("refused", json.loads((args.output / "launch.json").read_text())["status"])
+                if extra.exists():
+                    shutil.rmtree(extra.parent.parent.parent)
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                cached.write_text(clean_plugin)
+            args.output = evidence_root / "codex-verified-delivery-opt-in"
+            frames = iter([self.codex_frame(repository), self.codex_frame(repository, "› Reply ok.")])
+            def codex_transport(*argv, **kwargs):
+                if argv[:2] == ("pane", "read"):
+                    return next(frames)
+                return herdr(*argv, **kwargs)
+            def codex_ready(*_args, **kwargs):
+                self.assertEqual({"model": "gpt-6-astra", "effort": "high", "repository": repository}, kwargs["codex"])
+                return {"agent_status": "idle"}
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=codex_transport), \
+                 patch.object(runner, "wait_ready", side_effect=codex_ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), patch.object(runner, "started", return_value=True), \
+                 patch.object(runner.subprocess, "run", side_effect=AssertionError("managed helper used")), \
+                 patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            delivered = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual("started", delivered["status"])
+            self.assertEqual(1, delivered["enters"])
+            flag = "--dangerously-bypass-hook-trust"
+            self.assertEqual(1, delivered["native_args"].count(flag))
+            self.assertEqual("true", delivered["permission_flags"][flag])
+            trust = delivered["hook_trust"]
+            self.assertEqual({"option", "flag_used", "evaluator_home", "hooks_sha256", "checks", "plugins"}, set(trust))
+            self.assertEqual("bypass", trust["option"])
+            self.assertEqual(trust["plugins"], delivered["config_start"]["codex"]["plugins"])
+            self.assertEqual(trust["plugins"], delivered["config_preflight"]["codex"]["plugins"])
+            self.assertEqual("example", trust["plugins"][0]["name"])
+            self.assertEqual("sha256:" + hashlib.sha256(cached.read_bytes()).hexdigest(), trust["plugins"][0]["manifest_sha256"])
+            self.assertTrue(trust["flag_used"])
+            self.assertEqual(str(Path(environment["CODEX_HOME"]).resolve()), trust["evaluator_home"])
+            self.assertEqual("sha256:" + hashlib.sha256((repository / ".codex/hooks.json").read_bytes()).hexdigest(), trust["hooks_sha256"])
+            self.assertEqual({"evaluator_home": "passed", "fixture_hooks": "passed"}, trust["checks"])
+            self.assertIn(flag, next(c for c in reversed(calls) if c[:2] == ("agent", "start")))
+            self.assertNotIn("delivery", delivered)
+            # A caller-supplied scoped flag is retained exactly once.
+            args.output = evidence_root / "codex-caller-hook-flag"
+            args.native.append(flag)
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=codex_ready), \
+                 patch.object(runner, "snapshot", side_effect=snapshot), \
+                 patch.object(runner, "deliver_codex", return_value=1), patch.object(runner.time, "sleep"):
+                runner.launch(args)
+            caller = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual(1, caller["native_args"].count(flag))
+            self.assertTrue(caller["hook_trust"]["flag_used"])
+            args.native.pop()
+            self.assertEqual(["before-paste", "pending"], [f["stage"] for f in delivered["verified_frames"]])
+            self.assertTrue((evidence_root / "codex-verified-delivery-opt-in/editor-pasted.txt").is_file())
+            # A user hook prevents all transport and leaves a refusal record.
+            user_hooks = Path(environment["CODEX_HOME"]) / "hooks.json"
+            user_hooks.write_text("{}")
+            args.output = evidence_root / "codex-extra-hook-refused"
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "user-level hooks"):
+                runner.launch(args)
+            transport.assert_not_called()
+            refused = json.loads((args.output / "launch.json").read_text())
+            self.assertFalse(refused["hook_trust"]["flag_used"])
+            self.assertEqual({"evaluator_home": "refused", "fixture_hooks": "not_checked"}, refused["hook_trust"]["checks"])
+            self.assertEqual(flag, refused["refused_flag"])
+            user_hooks.unlink()
+            args.output = evidence_root / "codex-without-model"
+            args.native = ["--", "--ask-for-approval", "never", "--sandbox", "workspace-write"]
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "--model"):
+                runner.launch(args)
+            transport.assert_not_called()
+            self.assertEqual("--model", json.loads((args.output / "launch.json").read_text())["refused_flag"])
+            args.harness = "claude"; args.native = ["--", *native]
+            args.output = evidence_root / "claude-bypass-refused"
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "only.*Codex"):
+                runner.launch(args)
+            transport.assert_not_called()
+            args.codex_hook_trust = "review"
+            with patch.object(runner, "herdr") as transport:
+                printed = runner.print_hook_review(record_path)
+            transport.assert_not_called()
+            self.assertIn("cd " + str(repository), printed)
+            self.assertIn("CODEX_HOME=" + environment["CODEX_HOME"], printed)
+            for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "USER", "LOGNAME"]:
+                self.assertIn(key + "=" + environment[key], printed)
+            self.assertIn("-c 'cli_auth_credentials_store=\"file\"'", printed)
+            self.assertIn(" codex --sandbox read-only -c ", printed)
+            for broader in ["--ask-for-approval", "danger-full-access", "workspace-write"]:
+                self.assertNotIn(broader, printed)
+            link = Path(environment["HOME"]) / "Library/Keychains"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(str(Path.home() / "Library/Keychains"), os.readlink(link))
+            self.assertEqual(["Keychains"], [p.name for p in link.parent.iterdir()])
+            self.assertIn("review the hooks", printed)
+            self.assertNotIn("--dangerously-bypass-hook-trust", printed)
+            self.assertNotIn("TASK.md'", printed)
+            (root / "AGENTS.md").write_text("new ancestor instructions")
+            args.output = evidence_root / "ancestor-refusal"
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.kit.EvalError, "ancestor instructions"):
+                runner.launch(args)
+            transport.assert_not_called()
+            (root / "AGENTS.md").unlink()
+            args.output = evidence_root / "failed-readiness"
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=runner.Refused("not ready")), \
+                 patch.object(runner, "snapshot") as capture, \
+                 patch.object(runner.time, "sleep"), self.assertRaisesRegex(runner.Refused, "not ready"):
+                runner.launch(args)
+            capture.assert_not_called()
+            self.assertFalse((args.output / "before.json").exists())
+            args.output = evidence_root / "unsigned-seat"
+            with patch.object(runner, "check_evaluator_auth", side_effect=runner.Refused(runner.AUTH_REFUSAL)), \
+                 patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, runner.AUTH_REFUSAL):
+                runner.launch(args)
+            transport.assert_not_called()
+            self.assertFalse(args.output.exists())
+            args.output = evidence_root / "refused-flags"
+            args.native = ["--settings", "/outside/settings.json"]
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "--settings"):
+                runner.launch(args)
+            transport.assert_not_called()
+            self.assertEqual("--settings", json.loads((args.output / "launch.json").read_text())["refused_flag"])
+            args.native = ["--", *native]
+            args.harness = "grok"
+            args.output = evidence_root / "grok-login"
+            calls.clear()
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": False}), \
+                 patch.object(runner, "herdr", side_effect=lambda *a, **k: "Approve in your browser to finish signing in." if a[:2] == ("pane", "read") else herdr(*a, **k)), \
+                 patch.object(runner, "wait_ready", side_effect=ready), \
+                 patch.object(runner, "snapshot") as capture, patch.object(runner.time, "sleep"), \
+                 self.assertRaisesRegex(runner.Refused, runner.AUTH_REFUSAL):
+                runner.launch(args)
+            capture.assert_not_called()
+            self.assertEqual("refused", json.loads((args.output / "launch.json").read_text())["status"])
+            self.assertFalse(any(call[:2] in [("pane", "send-text"), ("pane", "send-keys")] for call in calls))
+            record["path"] = "/another/repository"
+            runner.write(record_path, record)
+            with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "signature"):
+                runner.launch(args)
+            transport.assert_not_called()
+
+    def test_closeout_inventory_matches_real_local_worktrees(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repository"
+            root.mkdir()
+            (root / ".gitignore").write_text(".worktrees/\n")
+            (root / "README.md").write_text("fixture\n")
+            eval_kit.reset_fixture_history(root, "test/worktree-closeout", install_hooks=False)
+            codeflow = (Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).expanduser().resolve()
+                        / "release" / "codeflow")
+            eval_kit.configure_closeout_inventory(root, codeflow)
+            records = eval_kit.git_output(["worktree", "list", "--porcelain"], root)
+            self.assertEqual("refs/remotes/origin/main", eval_kit.git_output(["symbolic-ref", "refs/remotes/origin/HEAD"], root).strip())
+            self.assertEqual("main", eval_kit.git_output(["--git-dir", str(root.parent / "origin.git"), "branch", "--format=%(refname:short)"], root).strip())
+            status = subprocess.check_output([str(codeflow), "status"], cwd=root, text=True)
+            self.assertEqual(status, (root / "CODEFLOW_STATUS.txt").read_text())
+            self.assertNotIn("removable branch main", status)
+            self.assertNotIn("removable branch test/stale", status)
+            self.assertIn("+", eval_kit.git_output(["cherry", "origin/main", "test/stale"], root))
+            stale = root / ".worktrees/stale"
+            self.assertFalse(stale.exists())
+            self.assertIn(str(stale), records)
+            prune = subprocess.run(["git", "worktree", "prune", "--dry-run", "--verbose"], cwd=root, capture_output=True, text=True)
+            self.assertIn("stale", prune.stdout + prune.stderr)
+            self.assertIn("stale administrative record", (root / "WORKTREE_INVENTORY.md").read_text())
+            for name in ["export-ui", "retry-race", "cache"]:
+                path = root / ".worktrees" / name
+                self.assertIn(str(path), records)
+                self.assertIn(str(path), (root / "CODEFLOW_STATUS.txt").read_text())
+            clean = root / ".worktrees/export-ui"
+            self.assertEqual("", eval_kit.git_output(["status", "--porcelain"], clean).strip())
+            ancestry = subprocess.run(["git", "merge-base", "--is-ancestor", "feat/export-ui", "origin/main"], cwd=root)
+            self.assertEqual(0, ancestry.returncode)
+            self.assertIn(" M fixture-work.txt", eval_kit.git_output(["status", "--porcelain"], root / ".worktrees/retry-race"))
+            self.assertIn("?? untracked.txt", eval_kit.git_output(["status", "--porcelain"], root / ".worktrees/retry-race"))
+            self.assertIn("+", eval_kit.git_output(["cherry", "origin/main", "spike/cache"], root))
+            eval_kit.run_command(["git", "worktree", "remove", str(clean)], root)
+            self.assertFalse(clean.exists())
+            self.assertTrue((root / ".worktrees/retry-race/untracked.txt").is_file())
+            self.assertTrue((root / ".worktrees/cache").is_dir())
+
+    def test_process_and_r105_judge_controls_calibrate_and_reject_a_wrong_answer(self):
+        controls_path = ROOT / "evals/qualification/judge-controls.json"
+        controls = eval_kit.load_judge_controls(controls_path)
+        process = set(eval_kit.resolve_pack("process-round"))
+        covered = {item["assertion"] for item in controls}
+        self.assertTrue(process <= covered)
+        self.assertTrue({"r105-finish-task", "r105-unavailable-prerequisite", "r105-backlog-selection",
+                         "r105-review-missed-criterion", "r105-release-change", "r105-small-fix"} <= covered)
+        for case in covered:
+            self.assertEqual({"pass", "fail"}, {c["expected"] for c in controls if c["assertion"] == case})
+        with tempfile.TemporaryDirectory() as temp:
+            answers = Path(temp) / "judgements.json"
+            entries = [eval_kit.signed_judgement({
+                "assertion": c["assertion"], "excerpt_digest": eval_kit.excerpt_digest(c["excerpt"]),
+                "verdict": c["expected"], "judge": "synthetic plumbing control",
+                "judge_config": "unit test, not native judge qualification", "rationale": "labelled control",
+            }) for c in controls]
+            eval_kit.write_json(answers, {"schema_version": 1, "judgements": entries})
+            done = subprocess.run([sys.executable, "-B", str(MODULE_PATH), "judge-check", "--controls",
+                                   str(controls_path), "--judgements", str(answers)], capture_output=True, text=True)
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            self.assertIn(f"{len(controls)} control(s) met", done.stdout)
+            entries[0] = eval_kit.signed_judgement({**entries[0], "verdict": "fail"})
+            eval_kit.write_json(answers, {"schema_version": 1, "judgements": entries})
+            done = subprocess.run([sys.executable, "-B", str(MODULE_PATH), "judge-check", "--controls",
+                                   str(controls_path), "--judgements", str(answers)], capture_output=True, text=True)
+            self.assertNotEqual(0, done.returncode)
+            self.assertIn("not qualified", done.stdout)
 
 if __name__ == "__main__":
     unittest.main()

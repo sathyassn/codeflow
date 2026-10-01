@@ -901,6 +901,15 @@ requirement IDs, source-marker traceability, balanced regression/capability
 cases, exact fixture overlays, a native-interactive run protocol, and a
 standard-library tool for deterministic validation, materialization, scoring,
 baseline comparison, and fail-closed cleanup.
+Repository qualification tooling in `evals/qualification/` consumes the kit's
+isolated HOME, TMPDIR and CODEFLOW_HOME, records exact requested launch flags,
+and compares metadata snapshots of declared directories. New, changed or
+removed entries and incomplete reads invalidate the observation. It does not
+observe writes outside those directories or attribute concurrent changes to a
+subject. Its judge controls cover process-round and R-105 evidence boundaries;
+native judge calibration and subject trials remain separate from tooling tests.
+The closeout fixture creates the clean landed, dirty active and unmerged
+worktrees that its inventory describes.
 The `release-policy` diagnostic pack tests compatibility judgment, misleading
 commit labels, compatible/no-release counterexamples, independent version
 domains, project-owned tool/adoption choices and stale or conflicting
