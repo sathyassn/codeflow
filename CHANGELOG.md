@@ -60,6 +60,15 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The release pull request passes classification.** A release pull
+  request names its release-integration task (`Task: TSK-NNN`), as SPC-013
+  R-120 says. `codeflow ci` judged that body by the task pull request rules
+  and refused it: a release brings every line's records, and the task
+  completes at the head. On a release head, the task with `role:
+  release-integration` now classifies as the release pull request, which
+  the release checks judge. Any other task named there keeps the task rules.
+
+<!-- codeflow:release-impact patch -->
 - **Portal publication keeps committed public files' modes.** The docs portal
   rewrote the committed files in `public/`, such as `favicon.svg`, as
   owner-only (0600). In a fresh clone the first full test gate then failed
