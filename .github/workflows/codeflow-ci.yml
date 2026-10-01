@@ -97,10 +97,16 @@ jobs:
         run: codeflow test --mode full --strict --all
 
 
+  # Advisory until TSK-197: 3.0.0 ships without native Windows (operator
+  # decision 2026-10-01). The job keeps running so Windows evidence builds up,
+  # and its own result still shows failures. continue-on-error keeps a Windows
+  # failure from failing the workflow run, and .release/config.json does not
+  # require this check for publication. TSK-197 restores it as a gate.
   windows:
     if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
-    name: windows (build + test + clippy)
+    name: windows advisory (build + test + clippy, TSK-197)
     runs-on: windows-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust (rust-toolchain.toml)
