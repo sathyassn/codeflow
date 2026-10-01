@@ -60,6 +60,15 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **An old Git is named when it cannot read attributes from a commit.**
+  `codeflow ci` reads each changed file's conflict-marker size with
+  `git check-attr --source`, which needs Git 2.40 or later. An older Git
+  refuses the option and exits before it reads the paths. On Linux the path
+  write then failed first, and the check reported a broken pipe with advice
+  to fetch the whole range. It now reports Git's own refusal and says to
+  upgrade Git.
+
+<!-- codeflow:release-impact patch -->
 - **The release pull request passes classification.** A release pull
   request names its release-integration task (`Task: TSK-NNN`), as SPC-013
   R-120 says. `codeflow ci` judged that body by the task pull request rules

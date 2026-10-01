@@ -260,10 +260,11 @@ pub fn marker_sizes(
         .collect();
     let writer = std::thread::spawn(move || stdin.write_all(&input));
     let out = child.wait_with_output().map_err(|e| failed(&e))?;
-    writer
+    let written = writer
         .join()
-        .map_err(|_| failed(&"input writer panicked"))?
-        .map_err(|e| failed(&e))?;
+        .map_err(|_| failed(&"input writer panicked"))?;
+    // A git that refuses its arguments exits before it reads the paths, so
+    // the write may fail with a broken pipe; git's own refusal says why.
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         let message = format!("git check-attr: {stderr}");
@@ -275,6 +276,7 @@ pub fn marker_sizes(
             },
         );
     }
+    written.map_err(|e| failed(&e))?;
     // `-z` output is path, attribute, value, each ended by a NUL.
     let text = String::from_utf8_lossy(&out.stdout);
     let fields: Vec<&str> = text.split('\0').collect();
