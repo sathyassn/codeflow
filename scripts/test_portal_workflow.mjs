@@ -11,7 +11,7 @@ async function fixture(action) {
   try {
     await mkdir(join(root, 'scripts'));
     await mkdir(join(root, 'node_modules/astro/bin'), { recursive: true });
-    for (const file of ['workflow.mjs', 'publication.mjs', 'child-lifecycle.mjs', 'process-environment.mjs']) await copyFile(resolve('docs-portal/scripts', file), join(root, 'scripts', file));
+    for (const file of ['workflow.mjs', 'publication.mjs', 'child-lifecycle.mjs', 'process-environment.mjs', 'runtime-scripts.mjs', 'runtime-scripts.json']) await copyFile(resolve('docs-portal/scripts', file), join(root, 'scripts', file));
     await writeFile(join(root, 'scripts/lib.mjs'), `export {compareDeterministicText, portablePathKey, safeRelative} from ${JSON.stringify(pathToFileURL(resolve('docs-portal/scripts/lib.mjs')).href)};`);
     const record = `import {readFileSync,appendFileSync} from 'node:fs';\nconst owner=JSON.parse(readFileSync('.portal/workflow.lock'));\nappendFileSync('sequence.jsonl',JSON.stringify({stage:STAGE,token:owner.token})+'\\n');\n`;
     for (const stage of ['adapter', 'evidence']) await writeFile(join(root, `scripts/${stage}.mjs`), record.replace('STAGE', JSON.stringify(stage)));
