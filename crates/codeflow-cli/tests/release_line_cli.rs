@@ -285,6 +285,18 @@ impl Fx {
     /// `codeflow ci` on `base..head` for branch `branch` (into `into`), with
     /// `origin` as the destination.
     fn ci(&self, base: &str, head: &str, branch: &str, into: Option<&str>) -> (i32, String) {
+        self.ci_with(base, head, branch, into, &[])
+    }
+
+    /// As [`Fx::ci`], with `extra` arguments such as a pull request body.
+    fn ci_with(
+        &self,
+        base: &str,
+        head: &str,
+        branch: &str,
+        into: Option<&str>,
+        extra: &[&str],
+    ) -> (i32, String) {
         let mut args = vec![
             "ci",
             "--base",
@@ -299,6 +311,7 @@ impl Fx {
         if let Some(into) = into {
             args.extend(["--into", into]);
         }
+        args.extend(extra);
         let out = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
             .args(&args)
             .current_dir(&self.root)
@@ -2960,6 +2973,82 @@ fn the_release_fix_pull_request_binds_to_its_head() {
     // head carries it only through the merge: the completion is bound to
     // the fix pull request's head, which the merge changes nothing beyond.
     passes(&final_pr, "the final release pull request");
+}
+
+/// The release pull request's body for `task`, with every section the
+/// policy asks of a code pull request into a protected branch.
+fn release_body(task: &str) -> String {
+    format!(
+        "## Summary\nThe release.\n\nTask: {task}\n\n## Changes\n- the lines\n\n## Reviews\n- reviewed at the head\n\n## Testing\n- cargo test: 1 passed\n\n## Release impact\n- Impact: `patch`\n- Breaking: `no`\n- Rationale: the lines fix defects\n- Migration: none\n"
+    )
+}
+
+/// AC-7 (SPC-013 R-120): the release pull request names its
+/// release-integration task, which completes inside the range at its head
+/// while the range brings records from the lines. It is classified as the
+/// release pull request, which the release checks judge; the same body
+/// naming another task keeps the ordinary task rules.
+#[test]
+fn the_release_pull_request_names_its_release_integration_task() {
+    let fx = Fx::new(true);
+    codeflow_ok(&fx, &["ids", "seed"]);
+    fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+    fx.land(LINE_A, "task/TSK-001-work");
+    // Line A plans a new task, a record the release brings.
+    fx.git(&["switch", "-q", "-C", "plan/more", LINE_A]);
+    codeflow_ok(
+        &fx,
+        &[
+            "task",
+            "new",
+            "more work",
+            "--epic",
+            "EPC-001",
+            "--into",
+            LINE_A,
+        ],
+    );
+    fx.commit("docs(records): plan more work");
+    fx.land(LINE_A, "plan/more");
+    fx.cut_release();
+    fx.import(LINE_A);
+    fx.git(&[
+        "fetch",
+        "-q",
+        "origin",
+        "codeflow/registry:refs/remotes/origin/codeflow/registry",
+    ]);
+    fx.write("src/fix.rs", "// fix\n");
+    let reviewed = fx.commit("fix: integrate");
+    fx.write(
+        &path(HOLDER),
+        &record(HOLDER, "todo", CRITERIA, &block(&reviewed)),
+    );
+    passes(&fx.status_complete(HOLDER), "the holder completes");
+    fx.commit("docs(records): complete the release integration");
+
+    let body = release_body(HOLDER);
+    let release = fx.ci_with("main", "HEAD", RELEASE, Some("main"), &["--pr-body", &body]);
+    passes(&release, "the release pull request");
+    assert!(
+        release
+            .1
+            .contains("pull request class: release integration TSK-009 (from the Task: line)"),
+        "{}",
+        release.1
+    );
+
+    // Control: another task named on the release head keeps the task rules.
+    let body = release_body("TSK-001");
+    let other = fx.ci_with("main", "HEAD", RELEASE, Some("main"), &["--pr-body", &body]);
+    blocks(
+        &other,
+        "another task on the release head",
+        &[
+            "pull request class: tracked TSK-001",
+            "a task PR may add only its own standalone task record",
+        ],
+    );
 }
 
 // ---------------------------------------------------------------------------

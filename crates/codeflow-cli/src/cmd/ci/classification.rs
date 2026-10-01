@@ -1,7 +1,8 @@
 //! Pull request classification (TSK-104, SPC-013 R-64, R-70 to R-72, R-78).
 //!
 //! A tracked range names its task, a planning range names its epic, and an
-//! integration line names the epic verified by its history. Every PR names
+//! integration line names the epic verified by its history. A release pull
+//! request names its release-integration task (R-120). Every PR names
 //! exactly one unit, including projects without durable tracking. The one
 //! exception is the workspace root branch the target's `git.root_branch`
 //! names (ADR-0074): it collects small workspace edits and carries no
@@ -10,7 +11,9 @@
 use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
-use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
+use codeflow_core::workgraph::acceptance::{
+    journey_requirement_at, release_integration_at, JOURNEY_RULE,
+};
 use codeflow_core::workgraph::classify::{
     is_planning_path, is_spike_path, path_sets, ProjectPaths,
 };
@@ -86,6 +89,11 @@ pub(super) fn task_lines(body: &str) -> Vec<TaskLine> {
 pub(super) enum Class {
     /// Tracked work for the task named in the body.
     Tracked { task_id: String },
+    /// A release pull request (SPC-013 R-120): a release head whose body
+    /// names the task with `role: release-integration` at the head. The
+    /// release checks judge what the range brings and bind that task's
+    /// completion to the head, so the task rules do not apply.
+    ReleaseIntegration { task_id: String },
     /// The range touches only records and plans.
     PlanningOnly,
     /// An epic's integration line landing on its target; each task on it was
@@ -339,7 +347,8 @@ pub(super) fn dispatch(
             .then(|| check_epic_line(root, branch, range.target, range.base, range.head)),
         root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
     };
-    let class = match classify(&input) {
+    let class = match classify(&input).map(|class| release_class(root, release_head, range, class))
+    {
         Ok(class) => class,
         Err(reason) => {
             push(
@@ -355,11 +364,6 @@ pub(super) fn dispatch(
         Class::Tracked { task_id } => {
             println!("codeflow ci: pull request class: tracked {task_id} (from the Task: line)");
             let own_branch = input.branch_task.as_deref() == Some(task_id.as_str());
-            let added: Vec<&str> = changes
-                .iter()
-                .filter(|(status, _)| status == "A")
-                .map(|(_, path)| path.as_str())
-                .collect();
             let level = git.work_planning_level();
             let anchor = Anchor {
                 own_branch,
@@ -367,7 +371,13 @@ pub(super) fn dispatch(
                 branch,
                 head: range.head,
             };
-            tracked(root, task_id, anchor, &files, &added, tagged);
+            tracked(root, task_id, anchor, &files, &changes, tagged);
+            journey(root, git, task_id, range.head, &files, tagged);
+        }
+        Class::ReleaseIntegration { task_id } => {
+            println!(
+                "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
+            );
             journey(root, git, task_id, range.head, &files, tagged);
         }
         Class::PlanningOnly => println!("codeflow ci: pull request class: planning-only"),
@@ -379,6 +389,22 @@ pub(super) fn dispatch(
         }
     }
     Some(class)
+}
+
+/// On a release head, a `Task:` line naming the task with `role:
+/// release-integration` at the head names the release pull request
+/// (SPC-013 R-120). A head that cannot be read keeps the task rules, which
+/// report it.
+fn release_class(root: &Path, release_head: bool, range: &Range<'_>, class: Class) -> Class {
+    match class {
+        Class::Tracked { task_id }
+            if release_head
+                && matches!(release_integration_at(root, range.head, &task_id), Ok(true)) =>
+        {
+            Class::ReleaseIntegration { task_id }
+        }
+        class => class,
+    }
 }
 
 /// A selection lands only by a planning pull request (SPC-013 R-43): a range
@@ -461,12 +487,14 @@ fn tracked(
     task_id: &str,
     anchor: Anchor<'_>,
     files: &[String],
-    added: &[&str],
+    changes: &[(String, String)],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
     let Anchor { branch, head, .. } = anchor;
-    let added_records: Vec<_> = added
+    let added_records: Vec<_> = changes
         .iter()
+        .filter(|(status, _)| status == "A")
+        .map(|(_, path)| path.as_str())
         .filter(|path| {
             path.starts_with("project-management/")
                 && Path::new(path)
