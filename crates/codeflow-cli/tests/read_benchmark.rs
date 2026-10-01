@@ -1,13 +1,21 @@
 //! Benchmark (TSK-110 AC-3, SPC-013 R-103, R-104): the read commands on
 //! 10,000 task records across ten integration lines, with thousands of stale
-//! task branches (merged, squash-landed and never landed). The first run
-//! recorded `read_benchmark_baseline.json`; later runs are guarded against it:
+//! task branches (merged, squash-landed and never landed). The first run on
+//! each operating system recorded its `read_benchmark_baseline-<os>.json`;
+//! later runs are guarded against the baseline of their own system:
 //!
 //! - git processes started: at most the baseline count (deterministic);
 //! - peak memory: at most 1.5 times the baseline, plus 16 MiB;
 //! - latency: the command's time over a calibration of plain git reads on
 //!   the same fixture, at most twice the baseline ratio, so the budget holds
 //!   on a slower or faster machine.
+//!
+//! The ratio travels across machines, not across operating systems: the
+//! calibration is a few short git processes, and starting a process costs
+//! several times as much on macOS as on Linux, while the commands spend
+//! most of their time in their own work. The same commands take about as
+//! long on both (status 48.8 s on macOS, 48.4 s on the hosted Linux runner)
+//! against calibrations of 296 ms and 101 ms.
 //!
 //! It is ignored by `cargo test`; `scripts/journey-gate.py` runs it with
 //! `--include-ignored`. `CODEFLOW_BENCH_RECORD=1` rewrites the baseline from
@@ -398,8 +406,13 @@ fn calibration(root: &Path, trace: &Path) -> Duration {
     median(runs)
 }
 
+/// This operating system's baseline: the latency ratio is comparable only
+/// between runs on the same system (see the module notes).
 fn baseline_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/read_benchmark_baseline.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "tests/read_benchmark_baseline-{}.json",
+        std::env::consts::OS
+    ))
 }
 
 #[test]
