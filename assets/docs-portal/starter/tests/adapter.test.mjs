@@ -827,11 +827,26 @@ test("corpus publication keeps a preserved public file's mode", { skip: process.
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-mode-"));
   try {
     await mkdir(path.join(root, "public"), { recursive: true });
-    await writeFile(path.join(root, "public/favicon.svg"), "committed");
-    await chmod(path.join(root, "public/favicon.svg"), 0o644);
+    await writeFile(path.join(root, "public/notes.txt"), "kept");
+    await chmod(path.join(root, "public/notes.txt"), 0o640);
     await publishOwnedCorpus(root, [{ live: "public", preserveUnknown: true, files: new Map([["llms.txt", "generated"]]) }]);
-    assert.equal(await readFile(path.join(root, "public/favicon.svg"), "utf8"), "committed");
-    assert.equal((await lstat(path.join(root, "public/favicon.svg"))).mode & 0o777, 0o644);
+    assert.equal(await readFile(path.join(root, "public/notes.txt"), "utf8"), "kept");
+    assert.equal((await lstat(path.join(root, "public/notes.txt"))).mode & 0o777, 0o640);
+    assert.equal((await lstat(path.join(root, "public/llms.txt"))).mode & 0o777, 0o600);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("adaptation leaves committed public files at their git mode", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const committed = git(root, ["ls-files", "-s", "public"]).trim().split("\n").filter(Boolean)
+      .map((line) => ({ mode: line.split(" ")[0], file: line.split("\t")[1] }));
+    assert.ok(committed.length > 0, "the fixture commits public files");
+    for (const { file } of committed) await chmod(path.join(root, file), 0o644);
+    runLocalAdapter(root);
+    for (const { mode, file } of committed) {
+      assert.equal((await lstat(path.join(root, file))).mode & 0o777, mode === "100755" ? 0o755 : 0o644, file);
+    }
   } finally { await rm(root, treeRemoval); }
 });
 

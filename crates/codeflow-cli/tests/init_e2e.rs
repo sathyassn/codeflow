@@ -2736,7 +2736,7 @@ fn brownfield_init_names_the_git_dir_hooks_it_stops_running() {
         .unwrap_or_else(|| panic!("no git-dir hooks note:\n{report}"));
     assert!(line.contains("pre-commit"), "{line}");
     assert!(line.contains("CI or a supported hook manager"), "{line}");
-    assert!(line.contains("project-owned hook"), "{line}");
+    assert!(line.contains("hooks folder the project owns"), "{line}");
     #[cfg(unix)]
     assert!(!line.contains("pre-push"), "not executable: {line}");
     assert!(!line.contains(".sample"), "{line}");

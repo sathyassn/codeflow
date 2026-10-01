@@ -79,6 +79,7 @@ const authorityRecords = [...runtimeRecords, ...publicRecords];
 const authorityBlobs = git.readBlobs(authorityRecords, { perObjectBytes: MAX_RUNTIME_FILE_BYTES, totalBytes: MAX_TOTAL_RUNTIME_BYTES, label: "portal runtime input" });
 await assertWorktreeMatchesCommit(authorityRecords, authorityBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
 const committedPublicFiles = new Map(publicRecords.map((record) => [record.path.slice(publicRootRelative.length + 1), authorityBlobs.get(record.path)]));
+const committedPublicModes = new Map(publicRecords.map((record) => [record.path.slice(publicRootRelative.length + 1), record.mode === "100755" ? 0o755 : 0o644]));
 let primitiveTokens = null;
 let primitiveTokenEvidence = null;
 let primitiveTokenRecord = null;
@@ -371,7 +372,7 @@ const publicFiles = new Map([...committedPublicFiles, ...renderedPages.map((page
 await publishOwnedCorpus(portalRoot, [
   { live: ".portal/generated", files: new Map([["evidence.json", evidenceText], ["project-tokens.css", primitiveTokenCss], ["as-is-links.json", `${JSON.stringify(asIsLinks, null, 2)}\n`]]) },
   { live: "src/content/docs", files: contentFiles },
-  { live: "public", files: publicFiles, preserveUnknown: false },
+  { live: "public", files: publicFiles, modes: committedPublicModes, preserveUnknown: false },
 ]);
 console.log(`portal: adapted ${counted(pages.length, "source page")} across ${counted(layers.length, "layer")}`);
 const classCounts = [PAGE_CLASSES.explanatory.id, PAGE_CLASSES.illustrated.id, PAGE_CLASSES.passThrough.id, PAGE_CLASSES.derivedLookup.id]
