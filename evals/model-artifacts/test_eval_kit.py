@@ -5754,7 +5754,7 @@ class ProcessRepairTests(unittest.TestCase):
         runner = self.runner()
         good = {"claude": ["--model", "fable", "--effort", "high", "--permission-mode", "auto"],
                 "codex": ["--model", "gpt-6", "-c", 'model_reasoning_effort="high"', "--ask-for-approval", "never", "--sandbox", "workspace-write"],
-                "grok": ["--model", "grok-4.6", "--reasoning-effort", "high", "--permission-mode", "default"]}
+                "grok": ["--model", "grok-4.7", "--reasoning-effort", "high", "--permission-mode", "default"]}
         for harness, argv in good.items():
             self.assertTrue(runner.permission_flags(harness, argv))
             for flag in ["--settings", "--mcp-config", "--add-dir", "--plugin-dir", "--agents", "--dangerously-skip-permissions", "--profile", "--leader-socket"]:
