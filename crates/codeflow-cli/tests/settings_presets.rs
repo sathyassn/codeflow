@@ -274,7 +274,11 @@ fn every_hook_command_is_a_known_codeflow_hook() {
                 command.starts_with("codeflow hook "),
                 "{name}: hook command {command:?} must start with \"codeflow hook \""
             );
-            let sub = command.trim_start_matches("codeflow hook ").trim();
+            let sub = command
+                .trim_start_matches("codeflow hook ")
+                .split_whitespace()
+                .next()
+                .unwrap();
             assert!(
                 HOOK_NAMES.contains(&sub),
                 "{name}: hook command {command:?} names unknown subcommand {sub:?}"
@@ -285,7 +289,7 @@ fn every_hook_command_is_a_known_codeflow_hook() {
             assert!(
                 commands
                     .iter()
-                    .any(|c| c == &format!("codeflow hook {hook}")),
+                    .any(|c| c.starts_with(&format!("codeflow hook {hook} --contract 3"))),
                 "{name}: {hook} hook not wired"
             );
         }
@@ -319,11 +323,8 @@ fn session_start_sources_are_explicit_per_host() {
         );
         let mut prompt = Vec::new();
         collect_hook_commands(&value["hooks"]["UserPromptSubmit"], &mut prompt);
-        assert_eq!(
-            prompt,
-            vec!["codeflow hook session-orient".to_string()],
-            "{name}: UserPromptSubmit must use the stable advisory entry"
-        );
+        assert_eq!(prompt.len(), 1);
+        assert!(prompt[0].starts_with("codeflow hook session-orient --contract 3"));
         assert!(
             value["hooks"]["UserPromptSubmit"][0]
                 .get("matcher")
@@ -396,7 +397,9 @@ fn exec_guard_wired_in_every_preset() {
         let mut commands = Vec::new();
         collect_hook_commands(&value["hooks"], &mut commands);
         assert!(
-            commands.iter().any(|c| c == "codeflow hook exec-guard"),
+            commands
+                .iter()
+                .any(|c| c.starts_with("codeflow hook exec-guard --contract 3")),
             "{name}: exec-guard hook not wired"
         );
     }

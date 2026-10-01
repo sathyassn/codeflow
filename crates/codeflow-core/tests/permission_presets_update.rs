@@ -211,7 +211,18 @@ fn without_a_baseline_new_entries_are_added_and_nothing_is_removed() {
     for rule in strings(&json(&incoming)["permissions"]["deny"]) {
         assert!(deny.contains(&rule), "missing {rule}");
     }
-    assert!(!report.iter().any(|l| l.contains("removed")), "{report:?}");
+    // Recognized CodeFlow hook commands migrate to contract 3; adopter
+    // permissions still cannot be inferred away without a baseline.
+    assert!(
+        !report
+            .iter()
+            .any(|line| line.contains("removed")
+                && !line.starts_with("settings: removed stale hook ")),
+        "{report:?}"
+    );
+    for rule in strings(&prior["permissions"]["deny"]) {
+        assert!(deny.contains(&rule), "removed adopter deny: {rule}");
+    }
 }
 
 /// Gitignore-style path glob, as in the CLI preset tests: `**/` spans zero
@@ -730,12 +741,12 @@ fn update_brings_the_codex_profiles_and_keeps_the_adopters_keys() {
         builder["filesystem"][":workspace_roots"][".git"].as_str(),
         Some("write")
     );
-    assert_eq!(
-        merged["permissions"]["cf-guard"]["filesystem"][":workspace_roots"]
-            [".codeflow/policy.json"]
-            .as_str(),
-        Some("read")
-    );
+    let workspace = &merged["permissions"]["cf-guard"]["filesystem"][":workspace_roots"];
+    assert_eq!(workspace[".codeflow/policy.json"].as_str(), Some("read"));
+    // TSK-190: the root-level secret denies replace the `**/` globs, which
+    // blocked every directory delete.
+    assert_eq!(workspace[".env"].as_str(), Some("deny"));
+    assert!(workspace.get("**/.env").is_none(), "{workspace:?}");
 }
 
 /// AC-6: the Grok profile is installed when absent and never overwritten.

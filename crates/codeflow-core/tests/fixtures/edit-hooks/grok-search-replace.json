@@ -1,0 +1,32 @@
+{
+  "hookEventName": "pre_tool_use",
+  "sessionId": "fixture-session",
+  "cwd": "/fixture/project",
+  "workspaceRoot": "/fixture/project/",
+  "timestamp": "2026-09-29T23:09:23.979382+00:00",
+  "transcriptPath": "/fixture/home/.grok/sessions/fixture-session/updates.jsonl",
+  "permissionMode": "bypassPermissions",
+  "toolName": "search_replace",
+  "toolUseId": "fixture-call",
+  "toolInput": {
+    "file_path": "/fixture/project/notes.txt",
+    "old_string": "beta",
+    "new_string": "beta edited"
+  },
+  "toolInputTruncated": false,
+  "hook_event_name": "PreToolUse",
+  "session_id": "fixture-session",
+  "transcript_path": "/fixture/home/.grok/sessions/fixture-session/updates.jsonl",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "search_replace",
+  "tool_input": {
+    "file_path": "/fixture/project/notes.txt",
+    "old_string": "beta",
+    "new_string": "beta edited"
+  },
+  "tool_use_id": "fixture-call",
+  "_fixture": {
+    "provenance": "native capture, grok 1.0.44",
+    "checked": "2026-09-29"
+  }
+}

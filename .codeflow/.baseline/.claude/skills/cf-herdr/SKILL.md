@@ -94,9 +94,11 @@ pane after its lifecycle ends.
 - Grok: `--model <selector> --reasoning-effort <effort> --always-approve`
 
 Default production launch is ADR-conformant: Claude `bypassPermissions`; Codex
-never + `danger-full-access`; Grok `--always-approve`. Consult / no-edit review:
-Claude `--permission-mode auto` (never bypass); Codex `--ask-for-approval
-on-request --sandbox workspace-write`. Herdr is not an external sandbox.
+never + `danger-full-access` (ADR-0075 D1, until a `cf-builder` spike passes);
+Grok `--always-approve`. Consult / no-edit review: Claude `--permission-mode
+auto` (never bypass); Codex `--ask-for-approval never` with no `--sandbox`
+flag, which selects the project's `cf-guard` profile (D2). Herdr is not an
+external sandbox.
 Never `--dangerously-skip-permissions` unless the operator named it. Consults
 still verify an empty worktree diff. No third-party Grok Codex plugins.
 Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`).

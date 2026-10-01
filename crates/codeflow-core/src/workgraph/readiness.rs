@@ -863,17 +863,74 @@ impl StackHints {
     }
 }
 
+fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
+    // A visible record owns its declaration; use the shared target resolver.
+    if let Some(target) = super::declared_work_target(root, task_id) {
+        return Ok(Some(target));
+    }
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let mut targets = BTreeSet::new();
+    for reference in repo
+        .references_glob("refs/remotes/*")
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
+        let Ok(name) = reference.name() else { continue };
+        if name.ends_with("/HEAD") {
+            continue;
+        }
+        let Ok(tree) = reference.peel_to_tree() else {
+            continue;
+        };
+        let records = records_from_tree(&repo, &tree).map_err(|e| e.to_string())?;
+        if let Some(target) = records
+            .get(task_id)
+            .and_then(|r| r.integration_target.as_ref())
+        {
+            let branch = name
+                .strip_prefix("refs/remotes/")
+                .and_then(|s| s.split_once('/'))
+                .map(|(_, b)| b);
+            if branch == Some(super::work_start::logical_target(target)) {
+                let preferred = target_fetch_remote(&repo, target)?
+                    .or_else(|| repo.find_remote("origin").ok().map(|_| "origin".into()));
+                let remote = name
+                    .strip_prefix("refs/remotes/")
+                    .and_then(|s| s.split_once('/'))
+                    .map(|(r, _)| r);
+                if preferred
+                    .as_deref()
+                    .is_none_or(|preferred| remote == Some(preferred))
+                {
+                    targets.insert(name.to_string());
+                }
+            }
+        }
+    }
+    if targets.len() > 1 {
+        return Err(format!(
+            "{task_id} has ambiguous fetched targets: {targets:?}"
+        ));
+    }
+    Ok(targets.into_iter().next())
+}
+
 /// Refresh the refs used to resolve a claim before looking up review pins.
 ///
 /// # Errors
 /// Reports target or fetch errors without creating a claim.
 pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
-    let declared = super::declared_work_target(repo_root, task_id)
-        .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
     let remotes: Vec<String> = git(repo_root, &["remote"])?
         .lines()
         .map(str::to_string)
         .collect();
+    if super::declared_work_target(repo_root, task_id).is_none() {
+        for remote in &remotes {
+            git(repo_root, &["fetch", "--prune", "--quiet", remote])?;
+        }
+    }
+    let declared = claim_target(repo_root, task_id)?
+        .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
     let has_origin = remotes.iter().any(|remote| remote == "origin");
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     // Fetch the remote the target resolves through (never substituting
@@ -933,7 +990,7 @@ pub fn claim_on(
     pins: &[super::work_start::ReviewedPin],
 ) -> Result<Claim, String> {
     refresh_claim(repo_root, task_id)?;
-    let declared = super::declared_work_target(repo_root, task_id)
+    let declared = claim_target(repo_root, task_id)?
         .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let has_origin = repo.find_remote("origin").is_ok();
@@ -2077,6 +2134,24 @@ mod tests {
         let published = run(origin.path(), &["branch", "--list"]);
         assert!(published.contains(&claimed.branch), "{published}");
         start_from(root, &claimed.branch).unwrap();
+    }
+
+    #[test]
+    fn a_missing_checkout_record_uses_the_configured_upstream() {
+        for held in [true, false] {
+            let dir = repo();
+            let root = dir.path();
+            let (_upstream, _origin) = forked(root, held);
+            fs::remove_file(root.join("project-management/tasks/TSK-001.md")).unwrap();
+            let result = claim(root, "TSK-001");
+            if held {
+                let error = result.unwrap_err();
+                assert!(error.contains("upstream hold"), "{error}");
+            } else {
+                let claim = result.unwrap();
+                assert!(claim.from.starts_with("upstream/main@"), "{}", claim.from);
+            }
+        }
     }
 
     /// R2-1 controls: a local `main` ahead of its upstream is read as it is;

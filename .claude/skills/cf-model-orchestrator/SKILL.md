@@ -36,14 +36,11 @@ signals in the quality contract's verification section), read
 the test plan names a technique only when one is selected. For a new or
 materially reshaped user-facing surface, load `cf-design` before settling the
 plan; a bounded change records its explicit `conform` or `N/A` path instead.
-Before deciding whether to ask the operator, escalate or stop, read "What
-belongs to the operator" in `cf-method/references/autonomy.md`.
 
 ## Outcome modes
 
-Select the smallest complete stage set. A change request selects implementation
-through the readiness report; research, plan or review alone needs a brief that
-asks for just that.
+Select the smallest complete stage set before starting; do not manufacture an
+implementation stage for an analysis-only request.
 
 - **Research/analysis:** independent discovery, evidence comparison, settled
   findings, then stop without edits.
@@ -151,27 +148,18 @@ asks for just that.
 - **Degrade legibly, never silently.** If a planned seat, route or required
   tool is unavailable before approval, select another qualified assignment;
   exhaust qualified routes before the recorded solo fallback. Auth failure
-  stops for operator action. A mid-run failure gets one bounded retry and
-  diagnosis, never a silent downgrade: a seat lost mid-run then moves the
-  unit to that participant's next eligible alternative, the recorded
-  fallback until the model catalog lands, recorded as a reassignment where
-  the assignment lives; the lost seat is recorded unavailable with reduced
-  assurance, never waited on or recorded as approving, and any verdict it
-  gave before the loss stays as given. Buying credits is spend and stays
-  with the operator: do not purchase, name it in the report and continue on
-  the fallback. If no
+  stops for operator action; a mid-run failure gets one bounded
+  retry/diagnosis, then human escalation, never a silent downgrade. If no
   cross-lineage route remains, use the documented solo fallback with its
   fresh-context independent review, and record reduced assurance naming the
   review that is missing: never faked, never silently waived, never turned
   into a finding, and never reported as duo completion.
 - **Loops end on evidence.** Plan settlement ends when both seats approve one
-  version, with any open reversible item settled under the plan contract's
-  `SETTLED_DISSENT` rule, or the host stops for the operator. When review
-  findings are acted on, they are batched per
-  [findings](resources/quality/findings.md); a repeat without a new
-  hypothesis or changed evidence is not progress. A deterministic or safety
-  gate is fixed or honored; its redness alone neither authorizes bypass nor
-  makes the operator choose an implementation tactic.
+  version or the host stops for the operator. When review findings are acted
+  on, they are batched per [findings](resources/quality/findings.md); a repeat
+  without a new hypothesis or changed evidence is not progress. A
+  deterministic or safety gate is fixed or honored; its redness alone neither
+  authorizes bypass nor makes the operator choose an implementation tactic.
 - **Bounded parallelism.** Parallelize independent discovery and implementation
   only when it shortens the critical path: one owner, branch and worktree per
   task; shared contracts and integration serialized; concurrency capped from
@@ -219,10 +207,14 @@ standing pair through Herdr; it does not start a nested duo.
 Run preflight once per session per lane. Recheck it explicitly when a tool,
 binding, permission or selector changed since it ran.
 
-1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
-   non-goals. Discover facts yourself and apply the clarity checklist in
-   `cf-method`; ask the operator only what `cf-method/references/autonomy.md`
-   reserves to them. A task inside an approved epic starts from the epic plan:
+1. Before choosing a landing route, read `PLAN.md` and the landing policy
+   in the project README when present, alongside the project operating
+   contract. An existing approved plan controls the target until amended.
+   Pin the brief: objective, scope, constraints, acceptance criteria, and known
+   non-goals. Discover facts yourself; ask the operator only when an answer
+   changes the outcome, public behavior, authority, a material security
+   boundary, or an irreversible action (the clarity checklist in
+   `cf-method`). A task inside an approved epic starts from the epic plan:
    reuse it after a compact currency, acceptance, dependency and
    planning-anchor check. When the brief concerns agentic estimates, capacity
    or deadlines, read [estimates](references/estimates.md).
@@ -274,8 +266,11 @@ binding, permission or selector changed since it ran.
      trusted installed tool may receive one classified unsandboxed retry;
      arbitrary unsandboxed commands remain out of bounds.
    - Codex: prefer app-server (`codex app-server daemon version` running);
-     otherwise interactive CLI. Production: `--ask-for-approval never` and
-     `--sandbox danger-full-access`. public network and live search are enabled.
+     otherwise interactive CLI. Builders: `--ask-for-approval never` and
+     `--sandbox danger-full-access` (ADR-0075 D1). Reviewers and consults:
+     `--ask-for-approval never` with no `--sandbox` flag, which selects the
+     project's `cf-guard` profile (D2). For every seat, public network and
+     live search are enabled.
      Auto-review is not human authorization; catastrophic work still stops for
      the operator.
    - Grok, when a Grok seat is used: the autonomy flags in the seat section.
@@ -319,10 +314,8 @@ findings: feasibility, failure modes, security, testing, maintainability, and
 whether a simpler proportionate design satisfies the same requirements. There
 is no second plan and no reconciliation round. A Grok host does not author
 the design pass. The plan records the fields in the quality contract's plan
-section. Settlement ends when both seats approve one version, with any open
-reversible item settled under the plan contract's `SETTLED_DISSENT` rule, or
-the host stops for the operator; approval of an older version does not carry
-forward.
+section. Settlement ends when both seats approve one version or the host
+stops for the operator; approval of an older version does not carry forward.
 
 For multi-task work, the approval covers the canonical task graph. Only a
 change of outcome, cross-task interface, dependency graph or safety boundary

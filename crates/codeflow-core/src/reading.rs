@@ -614,6 +614,12 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
     // TSK-184 reduction: the bounded wait and the redness classes load only
     // when a check is red or stuck or the policy requires hosted checks.
     conditional(
+        "cf-ship/SKILL.md",
+        "cf-ship/references/pr-checks.md",
+        "For red or unfinished CI jobs, follow",
+        "only when a CI job is red or unfinished",
+    ),
+    conditional(
         "cf-ship/references/pr-evidence.md",
         "cf-ship/references/pr-checks.md",
         "When a required check is red or stuck, or the adopted policy requires hosted checks green before landing, follow",
@@ -673,6 +679,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     // instructions.
     "AGENTS.md",
     "CLAUDE.md",
+    // The approved plan the orchestrator and cf-ship read before choosing
+    // a landing route (TSK-191).
+    "PLAN.md",
     "TASK.md",
     "index.md",
     "portal.config.json",

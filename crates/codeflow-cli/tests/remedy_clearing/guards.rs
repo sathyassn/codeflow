@@ -76,6 +76,20 @@ fn with_origin() -> tempfile::TempDir {
     dir
 }
 
+/// Model the operator's policy landing, rather than a session-local edit.
+fn land_policy(root: &Path) {
+    git(root, &["add", ".codeflow/policy.json"]);
+    git(root, &["commit", "-qm", "chore: land policy decision"]);
+    if !String::from_utf8(run("git", root, &["remote"]).stdout)
+        .unwrap()
+        .trim()
+        .is_empty()
+    {
+        git(root, &["push", "-q", "origin", "HEAD:main"]);
+        git(root, &["fetch", "-q", "origin"]);
+    }
+}
+
 #[test]
 fn clears_protected_branch() {
     let dir = with_origin();
@@ -131,6 +145,7 @@ fn clears_protected_delete() {
                 ".codeflow/policy.json",
                 r#"{"git": {"protected_branches": ["master"]}}"#,
             );
+            land_policy(root);
         },
     );
     git(root, &["branch", "-D", "main"]);
@@ -212,7 +227,8 @@ fn clears_force_push() {
         root,
         &["commit", "-q", "-am", "chore: restrict force pushes"],
     );
-    git(root, &["push", "-q", "origin", "feat/x"]);
+    git(root, &["push", "-q", "origin", "feat/x", "feat/x:main"]);
+    git(root, &["fetch", "-q", "origin"]);
     // Someone else's commit reached the destination's feat/x.
     let other = root.join(".other");
     git(
@@ -247,7 +263,7 @@ fn clears_force_push() {
 
 #[test]
 fn clears_pr_merge_protected() {
-    let dir = ci_repo(DEFAULTS);
+    let dir = with_origin();
     let root = dir.path();
     prove(
         "PR_MERGE_PROTECTED",
@@ -261,6 +277,7 @@ fn clears_pr_merge_protected() {
                 ".codeflow/policy.json",
                 r#"{"git": {"pr_merge_to_protected": "allow"}}"#,
             );
+            land_policy(root);
         },
     );
 }
@@ -488,10 +505,10 @@ fn clears_refusal_unrecorded_behind_a_held_lock() {
 
 /// Run the `.claude/settings.json` entry that wires `hook <guard>` the way
 /// Claude Code does: its command in a shell, the tool payload on stdin.
-fn wired_guard(root: &Path, guard: &str, payload: &str) -> String {
+fn wired_command(root: &Path, guard: &str) -> String {
     let settings: serde_json::Value =
         serde_json::from_str(&read(root, ".claude/settings.json")).unwrap();
-    let wired = settings["hooks"]["PreToolUse"]
+    settings["hooks"]["PreToolUse"]
         .as_array()
         .unwrap()
         .iter()
@@ -499,7 +516,11 @@ fn wired_guard(root: &Path, guard: &str, payload: &str) -> String {
         .filter_map(|hook| hook["command"].as_str())
         .find(|command| command.contains(&format!("hook {guard}")))
         .unwrap_or_else(|| panic!("no {guard} entry"))
-        .to_string();
+        .to_string()
+}
+
+fn wired_guard(root: &Path, guard: &str, payload: &str) -> String {
+    let wired = wired_command(root, guard);
     let mut child = command("sh", root)
         .args(["-c", &wired])
         .stdin(std::process::Stdio::piped())
@@ -530,7 +551,7 @@ fn clears_guard_payload_malformed() {
     ];
     for guard in ["git-guard", "exec-guard"] {
         let settings = read(&root, ".claude/settings.json");
-        let shipped = format!("\"codeflow hook {guard}\"");
+        let shipped = serde_json::to_string(&wired_command(&root, guard)).unwrap();
         assert!(settings.contains(&shipped), "{guard}");
         for sender in mangled {
             let entry =
@@ -659,4 +680,43 @@ fn clears_hook_stdin_unread_for_a_branch_name_that_is_not_utf8() {
     assert!(out.status.success(), "{}", text(&out));
     let after = run_printed(&root, "git push", &[], &["-q", "origin", "feat/cafe"]);
     assert!(!after.contains(finding), "{after}");
+}
+
+#[test]
+fn clears_discard_local_work() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    write(root, "seed.txt", "locally changed\n");
+    prove(
+        "DISCARD_LOCAL_WORK",
+        "git.discard_uncommitted",
+        || guard(root, "git-guard", "git reset --hard"),
+        |printed| {
+            let step = printed_command(printed, "DISCARD_LOCAL_WORK", None);
+            assert_eq!(step, "git stash push");
+            assert_passes(root, "git-guard", &step);
+            run_printed(root, &step, &[], &[]);
+        },
+    );
+    assert!(text(&run("git", root, &["stash", "show", "-p"])).contains("locally changed"));
+}
+
+#[test]
+fn clears_push_without_follow_tags() {
+    let dir = with_origin();
+    let root = dir.path();
+    git(root, &["config", "push.followTags", "true"]);
+    let printed = refused(
+        root,
+        "exec-guard",
+        "git push origin feat/x",
+        "security.outward_actions",
+        "PUSH_WITHOUT_FOLLOW_TAGS",
+    );
+    let step = printed_command(&printed, "PUSH_WITHOUT_FOLLOW_TAGS", None)
+        .replace("<remote>", "origin")
+        .replace("<branch>", "feat/x");
+    assert_passes(root, "exec-guard", &step);
+    run_printed(root, &step, &[], &[]);
+    assert_eq!(head(root, "origin/feat/x"), head(root, "feat/x"));
 }

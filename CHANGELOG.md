@@ -45,7 +45,43 @@ publication date._
 > 6. A project that adopted the bundled portal follows the ownership table
 >    in `docs/releasing.md` before its next portal update.
 
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **Tracking authority transport checks.** Fetch, pull and remote update reject
+  URL rewrites and configuration overrides; fetch and pull also reject arbitrary
+  tracking-ref destinations. Direct writes to global Git config
+  files are refused while ordinary config reads and user-name updates pass.
+
+<!-- codeflow:release-impact patch -->
+- **Worktree removal under a harness sandbox.** The cleanup rules say that a
+  sandbox denying writes under `.claude/` or `.git/` stops `git worktree
+  remove` partway. After the proof, the removal runs once through the
+  harness's sanctioned unsandboxed path; with no such path the worktree is
+  kept and the proven removal goes to the operator. Never `--force`.
+
+<!-- codeflow:release-impact patch -->
+- **Peers in qualification trials.** The repository's qualification runner
+  routes seats a trial subject opens in Herdr through checked launchers: the
+  trial environment and workspace, the same argument allowlist and isolation,
+  and the Codex hook-trust option only for Codex peers. Trust dialogs are
+  answered only for verified launches; other peers flag the trial invalid.
+
 ### Added
+
+<!-- codeflow:release-impact major -->
+- **Landed policy authority.** Agent guards read landed policy and protect
+  its remote-tracking authority.
+  Local policy edits cannot relax it. Contract-3 hooks refuse a missing or
+  older binary. Install the new binary before `codeflow update`; configure
+  the remote HEAD with operator `git remote set-head origin --auto` when
+  needed. Doctor and orient report policy sources and local drift.
+  Without remote HEAD, guards merge main and master by the stricter levels; custom defaults need operator set-head.
+
+<!-- codeflow:release-impact minor -->
+- **Fetched work targets.** Work claims discover records on fetched target
+  branches. Work start prefers a fetched origin target when a local branch
+  without an upstream is stale. The automation profile schema also documents its `task` field.
 
 <!-- codeflow:release-impact major -->
 - **Agent sessions refuse instead of prompting (ADR-0075).** The Claude,
@@ -60,11 +96,11 @@ publication date._
   setup-git, token, refresh and logout, and `git credential`; keychain
   reads; and user-level persistence (`defaults write`, `launchctl`,
   `crontab -e` and `-r`, `systemctl enable`, registry writes). The deny
-  rules match these commands as written; another spelling, such as `cargo
-  +stable publish` or `git push origin v1.2.3`, is not refused in this
-  release. Codex gets `.codex/rules/codeflow.rules`, and its `cf-guard`
+  rules match these commands as written; exec-guard and git-guard also
+  parse covered wrappers, leading flags and tag-push spellings, including
+  `cargo +stable publish` and `git push origin v1.2.3`. Codex gets `.codex/rules/codeflow.rules`, and its `cf-guard`
   profile now runs the network proxy, with a `cf-builder` profile defined
-  beside it but not selected (tested on Codex 0.157.1; earlier versions
+  beside it but not selected (tested on Codex 0.159.1; earlier versions
   are unqualified). Grok gets `.grok/sandbox.toml`, written only when
   absent. The Claude presets' sandbox now withholds model, cloud and
   publishing credential variables and the common credential stores
@@ -74,11 +110,12 @@ publication date._
   `codex exec`, `grok -p`) and a privilege launcher run directly, chained
   or wrapped in a shell `-c` string or `eval`; a shell string that reaches
   no launcher, `source` and `LD_LIBRARY_PATH` are not refused. The policy
-  file also carries the keys planned for later guard checks
-  (`script_bypass`, `outward_actions`, `interpreter_scan`, `secret_reads`,
+  file carries `outward_actions` and `secret_reads` for their action
+  families. Interpreter forms use the underlying action's policy level.
+  The reserved keys `script_bypass`, `interpreter_scan`,
   `enforcement_baseline`, `workflow_pushes`, `sandbox_retry` and
-  `sandbox_retry_allow`), and `headless_opt_in` is accepted; no check
-  reads any of them in 3.0.0.
+  `sandbox_retry_allow` remain unread. Legacy `headless_opt_in` is
+  accepted but ignored with a warning; `codeflow update` removes it.
   - Order: install the new `codeflow` on `PATH`, then run `codeflow
     update`. Update merges the permission arrays three ways against the
     last shipped copy: a rule the preset retired is removed, the 2.x ask
@@ -90,9 +127,12 @@ publication date._
     compares with the files 2.1.0 shipped, says so, and adds back every
     shipped deny.
   - Relief: to let agents run one of these actions in a project, remove its
-    deny entry from `.claude/settings.json`; for privilege escalation,
-    which exec-guard also refuses, set `security.privilege_escalation` in
-    `.codeflow/policy.json` as well. To allow headless peer runs, set
+    deny entry from `.claude/settings.json` and relax the policy level
+    exec-guard also checks in `.codeflow/policy.json`:
+    `security.privilege_escalation` for privilege escalation,
+    `security.secret_reads` for keychain reads, and
+    `security.outward_actions` for publishing, release, account and
+    persistence actions. To allow headless peer runs, set
     `security.headless_peer_runs`. Update keeps these changes. A local ask
     rule cannot restore a denied action, because a deny rule wins.
 
@@ -235,7 +275,8 @@ publication date._
   the task's own range. `task status complete` also refuses uncommitted
   changes outside the record. A task's own pull request may change its
   criteria before its first completion, and `codeflow ci` prints the change
-  for the reviewer. A change to another task's criteria is refused unless the
+  for the reviewer; the pre-push check, which has no pull request body,
+  lets the task branch carry that change too. A change to another task's criteria is refused unless the
   pull request's validated class is planning-only or a checked epic line,
   whatever its branch prefix, and a reopened task keeps its criteria as its
   target has them. A range touching the adopter-facing path set needs a task
@@ -1361,6 +1402,12 @@ publication date._
 
 ### Fixed
 
+<!-- codeflow:release-impact patch -->
+- **Evaluation trial repairs.** Repair fixtures and their planning, cleanup
+  and PR-check guidance. The repository qualification runner now uses isolated trial
+  homes, records native launch flags, guards prompt delivery and reports
+  changes in declared directories with explicit observation limits.
+
 <!-- codeflow:release-impact minor -->
 - **Fix completed work in one PR.** A task can reopen with its old review
   preserved and a reason, carry the fix, and complete again with a review
@@ -1368,6 +1415,62 @@ publication date._
   reviews, changed criteria and damaged reopen history. Clean task landings
   and verified release imports retain their source review; the separate
   planning-reopen path remains valid.
+
+<!-- codeflow:release-impact patch -->
+- **Agent-session refusal coverage.** Exec-guard and git-guard apply the
+  existing action-family policy to parsed wrappers, leading flags,
+  interpreter forms and tag-push spellings. Git-guard refuses covered
+  discards of local-only work. Codex `apply_patch` and Grok `write` and
+  `search_replace` pass enforcement-path edits through the new
+  `codeflow hook edit-guard`; ordinary edits remain available. Refusals
+  name the rule and the operator's route. These command and payload
+  checks do not inspect opaque child programs.
+  - Relief stays with the underlying action's policy level and the
+    harness's independent native deny rules. `security.headless_peer_runs`
+    is the sole policy-level relief for a headless peer run; the unread
+    `security.headless_opt_in` structure remains accepted but ignored,
+    with a warning and removal on `codeflow update`. The built-in
+    catastrophic-command floor is unchanged.
+  - ADR-0075 drops the proposed readiness receipts, external enforcement
+    baseline, operator-actions queue and fixture-root admission. A
+    primary's permitted sandbox retry is judged by native permissions
+    and the guards; delegated seats deny the retry natively. Herdr's
+    named list remains workspace practice. Landed-policy authority and
+    fail-closed hooks are separate TSK-189 work.
+
+<!-- codeflow:release-impact patch -->
+- **A Codex seat under `cf-guard` can delete files and build.** The
+  profile's secret-file denies (`.env`, `.env.*`, `*.pem`, `*.key`,
+  `*.p12`, `*.pfx`, `.netrc`, `id_rsa*`, `id_ed25519*`) now apply at the
+  workspace root only. The `**/` forms made Codex deny deleting and
+  renaming every directory, so `rmdir`, `cargo build` and `npm` builds
+  failed. Nested secret files, such as `sub/.env` or a linked worktree's
+  `.env` under `.worktrees/`, are no longer denied, so a seat can read,
+  change or delete them; the config comment records that gap. The network is unchanged: no unix sockets and no local
+  binding. Reviewer seats launch with `--ask-for-approval never` and no
+  `--sandbox` flag, which selects `cf-guard`; builder seats keep full
+  access, because the `cf-builder` spike did not pass (a push to a remote
+  outside the workspace root is denied). Tested on Codex 0.159.1. On macOS,
+  Playwright's Chromium did not start under the sandboxed profiles probed
+  (`cf-guard`, `cf-builder` and `:workspace`), since the sandbox denies its
+  Mach port rendezvous; it starts unsandboxed, so a full-access builder can
+  run browser tests (TSK-190).
+
+<!-- codeflow:release-impact patch -->
+- **`codeflow ci` accepts a workspace's root branch.** In workspace mode,
+  at every tier, a range on the branch `git.root_branch` names, such as
+  `integration/workspace`, is classified as the workspace root branch, the
+  way a verified epic line is: it needs no `Task:` line and may change task
+  criteria. Before, `ci` refused it as an unverified epic line and blocked
+  any criteria change on it. The branch is read from the policy on the
+  target. With durable tracking, a pull request from any other
+  `integration/*` branch that is neither a verified epic line nor a release
+  branch is refused whatever its `Task:` line, and also when the host
+  supplies no body (a Bitbucket description `ci` cannot read); before,
+  `Task: TSK-NNN` or a missing body let one through. A plain push with no
+  pull request context, the minimal tier, and a range into a release
+  branch, which the release checks judge, are not judged this way
+  (TSK-190).
 
 <!-- codeflow:release-impact patch -->
 - **An approved spec is amended until it ships, and frozen after.** The

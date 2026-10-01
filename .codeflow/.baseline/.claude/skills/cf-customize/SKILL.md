@@ -76,8 +76,8 @@ Then verify and **offer** remediation; never install silently.
     - `.codex/config.toml`: guarded workspace default, no legacy `sandbox_mode`,
       public network/live search. Production combines `approval_policy = "never"`
       and `--sandbox danger-full-access`: no prompts/OS sandbox; guards, hooks,
-      and CI remain floors, not task authority. Consult `workspace-write` still
-      denies workspace keys/certificates and `~/.codex/auth.json`;
+      and CI remain floors, not task authority. A reviewer's `cf-guard` profile
+      still denies root-level keys/certificates and `~/.codex/auth.json`;
       `ignore_default_excludes = false` retains secret-environment filtering.
       Verify the effective boundary: settings alone neither authorize external
       communication nor protect arbitrary PII/public queries. Obtain needed

@@ -224,7 +224,7 @@ fn runner_exits(arg: &str) -> bool {
 /// grammar does not know may or may not take the next word, so both are
 /// kept, though never an option word, which it does not take (npm reads
 /// `--unknown --help` as help); a help or version option ends the run.
-fn after_runner_options(args: &[String]) -> Vec<usize> {
+pub(crate) fn after_runner_options(args: &[String]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut stack = vec![0];
     let mut steps = 0;
@@ -388,7 +388,7 @@ fn launch(args: &[String], at: usize, package_given: bool, depth: usize) -> Foun
 
 /// The binary a package spec runs: its name without scope or version,
 /// with the peers' package names read as their commands.
-fn package_bin(spec: &str) -> String {
+pub(crate) fn package_bin(spec: &str) -> String {
     let unversioned = match spec.strip_prefix('@') {
         Some(scoped) => format!("@{}", scoped.split('@').next().unwrap_or(scoped)),
         None => spec.split('@').next().unwrap_or(spec).to_string(),
@@ -426,7 +426,7 @@ fn find_exec(args: &[String], depth: usize) -> Found {
 
 /// Skip a wrapper's options (those in `with_value` take the next token) to
 /// the command it runs.
-fn skip_options<'a>(args: &'a [String], with_value: &[&str]) -> &'a [String] {
+pub(crate) fn skip_options<'a>(args: &'a [String], with_value: &[&str]) -> &'a [String] {
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         if arg == "--" {
@@ -445,7 +445,7 @@ fn skip_options<'a>(args: &'a [String], with_value: &[&str]) -> &'a [String] {
 }
 
 /// Skip `NAME=value` words.
-fn skip_assignments(args: &[String]) -> &[String] {
+pub(crate) fn skip_assignments(args: &[String]) -> &[String] {
     let at = args
         .iter()
         .position(|arg| !is_assignment(arg))
@@ -455,7 +455,7 @@ fn skip_assignments(args: &[String]) -> &[String] {
 
 /// `env`'s options and assignments up to its command; `None` for `env -S`,
 /// which splits a string this classifier does not model.
-fn skip_env(args: &[String]) -> Option<&[String]> {
+pub(crate) fn skip_env(args: &[String]) -> Option<&[String]> {
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         if arg == "-S" || arg.starts_with("--split-string") || arg.starts_with("-S") {
@@ -473,7 +473,7 @@ fn skip_env(args: &[String]) -> Option<&[String]> {
 }
 
 /// The string after `-c` (or a cluster holding `c`, such as `-lc`).
-fn shell_command_string(args: &[String]) -> Option<&str> {
+pub(crate) fn shell_command_string(args: &[String]) -> Option<&str> {
     let at = args.iter().position(|arg| {
         arg == "-c"
             || arg == "--command"
@@ -871,7 +871,7 @@ fn after_long_value(cli: &Cli, flag: &str, args: &[String], mut at: usize) -> us
 
 /// The raw-text judgement for a line that could not be resolved: a peer
 /// name followed, anywhere later, by one of its headless markers.
-fn raw_run(command: &str) -> Option<HeadlessRun> {
+pub(crate) fn raw_run(command: &str) -> Option<HeadlessRun> {
     let plain: String = command
         .chars()
         .filter(|c| !matches!(c, '\\' | '\'' | '"'))

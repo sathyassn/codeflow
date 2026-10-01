@@ -26,6 +26,7 @@
       "scripts/check-gate-browser.mjs",
       "scripts/*.sh",
       "scripts/*.mjs",
+      "tests/release-qualification/**",
       "journey_gate.toml",
       ".codex/**",
       ".grok/**",

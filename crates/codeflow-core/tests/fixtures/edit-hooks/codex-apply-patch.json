@@ -1,0 +1,20 @@
+{
+  "_fixture": {
+    "provenance": "constructed from documented schema, not a native capture",
+    "source": "https://learn.chatgpt.com/docs/hooks#pretooluse",
+    "common_fields": "https://learn.chatgpt.com/docs/hooks#common-input-fields",
+    "checked": "2026-09-29"
+  },
+  "session_id": "fixture-session",
+  "transcript_path": null,
+  "cwd": "/fixture/project",
+  "hook_event_name": "PreToolUse",
+  "model": "fixture-model",
+  "permission_mode": "default",
+  "turn_id": "fixture-turn",
+  "tool_use_id": "fixture-call",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: .codeflow/policy.json\n@@\n-a\n+b\n*** End Patch\n"
+  }
+}

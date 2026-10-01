@@ -816,3 +816,54 @@ fn delegate_source_live_and_baseline_copies_are_byte_identical() {
         problems.join("\n  ")
     );
 }
+
+#[test]
+fn process_round_guidance_names_the_evidence_before_action() {
+    for path in [ORCHESTRATOR, "assets/base/agents/skills/cf-ship/SKILL.md"] {
+        assert_contains(
+            path,
+            &[
+                "Before choosing a landing route, read `PLAN.md`",
+                "in the project README",
+            ],
+        );
+    }
+    assert_contains(
+        "assets/base/rules/worktrees.md",
+        &[
+            "Before any removal, read `CODEFLOW_STATUS.txt`",
+            "against current Git state",
+            // TSK-194 first batch, case 15: a sandboxed removal stopped partway.
+            "Where the effective sandbox denies those writes, make the proof first",
+            "through the harness's sanctioned unsandboxed path",
+            "Do not make a first attempt inside the sandbox",
+            "keep the worktree and hand the proven removal to the operator",
+            "never change sandbox or permission settings",
+        ],
+    );
+    assert_contains(
+        "assets/base/claude/skills/cf-method/references/project-organization.md",
+        &[
+            "A task branch is not an integration target",
+            "real local or remote-tracking branch",
+            "`codeflow work start`, `codeflow ci` and pre-commit enforce",
+        ],
+    );
+    assert_contains(
+        "assets/base/agents/skills/cf-ship/references/pr-checks.md",
+        &[
+            "timeout 30m gh pr checks <url> --required --watch --interval 60",
+            "do not add a preliminary poll, a parallel poll or a background loop",
+            "Wait for this command to finish before reporting readiness",
+        ],
+    );
+    assert_contains(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
+        &[
+            "refuse agent execution even after approval",
+            "separate controlled operator channel",
+            "checkpoint or backup identity, restore procedure",
+            "do not execute the action to obtain it",
+        ],
+    );
+}

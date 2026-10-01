@@ -1,11 +1,15 @@
 ---
 name: cf-ship
-description: Land finished work (docs and capability updates, then a PR through the gates). Use when a change is reviewed and green and ready to merge.
+description: Land finished work — docs and capability updates, then a PR through the gates. Use when a change is reviewed and green and ready to merge.
 ---
 
-# cf-ship: land finished work
+# cf-ship — land finished work
 
-1. Preconditions: the applicable independent review verdict is `approved` and
+1. Before choosing a landing route, read `PLAN.md` and the landing policy
+   in the project README when present, alongside the project operating
+   contract. Resolve any conflict with the approved plan before changing
+   its target.
+   Preconditions: the applicable independent review verdict is `approved` and
    every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
    After review, a task PR's last commit runs `codeflow task status <id>
    complete --acceptance <file>`; its block names the reviewed code commit
@@ -30,15 +34,15 @@ description: Land finished work (docs and capability updates, then a PR through 
    gaps. Never restart the whole lifecycle or force every failure through
    development.
 2. Same-PR doc mutations (this is how docs stay true):
-   - a capability entry created or updated: status, `verified_by` test tags,
+   - a capability entry created or updated — status, `verified_by` test tags,
      epic and ADR links (required at full tier; keep `verified_by` non-empty so
-     `validate --docs` stays clean; it does not gate epic close);
+     `validate --docs` stays clean — it does not gate epic close);
    - an ADR finalized if a Tier-3 decision was made; `docs/architecture.md`
      updated when the ADR declares architecture impact;
    - no spec status is written at ship: `implemented` is derived once every
      consumer is complete, and already-frozen specs remain historical; epic
      and task statuses change only as the work lifecycle states.
-3. Re-run `codeflow validate --docs` after the doc updates; it must pass.
+3. Re-run `codeflow validate --docs` after the doc updates — it must pass.
    If `.codeflow/docs-portal.json` exists and this change materially affects
    authoritative docs, relationships, version context, portal configuration,
    or starter behavior, also run the adopted portal's locked check/build and
@@ -53,9 +57,9 @@ description: Land finished work (docs and capability updates, then a PR through 
    coupled version updates now, reconciled with the current target and
    published baseline. A reviewed merge is not permission to publish or
    deploy.
-5. Apply `cf-editorial-review` and its copy guide where its description
-   triggers it (by consequence). They refine the writing but cannot weaken
-   the template, evidence, policy, or no-emoji requirements below.
+5. Apply `cf-editorial-review` where its description triggers it (by
+   consequence). It refines the writing but cannot weaken the template,
+   evidence, policy, or no-emoji requirements below.
 6. Prepare the whole-branch PR using
    [references/pr-evidence.md](references/pr-evidence.md). Write the body and
    release notes plainly: simple, straightforward and clear, no mannered
@@ -71,21 +75,18 @@ description: Land finished work (docs and capability updates, then a PR through 
    where the adopted policy requires hosted checks green before landing, wait
    for them with a bounded poll (once a minute, at most thirty minutes).
    Then fix assertion-red without asking, report infra-incomplete as
-   missing evidence, and report readiness with the PR URL the tool printed.
-8. Merge by target once required *checks* are evidenced green, locally or in
-   completed CI jobs (a gate is the check, not the job name; the quality
-   contract classifies redness). The primary merges a green, reviewed PR into
-   an `integration/` branch no protected-branch policy covers (`main`,
-   `master`, `.codeflow/policy.json` globs) without fast forward or with
-   `codeflow integrate <branch> --into <target>`, once the full gate is green
-   on that exact candidate (a batch, or a standalone PR as its own). A
-   protected target, including a protected `integration/` glob, is reported
-   ready (on local evidence only as `pr-evidence.md` allows) and **merged by a
-   human**, through the PR or `codeflow integrate`. An agent never merges
-   into a protected target: no `gh pr merge` or by-hand merge there, never
-   `gh pr merge --delete-branch` (step 10 deletes the pushed branch after
-   proof), and override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are
-   human-only.
+   missing evidence, never merge, and report readiness with the PR URL the
+   tool printed.
+8. Land via a PR **merged by a human** when required *checks* are evidenced
+   green (the same `codeflow test` / `validate` / coverage / security targets,
+   locally or in completed CI jobs — a gate is the check, not the job name).
+   For red or unfinished CI jobs, follow
+   [PR checks](references/pr-checks.md#redness-classes).
+   Or `codeflow integrate <branch> --into <target>` when there is no
+   remote. An agent never merges into a protected branch — no `gh pr merge`
+   into a protected base, no by-hand merge, never `gh pr merge --delete-branch`
+   (step 10 deletes the pushed branch after proof).
+   Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 9. Confirm the landed state with `codeflow status`; report the final epic and
    capability state. After an epic-line landing, only when the project
    configures a release branch matching its release pattern, R-120, and a
