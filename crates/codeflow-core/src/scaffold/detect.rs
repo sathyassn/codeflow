@@ -1,6 +1,6 @@
 //! Environment detection: stack, existing git-hook managers, empty dirs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::gitutil;
 
@@ -70,6 +70,120 @@ pub fn detect_hook_manager(root: &Path) -> Option<HookManager> {
     None
 }
 
+/// Hook scripts in the repository's own hooks folder (`hooks/` in the
+/// common git dir, which linked worktrees share), such as those `pre-commit
+/// install` writes or a person wrote by hand. Git runs them only while
+/// `core.hooksPath` is unset, so wiring codeflow's shims stops them
+/// silently; init, update and doctor name them as a brownfield choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitDirHooks {
+    /// The hooks folder, as a path from `root` when it lies under it.
+    pub dir: String,
+    /// The hook names, sorted.
+    pub names: Vec<String>,
+}
+
+impl GitDirHooks {
+    /// The setup report line: what stops running, and the adopter's
+    /// options. Nothing is moved or deleted.
+    #[must_use]
+    pub fn report_note(&self) -> String {
+        format!(
+            "existing git hooks in {dir}: {names}. git no longer runs them once CodeFlow's hooks are wired (core.hooksPath = {CODEFLOW_HOOKS_PATH}); nothing was moved or deleted. Choose one: move each check into the project's CI or a supported hook manager (husky, lefthook), or keep it by calling it from a project-owned hook, a hooks folder set as core.hooksPath whose hooks call both the check and the codeflow shim. `codeflow doctor` warns while they stay in {dir}",
+            dir = self.dir,
+            names = self.names.join(", "),
+        )
+    }
+}
+
+/// The hook events git runs from its hooks folder (githooks(5)). A file under
+/// any other name, such as git's `*.sample` files or a helper script, is
+/// never run by git as a hook.
+const GIT_HOOK_NAMES: &[&str] = &[
+    "applypatch-msg",
+    "pre-applypatch",
+    "post-applypatch",
+    "pre-commit",
+    "pre-merge-commit",
+    "prepare-commit-msg",
+    "commit-msg",
+    "post-commit",
+    "pre-rebase",
+    "post-checkout",
+    "post-merge",
+    "pre-push",
+    "pre-receive",
+    "update",
+    "proc-receive",
+    "post-receive",
+    "post-update",
+    "reference-transaction",
+    "push-to-checkout",
+    "pre-auto-gc",
+    "post-rewrite",
+    "sendemail-validate",
+    "fsmonitor-watchman",
+    "p4-changelist",
+    "p4-prepare-changelist",
+    "p4-post-changelist",
+    "p4-pre-submit",
+    "post-index-change",
+];
+
+/// The executable hook files in the common git dir's `hooks/`, skipping
+/// files whose name is not a git hook event (git's `*.sample` files, helper
+/// scripts) and anything git would not run. `None` when there
+/// are none, outside a repository, or when `core.hooksPath` already points
+/// at another manager's folder (git was not running these files anyway, and
+/// that manager is reported instead).
+#[must_use]
+pub fn git_dir_hooks(root: &Path) -> Option<GitDirHooks> {
+    if configured_hooks_path(root).is_some_and(|path| path != CODEFLOW_HOOKS_PATH) {
+        return None;
+    }
+    let dir = gitutil::common_dir(root)?.join("hooks");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.path().is_file() && is_executable(&entry.path()))
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| GIT_HOOK_NAMES.contains(&name.as_str()))
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    names.sort();
+    Some(GitDirHooks {
+        dir: display_from(root, &dir),
+        names,
+    })
+}
+
+/// `path` as a path from `root` when it lies under it, else as given.
+fn display_from(root: &Path, path: &Path) -> String {
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let (root, path): (PathBuf, PathBuf) = (canonical(root), canonical(path));
+    path.strip_prefix(&root)
+        .unwrap_or(&path)
+        .display()
+        .to_string()
+}
+
+/// Whether git would run `path` as a hook.
+#[cfg(unix)]
+#[must_use]
+pub fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
+}
+
+/// Git for Windows runs a hook without an executable bit.
+#[cfg(not(unix))]
+#[must_use]
+pub fn is_executable(path: &Path) -> bool {
+    path.is_file()
+}
+
 /// True when the directory contains nothing (ignoring nothing — a truly
 /// empty dir, the canonical bootstrap-grace case).
 #[must_use]
@@ -98,6 +212,86 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".husky")).unwrap();
         assert_eq!(detect_hook_manager(dir.path()), Some(HookManager::Husky));
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = crate::git::command()
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.test")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.test")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    fn hook(dir: &Path, name: &str, executable: bool) {
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\ntrue\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = if executable { 0o755 } else { 0o644 };
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        #[cfg(not(unix))]
+        let _ = executable;
+    }
+
+    #[test]
+    fn git_dir_hooks_name_executable_hooks_and_resolve_the_common_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir(&main).unwrap();
+        git(&main, &["init", "-q", "-b", "main"]);
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let hooks = main.join(".git/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        for entry in std::fs::read_dir(&hooks).unwrap().flatten() {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+        assert_eq!(git_dir_hooks(&main), None, "an empty hooks folder");
+
+        hook(&hooks, "pre-push.sample", true);
+        hook(&hooks, "pre-commit", true);
+        hook(&hooks, "commit-msg", true);
+        #[cfg(unix)]
+        hook(&hooks, "post-merge", false);
+        let found = git_dir_hooks(&main).unwrap();
+        assert_eq!(found.names, ["commit-msg", "pre-commit"]);
+        assert_eq!(found.dir, ".git/hooks");
+        let note = found.report_note();
+        assert!(note.contains("commit-msg, pre-commit") && note.contains("git no longer runs"));
+
+        // A linked worktree resolves the main checkout's hooks folder.
+        git(&main, &["worktree", "add", "-q", "wt", "-b", "chore/wt"]);
+        let linked = git_dir_hooks(&main.join("wt")).unwrap();
+        assert_eq!(linked.names, ["commit-msg", "pre-commit"]);
+        assert!(
+            Path::new(&linked.dir).ends_with("main/.git/hooks"),
+            "{}",
+            linked.dir
+        );
+
+        // codeflow's own wiring keeps reporting them; another manager's
+        // folder means git was not running them anyway.
+        git(&main, &["config", "core.hooksPath", CODEFLOW_HOOKS_PATH]);
+        assert!(git_dir_hooks(&main).is_some());
+        git(&main, &["config", "core.hooksPath", ".husky"]);
+        assert_eq!(git_dir_hooks(&main), None);
+    }
+
+    #[test]
+    fn git_dir_hooks_outside_a_repository_are_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(git_dir_hooks(dir.path()), None);
     }
 
     #[test]

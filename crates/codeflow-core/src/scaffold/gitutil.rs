@@ -48,6 +48,17 @@ pub fn has_commits(root: &Path) -> bool {
     git(root, &["rev-parse", "--verify", "HEAD"]).is_ok_and(|o| o.status.success())
 }
 
+/// The common git dir (the main checkout's `.git`, shared by linked
+/// worktrees), as an absolute path. `None` outside a repository.
+pub fn common_dir(root: &Path) -> Option<std::path::PathBuf> {
+    let out = git(root, &["rev-parse", "--git-common-dir"]).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!dir.is_empty()).then(|| root.join(dir))
+}
+
 pub fn init_repo(root: &Path) -> Result<(), ScaffoldError> {
     git_ok(root, &["init", "--quiet"])
 }

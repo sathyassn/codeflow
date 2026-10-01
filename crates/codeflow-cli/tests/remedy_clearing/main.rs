@@ -176,6 +176,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_TOOL_MISSING", Runs),
     ("DOCTOR_HOOK_MANAGER", Runs),
     ("DOCTOR_HOOK_WIRING_UNSEEN", Confirms),
+    ("DOCTOR_GIT_DIR_HOOKS", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
@@ -1824,6 +1825,33 @@ fn clears_doctor_hooks_path() {
         |printed| {
             let step = printed_command(printed, "DOCTOR_HOOKS_PATH", None);
             run_printed(&root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_git_dir_hooks() {
+    // A hook git ran from its own folder until `init` wired the shims.
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    write(&root, ".git/hooks/pre-commit", "#!/bin/sh\ntrue\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            root.join(".git/hooks/pre-commit"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    prove(
+        "DOCTOR_GIT_DIR_HOOKS",
+        "git does not run the hooks in",
+        || doctor(&root, "hooks"),
+        |printed| {
+            assert!(printed.contains("git-hooks: pre-commit"), "{printed}");
+            // The adopter moved the check to CI; the file leaves the folder.
+            std::fs::remove_file(root.join(".git/hooks/pre-commit")).unwrap();
         },
     );
 }

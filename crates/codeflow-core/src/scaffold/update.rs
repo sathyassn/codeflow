@@ -219,6 +219,14 @@ fn update_writes(
     if let Some(note) = record_work_records_baseline(root)? {
         report.notes.push(note);
     }
+    // The brownfield hook choice stays visible until the adopter makes it.
+    if super::detect::configured_hooks_path(root).as_deref()
+        == Some(super::detect::CODEFLOW_HOOKS_PATH)
+    {
+        if let Some(found) = super::detect::git_dir_hooks(root) {
+            report.notes.push(found.report_note());
+        }
+    }
 
     if let Some(path) = &opts.diff_out {
         let mut out = report.to_string();

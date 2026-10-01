@@ -406,8 +406,18 @@ fn check_hooks(opts: &Options) -> CheckResult {
     // `core.hooksPath` wiring, leaving zero local git gates behind a green
     // doctor. Resolve the ACTIVE hooks dir the same way orient's gates line
     // does and warn when the shims are not what git runs.
-    match hooks_wiring(Path::new(&opts.project_dir)) {
-        Wiring::Read => {}
+    let root = Path::new(&opts.project_dir);
+    match hooks_wiring(root) {
+        Wiring::Read => {
+            if let Some(warning) = git_dir_hooks_finding(root) {
+                return CheckResult {
+                    name: "hooks".into(),
+                    status: Status::Warn(warning.remedy),
+                    message: warning.text,
+                    duration: start.elapsed(),
+                };
+            }
+        }
         Wiring::Broken(warning) => {
             return CheckResult {
                 name: "hooks".into(),
@@ -432,6 +442,26 @@ fn check_hooks(opts: &Options) -> CheckResult {
         message: format!("all {} hook subcommands functional", HOOK_SUBCOMMANDS.len()),
         duration: start.elapsed(),
     }
+}
+
+/// Hooks in the repository's own hooks folder that git stopped running when
+/// `core.hooksPath` was set to the codeflow shims (`pre-commit install`
+/// output, or hooks written by hand). Init reported them as a choice; this
+/// keeps the choice visible until the adopter makes it.
+fn git_dir_hooks_finding(root: &Path) -> Option<Finding> {
+    use crate::scaffold::detect::{self, CODEFLOW_HOOKS_PATH};
+    if detect::configured_hooks_path(root).as_deref() != Some(CODEFLOW_HOOKS_PATH) {
+        return None;
+    }
+    let found = detect::git_dir_hooks(root)?;
+    Some(Finding::new(
+        format!(
+            "git does not run the hooks in {} while core.hooksPath = {CODEFLOW_HOOKS_PATH}: {}",
+            found.dir,
+            found.names.join(", ")
+        ),
+        remedy::DOCTOR_GIT_DIR_HOOKS.with(&[("path", &found.dir)]),
+    ))
 }
 
 /// What reading the hook files shows about git calling the codeflow shims.
@@ -545,7 +575,7 @@ fn shims_not_called(active: &Path, shims: &Path) -> Vec<String> {
             let hook = active.join(&name);
             let why = match std::fs::read_to_string(&hook) {
                 Err(_) => "no hook",
-                Ok(_) if !is_executable(&hook) => "not executable",
+                Ok(_) if !crate::scaffold::detect::is_executable(&hook) => "not executable",
                 Ok(text) => {
                     let call = format!("{CODEFLOW_HOOKS_PATH}/{name}");
                     if text.lines().any(|line| shell_code(line).contains(&call)) {
@@ -569,19 +599,6 @@ fn shell_code(line: &str) -> &str {
         previous = c;
     }
     line
-}
-
-/// Whether git would run `path` as a hook.
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
-}
-
-/// Git for Windows runs a hook without an executable bit.
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
 }
 
 fn check_claude(opts: &Options) -> CheckResult {
