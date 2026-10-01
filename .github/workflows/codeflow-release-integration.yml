@@ -29,7 +29,7 @@ jobs:
       group: codeflow-release-integration
       cancel-in-progress: false
     env:
-      RELEASE_BRANCH: integration/release-3-0-0-r2
+      RELEASE_BRANCH: integration/release-3-0-0-r3
     steps:
       # Both accepted events bind github.sha to the default-branch commit.
       # Never build from workflow_run.head_sha or consume upstream artifacts.

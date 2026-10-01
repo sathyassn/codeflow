@@ -316,7 +316,7 @@ To reproduce the current integration locally without pushing, put the current
 `codeflow` binary on PATH and run:
 
 ```sh
-cargo run -p codeflow-cli --example release_integration -- --release integration/release-3-0-0-r2
+cargo run -p codeflow-cli --example release_integration -- --release integration/release-3-0-0-r3
 ```
 
 | Option or limit | Effect |
