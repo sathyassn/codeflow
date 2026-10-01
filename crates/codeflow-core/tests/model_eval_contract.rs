@@ -4905,10 +4905,13 @@ fn pr_fixtures_keep_side_effect_free_help_and_bounded_watch_support() {
     for id in ["pr-follow-up-green", "pr-follow-up-queued-forever"] {
         let fixture = process_fixture(id);
         let gh = fixture["files"]["tools/gh.py"].as_str().expect("gh");
-        let main = gh.split("def main(argv:").nth(1).expect("main");
+        // The release stand-in answers help in `respond`, before `dispatch`
+        // can touch the PR state; `main` only logs the call for replay.
+        let respond = gh.split("def respond(argv:").nth(1).expect("respond");
         assert!(
-            main.find("return show_help(argv)").expect("help return")
-                < main.find("state = load_state()").expect("state load")
+            respond.find("return show_help(argv").expect("help return")
+                < respond.find("dispatch(argv").expect("dispatch"),
+            "{id}: help must return before dispatch"
         );
         for flag in ["--required", "--watch", "--interval"] {
             assert!(gh.contains(flag), "{id}: {flag}");
