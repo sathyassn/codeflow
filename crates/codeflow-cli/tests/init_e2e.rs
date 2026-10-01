@@ -2679,3 +2679,81 @@ fn fresh_scaffolds_install_the_spec_amendment_rule_and_update_brings_it() {
         }
     }
 }
+
+/// Release canary: brownfield adoption in a linked worktree of a repository
+/// whose own `.git/hooks/pre-commit` git ran until `init` set
+/// `core.hooksPath`. The init report, `codeflow update` and `codeflow
+/// doctor` name the hook as a choice, ignore git's `*.sample` files and a
+/// file that is not executable, and leave every hook file in place.
+#[test]
+fn brownfield_init_names_the_git_dir_hooks_it_stops_running() {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("b");
+    std::fs::create_dir(&main).unwrap();
+    git_stdout(&main, &["init", "-q", "-b", "main"]);
+    std::fs::write(main.join("a"), "x\n").unwrap();
+    git_with_binary(&main, &["add", "a"]);
+    git_with_binary(&main, &["commit", "-qm", "init"]);
+    let hooks = main.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\necho OWN HOOK RAN\n").unwrap();
+    std::fs::write(hooks.join("commit-msg.sample"), "#!/bin/sh\n").unwrap();
+    std::fs::write(hooks.join("pre-push"), "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for (name, mode) in [
+            ("pre-commit", 0o755),
+            ("commit-msg.sample", 0o755),
+            ("pre-push", 0o644),
+        ] {
+            std::fs::set_permissions(hooks.join(name), std::fs::Permissions::from_mode(mode))
+                .unwrap();
+        }
+    }
+    git_stdout(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            ".worktrees/adopt",
+            "-b",
+            "chore/adopt",
+        ],
+    );
+    let adopt = main.join(".worktrees/adopt");
+
+    let out = codeflow(&adopt, &["init", "--standard", "--yes"]);
+    let report = output_text(&out);
+    assert!(out.status.success(), "{report}");
+    let line = report
+        .lines()
+        .find(|line| line.contains("git no longer runs"))
+        .unwrap_or_else(|| panic!("no git-dir hooks note:\n{report}"));
+    assert!(line.contains("pre-commit"), "{line}");
+    assert!(line.contains("CI or a supported hook manager"), "{line}");
+    assert!(line.contains("project-owned hook"), "{line}");
+    #[cfg(unix)]
+    assert!(!line.contains("pre-push"), "not executable: {line}");
+    assert!(!line.contains(".sample"), "{line}");
+    assert!(
+        hooks.join("pre-commit").exists(),
+        "nothing moved or deleted"
+    );
+
+    let update = output_text(&codeflow(&adopt, &["update"]));
+    assert!(
+        update.contains("git no longer runs") && update.contains("pre-commit"),
+        "{update}"
+    );
+
+    let doctor = output_text(&codeflow(&adopt, &["doctor", "--check", "hooks"]));
+    assert!(
+        doctor.contains("git does not run") && doctor.contains("pre-commit"),
+        "{doctor}"
+    );
+    std::fs::remove_file(hooks.join("pre-commit")).unwrap();
+    let cleared = output_text(&codeflow(&adopt, &["doctor", "--check", "hooks"]));
+    assert!(!cleared.contains("git does not run"), "{cleared}");
+}
