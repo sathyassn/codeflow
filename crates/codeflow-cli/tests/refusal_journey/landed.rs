@@ -255,11 +255,43 @@ fn ac3_shims_fail_closed_and_harness_contract_is_wired() {
     wrappers_advise_reinstall_only_for_a_stale_binary(&repo, &assets, &bin);
 }
 
-/// AC-3: every harness wrapper blocks with exit 2 for a missing binary, an
-/// older one and a current one refusing by policy, and only the first two
-/// are told to reinstall.
-fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path, bin: &Path) {
+/// The fake `codeflow` for a wrapper case: `capabilities` runs `probe`, the
+/// hook prints `refusal` and exits 2. It records its pid so a test can prove
+/// a stalled probe was killed.
+fn fake_codeflow(bin: &Path, probe: &str, refusal: &str) {
     use std::os::unix::fs::PermissionsExt;
+    let fake = bin.join("codeflow");
+    let pid = bin.join("probe.pid");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\nif [ \"$1 $2\" = \"git-hook capabilities\" ]; then echo $$ > '{}'; {probe}; fi\necho \"{refusal}\" >&2\nexit 2\n",
+            pid.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// AC-3: every harness wrapper blocks with exit 2 for a missing binary, an
+/// older one, a current one refusing by policy and one whose capability
+/// probe stalls before or after answering; only the current binary that
+/// answers in time goes without reinstall advice. The probe is bounded, so a
+/// stall still returns exit 2 well inside the harness's 10-second timeout,
+/// kills the probe and removes its temporary file.
+fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path, bin: &Path) {
+    for tool in ["mktemp", "sed", "sleep", "rm"] {
+        let source = ["/usr/bin", "/bin"]
+            .iter()
+            .map(|dir| Path::new(dir).join(tool))
+            .find(|path| path.exists())
+            .unwrap();
+        std::os::unix::fs::symlink(source, bin.join(tool)).unwrap();
+    }
+    let tmp = repo.root().join("wrapper-tmp");
+    std::fs::create_dir(&tmp).unwrap();
+    let stall = "exec /bin/sleep 30";
+    let answer_then_stall = "echo 'hooks 3'; exec /bin/sleep 30";
     for path in [
         "codex/hooks.json",
         "grok/hooks.json",
@@ -276,31 +308,46 @@ fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path,
         let mut hooks = Vec::new();
         commands(&value, &mut hooks);
         assert!(!hooks.is_empty());
-        for command in hooks {
+        let tail = |command: &str| command.split_once(';').unwrap().1.to_string();
+        for (index, command) in hooks.iter().enumerate() {
             assert!(command.contains("--contract 3"), "{command}");
-            // A missing binary, an older one (clap rejects `--contract` with
-            // exit 2) and a current one refusing by policy (exit 2) all
-            // block; only the first two are told to reinstall.
-            for (binary, advised) in [
+            // Every handler shares one probe, so the stalls run on the first.
+            assert_eq!(tail(command), tail(&hooks[0]), "{command}");
+            let mut cases = vec![
                 (None, true),
                 (
-                    Some(("hooks 2", "error: unexpected argument '--contract'")),
+                    Some((
+                        "echo 'hooks 2'; exit 0",
+                        "error: unexpected argument '--contract'",
+                    )),
                     true,
                 ),
-                (Some(("hooks 3", "codeflow git-guard: BLOCKED")), false),
-            ] {
-                let fake = bin.join("codeflow");
-                if let Some((cap, refusal)) = binary {
-                    std::fs::write(&fake, format!("#!/bin/sh\nif [ \"$2\" = capabilities ]; then echo '{cap}'; exit 0; fi\necho \"{refusal}\" >&2\nexit 2\n")).unwrap();
-                    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
-                        .unwrap();
+                (
+                    Some(("echo 'hooks 3'; exit 0", "codeflow git-guard: BLOCKED")),
+                    false,
+                ),
+            ];
+            if index == 0 {
+                cases.push((Some((stall, "ORIGINAL-REFUSAL")), true));
+                cases.push((Some((answer_then_stall, "ORIGINAL-REFUSAL")), true));
+            }
+            for (binary, advised) in cases {
+                if let Some((probe, refusal)) = binary {
+                    fake_codeflow(bin, probe, refusal);
                 }
+                let started = std::time::Instant::now();
                 let out = repo
                     .command("/bin/sh")
-                    .args(["-c", &command])
+                    .args(["-c", command])
                     .env("PATH", bin)
+                    .env("TMPDIR", &tmp)
                     .output()
                     .unwrap();
+                let elapsed = started.elapsed();
+                assert!(
+                    elapsed < std::time::Duration::from_secs(5),
+                    "{binary:?}: {elapsed:?}"
+                );
                 assert_eq!(out.status.code(), Some(2), "{command}: {out:?}");
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 assert_eq!(
@@ -309,9 +356,23 @@ fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path,
                     "{binary:?} {command}: {stderr}"
                 );
                 assert_eq!(stderr.contains("codeflow update"), advised, "{stderr}");
-                if let Some((_, refusal)) = binary {
+                assert_eq!(
+                    std::fs::read_dir(&tmp).unwrap().count(),
+                    0,
+                    "probe file left"
+                );
+                if let Some((probe, refusal)) = binary {
                     assert!(stderr.contains(refusal), "{stderr}");
-                    std::fs::remove_file(fake).unwrap();
+                    let pid = std::fs::read_to_string(bin.join("probe.pid")).unwrap();
+                    if probe.contains("sleep") {
+                        let alive = std::process::Command::new("/bin/kill")
+                            .args(["-0", pid.trim()])
+                            .output()
+                            .unwrap();
+                        assert!(!alive.status.success(), "stalled probe {pid} still runs");
+                    }
+                    std::fs::remove_file(bin.join("codeflow")).unwrap();
+                    std::fs::remove_file(bin.join("probe.pid")).unwrap();
                 }
             }
         }

@@ -815,7 +815,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "18e247bcb8da073f6d7bc494dbd8d219e3020768ff5f00267b507b3b4f0ed357",
+      "sha256": "9996958e41da6c9d52b8c3ae17c03253cdb33ef32aecdd1020e425f7c74d24d8",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -1733,7 +1733,7 @@
     ".codex/hooks.json": {
       "src": "codex/hooks.json",
       "ownership": "managed",
-      "sha256": "46575944380f82a367845dffa86ce66a08dfee0feb9bd266827d6c39cd3ad4a0",
+      "sha256": "730a6807a43730d7e019c199e1edd8725fa8240af4d59c3e6374f69fad3bf05d",
       "exec": false
     },
     ".codex/rules/codeflow.rules": {
@@ -1769,7 +1769,7 @@
     ".grok/hooks/codeflow.json": {
       "src": "grok/hooks.json",
       "ownership": "managed",
-      "sha256": "a96f2902420901af2357a84a1223ea3cae51287a603fdca303199865099f70c8",
+      "sha256": "beb4e5ebab007c2673eebde820286161aa48315b8542f8c84bd40e029798b836",
       "exec": false
     },
     ".grok/sandbox.toml": {
