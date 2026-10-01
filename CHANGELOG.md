@@ -53,6 +53,20 @@ publication date._
   tracking-ref destinations. Direct writes to global Git config
   files are refused while ordinary config reads and user-name updates pass.
 
+<!-- codeflow:release-impact patch -->
+- **Worktree removal under a harness sandbox.** The cleanup rules say that a
+  sandbox denying writes under `.claude/` or `.git/` stops `git worktree
+  remove` partway. After the proof, the removal runs once through the
+  harness's sanctioned unsandboxed path; with no such path the worktree is
+  kept and the proven removal goes to the operator. Never `--force`.
+
+<!-- codeflow:release-impact patch -->
+- **Peers in qualification trials.** The repository's qualification runner
+  routes seats a trial subject opens in Herdr through checked launchers: the
+  trial environment and workspace, the same argument allowlist and isolation,
+  and the Codex hook-trust option only for Codex peers. Trust dialogs are
+  answered only for verified launches; other peers flag the trial invalid.
+
 ### Added
 
 <!-- codeflow:release-impact major -->
