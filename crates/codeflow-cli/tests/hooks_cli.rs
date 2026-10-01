@@ -1037,10 +1037,19 @@ fn shared_temp_scratch() -> (tempfile::TempDir, Vec<String>) {
     let canonical = std::fs::canonicalize(scratch.path()).unwrap();
     let canonical = canonical.to_str().unwrap().to_string();
     let mut spellings = vec![canonical.clone()];
-    if let Some(rest) = canonical.strip_prefix("/private/tmp/") {
-        spellings.push(format!("/tmp/{rest}"));
-    } else if let Some(rest) = canonical.strip_prefix("/tmp/") {
-        spellings.push(format!("/private/tmp/{rest}"));
+    let alias = if let Some(rest) = canonical.strip_prefix("/private/tmp/") {
+        Some(format!("/tmp/{rest}"))
+    } else {
+        canonical
+            .strip_prefix("/tmp/")
+            .map(|rest| format!("/private/tmp/{rest}"))
+    };
+    // Only a spelling that reaches the same directory is an alias: Linux has
+    // no `/private/tmp`, so there the canonical spelling is the only one.
+    if let Some(alias) = alias.filter(|alias| {
+        std::fs::canonicalize(alias).is_ok_and(|path| path.to_str() == Some(canonical.as_str()))
+    }) {
+        spellings.push(alias);
     }
     (scratch, spellings)
 }
