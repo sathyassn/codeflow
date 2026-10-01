@@ -26,7 +26,7 @@ publication date._
 > the detail.
 >
 > 1. On a planning branch, make the repairs in the "Breaking migrations" note
->    in the last Changed section (coverage scopes, test modes,
+>    of this section (coverage scopes, test modes,
 >    `security.dangerous_commands`, and what `codeflow validate --docs`
 >    reports), and merge them before updating.
 > 2. Install the 3.0.0 `codeflow` on `PATH`. The hooks run that binary, and
@@ -61,10 +61,10 @@ publication date._
 
 <!-- codeflow:release-impact patch -->
 - **Portal publication keeps committed public files' modes.** The docs portal
-  rewrote the committed files it preserves in `public/`, such as
-  `favicon.svg`, as owner-only (0600). In a fresh clone the first full test
-  gate then failed with "generation changed the candidate". Preserved files now
-  keep their mode.
+  rewrote the committed files in `public/`, such as `favicon.svg`, as
+  owner-only (0600). In a fresh clone the first full test gate then failed
+  with "generation changed the candidate". Committed files now keep their git
+  mode, and other files the portal preserves keep the mode they had.
 
 <!-- codeflow:release-impact patch -->
 - **Tracking authority transport checks.** Fetch, pull and remote update reject
