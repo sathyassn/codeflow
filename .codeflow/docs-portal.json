@@ -94,7 +94,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "8c5b91efdba58805719e425c802fcd8ff7adff3bea415bb1bb46b1af02a84efe"
+      "pristine_sha256": "2115d1ba684e41d820cf09c79f0ede3074be59c2672889d5952511a491681459"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -126,7 +126,7 @@
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "5bfc579aa88a5797861419d19d180b6c1fc9970a57318bb3d61c4ca3ad2a605f"
+      "pristine_sha256": "60925812836859609ab44d82b1c025992fed8fc6d755f5a72cceb75ce85048f6"
     },
     "src/components/PortalColumns.astro": {
       "ownership": "managed",
@@ -210,7 +210,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "6cd9c7cea82ac65874e0f1dc18589193d45dc35609664a8a687f4f9d1fd6758c"
+      "pristine_sha256": "f3679194696d9fbca00d0d9039b708f72d81e384213bec037ec1c1026d6750c8"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
@@ -246,7 +246,7 @@
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
-      "pristine_sha256": "1260843bdef478478c9cf5791571749724142eb9ef9c1cfd32a89c362489528d"
+      "pristine_sha256": "f0779d7c8cd35c104797c2cba7354e1aa3de0b8137bda83b1dc4dde5d3f82790"
     },
     "tests/fixtures/carrier-contract.json": {
       "ownership": "managed",
@@ -374,7 +374,7 @@
     },
     "tests/portal-fixture.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "dd3960e341d14073974c219b1020624903edeff9dc7b4c40f4d4b14cfc4a10c5"
+      "pristine_sha256": "d0c2d9b6570ee0c2cce20ea78bc377737a1796d889e6259166da85aa862d975b"
     },
     "tests/site-server.test.mjs": {
       "ownership": "managed",

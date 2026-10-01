@@ -11,7 +11,7 @@
   "exclude": ["docs/verification", "docs/plan"],
   "layers": [
     { "id": "orient", "label": "Orient", "description": "What CodeFlow is, what it does, how a repository adopts it, and the terms the guide uses.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/glossary.md"], "prefixes": ["docs/capabilities"] },
-    { "id": "guides", "label": "Guides", "description": "Task guides: reviewing work in a present session, handing a turn to a peer model, and fixing what doctor reports.", "paths": ["docs/present-guide.md", "docs/delegation.md", "docs/troubleshooting.md"] },
+    { "id": "guides", "label": "Guides", "description": "Task guides: how work moves from a request to main, an umbrella repository of several projects, reviewing work in a present session, handing a turn to a peer model, and fixing what doctor reports.", "paths": ["docs/delivery.md", "docs/workspace-mode.md", "docs/present-guide.md", "docs/delegation.md", "docs/troubleshooting.md"] },
     { "id": "system", "label": "System", "description": "How the binary is built, what enforces the rules, the boundaries each harness and surface runs under, and the decisions behind them.", "paths": ["docs/architecture.md", "docs/architecture/enforcement-planes.md", "docs/architecture/present.md", "docs/architecture/utility-presentation.md", "docs/harness-posture.md", "docs/decision-map.md"], "prefixes": ["docs/architecture"] },
     { "id": "reference", "label": "Reference", "description": "Operating CodeFlow: the command surface, the skills and policy it ships, model and harness upgrades, and the release runbook and checklist.", "paths": ["docs/cli.md", "docs/skills.md", "docs/policy-reference.md", "docs/model-upgrades.md", "docs/releasing.md", "docs/release-checklist.md"], "fallback": true},
     { "id": "project", "label": "Project", "description": "How to contribute, report a vulnerability and take part, and the license the code ships under.", "paths": ["docs/CONTRIBUTING.md", "docs/SECURITY.md", "docs/CODE_OF_CONDUCT.md", "docs/LICENSE.md"] }
@@ -31,6 +31,7 @@
   ],
   "page_classes": [
     { "source": "docs/glossary.md", "class": "pass-through", "reason": "no-relationship", "note": "A table of term definitions with links; no relationship between terms needs drawing." },
+    { "source": "docs/workspace-mode.md", "class": "illustrated" },
     { "source": "docs/skills.md", "class": "derived-lookup", "derive": "skill-catalog" },
     { "source": "docs/policy-reference.md", "class": "derived-lookup", "derive": "policy-reference" },
     { "source": "docs/CONTRIBUTING.md", "class": "pass-through", "reason": "governance" },
@@ -49,7 +50,6 @@
     { "declaration": "docs-portal/figures/adoption/architecture.json", "route": "orient/adoption", "panel": "architecture" },
     { "declaration": "docs-portal/figures/adoption/technical.json", "route": "orient/adoption", "panel": "technical" },
     { "declaration": "docs-portal/figures/adoption/howto-adopt.json", "route": "orient/adoption", "panel": "technical", "anchor": "adopt-a-new-or-existing-repository" },
-    { "declaration": "docs-portal/figures/adoption/howto-body.json", "route": "orient/adoption", "panel": "technical", "anchor": "a-body-of-work-the-integration-branch" },
     { "declaration": "docs-portal/figures/adoption/howto-daily.json", "route": "orient/adoption", "panel": "technical", "anchor": "the-daily-flow" },
     { "declaration": "docs-portal/figures/adoption/howto-install.json", "route": "orient/adoption", "panel": "technical", "anchor": "install-the-binary" },
     { "declaration": "docs-portal/figures/adoption/howto-tests.json", "route": "orient/adoption", "panel": "technical", "anchor": "configure-test-targets" },
@@ -61,6 +61,10 @@
     { "declaration": "docs-portal/figures/cap-015/architecture.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "architecture" },
     { "declaration": "docs-portal/figures/cap-015/technical.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "technical" },
     { "declaration": "docs-portal/figures/cap-015/howto-adopt.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "technical", "anchor": "adopt-and-build-the-portal" },
+    { "declaration": "docs-portal/figures/workspace-mode/layout.json", "route": "guides/workspace-mode" },
+    { "declaration": "docs-portal/figures/delivery/concept.json", "route": "guides/delivery", "panel": "concept" },
+    { "declaration": "docs-portal/figures/delivery/architecture.json", "route": "guides/delivery", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/delivery/technical.json", "route": "guides/delivery", "panel": "technical" },
     { "declaration": "docs-portal/figures/present-guide/concept.json", "route": "guides/present-guide", "panel": "concept" },
     { "declaration": "docs-portal/figures/present-guide/architecture.json", "route": "guides/present-guide", "panel": "architecture" },
     { "declaration": "docs-portal/figures/present-guide/technical.json", "route": "guides/present-guide", "panel": "technical" },

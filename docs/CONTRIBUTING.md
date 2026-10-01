@@ -30,8 +30,9 @@ the Linux artifact. Git for Windows supplies the shell environment used by the
 hook shims on native Windows. Cross-target compilation is useful early evidence,
 but the release checklist still requires native platform and installer canaries.
 Run a narrower command while iterating, but report the full gate in the PR.
-Measure coverage locally with the same `cargo llvm-cov` command CI uses; do
-not leave the numbers for CI to fill in. Write the PR Summary and Changes
+Measure coverage locally with the full gate's `rust-coverage` target, the one
+instrumented `cargo llvm-cov nextest` run; do not leave the numbers for CI to
+fill in. Write the PR Summary and Changes
 from the whole `base...HEAD` diff, not from the last commit or last review.
 
 The operating contract for this repo is [AGENTS.md](../AGENTS.md); the working

@@ -1,206 +1,390 @@
 # CodeFlow command line reference
 
-<!-- Reference layer. Every purpose line, flag and argument below is derived
-     from the binary's own `--help` text, with long purposes shortened and
-     arrows written as words; re-derive this page from `codeflow <cmd> --help`
-     when the surface changes. -->
+<!-- Reference layer. The command tables under Technical are generated from
+     the binary's clap definitions (crates/codeflow-cli/src/command_reference.rs);
+     the prose around them is written by hand. -->
 
 ## Concept
 
-**One binary and twenty-two subcommands, grouped by the job each one does.**
+**One binary, and every command in it does one of six jobs.**
 
-The jobs are the same six the capabilities page uses. Three commands are never
-typed by hand: the settings presets call `hook`, the git-hook shims call
-`git-hook`, and the scaffolded workflow runs `ci`. `codeflow --help` lists
-the same commands this page lists, and `codeflow <command> --help` prints the
-flags.
+- **Scaffold** puts CodeFlow into a repository, keeps its managed files
+  current, and creates the numbered records work is planned in: epics, specs,
+  tasks and architecture decision records (ADRs), with the shared id registry
+  that numbers them.
+- **Enforce** holds the git rules at each plane: the in-session guards, the
+  git hooks, the CI check, the policy file and remote branch protection.
+- **Verify** proves work before it lands: the test gate, record and document
+  validation, local landing, health checks and the durable-work lifecycle.
+- **Remember** tells a session where things stand and why: the session
+  digest, the status view, search over project memory and reports on the
+  process itself.
+- **Delegate** hands a turn to a peer model and resolves which models a duty
+  needs.
+- **Present** shows work to a reader: the documentation portal and the review
+  surface.
+
+You type most commands. Three are run for you by the wiring `init` installs:
+the settings presets call `hook`, the git hook shims call `git-hook`, and the
+CI workflow runs `ci`.
 
 ## Architecture
 
-Every subcommand is parsed in one place and handed to the library that owns
-the work: `init` and `update` run the scaffold directly, `present` hands off to
-the presentation runtime, and every other command goes through its own handler
-into the core library. Rows are grouped by the six jobs, then by the order
-`codeflow --help` prints them within each job. Purposes are derived from the binary's own short
-help, with the long ones shortened and arrows written as words. Nothing here is
-a wrapper around a second implementation: the hooks, CI, and the in-session
-guards all call the same functions through this surface.
+**One parser, one handler per command, one library underneath.**
 
-| Job | Subcommand | Purpose | When |
-|---|---|---|---|
-| Scaffold | `init` | Scaffold this project (idempotent, non-destructive, offline) | Once per repository, run from the intended project root |
-| Scaffold | `update` | Refresh managed scaffold files (3-way merge; never clobbers) | After upgrading the binary, per repository |
-| Scaffold | `epic` | Create an epic: allocate the next EPC-NNN and scaffold it from the template | Full tier, planning a body of work |
-| Scaffold | `spec` | Create a spec: allocate the next SPC-NNN and link its consuming work item | Full tier, when a change agreement needs freezing |
-| Scaffold | `task` | Create an epic-linked or reasoned standalone task | Full tier, planning a unit of work |
-| Scaffold | `estimate` | Check explicit forecast allocations and pinned evidence without writes | Only where the optional cf-estimate method was adopted |
-| Enforce | `hook` | Claude-layer hooks, wired by the settings presets | Never by hand: the settings presets invoke it |
-| Enforce | `git-hook` | Git client hook target, the `.codeflow/git-hooks/` shims exec this | Never by hand: the installed shims invoke it |
-| Enforce | `ci` | Verify a commit range + branch name against policy, the portable, binary-sourced CI check | In CI, from the scaffolded workflow |
-| Enforce | `policy` | Inspect `.codeflow/policy.json` | When you need a key's schema or the effective value and its source |
-| Enforce | `remote` | Remote provider operations (branch protection) | Once the repository has a remote to protect |
-| Verify | `test` | Run the test gate (configured targets or runtime stack detection) | Before push, in full. CI runs it too; pre-push runs the push set described under Verify |
-| Verify | `validate` | Validate record frontmatter; `--docs` adds the doc-graph integrity lint | Before push, and for a portal with `--portal` |
-| Verify | `integrate` | Land a branch into a target: flock(rebase to test to ff-merge) | Landing locally with no remote, or into an integration branch |
-| Verify | `doctor` | Health checks | After init or update, and when something is wired but not working |
-| Verify | `work` | Durable-work lifecycle checks | Before implementing a durable task |
-| Remember | `orient` | Print the session-start digest (pointers, not content) | At session start; the SessionStart hook runs it for you |
-| Remember | `status` | Generated status view: branch, worktrees, in-flight work, capabilities | When you need the current shape of the repository |
-| Remember | `recall` | Search project memory: ledger, session summaries, decision records, epics, capabilities | When you need why something was decided |
-| Delegate | `delegate` | Transport-neutral lifecycle for interactive delegate turns | From a host driving a peer harness turn |
-| Present | `portal` | Adopt or reconcile the opt-in documentation portal | Adopting or transferring the documentation portal |
-| Present | `present` | Review this session on the utility presentation surface (catalog JSON, Comment) | When a bounded review surface materially helps |
+`main.rs` parses every subcommand with clap and hands it to the code that owns
+the work: `init` and `update` call the scaffold directly, `present` goes to the
+presentation crate, and every other command goes through its handler in `cmd/`
+into the core library. The hooks, CI and the in-session guards call the same
+handlers you do, so no command has a second implementation.
+
+Three commands exist for that wiring.
+
+| Command | What it does | When it runs |
+|---|---|---|
+| `hook` | Runs the in-session guards and session hooks for a harness | Never by hand: the settings presets invoke it |
+| `git-hook` | Runs one git hook stage for the shims in `.codeflow/git-hooks/` | Never by hand: the installed shims invoke it |
+| `ci` | Checks a pull request's commits, branch name and body against policy | In CI, from the scaffolded workflow |
+
+The command tables under Technical are generated from the same clap
+definitions the binary parses, so they say what `codeflow <command> --help`
+says at this commit. A test in `crates/codeflow-cli/src/command_reference.rs`
+regenerates them and fails when this page differs. After changing a command,
+run `CODEFLOW_REGENERATE_LOOKUPS=1 cargo test -p codeflow-cli derived_lookup`
+and commit the result. The one hand-written input is the job each subcommand
+belongs to; a new subcommand fails that test until it is given one.
 
 ## Technical
 
-Every argument, flag and default below is derived from the binary's own
-`--help` output at this head, shortened where the help text runs long. A
-required argument is written in angle brackets, an optional one in square
-brackets.
+Look a command up by its job below. The notes after the tables cover what help
+text cannot say: exit contracts, and how the gates and the landing path
+behave.
+
+<!-- codeflow-derived command-reference begin: generated by codeflow from the binary; do not edit between the markers. Regenerate with CODEFLOW_REGENERATE_LOOKUPS=1 cargo test -p codeflow-cli derived_lookup -->
+
+`codeflow --help` lists twenty-six subcommands. The tables below group them by job and hold each command's purpose and every argument and flag it accepts, in the words of the binary's own help. A required argument is written in angle brackets, an optional one in square brackets, and `...` means it repeats.
 
 ### Scaffold
 
-| Command | Arguments and flags | Notes |
+| Command | Argument or flag | What it does |
 |---|---|---|
-| `codeflow init` | `--minimal`, `--standard`, `--full`, `--yes`, `--force` | `--minimal` is the discipline floor, `--standard` the default tier, `--full` adds project-management. `--yes` takes sane defaults at standard tier. `--force` overwrites existing files and is never the default |
-| `codeflow update` | `--diff <FILE>`, `--force` | `--diff` writes the report plus unified diffs of applied changes to a file; `--force` replaces user-modified managed files instead of merging |
-| `codeflow epic new <TITLE>` | no flags | Allocates the next `EPC-NNN` and scaffolds the epic from the template |
-| `codeflow spec new <TITLE> --for <EPC-NNN\|TSK-NNN>` | `--for` is required | Allocates the next `SPC-NNN`, scaffolds it, and links the consuming epic or task |
-| `codeflow task new <TITLE>` | `-e`/`--epic <EPC-NNN>`, `--standalone-reason <REASON>`, `--into <BRANCH>` | `--epic` and `--standalone-reason` are mutually exclusive, and a durable task needs one of them. `--into` names the existing local or remote-tracking non-task branch this task will integrate into |
-
-`codeflow estimate check` serves the optional cf-estimate method defined by
-specification SPC-007: an active project-specific offer, confirmed adoption or
-a respected decline, evidence-anchored grades, full-delivery scenarios and
-resource-feasible allocations. Standard and full skills are managed; profiles,
-forecasts and outcomes stay project-owned and link existing authority. The
-checker is read-only. Implementation readiness and predictive usefulness remain
-separate, and nothing here establishes calibrated delivery predictions.
-
-`codeflow update` exits 2 when the scaffold report or the adopted portal report
-contains conflicts, so a caller can distinguish a clean refresh from one that
-left `.new` sidecars behind.
+| `codeflow init` | | Scaffold this project (idempotent, non-destructive, offline) |
+| | `--minimal` | The discipline floor: full git-discipline enforcement (all hooks + CI + in-session guards + armed policy) and a lean agent contract, for any repo. |
+| | `--standard` | A code project (default): everything in minimal, plus the develop-loop skills, reviewer agents, the traceability spine (product/capabilities/architecture/ADRs), and harness integration. |
+| | `--full` | A program: everything in standard, plus project-management (epics, tasks, specs). |
+| | `--yes` | No prompts; sane defaults (standard tier). |
+| | `--force` | Overwrite existing files (never the default). |
+| | `--workspace` | Set up an umbrella workspace: put the root checkout on its root branch (created from the default branch if missing), write `git.root_branch`, and ignore every nested git repository. Refuses over uncommitted changes. |
+| `codeflow update` | | Refresh managed scaffold files (3-way merge; never clobbers) |
+| | `--diff <FILE>` | Write the report plus unified diffs of applied changes to a file. |
+| | `--force` | Replace user-modified managed files instead of merging. |
+| `codeflow epic new <TITLE>` | | Allocate the next `EPC-NNN` and scaffold the epic from the template |
+| | `--integration` | Also cut `integration/EPC-NNN-<slug>` from main (or master) and push it to origin when that remote exists. |
+| | `<TITLE>` | Epic title. |
+| `codeflow epic status <ID> <STATUS>` | | Record an epic terminal act, judged by the epic close rules |
+| | `<ID>` | Epic id. |
+| | `<STATUS>` | The terminal act to record. One of `complete`, `cancelled`, `archived`. |
+| | `--reason <REASON>` | Blocker, cancellation or reopen reason. |
+| | `--owner <OWNER>` | Who owns the blocker. |
+| | `--revisit <REVISIT>` | The event that revisits the blocker. |
+| | `--scope <SCOPE>` | Where a cancelled record's scope went. |
+| | `--acceptance <FILE>` | A file holding the acceptance block (the YAML between the fences) to add to the Closeout on completion. |
+| `codeflow spec new <TITLE>` | | Allocate the next `SPC-NNN`, scaffold it, and link the consuming work item |
+| | `--for <EPC-NNN\|TSK-NNN>...` | Epic or task that consumes this specification; repeat the flag (or separate ids with commas) for several consumers. Required. |
+| | `<TITLE>` | Specification title. |
+| `codeflow spec status <ID> <STATUS>` | | Approve a draft spec, or supersede an approved one by a new revision |
+| | `<ID>` | Spec id. |
+| | `<STATUS>` | The new status. One of `approved`, `superseded`. |
+| | `--by <SPC-NNN>` | The new revision that supersedes this spec. |
+| `codeflow task new [TITLE]` | | Allocate the next independent `TSK-NNN` and scaffold it |
+| | `-e, --epic <EPC-NNN>` | Parent epic id. Mutually exclusive with --standalone-reason. |
+| | `--standalone-reason <REASON>` | Why this durable task does not belong to an epic; may run on its task branch. |
+| | `--into <BRANCH>` | Existing local or remote-tracking non-task branch this task will integrate into. |
+| | `--follow-up-of <TSK-NNN>` | File a follow-up of this task: records `follow_up_of`, inherits its epic and target, and must run on a plan/ branch of that target. |
+| | `--resume <TSK-NNN>` | Write the record of a reservation whose write was interrupted. |
+| | `[TITLE]` | Task title. |
+| `codeflow task status <ID> <STATUS>` | | Change a task's status through the transition rules |
+| | `<ID>` | Task id. |
+| | `<STATUS>` | The new status. One of `todo`, `blocked`, `complete`, `cancelled`. |
+| | `--reason <REASON>` | Blocker, cancellation or reopen reason. |
+| | `--owner <OWNER>` | Who owns the blocker. |
+| | `--revisit <REVISIT>` | The event that revisits the blocker. |
+| | `--scope <SCOPE>` | Where a cancelled record's scope went. |
+| | `--acceptance <FILE>` | A file holding the acceptance block (the YAML between the fences) to add to the Closeout on completion. |
+| `codeflow adr new <TITLE>` | | Number the next ADR and write it from the template as `proposed` |
+| | `<TITLE>` | Decision title. |
+| `codeflow ids seed` | | Register every id on every ref and in retained history, once (maintainer) |
+| | `--map <FILE>` | Map copies of one record that provenance cannot decide. |
+| `codeflow ids backfill` | | Copy each registered uid into the records of the current line |
+| `codeflow ids sync` | | Publish pending reservations made offline |
+| `codeflow ids admit <RECORD>` | | Reserve the number of a fork or hand-written record for its uid (maintainer) |
+| | `<RECORD>` | The record: a path in the working tree, or `<rev>:<path>`. |
+| `codeflow ids retarget <ID>` | | Renumber an unmerged record whose number another record holds |
+| | `<ID>` | The record's current id. |
+| `codeflow ids restore <IDS>...` | | Return registry files to the bytes of their first addition (maintainer) |
+| | `<IDS>...` | The ids to restore. |
+| `codeflow ids check` | | Check the registry and reconcile it with every ref (read only) |
+| | `--registry <REF>` | Registry ref to read (default: the fetched authority copy, else local). |
+| | `--base <REF>` | With --head: also apply the merge rule and uniqueness scan to base...head. |
+| | `--head <REF>` | Head of the range to judge. |
+| `codeflow estimate check <FORECAST_PATH>` | | Check explicit allocations and pinned evidence without scheduling or writes |
+| | `<FORECAST_PATH>` | Forecast JSON file (relative to the current directory or absolute). |
+| | `--json` | Emit the versioned JSON report. |
 
 ### Enforce
 
-| Command | Arguments and flags | Notes |
+| Command | Argument or flag | What it does |
 |---|---|---|
-| `codeflow hook <NAME>` | `--run-id <ID>`, `--result <FILE>`, `--state-dir <DIR>` | `<NAME>` is one of `git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`. The payload is read from stdin. The three flags exist only for `delegate-turn`; the other four names ignore them. `delegate-turn` requires `--run-id` and exactly one of `--state-dir`, which selects the lifecycle-directory mode, or `--result`, which selects the result-file mode |
-| `codeflow git-hook <STAGE> [ARGS]...` | `<STAGE>` is one of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push` | `[ARGS]` are the arguments git passes through, for example the commit-msg file path or the pre-push remote name and URL |
-| `codeflow ci` | `--base <REF>`, `--head <REF>`, `--branch <NAME>`, `--pr-body <TEXT>`, `--pr-body-file <FILE>` | Base and head are auto-detected from the CI environment when omitted; branch defaults to the CI-provided or current HEAD branch. `--pr-body` and `--pr-body-file` scan for AI attribution, emoji, and the required section structure |
-| `codeflow policy explain` | no flags | Prints every key's type, default, valid values, and purpose from the schema registry |
-| `codeflow policy show` | no flags | Prints each key's current value, its source (project file or built-in default), and any invalid values |
-| `codeflow remote protect` | `--provider <PROVIDER>` (default `github`), `--dry-run` | Applies the policy's `protected_branches` to the provider: require a PR and green CI, block force-push and deletion, with a legible report of anything the plan tier cannot apply. Only `github` has an adapter (through `gh api`); another provider prints the manual checklist. `--dry-run` prints the intended rules without applying anything |
+| `codeflow hook <NAME>` | | Claude-layer hooks, wired by the settings presets (charter §3.3) |
+| | `--contract <CONTRACT>` | Required installed hook contract. Older binaries reject this flag. |
+| | `<NAME>` | Hook to run (reads the Claude Code hook payload from stdin). One of `git-guard`, `exec-guard`, `edit-guard`, `session-orient`, `prompt-reminder`, `session-summary`, `delegate-turn`. |
+| | `--run-id <ID>` | Unique task id for `delegate-turn` (1-64 safe ASCII characters). |
+| | `--result <FILE>` | Absolute owner-only result path for legacy one-shot `delegate-turn`. |
+| | `--state-dir <DIR>` | Absolute owner-only lifecycle directory for schema-v2 `delegate-turn`. |
+| `codeflow git-hook <STAGE> [ARGS]...` | | Git client hook target, the .codeflow/git-hooks/ shims exec this |
+| | `<STAGE>` | Hook stage (receives git's standard hook arguments). One of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push`, `capabilities`. |
+| | `[ARGS]...` | Arguments passed through by git (e.g. the commit-msg file path, the pre-push remote name and URL). |
+| `codeflow ci` | | Verify a commit range + branch name against policy, the portable, binary-sourced CI check (auto-detects the CI platform's range) |
+| | `--base <REF>` | Base ref of the range (exclusive). Auto-detected from CI env when omitted. |
+| | `--head <REF>` | Head ref of the range (inclusive). Auto-detected from CI env when omitted. |
+| | `--branch <NAME>` | Branch name to check against the naming policy (default: the CI-provided or current HEAD branch). |
+| | `--pr-body <TEXT>` | PR/MR body text to scan for AI attribution, emoji, policy characters (ADR-0067), and the required section structure. |
+| | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
+| | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
+| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, else the branch an explicit `--base` names). A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
+| `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
+| `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
+| `codeflow remote protect` | | Apply protected-branch policy to the remote provider |
+| | `--provider <PROVIDER>` | Remote provider (only `github` has an adapter; others print the manual checklist). Default `github`. |
+| | `--dry-run` | Print the intended rules without applying anything. |
 
-Each hook name under `codeflow hook` carries its own exit contract, and exit 0
+### Verify
+
+| Command | Argument or flag | What it does |
+|---|---|---|
+| `codeflow test` | | Run the test gate (configured targets or runtime stack detection) |
+| | `--mode <MODE>` | Test mode: full (default), quick, or essential. `quick` is an alias for `essential`, the lighter mode shipped test-configs define. One of `full`, `quick`, `essential`. Default `full`. |
+| | `--strict` | Treat "nothing to run" as a failure (exit non-zero) instead of a loud no-op. For scripted/unattended callers, CI, the pipeline verify gate, where a run that executed zero tests must NOT read as green. The default (no `--strict`) keeps the loud-no-op-exit-0 behavior so the bootstrap/early-setup path of a brand-new repo without tests is not broken. |
+| | `--since <SINCE>` | Compare the entire candidate delta with a recorded green base. An unproven base conservatively runs every target. |
+| | `--all` | Run every target, including the binary determinism check at epic close. |
+| `codeflow test setup` | | Configure `.codeflow/test-config.json` using root detection, an embedded template, or an appended target. Safe auto-detection is the default |
+| | `--list-templates` | List the test-config templates embedded in this binary. |
+| | `--template <NAME>` | Write an embedded test-config template by name. |
+| | `--replace` | Explicitly replace an existing config when applying --template. |
+| | `--add-target` | Interactively append one target to the existing config. |
+| `codeflow validate [PATH]` | | Validate record frontmatter; --docs adds the doc-graph integrity lint |
+| | `[PATH]` | File or directory to validate (default: project-management/). |
+| | `--docs` | Also run the doc-graph referential-integrity lint. |
+| | `--portal <DIR>` | Verify a portal evidence manifest without executing project code. |
+| | `--since <REF>` | Also judge every record changed since REF (a commit or branch) against the lifecycle transition rules, as CI judges a pull request. |
+| `codeflow integrate <BRANCH>` | | Land a branch into a target: flock(rebase to test to ff-merge) |
+| | `<BRANCH>` | Branch to integrate. |
+| | `--into <INTO>` | Target branch to land on. Default `main`. |
+| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
+| | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
+| | `--list` | List available check names. |
+| `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
+| | `--epic <EPC-NNN>` | Only tasks of this epic. |
+| | `--json` | Print the same facts as JSON. |
+| `codeflow work claim <TASK_ID>` | | Fetch, check the task is ready and unclaimed on its target tip, then create and push `task/<id>-<slug>` from that tip. The pushed branch is an advisory mark others can see |
+| | `<TASK_ID>` | Stable task id. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. |
+| `codeflow work start <TASK_ID>` | | Verify that a durable task was planned and anchored before implementation |
+| | `<TASK_ID>` | Stable task id. |
+| | `--into <REF>` | Non-task branch/ref this task will merge into. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
+
+### Remember
+
+| Command | Argument or flag | What it does |
+|---|---|---|
+| `codeflow orient` | | Print the session-start digest (pointers, not content) |
+| `codeflow status` | | Generated status view: branch, worktrees, in-flight work, capabilities |
+| | `--capabilities` | Show the full capability table (default: counts by status). |
+| | `--delivery` | Show the capability-delivery rollup: each capability's epics with their open/total task counts and next actionable tasks. |
+| `codeflow recall <QUERY>` | | Search project memory: ledger, session summaries, ADRs, epics, capabilities |
+| | `--all` | Search every repo in the user registry, not just the current one. |
+| | `--rebuild` | Drop the index for the searched repos and re-sync (the index is a rebuildable cache). |
+| | `--limit <LIMIT>` | Maximum number of results (default 20, or `[recall].limit` from ~/.codeflow/config.toml). |
+| | `<QUERY>` | The query. |
+| `codeflow report ceremony` | | Pull requests per logical change, review rounds per pull request (asked of the host; `unknown` when it cannot answer) and refusals hit by this clone's hooks and guards, over a window |
+| | `--prs <FIRST..LAST>` | Pull request numbers, first and last included: `568..644`. |
+| | `--since <DATE>` | Pull requests merged on this UTC date or later (`YYYY-MM-DD`). |
+| | `--until <DATE>` | With `--since`: merged on this UTC date or earlier. |
+
+### Delegate
+
+| Command | Argument or flag | What it does |
+|---|---|---|
+| `codeflow delegate init` | | Create an owner-only run directory and task hook settings |
+| | `--run-id <ID>` | Unique run identifier. Required. |
+| | `--state-dir <DIR>` | Absolute path for the owner-only protocol state. Required. |
+| | `--model <SELECTOR>` | The model selector the delegate CLI is launched with; recorded as requested provenance (`unknown` when omitted). |
+| | `--effort <LEVEL>` | The effort the delegate CLI is launched with; recorded as requested provenance (`unknown` when omitted). |
+| `codeflow delegate arm` | | Arm one prompt for a delegate turn |
+| | `--run-id <ID>` | Unique run identifier. Required. |
+| | `--state-dir <DIR>` | Absolute path for the owner-only protocol state. Required. |
+| | `--turn-id <ID>` | Unique turn identifier within the run. Required. |
+| | `--prompt-file <FILE>` | File containing the exact prompt bytes that the host will deliver. Required. |
+| `codeflow delegate wait` | | Wait for a durable lifecycle state |
+| | `--run-id <ID>` | Unique run identifier. Required. |
+| | `--state-dir <DIR>` | Absolute path for the owner-only protocol state. Required. |
+| | `--until <UNTIL>` | State to observe. Required. One of `ready`, `accepted`, `terminal`. |
+| | `--turn-id <ID>` | Turn identifier; required for accepted and terminal waits. |
+| | `--timeout-seconds <N>` | Bounded wait duration in seconds. Required. |
+| `codeflow models resolve` | | Resolve every participant and obligation without launching or writing |
+| | `--duty <DUTY>` | Catalog duty whose participants and obligations must be resolved. Required. |
+| | `--host <HOST>` | Supported host harness id, such as claude-code or codex-app. Required. |
+| | `--author <AUTHOR>` | One of `claude`, `codex`, `grok`, `none`. Default `none`. |
+| | `--exclude <EXCLUDE>...` | Fresh native exclusion: `selector:<id>` excludes the whole version across harnesses; `bucket:<id>` excludes its usage bucket (repeatable). |
+| | `--observed <OBSERVED>...` | Fresh identity canary observation: `<pinned-id>=<observed-id>`. |
+| | `--trigger <TRIGGER>...` | Catalog trigger fact to apply to this resolution (repeatable). |
+| | `--task <TASK>` | Canonical task id for this resolution; required with --override. |
+| | `--override <OVERRIDE_ID>` | Task id of the anchored `OPERATOR_OVERRIDE`; must equal --task. |
+| | `--route <ROUTE>` | Exact override invocation route: `<seat-or-line>@<harness>`. |
+| | `--effort <EFFORT>` | Exact override invocation effort. |
+| | `--json` | Print the resolution as JSON; input errors go to stderr with exit 2. |
+
+### Present
+
+| Command | Argument or flag | What it does |
+|---|---|---|
+| `codeflow portal setup` | | Adopt or reconcile the documentation portal starter |
+| | `--path <DIR>` | Repository-relative portal workspace directory. Required. |
+| `codeflow portal transfer` | | Take project ownership, preserving runtime files and intentional deletions |
+| | `--confirm` | Confirm responsibility for future runtime reconciliation. Required. |
+| `codeflow present open <DOCUMENT>` | | Open a validated presentation document in an isolated browser profile |
+| | `--no-launch` | Start the service but do not launch a browser window. |
+| `codeflow present reply <SESSION_ID> <EVENT_ID> <TEXT>` | | Reply to a review, note or answer in the thread rail |
+| | `--note <NOTE>` |  |
+| `codeflow present diff <SESSION_ID>` | | Compare blocks and carried feedback between revisions |
+| | `--from <FROM>` | Required. |
+| | `--to <TO>` | Required. |
+| `codeflow present check [SESSION_ID]` | | Check framing, anchors and forms without a browser |
+| | `--file <FILE>` |  |
+| | `--revision <REVISION>` |  |
+| `codeflow present list` | | List presentation sessions for this project |
+| `codeflow present show <SESSION_ID>` | | Reopen an active presentation session |
+| | `--no-launch` | Print the session endpoint and profile without launching. |
+| `codeflow present update <SESSION_ID> <DOCUMENT>` | | Append a validated immutable revision to an active session |
+| | `--expected-revision <N>` | Apply the update only while revision N is current; otherwise exit 8 and write nothing. |
+| `codeflow present history <SESSION_ID>` | | Print the append-only feedback history as JSON |
+| `codeflow present feedback <SESSION_ID>` | | Deliver pending events as JSON lines: review envelopes (v1) or typed review and answer events (v2) |
+| | `--follow` | Continue until the session closes. |
+| | `--wait` | Wait until an event is pending, print every pending one and exit 0; exit 6 on timeout, 7 when the session closes with none pending. |
+| | `--timeout <S>` | Stop waiting after S seconds (1 to 86400). |
+| | `--format <FORMAT>` | v1: review envelopes only, as 3.0.0 printed them; v2: typed events. One of `v1`, `v2`. Default `v1`. |
+| `codeflow present responses list <SESSION_ID>` | | List events with their status; filters combine with AND |
+| | `--revision <N>` |  |
+| | `--form <BLOCK_ID>` | A form or v2 decision block id. |
+| | `--status <STATUS>` | One of `pending`, `delivered`, `acknowledged`. |
+| | `--kind <KIND>` | One of `review`, `answer`, `amendment`, `reopen`, `tombstone`. |
+| `codeflow present ack <SESSION_ID> <EVENT_ID>` | | Acknowledge a delivered event; acknowledging again changes nothing |
+| `codeflow present resolve <SESSION_ID> <EVENT_ID>` | | Mark one delivered feedback event addressed or dismissed |
+| | `--event-version <EVENT_VERSION>` | Current event version printed by the review surface/history. Required. |
+| | `--status <STATUS>` | Required. One of `addressed`, `dismissed`. |
+| `codeflow present close <SESSION_ID>` | | Close a presentation session. Repeating close is safe |
+| `codeflow present export <SESSION_ID>` | | Export a deterministic self-contained read-only HTML artifact |
+| | `--out <FILE>` | Required. |
+| | `--theme <THEME>` | One of `graphite`, `slate`, `sage`, `editorial`, `instrument`, `technical`, `ink`. Default `editorial`. |
+| | `--mode <MODE>` | One of `system`, `light`, `dark`. Default `system`. |
+| | `--with-notes` | Include the private conversation as a read-only appendix. |
+| `codeflow present clear [SESSION_ID]` | | Remove eligible closed session state |
+| | `--older-than <OLDER_THAN>` | Default `30d`. |
+| | `--dry-run` |  |
+
+<!-- codeflow-derived command-reference end -->
+
+### Scaffold notes
+
+`codeflow update` exits 2 when the scaffold report or the adopted portal
+report contains conflicts, so a caller can tell a clean refresh from one that
+left `.new` sidecars behind.
+
+`codeflow estimate check` serves the optional cf-estimate method defined by
+specification SPC-007. The checker is read-only: it checks allocations and
+pinned evidence, and it makes no calibrated delivery prediction. Profiles,
+forecasts and outcomes stay project-owned.
+
+### Enforce notes
+
+Each hook name under `codeflow hook` has its own exit contract, and exit 0
 does not by itself mean enforcement succeeded. `git-guard` exits 0 to allow the
 tool call and 2 to make the harness block it. `exec-guard` exits 0 to allow,
 including when it only warns, and 2 to block. Both exit 0 on a payload they
 cannot read, after printing a warning to stderr, so an unrecognized payload
-looks the same to the harness as an allowed call. `session-orient` prints the
-digest and always exits 0; `session-summary` always exits 0 as well, warning on
-stderr instead, because a failed summary must never fail the session. Read
-stderr, not the exit code, to tell an advisory failure from a clean pass.
-`delegate-turn` is the exception: it exits 1 when `--run-id` is missing and 2
-when a lifecycle-directory payload cannot be read. `codeflow ci` proceeds when only
-warnings were raised and reports the count.
+looks the same to the harness as an allowed call. `session-orient`,
+`prompt-reminder` and `session-summary` always exit 0 and warn on stderr
+instead, because a failed digest or summary must never fail the session;
+`prompt-reminder` is the one name meant for manual use. Read stderr, not the
+exit code, to tell an advisory failure from a clean pass. `delegate-turn` exits
+1 when `--run-id` is missing and 2 when a lifecycle-directory payload cannot
+be read.
 
-### Verify
+`codeflow ci` proceeds when only warnings were raised and reports the count.
+`codeflow remote protect` has an adapter only for GitHub, through `gh api`;
+another provider prints the manual checklist.
 
-| Command | Arguments and flags | Notes |
-|---|---|---|
-| `codeflow test` | `--mode <full\|quick\|essential>` (default `full`), `--strict` | `quick` is the push set; a manual run aliases it to `essential`, the lighter mode, when no target defines it. With no stack detected the run is a loud no-op with exit 0; `--strict` makes that no-op exit non-zero for scripted and unattended callers |
-| pre-push test gate | not a command | The `pre-push` hook runs the push set (the targets with a `quick` mode) plus `codeflow validate --docs` and `codeflow ci` on the pushed range, blocking by default under the `test_gate_on_push` policy key; this repository sets the key to `block`. It blocks on what it can see and names what it left to CI (an unresolved range, a sibling ref, a dirty, sparse or submodule-incomplete checkout). It is fast feedback; the test suite belongs to the full gate |
-| `codeflow test setup` | `--list-templates`, `--template <NAME>`, `--replace`, `--add-target` | The three actions are mutually exclusive. `--list-templates` lists the templates embedded in this binary, `--template` writes one by name, `--add-target` appends one target interactively. `--replace` requires `--template` and explicitly replaces an existing config. With no flag, safe root-only auto-detection runs |
-| `codeflow validate [PATH]` | `--docs`, `--portal <DIR>` | `PATH` defaults to `project-management/`. `--docs` adds the doc-graph referential-integrity lint. `--portal` verifies a portal evidence manifest without executing project code and conflicts with `PATH`, so pass one or the other |
-| `codeflow integrate <BRANCH>` | `--into <INTO>` (default `main`) | Rebase, test, then fast-forward, under a flock and a gate-context token; details below |
-| `codeflow doctor` | `--check <CHECK>`, `--list` | `--list` prints the available check names; `--check` runs a single named check |
-| `codeflow work start <TASK_ID>` | `--into <REF>` | Verifies that a durable task was planned and anchored before implementation. `--into` names the non-task branch or ref this task will merge into |
-| `codeflow estimate check <FORECAST_PATH>` | `--json` | `<FORECAST_PATH>` is a forecast JSON file, relative to the current directory or absolute. `--json` emits the versioned JSON report |
+### Verify notes
 
-`codeflow test` runs against configured targets or runtime stack detection.
-With a stack it is a real gate, re-run in CI. File and aggregate coverage
-thresholds all contribute to the verdict; `changed_files` rules are rejected
-until an explicit comparison base is available (architecture decision record
-ADR-0021). Captured stdout and stderr are bounded and report truncation.
-Detection in `test setup` is root-only, monorepos declare package `cwd`
-targets explicitly, populated or malformed configs are never replaced
-automatically, and a malformed configured pre-push gate is a violation rather
-than a skip.
+`codeflow test` runs the configured targets, or the tests of a detected stack,
+and CI runs it again. With no stack detected the run is a loud no-op that
+exits 0, and `--strict` makes it exit non-zero for scripted callers. File and
+aggregate coverage thresholds all count toward the verdict; `changed_files`
+rules are rejected until an explicit comparison base exists (ADR-0021).
+Captured output is bounded and reports truncation. `test setup` detects only
+at the repository root, monorepos declare package `cwd` targets themselves,
+and a populated or malformed config is never replaced automatically.
 
-One full gate runs at a time on a machine (a second refuses, naming the
-holder), a gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
+One full gate runs at a time on a machine: a second refuses and names the
+holder. A gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
 worktree, and each target prints a start line on stderr as it begins. A
 killed gate never lets a second one run beside its target: on Unix the lock
-stays held until the target's process group exits, and on Windows the
-target's job object ends its process tree with the gate. If Windows cannot
-put a suspended target in that job, it ends the target and reports a failed
-test before the target command runs.
+is held until the target's process group exits, and on Windows the target's
+job object ends its process tree with the gate.
 
-The pre-push range is bound to what is pushed. An existing protected or
-`integration/` branch fast-forward starts at its advertised tip. Branches with
-a declared target use the merge base with its advertised tip, reading the
-target from the task record at the pushed commit; the hook names that target.
-Line rewrites, undeclared branches and unavailable targets retain the
-advertised-history fallback. An advertised target missing locally is noted.
+The `pre-push` hook runs the push set (the targets with a `quick` mode), then
+`codeflow validate --docs` and `codeflow ci` over the pushed range. It blocks
+under the `git.test_gate_on_push` policy key, which this repository sets to
+`block`. The range is bound to what is pushed: an existing protected or
+`integration/` branch starts at its advertised tip, and a branch with a
+declared target starts at the merge base with that target's advertised tip,
+read from the task record. It names what it left to CI, such as an unresolved
+range or a dirty checkout.
 
-`codeflow integrate` is the sanctioned local landing path for protected
-branches. It rebases the branch onto the target, runs the test gate, then
-advances the target with `git merge --ff-only`, a linear fast-forward that adds
-no merge commit; the target ref moves only when every stage succeeds. The
-sequence runs under a gate-context token the git hooks and git-guard verify, so
-the protected ref advances only through integrate or a human-merged PR, and a
-raw `git merge` or manual ref move stays blocked. A human keeps the local
-override (`CODEFLOW_HUMAN_OVERRIDE=1`), which git-guard never honors for an
-agent. After landing, clean linked worktrees that have the target checked out
-are reset to the tested tip; dirty worktrees and a failed checkout restoration
-are reported as partial-success warnings.
+`codeflow integrate` is the local landing path for protected branches. It
+rebases the branch onto the target, runs the test gate, then advances the
+target with `git merge --ff-only`; the target moves only when every stage
+passes. It runs under a gate-context token that the git hooks and git-guard
+verify, so a raw `git merge` or a manual ref move onto a protected branch
+stays blocked. After landing, clean linked worktrees that have the target
+checked out are reset to the tested tip, and a dirty one is reported.
 
-### Remember
+### Remember notes
 
-| Command | Arguments and flags | Notes |
-|---|---|---|
-| `codeflow orient` | no flags | Prints the session-start digest to stdout: at most 30 lines of pointers, not content, covering the product one-liner, branch and worktree state, work and capability counts, recent decision record (ADR) titles, gate status and paths to read more |
-| `codeflow status` | `--capabilities`, `--delivery` | Default output is counts by status; `--capabilities` shows the full capability table; `--delivery` shows each capability's epics with their open and total task counts and next actionable tasks |
-| `codeflow recall <QUERY>` | `--all`, `--rebuild`, `--limit <LIMIT>` | Searches ledger events, session summaries, ADRs, epics, tasks, frozen specs and capabilities through bundled SQLite full-text search (FTS5), disclosing coverage gaps. `--all` searches every repo in the user registry, `~/.codeflow/registry.json`, a locked registry updated on every command run and read lazily at query time, not a daemon. `--rebuild` drops the index for the searched repos and re-syncs. `--limit` defaults to 20, or `[recall].limit` from `~/.codeflow/config.toml` |
+`codeflow status` also prints a read-only cleanup inventory of linked
+worktrees and unattached local branches. It is local git evidence and never
+stands in for a check that the owner is done (ADR-0044). `codeflow recall`
+searches through bundled SQLite full-text search (FTS5) and names the sources
+it could not cover. `--all` reads the user registry at
+`~/.codeflow/registry.json`, which most commands update as they run; there is no
+daemon.
 
-`codeflow status` also emits a read-only cleanup inventory for linked
-worktrees and unattached local branches. Against the locally known target it
-tells clean ancestry or patch-equivalent resources from dirty and unproven
-work; it performs no mutation and never substitutes for an active-owner check
-(ADR-0044). The `session-summary` SessionEnd hook appends a session record to
-the ledger, which is recall's zero-ceremony corpus. Recall's source discovery
-skips directory symlinks and obeys depth and count budgets; reversible path
-encoding supplies index identity, while lossy text is display only.
+### Delegate notes
 
-### Delegate
+`codeflow delegate wait` has the exit contract a host polls: 0 on the
+observed state, 10 on a failed terminal, 11 on a poisoned, unsafe or invalid
+run, 124 on timeout and 130 when interrupted. It has no default timeout, so
+`--timeout-seconds` is always passed. `delegate init` and `delegate arm` exit
+0 or 1.
 
-| Command | Arguments and flags | Notes |
-|---|---|---|
-| `codeflow delegate init` | `--run-id <ID>` (required), `--state-dir <DIR>` (required) | Creates the owner-only run directory and the task hook settings. `--state-dir` must be an absolute path |
-| `codeflow delegate arm` | `--run-id <ID>` (required), `--state-dir <DIR>` (required), `--turn-id <ID>` (required), `--prompt-file <FILE>` (required) | `--prompt-file` holds the exact prompt bytes the host will deliver |
-| `codeflow delegate wait` | `--run-id <ID>` (required), `--state-dir <DIR>` (required), `--until <ready\|accepted\|terminal>` (required), `--timeout-seconds <N>` (required), `--turn-id <ID>` | There is no default timeout, so `--timeout-seconds` is always passed. `--turn-id` is required for `accepted` and `terminal` waits and ignored for `ready` |
+### Present notes
 
-`codeflow delegate wait` has the stable exit contract the host polls: 0 on the
-observed state, 10 on a failed terminal, 11 on a poisoned, unsafe, or invalid
-run, 124 on timeout, and 130 when interrupted. `delegate init` and
-`delegate arm` exit 0 or 1.
-
-### Present
-
-| Command | Arguments and flags | Notes |
-|---|---|---|
-| `codeflow portal setup` | `--path <DIR>` (required) | The repository-relative portal workspace directory |
-| `codeflow portal transfer` | `--confirm` (required) | Confirms responsibility for future runtime reconciliation |
-| `codeflow present open <DOCUMENT>` | `--no-launch` | `--no-launch` starts the service but does not launch a browser window |
-| `codeflow present list` | no flags | Lists presentation sessions for this project |
-| `codeflow present show <SESSION_ID>` | `--no-launch` | `--no-launch` prints the session endpoint and profile without launching |
-| `codeflow present update <SESSION_ID> <DOCUMENT>` | no flags | Appends a validated immutable revision to an active session |
-| `codeflow present history <SESSION_ID>` | no flags | Prints the append-only feedback history as JSON |
-| `codeflow present feedback <SESSION_ID>` | `--follow` | Delivers pending review envelopes as JSON lines. `--follow` continues until the session closes |
-| `codeflow present resolve <SESSION_ID> <EVENT_ID>` | `--event-version <EVENT_VERSION>` (required), `--status <addressed\|dismissed>` (required) | Marks one delivered feedback event addressed or dismissed. `--event-version` is the current event version printed by the review surface or by `history` |
-| `codeflow present close <SESSION_ID>` | no flags | Repeating close is safe |
-| `codeflow present export <SESSION_ID>` | `--out <FILE>` (required), `--theme <graphite\|slate\|sage>` (default `editorial`, which resolves to Slate), `--mode <system\|light\|dark>` (default `system`) | Exports a deterministic self-contained read-only HTML artifact. The older names `editorial`, `instrument`, `technical` and `ink` are still accepted |
-| `codeflow present clear [SESSION_ID]` | `--older-than <OLDER_THAN>` (default `30d`), `--dry-run` | With no session id it removes every eligible closed session older than the window |
+`codeflow present export` accepts the older theme names `editorial`,
+`instrument`, `technical` and `ink`; the default, `editorial`, resolves to
+Slate. `present feedback --wait` exits 6 on timeout and 7 when the session
+closes with nothing pending, and `present update --expected-revision` exits 8
+when another revision is current.
 
 ### General exit behavior
 

@@ -67,7 +67,7 @@ produced them (ADR-0007).
 
 | Shim | What it holds | Notes |
 |---|---|---|
-| `pre-commit` | commits on a protected branch; the secret scan | also runs the read-only `work start` preflight that the CLI and detached CI share |
+| `pre-commit` | commits on a protected branch; the secret scan | also refuses staged conflict markers, and a commit in the root checkout while it is off its root branch |
 | `commit-msg` | commit format, no-attribution, no-emoji | the same checks `codeflow ci` runs server-side |
 | `pre-merge-commit` | non-fast-forward merge commits onto protected | |
 | `reference-transaction` | fast-forward merges, `reset --hard`, `branch -D` on protected | the harness-agnostic backstop; needs git ≥ 2.28 |
@@ -90,19 +90,71 @@ editable.
 
 ### in-session guards
 
-Two PreToolUse (Bash) handlers add fast, pre-git feedback.
+Three PreToolUse handlers add fast, pre-git feedback.
 
 | Handler | Policy section | Verdict |
 |---|---|---|
-| `git-guard` | git policy | blocks the git rows above, the PR-content checks, and structural override-token laundering |
-| `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5) |
+| `git-guard` | git policy | blocks the git rows above, the PR-content checks, structural override-token laundering, discards of local-only work, and changes to the tracking refs and transport settings that decide policy authority |
+| `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5); outward action families, secret-store reads and interpreter literals refuse at their rule's level |
+| `edit-guard` | the action table's enforcement paths | native file edits (Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths refuse, including patch move sources and destinations |
 
 | Harness | Wiring | Condition |
 |---|---|---|
 | Claude Code | `.claude/settings.json` | laid by the scaffold from `--minimal` up |
-| Interactive Codex | `.codex/hooks.json` | byte-compatible PreToolUse payload (ADR-0008); the project's `.codex/` layer must be trusted |
-| Grok Build | `.grok/hooks/codeflow.json` | ADR-0008 analog; project hooks load only after `/hooks-trust` or `--trust` |
+| Interactive Codex | `.codex/hooks.json`, with edit-guard | byte-compatible PreToolUse payload (ADR-0008); the project's `.codex/` layer must be trusted, and Codex asks again for each new folder or worktree |
+| Grok Build | `.grok/hooks/codeflow.json`, with edit-guard | ADR-0008 analog; project hooks load only after `/hooks-trust` or `--trust` |
 | Headless `codex exec`, `grok -p` | none | project PreToolUse hooks do not run, so those invocations are not work-session lanes and rely on the git-hook plane |
+
+Agent sessions are judged by the landed policy. The guards read
+`.codeflow/policy.json` and project settings from the configured remote's
+default branch and the declared target, taking the stricter level key by key,
+so a local checkout, commit, rebase or stash cannot relax them. When the remote
+HEAD is not set, as after `git init`, `git remote add` and `git push -u`,
+every existing `main` and `master` tracking ref contributes, stricter wins, so
+a fetch that adds one cannot weaken them; a custom default branch needs the
+operator's `git remote set-head <remote> --auto`, which `doctor` names, and a
+dangling remote HEAD refuses. They read
+`HEAD` only when there is no remote or the remote has no tracking refs yet,
+and the working copy only on an unborn `HEAD`; every refusal and `doctor`
+name the source. Ref plumbing on `refs/remotes`, fetch or pull into an
+explicit tracking destination or from another source, remote identity
+changes, writes to transport configuration, the global Git config files and
+the common Git directory's refs and config cannot replace that authority.
+Fetch, pull and remote update compare each selected remote's effective URL
+with its configured URL. Once a tracking ref exists, missing authority
+refuses the call and names `git fetch`, or the operator's
+`git remote set-head <remote> --auto`. `doctor` and orient report the source
+and any local policy drift; they do not detect earlier movement of a
+tracking ref.
+
+Under the shipped defaults, the guards refuse the wrapped, flag-led and
+interpreter forms of privilege escalation, package or gist publishing,
+release and tag changes, repository or account changes, secret-store reads
+and user-level persistence. Commands inside opaque child programs are not
+inspected. Ordinary builds, a task-branch push and a single-file restore
+stay ordinary work.
+
+A refusal names the policy rule and the operator's route. Project relief is
+that rule's existing level, such as `security.privilege_escalation`,
+`security.outward_actions`, `security.secret_reads` or
+`git.discard_uncommitted`, landed through a reviewed change, together with
+any native deny that still applies; the native presets and the guards are
+separate checks, and the agent never edits enforcement files to clear its
+own refusal. `security.headless_peer_runs` is the only relief for a headless
+peer run; `security.headless_opt_in` is ignored with a warning and removed
+by `codeflow update`. The `security.dangerous_commands` floor cannot be
+lowered.
+
+Contract-3 git shims exit 1 and harness wrappers exit 2 when the `codeflow`
+binary is missing or older, printing the installer and `codeflow update`,
+so install the new binary before running `codeflow update`. A wrapper also
+exits 2 when a current binary refuses by policy, but then prints only the
+guard's own message. After a refusal it gives `git-hook capabilities` about
+two seconds to answer `hooks 3`, then kills the probe; it advises a
+reinstall only when the binary is missing, older, or the probe fails or
+does not answer in time.
+The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
+PowerShell as the hook runner is unsupported.
 
 The deterministic shell plane accepts both Bash and PowerShell payloads and
 keeps its catastrophic classifier non-relaxable across Unix and macOS roots and

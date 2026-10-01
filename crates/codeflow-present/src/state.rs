@@ -3979,6 +3979,8 @@ fn read_revision_record(path: &Path) -> Result<RevisionRecord> {
             diagram_ids,
             readable,
         },
+        context: checked.context,
+        snapshots: checked.snapshots,
     })
 }
 

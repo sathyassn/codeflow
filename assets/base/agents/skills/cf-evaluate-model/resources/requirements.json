@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-29-process-round-v1",
+  "requirements_version": "2026-09-29-outcome-first-autonomy-visual-doctrine-and-process-round-v2",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -434,7 +434,7 @@
         {
           "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
           "markers": [
-            "the governing idea — not the fact inventory — as the thing that must survive",
+            "the governing idea, not the fact inventory, as the thing that must survive",
             "A declared alternate composition is a design decision"
           ]
         },
@@ -989,7 +989,7 @@
     {
       "id": "CF-MM-004",
       "level": "hard",
-      "statement": "Both seats approve one named version of the plan and its task assignments. A change of responsible primary or reviewer seat or lineage is a reassignment: it is recorded and reviewed by one other-lineage seat (in the batched epic amendment for epic tasks) before the affected work continues and never carries an old approval, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
+      "statement": "Both seats approve one named version of the plan and its task assignments, except that a reversible item may carry recorded settled dissent while the dissenting seat still approves the rest. A change of responsible primary or reviewer seat or lineage is a reassignment: it is recorded and reviewed by one other-lineage seat (in the batched epic amendment for epic tasks) before the affected work continues and never carries an old approval, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/plan.md",
@@ -997,6 +997,7 @@
             "ASSIGNMENTS:",
             "APPROVALS: <each seat and the plan version it approved>",
             "Approvals name the version they approve",
+            "that seat must still approve the rest of the plan",
             "is a reassignment: it is recorded and reviewed by one other-lineage seat",
             "is ledger evidence, not reassignment",
             "A permitted worker change within the approved responsible-primary seat remains internal routing"
@@ -1078,11 +1079,11 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
             "\"role\": \"claude-judgment-primary\"",
-            "\"model_class\": \"latest-fable\"",
-            "\"model_class\": \"latest-opus\"",
-            "\"default_effort\": \"medium\"",
-            "\"default_effort\": \"high\"",
-            "without transferring judgment"
+            "\"design_owner\": \"claude-primary\"",
+            "\"relation\": \"opposite-author\"",
+            "\"effort\": \"medium\"",
+            "Primary seats retain independent planning and approval duties",
+            "Internal workers never replace a primary or named cross-lineage reviewer"
           ]
         }
       ]
@@ -1105,7 +1106,7 @@
     {
       "id": "CF-MM-009",
       "level": "hard",
-      "statement": "A missing peer degrades only after proven unavailability and is recorded; a mid-run loss retries boundedly and blocks rather than silently continuing.",
+      "statement": "A missing peer degrades only after proven unavailability and is recorded; a mid-run loss retries boundedly, then moves to the recorded fallback, recorded as a reassignment where the assignment lives, with the lost seat recorded unavailable and never as approving, rather than silently continuing.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -1136,9 +1137,9 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
-            "\"default_effort\": \"high\"",
-            "\"escalation_effort\": \"xhigh\"",
-            "\"model_class\": \"latest-terra\"",
+            "\"effort\": \"high\"",
+            "\"xhigh_triggers\"",
+            "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at high and keeps approval",
             "Claude-side internal routing belongs to the Claude primary",
             "A high primary retains orchestration",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"
@@ -1784,7 +1785,7 @@
           "markers": [
             "derived utility, never a second source of truth",
             "same utility design system as `cf-present`",
-            "Do not clone the",
+            "Do not copy present Comment chrome",
             "Apply `cf-design`",
             "Apply `cf-editorial-review`"
           ]
@@ -1926,7 +1927,7 @@
           "path": ".agents/skills/cf-present/SKILL.md",
           "markers": [
             "let `codeflow present open",
-            "Deduplicate by stable `event_id`",
+            "deduplicate by `event_id`",
             "use `codeflow present resolve",
             "a stale or cross-session transition fails closed",
             "Never inject old presentation history",
@@ -1957,7 +1958,7 @@
           "markers": [
             "restyling the same chat answer is a failed use",
             "Author **this session's** subject",
-            "Do not clone the design-exploration board",
+            "Do not rebuild Comment UI or invent a second visual language",
             "one primary visual form at rest",
             "exact selected text, one semantic element",
             "whole document",
@@ -1978,9 +1979,16 @@
           "markers": [
             "JSON is only the handoff format",
             "order of `blocks[]` = order of attention",
-            "5‑second picture",
-            "Choose one primary carrier",
-            "Mentally walk the page"
+            "the stage 3 carrier is the first block",
+            "the page walked top to bottom in plain words"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-present/resources/explanation-method.md",
+          "markers": [
+            "what relationship the reader must see first",
+            "The smallest carrier that keeps the depth wins",
+            "with every sentence removed, the carrier still states the relationship"
           ]
         }
       ]
@@ -2282,7 +2290,7 @@
     {
       "id": "CF-QA-013",
       "level": "hard",
-      "statement": "A gate is the verification check, not the CI job name. An assertion-red completed check cannot be overridden by model consensus. A CI job that never completed (runner loss, OOM, timeout, billing) is missing job evidence, not a failed check; a completed same-check in a sibling job or local codeflow test satisfies that gate. A check that never ran anywhere remains missing and is a blocker or declared limitation, never a pass. Agents still do not merge.",
+      "statement": "A gate is the verification check, not the CI job name. An assertion-red completed check cannot be overridden by model consensus. A CI job that never completed (runner loss, OOM, timeout, billing) is missing job evidence, not a failed check; a completed same-check in a sibling job or local codeflow test satisfies that gate. A check that never ran anywhere and has no local equivalent is a missing gate, named as the blocker, never a pass. Agents never merge a protected target.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
@@ -2304,6 +2312,7 @@
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "a gate is the check, not the job name",
+            "the quality contract classifies redness",
             "For red or unfinished CI jobs, follow",
             "references/pr-checks.md#redness-classes"
           ]
@@ -2402,7 +2411,7 @@
     {
       "id": "CF-SHIP-001",
       "level": "hard",
-      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches when required checks are evidenced green; an infra-killed duplicate CI job is not a failed check and is not agent merge authority. After opening a PR the agent does not poll by default: the PR carries its cited evidence and hosted results are read once when the batch is assembled. Only where the adopted policy requires hosted checks green before landing does it wait for them, at most once a minute for at most thirty minutes and never with an unbounded watch (a watch refreshes at a one-minute interval under a thirty-minute timeout); the required checks are the project's gates, so when remote protection marks none required it reads all check runs, matches each gate to its run, and treats an unmatched gate as missing evidence rather than calling an empty required list ready. It repairs an assertion-red check its change caused without waiting to be asked, reports an infrastructure-incomplete job as missing evidence with the tool's reason rather than fixing it as a product defect, never merges, and sends one unprompted readiness report with the printed PR URL, each required check's state, and the next action.",
+      "statement": "Agents prepare reviewable PRs and evidence; a human merges every protected target when required checks are evidenced green, and the primary merges a green, reviewed PR only into an integration branch no protected-branch policy covers; an infra-killed duplicate CI job is not a failed check and is not agent merge authority. After opening a PR the agent does not poll by default: the PR carries its cited evidence and hosted results are read once when the batch is assembled. Only where the adopted policy requires hosted checks green before landing does it wait for them, at most once a minute for at most thirty minutes and never with an unbounded watch (a watch refreshes at a one-minute interval under a thirty-minute timeout); the required checks are the project's gates, so when remote protection marks none required it reads all check runs, matches each gate to its run, and treats an unmatched gate as missing evidence rather than calling an empty required list ready. It repairs an assertion-red check its change caused without waiting to be asked, reports an infrastructure-incomplete job as missing evidence with the tool's reason rather than fixing it as a product defect, never merges a protected target, and sends one unprompted readiness report with the printed PR URL, each required check's state, and the next action; it says ready on local evidence only with a completed green result of every owed required check.",
       "sources": [
         {
           "path": ".codeflow/rules/git-rules.md",
@@ -2415,11 +2424,11 @@
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "required *checks* are evidenced",
-            "An agent never merges into",
+            "An agent never merges into a protected target",
             "no polling by default",
             "Only where the adopted policy requires hosted checks green before landing",
             "a bounded poll (once a minute, at most thirty minutes)",
-            "fix assertion-red without asking, report infra-incomplete as missing evidence, never merge",
+            "fix assertion-red without asking, report infra-incomplete as missing evidence, and report",
             "report readiness with the PR URL the tool printed"
           ]
         },
@@ -2429,7 +2438,9 @@
             "## After opening",
             "No polling by default",
             "whether or not the host marks them required",
-            "Never merge. When the evidence is complete, send one readiness report without being asked"
+            "When the evidence is complete, send one readiness report without being asked",
+            "for every protected target, including a protected `integration/` glob, the next action is a human merge",
+            "Say \"ready for your merge on local evidence\" only when every owed required check has a completed green result"
           ]
         },
         {
@@ -2527,6 +2538,360 @@
           "path": ".codeflow/rules/workflow-discipline.md",
           "markers": [
             "never unilaterally cross an ethical, authority, or privacy boundary to finish"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-001",
+      "level": "hard",
+      "statement": "A figure's family is chosen by the relationship its reader must see, never by the data's shape or by habit; one figure encodes one family, and a point with no relationship takes a table or a sentence instead of a figure.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Choose the family by the relationship the reader must see, never by the data's shape or by habit. One figure encodes one family.",
+            "When no family fits, the point is not a relationship, and a table or a sentence carries it."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-002",
+      "level": "hard",
+      "statement": "Text arranged in boxes is not a figure: a box is drawn only where its edges mean containment, a state or a boundary, and a relationship is drawn with the marks between the parts, so a correct state or structure figure whose boxes carry meaning is kept.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Text arranged in boxes is not a figure.",
+            "A box is drawn only where its edges mean containment, a state or a boundary. Labels in boxes with nothing between them are not a figure"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-003",
+      "level": "hard",
+      "statement": "Every pair of drawn states differs on at least two rendered channels other than hue, measured off the render in light and dark, whatever the declaration claims about its channels.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Every pair of drawn states differs on at least two of: paint kind (fill, stroke, none), stroke width by 0.5 px or more, dash ratio, shape vocabulary, overlay (cap, cross, ring). Hue is not counted.",
+            "Measured from the rendered DOM in light and dark"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-004",
+      "level": "hard",
+      "statement": "At narrow width a figure recomposes with its own declared mark set and drops, inside the elongation ceiling or with a stated reason, and never reflows the wide marks into a long column.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Under a 646 px container the narrow composition shows; it declares its own mark set and what it drops, and its height is at most 1.5 times the wide height unless the declaration states why more is needed and what the reader gets",
+            "Narrow recomposes with its declared mark set inside the elongation ceiling."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-005",
+      "level": "hard",
+      "statement": "No text prints over text or over a mark it does not label, and text keeps its clearance from every mark it does not label, at both widths; labels are moved or the composition changed, not dropped at the cost of the facts they carry.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "text overlapping text, or a mark it does not label, at a depth of 1 px or more fails; text keeps 8 px clear of any mark it does not label",
+            "No text box carries the form; no text overprints text or a mark."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-006",
+      "level": "hard",
+      "statement": "Every drawn state mark meets the mark floor on its information-bearing dimension at both widths, measured on the inner mark such as the cross of a crossed cell, never on the container around it.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Every drawn state mark 9 px or larger on its information-bearing dimension: length for a line, diameter for a disc, the cross for a crossed box, never the container around it",
+            "every inner mark 9 px or larger at both widths"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-007",
+      "level": "hard",
+      "statement": "Every fact a figure declares names a repository source and a derivation that the build re-derives, and the drawn value is what the source holds today; a value is corrected from its source, never by weakening the check or copying stale prose.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Every `facts` entry names a repository source and a derivation; the verifier re-derives the value and compares it exactly with the drawn value",
+            "Every fact names its source and matches what the source says today."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-008",
+      "level": "hard",
+      "statement": "Figures lead every altitude with a family the altitude contract lists: Concept owns what the subject is, who it is for and what it is not, and an ordinary how-to section carries a sequence, state or extent figure between its lead and its steps.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "A figure leads every altitude panel and every ordinary how-to section",
+            "Figures lead at every altitude. Concept owns what the subject is, who it is for and what it is not.",
+            "sequence, state or extent | one lead sentence, the steps as a list, the figure between them"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-METH-001",
+      "level": "hard",
+      "statement": "An explanation names the reader and the one question of each altitude it carries, answers each altitude's own question without repeating another's, and lets only Concept say what the subject is not.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/explanation-method.md",
+          "markers": [
+            "Name the reader of each altitude the deliverable carries, and the one question that reader must be able to answer afterwards.",
+            "Each altitude answers its own question and does not repeat another's. Only Concept says what the subject is not.",
+            "A portal explanatory page carries Concept, Architecture and Technical in that order"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-METH-002",
+      "level": "hard",
+      "statement": "The carrier is chosen by the relationship the reader must see first and by the medium: a family's inline figure on the portal and in present, in chat the form the surface rule picks, with the fenced ASCII chat form as its plain-text form, the fenced ASCII chat form in a README (never an SVG file or a Mermaid fence), a screenshot only for a surface as it is, captured and annotated under the doctrine's rules, and never for a relationship.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/explanation-method.md",
+          "markers": [
+            "Name the relationship the reader must see first, then choose the carrier by that relationship and by the medium.",
+            "In a chat reply, the surface rule in `cf-method/references/workflow-lifecycle.md` picks the form; the fenced ASCII chat form is its plain-text form.",
+            "In a README, a figure is the fenced ASCII chat form. An SVG file and a Mermaid fence are not README figures",
+            "A screenshot shows a surface as it is and never a relationship."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/utility-presentation-system.md",
+          "markers": [
+            "Annotate only with numbered markers keyed in the caption; never draw arrows on it.",
+            "Write alt text that names the surface and its state."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-METH-003",
+      "level": "hard",
+      "statement": "The smallest carrier that keeps the depth wins: facts with no relationship between them take bullets or a table and no figure, and such an answer passes on the universal checks alone.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/explanation-method.md",
+          "markers": [
+            "The smallest carrier that keeps the depth wins. Facts with no relationship between them take bullets or a table and no figure.",
+            "An answer with no figure, a table lookup included, passes on the universal checks alone"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-METH-004",
+      "level": "hard",
+      "statement": "A present document puts its governing carrier first so the reader sees the relationship before reading, walks the altitudes as a path, and ends with one ask.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-present/resources/explanation-method.md",
+          "markers": [
+            "A present document walks the same altitudes as a path, with Architecture only when a second structural view is needed, and ends with one ask."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-present/resources/how-presentation-works.md",
+          "markers": [
+            "order of `blocks[]` = order of attention",
+            "A structural figure first means they start by *seeing* a relationship."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-COPY-001",
+      "level": "hard",
+      "statement": "The text around a figure has three parts with three jobs: a lead above it that says what the reader is looking at and never restates the caption, title or legend; a caption of exactly one sentence that states the takeaway and never repeats the title; and legend keys that are noun phrases naming each state, one key per state, with no prose sentence explaining the legend.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "Write a lead only above a carrier",
+            "Never restate the caption, the title or the legend",
+            "Never describe the carrier's form",
+            "Write exactly one sentence, ending in a full stop.",
+            "Never repeat the title, the lead or a legend key.",
+            "Write a key as a noun phrase",
+            "Give each state one key and each key one state."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-COPY-002",
+      "level": "hard",
+      "statement": "Interface strings are written as microcopy: an action label starts with its verb in sentence case, a state is an adjective or participle, an empty state says what to do next, an error names its cause and its fix, counts are digits, a tooltip is one clause, and no string carries an exclamation mark or a joke.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "Start an action label with the verb and name its object",
+            "Name a state with an adjective or a participle, not a verb phrase",
+            "Make an empty state say what to do next",
+            "Give an error its cause and its fix in one or two sentences.",
+            "Write counts as digits",
+            "Keep a tooltip to one clause",
+            "Use no exclamation mark, joke or mascot voice anywhere in an interface."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-COPY-003",
+      "level": "hard",
+      "statement": "A closeout, a pull request body, an ADR context, a report and a reply that leads into a list or table open with a summary of a few lines that anchors the reader, with the detail that does not help orientation after it as bullets, a table for tabular data and a fenced block for pasted output; bullets or a table alone, or a paragraph wall, fail; a short answer is its own summary and takes no lead, heading or recap.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "A summary anchors the reader",
+            "Write a few lines a reader with no context understands.",
+            "It is judgment, not a sentence count or a list of banned items",
+            "Judge a summary by what it carries.",
+            "A short answer is its own summary and takes no lead.",
+            "and a one-line answer stays one line",
+            "Never write a sentence about the reply's own format, length or structure."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-COPY-004",
+      "level": "hard",
+      "statement": "Skill prose is written in the imperative register with the sentence and word rules: the verb first, the actor named when it is not the reader, exact identifiers in code spans, no slogan, motto, contrast turn or rhetorical triplet, no self-narration and no policy character.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "Write a rule as an instruction to the agent",
+            "Name the actor when it is not the reader",
+            "Write no slogan, motto, contrast turn or rhetorical triplet.",
+            "Use no em or en dash. The skill trees are policy surfaces.",
+            "Drop hedges, ceremony and self-narration"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-COPY-005",
+      "level": "hard",
+      "statement": "An ADR states its context in two to five sentences that name the constraint rather than the history, its decision in one paragraph stated as fact with no hedge and no alternatives inside it, and its consequences with the cost named; a pull request body opens with a summary of a few lines that anchor the reader and then carries its changes as bullets and its test evidence as a fenced block and a table.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "two to five sentences naming the constraint",
+            "not the history that led to it",
+            "one paragraph stated as fact",
+            "with the cost named plainly",
+            "a few lines that anchor the reader, then the changes",
+            "the measured coverage with its scope, and what was not"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-AUTO-001",
+      "level": "hard",
+      "statement": "A change request runs from its settled outcome to the readiness report. Discoverable facts, reversible choices, a repeated safe step, a red job, a missing seat or credit, a green reviewed merge into an integration branch no protected-branch policy covers, a trust prompt for the task's own project or this run's sample, and a reversible seat dissent are settled from evidence and disclosed without asking; a settled dissent keeps the dissenting verdict as given. Only intent, public behavior, taste, and authority or scope beyond the brief are asked, and hard gates (spend, credentials, sending outside the conversation or to a changed recipient, a merge into a protected target including a protected integration glob, an unrestorable delete) wait for a human for that action only; a trust prompt for any other path goes to the operator. Ready on local evidence needs a completed green result of every owed check and names the hosted gap; a check that never ran anywhere is a missing gate.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-method/references/autonomy.md",
+          "markers": [
+            "A brief that asks for a change selects implementation through the readiness report.",
+            "Do not stop to offer the next step, to confirm a safe step you already have authority for",
+            "A stop holds only that one action",
+            "Record a missing seat, tool or credit as reduced assurance and continue on the recorded fallback.",
+            "intent or public behavior the brief does not fix;",
+            "spend, including buying credits;",
+            "anything sent outside the conversation, as or for the operator;",
+            "every protected glob in `.codeflow/policy.json`, including a protected `integration/` glob;",
+            "a delete that version control, a backup or a scratch area cannot restore;",
+            "Decide by authorization and path identity",
+            "A folder that another run created, or a path that only resembles yours, is foreign.",
+            "The dissenting verdict stays as given and is never recorded as approval",
+            "1: take it without asking; progress goes in the running report, never in an offer",
+            "1: choose from evidence and disclose it",
+            "1: classify and continue; fix an assertion-red check, push and poll again",
+            "2: once the full gate is green on that exact candidate, the primary merges it without fast forward or with `codeflow integrate`, then confirms the landed state against the candidate's evidence with `codeflow status`",
+            "3: ask for a fresh grant",
+            "4: wait for the operator; do not spend",
+            "4: report it ready; a human merges"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "A change request selects implementation through the readiness report",
+            "with any open reversible item settled under the plan contract's `SETTLED_DISSENT` rule",
+            "Buying credits is spend and stays with the operator: do not purchase, name it in the report and continue on the fallback."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/plan.md",
+          "markers": [
+            "The dissenting seat's verdict on that item stays as given and is never recorded as approval"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+          "markers": [
+            "needs a completed green result of every owed required check at the pull request head"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/task-graph.md",
+          "markers": [
+            "A reversible item in that approval may carry `SETTLED_DISSENT`"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "The primary merges a green, reviewed PR into an `integration/` branch no protected-branch policy covers",
+            "A protected target, including a protected `integration/` glob, is reported ready"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "Paste the local full gate summary with the head SHA, and name each hosted job that never ran with the reason the tool gave.",
+            "is a missing gate: name it as the blocker, keep the PR draft where required evidence is missing"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-herdr/SKILL.md",
+          "markers": [
+            "Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`)."
           ]
         }
       ]

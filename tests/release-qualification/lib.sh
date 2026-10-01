@@ -127,16 +127,27 @@ observed_exit() {
 # ---------------------------------------------------------------------------
 #
 # A freshly scaffolded sample carries its own .claude/settings.json, so the
-# Claude session the canary starts asks a human to trust the folder before it
-# takes any prompt. No agent may answer that question, so the harness waits for
-# the operator instead of recording the whole delegate lane unavailable.
+# Claude session the canary starts asks whether to trust the folder before it
+# takes any prompt. The trust prompt rule (cf-method/references/autonomy.md,
+# and the workspace rule of 2026-09-22) lets an agent answer for a folder its
+# own task created: when the prompt names the sample this run created, the
+# harness answers it. Any other folder stays the operator's to answer, so the
+# harness waits for the operator instead of recording the whole delegate lane
+# unavailable.
 #
 # Everything here fails closed. A pane the harness cannot read is never read as
 # an answer: the run would otherwise record a failed delegate lane on evidence
 # that only says herdr stopped replying.
 
-# The line Claude Code paints while it waits for that answer.
+# The question Claude Code paints while it waits for that answer. A narrow
+# pane wraps it, so it is matched with line breaks and runs of blanks folded
+# into single spaces (asks_trust).
 TRUST_PROMPT_MATCH='Is this a project you created or one you trust'
+
+# asks_trust - true when the screen on stdin shows the trust question.
+asks_trust() {
+  tr -s '\n ' '  ' | grep -qF -- "$TRUST_PROMPT_MATCH"
+}
 
 # How often the pane is re-read while waiting.
 TRUST_POLL_SECONDS=5
@@ -206,7 +217,7 @@ trust_prompt_showing() {
 
   if [ "$_tps_read" != 0 ] || [ ! -s "$_tps_file" ]; then
     _tps_seen=$TRUST_UNREADABLE
-  elif grep -qF -- "$TRUST_PROMPT_MATCH" "$_tps_file"; then
+  elif asks_trust <"$_tps_file"; then
     _tps_seen=$TRUST_SHOWING
   else
     _tps_seen=$TRUST_GONE
@@ -287,13 +298,180 @@ except Exception:
     pass' 2>/dev/null
 }
 
+# What trust_dialog_names found, returned as an exit status.
+TRUST_NAMES_SAMPLE=0
+TRUST_NAMES_OTHER=1
+TRUST_NAMES_UNREADABLE=2
+
+# The option the dialog's cursor was on at the last read: yes, no or empty.
+TRUST_SELECTED=""
+
+# How long the prompt gets to clear after the harness answers it.
+TRUST_SELF_ANSWER_SECONDS=30
+
+# The harness answers a trust prompt only in a pane it created, for a sample
+# it named itself (sample_dir in qualify.sh). The threat is an accidental
+# mismatch, not a local actor racing the pane, so identity rests on three
+# exact checks rather than on a lossy reading of the screen:
+#
+#   1. the sample's real path is plain: ASCII letters, digits, `.`, `_`, `-`
+#      and `/` only, and its last component is lowercase letters, digits and
+#      `-` ending in a random nonce of at least 12 hex digits;
+#   2. the dialog's path lines, joined, equal that real path byte for byte:
+#      each line is one leading space and then only those characters, so a
+#      blank, tab or other character inside or after the path means no key;
+#   3. the pane's foreground process, the Claude session, has that real path
+#      as its working directory, before any key and again after the answer.
+#      A wrapped path and a folder name holding a newline look the same on
+#      screen, so this check, not the screen, decides which folder it is.
+#
+# The read-to-key gap is accepted under that threat model: between the last
+# read and the Enter nothing but the owned session draws in the pane, and the
+# after-answer check stops the run if the session is anywhere but the sample.
+
+# plain_sample_path <dir> - print the real path of <dir> when it passes rule 1.
+plain_sample_path() {
+  python3 -c 'import os, re, sys
+real = os.path.realpath(sys.argv[1])
+ok = (os.path.isdir(real)
+      and re.fullmatch(r"/[A-Za-z0-9._/-]+", real)
+      and re.fullmatch(r"[a-z0-9-]*-[0-9a-f]{12,}", os.path.basename(real)))
+print(real) if ok else sys.exit(1)' "$1" 2>/dev/null
+}
+
+# trust_dialog <screen-file> - print the dialog's path on line 1 and the
+# option under the cursor (no or yes) on line 2 when the screen is the Claude
+# Code 2.1.283 workspace-trust dialog with plain path lines; exit 1 for any
+# other screen:
+#
+#    Accessing workspace:
+#    /the/folder/path            one or more lines; a long path wraps
+#    Quick safety check: Is this a project you created or one ...
+#    ...
+#    ❯ No, exit                   exactly one option carries the cursor
+#      Yes, I trust this folder
+#    Enter to confirm · Esc to cancel
+#
+# Path lines are joined without trimming: each must be one space followed by
+# plain path characters and nothing else, trailing spaces included. Blank
+# lines between the two headings are skipped.
+trust_dialog() {
+  LC_ALL=C awk '
+    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+    { raw[NR] = $0; line[NR] = trim($0) }
+    line[NR] == "Accessing workspace:" { heads++; head = NR }
+    index(line[NR], "Quick safety check: Is this a project you created or one") == 1 { checks++; check = NR }
+    line[NR] == "Enter to confirm · Esc to cancel" { confirms++ }
+    line[NR] ~ /^(❯ )?No, exit$/ { nos++; if (index(line[NR], "❯") == 1) cursor = cursor "no" }
+    line[NR] ~ /^(❯ )?Yes, I trust this folder$/ { yeses++; if (index(line[NR], "❯") == 1) cursor = cursor "yes" }
+    END {
+      if (heads != 1 || checks != 1 || confirms != 1 || nos != 1 || yeses != 1) exit 1
+      if (cursor != "no" && cursor != "yes") exit 1
+      for (i = head + 1; i < check; i++) {
+        if (raw[i] == "") continue
+        if (raw[i] !~ /^ [A-Za-z0-9._\/-]+$/) exit 1
+        path = path substr(raw[i], 2)
+      }
+      if (index(path, "/") != 1) exit 1
+      printf "%s\n%s\n", path, cursor
+    }
+  ' "$1"
+}
+
+# process_cwd <pid> - print the working directory of <pid> and one newline.
+# The name is printed whole: a newline inside it stays in the output, so a
+# folder named "<sample>" plus a newline and more can never read as the sample.
+process_cwd() {
+  if [ -d "/proc/$1" ]; then
+    readlink "/proc/$1/cwd"
+  else
+    lsof -a -p "$1" -d cwd -Fn 2>/dev/null |
+      awk 'name { print; next } /^fcwd$/ { cwd = 1; next } cwd && /^n/ { print substr($0, 2); name = 1 }'
+  fi
+}
+
+# pane_session_in <pane> <real-path> - succeed when the pane's foreground
+# process, the session the harness launched there, has exactly <real-path> as
+# its real working directory. Prints what was observed, on one line.
+pane_session_in() {
+  _psi_pid=$(herdr pane process-info --pane "$1" 2>/dev/null | python3 -c 'import json,sys
+info = json.load(sys.stdin)["result"]["process_info"]
+if info["foreground_process_group_id"] == info["shell_pid"]:
+    sys.exit(1)
+print(int(info["foreground_process_group_id"]))' 2>/dev/null) || {
+    printf 'no session in the foreground of pane %s\n' "$1"
+    unset _psi_pid
+    return 1
+  }
+  # The trailing x keeps trailing newlines that are part of the name; only the
+  # one newline process_cwd ends with is removed.
+  _psi_cwd=$(process_cwd "$_psi_pid"; printf x)
+  _psi_cwd=${_psi_cwd%x}
+  _psi_cwd=${_psi_cwd%"
+"}
+  python3 -c 'import os, sys
+cwd, want = sys.argv[1], sys.argv[2]
+real = os.path.realpath(cwd) if cwd else ""
+print(ascii(real) if real else "no working directory readable")
+sys.exit(0 if real and real == want else 1)' "$_psi_cwd" "$2"
+  _psi_rc=$?
+  unset _psi_pid _psi_cwd
+  return "$_psi_rc"
+}
+
+# trust_dialog_names <pane-id> <sample-dir> - one bounded read of the screen.
+#
+# Returns TRUST_NAMES_SAMPLE only when the sample path is plain (rule 1), the
+# screen is the trust dialog, its path equals the sample's real path exactly
+# (rule 2) and the pane's session runs in it (rule 3); sets TRUST_SELECTED to
+# the option under the cursor. Returns TRUST_NAMES_OTHER otherwise, and
+# TRUST_NAMES_UNREADABLE when the pane cannot be read.
+trust_dialog_names() {
+  TRUST_SELECTED=""
+  _tdn_real=$(plain_sample_path "$2") || { unset _tdn_real; return "$TRUST_NAMES_OTHER"; }
+  _tdn_file=${TMPDIR:-/tmp}/cf-trust-dialog.$$
+  pane_read_visible "$1" "$_tdn_file" "$TRUST_READ_TIMEOUT" && _tdn_read=0 || _tdn_read=$?
+  if [ "$_tdn_read" != 0 ] || [ ! -s "$_tdn_file" ]; then
+    set -- "$TRUST_NAMES_UNREADABLE"
+  elif _tdn_found=$(trust_dialog "$_tdn_file") &&
+    [ "$(printf '%s\n' "$_tdn_found" | sed -n 1p)" = "$_tdn_real" ] &&
+    pane_session_in "$1" "$_tdn_real" >/dev/null; then
+    TRUST_SELECTED=$(printf '%s\n' "$_tdn_found" | sed -n 2p)
+    set -- "$TRUST_NAMES_SAMPLE"
+  else
+    set -- "$TRUST_NAMES_OTHER"
+  fi
+  rm -f "$_tdn_file"
+  unset _tdn_file _tdn_read _tdn_found _tdn_real
+  return "$1"
+}
+
+# answer_own_trust_prompt <pane-id> <sample-dir> - answer yes for our sample.
+#
+# Keys go only to a screen just read as the trust dialog for this run's own
+# sample. The cursor starts on "No, exit"; the harness moves it down one
+# option, reads the screen again, and presses Enter only when the same dialog
+# for the same folder now has the cursor on "Yes, I trust this folder". Any
+# other screen at either read sends nothing more. Returns 0 once Enter is sent.
+answer_own_trust_prompt() {
+  trust_dialog_names "$1" "$2" || return 1
+  if [ "$TRUST_SELECTED" = no ]; then
+    herdr pane send-keys "$1" down >>"$TRANSCRIPT" 2>&1 || return 1
+    sleep 1
+    trust_dialog_names "$1" "$2" || return 1
+  fi
+  [ "$TRUST_SELECTED" = yes ] || return 1
+  herdr pane send-keys "$1" Enter >>"$TRANSCRIPT" 2>&1 || return 1
+}
+
 # What resolve_trust_prompt decided, and why.
 TRUST_OUTCOME=""
 TRUST_REASON=""
 TRUST_OWNER=""
 
-TRUST_OWNER_OPERATOR="a human operator, who alone may answer the workspace-trust prompt"
+TRUST_OWNER_OPERATOR="the operator, because the trust prompt does not name the sample this run created"
 TRUST_OWNER_ENVIRONMENT="operator environment"
+TRUST_OWNER_HARNESS="this harness, which answered the trust prompt and could not confirm the effect"
 
 # resolve_trust_prompt <pane> <tab> <dir> <budget> <agent> <settings-file>
 #
@@ -307,10 +485,13 @@ TRUST_OWNER_ENVIRONMENT="operator environment"
 # caller to record. TRUST_OUTCOME is one of:
 #
 #   ready       a live session is proven on this pane; the run may continue
-#   disabled    the wait was switched off with --trust-wait-seconds 0
+#   disabled    the operator wait was switched off with --trust-wait-seconds 0
 #   unanswered  the budget ended with the question still on screen
 #   unreadable  the budget ended without a readable pane
 #   unproven    the question cleared but no session could be proven
+#   stopped     the harness answered for its own sample, and a fresh read
+#               afterwards did not show the dialog gone with the session in
+#               that sample; the caller stops the run and reports it
 resolve_trust_prompt() {
   _rtp_pane=$1
   _rtp_tab=$2
@@ -321,16 +502,39 @@ resolve_trust_prompt() {
   TRUST_OUTCOME=""
   TRUST_REASON=""
   TRUST_OWNER=""
+  TRUST_ANSWERED_BY=""
 
-  if [ "$_rtp_budget" -eq 0 ]; then
+  # A prompt that names this run's own sample is the harness's to answer. It
+  # is recorded as such, and the answer's effect is then verified: the dialog
+  # gone and the pane's session still running in the sample. Anything else
+  # stops the run, because a yes may have reached a folder that is not ours.
+  if answer_own_trust_prompt "$_rtp_pane" "$_rtp_dir"; then
+    TRUST_ANSWERED_BY="the harness, because the prompt named this run's own sample $_rtp_dir"
+    printf 'trust prompt answered by %s\n' "$TRUST_ANSWERED_BY" | tee -a "$TRANSCRIPT"
+    wait_for_trust_answer "$_rtp_pane" "$TRUST_SELF_ANSWER_SECONDS" && _rtp_wait=0 || _rtp_wait=$?
+    _rtp_real=$(plain_sample_path "$_rtp_dir") || _rtp_real=""
+    _rtp_cwd=$(pane_session_in "$_rtp_pane" "$_rtp_real") && _rtp_in=0 || _rtp_in=1
+    if [ "$_rtp_wait" != "$TRUST_WAIT_ANSWERED" ]; then
+      TRUST_OUTCOME=stopped
+      TRUST_OWNER=$TRUST_OWNER_HARNESS
+      TRUST_REASON="the harness answered the trust prompt for its own sample, but the prompt was still on screen or unreadable $TRUST_SELF_ANSWER_SECONDS seconds later, so the run stopped"
+    elif [ -z "$_rtp_real" ] || [ "$_rtp_in" != 0 ]; then
+      TRUST_OUTCOME=stopped
+      TRUST_OWNER=$TRUST_OWNER_HARNESS
+      TRUST_REASON="the harness answered the trust prompt for its own sample, but afterwards the pane's session was not running in that sample (observed: $_rtp_cwd), so the run stopped"
+    else
+      resolve_trust_session "$_rtp_pane" "$_rtp_tab" "$_rtp_agent" "$_rtp_settings"
+    fi
+  elif [ "$_rtp_budget" -eq 0 ]; then
     TRUST_OUTCOME=disabled
     TRUST_OWNER=$TRUST_OWNER_OPERATOR
-    TRUST_REASON="the wait for an answer was disabled by --trust-wait-seconds 0"
+    TRUST_REASON="the prompt did not name this run's own sample, and the operator wait was disabled by --trust-wait-seconds 0"
   else
     # The operator is watching stdout, not the transcript file, so the ask goes
     # there and names the tab, the pane and the folder being trusted.
     printf '\n%s\n' '=================================================================='
-    printf 'ACTION NEEDED: a human must answer the Claude Code trust prompt.\n'
+    printf 'ACTION NEEDED: the operator must answer the Claude Code trust prompt;\n'
+    printf '  it does not name the sample this run created, so the harness does not.\n'
     printf '  Herdr tab:  %s\n' "$_rtp_tab"
     printf '  Herdr pane: %s\n' "$_rtp_pane"
     printf '  sample:     %s\n' "$_rtp_dir"
@@ -344,7 +548,7 @@ resolve_trust_prompt() {
     if [ "$_rtp_wait" = "$TRUST_WAIT_TIMEOUT" ]; then
       TRUST_OUTCOME=unanswered
       TRUST_OWNER=$TRUST_OWNER_OPERATOR
-      TRUST_REASON="the operator did not answer the trust prompt within $_rtp_budget seconds (--trust-wait-seconds)"
+      TRUST_REASON="the prompt did not name this run's own sample, and the operator did not answer it within $_rtp_budget seconds (--trust-wait-seconds)"
     elif [ "$_rtp_wait" = "$TRUST_WAIT_UNREADABLE" ]; then
       TRUST_OUTCOME=unreadable
       TRUST_OWNER=$TRUST_OWNER_ENVIRONMENT
@@ -354,7 +558,7 @@ resolve_trust_prompt() {
     fi
   fi
 
-  unset _rtp_pane _rtp_tab _rtp_dir _rtp_budget _rtp_agent _rtp_settings _rtp_wait
+  unset _rtp_pane _rtp_tab _rtp_dir _rtp_budget _rtp_agent _rtp_settings _rtp_wait _rtp_cwd _rtp_real _rtp_in
   [ "$TRUST_OUTCOME" = ready ]
 }
 
@@ -723,34 +927,65 @@ print(found)' "$1" 2>/dev/null)
   find "$HOME/.claude/projects" -maxdepth 2 -name "$_sid.jsonl" 2>/dev/null | head -1
 }
 
+# pipeline_workflow_calls <transcript> - print the tool-use id of every
+# Workflow call in the transcript that runs the scaffolded pipeline, one per
+# line. This is the one rule every reading below shares: a Workflow tool_use
+# whose input names the pipeline exactly ("name": "pipeline", never a
+# substring) or refers to its script (pipeline.workflow). Text elsewhere in
+# the transcript never counts. Returns non-zero when the transcript cannot be
+# read.
+pipeline_workflow_calls() {
+  python3 - "$1" <<'PY'
+import json, sys
+
+for line in open(sys.argv[1], encoding="utf-8"):
+    try:
+        entry = json.loads(line)
+    except Exception:
+        continue
+    content = (entry.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        continue
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use" or \
+                block.get("name") != "Workflow":
+            continue
+        tool_input = block.get("input")
+        by_name = isinstance(tool_input, dict) and tool_input.get("name") == "pipeline"
+        if by_name or "pipeline.workflow" in json.dumps(tool_input):
+            print(block.get("id"))
+PY
+}
+
 # Did the session actually invoke the native Workflow tool on the scaffolded
 # pipeline? Prints yes, no, or unknown, where unknown means no transcript could
-# be located and is never read as no.
+# be located or read and is never read as no.
 workflow_invocation_evidence() {
   _tx=$(session_transcript "$1")
-  if [ -z "$_tx" ]; then
+  if [ -z "$_tx" ] || ! _calls=$(pipeline_workflow_calls "$_tx" 2>/dev/null); then
     printf 'unknown'
-    return 0
-  fi
-  if grep -q '"name"[[:space:]]*:[[:space:]]*"Workflow"' "$_tx" 2>/dev/null &&
-    grep -q 'pipeline.workflow' "$_tx" 2>/dev/null; then
+  elif [ -n "$_calls" ]; then
     printf 'yes'
   else
     printf 'no'
   fi
 }
 
-# workflow_launch_evidence <state-dir> - how the Workflow call was run: its run
-# id and whether Claude Code launched it in the background, read from the tool
-# result the session's transcript recorded for that call.
+# workflow_launch_evidence <state-dir> - how the pipeline's Workflow call was
+# run: its run id and whether Claude Code launched it in the background, read
+# from the tool result the session's transcript recorded for that call.
 workflow_launch_evidence() {
   _tx=$(session_transcript "$1")
   if [ -z "$_tx" ]; then
     printf 'workflow launch unknown: no session transcript'
     return 0
   fi
+  if ! _calls=$(pipeline_workflow_calls "$_tx" 2>/dev/null); then
+    printf 'workflow launch unknown: the transcript could not be read'
+    return 0
+  fi
   python3 -c 'import json,sys
-calls, launches = set(), []
+calls, launches = set(sys.argv[2].split()), []
 for line in open(sys.argv[1], encoding="utf-8"):
     try:
         entry = json.loads(line)
@@ -762,9 +997,7 @@ for line in open(sys.argv[1], encoding="utf-8"):
     for block in content:
         if not isinstance(block, dict):
             continue
-        if block.get("type") == "tool_use" and block.get("name") == "Workflow":
-            calls.add(block.get("id"))
-        elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+        if block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
             result = entry.get("toolUseResult")
             result = result if isinstance(result, dict) else {}
             mode = "in the background" if result.get("status") == "async_launched" else "in the foreground"
@@ -772,9 +1005,9 @@ for line in open(sys.argv[1], encoding="utf-8"):
 if launches:
     print("; ".join(launches))
 elif calls:
-    print("workflow launch unknown: the Workflow call has no recorded result")
+    print("workflow launch unknown: the pipeline Workflow call has no recorded result")
 else:
-    print("workflow launch: no Workflow call recorded")' "$_tx" 2>/dev/null ||
+    print("workflow launch: no pipeline Workflow call recorded")' "$_tx" "$_calls" 2>/dev/null ||
     printf 'workflow launch unknown: the transcript could not be read'
 }
 
@@ -826,11 +1059,15 @@ workflow_task_evidence() {
     printf 'task output unknown: no session transcript'
     return 1
   fi
-  python3 - "$_tx" "$2" <<'PY'
+  if ! _calls=$(pipeline_workflow_calls "$_tx" 2>/dev/null); then
+    printf 'task output unknown: the transcript could not be read'
+    return 1
+  fi
+  python3 - "$_tx" "$2" "$_calls" <<'PY'
 import json, re, sys
 
 transcript, result_file = sys.argv[1], sys.argv[2]
-calls, task_id, notices = set(), None, []
+calls, task_id, notices = set(sys.argv[3].split()), None, []
 for line in open(transcript, encoding="utf-8"):
     try:
         entry = json.loads(line)
@@ -846,10 +1083,7 @@ for line in open(transcript, encoding="utf-8"):
     for block in content:
         if not isinstance(block, dict):
             continue
-        if block.get("type") == "tool_use" and block.get("name") == "Workflow" and \
-                "pipeline.workflow" in json.dumps(block.get("input")):
-            calls.add(block.get("id"))
-        elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+        if block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
             result = entry.get("toolUseResult")
             if isinstance(result, dict) and result.get("taskId"):
                 task_id = result["taskId"]
@@ -1198,4 +1432,28 @@ snapshot_files() {
       printf '%s  %s\n' "ABSENT" "$_p" >>"$_out"
     fi
   done
+}
+
+# grade_present_resolve <event> <delivered yes|no> <delivered-version>
+#   <resolve-status> <resolve-output> <history-after-json>
+#
+# Print the positive present resolve row's result. Exit status and the
+# acknowledgement are not enough: the session history read after resolve must
+# hold an `addressed` event for this exact event id at a sequence later than
+# the version it was resolved at, and no `dismissed` event for it. Missing,
+# malformed or contradictory history fails the row.
+grade_present_resolve() {
+  if [ -n "$1" ] && [ "$2" = yes ] && [ "$4" = 0 ] &&
+    printf '%s' "$5" | grep -qF "resolved $1 as addressed" &&
+    printf '%s' "$6" | python3 -c 'import json, sys
+event, version = sys.argv[1], int(sys.argv[2])
+events = json.load(sys.stdin)["feedback_events"]
+mine = [e for e in events if e.get("event_id") == event]
+addressed = [e for e in mine if e.get("event") == "addressed" and int(e["sequence"]) > version]
+dismissed = [e for e in mine if e.get("event") == "dismissed"]
+sys.exit(0 if len(addressed) == 1 and not dismissed else 1)' "$1" "${3:-0}" 2>/dev/null; then
+    printf '%s\n' "$RESULT_PASSED"
+  else
+    printf '%s\n' "$RESULT_FAILED"
+  fi
 }

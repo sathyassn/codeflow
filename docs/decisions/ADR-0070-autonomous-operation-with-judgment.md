@@ -1,5 +1,6 @@
 ---
 id: ADR-0070
+uid: ae03f88c-a953-404b-a65f-a652b76306c7
 title: "Autonomous operation with judgment"
 status: accepted
 date: 2026-09-23
@@ -135,3 +136,21 @@ F1, Grok M1), which found that `cf-method/references/autonomy.md` omitted the
 correctness axis the quality contract already kept closed.
 `cf-method/references/autonomy.md` owns this list; the text above is
 unchanged, and the reference wins where they differ.
+
+## Note, 2026-09-29: ADR-0076 supersedes the reassignment clause
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. It
+supersedes the ADR-0035 reassignment clause this record amended, and with
+it one clause here; settled dissent and the rest stay accepted.
+
+- "After a recorded mid-run seat loss, every available standing seat
+  approves the reassignment." Superseded: a reassignment is recorded where
+  the assignment lives and, for an unstarted task, rides in the batched
+  epic amendment with one other-lineage reviewer. The lost seat is still
+  recorded unavailable with reduced assurance, and any verdict it gave
+  before the loss stays as given.
+- The settled-dissent rule's "after two rounds" no longer applies, since
+  ADR-0076 removes round caps. A disagreement on a reversible choice is
+  settled once repairs stop producing relevant evidence; the unsettleable
+  axes are unchanged. `cf-method/references/autonomy.md` states the current
+  rule.

@@ -148,7 +148,7 @@ Runbook: [re-verification before tagging](releasing.md#re-verification-before-ta
 - [ ] 4.8 `codeflow doctor --check model-bindings` passes for each retained local promotion record, or records the native canary still needed. Evidence: doctor output.
 - [ ] 4.9 Both native interactive directions complete a scoped tool and Model Context Protocol (MCP) canary. Evidence: versions, effort, tool access and graceful degradation.
 - [ ] 4.10 Each task records its producer and cross-lineage reviewer, and every blocking finding is resolved or stops the release. Evidence: verified routing evidence per task.
-- [ ] 4.11 Host, peer and worker role canaries reject nested orchestration, observe usage state, and force fresh dual approval on reassignment. Evidence: canary output.
+- [ ] 4.11 Host, peer and worker role canaries reject nested orchestration, observe usage state, and record a reassignment where the assignment lives, reviewed by one other-lineage seat and never carrying an old approval (ADR-0076). Evidence: canary output.
 
 #### Harness and model details
 

@@ -56,7 +56,10 @@ TRANSCRIPT="$STUB_DIR/transcript"
 #   proc-out               what `pane process-info` prints; with exit-on-keys
 #                          present, any send-keys swaps in proc-shell
 #   pane-text-directive    swapped into pane-text when the directive is typed
-#   pane-text-after-enter  swapped into pane-text on any send-keys
+#   pane-text-after-down   swapped into pane-text when the key is `down`
+#   pane-text-after-enter  swapped into pane-text on any other send-keys
+#   proc-cwd               the session's working directory, as `lsof` prints
+#                          it; proc-cwd-after-enter is swapped in on Enter
 {
   printf '#!/bin/sh\n'
   printf 'D=%s\n' "$STUB_DIR"
@@ -76,7 +79,12 @@ TRANSCRIPT="$STUB_DIR/transcript"
   printf '    esac\n'
   printf '    exit 0 ;;\n'
   printf '  "pane send-keys")\n'
+  printf '    case "$*" in *" down")\n'
+  printf '      [ -f "$D/pane-text-after-down" ] && cp "$D/pane-text-after-down" "$D/pane-text"\n'
+  printf '      exit 0 ;;\n'
+  printf '    esac\n'
   printf '    [ -f "$D/exit-on-keys" ] && cp "$D/proc-shell" "$D/proc-out"\n'
+  printf '    [ -f "$D/proc-cwd-after-enter" ] && cp "$D/proc-cwd-after-enter" "$D/proc-cwd"\n'
   printf '    [ -f "$D/pane-text-after-enter" ] && cp "$D/pane-text-after-enter" "$D/pane-text"\n'
   printf '    n=$(($(cat "$D/enters") + 1)); printf "%%s" "$n" >"$D/enters"\n'
   printf '    [ "$n" -lt "$(cat "$D/accept-at")" ] || : >"$D/accepted"\n'
@@ -85,6 +93,16 @@ TRANSCRIPT="$STUB_DIR/transcript"
   printf 'exit 0\n'
 } >"$STUB_DIR/herdr"
 chmod 0755 "$STUB_DIR/herdr"
+
+# An lsof stub for the session's working directory, printed in the field
+# format lsof -Fn uses. The session's process id is beyond any pid_max, so
+# process_cwd never finds it under /proc and always asks this stub.
+{
+  printf '#!/bin/sh\n'
+  printf 'D=%s\n' "$STUB_DIR"
+  printf 'printf "p%%s\\nfcwd\\nn%%s\\n" 99999999 "$(cat "$D/proc-cwd")"\n'
+} >"$STUB_DIR/lsof"
+chmod 0755 "$STUB_DIR/lsof"
 
 # stub_herdr <pane text> - reset the stub: that pane text, a readable pane, an
 # agent start that refuses and an agent get that finds nothing.
@@ -100,14 +118,16 @@ stub_herdr() {
   printf '0' >"$STUB_DIR/enters"
   printf '99' >"$STUB_DIR/accept-at"
   rm -f "$STUB_DIR/accepted" "$STUB_DIR/exit-on-keys" \
-    "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter" "$STUB_DIR/pane-text-paste"
+    "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter" "$STUB_DIR/pane-text-paste" \
+    "$STUB_DIR/pane-text-after-down" "$STUB_DIR/proc-cwd-after-enter"
+  printf '%s' /nonexistent >"$STUB_DIR/proc-cwd"
   printf '%s\n' "$PROC_AGENT" >"$STUB_DIR/proc-out"
   printf '%s\n' "$PROC_SHELL" >"$STUB_DIR/proc-shell"
 }
 
 # The `pane process-info` replies for a pane running an agent and for one back
 # at its shell: only the foreground process group differs.
-PROC_AGENT='{"result":{"process_info":{"foreground_process_group_id":200,"shell_pid":100},"type":"pane_process_info"}}'
+PROC_AGENT='{"result":{"process_info":{"foreground_process_group_id":99999999,"shell_pid":100},"type":"pane_process_info"}}'
 PROC_SHELL='{"result":{"process_info":{"foreground_process_group_id":100,"shell_pid":100},"type":"pane_process_info"}}'
 
 # agent_get_json <pane> <tab> - the reply shape `herdr agent get` prints.
@@ -280,14 +300,233 @@ ok resolve_trust_prompt.unanswered "an unanswered prompt names the operator" \
   "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = unanswered ] &&
      [ "$TRUST_OWNER" = "$TRUST_OWNER_OPERATOR" ] && echo 0 || echo 1)"
 
-# The wait switched off: say so, ask nobody, read nothing.
+# The operator wait switched off: say so, ask nobody, send nothing. The one
+# read that remains is the check for this run's own sample.
 stub_herdr "$BLOCKED_PANE"
 run_resolve 0
 ok resolve_trust_prompt.disabled "a zero budget says the wait was disabled by the flag" \
   "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = disabled ] &&
      printf '%s' "$TRUST_REASON" | grep -qF -- '--trust-wait-seconds 0' && echo 0 || echo 1)"
-ok resolve_trust_prompt.disabled "a zero budget neither asks the operator nor reads the pane" \
-  "$([ ! -s "$STUB_DIR/banner" ] && [ ! -s "$STUB_DIR/calls" ] && echo 0 || echo 1)"
+ok resolve_trust_prompt.disabled "a zero budget neither asks the operator nor sends a key" \
+  "$([ ! -s "$STUB_DIR/banner" ] && ! grep -qF 'send-keys' "$STUB_DIR/calls" && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
+# The trust prompt for this run's own sample is the harness's to answer
+# ---------------------------------------------------------------------------
+#
+# The screens follow a live Claude Code 2.1.283 capture of the dialog: the
+# folder under "Accessing workspace:", wrapped at the pane width, the cursor on
+# "No, exit". Every folder below exists, so only identity decides. The sample
+# is named the way qualify.sh names one: lowercase words and a hex nonce.
+
+STUB_REAL=$(CDPATH= cd -P -- "$STUB_DIR" && pwd -P)
+NONCE=0123456789abcdef
+OWN="$STUB_REAL/greenfield-rust-full-$NONCE"
+SIBLING="$STUB_REAL/greenfield-rust-full-0123456789abcdee"
+ELSEWHERE="$STUB_REAL/other-folder"
+NL='
+'
+TAB=$(printf '\t')
+# Codex's three foreign folders (TSK-083 review round 1): a trailing blank,
+# a newline and a tab in the name, each once read as the sample.
+TRAILING="$OWN "
+NEWLINE="$STUB_REAL/greenfield-rust-full-01234567${NL}89abcdef"
+TABBED="$OWN$TAB-other"
+mkdir -p "$OWN" "$SIBLING" "$ELSEWHERE" "$TRAILING" "$NEWLINE" "$TABBED"
+ln -s "$ELSEWHERE" "$STUB_REAL/link-elsewhere"
+ln -s "$OWN" "$STUB_REAL/link-own"
+
+# trust_screen <folder> <no|yes> [width] - the dialog as the pane shows it.
+trust_screen() {
+  _ts_path=$1
+  printf '%s\n' '────────────────────────────────────────────────────────────'
+  printf ' Accessing workspace:\n\n'
+  while [ -n "$_ts_path" ]; do
+    _ts_line=$(printf '%s' "$_ts_path" | cut -c1-"${3:-400}")
+    printf ' %s\n' "$_ts_line"
+    _ts_path=${_ts_path#"$_ts_line"}
+  done
+  printf '\n Quick safety check: Is this a project you created or one\n'
+  printf ' you trust? (Like your own code, a well-known open source\n'
+  printf ' project, or work from your team). If not, take a moment to\n'
+  printf " review what's in this folder first.\n\n"
+  printf " Claude Code'll be able to read, edit, and execute files\n here.\n\n"
+  printf ' Security guide\n\n'
+  if [ "$2" = no ]; then
+    printf ' ❯ No, exit\n   Yes, I trust this folder\n'
+  else
+    printf '   No, exit\n ❯ Yes, I trust this folder\n'
+  fi
+  printf '\n Enter to confirm · Esc to cancel\n'
+  unset _ts_path _ts_line
+}
+
+# A pane narrower than the question wraps it; it is still the question.
+stub_herdr "$(trust_screen "$OWN" no 60)"
+trust_prompt_showing p1 && _r=0 || _r=$?
+ok trust_prompt_showing.wrapped "a question wrapped by a narrow pane is still showing" \
+  "$([ "$_r" = "$TRUST_SHOWING" ] && echo 0 || echo 1)"
+
+# own_stub <folder shown> <cursor after down> [width] [session folder] [sample]
+# - set the stub up: the dialog names <folder shown>, the session runs in
+# <session folder> (the shown folder by default), this run's sample is
+# <sample> ($OWN by default).
+own_stub() {
+  stub_herdr "$(trust_screen "$1" no "${3:-}")"
+  trust_screen "$1" "$2" "${3:-}" >"$STUB_DIR/pane-text-after-down"
+  printf '%s\n' "$TRUSTED_PANE" >"$STUB_DIR/pane-text-after-enter"
+  printf '0' >"$STUB_DIR/start-rc"
+  printf '%s' "${4:-$1}" >"$STUB_DIR/proc-cwd"
+  OWN_SAMPLE=${5:-$OWN}
+}
+
+# run_own <budget> <own_stub arguments> - drive the real trust branch.
+run_own() {
+  _ro_budget=$1
+  shift
+  own_stub "$@"
+  resolve_trust_prompt p1 t1 "$OWN_SAMPLE" "$_ro_budget" cf-selfcheck-cl01 \
+    /tmp/state/settings.json >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+  unset _ro_budget
+}
+
+# keys_sent - the keys the harness pressed, in order, on one line.
+keys_sent() {
+  sed -n 's/^pane send-keys p1 //p' "$STUB_DIR/calls" | tr '\n' ' '
+}
+
+run_own 0 "$OWN" yes
+ok trust_own.answered "the prompt for this run's own sample is answered with no operator wait" \
+  "$([ "$RESOLVE_RC" = 0 ] && [ "$TRUST_OUTCOME" = ready ] &&
+     [ "$(keys_sent)" = "down Enter " ] && echo 0 || echo 1)"
+ok trust_own.answered "the harness says it answered, and why; no operator banner" \
+  "$(printf '%s' "$TRUST_ANSWERED_BY" | grep -qF "own sample $OWN" &&
+     grep -qF "trust prompt answered by the harness" "$STUB_DIR/banner" &&
+     ! grep -qF 'ACTION NEEDED' "$STUB_DIR/banner" && echo 0 || echo 1)"
+
+run_own 0 "$OWN" yes 60
+ok trust_own.wrapped "a path wrapped at a 60-column pane is still read as the sample" \
+  "$([ "$RESOLVE_RC" = 0 ] && [ "$(keys_sent)" = "down Enter " ] && echo 0 || echo 1)"
+
+# Negative controls: each must leave the pane without a single key and hand
+# the prompt to the operator with a reason that says so. The session runs in
+# the folder the dialog names, except where the case says otherwise.
+#   symlink-own    the dialog shows a link to the sample, not its real path
+#   trailing-blank a sibling whose name ends in a blank
+#   newline        a folder whose name holds a newline; wrapped, its screen
+#                  reads exactly as the sample, and only the session's
+#                  working directory tells them apart
+#   tab            a folder whose name holds a tab
+#   session-elsewhere  the screen names the sample, the session runs elsewhere
+#   no-nonce, short-nonce, upper-case  a sample path the harness would not
+#                  have named, answered by nobody but the operator
+mkdir -p "$STUB_REAL/greenfield-rust-full" "$STUB_REAL/greenfield-rust-full-0123abcd" \
+  "$STUB_REAL/Greenfield-rust-full-$NONCE"
+while IFS='|' read -r _name _shown _width _session _sample; do
+  run_own 3 "$_shown" yes "$_width" "$_session" "$_sample"
+  ok "trust_other.$_name" "a prompt that is not provably this run's own sample gets no key and waits for the operator" \
+    "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "" ] &&
+       [ "$TRUST_OUTCOME" = unanswered ] && [ "$TRUST_OWNER" = "$TRUST_OWNER_OPERATOR" ] &&
+       [ -z "$TRUST_ANSWERED_BY" ] && grep -qF 'ACTION NEEDED' "$STUB_DIR/banner" &&
+       printf '%s' "$TRUST_REASON" | grep -qF "did not name this run's own sample" &&
+       echo 0 || echo 1)"
+done <<CASES
+sibling|$SIBLING||$SIBLING|
+parent|$STUB_REAL||$STUB_REAL|
+symlink-elsewhere|$STUB_REAL/link-elsewhere||$ELSEWHERE|
+symlink-own|$STUB_REAL/link-own||$OWN|
+missing|$STUB_REAL/not-there||$STUB_REAL/not-there|
+prefix|$OWN-b||$OWN-b|
+trailing-blank|$TRAILING||$TRAILING|
+tab|$TABBED||$TABBED|
+session-elsewhere|$OWN||$SIBLING|
+no-nonce|$STUB_REAL/greenfield-rust-full||$STUB_REAL/greenfield-rust-full|$STUB_REAL/greenfield-rust-full
+short-nonce|$STUB_REAL/greenfield-rust-full-0123abcd||$STUB_REAL/greenfield-rust-full-0123abcd|$STUB_REAL/greenfield-rust-full-0123abcd
+upper-case|$STUB_REAL/Greenfield-rust-full-$NONCE||$STUB_REAL/Greenfield-rust-full-$NONCE|$STUB_REAL/Greenfield-rust-full-$NONCE
+CASES
+unset _name _shown _width _session _sample
+
+# The newline folder needs its own case: its name cannot sit on one line of
+# the table above. Its screen is the sample's own, wrapped where the name
+# breaks, so the screen alone would pass.
+run_own 3 "$OWN" yes "" "$NEWLINE"
+ok trust_other.newline "a folder whose name holds a newline, shown exactly as the sample, gets no key" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "" ] &&
+     [ "$TRUST_OUTCOME" = unanswered ] && [ -z "$TRUST_ANSWERED_BY" ] && echo 0 || echo 1)"
+
+# The dialog parser: an exact path or nothing.
+own_stub "$OWN" yes
+trust_dialog "$STUB_DIR/pane-text-after-down" >"$STUB_DIR/dialog" && _r=0 || _r=1
+ok trust_dialog.exact "the parsed path is the sample's real path and the cursor is on yes" \
+  "$([ "$_r" = 0 ] && [ "$(sed -n 1p "$STUB_DIR/dialog")" = "$OWN" ] &&
+     [ "$(sed -n 2p "$STUB_DIR/dialog")" = yes ] && echo 0 || echo 1)"
+for _bad in "$TRAILING" "$TABBED" "$STUB_REAL/sample with space-$NONCE"; do
+  trust_screen "$_bad" yes >"$STUB_DIR/screen"
+  trust_dialog "$STUB_DIR/screen" >/dev/null && _r=1 || _r=0
+  ok trust_dialog.refused "a path line with a blank, tab or other character outside the set is refused" "$_r"
+done
+unset _bad
+
+# The cursor did not reach "Yes" after the move: no Enter is pressed.
+run_own 3 "$OWN" no
+ok trust_own.no_enter "Enter is pressed only with the cursor on Yes" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "down " ] && echo 0 || echo 1)"
+
+# The screen after the move names another folder: no Enter either.
+own_stub "$OWN" yes
+trust_screen "$SIBLING" yes >"$STUB_DIR/pane-text-after-down"
+resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
+  >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+ok trust_own.changed "a dialog that changes folder between reads gets no Enter" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "down " ] && echo 0 || echo 1)"
+
+# The accepted read-to-key gap: the screen and the session change after the
+# final read, so Enter goes out. The after-answer check must then stop the run.
+own_stub "$OWN" yes
+printf '%s' "$SIBLING" >"$STUB_DIR/proc-cwd-after-enter"
+resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
+  >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+ok trust_own.race "a change after the final read is caught after the answer and stops the run" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "down Enter " ] &&
+     [ "$TRUST_OUTCOME" = stopped ] && [ "$TRUST_OWNER" = "$TRUST_OWNER_HARNESS" ] &&
+     printf '%s' "$TRUST_REASON" | grep -qF 'not running in that sample' &&
+     ! grep -qF 'agent start' "$STUB_DIR/calls" && echo 0 || echo 1)"
+
+# The session is gone after the answer (a No, or a crash): stop the run.
+own_stub "$OWN" yes
+: >"$STUB_DIR/exit-on-keys"
+resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
+  >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+ok trust_own.exited "a session gone after the answer stops the run" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = stopped ] &&
+     printf '%s' "$TRUST_REASON" | grep -qF 'no session in the foreground' && echo 0 || echo 1)"
+
+# Answered, but the dialog never clears: the run stops.
+own_stub "$OWN" yes
+rm -f "$STUB_DIR/pane-text-after-enter"
+_saved=$TRUST_SELF_ANSWER_SECONDS
+TRUST_SELF_ANSWER_SECONDS=2
+resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
+  >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+TRUST_SELF_ANSWER_SECONDS=$_saved
+ok trust_own.stuck "an answered prompt that stays on screen stops the run, owned by the harness" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = stopped ] &&
+     [ "$TRUST_OWNER" = "$TRUST_OWNER_HARNESS" ] && echo 0 || echo 1)"
+unset _saved
+
+# Mutation probe: with the session check removed, the newline folder whose
+# screen reads as the sample is answered, so that check is what stops it.
+MUTANT_ID="$STUB_DIR/lib-identity.sh"
+sed 's#^    pane_session_in "\$1" "\$_tdn_real" >/dev/null; then$#    true; then#' \
+  "$SCRIPT_DIR/lib.sh" >"$MUTANT_ID"
+run_own 3 "$OWN" yes "" "$NEWLINE"
+_real_keys=$(keys_sent)
+_mutant_keys=$(sh -c '. "$1"; TRANSCRIPT=$2/transcript; resolve_trust_prompt p1 t1 "$3" 3 cf-selfcheck-cl01 /tmp/s.json >/dev/null 2>&1
+  sed -n "s/^pane send-keys p1 //p" "$2/calls" | tr "\n" " "' sh "$MUTANT_ID" "$STUB_DIR" "$OWN" 2>/dev/null)
+ok mutation.identity "without the session check a folder that only looks like the sample would be answered" \
+  "$([ "$(grep -c '^    true; then$' "$MUTANT_ID")" = 1 ] &&
+     [ "$_real_keys" = "" ] && [ -n "$_mutant_keys" ] && echo 0 || echo 1)"
+unset _real_keys _mutant_keys
 
 # ---------------------------------------------------------------------------
 # Mutation probe
@@ -931,7 +1170,7 @@ ok pipeline.launch "any other recorded result reports the foreground" \
 printf '{"message":{"content":[{"type":"text","text":"no tools"}]}}\n' >"$LAUNCH_TX"
 _launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
 ok pipeline.launch "a transcript without a Workflow call says so" \
-  "$([ "$_launch" = "workflow launch: no Workflow call recorded" ] && echo 0 || echo 1)"
+  "$([ "$_launch" = "workflow launch: no pipeline Workflow call recorded" ] && echo 0 || echo 1)"
 
 rm -f "$LAUNCH_TX"
 _launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
@@ -951,11 +1190,13 @@ ok pipeline.shape "a rejected verify does not" \
 
 TASK_OUT="$STUB_DIR/task.output"
 MODEL_RESULT="$STUB_DIR/model-result.txt"
-# write_task_tx - a transcript with the pipeline Workflow launched as task
-# wtask0001 and Claude Code's notice naming its output file.
+# write_task_tx [input-json] - a transcript with a Workflow call launched as
+# task wtask0001 and Claude Code's notice naming its output file. The call's
+# input defaults to the pipeline's script path.
 write_task_tx() {
+  _wtt_input=${1:-'{"scriptPath":"/s/.claude/workflows/pipeline.workflow.js"}'}
   {
-    printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Workflow","input":{"scriptPath":"/s/.claude/workflows/pipeline.workflow.js"}}]}}\n'
+    printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Workflow","input":%s}]}}\n' "$_wtt_input"
     printf '{"type":"user","promptId":"p1","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"status":"async_launched","taskId":"wtask0001","runId":"wf_x"}}\n'
     printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\\n<task-id>wtask0001</task-id>\\n<tool-use-id>toolu_1</tool-use-id>\\n<output-file>%s</output-file>\\n</task-notification>"}\n' "$TASK_OUT"
   } >"$LAUNCH_TX"
@@ -983,6 +1224,66 @@ rm -f "$TASK_OUT"
 _task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
 ok pipeline.task "a missing task output is no proof" \
   "$([ "$_r" != 0 ] && printf '%s' "$_task" | grep -q 'output unreadable' && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
+# One rule recognises the pipeline's Workflow call in every reading
+# ---------------------------------------------------------------------------
+
+printf '{"summary":"s","result":%s}\n' "$GOOD_RESULT" >"$TASK_OUT"
+printf '%s\n' "$GOOD_RESULT" >"$MODEL_RESULT"
+TASK_PROOF="Claude Code task wtask0001 output: status complete, stages build/verify, verify verdict approved; agrees with the result file"
+
+# check_pipeline_match <label> <yes|no> - read the current transcript with the
+# invocation, launch and task readings and check that each one does, or does
+# not, find the pipeline's Workflow call in it.
+check_pipeline_match() {
+  _cpm_inv=$(HOME="$FAKE_HOME" workflow_invocation_evidence "$STUB_DIR/state")
+  _cpm_launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
+  _cpm_task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") &&
+    _cpm_r=0 || _cpm_r=$?
+  if [ "$2" = yes ]; then
+    ok pipeline.match "$1: the invocation reads yes" \
+      "$([ "$_cpm_inv" = yes ] && echo 0 || echo 1)"
+    ok pipeline.match "$1: the launch reads its run in the background" \
+      "$([ "$_cpm_launch" = "workflow run wf_x launched in the background" ] && echo 0 || echo 1)"
+    ok pipeline.match "$1: the task output is the proof" \
+      "$([ "$_cpm_r" = 0 ] && [ "$_cpm_task" = "$TASK_PROOF" ] && echo 0 || echo 1)"
+  else
+    ok pipeline.match "$1: the invocation reads no" \
+      "$([ "$_cpm_inv" = no ] && echo 0 || echo 1)"
+    ok pipeline.match "$1: no pipeline launch is claimed" \
+      "$([ "$_cpm_launch" = "workflow launch: no pipeline Workflow call recorded" ] && echo 0 || echo 1)"
+    ok pipeline.match "$1: no pipeline task is matched" \
+      "$([ "$_cpm_r" != 0 ] && printf '%s' "$_cpm_task" | grep -q 'no backgrounded pipeline Workflow task' &&
+         echo 0 || echo 1)"
+  fi
+}
+
+# The script path form, and the registered name that live Claude Code
+# sessions also use, are both the pipeline.
+write_task_tx
+check_pipeline_match "a Workflow call on the script path" yes
+write_task_tx '{"name":"pipeline","args":{"stages":["build","verify"]}}'
+check_pipeline_match "a Workflow call naming the pipeline" yes
+
+# Negative controls: another workflow's name, or a name that only contains
+# the word, is not the pipeline.
+for _other in deploy pipeline-canary; do
+  write_task_tx "{\"name\":\"$_other\",\"args\":{}}"
+  check_pipeline_match "a Workflow call naming $_other" no
+done
+
+# The script path mentioned only in prose, or read by another tool, next to a
+# Workflow call on another workflow, is not the pipeline. The launched task is
+# recorded against the Read call, so only the match can reject it.
+{
+  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"I will run .claude/workflows/pipeline.workflow.js next."}]}}\n'
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/s/.claude/workflows/pipeline.workflow.js"}},{"type":"tool_use","id":"t2","name":"Workflow","input":{"name":"deploy"}}]}}\n'
+  printf '{"type":"user","promptId":"p1","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"status":"async_launched","taskId":"wtask0001","runId":"wf_x"}}\n'
+  printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\\n<task-id>wtask0001</task-id>\\n<tool-use-id>toolu_1</tool-use-id>\\n<output-file>%s</output-file>\\n</task-notification>"}\n' "$TASK_OUT"
+} >"$LAUNCH_TX"
+check_pipeline_match "pipeline.workflow outside a Workflow call" no
+write_task_tx
 
 # ---------------------------------------------------------------------------
 # The pipeline's work is checked on its own branch
@@ -1085,6 +1386,106 @@ ok qualify.sh "exports the candidate into the live pane and records its binding"
   "$(grep -qF 'pane_env_command "$BIN_DIR:$DECOY_DIR" "$_pane_codeflow"' "$SCRIPT_DIR/qualify.sh" &&
      grep -qF 'pane_codeflow_binding "$_pane_codeflow" "$BINARY"' "$SCRIPT_DIR/qualify.sh" &&
      echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
+# present-review.py: the positive present resolve row's review client
+# ---------------------------------------------------------------------------
+#
+# A stub session service on loopback checks each request the way the real
+# service does: the bootstrap post carries the capability and no Origin, and
+# the review post carries the cookie the bootstrap set, the session Origin,
+# the request marker and JSON. Mode "refuse" rejects the capability and mode
+# "nocookie" sets no cookie; the client must then print no event id.
+
+review_stub() { # <mode> <bootstrap-file> -> "<client exit> <event id or empty> <stub verdict>"
+  python3 - "$1" "$2" "$SCRIPT_DIR/present-review.py" <<'PY'
+import http.server, json, subprocess, sys, threading
+mode, page, client = sys.argv[1], sys.argv[2], sys.argv[3]
+seen = {"bootstrap": "none", "review": "none"}
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+        auth = "127.0.0.1:%d" % self.server.server_port
+        if self.path == "/bootstrap":
+            ok = body == "capability=cap-123" and self.headers.get("Origin") is None
+            seen["bootstrap"] = "ok" if ok else "bad"
+            if mode == "refuse" or not ok:
+                self.send_response(401); self.end_headers(); self.wfile.write(b"invalid"); return
+            self.send_response(200)
+            if mode != "nocookie":
+                self.send_header("Set-Cookie", "cfp=sess-9; Path=/app; HttpOnly; SameSite=Strict")
+            self.end_headers(); return
+        if self.path == "/app/api/reviews":
+            doc = json.loads(body)
+            ok = (self.headers.get("Cookie") == "cfp=sess-9"
+                  and self.headers.get("Origin") == "http://" + auth
+                  and self.headers.get("X-CF-Present") == "1"
+                  and self.headers.get("Content-Type") == "application/json"
+                  and doc["session_id"] == "s-1" and doc["revision"] == 2
+                  and doc["verdict"] == "request_changes" and doc["instruction"])
+            seen["review"] = "ok" if ok else "bad"
+            self.send_response(200 if ok else 403); self.end_headers()
+            self.wfile.write(json.dumps({"event_id": doc["event_id"], "state": "received"}).encode())
+server = http.server.HTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+open(page, "w").write('<form id="bootstrap" method="post" action="http://127.0.0.1:%d/bootstrap">'
+                      '<input type="hidden" name="capability" value="cap-123"></form>' % server.server_port)
+run = subprocess.run([sys.executable, client, page, "s-1", "2"], capture_output=True, text=True)
+server.shutdown()
+print(run.returncode, run.stdout.strip() or "-", seen["bootstrap"], seen["review"])
+PY
+}
+
+set -- $(review_stub ok "$STUB_DIR/bootstrap.html")
+ok present-review.py "posts the bootstrap, then the review with cookie, Origin and marker" \
+  "$([ "$1" = 0 ] && printf '%s' "$2" | grep -Eq '^[0-9a-f-]{36}$' &&
+     [ "$3" = ok ] && [ "$4" = ok ] && echo 0 || echo 1)"
+set -- $(review_stub refuse "$STUB_DIR/bootstrap.html")
+ok present-review.py "a refused bootstrap gives no event id and sends no review" \
+  "$([ "$1" = 1 ] && [ "$2" = - ] && [ "$4" = none ] && echo 0 || echo 1)"
+set -- $(review_stub nocookie "$STUB_DIR/bootstrap.html")
+ok present-review.py "a bootstrap that sets no cookie gives no event id and sends no review" \
+  "$([ "$1" = 1 ] && [ "$2" = - ] && [ "$4" = none ] && echo 0 || echo 1)"
+set --
+
+ok qualify.sh "the positive present resolve row runs through present-review.py" \
+  "$(grep -qF 'python3 "$SCRIPT_DIR/present-review.py" "$_bootstrap" "$_sid"' "$SCRIPT_DIR/qualify.sh" &&
+     ! grep -q 'hosts no browser' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
+
+# grade_present_resolve: the positive resolve row passes only on the saved
+# effect. Each control changes one input from the passing case: history read
+# after resolve must show this event addressed after the resolved version.
+EV=11111111-2222-4333-8444-555555555555
+ACK="resolved $EV as addressed"
+history_json() { # <extra events JSON, comma-led or empty>
+  printf '{"feedback_events":[{"event":"received","sequence":1,"envelope":{"event_id":"%s"}},' "$EV"
+  printf '{"event":"delivered","sequence":2,"event_id":"%s","at_unix":1}%s]}' "$EV" "$1"
+}
+ADDRESSED=$(printf ',{"event":"addressed","sequence":3,"event_id":"%s","at_unix":2}' "$EV")
+grade_case() { # <name> <expected> <event> <delivered> <version> <status> <output> <history>
+  _gc_name=$1 _gc_want=$2
+  shift 2
+  _gc_got=$(grade_present_resolve "$@")
+  ok "grade_present_resolve.$_gc_name" "the row is $_gc_want" \
+    "$([ "$_gc_got" = "$_gc_want" ] && echo 0 || echo 1)"
+  unset _gc_name _gc_want _gc_got
+}
+grade_case addressed "$RESULT_PASSED" "$EV" yes 2 0 "$ACK" "$(history_json "$ADDRESSED")"
+grade_case ack-only "$RESULT_FAILED" "$EV" yes 2 0 "$ACK" "$(history_json "")"
+grade_case stale "$RESULT_FAILED" "$EV" yes 3 0 "$ACK" "$(history_json "$ADDRESSED")"
+grade_case other-event "$RESULT_FAILED" "$EV" yes 2 0 "$ACK" \
+  "$(history_json ',{"event":"addressed","sequence":3,"event_id":"99999999-2222-4333-8444-555555555555","at_unix":2}')"
+grade_case also-dismissed "$RESULT_FAILED" "$EV" yes 2 0 "$ACK" \
+  "$(history_json "$ADDRESSED$(printf ',{"event":"dismissed","sequence":4,"event_id":"%s","at_unix":3}' "$EV")")"
+grade_case malformed "$RESULT_FAILED" "$EV" yes 2 0 "$ACK" '{"feedback_events":'
+grade_case resolve-failed "$RESULT_FAILED" "$EV" yes 2 1 "$ACK" "$(history_json "$ADDRESSED")"
+grade_case not-delivered "$RESULT_FAILED" "$EV" no 2 0 "$ACK" "$(history_json "$ADDRESSED")"
+grade_case no-ack "$RESULT_FAILED" "$EV" yes 2 0 "" "$(history_json "$ADDRESSED")"
+grade_case no-event "$RESULT_FAILED" "" yes 2 0 "$ACK" "$(history_json "$ADDRESSED")"
+ok qualify.sh "the positive resolve row is graded on history read after resolve" \
+  "$(grep -qF '_s=$(grade_present_resolve "$_event" "$_delivered" "$_version"' "$SCRIPT_DIR/qualify.sh" &&
+     ! grep -qF 'grep -qF "resolved $_event as addressed"; then' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
 
 printf '\n%s check(s), %s failed\n' "$CHECKS" "$FAILED"
 [ "$FAILED" = 0 ]

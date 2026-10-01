@@ -5,10 +5,10 @@
     "family": "flow",
     "binding": "authored",
     "question": "What is the duo, and who decides?",
-    "idea": "Two seats draft the same brief apart, then one approved plan is executed, verified, reviewed by the other lineage and merged by the operator.",
-    "title": "Two drafts first, then one plan",
+    "idea": "Two seats discover the same brief apart, Claude drafts one plan that Codex challenges once, and the approved plan is executed, verified, reviewed by the other lineage and merged by the operator.",
+    "title": "Independent discovery, then one plan challenged once",
     "kicker": "Duo orchestration",
-    "caption": "The second seat drafts before it sees the first, so review never shrinks to critiquing one supplied plan.",
+    "caption": "The second seat discovers before it sees the first, so its challenge never shrinks to critiquing one supplied plan.",
     "states": [
       {
         "name": "seat",
@@ -38,22 +38,22 @@
     ],
     "facts": [
       {
-        "claim": "neither seat sees the other's conclusions first",
+        "claim": "neither seat sees the other's findings first",
         "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
-        "derive": "the anti-anchoring sentence",
+        "derive": "the discovery sentence",
         "check": {
           "kind": "contains",
-          "text": "and neither sees the other's conclusions first"
+          "text": "and neither sees the other's findings first"
         },
         "value": true
       },
       {
-        "claim": "both seats approve the assignments before implementation",
+        "claim": "Claude drafts the one plan and Codex challenges it, with no second plan",
         "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
-        "derive": "the approval sentence",
+        "derive": "the one-plan sentence",
         "check": {
           "kind": "contains",
-          "text": "Both seats approve those assignments before implementation"
+          "text": "there is no second plan and no reconciliation round"
         },
         "value": true
       },
@@ -63,7 +63,7 @@
         "derive": "the review sentence",
         "check": {
           "kind": "contains",
-          "text": "accepts it, and a lineage different from the actual author's reviews it"
+          "text": "accepts it, and a lineage\ndifferent from the actual author's reviews it"
         },
         "value": true
       }
@@ -90,7 +90,7 @@
           ]
         },
         {
-          "text": "drafts alone",
+          "text": "discovers",
           "x": 50,
           "y": 72,
           "for": [
@@ -115,7 +115,7 @@
           ]
         },
         {
-          "text": "drafts alone",
+          "text": "discovers",
           "x": 50,
           "y": 186,
           "for": [
@@ -170,7 +170,7 @@
           "id": "p"
         },
         {
-          "text": "Plan vN",
+          "text": "one plan",
           "x": 250,
           "y": 109,
           "style": "strong",
@@ -179,7 +179,7 @@
           ]
         },
         {
-          "text": "both approve",
+          "text": "challenged",
           "x": 250,
           "y": 130,
           "for": [
@@ -306,7 +306,7 @@
           ]
         },
         {
-          "text": "drafts alone",
+          "text": "discovers",
           "x": 42,
           "y": 42,
           "for": [
@@ -331,7 +331,7 @@
           ]
         },
         {
-          "text": "drafts alone",
+          "text": "discovers",
           "x": 222,
           "y": 42,
           "for": [
@@ -480,14 +480,14 @@
       ],
       "rows": [
         [
-          "draft",
+          "discover",
           "Claude seat and Codex seat",
-          "each researches and plans from the same brief, without seeing the other"
+          "each discovers from the same brief, without seeing the other's findings"
         ],
         [
-          "Plan vN",
-          "both seats",
-          "one reconciled plan; both approve the assignments"
+          "one plan",
+          "Claude drafts, Codex challenges once",
+          "no second plan and no reconciliation round; both seats approve one version"
         ],
         [
           "execute",

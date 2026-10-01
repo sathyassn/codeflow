@@ -8,7 +8,7 @@
     "idea": "The spine runs from a capability through a work item and an ADR or spec to the ledger, four of the six layers hold its stations, and the pull request it crosses is held by none.",
     "title": "The six knowledge layers along the traceability spine",
     "kicker": "The knowledge model",
-    "description": "The axis is the five stations of the traceability spine: capability, work item, ADR or spec, pull request, ledger. WHAT holds capability, WORK holds the work item and also reaches ADR or spec because specs live in project-management, HOW holds ADR or spec, and TRACE holds the ledger. The spine enters each of those four layers at a disc and runs left to right in the source's order; it crosses the pull request station between HOW and TRACE, where no layer holds it. WHY and RULES hold no station and draw no bar. Beside its name, WHY is marked human-owned and WHAT is marked as updated every ship.",
+    "description": "The axis is the five stations of the traceability spine: capability, work item, ADR or spec, pull request, ledger. WHAT holds capability, WORK holds the work item and also reaches ADR or spec because specs live in project-management, HOW holds ADR or spec, and TRACE holds the ledger. The spine enters each of those four layers at a disc and runs left to right in the source's order; it crosses the pull request station between HOW and TRACE, where no layer holds it. WHY and RULES hold no station and draw no bar. Beside its name, WHY is marked human-owned.",
     "caption": "The spine runs through WHAT, WORK, HOW and TRACE in that order, and the pull request it crosses on the way to the ledger is held by no layer.",
     "states": [
       {
@@ -30,58 +30,58 @@
     "facts": [
       {
         "claim": "the product layer is human-owned",
-        "source": "AGENTS.md#where-things-live",
-        "derive": "the Why row",
+        "source": "docs/product.md",
+        "derive": "the WHY layer comment",
         "check": {
           "kind": "contains",
-          "text": "`docs/product.md` (human-owned)"
+          "text": "WHY layer. Human-owned:"
         },
         "value": true
       },
       {
-        "claim": "the rules live in AGENTS.md, .codeflow/rules/ and the skills",
-        "source": "AGENTS.md#where-things-live",
-        "derive": "the Rules row",
+        "claim": "the rules live in AGENTS.md's managed block, the rules directory and the skills",
+        "source": "assets/base/rules/workflow-discipline.md#changing-these-instructions",
+        "derive": "the managed instruction sentence",
         "check": {
           "kind": "contains",
-          "text": "this map, `.codeflow/rules/` and the skills"
+          "text": "The managed block of `AGENTS.md`, this directory and the skills"
         },
         "value": true
       },
       {
-        "claim": "the capability registry changes every ship",
-        "source": "AGENTS.md#where-things-live",
-        "derive": "the What row",
+        "claim": "the capability registry is the what layer",
+        "source": "AGENTS.md",
+        "derive": "the where things live line",
         "check": {
           "kind": "contains",
-          "text": "`docs/capabilities.md` (CAP registry, every ship)"
+          "text": "`docs/capabilities.md` (what)"
         },
         "value": true
       },
       {
         "claim": "planned and active work lives in project-management/",
-        "source": "AGENTS.md#where-things-live",
-        "derive": "the work sentence",
+        "source": "AGENTS.md",
+        "derive": "the where things live line",
         "check": {
           "kind": "contains",
-          "text": "Planned and active work lives in `project-management/`"
+          "text": "`project-management/` (work)"
         },
         "value": true
       },
       {
         "claim": "specs live in the WORK layer",
-        "source": "AGENTS.md#where-things-live",
-        "derive": "the work sentence",
+        "source": "docs/adoption.md",
+        "derive": "the full tier row",
         "check": {
           "kind": "contains",
-          "text": "`project-management/` (epics, specs, tasks"
+          "text": "`project-management/` (epics, tasks, specs, templates)"
         },
         "value": true
       },
       {
         "claim": "architecture and decisions live in docs/architecture.md and docs/decisions/",
-        "source": "AGENTS.md#where-things-live",
-        "derive": "the How row",
+        "source": "AGENTS.md",
+        "derive": "the where things live line",
         "check": {
           "kind": "contains",
           "text": "`docs/architecture.md` and `docs/decisions/`"
@@ -90,8 +90,8 @@
       },
       {
         "claim": "the trace layer is the ledger and codeflow recall",
-        "source": "AGENTS.md#where-things-live",
-        "derive": "the Trace row",
+        "source": "AGENTS.md",
+        "derive": "the where things live line",
         "check": {
           "kind": "contains",
           "text": "the ledger and `codeflow recall`"
@@ -100,21 +100,21 @@
       },
       {
         "claim": "the spine runs from capability through a work item",
-        "source": "AGENTS.md#where-things-live",
+        "source": "docs/product.md#architecture",
         "derive": "the spine sentence",
         "check": {
           "kind": "contains",
-          "text": "The traceability spine runs capability, work item,"
+          "text": "The traceability spine links a capability to its epics and tasks"
         },
         "value": true
       },
       {
         "claim": "the spine passes the pull request between the ADR or spec and the ledger",
-        "source": "AGENTS.md#where-things-live",
+        "source": "docs/product.md#architecture",
         "derive": "the spine sentence",
         "check": {
           "kind": "contains",
-          "text": "ADR or spec, PR, ledger"
+          "text": "decisions and specs, the pull request and the ledger"
         },
         "value": true
       }
@@ -241,15 +241,6 @@
           "x": 0,
           "y": 160,
           "style": "strong",
-          "for": [
-            "b2"
-          ]
-        },
-        {
-          "text": "every ship",
-          "x": 58,
-          "y": 160,
-          "style": "mute",
           "for": [
             "b2"
           ]
@@ -494,15 +485,6 @@
           ]
         },
         {
-          "text": "every ship",
-          "x": 72,
-          "y": 143,
-          "style": "mute",
-          "for": [
-            "b2"
-          ]
-        },
-        {
           "text": "docs/capabilities.md",
           "x": 8,
           "y": 164,
@@ -695,7 +677,7 @@
         [
           "WHAT",
           "what the system does",
-          "docs/capabilities.md (CAP registry, every ship)",
+          "docs/capabilities.md",
           "capability"
         ],
         [

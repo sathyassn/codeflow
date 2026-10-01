@@ -137,9 +137,10 @@ export async function methodAnswer(caseId, entry) {
 
 // What the class gate observes in a panel, read from the adapted page rather
 // than a built one: each altitude section's grammar figures, cf-stage
-// figures, tables, list items and code blocks. The utility chrome (heading,
-// Display control, no Comment) is the runtime's and is taken as present; the
-// browser build that observes it is not run here.
+// figures, tables, list items and code blocks, and the page-class marker the
+// adapter writes. The utility chrome (heading, Display control, no Comment)
+// is the runtime's and is taken as present; the browser build that observes
+// it is not run here.
 export function observeAdaptedPage(text, route) {
   const panelCarriers = { concept: null, architecture: null, technical: null };
   for (const match of text.matchAll(/<section class="portal-altitude"[^>]*data-altitude="(\w+)">([\s\S]*?)<\/section>/g)) {
@@ -151,7 +152,7 @@ export function observeAdaptedPage(text, route) {
     };
   }
   return {
-    route, headings: 1, displayControls: 1, commentChrome: 0, provenance: text.includes('class="portal-provenance"'),
+    route, pageClassMarker: text.match(/data-cf-page-class="([^"]*)"/)?.[1] ?? null, headings: 1, displayControls: 1, commentChrome: 0, provenance: text.includes('class="portal-provenance"'),
     altitudePanels: Object.keys(panelCarriers).filter((panel) => panelCarriers[panel] !== null), panelCarriers,
     pointerColumns: [], pointerRows: 0, companions: (text.match(/data-cf-companion=/g) ?? []).length,
   };

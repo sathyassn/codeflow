@@ -288,6 +288,13 @@ fn the_codex_exec_guard_wiring_judges_composed_deletions_and_help() {
     for (form, _) in guard_forms::COMPOSED_PAIRS {
         let out = run_codex_exec_guard(root, form);
         assert_eq!(out.status.code(), Some(2), "{form}");
+        // A policy refusal from the current binary carries no reinstall advice.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("codeflow-cli-installer.sh"),
+            "{form}: {stderr}"
+        );
+        assert!(!stderr.contains("codeflow update"), "{form}: {stderr}");
     }
     for command in guard_forms::PROJECT_DELETIONS {
         let out = run_codex_exec_guard(root, command);
