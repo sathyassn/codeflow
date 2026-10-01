@@ -1320,7 +1320,9 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
             return
     if launch["status"] != "pending":
         return
-    if agent.get("agent_status") == "working":
+    # A prompt needs a ready editor: Herdr's working status means delivery
+    # only once this launch was seen idle at its editor, never in startup.
+    if agent.get("agent_status") == "working" and launch.get("idle_seen"):
         launch["delivered_before_ready"] = True
 
     def before_key() -> None:
@@ -1338,6 +1340,8 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
         launch.update(status="startup_refused", error=str(exc),
                       screen_sha256="sha256:" + hashlib.sha256(screen.encode()).hexdigest())
         return
+    if agent.get("agent_status") == "idle":
+        launch["idle_seen"] = True
     if agent.get("agent_status") not in {"idle", "working", "done"}:
         return
     # Readiness: verify the live process again, hook and plugin checks included.
@@ -1469,7 +1473,7 @@ def peer_findings(run: dict, record: dict | None, watched: bool = True) -> tuple
     `watched` is false when launch refused before the watcher started."""
     peers = run["peers"]
     flags, summary = set(), {"requests": [], "peers": [], "launcher_logs": [], "watcher": None,
-                             "errors": [], "coverage_gaps": []}
+                             "errors": [], "coverage_gaps": [], "early_deliveries": []}
     for name, expected in peers["shim_sha256"].items():
         path = Path(peers["bin"]) / name
         if not path.is_file() or digest_file(path) != expected:
@@ -1508,6 +1512,17 @@ def peer_findings(run: dict, record: dict | None, watched: bool = True) -> tuple
             flags.add(PEER_FLAGS["refused"])
         elif entry.get("bound") is None:
             flags.add(PEER_FLAGS["unobserved"])
+    # The trial's herdr logs each delivery it lets through. One to a peer pane
+    # before a launch there was recorded ready came too early.
+    for entry in summary["launcher_logs"]:
+        pane = entry.get("pane")
+        if entry.get("kind") != "herdr-delivery" or pane == run.get("pane"):
+            continue
+        launches = record["peers"].get(pane, {}).get("launches", [])
+        if not any(launch.get("ready_at") is not None and launch["ready_at"] <= entry.get("time", 0)
+                   for launch in launches):
+            flags.add(PEER_FLAGS["delivered_early"])
+            summary["early_deliveries"].append(entry)
     for peer in record["peers"].values():
         summary["peers"].append(peer)
         if peer.get("outside_workspace"):

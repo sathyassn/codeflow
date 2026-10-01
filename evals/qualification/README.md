@@ -408,6 +408,8 @@ checkout. Watch roots overlapping these folders are refused.
   `send-keys` and `run`, `agent prompt` and `send-keys`) is allowed for the
   subject's own pane; any other pane must be in the trial workspace and have
   the watcher's ready record, waited for up to 30 seconds, or nothing is sent.
+  Each delivery let through is logged with its time and pane, and `finish`
+  checks it against the time the watcher recorded that peer ready.
   Other Herdr calls pass through.
 - `claude`, `codex`, `grok`: version, help and sign-in status calls pass
   through. The runner's own seat start passes through once, in the subject's
@@ -488,7 +490,7 @@ poll errors and coverage gaps. These validity flags invalidate a trial:
 | `peer_startup_refused` | a hook review, an unknown trust screen, another path, or a process change before a key; no key sent |
 | `peer_not_ready` | a verified peer never became ready |
 | `peer_plugin_drift` | the plugin inventory changed by the peer's readiness; no ready record, so the trial's `herdr` sends it nothing |
-| `peer_delivered_before_ready` | Herdr saw the peer working before its ready record |
+| `peer_delivered_before_ready` | the trial's `herdr` let a delivery to the peer through before the watcher recorded it ready, or Herdr saw the unready peer working after it sat idle at its editor; working during startup does not count |
 | `peer_delivery_refused` | the trial's `herdr` refused to type into a pane without a ready record |
 | `peer_launcher_changed` | a launcher file or `context.json` changed |
 | `peer_watch_incomplete` | the watcher did not cover the trial through finish: a failed poll, no completed poll, more than 10 seconds between polls or before the stop, its time limit, or no clean stop |
@@ -508,9 +510,11 @@ leaves it unanswered and flags the trial. The launchers are not containment.
 A seat started by another route can run before the watcher sees it and can
 use the operator's own harness folders; the watcher flags it by pane, cwd and
 live process, and only while it runs. A prompt sent through the real Herdr
-binary bypasses the ready record; the watcher flags it as
-`peer_delivered_before_ready` only when Herdr reports the peer working before
-readiness. A process whose environment the OS does not show fails
+binary bypasses the ready record and the trial's delivery log; the watcher
+flags it as `peer_delivered_before_ready` only when Herdr reports the peer
+working after it sat idle at its editor while still unready. The delivery log
+is written by the subject's own process, so a subject that deletes it, or a
+sandboxed shell that cannot write it, leaves no logged delivery. A process whose environment the OS does not show fails
 verification; macOS hides it for its own platform binaries, such as
 `/bin/sleep`. A subject that edits the launcher files is flagged, not
 stopped. A peer working outside the trial's folders in the trial workspace

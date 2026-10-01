@@ -7,7 +7,8 @@ nothing from the evaluator's checkout and never names it.
 
 `herdr`: tab and pane creation get the trial environment and stay in the
 trial's Herdr workspace; other workspaces are refused. Typing into another
-pane waits for the watcher's ready record for that pane, then refuses.
+pane waits for the watcher's ready record for that pane, then refuses; each
+delivery let through is logged with its time and pane.
 Everything else passes through unchanged.
 
 `claude`, `codex`, `grok`: version, help and sign-in status calls pass
@@ -137,6 +138,7 @@ def herdr(context: dict, args: list[str]) -> None:
                                          or not ready(context, where["pane"])):
             log(context, "herdr-delivery-refused", {"args": args[:2], "pane": where["pane"]})
             refuse("this pane is not a verified ready peer; nothing was sent")
+        log(context, "herdr-delivery", {"args": args[:2], "pane": where["pane"]})
     if command in CREATES:
         environment = context["environment"]
         given, workspace, index = set(), None, 2

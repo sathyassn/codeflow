@@ -5170,8 +5170,10 @@ class ProcessRepairTests(unittest.TestCase):
                                   capture_output=True, text=True, timeout=20)
             self.assertEqual(2, done.returncode)
             self.assertEqual(3, len(sent()))
+            # The ready records here were written without a watcher-ready launch,
+            # so the deliveries they let through count as early.
             flags, _ = runner.peer_findings(run, {"watcher": {"stopped_at": 1.0}, "requests": [], "peers": {}}, watched=False)
-            self.assertEqual(["peer_delivery_refused", "peer_launch_refused"], flags)
+            self.assertEqual(["peer_delivered_before_ready", "peer_delivery_refused", "peer_launch_refused"], flags)
 
     def test_peer_decision_negative_controls(self):
         flag = "--dangerously-bypass-hook-trust"
@@ -5673,19 +5675,135 @@ class ProcessRepairTests(unittest.TestCase):
             flags, _ = runner.peer_findings(run, self.stopped(record))
             self.assertEqual(["peer_delivery_refused", "peer_plugin_drift"], flags)
 
-    def test_peer_watch_flags_early_delivery_other_workspaces_and_unready_peers(self):
+    # Delivered before ready means the trial's herdr let a delivery through
+    # before the peer's ready record, or Herdr saw the peer working after it
+    # sat idle at its editor while still unready. Codex working during its
+    # own startup is neither.
+    def test_peer_working_during_startup_is_not_an_early_delivery(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
-            runner, run, repository, scene, record, _ = self.watch_trial(Path(temp).resolve())
-            # Working before the watcher recorded it ready: delivered early.
+            runner, run, repository, scene, record, calls = self.watch_trial(Path(temp).resolve())
+            herdr = Path(run["peers"]["bin"]) / "herdr"
+            # Working during startup, through the trust screen: no flag.
             self.ask_peer(runner, run, 4101)
             scene.agent("peer-pane", status="working", cwd=str(repository))
             self.poll(runner, run, record, scene)
             scene.run("peer-pane", self.peer_live(run, 4101, self.answer(record, 4101)["argv"]))
+            scene.screens["peer-pane"] = self.CASE_00_PEER_TRUST.format(path=repository)
+            scene.on_key = lambda pane, key: scene.screens.__setitem__(pane, "Starting Codex...\n")
+            self.poll(runner, run, record, scene)
+            scene.agent("peer-pane", status="unknown", cwd=str(repository))
+            self.poll(runner, run, record, scene)
+            scene.agent("peer-pane", status="idle", cwd=str(repository))
             scene.screens["peer-pane"] = self.CODEX_IDLE
             self.poll(runner, run, record, scene)
-            self.assertTrue(record["peers"]["peer-pane"]["launches"][0]["delivered_before_ready"])
+            [launch] = record["peers"]["peer-pane"]["launches"]
+            self.assertEqual("ready", launch["status"])
+            self.assertNotIn("delivered_before_ready", launch)
+            # A delivery the trial's herdr lets through after ready is logged, not flagged.
+            done = subprocess.run([str(herdr), "pane", "send-text", "peer-pane", "review the plan"],
+                                  env=run["environment"], capture_output=True, text=True, timeout=20)
+            self.assertEqual(0, done.returncode, done.stderr)
+            flags, summary = runner.peer_findings(run, self.stopped(record))
+            self.assertEqual([], flags)
+            self.assertEqual(["peer-pane"], [e["pane"] for e in summary["launcher_logs"] if e["kind"] == "herdr-delivery"])
+
+    def test_peer_logged_delivery_before_ready_is_flagged(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, scene, record, calls = self.watch_trial(Path(temp).resolve())
+            # A delivery let through before the watcher recorded the peer ready,
+            # here through a ready record the subject wrote itself: flagged.
+            self.ask_peer(runner, run, 4101)
+            scene.agent("peer-pane", status="starting", cwd=str(repository))
+            self.poll(runner, run, record, scene)
+            scene.run("peer-pane", self.peer_live(run, 4101, self.answer(record, 4101)["argv"]))
+            scene.screens["peer-pane"] = "Starting Codex...\n"
+            self.poll(runner, run, record, scene)
+            runner.write(Path(run["peers"]["launches"]) / "ready" / "peer-pane.json", {"pane": "peer-pane", "ready": True})
+            done = subprocess.run([str(Path(run["peers"]["bin"]) / "herdr"), "pane", "send-text", "peer-pane", "go"],
+                                  env=run["environment"], capture_output=True, text=True, timeout=20)
+            self.assertEqual(0, done.returncode, done.stderr)
+            flags, summary = runner.peer_findings(run, self.stopped(record))
+            self.assertEqual(["peer_delivered_before_ready", "peer_not_ready"], flags)
+            self.assertEqual("peer-pane", summary["early_deliveries"][0]["pane"])
+
+    def test_peer_working_after_idle_while_unready_is_flagged(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, scene, record, _ = self.watch_trial(Path(temp).resolve())
+            # Idle at its editor while unready, then working: flagged.
+            self.ask_peer(runner, run, 4101)
+            scene.agent("peer-pane", status="idle", cwd=str(repository))
+            self.poll(runner, run, record, scene)
+            scene.run("peer-pane", self.peer_live(run, 4101, self.answer(record, 4101)["argv"]))
+            scene.screens["peer-pane"] = self.CODEX_IDLE
+            reads, real = [], scene.live_process
+
+            def gone_at_readiness(pid):
+                reads.append(pid)
+                if len(reads) == 2:  # the readiness recheck of this poll
+                    raise ProcessLookupError(pid)
+                return real(pid)
+            scene.live_process = gone_at_readiness
+            self.poll(runner, run, record, scene)
+            [launch] = record["peers"]["peer-pane"]["launches"]
+            self.assertEqual(("pending", True), (launch["status"], launch["idle_seen"]))
+            scene.agent("peer-pane", status="working", cwd=str(repository))
+            self.poll(runner, run, record, scene)
+            self.assertTrue(launch["delivered_before_ready"])
             flags, _ = runner.peer_findings(run, self.stopped(record))
             self.assertEqual(["peer_delivered_before_ready"], flags)
+
+    def test_peerdry_3_trace_replays_without_flags(self):
+        """The native dry trial at 93758e0ee (peerdry-3): Codex in w2:pC9 was
+        first seen at 1790867106.31, its trust accepted at 107.20 while Herdr
+        reported it working during startup, and it was ready at 109.36. The
+        subject's first delivery, through the trial's herdr, came at 116.
+        Replayed with those times and this trial's paths: no flag."""
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, scene, record, _ = self.watch_trial(
+                Path(temp).resolve(), workspace="w2", subject="w2:pC8")
+            args = ["--model", "gpt-6-astra", "-c", "model_reasoning_effort=high", "--ask-for-approval", "never"]
+            clock = [1790867105.64]
+            self.ask_peer(runner, run, 74176, pane="w2:pC9", args=args)
+            scene.agents["w2:pC8"] = {"pane_id": "w2:pC8", "tab_id": "w2:tC8", "workspace_id": "w2", "agent": "claude",
+                                      "agent_status": "working", "cwd": str(repository)}
+            scene.agent("w2:pC9", status="idle", cwd=str(repository))
+            scene.run("w2:pC9", self.launcher_live(run, 74176, "codex", args, "w2:pC9"), name="codex")
+            steps = [
+                # (time, Herdr status, screen): the launcher, then Codex at its
+                # trust screen while Herdr reports it working, then starting.
+                (1790867105.64, "idle", None),
+                (1790867106.31, "working", self.CASE_00_PEER_TRUST.format(path=repository)),
+                (1790867107.20, "working", self.CASE_00_PEER_TRUST.format(path=repository)),
+                (1790867108.30, "unknown", "Starting Codex...\n"),
+                (1790867109.36, "idle", self.CODEX_IDLE),
+                (1790867112.00, "idle", self.CODEX_IDLE),
+            ]
+            with patch.object(runner.time, "time", side_effect=lambda: clock[0]):
+                for index, (now, status, screen) in enumerate(steps):
+                    clock[0] = now
+                    scene.agents["w2:pC9"]["agent_status"] = status
+                    if index == 1:
+                        scene.run("w2:pC9", self.peer_live(run, 74176, self.answer(record, 74176)["argv"], "w2:pC9"))
+                    if screen is not None and (index != 2 or not scene.keys):
+                        scene.screens["w2:pC9"] = screen
+                    self.poll(runner, run, record, scene)
+            [launch] = record["peers"]["w2:pC9"]["launches"]
+            self.assertEqual(("ready", 1790867109.36, 1), (launch["status"], launch["ready_at"], len(launch["trust_acceptances"])))
+            self.assertNotIn("delivered_before_ready", launch)
+            # The subject's own deliveries and the one to the peer, as the trial's herdr logged them.
+            launches = Path(run["peers"]["launches"])
+            for when, pane in [(1790867030.0, "w2:pC8"), (1790867116.0, "w2:pC9"), (1790867121.0, "w2:pC9")]:
+                runner.write(launches / f"{int(when * 1e9)}-90000-herdr-delivery.json",
+                             {"kind": "herdr-delivery", "time": when, "args": ["pane", "send-text"], "pane": pane})
+            flags, summary = runner.peer_findings(run, self.stopped(record))
+            self.assertEqual([], flags)
+            self.assertEqual([], summary["early_deliveries"])
+            # The same delivery a second before ready would be flagged.
+            runner.write(launches / "1790867108360000000-90000-herdr-delivery.json",
+                         {"kind": "herdr-delivery", "time": 1790867108.36, "args": ["agent", "prompt"], "pane": "w2:pC9"})
+            self.assertEqual(["peer_delivered_before_ready"], runner.peer_findings(run, self.stopped(record))[0])
+
+    def test_peer_watch_flags_other_workspaces_and_unready_peers(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
             runner, run, repository, scene, record, _ = self.watch_trial(Path(temp).resolve())
             # A peer seen in another workspace is never inspected or keyed.
