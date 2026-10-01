@@ -1,0 +1,11 @@
+id = "TSK-199"
+uid = "3780222b-1a89-41b1-a0be-54942f20274f"
+kind = "TSK"
+title = "Make the full gate pass on hosted Linux"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-01T21:59:43Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
