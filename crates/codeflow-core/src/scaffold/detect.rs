@@ -96,8 +96,43 @@ impl GitDirHooks {
     }
 }
 
+/// The hook events git runs from its hooks folder (githooks(5)). A file under
+/// any other name, such as git's `*.sample` files or a helper script, is
+/// never run by git as a hook.
+const GIT_HOOK_NAMES: &[&str] = &[
+    "applypatch-msg",
+    "pre-applypatch",
+    "post-applypatch",
+    "pre-commit",
+    "pre-merge-commit",
+    "prepare-commit-msg",
+    "commit-msg",
+    "post-commit",
+    "pre-rebase",
+    "post-checkout",
+    "post-merge",
+    "pre-push",
+    "pre-receive",
+    "update",
+    "proc-receive",
+    "post-receive",
+    "post-update",
+    "reference-transaction",
+    "push-to-checkout",
+    "pre-auto-gc",
+    "post-rewrite",
+    "sendemail-validate",
+    "fsmonitor-watchman",
+    "p4-changelist",
+    "p4-prepare-changelist",
+    "p4-post-changelist",
+    "p4-pre-submit",
+    "post-index-change",
+];
+
 /// The executable hook files in the common git dir's `hooks/`, skipping
-/// git's `*.sample` files and anything git would not run. `None` when there
+/// files whose name is not a git hook event (git's `*.sample` files, helper
+/// scripts) and anything git would not run. `None` when there
 /// are none, outside a repository, or when `core.hooksPath` already points
 /// at another manager's folder (git was not running these files anyway, and
 /// that manager is reported instead).
@@ -112,7 +147,7 @@ pub fn git_dir_hooks(root: &Path) -> Option<GitDirHooks> {
         .flatten()
         .filter(|entry| entry.path().is_file() && is_executable(&entry.path()))
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| !name.ends_with(".sample"))
+        .filter(|name| GIT_HOOK_NAMES.contains(&name.as_str()))
         .collect();
     if names.is_empty() {
         return None;

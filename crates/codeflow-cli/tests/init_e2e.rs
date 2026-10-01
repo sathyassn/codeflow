@@ -2698,14 +2698,17 @@ fn brownfield_init_names_the_git_dir_hooks_it_stops_running() {
     std::fs::create_dir_all(&hooks).unwrap();
     std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\necho OWN HOOK RAN\n").unwrap();
     std::fs::write(hooks.join("commit-msg.sample"), "#!/bin/sh\n").unwrap();
-    std::fs::write(hooks.join("pre-push"), "#!/bin/sh\n").unwrap();
+    std::fs::write(hooks.join("helper.sh"), "#!/bin/sh\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        // Windows has no executable bit: there every hook-named file counts.
+        std::fs::write(hooks.join("pre-push"), "#!/bin/sh\n").unwrap();
         for (name, mode) in [
             ("pre-commit", 0o755),
             ("commit-msg.sample", 0o755),
             ("pre-push", 0o644),
+            ("helper.sh", 0o755),
         ] {
             std::fs::set_permissions(hooks.join(name), std::fs::Permissions::from_mode(mode))
                 .unwrap();
@@ -2737,6 +2740,7 @@ fn brownfield_init_names_the_git_dir_hooks_it_stops_running() {
     #[cfg(unix)]
     assert!(!line.contains("pre-push"), "not executable: {line}");
     assert!(!line.contains(".sample"), "{line}");
+    assert!(!line.contains("helper.sh"), "not a hook event: {line}");
     assert!(
         hooks.join("pre-commit").exists(),
         "nothing moved or deleted"
