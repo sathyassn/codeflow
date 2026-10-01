@@ -5715,6 +5715,21 @@ class ProcessRepairTests(unittest.TestCase):
             runner.deliver_claude("owned", "trial prompt", {}, 1, "test/customer-search-brief")
         self.assertFalse(any(c.args[:2] == ("pane", "send-text") for c in transport.call_args_list))
 
+    def test_claude_auto_mode_footer_is_a_ready_editor(self):
+        runner = self.runner()
+        # Observed in TSK-194's first trial: `--permission-mode auto` in the evaluator home.
+        screen = ('⏺ Auto mode lets Claude handle permission prompts automatically.\n'
+                  '────────\n❯ Try "fix lint errors"\n────────\n  test/cache-plan\n'
+                  '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n')
+        self.assertEqual('Try "fix lint errors"', runner.editor(screen, "test/cache-plan"))
+        self.assertIsNone(runner.editor(screen, "test/other"))
+        for bad in ["⏵⏵ auto mode off (shift+tab to cycle)", "⏵⏵ plan mode on (shift+tab to cycle)",
+                    "⏵⏵ auto mode on", "⏵⏵ auto mode on (shift+tab to cycle) · unknown"]:
+            self.assertIsNone(runner.editor(screen.replace("⏵⏵ auto mode on (shift+tab to cycle) · ← for agents", bad),
+                                            "test/cache-plan"), bad)
+        pending = screen.replace('Try "fix lint errors"', "trial prompt")
+        self.assertTrue(runner.holds(runner.editor(pending, "test/cache-plan"), "trial prompt"))
+
     def test_claude_readiness_waits_for_renderer_then_verified_editor(self):
         runner = self.runner(); events = []; displays = []
         screen = self.renderer_screen(); selected = self.renderer_screen(True)
