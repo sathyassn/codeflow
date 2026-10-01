@@ -44,19 +44,19 @@
           ],
           "facts": [
             {
-              "claim": "both lineages research, analyze and plan independently",
-              "source": "AGENTS.md#entry-points",
-              "derive": "the orchestrator row: both independently research, analyze and plan",
+              "claim": "both lineages research and analyze independently",
+              "source": ".agents/skills/cf-method/references/workflow-lifecycle.md#settle-before-implementation",
+              "derive": "the settle section: both primary families independently research, analyze and identify risks",
               "check": {
                 "kind": "contains",
-                "text": "both independently research/analyze/plan"
+                "text": "both primary families independently research, analyze"
               },
               "value": true
             },
             {
               "claim": "each task has a cross-lineage reviewer",
-              "source": "AGENTS.md#entry-points",
-              "derive": "the orchestrator row: a producer and cross-lineage reviewer for each task",
+              "source": ".agents/skills/cf-method/references/workflow-lifecycle.md#execute-and-integrate",
+              "derive": "the execute section: follow the approved executor and cross-lineage reviewer assignment",
               "check": {
                 "kind": "contains",
                 "text": "cross-lineage reviewer"

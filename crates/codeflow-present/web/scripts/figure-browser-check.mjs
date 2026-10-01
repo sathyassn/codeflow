@@ -11,6 +11,7 @@
 // Usage: node scripts/figure-browser-check.mjs [--screenshots <dir>]
 import { execFileSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -258,15 +259,18 @@ async function checkReferenceExample() {
   const declaration = JSON.parse(example);
   validateDeclaration(declaration, "figure-grammar.md section 6 example");
   renderFigure(declaration);
-  const agents = await readFile(join(repoRoot, "AGENTS.md"), "utf8");
-  const facts = checkFacts(declaration.figure, (path) => (path === "AGENTS.md" ? agents : null));
+  // Each fact re-derives from the committed file it cites in this repository.
+  const readSource = (path) => {
+    try { return readFileSync(join(repoRoot, path), "utf8"); } catch { return null; }
+  };
+  const facts = checkFacts(declaration.figure, readSource);
   if (!facts.every((fact) => fact.matches)) throw new Error(`figure-grammar.md section 6 example facts do not derive: ${JSON.stringify(facts)}`);
   // The figure block the conversion section points authors at to copy.
   const review = JSON.parse(await readFile(join(repoRoot, "assets/base/agents/skills/cf-present/assets/review-document.example.json"), "utf8"));
   const converted = review.blocks.find((block) => block.type === "figure")?.declaration;
   validateDeclaration(converted, "review-document.example.json figure");
   renderFigure(converted);
-  const convertedFacts = checkFacts(converted.figure, (path) => (path === "AGENTS.md" ? agents : null));
+  const convertedFacts = checkFacts(converted.figure, readSource);
   if (!convertedFacts.every((fact) => fact.matches)) throw new Error(`review-document.example.json figure facts do not derive: ${JSON.stringify(convertedFacts)}`);
 }
 
