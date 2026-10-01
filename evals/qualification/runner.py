@@ -82,7 +82,10 @@ def snapshot(directories: list[str], *, shallow: list[str] | None = None,
             elif top_level:
                 entries[key] = [kind]
                 if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-                    entries[key].append(info.st_mtime_ns)
+                    # The inode tells a replaced entry apart even when the
+                    # filesystem clock is too coarse to move the mtime, as
+                    # Linux timestamps are for a swap within one tick.
+                    entries[key].extend([info.st_mtime_ns, info.st_ino])
             else:
                 entries[key] = [info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
         except OSError as exc:
@@ -133,7 +136,8 @@ def compare(before: dict, after: dict) -> dict:
             "limitation": "Writes inside pre-existing top-level directories of /private/tmp are unobserved "
                           "(except separately watched roots). Writes outside declared directories, startup writes "
                           "before seat readiness, and transient entries gone before the final snapshot are not "
-                          "observed. Changes are not attributed to the subject."}
+                          "observed. An in-place rewrite that keeps the size within one filesystem clock tick "
+                          "is not observed. Changes are not attributed to the subject."}
 
 
 # Whole-frame grammar from release-qualification/lib.sh at 97f714b61,

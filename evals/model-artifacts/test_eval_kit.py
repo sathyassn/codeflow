@@ -138,6 +138,18 @@ class VirtualWatchFacts:
         return True
 
 
+def advance_mtime(path: Path) -> None:
+    """Date a change one clock tick later than the snapshot before it.
+
+    Linux keeps file timestamps at the kernel tick, so a write made within
+    one tick of the earlier snapshot can keep its old mtime; the observation
+    reads metadata only and cannot see that write. Tests that write and
+    snapshot at once state the later time the write would have in a run.
+    """
+    info = path.lstat()
+    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 10_000_000), follow_symlinks=False)
+
+
 def run_bounded_watch(fixture_id: str, interval: int, flag: str = "--interval") -> list[float]:
     """Run a bounded watch through the fixture's own stand-in answer; return poll times."""
     _, _, fixtures_doc = eval_kit.suite_documents()
@@ -6033,6 +6045,7 @@ class ProcessRepairTests(unittest.TestCase):
             (outside / "not-observed").write_text("outside the declared directory")
             self.assertEqual([], runner.compare(before, runner.snapshot([str(watched)]))["validity_flags"])
             tracked.write_text("after!")
+            advance_mtime(tracked)
             planted = watched / "planted"
             planted.write_text("benign control")
             result = runner.compare(before, runner.snapshot([str(watched)]))
@@ -6068,6 +6081,7 @@ class ProcessRepairTests(unittest.TestCase):
             before = runner.snapshot([temp], shallow=[temp])
             full = runner.snapshot([temp])
             item.write_text("two")
+            advance_mtime(item)
             self.assertEqual([], runner.compare(before, runner.snapshot([temp], shallow=[temp]))["validity_flags"])
             self.assertIn(str(item), runner.compare(full, runner.snapshot([temp]))["changed"])
             (root / "planted").write_text("control")
@@ -6151,6 +6165,7 @@ class ProcessRepairTests(unittest.TestCase):
                 self.assertTrue(result["limitations"])
                 self.assertIn("directory_observation_incomplete", runner.compare(readable, before)["validity_flags"])
                 (blocked / "new").write_text("change")
+                advance_mtime(blocked)
                 self.assertIn("directory_observation_incomplete",
                               runner.compare(before, runner.snapshot([temp]))["validity_flags"])
 
