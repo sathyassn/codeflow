@@ -1,23 +1,21 @@
 // Measure cold page response bodies through the built service, without header overrides.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, webkit } from "playwright-core";
 import { codeflowBinary } from "./codeflow-binary.mjs";
+import { installedChrome, playwrightBuild } from "./browser-executables.mjs";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const binary = codeflowBinary(repoRoot);
 const evidence = join(repoRoot,"target/tsk193-evidence/transport");
 await mkdir(evidence,{recursive:true});
 const manifest = JSON.parse(await readFile(join(repoRoot,"crates/codeflow-present/assets/manifest.json"),"utf8"));
 const framed = JSON.parse(await readFile(join(repoRoot,"crates/codeflow-present/tests/fixtures/contract-v2/documents/v2-framed.json"),"utf8"));
-const cache = join(homedir(),"Library/Caches/ms-playwright");
-const version = (await readdir(cache)).filter(n => n.startsWith("webkit-")).sort((a,b) => Number(b.slice(7))-Number(a.slice(7)))[0];
 const engines = [
-  ["chrome",chromium,"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome","br"],
-  ["webkit",webkit,join(cache,version,"pw_run.sh"),"gzip"],
+  ["chrome",chromium,await installedChrome(),"br"],
+  ["webkit",webkit,await playwrightBuild(webkit),"gzip"],
 ];
 const cases = [
   ["prose",{type:"narrative",id:"prose",markdown:"A bounded page for transport measurement."},null,215_000],
