@@ -13,10 +13,10 @@ schema_version = 1
 stack = "rust"
 tier = "full"
 work_records_baseline = [
-    "375c68585cbeb3a1ffe6c28c8e4945c3d892e8db",
-    "ccd56fa85160ac58d66828933e96c000357c4baa",
-    "51ee9374b506d9a359150ac15663c26c914b57cf",
-    "d618075e229d49f706cf1c0e9ab5b10a3c9c69e3",
+    "afdb52a96967aa3a6a8e72fb378c209bcef02362",
+    "f9e7e6a59b597a26e41c8b8fef111c41fcf95c7f",
+    "4f5ed49be0f156f498d68f32fe05a5ec5ca6c556",
+    "ed2cbd076af7d62ff56abb5a1535a29643e3e17e",
 ]
 
 [release]
