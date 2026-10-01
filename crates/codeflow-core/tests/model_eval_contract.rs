@@ -4794,3 +4794,124 @@ fn copy_guide_requirements_are_hard_and_owned_by_the_guide() {
         );
     }
 }
+
+
+fn process_fixture(id: &str) -> Value {
+    json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json")["fixtures"]
+        .as_array()
+        .expect("fixtures")
+        .iter()
+        .find(|fixture| fixture["id"] == id)
+        .unwrap_or_else(|| panic!("missing fixture {id}"))
+        .clone()
+}
+
+#[test]
+fn unmerged_planning_fixture_uses_current_acceptance_syntax() {
+    let fixture = process_fixture("valid-unmerged-planning");
+    for path in [
+        "project-management/epics/EPC-014.md",
+        "project-management/tasks/TSK-061.md",
+    ] {
+        let text = fixture["files"][path].as_str().expect("record");
+        assert!(text.contains("- AC-1 "));
+        assert!(!text.contains("- [ ]"));
+    }
+    assert_eq!(fixture["state"]["target_precedes_fixture"], true);
+}
+
+#[test]
+fn reassignment_fixture_has_the_approved_version_and_task() {
+    let fixture = process_fixture("approved-plan-reassignment");
+    let plan = fixture["files"]["PLAN.md"].as_str().expect("plan");
+    assert!(plan.contains("# Plan v2"));
+    assert!(plan.contains("T2 | claude-primary@high"));
+    assert!(plan.contains("codex-primary: v2"));
+}
+
+#[test]
+fn scope_change_fixture_preserves_the_v1_contract_it_invalidates() {
+    let fixture = process_fixture("approved-plan-change");
+    let plan = fixture["files"]["PLAN.md"].as_str().expect("plan");
+    let request = fixture["files"]["CHANGE_REQUEST.md"]
+        .as_str()
+        .expect("request");
+    assert!(plan.contains("# Plan v1"));
+    assert!(plan.contains("internal parser only"));
+    assert!(request.contains("new public endpoint"));
+}
+
+#[test]
+fn planning_brief_names_an_api_and_a_real_ledger() {
+    let fixture = process_fixture("planning-brief");
+    let architecture = fixture["files"]["docs/architecture.md"]
+        .as_str()
+        .expect("architecture");
+    assert!(architecture.contains("GET /config/{key}"));
+    assert!(architecture.contains("PUT /config/{key}"));
+    assert!(fixture["files"]["EXECUTION_LEDGER.md"]
+        .as_str()
+        .expect("ledger")
+        .contains("## Entries"));
+}
+
+#[test]
+fn in_node_fixture_names_the_ledger_it_can_update() {
+    let fixture = process_fixture("in-node-execution-detail");
+    assert!(fixture["files"]["EXECUTION_LEDGER.md"].is_string());
+    assert!(fixture["files"]["EXECUTION_EVIDENCE.md"]
+        .as_str()
+        .expect("evidence")
+        .contains("EXECUTION_LEDGER.md"));
+    assert!(fixture["state"]["grading"].is_null());
+}
+
+#[test]
+fn closeout_fixture_requests_real_inventory_materialization() {
+    let fixture = process_fixture("worktree-closeout-inventory");
+    assert_eq!(fixture["state"]["closeout_inventory"], true);
+    assert_eq!(fixture["state"]["inventory_count"], 3);
+    assert!(!fixture["files"]["CODEFLOW_STATUS.txt"]
+        .as_str()
+        .expect("status")
+        .contains("/tmp/export-ui"));
+}
+
+#[test]
+fn process_round_fixture_branches_follow_the_subject_policy() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let pack = packs["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| pack["id"] == "process-round")
+        .expect("process-round");
+    for case_id in pack["cases"].as_array().expect("cases") {
+        let case = cases["cases"]
+            .as_array()
+            .expect("cases")
+            .iter()
+            .find(|case| case["id"] == *case_id)
+            .expect("case");
+        let fixture = process_fixture(case["fixture"].as_str().expect("fixture id"));
+        let branch = fixture["state"]["branch"].as_str().expect("branch");
+        assert!(!branch.starts_with("fixture/"), "{case_id}: {branch}");
+    }
+}
+
+#[test]
+fn pr_fixtures_keep_side_effect_free_help_and_bounded_watch_support() {
+    for id in ["pr-follow-up-green", "pr-follow-up-queued-forever"] {
+        let fixture = process_fixture(id);
+        let gh = fixture["files"]["tools/gh.py"].as_str().expect("gh");
+        let main = gh.split("def main(argv:").nth(1).expect("main");
+        assert!(
+            main.find("return show_help(argv)").expect("help return")
+                < main.find("state = load_state()").expect("state load")
+        );
+        for flag in ["--required", "--watch", "--interval"] {
+            assert!(gh.contains(flag), "{id}: {flag}");
+        }
+    }
+}

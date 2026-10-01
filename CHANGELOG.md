@@ -1388,6 +1388,12 @@ publication date._
 
 ### Fixed
 
+<!-- codeflow:release-impact patch -->
+- **Evaluation trial repairs.** Repair fixtures and their planning, cleanup
+  and PR-check guidance. The repository qualification runner now uses isolated trial
+  homes, records native launch flags, guards prompt delivery and reports
+  changes in declared directories with explicit observation limits.
+
 <!-- codeflow:release-impact minor -->
 - **Fix completed work in one PR.** A task can reopen with its old review
   preserved and a reason, carry the fix, and complete again with a review

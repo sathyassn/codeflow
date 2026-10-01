@@ -663,7 +663,9 @@ EDITOR_FOUND=0
 EDITOR_NONE=1
 EDITOR_UNREADABLE=2
 
-# current_editor <pane-id> - one bounded read of the screen, returning
+# current_editor <pane-id> [yes] - one bounded read of the screen, returning
+# an empty editor only with the explicit yes used before the initial paste.
+# Subsequent reads require nonempty pending text. Returning
 # EDITOR_FOUND and printing the editor's text only when the screen has the
 # layout a live Claude Code 2.1.283 pane draws around its editor:
 #
@@ -700,7 +702,7 @@ current_editor() {
     unset _ce_file _ce_read
     return "$EDITOR_UNREADABLE"
   fi
-  _ce_text=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" -v status="$QUALIFY_STATUS_LINE" '
+  _ce_text=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" -v status="$QUALIFY_STATUS_LINE" -v empty="${2:-no}" '
     BEGIN { nbsp = "\302\240" }
     { line[NR] = $0 }
     /^[[:space:]]*(─)+[[:space:]]*$/ { top = bottom; bottom = NR }
@@ -708,8 +710,10 @@ current_editor() {
       if (top == 0 || bottom - top < 2) exit 1
       for (i = top + 1; i < bottom; i++) {
         text = line[i]
+        original = text
         sub(/[[:space:]]+$/, "", text)
         if (i == top + 1) {
+          if (empty == "yes" && (original == "❯" || original == "❯ " || original == "❯" nbsp)) { body = "\n"; continue }
           if (index(text, "❯ ") == 1) text = substr(text, length("❯ ") + 1)
           else if (index(text, "❯" nbsp) == 1) text = substr(text, length("❯" nbsp) + 1)
           else exit 1
@@ -760,6 +764,14 @@ log_refused_screen() {
   } >>"${TRANSCRIPT:-/dev/null}"
 }
 
+# Empty or exactly the live single-line placeholder, never arbitrary input.
+editor_idle() {
+  [ -z "$1" ] || printf '%s\n' "$1" | LC_ALL=C awk '
+    NR != 1 || $0 !~ /^Try "[^"]+"$/ { bad = 1 }
+    END { exit bad }
+  '
+}
+
 # editor_holds <editor text> <prompt-file> - classify what the editor holds:
 # `attachment` for exactly one folded-paste attachment, `directive` for that
 # attachment followed by exactly the directive, `prompt` when the editor's
@@ -770,7 +782,9 @@ editor_holds() {
   _eh_rest=$(printf '%s\n' "$1" |
     LC_ALL=C sed -E 's/^\[Pasted text #[0-9]+ \+[0-9]+ lines\]//')
   _eh_lines=$(printf '%s\n' "$1" | wc -l | tr -d ' ')
-  if [ "$_eh_lines" = 1 ] && [ "$_eh_rest" != "$1" ] && [ -z "$_eh_rest" ]; then
+  if editor_idle "$1"; then
+    echo other
+  elif [ "$_eh_lines" = 1 ] && [ "$_eh_rest" != "$1" ] && [ -z "$_eh_rest" ]; then
     echo attachment
   elif [ "$_eh_lines" = 1 ] && [ "$_eh_rest" != "$1" ] && [ "$_eh_rest" = "$PASTE_DIRECTIVE" ]; then
     echo directive
@@ -805,6 +819,11 @@ deliver_stop() {
 # deliver_turn <pane> <prompt-file> <run-id> <state-dir> <turn-id> - returns 0
 # once the turn is accepted, non-zero when it was not.
 deliver_turn() {
+  _dt_ready=$(current_editor "$1" yes) && _dt_read=0 || _dt_read=$?
+  if [ "$_dt_read" != "$EDITOR_FOUND" ] || ! editor_idle "$_dt_ready"; then
+    deliver_stop 'no verified empty or placeholder current editor before the paste'
+    return 1
+  fi
   herdr pane send-text "$1" "$(cat "$2")" >>"$TRANSCRIPT" 2>&1 || true
   sleep "$DELIVER_SETTLE_SECONDS"
   _dt_text=$(current_editor "$1") && _dt_read=0 || _dt_read=$?

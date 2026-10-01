@@ -73,6 +73,7 @@ TRANSCRIPT="$STUB_DIR/transcript"
   printf '  "agent get") cat "$D/get-out"; exit "$(cat "$D/get-rc")" ;;\n'
   printf '  "pane process-info") cat "$D/proc-out"; exit 0 ;;\n'
   printf '  "pane send-text")\n'
+  printf '    [ -f "$D/pane-text-paste" ] && { cp "$D/pane-text-paste" "$D/pane-text"; rm "$D/pane-text-paste"; }\n'
   printf '    case "$*" in *"Carry out the pasted instructions."*)\n'
   printf '      [ -f "$D/pane-text-directive" ] && cp "$D/pane-text-directive" "$D/pane-text" ;;\n'
   printf '    esac\n'
@@ -117,7 +118,7 @@ stub_herdr() {
   printf '0' >"$STUB_DIR/enters"
   printf '99' >"$STUB_DIR/accept-at"
   rm -f "$STUB_DIR/accepted" "$STUB_DIR/exit-on-keys" \
-    "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter" \
+    "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter" "$STUB_DIR/pane-text-paste" \
     "$STUB_DIR/pane-text-after-down" "$STUB_DIR/proc-cwd-after-enter"
   printf '%s' /nonexistent >"$STUB_DIR/proc-cwd"
   printf '%s\n' "$PROC_AGENT" >"$STUB_DIR/proc-out"
@@ -766,7 +767,8 @@ $RULE
 
 # run_deliver <accept-at> <pane text> [directive pane] [pane after Enter]
 run_deliver() {
-  stub_herdr "$2"
+  stub_herdr "${5:-$(printf '%s\n❯ \n%s\n  ⏸ manual mode on\n' "$RULE" "$RULE")}"
+  printf '%s\n' "$2" >"$STUB_DIR/pane-text-paste"
   printf '%s' "$1" >"$STUB_DIR/accept-at"
   rm -f "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter"
   [ -z "${3:-}" ] || printf '%s\n' "$3" >"$STUB_DIR/pane-text-directive"
@@ -949,14 +951,15 @@ holds_case 'an attachment with a second line is neither' \
 _began=$(date +%s)
 run_deliver 1 "$UNSENT_PANE"
 _took=$(($(date +%s) - _began))
-ok deliver_turn.first "the prompt in the editor: accepted on one Enter after one read" \
-  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] && [ "$DELIVER_READS" = 1 ] && echo 0 || echo 1)"
+ok deliver_turn.first "the prompt in the editor: accepted after a ready read and a paste read" \
+  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] && [ "$DELIVER_READS" = 2 ] && echo 0 || echo 1)"
 ok deliver_turn.settle "waits the 2 s settle between the text and the read, took $_took s" \
   "$([ "$_took" -ge 2 ] && echo 0 || echo 1)"
-ok deliver_turn.order "sends the text, reads the editor, then the first Enter" \
-  "$(sed -n '1p' "$STUB_DIR/calls" | grep -qF 'pane send-text p1 Reply with exactly: ok.' &&
-     sed -n '2p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
-     sed -n '3p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
+ok deliver_turn.order "reads readiness, sends text, reads the editor, then Enter" \
+  "$(sed -n '1p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
+     sed -n '2p' "$STUB_DIR/calls" | grep -qF 'pane send-text p1 Reply with exactly: ok.' &&
+     sed -n '3p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
+     sed -n '4p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
 ok deliver_turn.no_directive "a prompt shown as text gets no directive" \
   "$([ "$DELIVER_TEXTS" = 1 ] && echo 0 || echo 1)"
 ok deliver_turn.probe "probes acceptance of this turn for 5 s" \
@@ -966,12 +969,22 @@ ok deliver_turn.probe "probes acceptance of this turn for 5 s" \
 # shellcheck disable=SC2034 # read by deliver_turn in lib.sh
 DELIVER_SETTLE_SECONDS=0
 
+# Live placeholders must be accepted before the initial paste.
+for idle in "$IDLE_PANE" "$BYPASS_IDLE_PANE" "$STATUS_IDLE_PANE"; do
+  run_deliver 1 "$UNSENT_PANE" '' '' "$idle"
+  ok deliver_turn.idle_placeholder "live idle placeholder allows exactly one delivery" \
+    "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] && [ "$DELIVER_TEXTS" = 1 ] && echo 0 || echo 1)"
+done
+run_deliver 1 "$UNSENT_PANE" '' '' "$EXTRA_TEXT_PANE"
+ok deliver_turn.initial_text "existing input refuses the paste" \
+  "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_TEXTS" = 0 ] && echo 0 || echo 1)"
+
 # The prompt still in the editor after the first Enter: one re-Enter lands it.
 run_deliver 2 "$UNSENT_PANE"
 ok deliver_turn.reenter "the prompt still in the editor gets one re-Enter, then acceptance" \
   "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 2 ] && [ "$DELIVER_WAITS" = 2 ] && echo 0 || echo 1)"
 ok deliver_turn.reenter "the re-Enter follows a second read and never resends the text" \
-  "$([ "$DELIVER_READS" = 2 ] && [ "$DELIVER_TEXTS" = 1 ] && echo 0 || echo 1)"
+  "$([ "$DELIVER_READS" = 3 ] && [ "$DELIVER_TEXTS" = 1 ] && echo 0 || echo 1)"
 
 # The prompt went to history after the first Enter: no re-Enter.
 run_deliver 99 "$UNSENT_PANE" '' "$SENT_PANE"
@@ -982,10 +995,10 @@ ok deliver_turn.no_evidence "a prompt that went to history gets no re-Enter" \
 run_deliver 1 "$PASTED_PANE" "$DIRECTIVE_PANE"
 ok deliver_turn.directive "an attachment gets the directive, a second read, then one Enter" \
   "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] &&
-     sed -n '2p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
-     [ "$(sed -n '3p' "$STUB_DIR/calls")" = 'pane send-text p1 Carry out the pasted instructions.' ] &&
-     sed -n '4p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
-     sed -n '5p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
+     sed -n '3p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
+     [ "$(sed -n '4p' "$STUB_DIR/calls")" = 'pane send-text p1 Carry out the pasted instructions.' ] &&
+     sed -n '5p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
+     sed -n '6p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
 
 run_deliver 1 "$STATUS_PASTED_PANE" "$STATUS_DIRECTIVE_PANE"
 ok deliver_turn.directive "the live status line layouts: directive, a second read, then one Enter" \
@@ -1033,9 +1046,17 @@ stub_herdr "$PASTED_PANE"
 printf '1' >"$STUB_DIR/pane-rc"
 printf '1' >"$STUB_DIR/accept-at"
 deliver_turn p1 "$STUB_DIR/prompt.txt" run1 /tmp/state t1 && _r=0 || _r=$?
-ok deliver_turn.unreadable "an unreadable pane after the paste: no directive and zero Enters" \
+ok deliver_turn.unreadable "an unreadable pane before the paste: no text and zero Enters" \
   "$([ "$_r" != 0 ] && [ "$(cat "$STUB_DIR/enters")" = 0 ] &&
-     [ "$(grep -c '^pane send-text' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
+     [ "$(grep -c '^pane send-text' "$STUB_DIR/calls" || true)" = 0 ] && echo 0 || echo 1)"
+
+# Initial history, dialog and occupied editor states must get no text at all.
+for initial in "$HISTORY_PASTE_PANE" "$DIALOG_PANE" "$UNSENT_PANE" "$NO_FOOTER_PANE"; do
+  stub_herdr "$initial"
+  deliver_turn p1 "$STUB_DIR/prompt.txt" run1 /tmp/state t1 && _r=0 || _r=$?
+  ok deliver_turn.before_paste "no text or Enter without a verified empty editor" \
+    "$([ "$_r" != 0 ] && ! grep -q '^pane send-' "$STUB_DIR/calls" && echo 0 || echo 1)"
+done
 
 # Still in the editor after the one re-Enter: stop and fail.
 run_deliver 99 "$UNSENT_PANE"

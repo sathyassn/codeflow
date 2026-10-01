@@ -497,6 +497,8 @@ model binding.
 | `expected.files` and `expected.effects` | `eval_kit.py grade` checks them against the work a session left. This does not prove CLI use, readiness checks or review before completion; those need the harness's own record of the session (TSK-116) |
 | Graded suites | live outside the shipped kit and binary: a public development suite in `evals/grader-dev/`, and the live delivery holdout of SPC-013 R-105 on a private archive ref that is never merged, recorded in `evals/holdout.json` |
 | Trial results | a timed-out or errored session is kept and graded as a failure, and a pack result keeps every trial (TSK-111) |
+| Qualification tooling | `evals/qualification/` uses the kit's isolated HOME, TMPDIR and CODEFLOW_HOME, records the exact requested launch flags and compares metadata snapshots of declared directories: a new, changed or removed entry or an incomplete read invalidates the observation. It does not observe writes outside those directories. Its judge controls cover process-round and R-105 evidence; native judge calibration and subject trials stay separate from tooling tests |
+| Closeout fixture | creates the clean landed, dirty active and unmerged worktrees its inventory describes |
 
 Detail: [model and harness upgrades](model-upgrades.md).
 
