@@ -833,6 +833,12 @@ fn process_round_guidance_names_the_evidence_before_action() {
         &[
             "Before any removal, read `CODEFLOW_STATUS.txt`",
             "against current Git state",
+            // TSK-194 first batch, case 15: a sandboxed removal stopped partway.
+            "Where the effective sandbox denies those writes, make the proof first",
+            "through the harness's sanctioned unsandboxed path",
+            "Do not make a first attempt inside the sandbox",
+            "keep the worktree and hand the proven removal to the operator",
+            "never change sandbox or permission settings",
         ],
     );
     assert_contains(
