@@ -135,9 +135,10 @@ def compare(before: dict, after: dict) -> dict:
 
 
 # Whole-frame grammar from release-qualification/lib.sh at 97f714b61,
-# plus the observed branch/effort row only for the registered fixture branch.
+# plus the observed branch/effort row only for the registered fixture branch
+# and the auto-mode footer (`--permission-mode auto`, the evaluation runs' mode).
 # Empty is accepted only before pasting. It is never proof for a second Enter.
-FOOTER = re.compile(r"  (?:⏸ manual mode on|⏵⏵ bypass permissions on \(shift\+tab to cycle\)|paste again to expand)(?: · (?:\? for shortcuts|← for agents))*")
+FOOTER = re.compile(r"  (?:⏸ manual mode on|⏵⏵ (?:bypass permissions|auto mode) on \(shift\+tab to cycle\)|paste again to expand)(?: · (?:\? for shortcuts|← for agents))*")
 FOLD = re.compile(r"\[Pasted text #\d+ \+\d+ lines\]")
 DIRECTIVE = "Carry out the pasted instructions."
 PLACEHOLDER = re.compile(r'Try "[^"\n]+"')
