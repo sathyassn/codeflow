@@ -23,15 +23,15 @@ work_records_baseline = [
 backend = "codeflow"
 
 [release_records_baseline]
-"integration/EPC-014-public-docs" = "ed2cbd076af7d62ff56abb5a1535a29643e3e17e"
+"integration/EPC-014-public-docs" = "d618075e229d49f706cf1c0e9ab5b10a3c9c69e3"
 "integration/EPC-015-engineering-bar" = "db55fc01c30f75d0eb1bd5f3df1de9dd8f9d1bff"
-"integration/EPC-016-visual-guide" = "4f5ed49be0f156f498d68f32fe05a5ec5ca6c556"
-"integration/EPC-018-autonomy-roster" = "f9e7e6a59b597a26e41c8b8fef111c41fcf95c7f"
-"integration/EPC-020-delivery-system" = "e79e6bc43514660532f6bdc765668e3f2b8c71fe"
+"integration/EPC-016-visual-guide" = "51ee9374b506d9a359150ac15663c26c914b57cf"
+"integration/EPC-018-autonomy-roster" = "ccd56fa85160ac58d66828933e96c000357c4baa"
+"integration/EPC-020-delivery-system" = "2921df9f52a5e787f896146233a85201720591d3"
 
 [release_rule_baseline]
-"integration/EPC-014-public-docs" = "ed2cbd076af7d62ff56abb5a1535a29643e3e17e"
+"integration/EPC-014-public-docs" = "d618075e229d49f706cf1c0e9ab5b10a3c9c69e3"
 "integration/EPC-015-engineering-bar" = "db55fc01c30f75d0eb1bd5f3df1de9dd8f9d1bff"
-"integration/EPC-016-visual-guide" = "4f5ed49be0f156f498d68f32fe05a5ec5ca6c556"
-"integration/EPC-018-autonomy-roster" = "f9e7e6a59b597a26e41c8b8fef111c41fcf95c7f"
-"integration/EPC-020-delivery-system" = "e79e6bc43514660532f6bdc765668e3f2b8c71fe"
+"integration/EPC-016-visual-guide" = "51ee9374b506d9a359150ac15663c26c914b57cf"
+"integration/EPC-018-autonomy-roster" = "ccd56fa85160ac58d66828933e96c000357c4baa"
+"integration/EPC-020-delivery-system" = "2921df9f52a5e787f896146233a85201720591d3"
