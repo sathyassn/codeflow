@@ -894,6 +894,91 @@ fn own_line_position(
     })
 }
 
+/// The first-parent path of a release range, oldest first, from `anchor`
+/// to `head`. History the default target holds was judged there.
+fn first_parent_path(
+    repo: &Repository,
+    head: Oid,
+    anchor: Oid,
+    default_tip: Option<Oid>,
+) -> Result<Vec<Oid>, String> {
+    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
+    walk.push(head)
+        .and_then(|()| walk.hide(anchor))
+        .and_then(|()| default_tip.map_or(Ok(()), |tip| walk.hide(tip)))
+        .and_then(|()| walk.simplify_first_parent())
+        .map_err(|error| error.to_string())?;
+    let mut path: Vec<Oid> = walk
+        .collect::<Result<_, _>>()
+        .map_err(|error| error.to_string())?;
+    path.reverse();
+    Ok(path)
+}
+
+/// The tasks in `graph` (the head) that may own direct release work: each
+/// task with `role: release-integration` that is open, or complete with a
+/// completion this range makes (compared with `start`, the commit before
+/// the path). A cancelled holder and a completion from before the range
+/// own nothing.
+fn owners<'g>(repo: &Repository, graph: &'g Graph, start: Option<Oid>) -> Vec<&'g RecordView> {
+    graph
+        .records
+        .values()
+        .filter(|task| task.kind == RecordKind::Task && task.role.as_deref() == Some(RELEASE_ROLE))
+        .filter(|task| match task.status.as_str() {
+            "complete" => completion_changed(
+                start
+                    .and_then(|start| record_at(repo, start, &task.path))
+                    .as_ref(),
+                task,
+            ),
+            "cancelled" => false,
+            _ => true,
+        })
+        .collect()
+}
+
+/// The one task the release checks select as the owner of direct release
+/// work on `base..head` toward `destination`, or `None` when no task or
+/// several tasks are eligible, or the range is empty.
+///
+/// # Errors
+///
+/// Returns a message when a revision or the records at `head` cannot be
+/// read.
+pub fn release_owner(
+    repo_root: &Path,
+    destination: &Destination,
+    base: &str,
+    head: &str,
+) -> Result<Option<String>, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let oid = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| format!("{revision}: {}", error.message()))
+    };
+    let head_oid = oid(head)?;
+    let anchor = repo
+        .merge_base(oid(base)?, head_oid)
+        .map_err(|error| history_error(&repo, error.message()))?;
+    let default_tip = destination.default.as_ref().map(|(_, tip)| *tip);
+    let path = first_parent_path(&repo, head_oid, anchor, default_tip)?;
+    let Some(oldest) = path.first() else {
+        return Ok(None);
+    };
+    let start = repo
+        .find_commit(*oldest)
+        .ok()
+        .and_then(|commit| commit.parent_id(0).ok());
+    let graph = Graph::from_revision(&repo, &head_oid.to_string())?;
+    Ok(match owners(&repo, &graph, start).as_slice() {
+        [owner] => Some(owner.id.clone()),
+        _ => None,
+    })
+}
+
 /// A task record at `commit`, when the path holds one that parses.
 fn record_at(repo: &Repository, commit: Oid, path: &str) -> Option<RecordView> {
     blob_at(repo, commit, path)
@@ -1021,18 +1106,7 @@ fn judge(
         .merge_base(oid(base)?, head_oid)
         .map_err(|error| history_error(&repo, error.message()))?;
     let default_tip = destination.default.as_ref().map(|(_, tip)| *tip);
-    // The first-parent path, oldest first. History the default target
-    // holds was judged there.
-    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
-    walk.push(head_oid)
-        .and_then(|()| walk.hide(anchor))
-        .and_then(|()| default_tip.map_or(Ok(()), |tip| walk.hide(tip)))
-        .and_then(|()| walk.simplify_first_parent())
-        .map_err(|error| error.to_string())?;
-    let mut path: Vec<Oid> = walk
-        .collect::<Result<_, _>>()
-        .map_err(|error| error.to_string())?;
-    path.reverse();
+    let path = first_parent_path(&repo, head_oid, anchor, default_tip)?;
     let mut lines = Lines::new(repo_root, &repo, destination);
     // Read at the default target's tip, never from the range.
     let bridge = match &destination.default {
@@ -1398,24 +1472,7 @@ fn judge(
     // Direct work other than planning records belongs to the one task that
     // owns release integration, completed inside the range at the head.
     if !work.is_empty() {
-        let owners: Vec<&RecordView> = graph
-            .records
-            .values()
-            .filter(|task| {
-                task.kind == RecordKind::Task && task.role.as_deref() == Some(RELEASE_ROLE)
-            })
-            .filter(|task| match task.status.as_str() {
-                "complete" => completion_changed(
-                    start
-                        .and_then(|start| record_at(&repo, start, &task.path))
-                        .as_ref(),
-                    task,
-                ),
-                "cancelled" => false,
-                _ => true,
-            })
-            .collect();
-        match owners.as_slice() {
+        match owners(&repo, &graph, start).as_slice() {
             [] => {
                 let closed: Vec<&str> = graph
                     .records
