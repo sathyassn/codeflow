@@ -296,6 +296,10 @@ fn init_writes(
             report.notes.push(format!(
                 "git hooks wired: core.hooksPath = {CODEFLOW_HOOKS_PATH}"
             ));
+            // Brownfield choice: hooks git ran from its own folder until now.
+            if let Some(found) = detect::git_dir_hooks(root) {
+                report.notes.push(found.report_note());
+            }
         }
         Some(manager) => {
             report.notes.push(format!(
