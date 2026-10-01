@@ -1197,6 +1197,26 @@ pub fn journey_requirement_at(
     Ok(journey_requirement(&graph, task_id))
 }
 
+/// Whether `task_id` is a task with `role: release-integration` as the
+/// `head` revision has it: the task that carries a release pull request
+/// (SPC-013 R-120).
+///
+/// # Errors
+///
+/// Returns a message when the repository or the revision cannot be read.
+pub fn release_integration_at(
+    repo_root: &std::path::Path,
+    head: &str,
+    task_id: &str,
+) -> Result<bool, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let graph = Graph::from_revision(&repo, head)?;
+    Ok(graph.records.get(task_id).is_some_and(|task| {
+        task.kind == RecordKind::Task
+            && task.role.as_deref() == Some(super::release_line::RELEASE_ROLE)
+    }))
+}
+
 /// Whether a range may change task criteria (R-52): a planning-only change
 /// or a validated epic integration line. The caller decides it from the
 /// pull request's validated class, never from the branch prefix alone.

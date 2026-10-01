@@ -573,7 +573,13 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
-    matches!(class, Some(classification::Class::Tracked { .. }))
+    matches!(
+        class,
+        Some(
+            classification::Class::Tracked { .. }
+                | classification::Class::ReleaseIntegration { .. }
+        )
+    )
 }
 
 /// The durable-record rows of the dispatch, in their append-only order

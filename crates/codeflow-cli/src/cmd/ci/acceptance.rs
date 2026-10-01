@@ -193,7 +193,9 @@ fn criteria(
     branch: &str,
     class: Option<&Class>,
 ) -> Result<Criteria, String> {
-    if let Some(Class::Tracked { task_id, .. }) = class {
+    // A release range is judged by `judge` and does not reach here; were it
+    // to, the release pull request keeps its task's criteria as tracked work.
+    if let Some(Class::Tracked { task_id } | Class::ReleaseIntegration { task_id }) = class {
         return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, task_id);
     }
     // Without a pull request body (a push), a task branch's only valid class
