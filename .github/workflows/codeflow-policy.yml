@@ -1,0 +1,117 @@
+# codeflow policy: the enforcing CodeFlow check for pull requests. Written by
+# `codeflow init` and managed by `codeflow update`.
+#
+# It runs on `pull_request_target`, so GitHub runs this file from the
+# repository's default branch, never from the pull request: a pull request
+# that edits this workflow cannot change the job that judges it. GitHub's
+# default checkout for this event is also the default branch, whatever the
+# pull request targets, so the job checks out the pull request's base commit
+# explicitly. From that target checkout it installs the codeflow version the
+# target pins in .codeflow/project.toml (`scaffold_version`), verified against
+# the release's published sha256.sum (SPC-013 R-113), and reads the target's
+# policy. It fetches the pull request head only as git data and never runs
+# its code. The token is read-only and no secret is used. Builds and tests of
+# the head run in codeflow-ci.yml on `pull_request`.
+#
+# `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
+# breaking-footer, branch-naming and PR-body checks as the git hooks and the
+# Claude git-guard, reading the target's .codeflow/policy.json (CodeFlow
+# ADR-0017). `edited` reruns it when the PR body changes. Trusted automation
+# profiles (git.automation_profiles) apply only for the actor passed here, and
+# never on a fork pull request.
+#
+# The same job is the enforcing check of the shared id registry (SPC-013
+# R-14, R-20, R-109; ADR-0072), so one target build serves both. Push,
+# schedule and dispatch runs keep their own event's commit and run only the
+# registry check; with durable work tracking off, `codeflow ids check` passes
+# with a note. No concurrency group: a registry run is never replaced by a
+# newer queued event.
+#
+# This repository's copy: CodeFlow is its own first consumer, so the install
+# step builds the target branch's own source in place of the pinned release.
+# `codeflow update` keeps it as a user-modified file.
+name: codeflow-policy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main, master, "integration/**"]
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  commit-lint:
+    name: commit standards
+    runs-on: ubuntu-24.04
+    steps:
+      # The target, never the pull request head: for a pull request its base
+      # commit, otherwise the event's own commit. The binary, the pin and the
+      # policy all come from this checkout.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
+          fetch-depth: 0
+
+      # This repository IS codeflow, so it builds the checked-out TARGET
+      # branch's own source instead of installing a pinned release. The PR
+      # head is never checked out or built. The toolchain is pinned in
+      # rust-toolchain.toml.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build codeflow from the target's source
+        run: |
+          cargo build --release -p codeflow-cli
+          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
+
+      - name: Fetch the pull request head as data
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
+          fetched=$(git rev-parse refs/codeflow/pr-head)
+          if [ "$fetched" != "$HEAD_SHA" ]; then
+            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); the newer run judges it"; exit 1
+          fi
+
+      # The PR body reaches `codeflow ci` through `env:`, never interpolated
+      # into the script, so an untrusted body cannot inject shell.
+      - name: codeflow ci (commit + branch + PR-body standards)
+        if: github.event_name == 'pull_request_target'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
+          ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
+        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
+
+      # The registry is fetched explicitly with full history, never forced
+      # (R-20); the pull request head above was fetched as data only.
+      - name: Fetch the shared registry
+        run: |
+          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
+            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+          else
+            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
+          fi
+
+      - name: codeflow ids check
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request_target ]; then
+            codeflow ids check --base "$BASE_SHA" --head refs/codeflow/pr-head
+          else
+            codeflow ids check
+          fi

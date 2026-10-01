@@ -1,17 +1,17 @@
 ---
 name: cf-estimate
-description: Provides an optional agentic operating and estimation method for software delivery using evidence-anchored Easy/Medium/Hard/Very Hard grades, populated scenario estimates and feasible resource allocations. Use for agentic development, delivery forecasts, capacity, deadlines, or revising estimates from outcomes. Offers a project-specific preview before confirmed adoption. Do not use for personal-task scoring, model-effort selection, automatic scheduling, or implementation.
+description: Provides an optional agentic operating and estimation method for software delivery using evidence-anchored Easy/Medium/Hard/Very Hard grades, populated scenario estimates and feasible resource allocations. Use on an explicit request for agentic delivery estimates, forecasts, capacity, deadlines, or revising estimates from outcomes; a project-specific preview comes before confirmed adoption. Do not use for personal-task scoring, model-effort selection, automatic scheduling, or implementation.
 ---
 
-# cf-estimate — estimate agent-delivered outcomes
+# cf-estimate: estimate agent-delivered outcomes
 
 Produce a useful, evidence-labelled forecast, not a human staffing estimate with
 an AI speed multiplier. This method is a starting point a project may adopt,
 adapt or decline. It does not replace its task authority, engineering standards,
 independent review, security controls or acceptance criteria.
 
-Use inside the active `cf-model-orchestrator` flow; direct non-trivial use first
-enters that flow. Both primary seats independently assess material scope,
+Use inside the active `cf-model-orchestrator` flow; direct use for routed work
+first enters that flow. Both primary seats independently assess material scope,
 drivers, duration assumptions and feasibility, then reconcile from evidence.
 Do not restart an already settled interview or choose model effort from a grade.
 An unavailable peer follows the existing evidenced-degradation contract.
@@ -25,11 +25,11 @@ missing tool is a disclosed limitation, not permission to install it. Identify
 the decision: explore an operating model, estimate work, compare a deadline or
 capacity option, revise a forecast, or assess actual outcomes.
 
-- **Not adopted:** when agentic operation/estimation is relevant, actively offer
-  a project-specific preview: a representative package, its provisional grade,
-  populated scenarios and what constrains delivery. Explain the benefit and
-  cost relative to existing practice. Do not leave the method hidden behind a
-  skill name. Ask before adopting it or creating durable project records.
+- **Not adopted:** answer the request, and with it offer a project-specific
+  preview: a representative package, populated scenarios and what constrains
+  delivery. Explain the benefit and cost relative to existing practice. Never
+  offer it unasked in other work. Ask before adopting it or creating durable
+  project records.
   This includes project-owned drafts labelled proposed. Keep an unadopted
   preview in the response or task-owned temporary scratch; a re-offer event
   does not grant adoption.
@@ -44,13 +44,14 @@ capacity option, revise a forecast, or assess actual outcomes.
 
 An estimate request authorizes an answer, not execution, adoption, installation,
 tracker replacement, risky probes, commitments to outsiders or relaxed gates.
-The operator supplies genuinely owner-held facts—priorities, budget, authority,
-availability—not all estimates. Resolve discoverable facts yourself.
+The operator supplies genuinely owner-held facts (priorities, budget, authority,
+availability), not all estimates. Resolve discoverable facts yourself.
 
 ## Apply the method
 
-1. Read [rubric.md](references/rubric.md) to establish a pinned delivery package
-   and assign anchored drivers. Materially missing scope/ownership/acceptance is
+1. Establish a pinned delivery package. Anchored grades are optional: where
+   they help, read [rubric.md](references/rubric.md) to assign anchored
+   drivers. Materially missing scope/ownership/acceptance is
    UNSIZED; duration uncertainty alone is not. Show conditional alternatives
    separately. Keep grade, consequence, permission and model effort distinct.
 2. Read [operating-model.md](references/operating-model.md) to estimate the full
@@ -76,7 +77,7 @@ availability—not all estimates. Resolve discoverable facts yourself.
 ## Return an actionable result
 
 Lead with the forecast or decision and its basis. Show package/category or
-milestone estimates, grade anchors, full-delivery boundary, resource consumption
+milestone estimates, grade anchors where graded, full-delivery boundary, resource consumption
 separately from active elapsed and calendar lead time, limiting dependencies,
 assumptions, human decisions, sensitivity and the next useful action. Use
 project-defined sessions only with a stated duration/boundary; use days or months
@@ -84,7 +85,9 @@ when the actual agentic schedule warrants them, not human-development habit.
 Scenario labels are not probabilities or statistical confidence intervals.
 
 State what was checked, what remains judgment, missing evidence and any reduced
-assurance. Use project editorial guidance and `cf-editorial-review` for a
-substantial report. Do not turn the report into a mandatory ceremony or create
-an epic merely to estimate one task. Implementation starts only through the
-existing approved work lifecycle, with unchanged quality and authority gates.
+assurance. Write the report plainly: simple, straightforward and clear, no
+mannered prose (see `.codeflow/rules/writing.md`); use project editorial
+guidance and `cf-editorial-review` for a substantial one. Do not turn the
+report into a mandatory ceremony or create an epic merely to estimate one
+task. Implementation starts only through the existing approved work
+lifecycle, with unchanged quality and authority gates.

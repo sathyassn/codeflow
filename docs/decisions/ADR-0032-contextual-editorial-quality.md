@@ -1,5 +1,6 @@
 ---
 id: ADR-0032
+uid: 596a84e9-53f5-4535-88f4-bbcc7992728f
 title: make editorial quality contextual and on demand
 date: 2026-07-18
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: the standard/full scaffold gains one mirrored editorial-review skill, a compact always-loaded principle, duo/reviewer/ship/customize routing, and behavioral evaluation without a prose linter dependency
 ---
 
-# ADR-0032 — contextual editorial quality
+# ADR-0032: contextual editorial quality
 
 ## Context
 

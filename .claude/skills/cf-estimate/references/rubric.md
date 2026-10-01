@@ -1,5 +1,8 @@
 # Evidence-anchored delivery grades
 
+Optional. Read when anchored grades would help the estimate; scenarios from
+the operating model stand without them.
+
 Method/rubric version: `codeflow-agentic-1`. This is a provisional classification
 instrument, not a validated speed model. It adapts the supplied Agentic
 Development Model at commit `87852d69170fad6b15bf2463841c74ef80ceda58` with the
@@ -19,7 +22,7 @@ The available brief/spec must answer: identity and scope; ownership of touched
 surfaces; behavior/states/refusals; operations/events; persistent shapes and
 migrations or reasoned none; state-change/irreversibility; own versus consumed
 security duties; falsifiable acceptance; and material open questions. Existing
-project artifacts may answer these together—do not demand another template.
+project artifacts may answer these together; do not demand another template.
 
 Missing material scope, ownership, existence or core acceptance yields **UNSIZED**
 with a named gap and bounded discovery action. Never silently assume ownership
@@ -38,17 +41,17 @@ conformance testing and operational cost still belong in the duration estimate.
 
 | Driver | Anchored question | Points and boundary |
 |---|---|---|
-| S1 — persisted shape | Owns a new/changed entity, table, index, migration or durable projection? | 3; ordinary audit/telemetry alone does not qualify |
-| S2 — contract | Owns at least one operation, event or contract member? | 1, plus 1 if at least three operations, any mutation, or an emitted lifecycle event; consumed contracts do not count |
-| S3 — interface | Owns a screen, panel or multi-state human workflow? | 3; one control on a surface owned elsewhere or ordinary developer documentation does not qualify |
-| S4 — computation | Owns a computation such as geometry, graph, ranking or generated output with golden/tolerance/determinism proof? | 3; tests alone, or lookup/ordering/clamping recorded state, do not create owned computation |
-| S5 — AI behavior | Owns model behavior accepted through grounding, refusal or evaluation evidence? | 3; agent access to an ordinary API alone does not qualify |
-| S6 — external conformance | Owns an external format, protocol or integration with conformance/loss proof? | 1; merely exposing its native shape is insufficient |
-| S7 — operability | Owns replay, reconciliation, drift detection, restore or environment evidence? | 1; ordinary telemetry emission is insufficient |
-| C — consequential act | Performs audience publication/activation, destructive erasure, custody/authority change or stored-data migration? | 2; consumed/read-only behavior or non-production restoration alone does not qualify |
-| X — specific security mechanic | Implements a named approval, revocation, disclosure or erasure mechanism on its own path? | 1; boilerplate security applicability is not a mechanic |
-| T — experimental technique | Defined acceptance requires establishing technique/model/tolerance/threshold by experiment during delivery? | 2; uncertainty about an unapproved budget or an evidence disclaimer alone is insufficient |
-| R — distinct refusal/safeguard obligations | How many semantically distinct, explicit acceptance obligations govern refusal or safeguarding? | 0 for at most 3; 1 for 4–7; 2 for 8 or more |
+| S1: persisted shape | Owns a new/changed entity, table, index, migration or durable projection? | 3; ordinary audit/telemetry alone does not qualify |
+| S2: contract | Owns at least one operation, event or contract member? | 1, plus 1 if at least three operations, any mutation, or an emitted lifecycle event; consumed contracts do not count |
+| S3: interface | Owns a screen, panel or multi-state human workflow? | 3; one control on a surface owned elsewhere or ordinary developer documentation does not qualify |
+| S4: computation | Owns a computation such as geometry, graph, ranking or generated output with golden/tolerance/determinism proof? | 3; tests alone, or lookup/ordering/clamping recorded state, do not create owned computation |
+| S5: AI behavior | Owns model behavior accepted through grounding, refusal or evaluation evidence? | 3; agent access to an ordinary API alone does not qualify |
+| S6: external conformance | Owns an external format, protocol or integration with conformance/loss proof? | 1; merely exposing its native shape is insufficient |
+| S7: operability | Owns replay, reconciliation, drift detection, restore or environment evidence? | 1; ordinary telemetry emission is insufficient |
+| C: consequential act | Performs audience publication/activation, destructive erasure, custody/authority change or stored-data migration? | 2; consumed/read-only behavior or non-production restoration alone does not qualify |
+| X: specific security mechanic | Implements a named approval, revocation, disclosure or erasure mechanism on its own path? | 1; boilerplate security applicability is not a mechanic |
+| T: experimental technique | Defined acceptance requires establishing technique/model/tolerance/threshold by experiment during delivery? | 2; uncertainty about an unapproved budget or an evidence disclaimer alone is insufficient |
+| R: distinct refusal/safeguard obligations | How many semantically distinct, explicit acceptance obligations govern refusal or safeguarding? | 0 for at most 3; 1 for 4 to 7; 2 for 8 or more |
 
 For R, enumerate each obligation and its anchor. Count semantics, not headings:
 the same required behavior counts whether phrased as an error, safeguard, edge

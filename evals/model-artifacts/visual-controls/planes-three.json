@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "planes-here",
+    "family": "layering",
+    "binding": "authored",
+    "question": "Which planes guard the git rules in this repository, and which one is the boundary?",
+    "idea": "Hooks, the session guard and CI guard the rules here; no remote plane is armed.",
+    "title": "The planes that guard the git rules here",
+    "caption": "No remote plane is armed on this repository, so CI and the hooks are the boundary.",
+    "states": [
+      {
+        "name": "layer",
+        "mark": "layer",
+        "means": "The span a plane covers"
+      },
+      {
+        "name": "act",
+        "mark": "act",
+        "means": "Where the plane acts"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "remote branch protection is unavailable on this repository",
+        "source": "CONTRIBUTING.md#branch-protection",
+        "derive": "the Branch protection section",
+        "check": {
+          "kind": "contains",
+          "text": "Remote branch protection is unavailable on this repository"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 200,
+      "draw": [
+        {
+          "text": "edit",
+          "x": 160,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "commit",
+          "x": 280,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "push",
+          "x": 400,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "pull request",
+          "x": 520,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "merge",
+          "x": 640,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 150,
+          "y1": 42,
+          "x2": 680,
+          "y2": 42
+        },
+        {
+          "text": "Git hooks",
+          "x": 0,
+          "y": 76
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 150,
+          "y": 62,
+          "w": 270,
+          "h": 18,
+          "rx": 4,
+          "id": "b0"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 280,
+          "cy": 71,
+          "r": 8,
+          "id": "a0"
+        },
+        {
+          "text": "Session guard",
+          "x": 0,
+          "y": 116
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 150,
+          "y": 102,
+          "w": 150,
+          "h": 18,
+          "rx": 4,
+          "id": "b1"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 200,
+          "cy": 111,
+          "r": 8,
+          "id": "a1"
+        },
+        {
+          "text": "CI",
+          "x": 0,
+          "y": 156
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 390,
+          "y": 142,
+          "w": 270,
+          "h": 18,
+          "rx": 4,
+          "id": "b2"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 520,
+          "cy": 151,
+          "r": 8,
+          "id": "a2"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 236,
+      "draw": [
+        {
+          "text": "edit",
+          "x": 26.0,
+          "y": 24,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "commit",
+          "x": 98.0,
+          "y": 24,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "push",
+          "x": 170.0,
+          "y": 24,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "PR",
+          "x": 242.0,
+          "y": 24,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "merge",
+          "x": 314.0,
+          "y": 24,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 20,
+          "y1": 34,
+          "x2": 340,
+          "y2": 34
+        },
+        {
+          "text": "Git hooks",
+          "x": 20,
+          "y": 66
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 20.0,
+          "y": 80,
+          "w": 162.0,
+          "h": 14,
+          "rx": 4,
+          "id": "nb0"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 98.0,
+          "cy": 87,
+          "r": 8,
+          "id": "na0"
+        },
+        {
+          "text": "Session guard",
+          "x": 20,
+          "y": 122
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 20.0,
+          "y": 136,
+          "w": 90.0,
+          "h": 14,
+          "rx": 4,
+          "id": "nb1"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 50.0,
+          "cy": 143,
+          "r": 8,
+          "id": "na1"
+        },
+        {
+          "text": "CI",
+          "x": 20,
+          "y": 178
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 164.0,
+          "y": 192,
+          "w": 162.0,
+          "h": 14,
+          "rx": 4,
+          "id": "nb2"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 242.0,
+          "cy": 199,
+          "r": 8,
+          "id": "na2"
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Plane",
+        "Covers",
+        "Acts at"
+      ],
+      "rows": [
+        [
+          "Git hooks",
+          "edit to push",
+          "commit"
+        ],
+        [
+          "Session guard",
+          "edit to commit",
+          "edit"
+        ],
+        [
+          "CI",
+          "push to merge",
+          "pull request"
+        ]
+      ]
+    }
+  }
+}

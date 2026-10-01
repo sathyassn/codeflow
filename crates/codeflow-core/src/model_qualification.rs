@@ -9,22 +9,17 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 const HARNESS_CATALOG: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json"
 ));
-const CURRENT_ENSEMBLE: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json"
-));
 const ROUTING_POLICY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json"
 ));
-const PROJECT_SELECTION_PATH: &str = ".codeflow/model-selection.json";
 
 /// Trusted, source-controlled metadata for a capability-supported native harness.
 #[derive(Debug, Clone, Deserialize)]
@@ -56,19 +51,6 @@ struct HarnessCatalog {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EnsembleCatalog {
-    schema_version: u64,
-    policy_id: String,
-    standing_roles: Vec<String>,
-    design_execution_owner: String,
-    bindings: Vec<EnsembleBinding>,
-    high_triggers: Vec<String>,
-    xhigh_triggers: Vec<String>,
-    rules: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct RoutingPolicy {
     schema_version: u64,
     policy_id: String,
@@ -88,40 +70,8 @@ struct ExtraFamilyReview {
     rule: String,
 }
 
-/// One stable primary role and its fully managed shipped default.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnsembleBinding {
-    pub role: String,
-    pub seat: String,
-    pub provider: String,
-    pub lineage: String,
-    pub model_class: String,
-    pub native_selectors: BTreeMap<String, String>,
-    pub default_effort: String,
-    pub escalation_effort: String,
-    pub responsibilities: Vec<String>,
-    pub internal_routes: Vec<InternalRoute>,
-}
-
-/// A harness-owned worker class that never replaces its primary.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct InternalRoute {
-    pub route_id: String,
-    pub model_class: String,
-    pub native_selectors: BTreeMap<String, String>,
-    pub efforts: Vec<RouteEffort>,
-    pub default_effort: RouteEffort,
-    pub workloads: Vec<RouteWorkload>,
-    pub status: RouteStatus,
-    pub evidence: Vec<String>,
-    #[serde(rename = "use")]
-    pub use_case: String,
-}
-
 /// One exact effort accepted by a managed worker route.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum RouteEffort {
     Low,
@@ -143,64 +93,6 @@ impl RouteEffort {
     }
 }
 
-/// A bounded task class declared by a managed worker route.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "kebab-case")]
-pub enum RouteWorkload {
-    Reasoning,
-    Implementation,
-    Evidence,
-    ReviewSupport,
-    DesignImplementation,
-}
-
-impl RouteWorkload {
-    /// Stable JSON spelling used in diagnostics.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Reasoning => "reasoning",
-            Self::Implementation => "implementation",
-            Self::Evidence => "evidence",
-            Self::ReviewSupport => "review-support",
-            Self::DesignImplementation => "design-implementation",
-        }
-    }
-}
-
-/// Evidence status of a managed worker route, never a primary promotion.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum RouteStatus {
-    Candidate,
-    ScopedQualified,
-}
-
-impl RouteStatus {
-    /// Stable JSON spelling used in diagnostics.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Candidate => "candidate",
-            Self::ScopedQualified => "scoped-qualified",
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProjectSelection {
-    schema_version: u64,
-    bindings: Vec<ProjectSelectionEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProjectSelectionEntry {
-    role: String,
-    binding_id: String,
-}
-
 /// One qualified project override after role, lineage, and harness validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSelection {
@@ -215,7 +107,7 @@ pub struct ResolvedSelection {
 }
 
 /// One promoted model+harness binding.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QualifiedBinding {
     pub schema_version: u64,
@@ -233,7 +125,7 @@ pub struct QualifiedBinding {
 }
 
 /// Requested binding recorded by the evaluated native session.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestedBinding {
     pub model: String,
@@ -244,7 +136,7 @@ pub struct RequestedBinding {
 }
 
 /// Native observation proving the requested model and effort.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservedBinding {
     pub model: String,
@@ -253,7 +145,7 @@ pub struct ObservedBinding {
 }
 
 /// Content-addressed observation retained without potentially sensitive refs.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservedEvidence {
     pub kind: String,
@@ -261,7 +153,7 @@ pub struct ObservedEvidence {
 }
 
 /// Full-suite result that justified promotion.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QualificationEvidence {
     pub run_id: String,
@@ -272,7 +164,7 @@ pub struct QualificationEvidence {
 }
 
 /// Optional live settings input whose digest doctor can recompute.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsSource {
     pub path: PathBuf,
@@ -280,7 +172,7 @@ pub struct SettingsSource {
 }
 
 /// Explicit human approval retained from the full evaluation result.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Approval {
     pub reviewer: String,
@@ -375,229 +267,10 @@ pub fn harness_catalog() -> Result<BTreeMap<String, HarnessMetadata>, String> {
     Ok(indexed)
 }
 
-fn validate_ensemble_triggers(ensemble: &EnsembleCatalog) -> Result<(), String> {
-    if ensemble.high_triggers.is_empty()
-        || ensemble.xhigh_triggers.is_empty()
-        || ensemble.rules.is_empty()
-    {
-        return Err("current ensemble effort triggers and rules must not be empty".into());
-    }
-    Ok(())
-}
-
-/// Parse and validate the fully managed current ensemble.
-///
-/// # Errors
-///
-/// Returns an error when roles, seats, lineages, selectors, or required
-/// responsibility fields are missing or contradictory.
-pub fn current_ensemble() -> Result<BTreeMap<String, EnsembleBinding>, String> {
-    let ensemble: EnsembleCatalog =
-        serde_json::from_str(CURRENT_ENSEMBLE).map_err(|error| error.to_string())?;
-    validate_parsed_ensemble(ensemble)
-}
-
-fn validate_parsed_ensemble(
-    ensemble: EnsembleCatalog,
-) -> Result<BTreeMap<String, EnsembleBinding>, String> {
-    if ensemble.schema_version != 4 {
-        return Err(format!(
-            "unsupported current ensemble schema {}",
-            ensemble.schema_version
-        ));
-    }
-    validate_nonempty(&ensemble.policy_id, "ensemble.policy_id")?;
-    validate_routing_policy(&ensemble.policy_id)?;
-    if ensemble.standing_roles.len() != 2 {
-        return Err("the standing pair must define exactly two primary roles".into());
-    }
-    if ensemble.bindings.len() < 2 {
-        return Err("current ensemble must include the standing pair".into());
-    }
-    let mut standing = BTreeSet::new();
-    for role in &ensemble.standing_roles {
-        validate_safe_atom(role, "ensemble standing role")?;
-        if !standing.insert(role.clone()) {
-            return Err(format!("duplicate standing role {role}"));
-        }
-    }
-    validate_safe_atom(
-        &ensemble.design_execution_owner,
-        "ensemble design_execution_owner",
-    )?;
-    if !standing.contains(&ensemble.design_execution_owner) {
-        return Err("ensemble design_execution_owner must be a standing role".into());
-    }
-    if ensemble.policy_id == "claude-codex-duo"
-        && standing
-            != BTreeSet::from([
-                "claude-judgment-primary".to_string(),
-                "codex-engineering-primary".to_string(),
-            ])
-    {
-        return Err(
-            "claude-codex-duo standing pair must remain claude-judgment-primary and codex-engineering-primary"
-                .into(),
-        );
-    }
-    validate_ensemble_triggers(&ensemble)?;
-    let catalog = harness_catalog()?;
-    let mut roles = BTreeMap::new();
-    let mut seats = BTreeSet::new();
-    let mut lineages = BTreeSet::new();
-    for binding in ensemble.bindings {
-        validate_safe_atom(&binding.role, "ensemble role")?;
-        validate_safe_atom(&binding.seat, "ensemble seat")?;
-        for (value, label) in [
-            (&binding.provider, "ensemble provider"),
-            (&binding.lineage, "ensemble lineage"),
-            (&binding.model_class, "ensemble model_class"),
-            (&binding.default_effort, "ensemble default_effort"),
-            (&binding.escalation_effort, "ensemble escalation_effort"),
-        ] {
-            validate_nonempty(value, label)?;
-        }
-        if !seats.insert(binding.seat.clone()) {
-            return Err(format!("duplicate ensemble seat {}", binding.seat));
-        }
-        if !lineages.insert(binding.lineage.clone()) {
-            return Err(format!(
-                "primary lineage {} appears more than once",
-                binding.lineage
-            ));
-        }
-        if binding.native_selectors.is_empty() || binding.responsibilities.is_empty() {
-            return Err(format!(
-                "ensemble role {} has no selector or responsibility",
-                binding.role
-            ));
-        }
-        for (harness_id, selector) in &binding.native_selectors {
-            validate_nonempty(selector, "ensemble native selector")?;
-            let harness = catalog.get(harness_id).ok_or_else(|| {
-                format!(
-                    "ensemble role {} uses unsupported harness {harness_id}",
-                    binding.role
-                )
-            })?;
-            if harness.provider != binding.provider || harness.lineage != binding.lineage {
-                return Err(format!(
-                    "ensemble role {} mismatches harness {harness_id}",
-                    binding.role
-                ));
-            }
-        }
-        validate_internal_routes(&binding, &ensemble.design_execution_owner)?;
-        let role = binding.role.clone();
-        if roles.insert(role.clone(), binding).is_some() {
-            return Err(format!("duplicate ensemble role {role}"));
-        }
-    }
-    for role in &standing {
-        if !roles.contains_key(role) {
-            return Err(format!("standing role {role} is missing from bindings"));
-        }
-    }
-    validate_design_execution_owner_lineage(&roles, &ensemble.design_execution_owner)?;
-    Ok(roles)
-}
-
-fn validate_design_execution_owner_lineage(
-    roles: &BTreeMap<String, EnsembleBinding>,
-    design_execution_owner: &str,
+pub(crate) fn validate_repository_relative_reference(
+    value: &str,
+    label: &str,
 ) -> Result<(), String> {
-    if roles[design_execution_owner].lineage == "claude" {
-        Ok(())
-    } else {
-        Err("ensemble design_execution_owner must have Claude lineage".into())
-    }
-}
-
-fn validate_internal_routes(
-    binding: &EnsembleBinding,
-    design_execution_owner: &str,
-) -> Result<(), String> {
-    let mut route_ids = BTreeSet::new();
-    for route in &binding.internal_routes {
-        validate_safe_atom(&route.route_id, "internal route route_id")?;
-        if !route_ids.insert(route.route_id.as_str()) {
-            return Err(format!(
-                "ensemble role {} contains duplicate internal route {}",
-                binding.role, route.route_id
-            ));
-        }
-        validate_nonempty(&route.model_class, "internal route model_class")?;
-        if route.native_selectors.is_empty() {
-            return Err(format!(
-                "internal route {} has no native selector",
-                route.route_id
-            ));
-        }
-        for (harness_id, selector) in &route.native_selectors {
-            validate_nonempty(selector, "internal route native selector")?;
-            if !binding.native_selectors.contains_key(harness_id) {
-                return Err(format!(
-                    "internal route {} uses harness {harness_id} outside parent role {}",
-                    route.route_id, binding.role
-                ));
-            }
-        }
-        if route.efforts.is_empty() {
-            return Err(format!("internal route {} has no effort", route.route_id));
-        }
-        let efforts: BTreeSet<RouteEffort> = route.efforts.iter().copied().collect();
-        if efforts.len() != route.efforts.len() {
-            return Err(format!(
-                "internal route {} contains a duplicate effort",
-                route.route_id
-            ));
-        }
-        if !efforts.contains(&route.default_effort) {
-            return Err(format!(
-                "internal route {} default effort is not in efforts",
-                route.route_id
-            ));
-        }
-        if route.workloads.is_empty() {
-            return Err(format!("internal route {} has no workload", route.route_id));
-        }
-        let workloads: BTreeSet<RouteWorkload> = route.workloads.iter().copied().collect();
-        if workloads.len() != route.workloads.len() {
-            return Err(format!(
-                "internal route {} contains a duplicate workload",
-                route.route_id
-            ));
-        }
-        if workloads.contains(&RouteWorkload::DesignImplementation)
-            && binding.role != design_execution_owner
-        {
-            return Err(format!(
-                "internal route {} declares design-implementation outside design_execution_owner {design_execution_owner}",
-                route.route_id
-            ));
-        }
-        if route.status == RouteStatus::ScopedQualified && route.evidence.is_empty() {
-            return Err(format!(
-                "scoped-qualified internal route {} has no evidence",
-                route.route_id
-            ));
-        }
-        let mut evidence = BTreeSet::new();
-        for path in &route.evidence {
-            validate_repository_relative_reference(path, "internal route evidence")?;
-            if !evidence.insert(path.as_str()) {
-                return Err(format!(
-                    "internal route {} contains duplicate evidence",
-                    route.route_id
-                ));
-            }
-        }
-        validate_nonempty(&route.use_case, "internal route use")?;
-    }
-    Ok(())
-}
-
-fn validate_repository_relative_reference(value: &str, label: &str) -> Result<(), String> {
     if value.trim().is_empty()
         || value.trim() != value
         || value.len() > 1024
@@ -620,10 +293,22 @@ fn validate_repository_relative_reference(value: &str, label: &str) -> Result<()
     Ok(())
 }
 
-fn validate_routing_policy(policy_id: &str) -> Result<(), String> {
-    let policy: RoutingPolicy =
-        serde_json::from_str(ROUTING_POLICY).map_err(|error| error.to_string())?;
-    validate_parsed_routing_policy(&policy, policy_id)
+fn routing_policy() -> Result<&'static RoutingPolicy, String> {
+    static POLICY: OnceLock<Result<RoutingPolicy, String>> = OnceLock::new();
+    POLICY
+        .get_or_init(|| {
+            let policy: RoutingPolicy =
+                serde_json::from_str(ROUTING_POLICY).map_err(|error| error.to_string())?;
+            validate_parsed_routing_policy(&policy, &policy.policy_id)?;
+            Ok(policy)
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// Shared immutable policy facts; parsing and validation happen once.
+pub(crate) fn routing_policy_triggers() -> Result<&'static [String], String> {
+    Ok(&routing_policy()?.extra_family_review.triggers)
 }
 
 fn validate_parsed_routing_policy(policy: &RoutingPolicy, policy_id: &str) -> Result<(), String> {
@@ -655,124 +340,6 @@ fn validate_parsed_routing_policy(policy: &RoutingPolicy, policy_id: &str) -> Re
         return Err("extra-family review must be named, triggered, invoked when available, and never a silent vote".into());
     }
     Ok(())
-}
-
-/// Resolve a project's reference-only overrides against approved bindings.
-///
-/// An absent or empty project selection returns no overrides. Any invalid entry
-/// rejects the entire selection so callers cannot partially apply it.
-///
-/// # Errors
-///
-/// Returns an error for malformed or unsafe project configuration, unknown or
-/// ineligible binding records, role/harness/provider mismatches, duplicates,
-/// or collapsed primary lineages.
-pub fn resolve_project_selection(
-    project_root: &Path,
-    records: &[QualifiedBinding],
-) -> Result<Vec<ResolvedSelection>, String> {
-    let path = project_root.join(PROJECT_SELECTION_PATH);
-    match std::fs::symlink_metadata(&path) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("stat {}: {error}", path.display())),
-    }
-    let data = read_bounded_json(&path, "model selection")?;
-    let selection: ProjectSelection = serde_json::from_slice(&data)
-        .map_err(|error| format!("parse {}: {error}", path.display()))?;
-    if selection.schema_version != 1 {
-        return Err(format!(
-            "unsupported project model-selection schema {}",
-            selection.schema_version
-        ));
-    }
-    if selection.bindings.is_empty() {
-        return Ok(Vec::new());
-    }
-    let ensemble = current_ensemble()?;
-    let records_by_id: BTreeMap<&str, &QualifiedBinding> = records
-        .iter()
-        .map(|record| (record.binding_id.as_str(), record))
-        .collect();
-    let mut resolved = Vec::with_capacity(selection.bindings.len());
-    let mut role_harnesses = BTreeSet::new();
-    for entry in selection.bindings {
-        validate_safe_atom(&entry.role, "selection role")?;
-        validate_safe_atom(&entry.binding_id, "selection binding_id")?;
-        let role = ensemble
-            .get(&entry.role)
-            .ok_or_else(|| format!("unknown project model-selection role {}", entry.role))?;
-        let record = records_by_id
-            .get(entry.binding_id.as_str())
-            .ok_or_else(|| {
-                format!(
-                    "project model selection references missing binding {}",
-                    entry.binding_id
-                )
-            })?;
-        if !record.eligible_roles.contains(&entry.role) {
-            return Err(format!(
-                "binding {} is not qualified for role {}",
-                entry.binding_id, entry.role
-            ));
-        }
-        if record.provider != role.provider || record.lineage != role.lineage {
-            return Err(format!(
-                "binding {} provider/lineage does not match role {}",
-                entry.binding_id, entry.role
-            ));
-        }
-        if !role
-            .native_selectors
-            .contains_key(&record.requested.harness)
-        {
-            return Err(format!(
-                "binding {} harness {} is not supported by role {}",
-                entry.binding_id, record.requested.harness, entry.role
-            ));
-        }
-        if !role_harnesses.insert((entry.role.clone(), record.requested.harness.clone())) {
-            return Err(format!(
-                "project model selection repeats role {} for harness {}",
-                entry.role, record.requested.harness
-            ));
-        }
-        resolved.push(ResolvedSelection {
-            role: entry.role,
-            seat: role.seat.clone(),
-            binding_id: entry.binding_id,
-            provider: record.provider.clone(),
-            lineage: record.lineage.clone(),
-            harness: record.requested.harness.clone(),
-            model: record.requested.model.clone(),
-            effort: record.requested.effort.clone(),
-        });
-    }
-
-    let selected_by_role: BTreeMap<&str, &ResolvedSelection> = resolved
-        .iter()
-        .map(|selection| (selection.role.as_str(), selection))
-        .collect();
-    // Provider/lineage checks above make collapse impossible for the current
-    // roles. Keep this backstop so a future schema change cannot weaken the
-    // independent-lineage invariant unnoticed.
-    let effective_lineages: BTreeSet<&str> = ensemble
-        .values()
-        .map(|role| {
-            selected_by_role
-                .get(role.role.as_str())
-                .map_or(role.lineage.as_str(), |selected| selected.lineage.as_str())
-        })
-        .collect();
-    if effective_lineages.len() != ensemble.len() {
-        return Err("project model selection collapses independent primary lineages".into());
-    }
-    resolved.sort_by(|left, right| {
-        left.role
-            .cmp(&right.role)
-            .then(left.harness.cmp(&right.harness))
-    });
-    Ok(resolved)
 }
 
 /// Resolve a source-controlled probe ID to fixed executable arguments.
@@ -849,7 +416,7 @@ fn read_bounded_record(path: &Path) -> Result<Vec<u8>, String> {
     read_bounded_json(path, "binding")
 }
 
-fn read_bounded_json(path: &Path, label: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn read_bounded_json(path: &Path, label: &str) -> Result<Vec<u8>, String> {
     let initial = std::fs::symlink_metadata(path)
         .map_err(|error| format!("stat {}: {error}", path.display()))?;
     if initial.file_type().is_symlink() {
@@ -963,7 +530,7 @@ fn same_file_identity(
     opened.len() == current.len() && opened.modified().ok() == current.modified().ok()
 }
 
-fn validate_binding(
+pub(crate) fn validate_binding(
     record: &QualifiedBinding,
     catalog: &BTreeMap<String, HarnessMetadata>,
 ) -> Result<(), String> {
@@ -1211,7 +778,7 @@ mod tests {
     fn record() -> QualifiedBinding {
         QualifiedBinding {
             schema_version: 1,
-            binding_id: "claude-fable-high".into(),
+            binding_id: "fictional-orchid-high".into(),
             provider: "anthropic".into(),
             lineage: "claude".into(),
             eligible_roles: vec![
@@ -1221,14 +788,14 @@ mod tests {
             ],
             qualified_at: "2026-07-25T10:00:00Z".into(),
             requested: RequestedBinding {
-                model: "fable-5".into(),
+                model: "orchid-5".into(),
                 effort: "high".into(),
                 harness: "claude-code".into(),
                 harness_version: "2.1.220".into(),
                 settings_digest: digest(),
             },
             observed: ObservedBinding {
-                model: "fable-5".into(),
+                model: "orchid-5".into(),
                 effort: "high".into(),
                 evidence: vec![ObservedEvidence {
                     kind: "session".into(),
@@ -1268,278 +835,6 @@ mod tests {
     }
 
     #[test]
-    fn embedded_ensemble_has_two_independent_stable_roles() {
-        let ensemble = current_ensemble().unwrap();
-        assert!(ensemble.len() >= 2);
-        assert_eq!(ensemble["claude-judgment-primary"].seat, "claude-primary");
-        assert_eq!(ensemble["codex-engineering-primary"].seat, "codex-primary");
-        assert_eq!(ensemble["grok-engineering-primary"].seat, "grok-primary");
-        assert_eq!(ensemble["grok-engineering-primary"].lineage, "grok");
-        assert!(
-            ensemble["claude-judgment-primary"]
-                .internal_routes
-                .iter()
-                .any(|route| route.route_id == "fable-high-reasoning"
-                    && route.default_effort == RouteEffort::High),
-            "Fable high in-family worker route missing"
-        );
-        assert!(
-            ensemble["claude-judgment-primary"]
-                .internal_routes
-                .iter()
-                .any(|route| route.route_id == "fable-xhigh-reasoning"
-                    && route.default_effort == RouteEffort::Xhigh),
-            "Fable xhigh in-family worker route missing"
-        );
-        assert!(
-            ensemble["codex-engineering-primary"]
-                .internal_routes
-                .iter()
-                .any(|route| route.route_id == "astra-high-reasoning"
-                    && route.default_effort == RouteEffort::High),
-            "Astra high in-family worker route missing"
-        );
-        assert!(
-            ensemble["codex-engineering-primary"]
-                .internal_routes
-                .iter()
-                .any(|route| route.route_id == "astra-xhigh-reasoning"
-                    && route.default_effort == RouteEffort::Xhigh),
-            "Astra xhigh in-family worker route missing"
-        );
-        assert!(
-            ensemble["grok-engineering-primary"]
-                .internal_routes
-                .iter()
-                .any(|route| route.route_id == "grok-xhigh-reasoning"
-                    && route.default_effort == RouteEffort::Xhigh),
-            "Grok xhigh in-family worker route missing"
-        );
-        assert_ne!(
-            ensemble["claude-judgment-primary"].lineage,
-            ensemble["codex-engineering-primary"].lineage
-        );
-        assert!(trusted_version_probe("grok-cli-version").is_some());
-    }
-
-    fn write_selection(root: &Path, body: &serde_json::Value) {
-        let directory = root.join(".codeflow");
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(
-            directory.join("model-selection.json"),
-            serde_json::to_vec_pretty(&body).unwrap(),
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn absent_or_empty_project_selection_keeps_managed_defaults() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(resolve_project_selection(root.path(), &[])
-            .unwrap()
-            .is_empty());
-        write_selection(
-            root.path(),
-            &serde_json::json!({"schema_version": 1, "bindings": []}),
-        );
-        assert!(resolve_project_selection(root.path(), &[])
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn project_selection_resolves_only_an_exact_qualified_role() {
-        let root = tempfile::tempdir().unwrap();
-        write_selection(
-            root.path(),
-            &serde_json::json!({
-                "schema_version": 1,
-                "bindings": [{
-                    "role": "claude-judgment-primary",
-                    "binding_id": "claude-fable-high"
-                }]
-            }),
-        );
-        let resolved = resolve_project_selection(root.path(), &[record()]).unwrap();
-        assert_eq!(
-            resolved,
-            vec![ResolvedSelection {
-                role: "claude-judgment-primary".into(),
-                seat: "claude-primary".into(),
-                binding_id: "claude-fable-high".into(),
-                provider: "anthropic".into(),
-                lineage: "claude".into(),
-                harness: "claude-code".into(),
-                model: "fable-5".into(),
-                effort: "high".into(),
-            }]
-        );
-    }
-
-    #[test]
-    fn project_selection_is_atomic_for_missing_or_ineligible_bindings() {
-        let root = tempfile::tempdir().unwrap();
-        write_selection(
-            root.path(),
-            &serde_json::json!({
-                "schema_version": 1,
-                "bindings": [
-                    {
-                        "role": "claude-judgment-primary",
-                        "binding_id": "claude-fable-high"
-                    },
-                    {
-                        "role": "codex-engineering-primary",
-                        "binding_id": "missing"
-                    }
-                ]
-            }),
-        );
-        let error = resolve_project_selection(root.path(), &[record()]).unwrap_err();
-        assert!(error.contains("missing binding missing"));
-
-        write_selection(
-            root.path(),
-            &serde_json::json!({
-                "schema_version": 1,
-                "bindings": [{
-                    "role": "codex-engineering-primary",
-                    "binding_id": "claude-fable-high"
-                }]
-            }),
-        );
-        let error = resolve_project_selection(root.path(), &[record()]).unwrap_err();
-        assert!(error.contains("not qualified for role"));
-    }
-
-    #[test]
-    fn project_selection_rejects_provider_lineage_and_harness_mismatch() {
-        let root = tempfile::tempdir().unwrap();
-        write_selection(
-            root.path(),
-            &serde_json::json!({
-                "schema_version": 1,
-                "bindings": [{
-                    "role": "codex-engineering-primary",
-                    "binding_id": "claude-fable-high"
-                }]
-            }),
-        );
-
-        let mut wrong_lineage = record();
-        wrong_lineage
-            .eligible_roles
-            .push("codex-engineering-primary".into());
-        let error = resolve_project_selection(root.path(), &[wrong_lineage.clone()]).unwrap_err();
-        assert!(error.contains("provider/lineage does not match"));
-
-        write_selection(
-            root.path(),
-            &serde_json::json!({
-                "schema_version": 1,
-                "bindings": [{
-                    "role": "claude-judgment-primary",
-                    "binding_id": "claude-fable-high"
-                }]
-            }),
-        );
-        wrong_lineage.requested.harness = "codex-app".into();
-        let error = resolve_project_selection(root.path(), &[wrong_lineage]).unwrap_err();
-        assert!(error.contains("harness codex-app is not supported"));
-    }
-
-    #[test]
-    fn pseudo_duo_selection_cannot_reuse_one_lineage_for_both_roles() {
-        let root = tempfile::tempdir().unwrap();
-        write_selection(
-            root.path(),
-            &serde_json::json!({
-                "schema_version": 1,
-                "bindings": [
-                    {
-                        "role": "claude-judgment-primary",
-                        "binding_id": "claude-fable-high"
-                    },
-                    {
-                        "role": "codex-engineering-primary",
-                        "binding_id": "claude-fable-high"
-                    }
-                ]
-            }),
-        );
-        let mut binding = record();
-        binding
-            .eligible_roles
-            .push("codex-engineering-primary".into());
-        let error = resolve_project_selection(root.path(), &[binding]).unwrap_err();
-        assert!(
-            error.contains("provider/lineage does not match"),
-            "a pseudo-duo must fail before any partial selection is returned: {error}"
-        );
-    }
-
-    #[test]
-    fn project_selection_rejects_duplicate_role_harness_and_unknown_fields() {
-        let root = tempfile::tempdir().unwrap();
-        write_selection(
-            root.path(),
-            &serde_json::json!({
-                "schema_version": 1,
-                "bindings": [
-                    {
-                        "role": "claude-judgment-primary",
-                        "binding_id": "claude-fable-high"
-                    },
-                    {
-                        "role": "claude-judgment-primary",
-                        "binding_id": "claude-fable-high"
-                    }
-                ]
-            }),
-        );
-        let error = resolve_project_selection(root.path(), &[record()]).unwrap_err();
-        assert!(error.contains("repeats role"));
-
-        write_selection(
-            root.path(),
-            &serde_json::json!({
-                "schema_version": 1,
-                "bindings": [],
-                "selector": "opus"
-            }),
-        );
-        let error = resolve_project_selection(root.path(), &[]).unwrap_err();
-        assert!(error.contains("unknown field"));
-    }
-
-    #[test]
-    fn project_selection_rejects_symlinks_and_oversized_files() {
-        let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join(".codeflow");
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("model-selection.json");
-        let oversized = std::fs::File::create(&path).unwrap();
-        oversized.set_len(MAX_RECORD_BYTES + 1).unwrap();
-        let error = resolve_project_selection(root.path(), &[]).unwrap_err();
-        assert!(error.contains("model selection exceeds"));
-
-        #[cfg(unix)]
-        {
-            std::fs::remove_file(&path).unwrap();
-            let target = directory.join("target.json");
-            std::fs::write(&target, b"{\"schema_version\":1,\"bindings\":[]}").unwrap();
-            std::os::unix::fs::symlink(&target, &path).unwrap();
-            let error = resolve_project_selection(root.path(), &[]).unwrap_err();
-            assert!(error.contains("symlinked model selection"));
-
-            std::fs::remove_file(&path).unwrap();
-            std::os::unix::fs::symlink(directory.join("missing.json"), &path).unwrap();
-            let error = resolve_project_selection(root.path(), &[]).unwrap_err();
-            assert!(error.contains("symlinked model selection"));
-        }
-    }
-
-    #[test]
     fn requested_observed_mismatch_is_rejected() {
         let mut binding = record();
         binding.observed.effort = "xhigh".into();
@@ -1550,7 +845,7 @@ mod tests {
     #[test]
     fn binding_id_must_start_with_an_alphanumeric_character() {
         let mut binding = record();
-        binding.binding_id = ".claude-fable-high".into();
+        binding.binding_id = ".fictional-orchid-high".into();
         let error = validate_binding(&binding, &harness_catalog().unwrap()).unwrap_err();
         assert!(error.contains("must start with a letter or digit"));
     }
@@ -1693,342 +988,5 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));
-    }
-
-    fn shipped_ensemble() -> EnsembleCatalog {
-        serde_json::from_str(CURRENT_ENSEMBLE).expect("shipped ensemble")
-    }
-
-    fn binding_mut<'a>(ensemble: &'a mut EnsembleCatalog, role: &str) -> &'a mut EnsembleBinding {
-        ensemble
-            .bindings
-            .iter_mut()
-            .find(|binding| binding.role == role)
-            .unwrap_or_else(|| panic!("missing role {role}"))
-    }
-
-    #[test]
-    fn parsed_ensemble_rejects_schema_and_pair_drift() {
-        let mut ensemble = shipped_ensemble();
-        ensemble.schema_version = 3;
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("unsupported current ensemble schema"));
-
-        let mut ensemble = shipped_ensemble();
-        ensemble.standing_roles.pop();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("exactly two primary roles"));
-
-        let mut ensemble = shipped_ensemble();
-        ensemble.bindings.truncate(1);
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("must include the standing pair"));
-
-        let mut ensemble = shipped_ensemble();
-        ensemble.standing_roles[1] = ensemble.standing_roles[0].clone();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("duplicate standing role"));
-
-        let mut ensemble = shipped_ensemble();
-        ensemble.standing_roles[1] = "grok-engineering-primary".into();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("must remain claude-judgment-primary"));
-    }
-
-    #[test]
-    fn parsed_ensemble_rejects_binding_and_trigger_defects() {
-        let mut ensemble = shipped_ensemble();
-        ensemble.high_triggers.clear();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("effort triggers and rules must not be empty"));
-
-        let mut ensemble = shipped_ensemble();
-        ensemble.bindings[1].seat = ensemble.bindings[0].seat.clone();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("duplicate ensemble seat"));
-
-        let mut ensemble = shipped_ensemble();
-        binding_mut(&mut ensemble, "claude-judgment-primary")
-            .native_selectors
-            .clear();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("has no selector or responsibility"));
-
-        let mut ensemble = shipped_ensemble();
-        binding_mut(&mut ensemble, "claude-judgment-primary").internal_routes[0]
-            .efforts
-            .clear();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("has no effort"));
-
-        let mut ensemble = shipped_ensemble();
-        ensemble
-            .bindings
-            .retain(|binding| binding.role != "claude-judgment-primary");
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("standing role claude-judgment-primary is missing"));
-
-        let mut ensemble = shipped_ensemble();
-        let claude_lineage = binding_mut(&mut ensemble, "claude-judgment-primary")
-            .lineage
-            .clone();
-        binding_mut(&mut ensemble, "grok-engineering-primary").lineage = claude_lineage;
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("primary lineage"));
-
-        let mut ensemble = shipped_ensemble();
-        binding_mut(&mut ensemble, "grok-engineering-primary")
-            .native_selectors
-            .insert("not-a-harness".into(), "x".into());
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("unsupported harness"));
-
-        let mut ensemble = shipped_ensemble();
-        binding_mut(&mut ensemble, "grok-engineering-primary").provider = "anthropic".into();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("mismatches harness"));
-    }
-
-    #[test]
-    fn parsed_ensemble_rejects_unknown_and_untyped_route_values() {
-        let mut unknown_catalog: serde_json::Value =
-            serde_json::from_str(CURRENT_ENSEMBLE).unwrap();
-        unknown_catalog["unexpected"] = serde_json::json!(true);
-        assert!(serde_json::from_value::<EnsembleCatalog>(unknown_catalog)
-            .unwrap_err()
-            .to_string()
-            .contains("unknown field"));
-
-        let mut unknown_route: serde_json::Value = serde_json::from_str(CURRENT_ENSEMBLE).unwrap();
-        unknown_route["bindings"][0]["internal_routes"][0]["unexpected"] = serde_json::json!(true);
-        assert!(serde_json::from_value::<EnsembleCatalog>(unknown_route)
-            .unwrap_err()
-            .to_string()
-            .contains("unknown field"));
-
-        for (field, invalid) in [
-            ("efforts", serde_json::json!(["medium-or-high"])),
-            ("workloads", serde_json::json!(["design"])),
-            ("status", serde_json::json!("enabled")),
-        ] {
-            let mut ensemble: serde_json::Value = serde_json::from_str(CURRENT_ENSEMBLE).unwrap();
-            ensemble["bindings"][0]["internal_routes"][0][field] = invalid;
-            assert!(
-                serde_json::from_value::<EnsembleCatalog>(ensemble).is_err(),
-                "invalid route field {field} parsed"
-            );
-        }
-    }
-
-    #[test]
-    fn parsed_ensemble_validates_typed_route_shape() {
-        let mut ensemble = shipped_ensemble();
-        let binding = binding_mut(&mut ensemble, "codex-engineering-primary");
-        let primary_selector = binding.native_selectors["codex-cli"].clone();
-        let route = &mut binding.internal_routes[0];
-        route.native_selectors.clear();
-        route
-            .native_selectors
-            .insert("codex-cli".into(), primary_selector);
-        route.efforts = vec![RouteEffort::High];
-        route.default_effort = RouteEffort::High;
-        route.evidence.clear();
-        assert!(validate_parsed_ensemble(ensemble).is_ok());
-
-        for invalid in ["", "-leading", "UPPER", "unsafe/route"] {
-            let mut ensemble = shipped_ensemble();
-            binding_mut(&mut ensemble, "codex-engineering-primary").internal_routes[0].route_id =
-                invalid.into();
-            assert!(
-                validate_parsed_ensemble(ensemble).is_err(),
-                "unsafe route id accepted: {invalid:?}"
-            );
-        }
-
-        let mut ensemble = shipped_ensemble();
-        let binding = binding_mut(&mut ensemble, "codex-engineering-primary");
-        binding.internal_routes[1].route_id = binding.internal_routes[0].route_id.clone();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("duplicate internal route"));
-
-        let mut ensemble = shipped_ensemble();
-        let route = &mut binding_mut(&mut ensemble, "codex-engineering-primary").internal_routes[0];
-        route.efforts.push(route.efforts[0]);
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("duplicate effort"));
-
-        let mut ensemble = shipped_ensemble();
-        let route = &mut binding_mut(&mut ensemble, "codex-engineering-primary").internal_routes[0];
-        route.default_effort = RouteEffort::Low;
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("default effort is not in efforts"));
-
-        let mut ensemble = shipped_ensemble();
-        let route = &mut binding_mut(&mut ensemble, "codex-engineering-primary").internal_routes[0];
-        route.workloads.push(route.workloads[0]);
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("duplicate workload"));
-
-        let mut ensemble = shipped_ensemble();
-        binding_mut(&mut ensemble, "codex-engineering-primary").internal_routes[0]
-            .workloads
-            .clear();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("has no workload"));
-
-        let mut ensemble = shipped_ensemble();
-        binding_mut(&mut ensemble, "codex-engineering-primary").internal_routes[0]
-            .native_selectors
-            .clear();
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("has no native selector"));
-
-        let mut ensemble = shipped_ensemble();
-        binding_mut(&mut ensemble, "codex-engineering-primary").internal_routes[0]
-            .native_selectors
-            .insert("codex-cli".into(), String::new());
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("native selector must not be empty"));
-
-        let mut ensemble = shipped_ensemble();
-        binding_mut(&mut ensemble, "codex-engineering-primary").internal_routes[0]
-            .native_selectors
-            .insert("claude-code".into(), "fable".into());
-        assert!(validate_parsed_ensemble(ensemble)
-            .unwrap_err()
-            .contains("outside parent role"));
-    }
-
-    #[test]
-    fn parsed_ensemble_keeps_design_candidates_owner_bound() {
-        let mut candidate = shipped_ensemble();
-        let route = binding_mut(&mut candidate, "claude-judgment-primary")
-            .internal_routes
-            .iter()
-            .find(|route| route.route_id == "opus-design-implementation-pilot")
-            .expect("shipped design qualification candidate");
-        assert_eq!(route.status, RouteStatus::Candidate);
-        assert!(route.evidence.is_empty());
-        assert!(
-            validate_parsed_ensemble(candidate).is_ok(),
-            "owner-bound candidate design routes must be representable for disposable qualification"
-        );
-
-        let mut scoped = shipped_ensemble();
-        let route = binding_mut(&mut scoped, "claude-judgment-primary")
-            .internal_routes
-            .iter_mut()
-            .find(|route| route.route_id == "opus-design-implementation-pilot")
-            .expect("shipped design qualification candidate");
-        route.status = RouteStatus::ScopedQualified;
-        route.evidence = vec!["docs/verification/opus-design-pilot.md".into()];
-        assert!(
-            validate_parsed_ensemble(scoped).is_ok(),
-            "owner-bound scoped-qualified design routes with evidence must remain valid"
-        );
-
-        for status in [RouteStatus::Candidate, RouteStatus::ScopedQualified] {
-            let mut wrong_owner = shipped_ensemble();
-            let route =
-                &mut binding_mut(&mut wrong_owner, "codex-engineering-primary").internal_routes[0];
-            route.workloads.push(RouteWorkload::DesignImplementation);
-            route.status = status;
-            if status == RouteStatus::ScopedQualified {
-                route.evidence = vec!["docs/verification/wrong-owner.md".into()];
-            }
-            assert!(validate_parsed_ensemble(wrong_owner)
-                .unwrap_err()
-                .contains("outside design_execution_owner"));
-        }
-
-        let mut non_standing = shipped_ensemble();
-        non_standing.design_execution_owner = "grok-engineering-primary".into();
-        assert!(validate_parsed_ensemble(non_standing)
-            .unwrap_err()
-            .contains("must be a standing role"));
-
-        let mut wrong_lineage = shipped_ensemble();
-        wrong_lineage.design_execution_owner = "codex-engineering-primary".into();
-        for route in &mut binding_mut(&mut wrong_lineage, "claude-judgment-primary").internal_routes
-        {
-            if route
-                .workloads
-                .contains(&RouteWorkload::DesignImplementation)
-            {
-                route.workloads = vec![RouteWorkload::Evidence];
-            }
-        }
-        assert!(validate_parsed_ensemble(wrong_lineage)
-            .unwrap_err()
-            .contains("must have Claude lineage"));
-    }
-
-    #[test]
-    fn parsed_ensemble_requires_safe_scoped_evidence() {
-        let mut missing = shipped_ensemble();
-        binding_mut(&mut missing, "claude-judgment-primary").internal_routes[0].status =
-            RouteStatus::ScopedQualified;
-        assert!(validate_parsed_ensemble(missing)
-            .unwrap_err()
-            .contains("has no evidence"));
-
-        let mut valid = shipped_ensemble();
-        let route = &mut binding_mut(&mut valid, "claude-judgment-primary").internal_routes[0];
-        route.status = RouteStatus::ScopedQualified;
-        route.evidence = vec!["docs/verification/fable-high-reasoning.md".into()];
-        assert!(validate_parsed_ensemble(valid).is_ok());
-
-        for invalid in [
-            "",
-            "/tmp/result.md",
-            "C:/tmp/result.md",
-            r"\\server\share\result.md",
-            "docs/../result.md",
-            "docs//result.md",
-            "https://example.com/result.md",
-        ] {
-            let mut ensemble = shipped_ensemble();
-            let route =
-                &mut binding_mut(&mut ensemble, "claude-judgment-primary").internal_routes[0];
-            route.status = RouteStatus::ScopedQualified;
-            route.evidence = vec![invalid.into()];
-            assert!(
-                validate_parsed_ensemble(ensemble)
-                    .unwrap_err()
-                    .contains("portable repository-relative path"),
-                "unsafe evidence path accepted: {invalid:?}"
-            );
-        }
-
-        let mut duplicate = shipped_ensemble();
-        let route = &mut binding_mut(&mut duplicate, "claude-judgment-primary").internal_routes[0];
-        route.status = RouteStatus::ScopedQualified;
-        route.evidence = vec![
-            "docs/verification/a.md".into(),
-            "docs/verification/a.md".into(),
-        ];
-        assert!(validate_parsed_ensemble(duplicate)
-            .unwrap_err()
-            .contains("duplicate evidence"));
     }
 }

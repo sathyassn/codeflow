@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "key-rotation",
+    "family": "state",
+    "binding": "authored",
+    "question": "What do I do to rotate the signing key, and what tells me it worked?",
+    "idea": "The old key retires only after a test tag verifies against the next key.",
+    "title": "States of a signing key rotation",
+    "caption": "The old key is retired only once a test tag verifies against the next key.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "Rotation state"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Step"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the rotation has four steps",
+        "source": "docs/signing.md#rotate-the-signing-key",
+        "derive": "the numbered steps",
+        "check": {
+          "kind": "count-items"
+        },
+        "value": 4
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 160,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 20,
+          "y": 60,
+          "w": 150,
+          "h": 40,
+          "rx": 8,
+          "id": "s0"
+        },
+        {
+          "text": "current key",
+          "x": 95,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "s0"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 196,
+          "y": 60,
+          "w": 150,
+          "h": 40,
+          "rx": 8,
+          "id": "s1"
+        },
+        {
+          "text": "next key created",
+          "x": 271,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M171 80H194",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 372,
+          "y": 60,
+          "w": 150,
+          "h": 40,
+          "rx": 8,
+          "id": "s2"
+        },
+        {
+          "text": "CI signs with next",
+          "x": 447,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M347 80H370",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 548,
+          "y": 60,
+          "w": 150,
+          "h": 40,
+          "rx": 8,
+          "id": "s3"
+        },
+        {
+          "text": "old key retired",
+          "x": 623,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "s3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M523 80H546",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "text": "test tag verifies against the next key",
+          "x": 548,
+          "y": 130,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t3"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 222,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 20,
+          "y": 14,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "n0"
+        },
+        {
+          "text": "current key",
+          "x": 115,
+          "y": 37,
+          "anchor": "middle",
+          "for": [
+            "n0"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 20,
+          "y": 66,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "n1"
+        },
+        {
+          "text": "next key created",
+          "x": 115,
+          "y": 89,
+          "anchor": "middle",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M115 51V64",
+          "head": "end",
+          "id": "u1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 20,
+          "y": 118,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "n2"
+        },
+        {
+          "text": "CI signs with next",
+          "x": 115,
+          "y": 141,
+          "anchor": "middle",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M115 103V116",
+          "head": "end",
+          "id": "u2"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 20,
+          "y": 170,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "n3"
+        },
+        {
+          "text": "old key retired",
+          "x": 115,
+          "y": 193,
+          "anchor": "middle",
+          "for": [
+            "n3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M115 155V168",
+          "head": "end",
+          "id": "u3"
+        },
+        {
+          "text": "after a test tag",
+          "x": 222,
+          "y": 170,
+          "style": "mute",
+          "for": [
+            "u3"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "Step"
+      ],
+      "rows": [
+        [
+          "current key",
+          "next key created",
+          "vault keys create"
+        ],
+        [
+          "next key created",
+          "CI signs with next",
+          "set SIGNING_KEY"
+        ],
+        [
+          "CI signs with next",
+          "old key retired",
+          "test tag verifies, then vault keys retire"
+        ]
+      ]
+    }
+  }
+}

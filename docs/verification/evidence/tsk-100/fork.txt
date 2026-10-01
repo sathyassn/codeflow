@@ -1,0 +1,59 @@
+
+## run at 2026-09-26T22:36:32Z against sathyassn/codeflow-registry-proof
+$ git -C $WORK/contrib fetch -q origin main
+[exit 0]
+$ git -C $WORK/contrib fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+next TSK: registry history max 007, refs max 001
+
+## a fork-style contributor writes TSK-008 by hand; it has no reservation
+$ git -C $WORK/contrib switch -q -C task/TSK-008-fork-record origin/main
+[exit 0]
+$ git -C $WORK/contrib add project-management/tasks/TSK-008.md
+[exit 0]
+$ git -C $WORK/contrib commit -q -m docs: add TSK-008 by hand
+[exit 0]
+$ git -C $WORK/contrib push -q origin task/TSK-008-fork-record
+remote: 
+remote: Create a pull request for 'task/TSK-008-fork-record' on GitHub by visiting:        
+remote:      https://github.com/sathyassn/codeflow-registry-proof/pull/new/task/TSK-008-fork-record        
+remote: 
+[exit 0]
+$ gh pr create -R sathyassn/codeflow-registry-proof --base main --head task/TSK-008-fork-record --title Add TSK-008 from a fork-style contributor --body Proof fixture for TSK-100: a hand-written record with no reservation.
+Warning: 2 uncommitted changes
+https://github.com/sathyassn/codeflow-registry-proof/pull/1
+[exit 0]
+{"attempt":1,"conclusion":"failure","createdAt":"2026-09-26T22:36:38Z","databaseId":36276831759,"event":"pull_request","headBranch":"task/TSK-008-fork-record","headSha":"5c3551aeef1502f4633b22132d88f8c78ebe7d7c","url":"https://github.com/sathyassn/codeflow-registry-proof/actions/runs/36276831759"}
+log: run-36276831759-pull_request-attempt1.log
+2026-09-26T22:36:41.9935709Z [36;1mecho "event: ${EVENT}; check code from $(git rev-parse --short origin/target):ci/ids.py"[0m
+2026-09-26T22:36:42.8427405Z event: pull_request; check code from af843e0:ci/ids.py
+2026-09-26T22:36:42.9009904Z FINDING TSK-008: not reserved in the registry; a maintainer must admit uid e5412fbd-d3b3-43eb-a442-1ee9b2c8fb45 (R-14, R-17)
+2026-09-26T22:36:42.9013384Z registry check: FAIL (1 findings)
+PASS: the PR check is red before admission
+PASS: the PR check names the missing reservation
+
+## a maintainer admits the record's uid (R-17)
+$ git -C $WORK/maint fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+TSK-008 is currently bound to: unbound
+$ git push --porcelain origin 1e69821a47a0:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	1e69821a47a084fedef7ae32271b11abf69d5805:refs/heads/codeflow/registry	0b915de..1e69821
+Done
+[exit 0]
+classified: accepted
+PASS: the admission push is accepted
+
+## the same PR check runs again
+$ gh run rerun -R sathyassn/codeflow-registry-proof 36276831759
+[exit 0]
+{"attempt":2,"conclusion":"success","createdAt":"2026-09-26T22:36:38Z","databaseId":36276831759,"event":"pull_request","headBranch":"task/TSK-008-fork-record","headSha":"5c3551aeef1502f4633b22132d88f8c78ebe7d7c","url":"https://github.com/sathyassn/codeflow-registry-proof/actions/runs/36276831759"}
+log: run-36276831759-pull_request-attempt2.log
+2026-09-26T22:37:00.5759535Z [36;1mecho "event: ${EVENT}; check code from $(git rev-parse --short origin/target):ci/ids.py"[0m
+2026-09-26T22:37:02.7328667Z event: pull_request; check code from af843e0:ci/ids.py
+2026-09-26T22:37:02.8075309Z bound: TSK-008 -> e5412fbd-d3b3-43eb-a442-1ee9b2c8fb45
+2026-09-26T22:37:02.8076101Z registry check: pass
+PASS: the PR check is green after admission
+PASS: the PR check reports the binding
+
+## result: 0 failed assertions

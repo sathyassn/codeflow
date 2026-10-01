@@ -32,6 +32,22 @@
           }
         ]
       }
+    },
+    {
+      "name": "go-lint",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "go vet ./..."
+        },
+        "full": {
+          "command": "go vet ./..."
+        },
+        "quick": {
+          "command": "go vet ./..."
+        }
+      }
     }
   ]
 }

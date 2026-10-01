@@ -1,5 +1,6 @@
 ---
 id: ADR-0057
+uid: f09a4344-30f8-40f1-84d6-fc6e26092a1a
 title: Optional agentic operating and estimation method
 date: 2026-09-09
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — optional linked forecasts and read-only allocation checking
 ---
 
-# ADR-0057 — optional agentic operating and estimation method
+# ADR-0057: optional agentic operating and estimation method
 
 ## Context
 

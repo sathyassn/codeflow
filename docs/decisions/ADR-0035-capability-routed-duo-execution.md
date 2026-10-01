@@ -1,5 +1,6 @@
 ---
 id: ADR-0035
+uid: 2c4c815c-d63e-4718-a68b-a41066f78481
 title: route duo execution by verified per-task capability
 date: 2026-07-22
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: scaffold orchestration gains per-task producer/reviewer assignments and explicit host/peer/worker roles; the binary remains model agnostic
 ---
 
-# ADR-0035 — capability-routed duo execution
+# ADR-0035: capability-routed duo execution
 
 ## Context
 
@@ -105,3 +106,30 @@ new engine policy or general runtime plugin system.
 The scaffold gains a managed capability-routing resource, updated skill/docs,
 and deterministic/model-eval pins. No Rust runtime routing or pipeline schema is
 added. CAP-010 remains the capability record for the duo.
+
+## Note (2026-09-25)
+
+Seats: the producer and reviewer seats in this decision are catalog seats
+(ADR-0069), resolved per duty. `unit-review` owes the lineage opposite the
+actual author, and `body-review` owes both standing seats. The Fable-class and
+Sol-class wording describes the roster at the time.
+
+Approval: ADR-0070 amends the clause that a changed producer or reviewer seat
+needs fresh approval from both primary seats, in two cases. A reversible item
+settled after two rounds carries `SETTLED_DISSENT` in place of the dissenting
+seat's approval. After a recorded mid-run seat loss, every available standing
+seat approves the reassignment, the lost seat is recorded unavailable with
+reduced assurance, and any verdict it gave before the loss stays as given.
+Every other part of this decision stands.
+
+## Note, 2026-09-29: ADR-0076 supersedes one clause
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. It
+supersedes one clause of this record and no other.
+
+- "Changing the named producer or reviewer seat or lineage creates Plan
+  vN+1 and requires fresh approval from both primary seats." Superseded: a
+  reassignment is recorded where the assignment lives and, for unstarted
+  tasks of an epic, rides in the batched epic amendment with one
+  other-lineage reviewer. The named other-lineage seat still reviews the
+  actual unit, and the rest of this record stands.

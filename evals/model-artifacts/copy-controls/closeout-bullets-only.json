@@ -1,0 +1,5 @@
+{
+  "files": {
+    "project-management/tasks/TSK-231.md#Closeout": "## Closeout\n\n- Tested revision 4f2c9a1 with `codeflow test --mode essential --strict`.\n- Essential gate PASS: 412 tests, 0 failed, 0 skipped, 41.2 s.\n- Coverage 84.2% over crates/queue and crates/tenant, above the 80 percent floor.\n- Not tested: the Windows path (no runner) and Redis (in-memory queue only).\n- AC-1, AC-2 and AC-3 met.\n"
+  }
+}

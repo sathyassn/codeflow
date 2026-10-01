@@ -24,7 +24,8 @@
 //                         (CodeFlow ADR-0023).
 //                         'consult' is an optional independent second read
 //                         (single-vendor; CodeFlow ADR-0023); off unless named.
-//   models     object?    per-stage model, e.g. { build: 'sonnet' }; every
+//   models     object?    per-stage model, e.g. { build: '<selector>' }, where the
+//                         selector comes from `codeflow models resolve`; every
 //                         stage defaults to 'inherit' (the caller's model).
 //   maxRework  number?    total build-attempt budget shared by all gate back-edges
 //                         (review/security/qa changes_requested -> build). Counts
@@ -239,9 +240,9 @@ const STAGES = {
     schema: VERDICT,
     prompt: () => [
       `Final verification gate for: ${TASK}`, WHERE,
-      'Run `codeflow test --mode full --strict` and report the exact exit code as a finding; any nonzero exit is changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: a no-op is not-verified, report it as changes_requested, never approved.',
+      'Run the affected targeted checks, then `codeflow test --mode quick --strict` and report the exact exit code as a finding; any nonzero exit is changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: a no-op is not-verified, report it as changes_requested, never approved.',
       `Then check every acceptance criterion one by one, citing evidence per criterion in findings:\n${CRITERIA}`,
-      "Verdict 'approved' only when the full test gate actually ran and is green (never on a NoTargets/no-op run) and every criterion is met.",
+      "Verdict 'approved' only when targeted checks and the quick gate ran green (never on a NoTargets/no-op run) and every criterion is met. The primary runs the full gate once on the exact landing candidate.",
     ].filter(Boolean).join('\n\n'),
   },
 };

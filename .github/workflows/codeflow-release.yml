@@ -1,0 +1,67 @@
+# CodeFlow's own release-state jobs (ADR-0062, SPC-013 R-94 and R-96). They
+# run scripts/release.py, the calculator of this repository only, so they
+# live here and not in codeflow-ci.yml, the managed CI file every adopter
+# receives. No scaffold manifest entry installs this file.
+#
+# - release impact: every pull request's Release impact block against the
+#   proposed merge tree and the host's published state. It blocks.
+# - release state: the merged state on main and on every integration line,
+#   without writes. Publication reads this job's result on main.
+name: codeflow-release
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main, "integration/**"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  release-impact:
+    name: release impact
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+      # release.py reads the body with the codeflow built from this same
+      # checkout, the reader `codeflow ci` uses, so the two cannot read a
+      # body differently (TSK-147 F4). It never takes a codeflow from PATH.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the codeflow that reads the body
+        run: cargo build --release --locked -p codeflow-cli
+      - name: Validate reviewed release intent
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin "$BASE_REF"
+          python3 scripts/release.py check-pr \
+            --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --target-ref "origin/$BASE_REF" --body-env CODEFLOW_PR_BODY \
+            --codeflow-bin target/release/codeflow
+
+  release-state:
+    name: release state
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+      - name: Validate merged release state without writes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/release.py check-state --ref "$GITHUB_SHA"

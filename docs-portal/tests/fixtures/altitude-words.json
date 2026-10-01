@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "the three panels",
+      "text": "# Title\n\nLead words here.\n\n## Concept\n\nOne two three.\n\n## Architecture\n\nFour five.\n\n## Technical\n\nSix.\n",
+      "words": {
+        "concept": 3,
+        "architecture": 2,
+        "technical": 1
+      }
+    },
+    {
+      "name": "skipped lines",
+      "text": "---\ntitle: Words\n---\n\n## Concept\n\n```md\n## Technical\nfenced words\n```\n\n<!-- a comment\nthat spans lines -->\n\n| a | b |\n|---|---|\n\n### A subsection\n\n- one item\n\n## Technical\n\n<!-- one line --> \n~~~\ntilde fence\n~~~\n\ncounted words\n\n## Notes\n\nnot a panel\n",
+      "words": {
+        "concept": 3,
+        "architecture": 0,
+        "technical": 2
+      }
+    },
+    {
+      "name": "line endings and a backtick info string",
+      "text": "﻿## Concept\r\n\r\n```js`x`\r\nstill prose\r\n\r\n##  Architecture \r\n\r\nspaced   out\tword\r\n",
+      "words": {
+        "concept": 3,
+        "architecture": 3,
+        "technical": 0
+      }
+    },
+    {
+      "name": "frontmatter is not prose",
+      "text": "---\ntitle: Words\n## Technical\n---\n\nLead words outside every panel.\n\n## Concept\n\nOne two.\n",
+      "words": {
+        "concept": 2,
+        "architecture": 0,
+        "technical": 0
+      }
+    }
+  ]
+}

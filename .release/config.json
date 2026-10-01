@@ -2,7 +2,8 @@
   "bootstrap": {
     "comparison": {
       "commit": "d70c6f17d4bf199a545c843856b3ded4681aff20",
-      "tag": "v2.1.0"
+      "tag": "v2.1.0",
+      "tree": "c00d62202df12d8aab2caf4ff90a81491f294a8f"
     },
     "published": {
       "changelog_sha256": "56aeff28b413cfe728288982218bf376a2a9b3ed40407f8ca156cbb7474b2e52",
@@ -19,11 +20,14 @@
     "version": "3.0.0"
   },
   "main_branch": "main",
+  "publication_workflows": [
+    ".github/workflows/codeflow-ci.yml",
+    ".github/workflows/codeflow-release.yml"
+  ],
   "release_unit": "codeflow",
   "required_publication_checks": [
     "release state",
     "codeflow gates",
-    "rust (format + test + clippy)",
     "windows (build + test + clippy)",
     "secret scan",
     "security review"
@@ -40,6 +44,7 @@
     "crates/codeflow-core/src/**",
     "dist-workspace.toml",
     "docs/adoption.md",
-    "docs/releasing.md"
+    "docs/releasing.md",
+    "project-management/templates/**"
   ]
 }

@@ -73,6 +73,7 @@ pub enum EpicStatus {
     InProgress,
     Blocked,
     Complete,
+    Cancelled,
     Archived,
 }
 
@@ -84,6 +85,7 @@ impl fmt::Display for EpicStatus {
             Self::InProgress => f.write_str("in_progress"),
             Self::Blocked => f.write_str("blocked"),
             Self::Complete => f.write_str("complete"),
+            Self::Cancelled => f.write_str("cancelled"),
             Self::Archived => f.write_str("archived"),
         }
     }
@@ -99,6 +101,7 @@ impl FromStr for EpicStatus {
             "in_progress" => Ok(Self::InProgress),
             "blocked" => Ok(Self::Blocked),
             "complete" => Ok(Self::Complete),
+            "cancelled" => Ok(Self::Cancelled),
             "archived" => Ok(Self::Archived),
             _ => Err(ParseStatusError {
                 kind: "epic status",

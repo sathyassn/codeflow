@@ -1,5 +1,6 @@
 ---
 id: ADR-0037
+uid: b5f2f8b6-af5a-4ad6-9355-7c754451b3e6
 title: require a canonical delegate prompt boundary
 date: 2026-07-24
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: delegate arm validates non-empty canonical UTF-8 prompt text with internal LF, no terminal line break, and no editor control characters before creating turn state; the host still owns transport and exact delivery
 ---
 
-# ADR-0037 — canonical delegate prompt boundary
+# ADR-0037: canonical delegate prompt boundary
 
 ## Context
 
@@ -56,3 +57,29 @@ Amend ADR-0036 at the host-to-harness input boundary:
   waiting and terminal observation remain tmux-free.
 - Other future transports may use a different delivery mechanism, but they
   must preserve the same canonical bytes and lifecycle evidence.
+
+## Note (2026-09-29): task notices admitted as continuations
+
+Shipped in 3.0.0 by TSK-090. A task that a delegated Claude turn backgrounds
+(a Workflow or a background Bash command) finishes after the turn's `Stop`,
+and Claude Code then submits a `<task-notification>` prompt. The
+delegate-turn hook admits that prompt without an armed turn, as a
+continuation of the current turn, only when it is exactly one envelope with
+nothing around it, the turn has stopped with no other continuation open, and
+the session transcript shows the tool call that returned that task id within
+this turn or one of its continuations. It is recorded under
+`turns/<turn>/continuations/<task-id>/` with its `prompt_id` and the SHA-256
+of its bytes. Any other notice is blocked like an unarmed prompt.
+
+The hook payload does not say whether a prompt is a real notice or typed
+text, so the `Stop` that closes the continuation checks the session
+transcript: the prompt must be recorded with origin `task-notification`,
+`promptSource` `system` and `turnOrigin` `task_notification`, with bytes
+matching the recorded digest and an earlier queued enqueue of the same bytes.
+Otherwise the run is poisoned and no result is written. The binary therefore
+now reads the session transcript for a task notice, within a size bound; the
+Decision's statement that it does not inspect a transcript no longer holds
+for this case. The model may still act on a forged notice within its
+continuation turn; the check keeps that turn from being recorded as a clean
+result. The rule is stated for hosts in `cf-delegate`'s
+`resources/claude-turn-completion.md`.

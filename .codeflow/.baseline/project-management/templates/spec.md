@@ -1,19 +1,31 @@
 ---
 id: SPC-{{NNN}}
+uid: {{UID}}              # hidden record identity, written once by `new`; never edit
 title: {{TITLE_YAML}}
-status: draft            # draft | approved | implemented
+status: draft            # draft | approved | superseded; change it with `codeflow spec status`
+open_questions: []       # each question still open, one string per item; approval needs this line, empty
 created: {{DATE}}
 ---
 
-# SPC-{{NNN}} — {{TITLE}}
+# SPC-{{NNN}}: {{TITLE}}
 
-<!-- Specs are optional frozen work inputs, not living requirements. `codeflow spec new --for
-     EPC-NNN|TSK-NNN` allocates this file and links it from the consuming work
-     item. Write one only when interfaces, formats, or behavior need pinning
-     down before building; many work items need no spec. `approved` requires
-     no unresolved open question. Set `implemented` and freeze the record when
-     the consuming work ships; later change gets a new spec. Keep maintained
-     requirements and executable schemas current at their declared authority. -->
+<!-- Specs are optional settled work inputs, frozen once implemented, not living
+     requirements. `codeflow spec new --for EPC-NNN|TSK-NNN` allocates this
+     file and links it from the consuming work item. Write one only when
+     interfaces, formats, or behavior need pinning down before building; many
+     work items need no spec. `approved` requires an empty `open_questions`
+     list. `implemented` is derived, never written: every consumer is terminal
+     and at least one is complete. Until then, a change to an approved spec is
+     Plan vN+1, amended in place through a reviewed planning change: each
+     change of meaning gets a dated note naming its resolution (an editorial
+     change needs none), and the superseded decision stays visible as
+     history. That change names each consumer bound to a changed requirement
+     and its disposition: unaffected, criteria amended in the same change, or
+     reopened. Once implemented the spec is frozen, so a later change gets a
+     new spec that lists `supersedes: [SPC-old]`, linked by `codeflow spec
+     status SPC-old superseded --by SPC-new`, or an explicit superseding
+     record. Keep maintained requirements and executable schemas current at
+     their declared authority. -->
 
 ## Summary
 
@@ -28,11 +40,11 @@ created: {{DATE}}
      spec level. Drop any heading that does not apply; skip the whole section
      for greenfield work. -->
 
-<!-- ADDED — new behavior or surface this introduces. -->
+<!-- ADDED: new behavior or surface this introduces. -->
 
-<!-- MODIFIED — existing behavior whose meaning changes (old -> new). -->
+<!-- MODIFIED: existing behavior whose meaning changes (old -> new). -->
 
-<!-- REMOVED — behavior or surface this retires. -->
+<!-- REMOVED: behavior or surface this retires. -->
 
 ## Behavior
 
@@ -40,7 +52,7 @@ created: {{DATE}}
 
 ## Interfaces and formats
 
-<!-- Signatures, schemas, file formats, CLI surfaces — only what the builder
+<!-- Signatures, schemas, file formats, CLI surfaces: only what the builder
      needs pinned down. -->
 
 ## Edge cases
@@ -49,4 +61,6 @@ created: {{DATE}}
 
 ## Open questions
 
-<!-- Before building starts, leave empty or state explicitly that all are resolved. -->
+<!-- Context for the questions only. What approval reads is the
+     `open_questions` frontmatter list: add each unresolved question there and
+     remove it once it is settled, so the list is `[]` before building. -->

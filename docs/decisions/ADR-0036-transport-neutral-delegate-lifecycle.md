@@ -1,5 +1,6 @@
 ---
 id: ADR-0036
+uid: fa81c09a-4b6d-47fb-a948-bf3080dfa11c
 title: make delegate turns a durable transport-neutral lifecycle
 date: 2026-07-23
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: engine gains the schema-v2 delegate lifecycle (delegate.rs state machine, the delegate CLI, a dual-mode delegate-turn hook, and a Fail-severity delegate-roundtrip doctor check); the binary still never launches a harness
 ---
 
-# ADR-0036 — transport-neutral durable delegate lifecycle
+# ADR-0036: transport-neutral durable delegate lifecycle
 
 ## Context
 

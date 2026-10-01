@@ -1,7 +1,7 @@
 //! Markdown-aware PR sections and advisory presentation/release checks.
 
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
 use super::SectionState;
 
@@ -242,16 +242,36 @@ impl Section<'_> {
 /// labels alone are not evidence. Code output counts as content, but cannot
 /// manufacture release fields or a Not tested declaration.
 fn visible_text(body: &str, include_code: bool) -> String {
+    rendered_text(body, include_code, true)
+}
+
+/// The lines a Release impact field may come from: visible text outside
+/// code and outside quotes, since a quoted field is an example taken from
+/// elsewhere, not this change's assessment (TSK-147 F4).
+fn field_text(body: &str) -> String {
+    rendered_text(body, false, false)
+}
+
+fn rendered_text(body: &str, include_code: bool, include_quotes: bool) -> String {
     let mut text = String::new();
     let mut excluded = 0;
     let mut heading_excluded = false;
     for (event, span) in Parser::new(body).into_offset_iter() {
+        // A block that starts inside a tight list item follows the item's
+        // text with no paragraph end between them, so it ends the line
+        // itself; otherwise `- Impact: minor` over `  - Breaking: no` reads
+        // as one line (TSK-147 round 3, the differential corpus).
+        if excluded == 0 && starts_block(&event) && !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
         match event {
             Event::Start(Tag::Heading { .. }) => {
                 heading_excluded = atx_heading(body, span.start);
                 excluded += usize::from(heading_excluded);
             }
             Event::Start(Tag::CodeBlock(_)) if !include_code => excluded += 1,
+            Event::Start(Tag::BlockQuote(_)) if !include_quotes => excluded += 1,
+            Event::End(TagEnd::BlockQuote(_)) if !include_quotes => excluded -= 1,
             Event::End(TagEnd::Heading(_)) => {
                 excluded -= usize::from(heading_excluded);
                 if !heading_excluded {
@@ -277,6 +297,26 @@ fn visible_text(body: &str, include_code: bool) -> String {
         }
     }
     text
+}
+
+/// Whether `event` opens a block, which begins a new line of text.
+fn starts_block(event: &Event<'_>) -> bool {
+    matches!(
+        event,
+        Event::Rule
+            | Event::Start(
+                Tag::Paragraph
+                    | Tag::Heading { .. }
+                    | Tag::BlockQuote(_)
+                    | Tag::CodeBlock(_)
+                    | Tag::HtmlBlock
+                    | Tag::List(_)
+                    | Tag::Item
+                    | Tag::Table(_)
+                    | Tag::FootnoteDefinition(_)
+                    | Tag::DefinitionList
+            )
+    )
 }
 
 /// Visible text or raw HTML other than comments; template placeholders are
@@ -315,7 +355,38 @@ pub(super) fn find_section(body: &str, name: &str) -> SectionState {
     }
 }
 
-pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) -> Vec<Violation> {
+/// A current review row names the exact revision and an approving verdict.
+/// Fences, quotes, examples and HTML comments cannot supply the evidence.
+pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> bool {
+    let outline = sections(body);
+    let matching = matching_sections(&outline, heading);
+    let [section] = matching.as_slice() else {
+        return false;
+    };
+    rendered_text(section.content(), false, false)
+        .lines()
+        .any(|line| {
+            let cells: Vec<_> = line
+                .split('|')
+                .map(str::trim)
+                .filter(|cell| !cell.is_empty())
+                .collect();
+            cells.len() >= 3
+                && cells.last().is_some_and(|verdict| {
+                    matches!(
+                        verdict.to_ascii_lowercase().as_str(),
+                        "approved" | "approve"
+                    )
+                })
+                && cells[1..cells.len() - 1].iter().any(|scope| {
+                    scope
+                        .split(|c: char| !c.is_ascii_hexdigit())
+                        .any(|token| token == sha)
+                })
+        })
+}
+
+pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec<Violation> {
     if !git.pr_sections.is_active() {
         return Vec::new();
     }
@@ -325,8 +396,7 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
             "git.pr_sections",
             PolicyLevel::Warn,
             message,
-            "keep the body concise and link detailed evidence; retain necessary verification"
-                .into(),
+            codeflow_core::remedy::PR_PRESENTATION.remedy(),
         ));
     };
     let outline = outline(body);
@@ -335,31 +405,9 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
             "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
         ));
     }
+    // ADR-0071 rule 7: a Summary is judged by whether it anchors the reader,
+    // which review and evaluation grade; no count stands in for that.
     for section in outline.sections {
-        if section.matches("Summary") {
-            let text = visible_text(section.content(), false);
-            // Advisory heuristic: punctuation ending a word, not dots inside paths.
-            let sentences = text
-                .split_whitespace()
-                .filter(|word| {
-                    word.trim_end_matches(['\'', '"', ')'])
-                        .ends_with(['.', '!', '?'])
-                })
-                .count();
-            if sentences > 3 {
-                warn(format!(
-                    "PR Summary has about {sentences} sentences; aim for at most three"
-                ));
-            }
-            if Parser::new(section.content()).any(|event| matches!(event, Event::Code(_))) {
-                warn(
-                    "PR Summary contains a code span; put implementation details in Changes".into(),
-                );
-            }
-            if text.split_whitespace().any(looks_like_path) {
-                warn("PR Summary contains a path; put file details in Changes".into());
-            }
-        }
         if section.matches("Testing")
             && !visible_text(section.content(), false)
                 .lines()
@@ -368,101 +416,129 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
             warn("PR Testing has no Not tested: line".into());
         }
     }
-    let mut fenced = false;
-    let mut code_lines = 0;
-    for event in Parser::new(body) {
-        match event {
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_))) => {
-                fenced = true;
-                code_lines = 0;
-            }
-            Event::Text(text) if fenced => code_lines += text.lines().count(),
-            Event::End(TagEnd::CodeBlock) if fenced => {
-                if code_lines > 12 {
-                    warn(format!(
-                        "PR fenced block has {code_lines} lines; aim for at most 12"
-                    ));
-                }
-                fenced = false;
-            }
-            _ => {}
-        }
-    }
-    if long_prose_line(body) {
-        warn("PR prose line exceeds about 160 characters; wrap or shorten it".into());
-    }
-    // A portable approximation to wrapped Markdown at 100 columns. Comments
-    // consume no rows; source blank lines and Markdown syntax remain conservative.
-    let visible = super::strip_html_comments(body, false);
-    let rows: usize = visible.lines().map(wrapped_rows).sum();
-    let budget = if epic_into_main { 90 } else { 65 };
-    if rows > budget {
-        warn(format!(
-            "PR body is about {rows} rendered rows at 100 columns; aim for {budget}"
-        ));
-    }
     out
 }
 
-/// Source lines of prose, list items and headings; code blocks, HTML blocks
-/// and table rows are exempt. Tight list items have no paragraph, so lines are
-/// read from the source rather than from paragraph spans.
-fn long_prose_line(body: &str) -> bool {
-    let exempt: Vec<_> = Parser::new(body)
-        .into_offset_iter()
-        .filter(|(event, _)| matches!(event, Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock)))
-        .map(|(_, span)| span)
+/// The body's one Release impact section's own fields, each `(key,
+/// value)` with the key in lower case; `None` without exactly one section.
+/// Fields come only from the section's own text outside code and quotes,
+/// never from a subsection; both the release check and the watched-path
+/// settlement read them here.
+fn release_fields(body: &str) -> Option<Vec<(String, String)>> {
+    release_fields_under(body, "Release impact")
+}
+
+fn release_fields_under(body: &str, heading: &str) -> Option<Vec<(String, String)>> {
+    let parsed = sections(body);
+    let matched = matching_sections(&parsed, heading);
+    let [section] = matched.as_slice() else {
+        return None;
+    };
+    let content = section.content();
+    let end = sections(content)
+        .first()
+        .map_or(content.len(), |s| s.heading_start);
+    Some(
+        field_text(&content[..end])
+            .lines()
+            .filter_map(|line| line.trim().split_once(':'))
+            .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.trim().to_string()))
+            .collect(),
+    )
+}
+
+/// What `scripts/release.py` reads from a PR body, through
+/// `codeflow ci --read-release-impact`: the Release impact fields, the
+/// visible text of each Breaking change section (a `Migration: see Breaking
+/// change` reference), and this check's findings under the default policy.
+pub(super) fn reading(body: &str) -> serde_json::Value {
+    let parsed = sections(body);
+    let breaking_change: Vec<String> = matching_sections(&parsed, "Breaking change")
+        .iter()
+        .map(|section| visible_text(section.content(), true))
         .collect();
-    let mut offset = 0;
-    body.split_inclusive('\n').any(|line| {
-        let range = offset..offset + line.len();
-        offset = range.end;
-        line.trim_end().chars().count() > 160
-            && !line.trim_start().starts_with('|')
-            && !exempt
-                .iter()
-                .any(|span| span.start < range.end && range.start < span.end)
+    let findings: Vec<String> = release(&GitPolicy::default(), body, false)
+        .into_iter()
+        .map(|violation| violation.message)
+        .collect();
+    serde_json::json!({
+        "release_impact": release_fields(body),
+        "breaking_change": breaking_change,
+        "findings": findings,
     })
 }
 
-/// A file path, not a word pair such as read/write, I/O or GitHub/GitLab:
-/// a rooted or relative prefix, a trailing slash, two or more separators, or a
-/// final segment with a file extension.
-fn looks_like_path(word: &str) -> bool {
-    let word = word.trim_matches(['(', ')', ',', '.', ';', ':', '"', '\'']);
-    if word.contains("://") || !word.chars().any(char::is_alphabetic) {
-        return false;
-    }
-    let separators = word.matches(['/', '\\']).count();
-    let last = word.rsplit(['/', '\\']).next().unwrap_or_default();
-    separators > 0
-        && (["./", "../", "~/", "/", ".\\", "\\"]
-            .iter()
-            .any(|prefix| word.starts_with(prefix))
-            || word.ends_with(['/', '\\'])
-            || separators >= 2
-            || last.rsplit_once('.').is_some_and(|(stem, ext)| {
-                !stem.is_empty() && ext.starts_with(|ch: char| ch.is_ascii_alphabetic())
-            }))
+/// The legacy three-state `Contract` field and the `Breaking` value each
+/// state means (`CONTRACT_BREAKING` in `scripts/release.py`). A block may
+/// state Contract alone during the transition, or beside Breaking when the
+/// two agree (`docs/releasing.md`).
+const CONTRACT_BREAKING: [(&str, &str); 3] = [
+    ("not-applicable", "no"),
+    ("compatible", "no"),
+    ("breaking", "yes"),
+];
+
+fn contract_breaking(contract: &str) -> Option<&'static str> {
+    CONTRACT_BREAKING
+        .iter()
+        .find(|(state, _)| state.eq_ignore_ascii_case(contract))
+        .map(|(_, breaking)| *breaking)
 }
 
-fn wrapped_rows(line: &str) -> usize {
-    let mut rows = 1;
-    let mut width = 0;
-    for word in line.split_whitespace() {
-        let length = word.chars().count();
-        if width > 0 && width + 1 + length > 100 {
-            rows += 1;
-            width = 0;
-        }
-        if width > 0 {
-            width += 1;
-        }
-        width += length;
-        rows += width.saturating_sub(1) / 100;
-        width = width.saturating_sub(1) % 100 + 1;
+/// What a block declares about breaking: `Breaking` lower-cased, or, when
+/// only the legacy `Contract` appears, the Breaking value its state means
+/// (empty for an unknown state). `legacy` is that Contract-only case.
+struct Declared {
+    breaking: String,
+    legacy: bool,
+}
+
+fn declared(fields: &std::collections::BTreeMap<String, &str>) -> Declared {
+    match (fields.get("breaking"), fields.get("contract")) {
+        (None, Some(contract)) => Declared {
+            breaking: contract_breaking(contract).unwrap_or_default().to_string(),
+            legacy: true,
+        },
+        (breaking, _) => Declared {
+            breaking: breaking.copied().unwrap_or_default().to_ascii_lowercase(),
+            legacy: false,
+        },
     }
-    rows
+}
+
+/// Whether the body's one Release impact section declares no break, by
+/// `Breaking: no`, a legacy `Contract: compatible`, or both, and has a
+/// `Rationale` that gives a reason (TSK-147 AC-4). A legacy
+/// `not-applicable` says no contract was touched, which a watched surface
+/// contradicts, so `scripts/release.py check-pr` refuses it there and it
+/// settles nothing here.
+pub(super) fn declares_no_break(body: &str) -> bool {
+    let Some(fields) = release_fields(body) else {
+        return false;
+    };
+    let field = |name: &str| {
+        let values: Vec<&str> = fields
+            .iter()
+            .filter(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+            .collect();
+        match values.as_slice() {
+            [value] => Some(*value),
+            _ => None,
+        }
+    };
+    let stated = |name: &str| fields.iter().any(|(key, _)| key == name);
+    let holds = |name: &str, meaning: &str| {
+        !stated(name) || field(name).is_some_and(|value| value.eq_ignore_ascii_case(meaning))
+    };
+    (stated("breaking") || stated("contract"))
+        && holds("breaking", "no")
+        && holds("contract", "compatible")
+        && field("rationale").is_some_and(|value| !value.is_empty() && !placeholder(value))
+}
+
+pub(super) fn release_heading(git: &GitPolicy) -> String {
+    codeflow_core::hooks::adoption::mapped_sections(git, &["Release impact".into()]).remove(0)
 }
 
 pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec<Violation> {
@@ -475,55 +551,72 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
             "git.pr_release_impact",
             git.pr_release_impact,
             message,
-            "declare Impact, Breaking, Rationale and Migration under Release impact using the project's breaking level".into(),
+            codeflow_core::remedy::PR_RELEASE_IMPACT.remedy(),
         ));
     };
     let parsed = sections(body);
-    let matched = matching_sections(&parsed, "Release impact");
-    let [section] = matched.as_slice() else {
+    // Do not consume sibling/subsection migration fields as release fields.
+    let Some(lines) = release_fields_under(body, &release_heading(git)) else {
         issue("PR body needs exactly one Release impact section".into());
         return out;
     };
-    // Do not consume sibling/subsection migration fields as release fields.
-    let content = section.content();
-    let end = sections(content)
-        .first()
-        .map_or(content.len(), |s| s.heading_start);
-    let text = visible_text(&content[..end], false);
     let mut fields = std::collections::BTreeMap::new();
-    for line in text.lines() {
-        if let Some((key, value)) = line.trim().split_once(':') {
-            let key = key.trim().to_ascii_lowercase();
-            if ["impact", "breaking", "rationale", "migration"].contains(&key.as_str())
-                && fields.insert(key.clone(), value.trim()).is_some()
-            {
-                issue(format!("PR Release impact has duplicate {key} fields"));
-            }
+    for (key, value) in &lines {
+        if ["impact", "breaking", "contract", "rationale", "migration"].contains(&key.as_str())
+            && fields.insert(key.clone(), value.as_str()).is_some()
+        {
+            issue(format!("PR Release impact has duplicate {key} fields"));
         }
     }
-    for key in ["impact", "breaking", "rationale", "migration"] {
-        if fields.get(key).is_none_or(|value| value.is_empty()) {
+    let declared = declared(&fields);
+    // A legacy Contract-only block states its break through Contract, and
+    // Migration is required with Breaking only, as `scripts/release.py` reads it.
+    let required: &[&str] = if declared.legacy {
+        &["impact", "rationale"]
+    } else {
+        &["impact", "breaking", "rationale", "migration"]
+    };
+    for key in required {
+        if fields.get(*key).is_none_or(|value| value.is_empty()) {
             issue(format!(
                 "PR Release impact requires a non-empty {key} field"
             ));
         }
+    }
+    // The same field rules as `scripts/release.py`, which reads the body
+    // through this reader; both pass `scripts/fixtures/release_impact_cases.json`.
+    if fields
+        .get("rationale")
+        .is_some_and(|value| !value.is_empty() && placeholder(value))
+    {
+        issue("PR Rationale must give the reason, not a placeholder".into());
+    }
+    if fields
+        .get("migration")
+        .is_some_and(|value| TEMPLATE_ALTERNATIVES.contains(&guidance(value).as_str()))
+    {
+        issue("PR Migration still holds the template's alternatives; choose one".into());
     }
     let impact = fields
         .get("impact")
         .copied()
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let breaking = fields
-        .get("breaking")
-        .copied()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let breaking = declared.breaking;
     let levels = ["none", "patch", "minor", "major"];
     if !levels.contains(&impact.as_str()) {
         issue("PR Impact must be none, patch, minor or major".into());
     }
-    if !["yes", "no"].contains(&breaking.as_str()) {
+    let contract = fields.get("contract").copied();
+    if contract.is_some_and(|value| contract_breaking(value).is_none()) {
+        issue("PR Contract must be not-applicable, compatible or breaking".into());
+    } else if !declared.legacy && !["yes", "no"].contains(&breaking.as_str()) {
         issue("PR Breaking must be yes or no".into());
+    } else if contract
+        .and_then(contract_breaking)
+        .is_some_and(|meant| meant != breaking)
+    {
+        issue("PR Contract disagrees with Breaking".into());
     }
     let below_floor = levels.iter().position(|level| *level == impact)
         < levels
@@ -543,19 +636,22 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
             git.pr_breaking_level
         ));
     }
-    if breaking == "yes" {
-        let migration = fields.get("migration").copied().unwrap_or_default();
-        let substantive = if guidance(migration) == "see breaking change" {
-            let guidance = matching_sections(&parsed, "Breaking change");
-            guidance.len() == 1 && substantive(&visible_text(guidance[0].content(), true))
-        } else {
-            substantive(migration)
-        };
-        if !substantive {
-            issue("PR Breaking: yes requires substantive Migration steps or a populated Breaking change reference".into());
-        }
+    let migration = fields.get("migration").copied().unwrap_or_default();
+    if breaking == "yes" && !migration_guidance(&parsed, migration) {
+        issue("PR Breaking: yes requires substantive Migration steps or a populated Breaking change reference".into());
     }
     out
+}
+
+/// Whether `migration` gives real steps, or points at exactly one populated
+/// Breaking change section.
+fn migration_guidance(parsed: &[Section<'_>], migration: &str) -> bool {
+    if guidance(migration) == "see breaking change" {
+        let sections = matching_sections(parsed, "Breaking change");
+        sections.len() == 1 && substantive(&visible_text(sections[0].content(), true))
+    } else {
+        substantive(migration)
+    }
 }
 
 /// Lowercased text without Markdown quoting or repeated whitespace, as
@@ -569,28 +665,35 @@ fn guidance(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// Real migration guidance, not a placeholder or the template's unresolved
-/// alternatives. Only whole-field forms are rejected, so a step containing a
-/// pipe or angle brackets in a command still counts.
-fn substantive(value: &str) -> bool {
+/// The PR template's Migration choice text, left in place instead of a
+/// chosen value (`UNRESOLVED_ALTERNATIVES` in `scripts/release.py`).
+const TEMPLATE_ALTERNATIVES: [&str; 3] = [
+    "none, steps, or see breaking change",
+    "none | steps | see breaking change",
+    "steps",
+];
+
+/// A value that says nothing: empty of letters and digits, a whole
+/// `<placeholder>`, or a placeholder word (`PLACEHOLDERS` in
+/// `scripts/release.py`).
+fn placeholder(value: &str) -> bool {
     let value = guidance(value);
     let whole_placeholder = value.starts_with('<')
         && value.ends_with('>')
         && !value[1..value.len() - 1].contains(['<', '>']);
-    !whole_placeholder
-        && value.chars().any(char::is_alphanumeric)
-        && !matches!(
-            value.as_str(),
-            "none"
-                | "n/a"
-                | "na"
-                | "tbd"
-                | "todo"
-                | "steps"
-                | "see breaking change"
-                | "none, steps, or see breaking change"
-                | "none | steps | see breaking change"
-        )
+    whole_placeholder
+        || !value.chars().any(char::is_alphanumeric)
+        || matches!(value.as_str(), "none" | "n/a" | "na" | "tbd" | "todo")
+}
+
+/// Real migration guidance, not a placeholder or the template's unresolved
+/// alternatives. Only whole-field forms are rejected, so a step containing a
+/// pipe or angle brackets in a command still counts.
+fn substantive(value: &str) -> bool {
+    let normalized = guidance(value);
+    !placeholder(value)
+        && normalized != "see breaking change"
+        && !TEMPLATE_ALTERNATIVES.contains(&normalized.as_str())
 }
 
 #[cfg(test)]
@@ -835,18 +938,26 @@ mod tests {
     fn presentation_warnings_are_advisory_and_respect_off() {
         let body = format!("## Summary\nOne. Two. Three. Four. Update `thing` in src/thing.py.\n## Testing\nPassed.\n```\n{}```\n{}", "output\n".repeat(13), "long word ".repeat(800));
         let findings = presentation(&GitPolicy::default(), &body, false);
-        for reason in [
-            "sentences",
+        {
+            let reason = "Not tested:";
+            assert!(
+                findings.iter().any(|v| v.message.contains(reason)),
+                "missing {reason}: {findings:?}"
+            );
+        }
+        // ADR-0071 rule 7: a key file name or code span may anchor the
+        // Summary, and its length is judgment, so none draws a warning.
+        for retired in [
             "code span",
-            "path",
-            "Not tested:",
+            "contains a path",
+            "sentences",
             "13 lines",
             "rendered rows",
             "160 characters",
         ] {
             assert!(
-                findings.iter().any(|v| v.message.contains(reason)),
-                "missing {reason}: {findings:?}"
+                !findings.iter().any(|v| v.message.contains(retired)),
+                "retired Summary warning {retired}: {findings:?}"
             );
         }
         assert!(findings.iter().all(|v| v.level == PolicyLevel::Warn));
@@ -857,17 +968,26 @@ mod tests {
         assert!(presentation(&git, &body, false).is_empty());
     }
 
+    /// ADR-0071 rule 7 (Codex TSK-108 review, R108-1): a Summary is judged
+    /// by whether it anchors the reader, never by counting its sentences.
     #[test]
-    fn presentation_accepts_short_evidence_and_uses_epic_row_budget() {
+    fn presentation_never_counts_summary_sentences() {
+        let body = "Task: none: isolated summary-warning review probe\n\n## Summary\n\n\
+            The installer now preserves local settings. Existing projects can update safely. \
+            Fresh projects keep the standard defaults. The change is ready for review.\n\n\
+            ## Changes\n\n- Preserve local settings during updates.\n\n## Testing\n\n\
+            Docs-only review fixture.\nNew tests: none.\nNot tested: live model behavior.\n";
+        let findings = presentation(&GitPolicy::default(), body, false);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn presentation_accepts_evidence_without_row_budget() {
         let body = "## Summary\nImproves the installer.\n## Testing\nNot tested: Windows.\n```\n12 passed\n```";
         assert!(presentation(&GitPolicy::default(), body, false).is_empty());
         let body = format!("{body}\n{}", "evidence\n".repeat(66));
-        assert!(presentation(&GitPolicy::default(), &body, false)
-            .iter()
-            .any(|v| v.message.contains("aim for 65")));
+        assert!(presentation(&GitPolicy::default(), &body, false).is_empty());
         assert!(presentation(&GitPolicy::default(), &body, true).is_empty());
-        assert_eq!(wrapped_rows(&"word ".repeat(40)), 2);
-        assert_eq!(wrapped_rows(&"x".repeat(201)), 3);
         let comment = format!("{body}\n<!-- {} -->", "hidden\n".repeat(100));
         assert!(presentation(&GitPolicy::default(), &comment, true).is_empty());
         assert!(presentation(
@@ -887,53 +1007,6 @@ mod tests {
                 presentation(&GitPolicy::default(), &body, false).is_empty(),
                 "{label}"
             );
-        }
-    }
-
-    #[test]
-    fn path_warning_needs_a_real_path_shape() {
-        for word in [
-            "read/write",
-            "I/O",
-            "GitHub/GitLab",
-            "and/or",
-            "24/7",
-            "https://example.com/a/b.md",
-        ] {
-            assert!(!looks_like_path(word), "{word}");
-        }
-        for word in [
-            "src/thing.py",
-            "docs/",
-            "./run",
-            "../x",
-            "/usr/bin",
-            "crates/codeflow-cli/src",
-            "(src\\main.rs).",
-        ] {
-            assert!(looks_like_path(word), "{word}");
-        }
-    }
-
-    #[test]
-    fn long_line_check_reads_tight_items_but_not_code_html_or_tables() {
-        let long = "word ".repeat(40);
-        for flagged in [
-            format!("- {long}"),
-            format!("{long}\n"),
-            format!("1. {long}"),
-            format!("> {long}"),
-        ] {
-            assert!(long_prose_line(&flagged), "{flagged}");
-        }
-        for exempt in [
-            format!("```\n{long}\n```"),
-            format!("    {long}"),
-            format!("| {long} |"),
-            format!("<!-- {long} -->"),
-            format!("- item\n\n  ```\n  {long}\n  ```"),
-        ] {
-            assert!(!long_prose_line(&exempt), "{exempt}");
         }
     }
 
@@ -1069,6 +1142,66 @@ mod tests {
         ] {
             assert!(!substantive(placeholder), "{placeholder}");
         }
+    }
+
+    /// TSK-147 round 6: a legacy `Contract: compatible` settles a watched
+    /// surface as `Breaking: no` does; `not-applicable` there is refused by
+    /// `scripts/release.py check-pr`, so it settles nothing.
+    #[test]
+    fn a_legacy_contract_declares_no_break_as_breaking_would() {
+        let block = |lines: &str| {
+            format!("## Release impact\n{lines}- Rationale: Preserve the public behavior.\n")
+        };
+        for no_break in [
+            "- Contract: compatible\n",
+            "- Contract: Compatible\n",
+            "- Contract: compatible\n- Breaking: no\n",
+        ] {
+            assert!(declares_no_break(&block(no_break)), "{no_break}");
+        }
+        for not_settled in [
+            "- Contract: breaking\n",
+            "- Contract: breaking\n- Breaking: no\n",
+            "- Contract: compatible\n- Breaking: yes\n",
+            "- Contract: maybe\n",
+            "- Contract: not-applicable\n",
+            "- Contract: not-applicable\n- Breaking: no\n",
+            "- Contract: compatible\n- Contract: compatible\n",
+            "- Breaking: no\n- Breaking: no\n",
+        ] {
+            assert!(!declares_no_break(&block(not_settled)), "{not_settled}");
+        }
+    }
+
+    /// TSK-106 AC-8: the shared fixture set; `scripts/test_release.py` runs
+    /// the same cases through `release.py`, which reads them with this
+    /// reader (`codeflow ci --read-release-impact`), and the seeded corpus
+    /// in `tests/release_impact_corpus.rs` compares the two verdicts.
+    #[test]
+    fn release_impact_block_passes_the_shared_fixture_set() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../scripts/fixtures/release_impact_cases.json"
+        ))
+        .unwrap();
+        let cases = fixtures["cases"].as_array().unwrap();
+        assert!(cases.len() >= 20, "the shared set covers the block");
+        let mut disagreements = Vec::new();
+        for case in cases {
+            let body = case["body"].as_str().unwrap();
+            let valid = case["valid"].as_bool().unwrap();
+            let findings = release(&GitPolicy::default(), body, false);
+            if findings.is_empty() != valid {
+                disagreements.push(format!(
+                    "{}: expected valid={valid}, got {:?}",
+                    case["name"],
+                    findings
+                        .iter()
+                        .map(|f| f.message.clone())
+                        .collect::<Vec<_>>()
+                ));
+            }
+        }
+        assert!(disagreements.is_empty(), "{disagreements:#?}");
     }
 
     #[test]

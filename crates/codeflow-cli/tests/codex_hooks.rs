@@ -12,9 +12,10 @@ use std::path::PathBuf;
 /// Every `codeflow hook` subcommand codeflow ships. A command naming anything
 /// else is a typo caught here. (Codex wires a subset — it has no `SessionEnd`
 /// event, so `session-summary` is not expected, but it stays a *known* name.)
-const KNOWN_HOOKS: [&str; 4] = [
+const KNOWN_HOOKS: [&str; 5] = [
     "git-guard",
     "exec-guard",
+    "edit-guard",
     "session-orient",
     "session-summary",
 ];
@@ -70,7 +71,11 @@ fn every_hook_command_is_a_known_codeflow_hook() {
             command.starts_with("codeflow hook "),
             "hook command {command:?} must start with \"codeflow hook \""
         );
-        let sub = command.trim_start_matches("codeflow hook ").trim();
+        let sub = command
+            .trim_start_matches("codeflow hook ")
+            .split_whitespace()
+            .next()
+            .unwrap();
         assert!(
             KNOWN_HOOKS.contains(&sub),
             "hook command {command:?} names unknown subcommand {sub:?}"
@@ -88,7 +93,7 @@ fn pretooluse_binds_git_and_exec_guard_on_supported_shells() {
         assert!(
             commands
                 .iter()
-                .any(|c| c == &format!("codeflow hook {hook}")),
+                .any(|c| c.starts_with(&format!("codeflow hook {hook} --contract 3"))),
             "PreToolUse: {hook} not wired"
         );
     }
@@ -116,7 +121,9 @@ fn sessionstart_wires_orient_across_all_sources() {
     let mut commands = Vec::new();
     collect_hook_commands(&start, &mut commands);
     assert!(
-        commands.iter().any(|c| c == "codeflow hook session-orient"),
+        commands
+            .iter()
+            .any(|c| c.starts_with("codeflow hook session-orient --contract 3")),
         "SessionStart: session-orient not wired"
     );
     let matcher = start[0]["matcher"].as_str().unwrap_or_default();
@@ -167,8 +174,13 @@ fn dogfood_codex_hooks_matches_shipped_scaffold() {
     );
 }
 
+/// TSK-128: Grok Build's session, compaction and prompt events exist, but it
+/// ignores their stdout and discards an allowing prompt hook's output
+/// (Grok Build 1.0.41 hook reference): events present, context injection
+/// unavailable. So the Grok file wires only the guards, the same payload as
+/// Codex, and no advisory `session-orient` whose output no model receives.
 #[test]
-fn dogfood_grok_hooks_share_pretooluse_and_add_compact_events() {
+fn dogfood_grok_hooks_share_pretooluse_and_wire_no_advisory_hook() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let shipped = std::fs::read_to_string(root.join("assets/base/grok/hooks.json"))
         .expect("read shipped grok hooks.json");
@@ -184,11 +196,170 @@ fn dogfood_grok_hooks_share_pretooluse_and_add_compact_events() {
     )
     .unwrap();
     assert_eq!(
-        grok["hooks"]["PreToolUse"], codex["hooks"]["PreToolUse"],
+        grok["hooks"]["PreToolUse"][0], codex["hooks"]["PreToolUse"][0],
         "Grok PreToolUse must stay the same git-guard/exec-guard payload as Codex"
     );
+    let events: Vec<&String> = grok["hooks"].as_object().unwrap().keys().collect();
+    assert_eq!(events, vec!["PreToolUse"], "Grok wires only the guards");
+    let mut commands = Vec::new();
+    collect_hook_commands(&grok["hooks"], &mut commands);
     assert!(
-        grok["hooks"]["PreCompact"].is_array() && grok["hooks"]["PostCompact"].is_array(),
-        "Grok must wire session-orient on PreCompact/PostCompact"
+        !commands
+            .iter()
+            .any(|c| c.contains("session-orient") || c.contains("prompt-reminder")),
+        "an advisory hook on Grok would claim context that never reaches the model"
     );
+}
+
+/// TSK-128 AC-5: Codex wires `UserPromptSubmit` to the stable advisory
+/// entry, where plain stdout becomes developer context, with no matcher
+/// (Codex ignores one on this event) and never the manual command.
+#[test]
+fn user_prompt_submit_wires_the_stable_advisory_entry() {
+    let v = hooks_json();
+    let prompt = v["hooks"]["UserPromptSubmit"].clone();
+    let mut commands = Vec::new();
+    collect_hook_commands(&prompt, &mut commands);
+    assert_eq!(commands.len(), 1);
+    assert!(commands[0].starts_with("codeflow hook session-orient --contract 3"));
+    assert!(prompt[0].get("matcher").is_none());
+    let mut all = Vec::new();
+    collect_hook_commands(&v["hooks"], &mut all);
+    assert!(!all.iter().any(|c| c.contains("prompt-reminder")));
+}
+
+#[path = "../../codeflow-core/src/security/guard_forms.rs"]
+#[allow(dead_code)]
+mod guard_forms;
+
+/// Run the shipped Codex exec-guard wiring through the shell, as Codex
+/// does, with a Bash tool call for `command` on stdin.
+#[cfg(unix)]
+fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::Output {
+    use std::io::Write as _;
+    let mut commands = Vec::new();
+    collect_hook_commands(&hooks_json()["hooks"]["PreToolUse"], &mut commands);
+    let hook = commands
+        .into_iter()
+        .find(|c| c.starts_with("codeflow hook exec-guard --contract 3"))
+        .expect("exec-guard wired");
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(
+        exe.parent()
+            .map(std::path::Path::to_path_buf)
+            .into_iter()
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+    )
+    .unwrap();
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": root,
+    });
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", &hook])
+        .current_dir(root)
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", root.join(".home"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// TSK-141 AC-5: the Codex wiring refuses each composed deletion, passes a
+/// project deletion, and lets a help invocation through while its data twin
+/// is reported.
+#[cfg(unix)]
+#[test]
+fn the_codex_exec_guard_wiring_judges_composed_deletions_and_help() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for (form, _) in guard_forms::COMPOSED_PAIRS {
+        let out = run_codex_exec_guard(root, form);
+        assert_eq!(out.status.code(), Some(2), "{form}");
+        // A policy refusal from the current binary carries no reinstall advice.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("codeflow-cli-installer.sh"),
+            "{form}: {stderr}"
+        );
+        assert!(!stderr.contains("codeflow update"), "{form}: {stderr}");
+    }
+    for command in guard_forms::PROJECT_DELETIONS {
+        let out = run_codex_exec_guard(root, command);
+        assert_eq!(out.status.code(), Some(0), "{command}");
+        assert!(out.stderr.is_empty(), "{command}");
+    }
+    for (help, twin) in guard_forms::HELP_PAIRS {
+        let out = run_codex_exec_guard(root, help);
+        assert!(out.stderr.is_empty(), "{help}");
+        let out = run_codex_exec_guard(root, twin);
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("headless peer run"),
+            "{twin}"
+        );
+    }
+}
+
+/// TSK-180: the built hook runs a cleanup after a trap reset or a removed
+/// hook, and refuses one whose reset or removal may not take effect.
+#[cfg(unix)]
+#[test]
+fn the_codex_exec_guard_wiring_holds_the_round_four_probes() {
+    use guard_forms::Expect;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::os::unix::fs::symlink("/", root.join("root-link")).unwrap();
+    for sub in ["build", "empty"] {
+        std::fs::create_dir(root.join(sub)).unwrap();
+    }
+    let mut wrong = Vec::new();
+    for (case, command, expect) in guard_forms::REVIEW_ROUND_FOUR_PROBES {
+        let out = run_codex_exec_guard(root, command);
+        let want = if *expect == Expect::Allowed { 0 } else { 2 };
+        if out.status.code() != Some(want) {
+            wrong.push(format!(
+                "{case} ({expect:?}): {command} -> {:?} {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+#[test]
+fn native_edit_tools_are_wired_to_the_edit_guard() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (harness, tools) in [
+        ("codex", vec!["apply_patch", "Edit", "Write"]),
+        ("grok", vec!["write", "search_replace", "Edit", "Write"]),
+    ] {
+        let value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(format!("assets/base/{harness}/hooks.json")))
+                .unwrap(),
+        )
+        .unwrap();
+        let entry = &value["hooks"]["PreToolUse"][1];
+        let matcher = regex::Regex::new(entry["matcher"].as_str().unwrap()).unwrap();
+        for tool in tools {
+            assert!(matcher.is_match(tool), "{harness}: {tool}");
+        }
+        assert!(!matcher.is_match("Bash"));
+        assert!(entry["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("codeflow hook edit-guard --contract 3"));
+    }
 }

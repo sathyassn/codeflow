@@ -1,5 +1,6 @@
 ---
 id: ADR-0004
+uid: 8de6918f-ec9a-4907-9319-945289a76838
 title: Composable pipeline workflow, shipped user-owned
 date: 2026-06-12
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: none
 ---
 
-# ADR-0004 — Composable pipeline workflow, shipped user-owned
+# ADR-0004: Composable pipeline workflow, shipped user-owned
 
 ## Context
 

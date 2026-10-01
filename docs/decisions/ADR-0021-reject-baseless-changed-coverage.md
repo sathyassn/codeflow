@@ -1,5 +1,6 @@
 ---
 id: ADR-0021
+uid: 2780c478-0c00-42e1-be8c-adac0329ebfe
 title: reject changed-file coverage without a comparison base
 date: 2026-07-14
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: The test-config contract no longer accepts changed_files coverage rules until the gate has an explicit comparison-base input; aggregate scopes remain supported and are verdict-bearing.
 ---
 
-# ADR-0021 — reject changed-file coverage without a comparison base
+# ADR-0021: reject changed-file coverage without a comparison base
 
 ## Context
 

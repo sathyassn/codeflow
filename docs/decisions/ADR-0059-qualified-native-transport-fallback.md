@@ -1,5 +1,6 @@
 ---
 id: ADR-0059
+uid: 36924baa-ed0d-4e39-b567-8ccf3a0698ae
 title: qualify native transport by capabilities instead of plugin exclusivity
 date: 2026-09-10
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: none
 ---
 
-# ADR-0059 — qualified native transport fallback
+# ADR-0059: qualified native transport fallback
 
 ## Context
 

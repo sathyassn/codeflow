@@ -18,10 +18,11 @@ pub struct DoctorArgs {
 
 /// Run doctor checks; exit 0 when healthy (warnings allowed), 1 on failures.
 pub fn run(args: &DoctorArgs) -> i32 {
+    let home = registry::codeflow_home();
     let opts = Options {
         project_dir: super::repo_root().to_string_lossy().into_owned(),
-        qualification_dir: registry::codeflow_home()
-            .map(|home| registry::qualified_bindings_path(&home)),
+        qualification_dir: home.as_deref().map(registry::qualified_bindings_path),
+        codeflow_home: home,
         ..Options::default()
     };
     run_with(args, &opts, &mut std::io::stdout())
@@ -35,6 +36,12 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
             let _ = writeln!(out, "{name}");
         }
         return 0;
+    }
+    for note in codeflow_core::hooks::policy_schema::deprecation_warnings(std::path::Path::new(
+        &opts.project_dir,
+    )) {
+        let _ = writeln!(out, "note  policy: {}", note.text);
+        let _ = writeln!(out, "      clear it: {}", note.remedy);
     }
     let results = if let Some(name) = &args.check {
         match doctor::run_check(name, opts) {
@@ -61,7 +68,8 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
     for r in &results {
         let badge = match r.status {
             Status::Pass => "ok  ",
-            Status::Warn => "warn",
+            Status::Warn(_) => "warn",
+            Status::Note(_) => "note",
             Status::Fail => {
                 failed = true;
                 "FAIL"
@@ -73,6 +81,15 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
             name = r.name,
             message = r.message
         );
+        match &r.status {
+            Status::Warn(remedy) => {
+                let _ = writeln!(out, "      clear it: {remedy}");
+            }
+            Status::Note(remedy) => {
+                let _ = writeln!(out, "      confirm: {remedy}");
+            }
+            Status::Pass | Status::Fail => {}
+        }
     }
     i32::from(failed)
 }
@@ -105,9 +122,18 @@ mod tests {
         let opts = Options {
             project_dir: dir.path().to_string_lossy().into_owned(),
             look_path: Some(|name| Ok(format!("/stub/bin/{name}"))),
-            exec_command: Some(|_, _| Ok(String::new())),
+            exec_command: Some(|_, args| {
+                Ok(if args == ["git-hook", "capabilities"] {
+                    "hooks 3".into()
+                } else {
+                    String::new()
+                })
+            }),
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
+            codeflow_home: None,
             qualification_dir: None,
+            harness_home: Some(dir.path().join("home")),
+            env_var: Some(|_| None),
         };
         (dir, opts)
     }
@@ -138,6 +164,23 @@ mod tests {
         assert_eq!(code, 1);
         assert!(out.contains("FAIL"), "got: {out}");
         assert!(out.contains("manifest.json"), "names the offender: {out}");
+    }
+
+    #[test]
+    fn a_warning_prints_the_step_that_clears_it() {
+        // SPC-013 R-80: an uninitialized project warns and names `codeflow init`.
+        let dir = tempfile::tempdir().unwrap();
+        let opts = Options {
+            project_dir: dir.path().to_string_lossy().into_owned(),
+            ..Options::default()
+        };
+        let (code, out) = run_to_string(&args(Some("config"), false), &opts);
+        assert_eq!(code, 0, "a warning never fails doctor: {out}");
+        assert!(out.starts_with("warn  config:"), "got: {out}");
+        assert!(
+            out.contains("\n      clear it: run `codeflow init` in the project root"),
+            "got: {out}"
+        );
     }
 
     #[test]

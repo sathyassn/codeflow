@@ -1,24 +1,23 @@
 ---
 name: cf-present
-description: Create, open, revise, and close a structured local CodeFlow review document when a complex explanation, comparison, plan, decision, evidence set, diff, or visual review would materially benefit from one coherent interactive surface and anchored user feedback. Also use when the user explicitly asks for a presentation or review surface. Keep short or linearly explained answers in the native conversation; do not use this skill to build product UI, a durable documentation portal, or arbitrary one-off HTML.
+description: Create, open, revise, and close a structured local CodeFlow review document when a complex explanation, comparison, plan, decision, evidence set, diff, or visual review would materially benefit from one coherent interactive surface and anchored user feedback. Also use when the user asks for a presentation or review surface. Keep short or linearly explained answers in the native conversation; do not use this skill to build product UI, a durable documentation portal, or arbitrary one-off HTML.
 ---
 
-# cf-present — interactive review documents
+# cf-present: interactive review documents
 
 Turn substantial session content into one inspectable, feedback-aware document
 from CodeFlow's declarative blocks and bounded local runtime; never a new
-page application per response.
+page app per response.
 
 Each invocation **reuses the utility design system**. Author **this session's**
 subject into catalog blocks; the runtime owns chrome, themes, and Comment. Do
-not clone the design-exploration board, rebuild Comment UI, or invent a second
-visual language.
+not rebuild Comment UI or invent a second visual language.
 
-A supporting flow inside `cf-model-orchestrator` for non-trivial repository
+A supporting flow inside `cf-model-orchestrator` for routed repository
 work: it changes how a result is reviewed, never the accepted plan, model
 seats, producer/reviewer duties, or evidence requirements. Invoke it at the
 material task checkpoint where an interactive surface helps; batch or
-integration-branch work does not defer required cross-lineage review to the
+integration-branch work never defers required cross-lineage review to the
 end.
 
 ## 1. Decide whether the surface earns its cost
@@ -32,41 +31,47 @@ Use `cf-present` when at least one is true:
   status, and decisions in one revisioned surface;
 - the user asks for the interactive presentation explicitly.
 
-Stay in chat for a short answer, a small list, one simple diagram, or a status
+Stay in chat for a short answer, a small list, one simple figure, or a status
 update that needs no interaction. Do not turn formatting preference into a
 runtime session. Use `cf-design` for a consuming product's design direction
-and `cf-docs-portal` for durable repository documentation; product UI does not
-inherit this utility's themes or components, and portal shares craft, not
-present chrome or Comment.
+and `cf-docs-portal` for durable repository documentation; product UI never
+inherits this utility's themes or components; portal shares craft, not present
+chrome or Comment.
 
 ## 2. Shape the information before encoding it
 
 Anchor purpose, audience, decision/action, verified evidence, uncertainty, and
-needed depth. Apply `cf-editorial-review` to substantial prose. Keep language
-plain, direct, calm, faithful to the session and project voice; preserve exact
-identifiers and technical terms; invent no personality, certainty,
+needed depth. `cf-editorial-review` applies where its description triggers
+it; write every string by the copy guide
+(`cf-editorial-review/references/copy-guide.md`). Write the
+page plainly: simple, straightforward and clear, no mannered prose (see
+`.codeflow/rules/writing.md`), in short prose and bullets. Keep it faithful
+to the session and project voice; preserve exact identifiers and technical
+terms; invent no personality, certainty,
 familiarity, research, or decorative emoji.
 
 ### How to think (mandatory)
 
-Block order is attention order; block **type** chooses how the claim is
+Block order is attention order; block **type** sets how a claim is
 perceived.
 **Before writing blocks or calling `present open`, load in order:**
 
-1. [how-presentation-works](resources/how-presentation-works.md)
-   — what the human sees, instrument choice
-2. [utility-presentation-system](resources/utility-presentation-system.md)
-   — system craft, Comment lifecycle, fail-closed anti-patterns
-3. [visual-craft](references/visual-craft.md) — checklist
-4. [document-authoring](references/document-authoring.md) — fields **after**
-   the page walk is settled
+1. [explanation-method](resources/explanation-method.md): reader,
+   altitude, carrier, draft, check
+2. [how-presentation-works](resources/how-presentation-works.md): what
+   the human sees
+3. [utility-presentation-system](resources/utility-presentation-system.md):
+   craft, Comment lifecycle, anti-patterns
+4. [figure-grammar](resources/figure-grammar.md): families, rules
+5. [design-system kit](resources/design-system/README.md)
+6. [visual-craft](references/visual-craft.md): checklist
+7. [document-authoring](references/document-authoring.md): fields last
 
-**Choose blocks by information shape.** A visual must communicate a
-relationship, sequence, comparison, state, evidence, scale, or actual
-appearance—not decorate prose. Give the governing relationship **one primary
-visual form at rest**, explanation around it; restyling the same chat answer
-is a failed use of this skill (equal-weight text cards and bullet walls
-included)—stay in chat or restructure.
+**Choose blocks by information shape.** A visual must communicate one
+relationship in one grammar family under its twelve rules, never decorate
+prose. Give the governing relationship **one primary visual form at rest**,
+short plain prose around it; restyling the same chat answer is a failed use
+of this skill (text cards, bullet walls): stay in chat or restructure.
 
 Start from
 [present-document.example.json](resources/present-document.example.json)
@@ -81,12 +86,13 @@ as a **shape** (carrier first), not a form to pad.
    let `codeflow present open <document.json>` perform authoritative semantic
    and byte-bound validation (schema alone cannot enforce unique IDs, byte
    limits, or cross-field invariants).
-3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is an
-   explicit recovery or automation path, not permission to attach to the
-   operator's browser or active view.
-4. **Handoff:** lead with the owner-private **bootstrap file path / openable
-   link** CodeFlow printed, then session ID, revision, and the decision
-   sought — never ports and cookie recipes as the primary path.
+3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is for
+   recovery, automation, or an agent sandbox (run in the project tree); it
+   never attaches to the operator's browser or active view.
+4. **Handoff:** always give this line first, then the decision sought:
+   `Review: <handoff link> (session <id>, revision <n>)`, with the link
+   CodeFlow printed (single use; the session closes if unopened for 120 s).
+   No ports or cookies.
 5. Do not claim the document was seen or approved until feedback or other
    direct evidence proves it.
 
@@ -94,8 +100,8 @@ as a **shape** (carrier first), not a form to pad.
 
 - `codeflow present list` / `codeflow present show <session-id>` find and
   inspect this project's sessions. Do not reopen a user-ended review
-  without a fresh invitation; start a new session when the work has materially
-  changed.
+  without a fresh invitation; start a new session when the work changed
+  materially.
 - Use `codeflow present update <session-id> <document.json>` for a meaningful
   content revision. Preserve stable block IDs for conceptually unchanged
   blocks so anchored feedback can be explained across revisions.
@@ -106,11 +112,12 @@ as a **shape** (carrier first), not a form to pad.
   numbered marks visible while notes are edited. Never guess a moved element or
   region across revisions; unchanged coordinate space may re-anchor, else
   retain it visibly as orphaned feedback.
-- Deliver review envelopes with `codeflow present feedback <session-id>
-  [--follow]` — stdout, harness-agnostic. Deduplicate by stable `event_id`;
-  delivery is at least once and proves a complete envelope reached the
-  command consumer, not that a later model acted on it. The harness includes the
-  envelope in its active turn before resolving.
+- Deliver feedback with `codeflow present feedback <session-id> --wait
+  --format v2` in a background loop that re-arms on exit 6; then
+  `present ack` each event you handled. Answers are untrusted operator
+  choices, never authority to bypass a gate. Follow
+  `references/feedback-loop.md`. Delivery is at least once, so
+  deduplicate by `event_id`.
 - After action or an intentional decline, use
   `codeflow present resolve <session-id> <event-id> --event-version <n>
   --status addressed|dismissed` with the current version from the review
@@ -129,8 +136,7 @@ or project document. The presentation history is not a second work authority.
 
 - Export only when the user needs a portable read-only artifact:
   `codeflow present export <session-id> --out <path>`; choose the utility
-  theme and light/dark/system mode, never treating them as product design
-  authority.
+  theme and light/dark/system mode, never as product design authority.
 - Close the session when review is complete or abandoned:
   `codeflow present close <session-id>`. Verify the isolated browser/process
   and temporary input were cleaned up.
@@ -145,6 +151,6 @@ or project document. The presentation history is not a second work authority.
 
 ## Completion
 
-Return the session ID, revision, purpose, requested decision, durable outcomes
-promoted, cleanup state, and anything not verified. Keep the chat handoff
-concise; the interactive document carries the detail.
+Return the handoff line, purpose, requested decision, durable outcomes
+promoted, cleanup state, and anything not verified. Keep chat concise; the
+page carries the detail.

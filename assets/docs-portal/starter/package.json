@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "node scripts/workflow.mjs build",
-    "browser:verify": "node --test tests/browser-keyboard.test.mjs && node scripts/browser-verify.mjs",
+    "browser:verify": "node --test tests/browser-keyboard.test.mjs tests/composition-browser.test.mjs tests/figure-rules-browser.test.mjs tests/figure-gate.test.mjs && node scripts/browser-verify.mjs",
     "check": "node scripts/workflow.mjs check",
     "deps:install": "node scripts/install-dependencies.mjs",
     "dev": "node scripts/workflow.mjs dev",

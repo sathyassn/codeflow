@@ -1,4 +1,4 @@
-//! `codeflow hook <git-guard|exec-guard|session-orient|session-summary|delegate-turn>` — the
+//! `codeflow hook <git-guard|exec-guard|session-orient|prompt-reminder|session-summary|delegate-turn>` — the
 //! Claude layer hooks, wired by the settings presets (charter §3.3).
 //!
 //! Exit-code contract:
@@ -7,18 +7,25 @@
 //! - `exec-guard`: 0 allow (or warn), 2 block — same `PreToolUse` shell
 //!   contract, enforcing the `security` policy section (ADR-0008). Payload is
 //!   parsed leniently so the same subcommand serves the Codex hooks engine.
-//! - `session-orient`: digest on stdout, always 0.
+//! - `session-orient`: the stable advisory entry, always 0, dispatched on the
+//!   payload's `hook_event_name` (TSK-128). `SessionStart` (or no event
+//!   named): the digest, plus the rule guidance block after a compaction, a
+//!   resume or a fork. `UserPromptSubmit`: at most one rule line. Any other
+//!   event: nothing. Harnesses wire both events to this one command, so an
+//!   older binary that knows only this name still exits 0 on a prompt.
+//! - `prompt-reminder`: the prompt line alone, always 0; a convenience for
+//!   manual use, never wired into a harness.
 //! - `session-summary`: always 0 — a failed summary must never fail the
 //!   session (warn on stderr instead).
 //! - `delegate-turn`: schema-v2 state mode handles the full lifecycle without
 //!   tmux; legacy result mode preserves its existing terminal signal contract.
 
-use std::io::Read;
+use std::io::{Read, Write as _};
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Args};
 use codeflow_core::hooks::{
-    delegate_turn, exec_guard, git_guard, orient, policy::Policy, session_summary,
+    delegate_turn, edit_guard, exec_guard, git_guard, guidance, orient, session_summary,
 };
 
 // Large enough for the maximum decoded terminal message even when every byte
@@ -33,11 +40,21 @@ pub enum HookName {
     /// `PreToolUse` (Bash/PowerShell): enforce policy.json `security` rules (dangerous
     /// commands, privilege escalation). Harness-agnostic — also serves Codex.
     ExecGuard,
-    /// `SessionStart`: emit the orient digest to stdout.
+    /// Native file edits: refuse changes to enforcement paths.
+    EditGuard,
+    /// `SessionStart` and `UserPromptSubmit`: the advisory entry, dispatched
+    /// on the payload's event (the digest and guidance, or one rule line).
     SessionOrient,
+    /// The one advisory rule line for a prompt payload; not wired into any
+    /// harness (the wired entry is `session-orient`).
+    PromptReminder,
     /// `SessionEnd`: append the session record to the ledger.
     SessionSummary,
-    /// `Stop` / `StopFailure`: persist and signal one interactive delegate turn.
+    /// `SessionStart`, `UserPromptSubmit`, `Stop` and `StopFailure`: with
+    /// `--state-dir`, advance the schema-v2 delegate lifecycle (ready, armed
+    /// prompt or task-notice continuation, terminal result); with `--result`,
+    /// the legacy one-shot mode that records and signals a `Stop` or
+    /// `StopFailure`.
     DelegateTurn,
 }
 
@@ -48,13 +65,16 @@ pub enum HookName {
         .multiple(false)
 ))]
 pub struct HookArgs {
+    /// Required installed hook contract. Older binaries reject this flag.
+    #[arg(long)]
+    pub contract: Option<u32>,
     /// Hook to run (reads the Claude Code hook payload from stdin).
     #[arg(value_enum)]
     pub name: HookName,
     /// Unique task id for `delegate-turn` (1-64 safe ASCII characters).
     #[arg(long, value_name = "ID")]
     pub run_id: Option<String>,
-    /// Absolute owner-only result path for `delegate-turn`.
+    /// Absolute owner-only result path for legacy one-shot `delegate-turn`.
     #[arg(long, value_name = "FILE")]
     pub result: Option<PathBuf>,
     /// Absolute owner-only lifecycle directory for schema-v2 `delegate-turn`.
@@ -65,6 +85,13 @@ pub struct HookArgs {
 /// Run the hook; returns the process exit code.
 #[must_use]
 pub fn run(args: &HookArgs) -> i32 {
+    if args.contract.is_some_and(|version| version != 3) {
+        eprintln!(
+            "codeflow: unsupported hook contract; {}; then codeflow update",
+            codeflow_core::hooks::landed_policy::INSTALL
+        );
+        return 2;
+    }
     let stdin = if matches!(args.name, HookName::DelegateTurn) && args.state_dir.is_some() {
         match read_bounded_utf8(std::io::stdin(), MAX_SCHEMA_HOOK_INPUT_BYTES) {
             Ok(stdin) => stdin,
@@ -86,13 +113,51 @@ pub fn run(args: &HookArgs) -> i32 {
     match args.name {
         HookName::GitGuard => git_guard(&stdin),
         HookName::ExecGuard => exec_guard(&stdin),
-        HookName::SessionOrient => {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-            print!("{}", orient::generate(&super::project_root(&cwd)));
+        HookName::EditGuard => edit_guard(&stdin),
+        HookName::SessionOrient => session_orient(&stdin),
+        HookName::PromptReminder => {
+            prompt_reminder(&stdin);
             0
         }
         HookName::SessionSummary => session_summary(&stdin),
         HookName::DelegateTurn => delegate_turn(args, &stdin),
+    }
+}
+
+/// The advisory entry: dispatch on the payload's event. Every path exits 0,
+/// and output is written without panicking, so a closed stdout cannot turn
+/// advice into a failed session or a refused prompt. The guards never pass
+/// through here.
+fn session_orient(stdin: &str) -> i32 {
+    match guidance::payload_event(stdin) {
+        guidance::HookEvent::SessionStart => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
+            let root = super::project_root(&cwd);
+            let digest = orient::generate(&root);
+            let mut out = std::io::stdout();
+            let _ = write!(out, "{digest}");
+            // The digest's own off-switch also silences the guidance block.
+            if !digest.is_empty() {
+                let source = guidance::payload_source(stdin).unwrap_or_default();
+                if let Some(block) = guidance::session_guidance(&root, &source) {
+                    let _ = write!(out, "\n{block}");
+                }
+            }
+            let _ = out.flush();
+        }
+        guidance::HookEvent::PromptSubmit => prompt_reminder(stdin),
+        guidance::HookEvent::Other(_) => {}
+    }
+    0
+}
+
+/// Write the prompt's one rule line, if any; a write error is dropped.
+fn prompt_reminder(stdin: &str) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    if let Some(line) = guidance::prompt_reminder(&super::project_root(&cwd), stdin) {
+        let mut out = std::io::stdout();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
     }
 }
 
@@ -159,7 +224,8 @@ fn git_guard(stdin: &str) -> i32 {
         Err(e) => {
             // Fail open with a visible warning: a malformed payload must not
             // veto every shell call (charter principle 8 — legible, not silent).
-            eprintln!("codeflow git-guard: warning: unreadable hook payload ({e}); allowing");
+            let finding = payload_finding("git-guard", &e);
+            eprintln!("{}", finding.line("codeflow git-guard", "warning"));
             return 0;
         }
     };
@@ -173,49 +239,71 @@ fn git_guard(stdin: &str) -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
     let root = super::project_root(&cwd);
-    let (policy, _armed) = Policy::load_effective(&root);
+    let authority = match codeflow_core::hooks::landed_policy::load(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
+                return 0;
+            }
+            eprintln!("codeflow git-guard: {error}");
+            return 2;
+        }
+    };
+    let policy = &authority.policy;
     let branch = codeflow_core::hooks::RepoInfo::discover(&root)
         .map(|i| i.branch)
         .unwrap_or_default();
+    // The session's root checkout, when the command runs in one (TSK-165).
+    let root_checkout = codeflow_core::root_checkout::RootCheckout::at(&root, &policy.git);
 
     let lookup = gh_pr_base;
-    // Resolve a retargeted directory (`-C`/`--git-dir`/`GIT_DIR`/`cd`) to the
-    // branch checked out there, so a wrong-dir git op is judged against the
-    // target repo, not the session (charter §6.1).
+    // Resolve a retargeted repository (`-C`/`--git-dir`/`GIT_DIR`/`cd`) to its
+    // branch and policy, so a git op is judged by the repository it targets,
+    // not the session's (charter §6.1; TSK-112).
+    let session_common = codeflow_core::hooks::RepoInfo::discover(&root).map(|i| i.common_dir);
     let dir_cwd = cwd.clone();
-    let dir_branch = move |dir: &str| resolve_dir_branch(&dir_cwd, dir);
+    let dir_target = move |spec: &git_guard::Retarget<'_>| {
+        git_guard::read_target(&dir_cwd, session_common.as_deref(), spec)
+    };
+    // Resolve a subcommand that is not a builtin through the alias it names,
+    // as git reads it where the command runs (TSK-112).
+    let alias_cwd = cwd.clone();
+    let alias = move |query: &git_guard::AliasQuery<'_>| git_guard::read_alias(&alias_cwd, query);
+    let discard_cwd = cwd.clone();
+    let discard = move |query: &git_guard::DiscardQuery<'_>| {
+        codeflow_core::hooks::git_discard::inspect(&discard_cwd, query.target, query.intent)
+    };
     let ctx = git_guard::GuardContext {
         policy: &policy.git,
         current_branch: &branch,
         integrate_token: super::integrate_token_present(),
         pr_base_lookup: Some(&lookup),
-        dir_branch_lookup: Some(&dir_branch),
+        dir_target_lookup: Some(&dir_target),
+        alias_lookup: Some(&alias),
+        discard_lookup: Some(&discard),
+        root_checkout: root_checkout.as_ref(),
     };
-    let violations = git_guard::evaluate(command, &ctx);
-    super::render_outcome("git-guard", &violations, &[], 2)
+    let report = git_guard::evaluate_report_at(command, &ctx, &cwd);
+    if !report.violations.is_empty() {
+        eprintln!("policy source: {}", authority.source);
+    }
+    super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
 }
 
-/// Resolve a `-C`/`--git-dir`/`GIT_DIR`/`cd` target `dir` (relative to the
-/// session `cwd`) to the branch checked out there. `--git-dir` may point at a
-/// `.git` directory; discovery from its parent handles that. `None` when the
-/// branch cannot be read — the guard then falls back to the session branch.
-fn resolve_dir_branch(cwd: &std::path::Path, dir: &str) -> Option<String> {
-    let p = std::path::Path::new(dir);
-    let abs = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        cwd.join(p)
-    };
-    let start = if abs.file_name().is_some_and(|n| n == ".git") {
-        abs.parent()
-            .map_or(abs.clone(), std::path::Path::to_path_buf)
-    } else {
-        abs
-    };
-    codeflow_core::hooks::RepoInfo::discover(&start)
-        .map(|i| i.branch)
-        .filter(|b| !b.is_empty())
+/// The finding for a guard input it could not read. Fail open with a
+/// visible warning: an unread payload must not veto every shell call
+/// (charter principle 8: legible, not silent).
+fn payload_finding(guard: &str, error: &git_guard::PayloadError) -> codeflow_core::remedy::Finding {
+    let remedy = codeflow_core::remedy::GUARD_PAYLOAD_MALFORMED
+        .with(&[("guard", guard), ("path", HARNESS_HOOK_FILES)]);
+    codeflow_core::remedy::Finding::new(
+        format!("unreadable hook payload ({error}); allowing"),
+        remedy,
+    )
 }
+
+/// Where each harness wires the guards.
+const HARNESS_HOOK_FILES: &str = "`.claude/settings.json`, `.codex/hooks.json` or `.grok/hooks/`";
 
 /// `exec-guard` (`PreToolUse` Bash/PowerShell): run the dangerous/privilege security
 /// modules against the command per the `security` policy section (ADR-0008).
@@ -227,7 +315,8 @@ fn exec_guard(stdin: &str) -> i32 {
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("codeflow exec-guard: warning: unreadable hook payload ({e}); allowing");
+            let finding = payload_finding("exec-guard", &e);
+            eprintln!("{}", finding.line("codeflow exec-guard", "warning"));
             return 0;
         }
     };
@@ -241,12 +330,81 @@ fn exec_guard(stdin: &str) -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
     let root = super::project_root(&cwd);
-    // The `security` section is not touched by bootstrap grace (like
-    // `secret_scan`, a dangerous command is never graced), so a plain load is
-    // enough — no need for `load_effective`.
-    let policy = Policy::load(&root);
-    let violations = exec_guard::evaluate(command, &policy.security);
-    super::render_outcome("exec-guard", &violations, &[], 2)
+    // Security levels use the same committed authority as the Git guard.
+    let authority = match codeflow_core::hooks::landed_policy::load(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
+                return 0;
+            }
+            eprintln!("codeflow hook: {error}");
+            return 2;
+        }
+    };
+    let policy = &authority.policy;
+    let violations = exec_guard::evaluate_at(
+        command,
+        &policy.security,
+        policy.git.hook_integrity,
+        &cwd,
+        &root,
+    );
+    if !violations.is_empty() {
+        eprintln!("policy source: {}", authority.source);
+    }
+    super::render_outcome("exec-guard", &root, &violations, &[], 2)
+}
+
+fn edit_guard(stdin: &str) -> i32 {
+    let request = match edit_guard::parse_payload(stdin) {
+        Ok(Some(request)) => request,
+        Ok(None) => return 0,
+        Err(error) => {
+            eprintln!("codeflow edit-guard: git.hook_integrity: cannot inspect edit payload: {error}; the operator repairs the edit hook payload in {HARNESS_HOOK_FILES}");
+            return 2;
+        }
+    };
+    let cwd = request
+        .cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| ".".into());
+    let root = super::project_root(&cwd);
+    let authority = match codeflow_core::hooks::landed_policy::load(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow hook: {error}");
+            return 2;
+        }
+    };
+    let policy = &authority.policy;
+    let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+    else {
+        eprintln!("codeflow edit-guard: git.hook_integrity: cannot resolve home; the operator repairs the hook process environment");
+        return 2;
+    };
+    let repo = codeflow_core::hooks::RepoInfo::discover(&root);
+    let context = edit_guard::EditContext {
+        cwd: &cwd,
+        root: &root,
+        home: &home,
+        git_common_dir: repo.as_ref().map(|repo| repo.common_dir.as_path()),
+        level: policy.git.hook_integrity,
+    };
+    match edit_guard::evaluate(&request, &context) {
+        Ok(findings) => {
+            if !findings.is_empty() {
+                eprintln!("policy source: {}", authority.source);
+            }
+            super::render_outcome("edit-guard", &root, &findings, &[], 2)
+        }
+        Err(error) => {
+            eprintln!("codeflow edit-guard: git.hook_integrity: cannot inspect edit target: {error}; the operator inspects the named path before editing");
+            2
+        }
+    }
 }
 
 /// Resolve a `gh pr merge <arg>` target to its base branch via `gh pr view`
@@ -280,12 +438,25 @@ fn gh_pr_base_blocking(arg: &str) -> Option<String> {
 fn session_summary(stdin: &str) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     match session_summary::record(&super::project_root(&cwd), stdin) {
-        Ok(path) => {
+        Ok(Some(path)) => {
             eprintln!("codeflow session-summary: recorded to {}", path.display());
             0
         }
+        Ok(None) => {
+            eprintln!("codeflow session-summary: not in a git repository, nothing to record");
+            0
+        }
         Err(e) => {
-            eprintln!("codeflow session-summary: warning: {e} — session unaffected");
+            let path = e.path.display().to_string();
+            let finding = codeflow_core::remedy::Finding::new(
+                format!(
+                    "session ledger not written ({}); session unaffected",
+                    e.cause
+                ),
+                codeflow_core::remedy::SESSION_SUMMARY_UNWRITTEN
+                    .with(&[("repair", e.repair.words()), ("path", &path)]),
+            );
+            eprintln!("{}", finding.line("codeflow session-summary", "warning"));
             0
         }
     }

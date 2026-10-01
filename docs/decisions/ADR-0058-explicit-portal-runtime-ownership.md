@@ -1,5 +1,6 @@
 ---
 id: ADR-0058
+uid: de5163f3-8f5e-4c61-a428-1c329b55b11b
 title: replace portal source merging with explicit runtime ownership
 date: 2026-09-10
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — portal updates replace unchanged runtime files; explicit whole-runtime transfer freezes provenance without weakening derived-evidence validation
 ---
 
-# ADR-0058 — replace portal source merging with explicit runtime ownership
+# ADR-0058: replace portal source merging with explicit runtime ownership
 
 ## Context
 

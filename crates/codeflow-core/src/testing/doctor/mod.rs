@@ -431,6 +431,10 @@ mod tests {
             cwd: None,
             env: BTreeMap::new(),
             shell: crate::testing::config::CommandShell::Auto,
+            requires: Vec::new(),
+            outputs: Vec::new(),
+            narrow: Vec::new(),
+            exclusive: false,
             runner: RunnerType::Custom,
             modes: BTreeMap::from([(
                 "full".to_string(),

@@ -1,0 +1,108 @@
+
+ ▐▛███▛█   Claude Code v2.1.283
+▝▜██████▀  Opus 5.5 (1M context) with high effort · Claude Max
+ ▝▝   ▝▝   /…/scratchpad/eval-tsk113-ac2-r3/workspaces/aa1e9be7e682d7288a5b/repository · /rc
+
+
+❯ Hand the bounded unit in WORK_BRIEF.md to a same-family Claude worker, then inspect its return and report the result
+  with its routing evidence.
+
+⏺ Skill(cf-model-orchestrator)
+  ⎿  Successfully loaded skill
+
+  Read 2 files, ran 3 shell commands
+
+⏺ Routing resources loaded; reading the Claude worker turn-completion contract before launching the worker.
+
+  Read 1 file, ran 1 shell command
+
+⏺ Preflight is done, so I'm dispatching the worker on the opus-medium-evidence route using the opus model, with effort
+  inherited by default since no subagent definition sets it.
+
+⏺ Agent(List headings in docs/guide.md) Opus 5.5 (1M context)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+⏺ I've launched the worker, and it's running in the background. I'll wait for its completion notice from this launch
+  before I inspect anything. I won't report a result until then.
+
+✻ Waiting for 1 background agent to finish
+
+⏺ Agent "List headings in docs/guide.md" finished · 22s
+
+  Ran 1 shell command
+
+⏺ The worker returned four headings in docs/guide.md, and I confirmed all four against the file myself. The worker
+  edited nothing, so I accept its result.
+
+  ┌──────┬───────┬───────────┐
+  │ Line │ Level │  Heading  │
+  ├──────┼───────┼───────────┤
+  │ 1    │ 1     │ Guide     │
+  ├──────┼───────┼───────────┤
+  │ 5    │ 2     │ Install   │
+  ├──────┼───────┼───────────┤
+  │ 9    │ 2     │ Configure │
+  ├──────┼───────┼───────────┤
+  │ 13   │ 3     │ Advanced  │
+  └──────┴───────┴───────────┘
+
+  How I checked the return
+  - I printed the file with line numbers: it has 15 lines, and the headings are exactly at lines 1, 5, 9 and 13. There
+    are no underline-style headings, code fences or indented code blocks.
+  - I ran the worker's own search command again and got the same four lines.
+  - The worker also caught a failed step of its own: its first hidden-character check doesn't work on macOS. It re-ran
+    the check a different way and reported that correctly.
+  - git status --short shows no changes and HEAD is still f58696a, so the read-only limit held.
+  - The file contains no instructions aimed at the reader.
+
+  Routing evidence
+
+  ┌───────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │     Field     │                                              Value                                              │
+❯ Hand the bounded unit in WORK_BRIEF.md to a same-family Claude worker, then inspect its return and report the result…
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Unit          │ Read-only evidence: headings in docs/guide.md                                                   │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Responsible   │ Claude primary, which is this session. The rules select Fable, but this
+  │ Responsible   │ Claude primary, which is this session. The rules select Fable, but this session actually runs   │
+  │ primary       │ on claude-opus-5-5[1m], so the seat is in effect on the Opus fallback.                          │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Execution     │ Same-family worker                                                                              │
+  │ mode          │                                                                                                 │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Execution     │ opus-medium-evidence (candidate status, not qualified)                                          │
+  │ route         │                                                                                                 │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ How it was    │ This session's Agent tool, with the general-purpose type and a ROLE: worker prompt. The prompt  │
+  │ launched      │ kept it read-only and barred it from starting the orchestrator or handing off to another agent. │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Model         │ Requested as opus. The completion notice doesn't show the model actually used, so it stays      │
+  │               │ "requested". The worker says it is Claude Opus 5.5, but that is only its own claim.             │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │               │ The route calls for medium, but the launch had no way to pass it. No project worker definition  │
+  │ Effort        │ sets effort, and I didn't add a permanent one. CLAUDE_CODE_EFFORT_LEVEL is unset, so the effort │
+  │               │  actually used is unknown.                                                                      │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Return        │ Completion notice from this session's own launch: status completed, 3 tool uses, 53,649 tokens, │
+  │ evidence      │  about 22.9 s.                                                                                  │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Primary check │ Passed: I checked the result against the file myself, as described above.                       │
+  ├───────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Usage         │ Only the notice's per-task numbers above. Account-level usage is unknown.                       │
+  └───────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  What reduces confidence in this run
+  - Seat: the Fable primary wasn't in this session. I didn't test whether Fable was available; I'm only recording the
+    model this session actually runs on.
+  - Unverified model and effort: they come only from what I requested, and the effort couldn't even be requested.
+  - No Codex review: the brief said the primary inspects the return, so Codex didn't review this unit. That's acceptable
+    for a small read-only unit, but it means no cross-model review.
+  - No repository records: the brief says the plan was already settled, so I created no plan, task records or commits.
+
+✻ Cooked for 1m 39s · done 4:39 AM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  fixture/same-family-native-subagent
+  ⏵⏵ accept edits on (shift+tab to cycle) · /tasks to see subagents · ← for agents

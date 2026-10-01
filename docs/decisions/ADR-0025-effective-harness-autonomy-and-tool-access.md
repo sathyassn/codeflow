@@ -1,5 +1,6 @@
 ---
 id: ADR-0025
+uid: 98bc51f7-fefe-4b99-b585-a8fc687113a9
 title: effective harness autonomy with broad tools and guarded side effects
 date: 2026-07-16
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: scaffolded Claude and Codex settings now enable real public-network and tool autonomy while keeping secret, destructive, privileged, private-network, and unsandboxed boundaries explicit
 ---
 
-# ADR-0025 — effective harness autonomy and tool access
+# ADR-0025: effective harness autonomy and tool access
 
 ## Context
 

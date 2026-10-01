@@ -1,0 +1,635 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "release-publication-sequence",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "In what order does publication run, and where does it stop?",
+    "idea": "A human dispatches, the workflow checks exact-source results and creates an empty draft, rechecks main after the builds, and cargo-dist uploads and then announces.",
+    "title": "Publication, step by step",
+    "kicker": "Publication",
+    "caption": "If main moves while the platforms build, the run fails before anything is hosted, and only a deliberate redispatch continues.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Acts on"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Reports back"
+      },
+      {
+        "name": "stop",
+        "mark": "stop",
+        "means": "Stops the run"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the global recheck blocks hosting and announcing on failure",
+        "source": "docs/releasing.md#architecture",
+        "derive": "the recheck row",
+        "check": {
+          "kind": "contains",
+          "text": "| Global-artifact recheck | The generated workflow | Rechecks main after platform builds."
+        },
+        "value": true
+      },
+      {
+        "claim": "upload runs without --clobber and announces last",
+        "source": "docs/releasing.md#architecture",
+        "derive": "the upload row",
+        "check": {
+          "kind": "contains",
+          "text": "Uploads without `--clobber`, so a later host conflict is never overwritten, and announces last |"
+        },
+        "value": true
+      },
+      {
+        "claim": "a changed main fails the run and needs a deliberate redispatch",
+        "source": "docs/releasing.md#architecture",
+        "derive": "the race bullet",
+        "check": {
+          "kind": "contains",
+          "text": "A changed main fails the run and needs a"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 440,
+      "draw": [
+        {
+          "text": "human",
+          "x": 70,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "workflow",
+          "x": 263.3,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "cargo-dist",
+          "x": 456.7,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "GitHub",
+          "x": 650,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 70,
+          "y1": 34,
+          "x2": 70,
+          "y2": 432
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 263.3,
+          "y1": 34,
+          "x2": 263.3,
+          "y2": 432
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 456.7,
+          "y1": 34,
+          "x2": 456.7,
+          "y2": 432
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 650,
+          "y1": 34,
+          "x2": 650,
+          "y2": 432
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 62H255.3",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "dispatch on main",
+          "x": 166.7,
+          "y": 52,
+          "anchor": "middle",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M271.3 108H642",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "text": "exact-source CI results",
+          "x": 456.7,
+          "y": 98,
+          "anchor": "middle",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M642 154H271.3",
+          "open": "end",
+          "id": "m3"
+        },
+        {
+          "text": "all green",
+          "x": 456.7,
+          "y": 144,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M271.3 200H642",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "text": "empty draft",
+          "x": 456.7,
+          "y": 190,
+          "anchor": "middle",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M271.3 246H448.7",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "text": "build platforms",
+          "x": 360,
+          "y": 236,
+          "anchor": "middle",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M271.3 292H642",
+          "head": "end",
+          "id": "m6"
+        },
+        {
+          "text": "recheck main",
+          "x": 448.7,
+          "y": 282,
+          "anchor": "middle",
+          "for": [
+            "m6"
+          ]
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 626,
+          "y1": 281,
+          "x2": 626,
+          "y2": 303,
+          "id": "m7"
+        },
+        {
+          "text": "main moved: fail",
+          "x": 626,
+          "y": 322,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m7"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M464.7 358H642",
+          "head": "end",
+          "id": "m8"
+        },
+        {
+          "text": "upload, no clobber",
+          "x": 553.4,
+          "y": 348,
+          "anchor": "middle",
+          "for": [
+            "m8"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M464.7 404H642",
+          "head": "end",
+          "id": "m9"
+        },
+        {
+          "text": "announce last",
+          "x": 553.4,
+          "y": 394,
+          "anchor": "middle",
+          "for": [
+            "m9"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 514,
+      "draw": [
+        {
+          "text": "human",
+          "x": 8,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M59 24H276",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "text": "workflow",
+          "x": 352,
+          "y": 29,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "dispatch on main",
+          "x": 8,
+          "y": 52,
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "workflow",
+          "x": 8,
+          "y": 89,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M84 84H292",
+          "head": "end",
+          "id": "c2"
+        },
+        {
+          "text": "GitHub",
+          "x": 352,
+          "y": 89,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "exact-source CI results",
+          "x": 8,
+          "y": 112,
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "GitHub",
+          "x": 8,
+          "y": 149,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M68 144H276",
+          "open": "end",
+          "id": "c3"
+        },
+        {
+          "text": "workflow",
+          "x": 352,
+          "y": 149,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "all green",
+          "x": 8,
+          "y": 172,
+          "style": "mute",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "workflow",
+          "x": 8,
+          "y": 209,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M84 204H292",
+          "head": "end",
+          "id": "c4"
+        },
+        {
+          "text": "GitHub",
+          "x": 352,
+          "y": 209,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "empty draft",
+          "x": 8,
+          "y": 232,
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "workflow",
+          "x": 8,
+          "y": 269,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M84 264H260",
+          "head": "end",
+          "id": "c5"
+        },
+        {
+          "text": "cargo-dist",
+          "x": 352,
+          "y": 269,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "build platforms",
+          "x": 8,
+          "y": 292,
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "workflow",
+          "x": 8,
+          "y": 329,
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M84 324H292",
+          "head": "end",
+          "id": "c6"
+        },
+        {
+          "text": "GitHub",
+          "x": 352,
+          "y": 329,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "recheck main",
+          "x": 8,
+          "y": 352,
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 268,
+          "y1": 313,
+          "x2": 268,
+          "y2": 335,
+          "id": "c7"
+        },
+        {
+          "text": "main moved: fail",
+          "x": 352,
+          "y": 374,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "cargo-dist",
+          "x": 8,
+          "y": 411,
+          "style": "strong",
+          "for": [
+            "c8"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M100 406H292",
+          "head": "end",
+          "id": "c8"
+        },
+        {
+          "text": "GitHub",
+          "x": 352,
+          "y": 411,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c8"
+          ]
+        },
+        {
+          "text": "upload, no clobber",
+          "x": 8,
+          "y": 434,
+          "for": [
+            "c8"
+          ]
+        },
+        {
+          "text": "cargo-dist",
+          "x": 8,
+          "y": 471,
+          "style": "strong",
+          "for": [
+            "c9"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M100 466H292",
+          "head": "end",
+          "id": "c9"
+        },
+        {
+          "text": "GitHub",
+          "x": 352,
+          "y": 471,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c9"
+          ]
+        },
+        {
+          "text": "announce last",
+          "x": 8,
+          "y": 494,
+          "for": [
+            "c9"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "human",
+          "workflow",
+          "dispatch with `--ref main` and the tag"
+        ],
+        [
+          "2",
+          "workflow",
+          "GitHub",
+          "read the exact-source main-push CI results"
+        ],
+        [
+          "3",
+          "GitHub",
+          "workflow",
+          "all required results green"
+        ],
+        [
+          "4",
+          "workflow",
+          "GitHub",
+          "create or resume the exact empty draft"
+        ],
+        [
+          "5",
+          "workflow",
+          "cargo-dist",
+          "build the platform artifacts"
+        ],
+        [
+          "6",
+          "workflow",
+          "GitHub",
+          "recheck main; a moved main fails the run"
+        ],
+        [
+          "7",
+          "cargo-dist",
+          "GitHub",
+          "upload without `--clobber`"
+        ],
+        [
+          "8",
+          "cargo-dist",
+          "GitHub",
+          "announce last"
+        ]
+      ]
+    }
+  }
+}

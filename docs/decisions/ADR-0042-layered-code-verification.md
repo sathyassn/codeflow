@@ -1,5 +1,6 @@
 ---
 id: ADR-0042
+uid: a080aaa5-734b-49e3-9e54-3feef184094b
 title: combine selected deterministic analyzers with contextual agentic verification
 date: 2026-07-25
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — verification evidence is recorded in deterministic and contextual layers, with stack-specific analyzer selection and a repository-only post-public CodeQL canary
 ---
 
-# ADR-0042 — layered code verification
+# ADR-0042: layered code verification
 
 ## Context
 

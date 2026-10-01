@@ -1,5 +1,6 @@
 ---
 id: ADR-0039
+uid: d3d8ad7d-0649-4d16-8c0d-6528f60d120b
 title: separate durable orchestration doctrine from qualified model and harness bindings
 date: 2026-07-25
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — model qualification gains a universal harness capability catalog, one current ensemble record, composable diagnostic packs, promoted local binding records, and doctor drift checks without becoming a runtime router
 ---
 
-# ADR-0039 — qualified model and harness bindings
+# ADR-0039: qualified model and harness bindings
 
 ## Context
 
@@ -86,3 +87,15 @@ binding. Promotion still requires the complete full suite.
   and would create brittle coupling.
 - Predeclaring untested Grok, Kimi, ACP, or A2A bindings: protocol presence does
   not meet the native capability contract.
+
+## Note (2026-09-25)
+
+Layer 4 is now the schema 5 model catalog (ADR-0069): families, product lines
+with ordered versions, seats and duties, still one fully managed
+`current-ensemble.json`. It owns pinned ids, efforts and triggers in place of
+primary selectors and internal worker classes. A designation is not a
+promoted binding: a seat served by designation alone is reported as
+"designated, full suite not run", and qualification still needs the full
+suite and an approved binding record under this decision. `doctor --check
+model-bindings` adds illustrative catalog resolutions and keeps the
+harness-version and settings drift checks for binding records.

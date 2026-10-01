@@ -1,0 +1,495 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "adoption-tests",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "What runs, in what order, when I set up test targets?",
+    "idea": "Setup writes the detected targets, you review each command, and both codeflow test and the test-config doctor check pass.",
+    "title": "Configuring test targets",
+    "kicker": "How-to",
+    "caption": "Setup only proposes targets from root markers, so the review step is where the commands become yours.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Acts on"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Reports back"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "both codeflow test and the doctor check pass",
+        "source": "docs/adoption.md#technical",
+        "derive": "the check sentence",
+        "check": {
+          "kind": "contains",
+          "text": "`codeflow test` and `codeflow doctor --check test-config` both pass."
+        },
+        "value": true
+      },
+      {
+        "claim": "review every command",
+        "source": "docs/adoption.md#technical",
+        "derive": "step 4",
+        "check": {
+          "kind": "contains",
+          "text": "4. Review every command against the project."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 374,
+      "draw": [
+        {
+          "text": "you",
+          "x": 70,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "codeflow",
+          "x": 360,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "test-config.json",
+          "x": 650,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 70,
+          "y1": 34,
+          "x2": 70,
+          "y2": 366
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 360,
+          "y1": 34,
+          "x2": 360,
+          "y2": 366
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 650,
+          "y1": 34,
+          "x2": 650,
+          "y2": 366
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 62H352",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "test setup",
+          "x": 215,
+          "y": 52,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M368 108H642",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "text": "detected targets",
+          "x": 505,
+          "y": 98,
+          "anchor": "middle",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 154H642",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "text": "review each command",
+          "x": 215,
+          "y": 144,
+          "anchor": "middle",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 200H352",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "text": "test",
+          "x": 215,
+          "y": 190,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M352 246H78",
+          "open": "end",
+          "id": "m5"
+        },
+        {
+          "text": "targets pass",
+          "x": 215,
+          "y": 236,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 292H352",
+          "head": "end",
+          "id": "m6"
+        },
+        {
+          "text": "doctor --check test-config",
+          "x": 215,
+          "y": 282,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m6"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M352 338H78",
+          "open": "end",
+          "id": "m7"
+        },
+        {
+          "text": "ok",
+          "x": 215,
+          "y": 328,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m7"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 432,
+      "draw": [
+        {
+          "text": "you",
+          "x": 8,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 24H276",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 29,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "test setup",
+          "x": 8,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "codeflow",
+          "x": 8,
+          "y": 89,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M84 84H210",
+          "head": "end",
+          "id": "c2"
+        },
+        {
+          "text": "test-config.json",
+          "x": 352,
+          "y": 89,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "detected targets",
+          "x": 8,
+          "y": 112,
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 149,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 144H210",
+          "head": "end",
+          "id": "c3"
+        },
+        {
+          "text": "test-config.json",
+          "x": 352,
+          "y": 149,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "review each command",
+          "x": 8,
+          "y": 172,
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 209,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 204H276",
+          "head": "end",
+          "id": "c4"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 209,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "test",
+          "x": 8,
+          "y": 232,
+          "style": "mono",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "codeflow",
+          "x": 8,
+          "y": 269,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M84 264H317",
+          "open": "end",
+          "id": "c5"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 269,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "targets pass",
+          "x": 8,
+          "y": 292,
+          "style": "mute",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 329,
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 324H276",
+          "head": "end",
+          "id": "c6"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 329,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "doctor --check test-config",
+          "x": 8,
+          "y": 352,
+          "style": "mono",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "codeflow",
+          "x": 8,
+          "y": 389,
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M84 384H317",
+          "open": "end",
+          "id": "c7"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 389,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "ok",
+          "x": 8,
+          "y": 412,
+          "style": "mute",
+          "for": [
+            "c7"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "run `codeflow test setup`, or start from a template"
+        ],
+        [
+          "2",
+          "setup writes detected root targets into an absent or empty config"
+        ],
+        [
+          "3",
+          "review every command against the project"
+        ],
+        [
+          "4",
+          "run `codeflow test`; the targets pass"
+        ],
+        [
+          "5",
+          "run `codeflow doctor --check test-config`; it passes"
+        ]
+      ]
+    }
+  }
+}

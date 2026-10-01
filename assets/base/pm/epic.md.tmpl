@@ -1,7 +1,8 @@
 ---
 id: EPC-{{NNN}}
+uid: {{UID}}              # hidden record identity, written once by `new`; never edit
 title: {{TITLE_YAML}}
-status: draft            # draft | planning | in_progress | blocked | complete | archived
+status: draft            # draft | planning | in_progress | blocked | complete | cancelled | archived
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
 capabilities: []         # CAP-### ids this epic creates or changes
 adrs: []                 # ADR ids consumed or produced
@@ -10,11 +11,14 @@ external_refs: []        # opaque links/ids only; never mirror external status
 created: {{DATE}}
 ---
 
-# EPC-{{NNN}} — {{TITLE}}
+# EPC-{{NNN}}: {{TITLE}}
 
 ## Summary
 
-<!-- 2-4 sentences: the problem, who it serves, and what done looks like.
+<!-- One to three short sentences of context: the problem, who it serves,
+     and what done looks like.
+     Write it by the copy guide
+     (`cf-editorial-review/references/copy-guide.md`).
      Research repository and authoritative-source facts first. Ask only when
      the remaining ambiguity is a consequential operator-owned choice under
      the cf-plan clarity gate. -->
@@ -26,9 +30,14 @@ created: {{DATE}}
      claim-matched evidence: automate where meaningful, otherwise name a
      bounded observable or review. Do not invent a hard-coded or meaningless
      test merely to make the record look verifiable. "Works correctly" is not
-     a criterion. If the list will not fit on one screen, split the epic. -->
+     a criterion. An epic is one outcome: when its criteria describe two
+     outcomes, make it two epics on one integration line.
+     List each as `- AC-n <criterion>` with no checkbox; a task criterion
+     serves one with `(serves EPC-NNN AC-m)`. `codeflow epic status` closes
+     the epic only when every task is terminal and every criterion is
+     verified. -->
 
-- [ ]
+- AC-1
 
 ## Out of scope
 
@@ -43,6 +52,13 @@ created: {{DATE}}
 
 ## Plan graph (when needed)
 
-<!-- Link the exact dual-approved TASK_GRAPH vN for a multi-task body; omit
-     when unnecessary. Task frontmatter owns membership (`epic_id`) and direct
+<!-- Optional: link the TASK_GRAPH for a multi-task body when one exists; omit
+     it otherwise. Task frontmatter owns membership (`epic_id`) and direct
      predecessors (`depends_on`); this is not a second task roster. -->
+
+## Planning notes
+
+<!-- Tracked nits, one line each with the event that revisits it, and hotspot
+     notes: files that two tasks restructure, one writer at a time. Recorded
+     nits are folded into the next breakdown or dropped with a reason at epic
+     close. -->

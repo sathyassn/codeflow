@@ -3,7 +3,7 @@ name: cf-herdr
 description: Host CodeFlow consults and delegates in Herdr tabs without hijacking existing panes. Use when HERDR_ENV=1 and starting, resuming, or closing Claude, Codex, or another coding agent for a dual-lineage review, consult, or delegate TTY. Use for Herdr workspaces, tabs, panes, agent names, follow-up on the same tab, and cleanup of self-created tabs. Do not use from outside Herdr; do not treat Herdr idle/done as turn completion; do not split the caller pane by default.
 ---
 
-# cf-herdr — Herdr-primary TTY for CodeFlow seats
+# cf-herdr: Herdr-primary TTY for CodeFlow seats
 
 Herdr is the **visible terminal host** when this agent runs inside it. Official
 Herdr CLI syntax is the authority (`herdr --help`; group help without a
@@ -17,21 +17,21 @@ completion.
 
 ## When this skill applies
 
-1. Require `test "${HERDR_ENV:-}" = 1`. If that fails, **stop driving Herdr**.
-   Say you are outside a Herdr pane. Use the tmux lifecycle in `cf-delegate`
-   and label that path **degraded**. Do not inspect or control Herdr from
-   outside.
+1. Require `test "${HERDR_ENV:-}" = 1`. If that fails, **stop driving Herdr**:
+   say you are outside a Herdr pane, use `cf-delegate`'s tmux lifecycle,
+   label that path **degraded**, and never read or drive Herdr from outside.
 2. If Herdr is absent, same degraded tmux path.
 3. Never `herdr server stop`. Never close a workspace, tab, or pane this run
    did not create. Never send keys to `$HERDR_PANE_ID` (the caller).
 
-Load the official Herdr skill if present for CLI details. Where it defaults to
-a sibling **split** in the current tab, CodeFlow overrides: prefer a **new
-tab** (or resume one this work already owns).
+Load the official Herdr skill, if present, for CLI details; where it defaults
+to a **split** in the current tab, prefer a **new tab** (or resume one this
+work owns).
 
 ## Discover before touching anything
 
-Parse JSON; never invent IDs from sidebar order.
+Parse JSON; never invent IDs from sidebar order. Live Herdr state is the
+only index of seats; keep no cache of it.
 
 ```bash
 herdr workspace list
@@ -49,34 +49,15 @@ Never send keys to an agent whose pane `cwd` is not the intended worktree.
 
 ## Naming
 
-Tab label (human, unique):
-
-```text
-cf/<repo>/<work>/<kind>/<nn>
-```
-
-Agent name (live unique, `[a-z][a-z0-9_-]{0,31}`):
-
-```text
-cf-<repo>-<work>-<k><nn>
-```
-
-| Part | Rule |
-|---|---|
-| repo | cwd basename, kebab, max 8 |
-| work | `tsk014` if a task id is in play, else kebab of the work, max 12 |
-| kind / k | `claude`/`cl`, `codex`/`cx`, `grok`/`gk` |
-| nn | next free `01`–`99` among **live** agents with the same `cf-<repo>-<work>-<k>` prefix |
-
-Repo slug truncation collides across worktrees of the same project. The
-**intended worktree `cwd`** is the disambiguator, not the label. Put full cwd,
-repo basename, and work identity in the optional cache.
-
-Examples: `cf-codeflow-skills-rev-cl01`, parallel Claude `…-cl02`, Codex on
-the same work `…-cx01`.
-
-List live agents first; increment `nn` until free. Never reuse a live name.
-Never steal a name that does not start with `cf-`.
+Tab label `cf/<repo>/<work>/<kind>/<nn>`; agent name
+`cf-<repo>-<work>-<k><nn>` (`[a-z][a-z0-9_-]{0,31}`; `repo` the cwd
+basename, at most 8 characters; `work` the task id such as `tsk014`, else a
+kebab slug, at most 12; `k` is `cl`, `cx` or `gk`; `nn` the next free number
+among live agents with that prefix), for
+example `cf-codeflow-skills-rev-cx01`. List live agents first and never reuse
+a live name; never take a name that does not start with `cf-`. Worktrees of
+one project can share a name prefix, so the intended worktree `cwd`, not the
+label, identifies the seat.
 
 ## Create or resume
 
@@ -84,8 +65,10 @@ Never steal a name that does not start with `cf-`.
 `cf/<repo>/<work>/<kind>/<nn>`, pane `cwd` is `$PWD`, this run created it or it
 is a same-cwd follow-up, and its prior turn was harvested (lifecycle terminal
 or native thread result). Idle/done after harvest permits the *next* prompt;
-it does not prove prior completion. Never prompt a different-cwd `cf-…` agent
-or mint `…-cl02` for a same-work follow-up unless the first is gone/poisoned.
+it does not prove prior completion. Resume delivers through the same script,
+which reports a seat whose folder is gone before sending. Never prompt a
+different-cwd `cf-…` agent or mint `…-cl02` for a same-work follow-up unless
+the first is gone/poisoned.
 
 **Create** otherwise in the existing workspace for project `$PWD` (never
 another repo); create that workspace only when none exists:
@@ -111,55 +94,56 @@ pane after its lifecycle ends.
 - Grok: `--model <selector> --reasoning-effort <effort> --always-approve`
 
 Default production launch is ADR-conformant: Claude `bypassPermissions`; Codex
-never + `danger-full-access`; Grok `--always-approve`. Consult / no-edit review:
-Claude `--permission-mode auto` (never bypass); Codex `--ask-for-approval
-on-request --sandbox workspace-write`. Never
-`--dangerously-skip-permissions` unless named. Consults still verify an empty
-worktree diff. No third-party Grok Codex plugins.
+never + `danger-full-access` (ADR-0075 D1, until a `cf-builder` spike passes);
+Grok `--always-approve`. Consult / no-edit review: Claude `--permission-mode
+auto` (never bypass); Codex `--ask-for-approval never` with no `--sandbox`
+flag, which selects the project's `cf-guard` profile (D2). Herdr is not an
+external sandbox.
+Never `--dangerously-skip-permissions` unless the operator named it. Consults
+still verify an empty worktree diff. No third-party Grok Codex plugins.
+Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`).
 
 Prompt rules: consults edit nothing; no force-push or rebase of a shared
 branch; no merge of protected main; no `herdr server stop`; no keys to the
 caller pane; no closing tabs this run did not create.
 
 Wait until the agent is ready. Split a pane only for a same-tab log/server
-sibling. From a Grok host, `herdr agent start --kind claude|codex` is the
-interactive seat. From Claude Code, Codex still uses the official plugin. From
-Codex, Claude still uses schema-v2; when `HERDR_ENV=1`, **start that Claude
-process in the Herdr pane**. Lifecycle records remain the completion signal.
+sibling. From a Grok or another qualified non-Claude, non-Codex host,
+`herdr agent start --kind claude|codex` is the interactive seat. From Claude
+Code, Codex still uses the official plugin. From Codex, Claude still uses
+schema-v2; when `HERDR_ENV=1`, **start that Claude process in the Herdr
+pane**. Lifecycle records remain the completion signal.
 
-## Deliver an armed prompt
+## Deliver a prompt
 
-After `codeflow delegate arm`, send the same canonical UTF-8/LF file bytes:
+Deliver with the skill's script. It sends the file's exact UTF-8/LF bytes
+with `herdr pane send-text`, then `herdr pane send-keys` Enter:
 
 ```bash
-herdr pane send-text "$pane_id" "$(cat "$P")"
-sleep 0.3  # bounded TUI input-settle; this is not completion detection
-herdr pane send-keys "$pane_id" Enter
+D=.agents/skills/cf-herdr/scripts/deliver.py
+# Codex or Grok seat: confirms the turn started
+python3 "$D" --pane "$pane_id" --file "$P"
+# Tracked Claude, after `codeflow delegate arm`: the lifecycle confirms
+python3 "$D" --pane "$pane_id" --file "$P" --lifecycle
 codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
   --until accepted --turn-id "$TURN" --timeout-seconds 120
 codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
   --until terminal --turn-id "$TURN" --timeout-seconds 3600
 ```
 
-Do not `tmux load-buffer` / `paste-buffer` into a Herdr pane. `herdr agent
-prompt` is for a consult that is not lifecycle-armed; it does not replace the
-armed-file digest. If `"$P"` exceeds 256 KiB, use degraded tmux paste-buffer
-(`send-text` is argv and can `E2BIG`). Prove the Herdr path with the same
-lifecycle canary as tmux.
+It sends nothing when the seat's folder is gone (exit 3), the file is over
+256 KiB (exit 2: use degraded tmux paste-buffer, since `send-text` is argv
+and can `E2BIG`), or, without the hook, the seat is `working`, `blocked` or
+`unknown` (exit 5). It then confirms within 20 s that the seat reached
+`working` or `blocked` (or a newer `done`), else exits 4 naming the pane. It
+sends one Enter only: Herdr cannot tell the input from the scrollback.
+Inspect with `herdr agent read`; never resend blindly. `--lifecycle` adds
+the fold sentence the hook requires when the paste folded (see
+cf-delegate); the `accepted` wait stays the check.
 
-## Cache (optional, not a record to maintain)
-
-Live Herdr names are the index. Optional cache:
-
-`${CODEFLOW_HOME:-$HOME/.codeflow}/herdr-runs/<repo>.json`
-
-Owner-only. Never commit. Never put it in `docs/` or `project-management/`.
-Write a row on create (tab id, pane id, agent name, **cwd**, full repo
-basename, work identity, native session/thread if observed). Delete the row
-when the tab closes. On every use, drop rows whose tab or pane is gone from
-`herdr pane list` / `tab list`. Missing file: list Herdr. If cache and Herdr
-disagree, **Herdr wins**. Resume still requires live cwd match even when the
-cache looks right.
+Do not `tmux load-buffer` / `paste-buffer` into a Herdr pane, and do not use
+`herdr agent prompt`: submission alone does not prove a started turn. Prove
+the Herdr path with the same lifecycle canary as tmux.
 
 ## Cleanup
 
@@ -170,8 +154,6 @@ After harvest, when that work is fully done and no follow-up is planned: record
 any native resume id, then close **only** the tab this run created. Leave
 blocked or working agents. Never close the caller tab.
 
-## Completion
-
-Report tab label, agent name, pane id, requested vs observed model/effort,
-native thread/session id when exposed, and whether the tab was kept or closed.
-A consult still needs `cf-consult` synthesis and a `VERDICT` line.
+Before removing a worktree, check `herdr agent list`: keep a worktree that a
+live seat uses as its folder until that seat's tab is closed. A seat whose
+folder is gone cannot start turns.

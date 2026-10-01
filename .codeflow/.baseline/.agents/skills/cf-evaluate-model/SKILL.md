@@ -1,9 +1,9 @@
 ---
 name: cf-evaluate-model
-description: Qualify a model, harness release, permission profile, or material CodeFlow instruction change against CodeFlow's regression and capability contracts. Use for model readiness, periodic suite maintenance, or reproducing an observed behavior regression. Runs repeated native-interactive Codex or Claude trials in disposable fixture repositories, preserves traces and environment metadata, compares a candidate with a pinned baseline, and cleans only its marked fixture roots. Never use for ordinary repository work, as a headless model runner, or as a generic cleanup tool.
+description: Qualify a model, harness release, permission profile, or material CodeFlow instruction change against CodeFlow's regression and capability contracts. Use for model readiness, periodic suite maintenance, or reproducing an observed behavior regression. Runs repeated native-interactive trials in disposable fixture repositories, keeps traces and environment metadata, compares with a pinned baseline, and cleans only its marked fixture roots. Never use for ordinary repository work, as a headless model runner, or as a generic cleanup tool.
 ---
 
-# cf-evaluate-model — qualify a model/harness binding
+# cf-evaluate-model: qualify a model/harness binding
 
 Evaluate the complete system the user will run: model, reasoning effort,
 harness, CodeFlow revision, settings, tools, and permission boundary. A score
@@ -53,15 +53,17 @@ limits of catalog support in consuming scaffolds.
 
    A source checkout may use the equivalent `assets/base/...` path. Validation
    requires every hard requirement to have source markers and behavioral cases;
-   it has no line-count or token-deletion gate.
+   it has no line-count or token-deletion gate. It and `model-eval-kit` are
+   structural, not behavioral, checks.
 3. **Choose a suite.** Materialize one named case while reproducing a failure;
    that diagnostic is not a validated suite result. Use `canary` while editing
    the corpus or for a quick regression smoke. Use `full` for a new production
-   model/harness binding, a permission change, or promotion. Canary runs each
+   model/harness binding, permission change, or promotion. Canary runs each
    selected canary case once; full runs every case three times. Never present
-   canary evidence as a full qualification. For a focused diagnostic, resolve
-   `list-cases --pack <pack-id>` and run those cases explicitly. Packs may
-   compose other packs, but even `release-smoke` is not a promotion suite.
+   canary evidence as a full qualification. A focused diagnostic (an
+   instruction change's pack) resolves `list-cases --pack <pack-id>` and
+   runs natively with graded traces, never as `full`. Packs may compose
+   other packs, but even `release-smoke` is not a promotion suite.
    Internal-route qualification pre-registers cases and fixes qualifying versus
    comparison arms before launch. Require three fresh accepted trials per case
    and qualifying route/harness/selector/effort/workload tuple; retain attempts,
@@ -69,7 +71,7 @@ limits of catalog support in consuming scaffolds.
    acceptance, absent observed route/trace, invalid
    control/fixture, or unresolved validity threat leaves it candidate.
    Comparisons inform claims but do not gate the qualifying tuple. It covers
-   evidenced tuples—not primary binding, universal reliability, or economy.
+   evidenced tuples, not primary binding, universal reliability, or economy.
 4. **Materialize each trial.** Use an explicit temporary run root and the exact
    CodeFlow binary under test:
 
@@ -87,9 +89,10 @@ limits of catalog support in consuming scaffolds.
    endpoints follow [bounded effects](resources/fake-effects.md), retain both
    digests, and hide owner state.
 5. **Run the subject naturally.** Open the native interactive harness in the
-   fixture and give only `TASK.md` as the task. Match actual CodeFlow and hook
-   executables to the external receipt per [protocol](resources/protocol.md);
-   `PATH` or version is not proof. Preserve session and scoped evidence. Duo
+   fixture and give only `TASK.md`, or a scripted case's turns in order, as
+   the task. Match actual CodeFlow and hook executables to the external
+   receipt per [protocol](resources/protocol.md); `PATH` or version is not
+   proof. Preserve session and scoped evidence. Duo
    cases require real native seats; a missing seat is observed degradation, not simulation.
 6. **Record raw observations.** Use the result shape in the protocol. Record the
    route, signals actually observed, violations, references consulted, evidence
@@ -98,7 +101,9 @@ limits of catalog support in consuming scaffolds.
 7. **Grade in layers.** Run deterministic validation first. Have the other
    vendor independently grade qualitative evidence with the case rubric, then
    reconcile. A human reviews every hard failure, disagreement, security case,
-   and promotion decision. Do not majority-vote away divergent evidence.
+   and promotion decision. Write grader notes plainly: simple,
+   straightforward and clear, no mannered prose (see
+   `.codeflow/rules/writing.md`). Do not majority-vote away divergent evidence.
 8. **Compare and decide.** Compare the candidate result with the pinned baseline.
    For a controlled promotion, declare one variable and use `compare --variable`.
    Promotion requires no hard-case regression, no unresolved validity threat,
@@ -115,7 +120,7 @@ limits of catalog support in consuming scaffolds.
    ```
 
    Add only roles the evidence qualifies. The record retains requested and
-   observed model/effort, content digests, harness metadata, and approval—not
+   observed model/effort, content digests, harness metadata, and approval, not
    prompts, settings contents, credentials, or arbitrary trace text. Stable
    primary roles additionally require their role-tagged behavioral cases to
    pass. A project adopts an approved binding only by referencing its ID from

@@ -1,0 +1,108 @@
+# The one definition of the path sets that classify a pull request range
+# (SPC-013 R-70, R-114). The journey criterion (R-53) and the release
+# contract (TSK-106) read the same table, with release sections in this
+# structure. The file is embedded in the binary and doubles as the fixture
+# the journeys use: `example` names one path per member that the tests
+# classify. Nothing here is specific to one project; CodeFlow's own product
+# (`assets/`, `crates/`) is named in its own `git.product_paths`.
+#
+# Globs use the `glob` crate syntax against repository-relative paths; `*`
+# also crosses `/`, and `**/name` matches `name` at the root too. A member
+# with `policy_key` reads its globs from that policy key instead.
+
+# Adopter-facing surfaces: a change here reaches the project's users or its
+# enforcement, so it requires journey coverage. The project owns
+# two members through policy: `git.product_paths` (its product code, with a
+# default per stack written by `codeflow init`) and `git.breaking_watch_paths`
+# (its watched contract paths). The rest is the same for every project.
+
+[[adopter_facing]]
+member = "product_paths"
+policy_key = "git.product_paths"
+patterns = []
+
+[[adopter_facing]]
+member = "watched_contract_paths"
+policy_key = "git.breaking_watch_paths"
+patterns = []
+
+[[adopter_facing]]
+member = "hook_sources"
+patterns = [
+  ".codeflow/git-hooks/**",
+  ".githooks/**",
+  ".husky/**",
+  ".claude/hooks/**",
+  ".codex/hooks/**",
+  ".grok/hooks/**",
+  "lefthook.yml",
+  ".pre-commit-config.yaml",
+]
+example = ".codeflow/git-hooks/pre-commit"
+
+[[adopter_facing]]
+member = "shipped_templates"
+patterns = [
+  "docs/decisions/template.md",
+  ".github/pull_request_template.md",
+  ".github/PULL_REQUEST_TEMPLATE/**",
+  ".gitlab/merge_request_templates/**",
+]
+example = "docs/decisions/template.md"
+
+[[adopter_facing]]
+member = "managed_instructions"
+patterns = ["AGENTS.md", "CLAUDE.md", ".claude/**", ".agents/**", ".codex/**", ".grok/**", ".codeflow/rules/**"]
+example = "AGENTS.md"
+
+[[adopter_facing]]
+member = "ci_workflows"
+patterns = [".github/workflows/**", ".gitlab-ci.yml", "bitbucket-pipelines.yml"]
+example = ".github/workflows/codeflow-ci.yml"
+
+# Release contract paths (TSK-106, R-114): the watched contract extended to
+# the record schema and the policy keys, which reach every adopter through
+# the records they write and the rules they enforce. The CLI flag surface is
+# the project's own product, named in its `git.product_paths`; CodeFlow's
+# release configuration (`.release/config.json`) watches its command tree
+# and these two members, and a test checks that it keeps doing so.
+
+[[adopter_facing]]
+member = "policy"
+patterns = [".codeflow/policy.json", ".codeflow/project.toml"]
+example = ".codeflow/policy.json"
+release_contract = true
+
+[[adopter_facing]]
+member = "record_schema"
+patterns = ["project-management/templates/**", ".codeflow/schemas/**"]
+example = "project-management/templates/task.md"
+release_contract = true
+
+# Behaviour paths for the local release preflight (TSK-106, R-93, R-114):
+# every path outside the documentation, the records and the record
+# templates is behaviour (`docs/verification/` sits under `docs/`). The
+# skill trees are always behaviour: they change shipped agent behaviour,
+# whatever a later exclusion says. `scripts/release.py preflight` reads
+# these two sections; a range that touches behaviour without a pending
+# changelog entry or a `Release impact: none` intent warns before a push.
+
+[[not_behaviour]]
+member = "documentation"
+patterns = ["docs/**"]
+example = "docs/verification/tsk-106-release-integrity.md"
+
+[[not_behaviour]]
+member = "records"
+patterns = ["project-management/**"]
+example = "project-management/tasks/TSK-106.md"
+
+[[not_behaviour]]
+member = "record_templates"
+patterns = ["assets/base/pm/*.tmpl"]
+example = "assets/base/pm/task.md.tmpl"
+
+[[behaviour_always]]
+member = "skill_trees"
+patterns = [".claude/skills/**", ".agents/skills/**", "assets/base/*/skills/**"]
+example = ".agents/skills/cf-ship/references/release-policy.md"

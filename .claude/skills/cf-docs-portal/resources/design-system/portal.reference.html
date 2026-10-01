@@ -1,0 +1,786 @@
+<!doctype html>
+<html lang="en" data-cf-skin="graphite" data-cf-theme="light" data-cf-typeface="inter" data-cf-scale="default">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How a change lands</title>
+<meta name="description" content="CodeFlow design system reference: the docs portal shell around one guide page.">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="chrome.css">
+<link rel="stylesheet" href="figure.css">
+<script src="chrome.js"></script>
+</head>
+<body>
+<div class="cf-portal" data-cf-view="portal" data-cf-route="/portal/how-a-change-lands">
+  <a class="cf-skip" href="#cf-main" data-cf-skip>Skip to content</a>
+  <header class="cf-header">
+    <div class="cf-header-start">
+      <button class="cf-icon-btn" type="button" data-cf-toggle="nav" aria-label="Navigation" aria-pressed="true" aria-controls="cf-nav" title="Hide navigation"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></svg></button>
+      <a class="cf-brand" href="#/portal/how-a-change-lands" aria-label="CodeFlow guide home"><span class="cf-brand-mark" aria-hidden="true"></span><span class="cf-brand-name">CodeFlow</span><span class="cf-brand-sub">guide</span></a>
+    </div>
+    <div class="cf-header-mid">
+      <button class="cf-search-trigger" type="button" data-cf-open="search" aria-haspopup="dialog" aria-keyshortcuts="/ Control+K Meta+K"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg><span>Search the guide</span><kbd class="cf-kbd" aria-hidden="true">/</kbd></button>
+    </div>
+    <div class="cf-header-end">
+      <button class="cf-icon-btn cf-search-icon" type="button" data-cf-open="search" aria-haspopup="dialog" aria-label="Search the guide" title="Search the guide"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></button>
+      <button class="cf-icon-btn" type="button" data-cf-open="display" aria-haspopup="dialog" aria-expanded="false" aria-label="Display" title="Display"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>
+      <button class="cf-icon-btn" type="button" data-cf-toggle="toc" aria-label="On this page" aria-pressed="true" aria-controls="cf-toc" title="Hide page outline"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M14.5 4.5v15"/></svg></button>
+    </div>
+  </header>
+
+  <div class="cf-shell">
+    <aside class="cf-panel cf-panel--nav" id="cf-nav" aria-label="Guide">
+      <div class="cf-panel-inner">
+        <nav aria-label="Guide pages">
+          <div class="cf-nav-group" data-group="orient">
+            <div class="cf-nav-group-head"><span class="cf-kicker" id="cf-ng-orient">Orient</span><button class="cf-icon-btn cf-nav-chev" type="button" aria-expanded="true" aria-controls="cf-ngb-orient" aria-labelledby="cf-ng-orient"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div>
+            <div class="cf-nav-group-body" id="cf-ngb-orient"><div><ul class="cf-nav-list">
+              <li><a class="cf-row" href="#/portal/what-codeflow-is">What CodeFlow is</a></li>
+              <li><a class="cf-row" href="#/portal/how-a-change-lands" aria-current="page">How a change lands<span class="cf-row-count">3</span></a>
+                <ul class="cf-nav-list cf-nav-list--nested">
+                  <li><a class="cf-row" href="#/portal/how-a-change-lands#concept" data-cf-layer-link="concept">Two landing paths</a></li>
+                  <li><a class="cf-row" href="#/portal/how-a-change-lands#architecture" data-cf-layer-link="architecture">Four enforcement planes</a></li>
+                  <li><a class="cf-row" href="#/portal/how-a-change-lands#technical" data-cf-layer-link="technical">What each plane checks</a></li>
+                </ul>
+              </li>
+              <li><a class="cf-row" href="#/portal/capabilities">Capabilities<span class="cf-row-count">17</span></a></li>
+            </ul></div></div>
+          </div>
+          <div class="cf-nav-group" data-group="system">
+            <div class="cf-nav-group-head"><span class="cf-kicker" id="cf-ng-system">System</span><button class="cf-icon-btn cf-nav-chev" type="button" aria-expanded="true" aria-controls="cf-ngb-system" aria-labelledby="cf-ng-system"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div>
+            <div class="cf-nav-group-body" id="cf-ngb-system"><div><ul class="cf-nav-list">
+              <li><a class="cf-row" href="#/portal/architecture">Architecture</a></li>
+              <li><a class="cf-row" href="#/portal/model-orchestration">Model orchestration</a></li>
+              <li><a class="cf-row" href="#/portal/documentation-portal">Documentation portal</a></li>
+              <li><a class="cf-row" href="#/portal/harness-posture">Harness posture</a></li>
+            </ul></div></div>
+          </div>
+          <div class="cf-nav-group" data-group="reference">
+            <div class="cf-nav-group-head"><span class="cf-kicker" id="cf-ng-reference">Reference</span><button class="cf-icon-btn cf-nav-chev" type="button" aria-expanded="true" aria-controls="cf-ngb-reference" aria-labelledby="cf-ng-reference"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div>
+            <div class="cf-nav-group-body" id="cf-ngb-reference"><div><ul class="cf-nav-list">
+              <li><a class="cf-row" href="#/portal/command-line">Command line<span class="cf-row-count">24</span></a></li>
+              <li><a class="cf-row" href="#/portal/policy-and-hooks">Policy and hooks<span class="cf-row-count">9</span></a></li>
+              <li><a class="cf-row" href="#/portal/releasing">Releasing</a></li>
+              <li><a class="cf-row" href="#/portal/glossary">Glossary</a></li>
+            </ul></div></div>
+          </div>
+        </nav>
+      </div>
+      <div class="cf-grip" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="cf-nav" aria-label="Resize navigation" aria-valuemin="220" aria-valuemax="360" aria-valuenow="264" title="Drag or use the arrow keys to resize. Double-click resets."></div>
+    </aside>
+
+    <main class="cf-main" id="cf-main" tabindex="-1">
+      <article class="cf-article">
+        <nav class="cf-crumbs" aria-label="Breadcrumb"><ol>
+          <li><a href="#/portal/">Guide</a></li>
+          <li class="cf-crumb-parent"><a href="#/portal/orient"><svg class="cf-crumb-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Orient</a></li>
+          <li><span aria-current="page">How a change lands</span></li>
+        </ol></nav>
+        <h1 class="cf-title">How a change lands</h1>
+        <p class="cf-prov"><span class="cf-prov-part">Source <a href="#/source/AGENTS.md" data-cf-source>AGENTS.md</a> at <a href="#/source/AGENTS.md@02908d5f3a1c" data-cf-source>02908d5f3a1c</a></span><span class="cf-prov-part">generated 2026-09-22 14:10</span><span class="cf-prov-part cf-fresh"><span class="cf-shape cf-shape--dot" aria-hidden="true"></span>fresh</span></p>
+
+        <div class="cf-tabs" role="tablist" aria-label="Altitude">
+          <button class="cf-tab" type="button" role="tab" id="cf-tab-concept" data-layer="concept" data-label="Concept" aria-selected="true" aria-controls="cf-panel-concept" tabindex="0">Concept</button>
+          <button class="cf-tab" type="button" role="tab" id="cf-tab-architecture" data-layer="architecture" data-label="Architecture" aria-selected="false" aria-controls="cf-panel-architecture" tabindex="-1">Architecture</button>
+          <button class="cf-tab" type="button" role="tab" id="cf-tab-technical" data-layer="technical" data-label="Technical" aria-selected="false" aria-controls="cf-panel-technical" tabindex="-1">Technical</button>
+          <span class="cf-tabs-ind" aria-hidden="true"></span>
+        </div>
+
+        <div class="cf-tabpanel cf-prose" role="tabpanel" id="cf-panel-concept" aria-labelledby="cf-tab-concept" tabindex="0" data-layer="concept">
+          <section class="cf-section" data-cf-section aria-labelledby="two-landing-paths">
+            <h2 class="cf-h2" id="two-landing-paths">Two landing paths</h2>
+            <p class="cf-lede">A change reaches <code>main</code> by one of two paths. A person makes the last step on both.</p>
+<figure class="cf-fig" data-cf-block-id="fig-landing" data-cf-figure="flow">
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 1</span> · <span class="cf-fig-name">Two landing paths from a task branch to main</span></p>
+  <div class="cf-fig-stage">
+    <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 252" role="img" aria-labelledby="f1w-t f1w-d">
+      <title id="f1w-t">Two landing paths from a task branch to main</title>
+      <desc id="f1w-d">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, where agents merge, to the integration branch, then along a path not yet travelled to the same human merge. A gate that stops travel sits in the gate column on both paths.</desc>
+      <text class="cf-t cf-t--head" x="90" y="22" text-anchor="middle">Branch</text>
+      <text class="cf-t cf-t--head" x="270" y="22" text-anchor="middle">Review</text>
+      <text class="cf-t cf-t--head" x="450" y="22" text-anchor="middle">Gate</text>
+      <text class="cf-t cf-t--head" x="630" y="22" text-anchor="middle">Land</text>
+      <line class="cf-f-rule" x1="24" y1="40" x2="696" y2="40"/>
+      <g data-cf-anchor="edge-a-review" data-cf-anchor-label="path A, task branch to pull request"><path class="cf-f-hit" d="M99 112H261"/><path class="cf-m-done" data-state="done" d="M99 112H261"/></g>
+      <g data-cf-anchor="edge-a-gate" data-cf-anchor-label="path A, pull request to required checks"><path class="cf-f-hit" d="M279 112H441"/><path class="cf-m-done" data-state="done" d="M279 112H441"/></g>
+      <g data-cf-anchor="edge-a-land" data-cf-anchor-label="path A, required checks to human merge"><path class="cf-f-hit" d="M459 112H620"/><path class="cf-m-done" data-state="done" d="M459 112H620"/></g>
+      <g data-cf-anchor="edge-b-review" data-cf-anchor-label="path B, task to codeflow integrate"><path class="cf-f-hit" d="M99 224H258"/><path class="cf-m-done" data-state="done" d="M99 224H258"/></g>
+      <g data-cf-anchor="edge-b-gate" data-cf-anchor-label="path B, codeflow integrate to integration branch"><path class="cf-f-hit" d="M282 224H441"/><path class="cf-m-done" data-state="done" d="M282 224H441"/></g>
+      <g data-cf-anchor="edge-b-land" data-cf-anchor-label="path B, integration branch to human merge"><path class="cf-f-hit" d="M459 224H540C590 224 630 190 630 123"/><path class="cf-m-todo" data-state="todo" d="M459 224H540C590 224 630 190 630 123"/></g>
+      <g data-cf-anchor="stop-a" data-cf-anchor-label="gate that stops path A"><path class="cf-f-hit" d="M516 101V123"/><line class="cf-m-stop" data-state="stop" x1="516" y1="101" x2="516" y2="123"/></g>
+      <g data-cf-anchor="stop-b" data-cf-anchor-label="gate that stops path B"><path class="cf-f-hit" d="M516 213V235"/><line class="cf-m-stop" data-state="stop" x1="516" y1="213" x2="516" y2="235"/></g>
+      <g data-cf-anchor="node-a-branch" data-cf-anchor-label="task branch"><circle class="cf-m-agent" data-state="agent" cx="90" cy="112" r="8"/><text class="cf-t" x="90" y="88" text-anchor="middle">Task branch</text></g>
+      <g data-cf-anchor="node-a-pr" data-cf-anchor-label="pull request"><circle class="cf-m-agent" data-state="agent" cx="270" cy="112" r="8"/><text class="cf-t" x="270" y="88" text-anchor="middle">Pull request</text></g>
+      <g data-cf-anchor="node-a-checks" data-cf-anchor-label="required checks"><circle class="cf-m-agent" data-state="agent" cx="450" cy="112" r="8"/><text class="cf-t" x="450" y="88" text-anchor="middle">Required checks</text></g>
+      <g data-cf-anchor="node-merge" data-cf-anchor-label="human merge"><circle class="cf-m-human" data-state="human" cx="630" cy="112" r="9"/><text class="cf-t cf-t--strong" x="630" y="88" text-anchor="middle">Human merge</text></g>
+      <g data-cf-anchor="node-b-branch" data-cf-anchor-label="task in an epic"><circle class="cf-m-agent" data-state="agent" cx="90" cy="224" r="8"/><text class="cf-t" x="90" y="200" text-anchor="middle">Task in an epic</text></g>
+      <g data-cf-anchor="node-b-integrate" data-cf-anchor-label="codeflow integrate"><path class="cf-m-merge" data-state="merge" d="M270 213L281 224L270 235L259 224Z"/><text class="cf-t cf-t--mono" x="270" y="200" text-anchor="middle">codeflow integrate</text></g>
+      <g data-cf-anchor="node-b-integration" data-cf-anchor-label="integration branch"><circle class="cf-m-agent" data-state="agent" cx="450" cy="224" r="8"/><text class="cf-t" x="450" y="200" text-anchor="middle">Integration branch</text></g>
+    </svg>
+    <svg class="cf-fig-svg cf-fig-svg--narrow" viewBox="0 0 343 344" role="img" aria-labelledby="f1n-t f1n-d">
+      <title id="f1n-t">Two landing paths from a task branch to main</title>
+      <desc id="f1n-d">Rows: branch, review, gate, land. Path A runs down from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs down from a task in an epic to codeflow integrate, where agents merge, to the integration branch, then along a path not yet travelled to the same human merge. A gate that stops travel sits on each path in the gate row.</desc>
+      <text class="cf-t cf-t--head" x="0" y="45">Branch</text>
+      <text class="cf-t cf-t--head" x="0" y="129">Review</text>
+      <text class="cf-t cf-t--head" x="0" y="213">Gate</text>
+      <text class="cf-t cf-t--head" x="0" y="305">Land</text>
+      <g data-cf-anchor="edge-a-review" data-cf-anchor-label="path A, task branch to pull request"><path class="cf-f-hit" d="M112 50V114"/><path class="cf-m-done" data-state="done" d="M112 50V114"/></g>
+      <g data-cf-anchor="edge-a-gate" data-cf-anchor-label="path A, pull request to required checks"><path class="cf-f-hit" d="M112 134V198"/><path class="cf-m-done" data-state="done" d="M112 134V198"/></g>
+      <g data-cf-anchor="edge-a-land" data-cf-anchor-label="path A, required checks to human merge"><path class="cf-f-hit" d="M112 218V250C112 280 140 300 163 300"/><path class="cf-m-done" data-state="done" d="M112 218V250C112 280 140 300 163 300"/></g>
+      <g data-cf-anchor="edge-b-review" data-cf-anchor-label="path B, task to codeflow integrate"><path class="cf-f-hit" d="M236 50V112"/><path class="cf-m-done" data-state="done" d="M236 50V112"/></g>
+      <g data-cf-anchor="edge-b-gate" data-cf-anchor-label="path B, codeflow integrate to integration branch"><path class="cf-f-hit" d="M236 136V198"/><path class="cf-m-done" data-state="done" d="M236 136V198"/></g>
+      <g data-cf-anchor="edge-b-land" data-cf-anchor-label="path B, integration branch to human merge"><path class="cf-f-hit" d="M236 218V250C236 280 208 300 185 300"/><path class="cf-m-todo" data-state="todo" d="M236 218V250C236 280 208 300 185 300"/></g>
+      <g data-cf-anchor="stop-a" data-cf-anchor-label="gate that stops path A"><path class="cf-f-hit" d="M101 240H123"/><line class="cf-m-stop" data-state="stop" x1="101" y1="240" x2="123" y2="240"/></g>
+      <g data-cf-anchor="stop-b" data-cf-anchor-label="gate that stops path B"><path class="cf-f-hit" d="M225 240H247"/><line class="cf-m-stop" data-state="stop" x1="225" y1="240" x2="247" y2="240"/></g>
+      <g data-cf-anchor="node-a-branch" data-cf-anchor-label="task branch"><circle class="cf-m-agent" data-state="agent" cx="112" cy="40" r="8"/><text class="cf-t" x="131" y="45">Task branch</text></g>
+      <g data-cf-anchor="node-a-pr" data-cf-anchor-label="pull request"><circle class="cf-m-agent" data-state="agent" cx="112" cy="124" r="8"/><text class="cf-t" x="131" y="129">Pull request</text></g>
+      <g data-cf-anchor="node-a-checks" data-cf-anchor-label="required checks"><circle class="cf-m-agent" data-state="agent" cx="112" cy="208" r="8"/><text class="cf-t" x="131" y="203"><tspan x="131">Required</tspan><tspan x="131" dy="18">checks</tspan></text></g>
+      <g data-cf-anchor="node-merge" data-cf-anchor-label="human merge"><circle class="cf-m-human" data-state="human" cx="174" cy="300" r="9"/><text class="cf-t cf-t--strong" x="174" y="333" text-anchor="middle">Human merge</text></g>
+      <g data-cf-anchor="node-b-branch" data-cf-anchor-label="task in an epic"><circle class="cf-m-agent" data-state="agent" cx="236" cy="40" r="8"/><text class="cf-t" x="255" y="35"><tspan x="255">Task in</tspan><tspan x="255" dy="18">an epic</tspan></text></g>
+      <g data-cf-anchor="node-b-integrate" data-cf-anchor-label="codeflow integrate"><path class="cf-m-merge" data-state="merge" d="M236 113L247 124L236 135L225 124Z"/><text class="cf-t cf-t--mono" x="257" y="119"><tspan x="257">codeflow</tspan><tspan x="257" dy="18">integrate</tspan></text></g>
+      <g data-cf-anchor="node-b-integration" data-cf-anchor-label="integration branch"><circle class="cf-m-agent" data-state="agent" cx="236" cy="208" r="8"/><text class="cf-t" x="255" y="203"><tspan x="255">Integration</tspan><tspan x="255" dy="18">branch</tspan></text></g>
+    </svg>
+  </div>
+  <ul class="cf-legend" aria-label="Legend">
+    <li data-state="done" data-cf-anchor="legend-done" data-cf-anchor-label="legend, travel completed"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-done" d="M3 8H25"/></svg>Travel completed</li>
+    <li data-state="todo" data-cf-anchor="legend-todo" data-cf-anchor-label="legend, travel not yet made"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-todo" d="M2 8H26"/></svg>Travel not yet made</li>
+    <li data-state="agent" data-cf-anchor="legend-agent" data-cf-anchor-label="legend, agent step"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle class="cf-m-agent" cx="14" cy="8" r="6.5"/></svg>Agent step</li>
+    <li data-state="merge" data-cf-anchor="legend-merge" data-cf-anchor-label="legend, agent merge point"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-merge" d="M14 1.5L20.5 8L14 14.5L7.5 8Z"/></svg>Agent merge point</li>
+    <li data-state="human" data-cf-anchor="legend-human" data-cf-anchor-label="legend, human decision"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle class="cf-m-human" cx="14" cy="8" r="6"/></svg>Human decision</li>
+    <li data-state="stop" data-cf-anchor="legend-stop" data-cf-anchor-label="legend, gate that stops travel"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line class="cf-m-stop" x1="14" y1="1" x2="14" y2="15"/></svg>Gate that stops travel</li>
+  </ul>
+  <figcaption class="cf-fig-caption">One task lands as a pull request; a body of work lands task by task on an integration branch, and both end at a human merge behind green checks.</figcaption>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, where agents merge, to the integration branch, then along a path not yet travelled to the same human merge. A gate that stops travel sits in the gate column on both paths.</p>
+    <div class="cf-twin-scroll"><table>
+      <thead><tr><th scope="col">Path</th><th scope="col">Who opens</th><th scope="col">Who merges</th><th scope="col">What stops it</th></tr></thead>
+      <tbody>
+        <tr><td>A: one task</td><td>An agent opens the pull request</td><td>A person, on green checks</td><td>A red required check</td></tr>
+        <tr><td>B: body of work</td><td>Agents land each task with <code>codeflow integrate</code></td><td>A person merges the finished body</td><td>A red required check on the integration pull request</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+</figure>
+
+            <h3 class="cf-h3" id="what-holds-on-both-paths">What holds on both paths</h3>
+            <ul>
+              <li>A single task ships as one pull request.</li>
+              <li>A body of work lands on <code>integration/&lt;epic&gt;</code> first, so each review stays small.</li>
+              <li>A red required check stops travel on either path.</li>
+              <li>Agents never push, merge or reset a protected branch.</li>
+            </ul>
+            <p class="cf-related">Records: <a class="cf-id" href="#/portal/capabilities#CAP-016" data-cf-id="CAP-016">CAP-016</a> describes this guide; <a class="cf-id" href="#/portal/epics#EPC-016" data-cf-id="EPC-016">EPC-016</a> rebuilds it.</p>
+          </section>
+        </div>
+
+        <div class="cf-tabpanel cf-prose" role="tabpanel" id="cf-panel-architecture" aria-labelledby="cf-tab-architecture" tabindex="0" data-layer="architecture" hidden>
+          <section class="cf-section" data-cf-section aria-labelledby="four-enforcement-planes">
+            <h2 class="cf-h2" id="four-enforcement-planes">Four enforcement planes</h2>
+            <p class="cf-lead">Four planes check the same policy at different moments.</p>
+<figure class="cf-fig" data-cf-figure="layering">
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 2</span> · <span class="cf-fig-name">Four enforcement planes along the life of one change</span></p>
+  <div class="cf-fig-stage">
+    <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 248" role="img" aria-labelledby="f2w-t f2w-d">
+      <title id="f2w-t">Four enforcement planes along the life of one change</title>
+      <desc id="f2w-d">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane that is remote and required. One change crosses all four planes in that order.</desc>
+      <text class="cf-t cf-t--mute" x="240" y="22" text-anchor="middle">Edit</text>
+      <text class="cf-t cf-t--mute" x="340" y="22" text-anchor="middle">Commit</text>
+      <text class="cf-t cf-t--mute" x="440" y="22" text-anchor="middle">Push</text>
+      <text class="cf-t cf-t--mute" x="540" y="22" text-anchor="middle">Pull request</text>
+      <text class="cf-t cf-t--mute" x="640" y="22" text-anchor="middle">Merge</text>
+      <line class="cf-f-rule" x1="190" y1="42" x2="690" y2="42"/>
+      <line class="cf-f-tick" x1="240" y1="36" x2="240" y2="42"/><line class="cf-f-tick" x1="340" y1="36" x2="340" y2="42"/><line class="cf-f-tick" x1="440" y1="36" x2="440" y2="42"/><line class="cf-f-tick" x1="540" y1="36" x2="540" y2="42"/><line class="cf-f-tick" x1="640" y1="36" x2="640" y2="42"/>
+      <text class="cf-t" x="0" y="89">Git hooks</text>
+      <text class="cf-t" x="0" y="137">Session git-guard</text>
+      <text class="cf-t" x="0" y="185">CI</text>
+      <text class="cf-t cf-t--strong" x="0" y="233">Remote branch protection</text>
+      <rect class="cf-m-layer" data-state="layer" x="290" y="72" width="200" height="24" rx="6"/>
+      <rect class="cf-m-layer" data-state="layer" x="190" y="120" width="300" height="24" rx="6"/>
+      <rect class="cf-m-layer" data-state="layer" x="390" y="168" width="200" height="24" rx="6"/>
+      <rect class="cf-m-layer--remote" data-state="layer-remote" x="490" y="216" width="186" height="24" rx="6"/>
+      <path class="cf-m-cap" d="M662 216H670A6 6 0 0 1 676 222V234A6 6 0 0 1 670 240H662Z"/>
+      <polyline class="cf-m-done" data-state="done" points="340,84 440,132 540,180 640,228"/>
+      <circle class="cf-m-act" data-state="act" cx="340" cy="84" r="8"/>
+      <circle class="cf-m-act" data-state="act" cx="440" cy="132" r="8"/>
+      <circle class="cf-m-act" data-state="act" cx="540" cy="180" r="8"/>
+      <circle class="cf-m-act" data-state="act" cx="640" cy="228" r="8"/>
+    </svg>
+    <svg class="cf-fig-svg cf-fig-svg--narrow" viewBox="0 0 343 318" role="img" aria-labelledby="f2n-t f2n-d">
+      <title id="f2n-t">Four enforcement planes along the life of one change</title>
+      <desc id="f2n-d">Columns are planes and rows are moments, edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane that is remote and required. Column heads are shortened to hooks, guard, CI and remote.</desc>
+      <text class="cf-t cf-t--head" x="120" y="52" text-anchor="middle">Hooks</text>
+      <text class="cf-t cf-t--head" x="175" y="52" text-anchor="middle">Guard</text>
+      <text class="cf-t cf-t--head" x="230" y="52" text-anchor="middle">CI</text>
+      <text class="cf-t cf-t--head" x="290" y="52" text-anchor="middle">Remote</text>
+      <text class="cf-t cf-t--mute" x="0" y="101">Edit</text>
+      <text class="cf-t cf-t--mute" x="0" y="145">Commit</text>
+      <text class="cf-t cf-t--mute" x="0" y="189">Push</text>
+      <text class="cf-t cf-t--mute" x="0" y="233">Pull request</text>
+      <text class="cf-t cf-t--mute" x="0" y="277">Merge</text>
+      <rect class="cf-m-layer" data-state="layer" x="109" y="118" width="22" height="88" rx="6"/>
+      <rect class="cf-m-layer" data-state="layer" x="164" y="74" width="22" height="132" rx="6"/>
+      <rect class="cf-m-layer" data-state="layer" x="219" y="162" width="22" height="88" rx="6"/>
+      <rect class="cf-m-layer--remote" data-state="layer-remote" x="279" y="206" width="22" height="100" rx="6"/>
+      <path class="cf-m-cap" d="M279 294H301V300A6 6 0 0 1 295 306H285A6 6 0 0 1 279 300Z"/>
+      <polyline class="cf-m-done" data-state="done" points="120,140 175,184 230,228 290,272"/>
+      <circle class="cf-m-act" data-state="act" cx="120" cy="140" r="8"/>
+      <circle class="cf-m-act" data-state="act" cx="175" cy="184" r="8"/>
+      <circle class="cf-m-act" data-state="act" cx="230" cy="228" r="8"/>
+      <circle class="cf-m-act" data-state="act" cx="290" cy="272" r="8"/>
+    </svg>
+  </div>
+  <ul class="cf-legend" aria-label="Legend">
+    <li data-state="layer"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-layer" x="2" y="3" width="24" height="10" rx="3"/></svg>Plane covers this moment, local and editable</li>
+    <li data-state="layer-remote"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-layer--remote" x="2" y="3" width="24" height="10" rx="3"/><path class="cf-m-cap" d="M20 3H23A3 3 0 0 1 26 6V10A3 3 0 0 1 23 13H20Z"/></svg>Plane covers this moment, remote and required</li>
+    <li data-state="act"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle class="cf-m-act" cx="14" cy="8" r="6.5"/></svg>Plane acts here</li>
+    <li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-done" d="M3 13L25 3"/></svg>One change</li>
+  </ul>
+  <figcaption class="cf-fig-caption">Local planes give fast feedback and can be edited; only the remote plane at merge is a boundary. Hooks are the git hooks, Guard is the session git-guard, Remote is remote branch protection.</figcaption>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane that is remote and required. One change crosses all four planes in that order.</p>
+    <div class="cf-twin-scroll"><table>
+      <thead><tr><th scope="col">Plane</th><th scope="col">Moments</th><th scope="col">Shared source</th><th scope="col">Can be bypassed locally</th></tr></thead>
+      <tbody>
+        <tr><td>Git hooks</td><td>Commit, push</td><td><code>.codeflow/policy.json</code></td><td>Yes, hooks can be edited</td></tr>
+        <tr><td>Session git-guard</td><td>Edit to push</td><td><code>.codeflow/policy.json</code></td><td>Yes, the session setup can be edited</td></tr>
+        <tr><td>CI</td><td>Push, pull request</td><td><code>.codeflow/policy.json</code> through <code>codeflow ci</code></td><td>Yes, unless the remote requires its result</td></tr>
+        <tr><td>Remote branch protection</td><td>Pull request, merge</td><td>Rules derived from <code>.codeflow/policy.json</code></td><td>No, it is the boundary at merge</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+</figure>
+
+            <h3 class="cf-h3" id="what-each-plane-reads">What each plane reads</h3>
+            <ul>
+              <li>Git hooks and the session git-guard read <code>.codeflow/policy.json</code> before a commit or push goes through.</li>
+              <li>CI runs the same rules as the shared <code>codeflow ci</code> checks.</li>
+              <li>The remote rules are derived from the same policy, as <a class="cf-id" href="#/portal/decisions#ADR-0017" data-cf-id="ADR-0017">ADR-0017</a> records.</li>
+            </ul>
+            <p>Installed files do not prove enforcement; verify hook execution, CI results and the remote rules.</p>
+          </section>
+        </div>
+
+        <div class="cf-tabpanel cf-prose" role="tabpanel" id="cf-panel-technical" aria-labelledby="cf-tab-technical" tabindex="0" data-layer="technical" hidden>
+          <section class="cf-section" data-cf-section aria-labelledby="what-each-plane-checks">
+            <h2 class="cf-h2" id="what-each-plane-checks">What each plane checks</h2>
+            <p class="cf-lead">The grid shows which plane enforces which rule.</p>
+<figure class="cf-fig" data-cf-figure="coverage">
+<p class="cf-fig-title"><span class="cf-fig-number">Figure 3</span> · <span class="cf-fig-name">Which plane enforces which rule</span></p>
+<div class="cf-fig-stage">
+<svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 316" role="img" aria-labelledby="f3w-t f3w-d">
+<title id="f3w-t">Which plane enforces which rule</title>
+<desc id="f3w-d">A grid of seven rules against four planes. Conventional subject: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. Body bullets only: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. No AI attribution: git hooks covered, session git-guard covered, CI covered, remote branch protection not applicable. Secret scan: git hooks covered, session git-guard covered, CI covered, remote branch protection covered. Protected branch push: git hooks covered, session git-guard covered, CI not applicable, remote branch protection covered. Breaking change footer: git hooks partial, session git-guard not run, CI covered, remote branch protection not applicable. Ticket reference: git hooks covered, session git-guard not applicable, CI partial, remote branch protection not claimed.</desc>
+<defs><pattern id="f3w-h" width="4.5" height="4.5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line class="cf-m-hatchline" x1="0" y1="0" x2="0" y2="4.5"/></pattern></defs>
+<text class="cf-t cf-t--head" x="350" y="38" text-anchor="middle">Git hooks</text>
+<text class="cf-t cf-t--head" x="450" y="20" text-anchor="middle"><tspan x="450">Session</tspan><tspan x="450" dy="18">git-guard</tspan></text>
+<text class="cf-t cf-t--head" x="550" y="38" text-anchor="middle">CI</text>
+<text class="cf-t cf-t--head" x="650" y="20" text-anchor="middle"><tspan x="650">Remote branch</tspan><tspan x="650" dy="18">protection</tspan></text>
+<line class="cf-f-rule" x1="0" y1="54" x2="720" y2="54"/>
+<text class="cf-t" x="0" y="87">Conventional subject</text>
+<rect class="cf-m-cov" data-state="cov" x="341" y="73" width="18" height="18" rx="2"/>
+<rect class="cf-m-part" data-state="part" x="441.7" y="73.7" width="16.6" height="16.6" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="541" y="73" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="641.5" y="73.5" width="17" height="17" rx="2"/>
+<text class="cf-t" x="0" y="123">Body bullets only</text>
+<rect class="cf-m-cov" data-state="cov" x="341" y="109" width="18" height="18" rx="2"/>
+<rect class="cf-m-part" data-state="part" x="441.7" y="109.7" width="16.6" height="16.6" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="541" y="109" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="641.5" y="109.5" width="17" height="17" rx="2"/>
+<text class="cf-t" x="0" y="159">No AI attribution</text>
+<rect class="cf-m-cov" data-state="cov" x="341" y="145" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="441" y="145" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="541" y="145" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="641.5" y="145.5" width="17" height="17" rx="2"/>
+<text class="cf-t cf-t--strong" x="0" y="195">Secret scan</text>
+<rect class="cf-m-cov" data-state="cov" x="341" y="181" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="441" y="181" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="541" y="181" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="641" y="181" width="18" height="18" rx="2"/>
+<text class="cf-t" x="0" y="231">Protected branch push</text>
+<rect class="cf-m-cov" data-state="cov" x="341" y="217" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="441" y="217" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="541.5" y="217.5" width="17" height="17" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="641" y="217" width="18" height="18" rx="2"/>
+<text class="cf-t" x="0" y="267">Breaking change footer</text>
+<rect class="cf-m-part" data-state="part" x="341.7" y="253.7" width="16.6" height="16.6" rx="2"/>
+<rect class="cf-m-notrun" data-state="notrun" x="441.5" y="253.5" width="17" height="17" rx="2" fill="url(#f3w-h)"/>
+<rect class="cf-m-cov" data-state="cov" x="541" y="253" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="641.5" y="253.5" width="17" height="17" rx="2"/>
+<text class="cf-t" x="0" y="303">Ticket reference</text>
+<rect class="cf-m-cov" data-state="cov" x="341" y="289" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="441.5" y="289.5" width="17" height="17" rx="2"/>
+<rect class="cf-m-part" data-state="part" x="541.7" y="289.7" width="16.6" height="16.6" rx="2"/>
+<rect class="cf-m-nc" data-state="nc" x="641.7" y="289.7" width="16.6" height="16.6" rx="2"/><path class="cf-m-nc-cross" d="M643.08 291.08L656.92 304.92M656.92 291.08L643.08 304.92"/>
+</svg>
+<svg class="cf-fig-svg cf-fig-svg--narrow" viewBox="0 0 343 364" role="img" aria-labelledby="f3n-t f3n-d">
+<title id="f3n-t">Which plane enforces which rule</title>
+<desc id="f3n-d">A grid of seven rules against four planes. Conventional subject: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. Body bullets only: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. No AI attribution: git hooks covered, session git-guard covered, CI covered, remote branch protection not applicable. Secret scan: git hooks covered, session git-guard covered, CI covered, remote branch protection covered. Protected branch push: git hooks covered, session git-guard covered, CI not applicable, remote branch protection covered. Breaking change footer: git hooks partial, session git-guard not run, CI covered, remote branch protection not applicable. Ticket reference: git hooks covered, session git-guard not applicable, CI partial, remote branch protection not claimed. Column heads are shortened to hooks, guard, CI and remote.</desc>
+<defs><pattern id="f3n-h" width="4.5" height="4.5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line class="cf-m-hatchline" x1="0" y1="0" x2="0" y2="4.5"/></pattern></defs>
+<text class="cf-t cf-t--head" x="166" y="22" text-anchor="middle">Hooks</text>
+<text class="cf-t cf-t--head" x="216" y="22" text-anchor="middle">Guard</text>
+<text class="cf-t cf-t--head" x="266" y="22" text-anchor="middle">CI</text>
+<text class="cf-t cf-t--head" x="312" y="22" text-anchor="middle">Remote</text>
+<line class="cf-f-rule" x1="0" y1="36" x2="343" y2="36"/>
+<text class="cf-t" x="0" y="63"><tspan x="0">Conventional</tspan><tspan x="0" dy="18">subject</tspan></text>
+<rect class="cf-m-cov" data-state="cov" x="157" y="57" width="18" height="18" rx="2"/>
+<rect class="cf-m-part" data-state="part" x="207.7" y="57.7" width="16.6" height="16.6" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="257" y="57" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="303.5" y="57.5" width="17" height="17" rx="2"/>
+<text class="cf-t" x="0" y="109"><tspan x="0">Body bullets</tspan><tspan x="0" dy="18">only</tspan></text>
+<rect class="cf-m-cov" data-state="cov" x="157" y="103" width="18" height="18" rx="2"/>
+<rect class="cf-m-part" data-state="part" x="207.7" y="103.7" width="16.6" height="16.6" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="257" y="103" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="303.5" y="103.5" width="17" height="17" rx="2"/>
+<text class="cf-t" x="0" y="155"><tspan x="0">No AI</tspan><tspan x="0" dy="18">attribution</tspan></text>
+<rect class="cf-m-cov" data-state="cov" x="157" y="149" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="207" y="149" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="257" y="149" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="303.5" y="149.5" width="17" height="17" rx="2"/>
+<text class="cf-t cf-t--strong" x="0" y="209">Secret scan</text>
+<rect class="cf-m-cov" data-state="cov" x="157" y="195" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="207" y="195" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="257" y="195" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="303" y="195" width="18" height="18" rx="2"/>
+<text class="cf-t" x="0" y="247"><tspan x="0">Protected</tspan><tspan x="0" dy="18">branch push</tspan></text>
+<rect class="cf-m-cov" data-state="cov" x="157" y="241" width="18" height="18" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="207" y="241" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="257.5" y="241.5" width="17" height="17" rx="2"/>
+<rect class="cf-m-cov" data-state="cov" x="303" y="241" width="18" height="18" rx="2"/>
+<text class="cf-t" x="0" y="293"><tspan x="0">Breaking</tspan><tspan x="0" dy="18">change footer</tspan></text>
+<rect class="cf-m-part" data-state="part" x="157.7" y="287.7" width="16.6" height="16.6" rx="2"/>
+<rect class="cf-m-notrun" data-state="notrun" x="207.5" y="287.5" width="17" height="17" rx="2" fill="url(#f3n-h)"/>
+<rect class="cf-m-cov" data-state="cov" x="257" y="287" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="303.5" y="287.5" width="17" height="17" rx="2"/>
+<text class="cf-t" x="0" y="339"><tspan x="0">Ticket</tspan><tspan x="0" dy="18">reference</tspan></text>
+<rect class="cf-m-cov" data-state="cov" x="157" y="333" width="18" height="18" rx="2"/>
+<rect class="cf-m-na" data-state="na" x="207.5" y="333.5" width="17" height="17" rx="2"/>
+<rect class="cf-m-part" data-state="part" x="257.7" y="333.7" width="16.6" height="16.6" rx="2"/>
+<rect class="cf-m-nc" data-state="nc" x="303.7" y="333.7" width="16.6" height="16.6" rx="2"/><path class="cf-m-nc-cross" d="M305.08 335.08L318.92 348.92M318.92 335.08L305.08 348.92"/>
+</svg>
+</div>
+<ul class="cf-legend" aria-label="Legend">
+<li data-state="cov"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-cov" x="6.3" y="0.3" width="15.4" height="15.4" rx="2"/></svg>Covered</li>
+<li data-state="part"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-part" x="7" y="1" width="14" height="14" rx="2"/></svg>Partial</li>
+<li data-state="notrun"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><defs><pattern id="f3k-h" width="4.5" height="4.5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line class="cf-m-hatchline" x1="0" y1="0" x2="0" y2="4.5"/></pattern></defs><rect class="cf-m-notrun" x="6.8" y="0.8" width="14.4" height="14.4" rx="2" fill="url(#f3k-h)"/></svg>Not run</li>
+<li data-state="na"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-na" x="6.8" y="0.8" width="14.4" height="14.4" rx="2"/></svg>Not applicable</li>
+<li data-state="nc"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-nc" x="7" y="1" width="14" height="14" rx="2"/><path class="cf-m-nc-cross" d="M8.224 2.224L19.776 13.776M19.776 2.224L8.224 13.776"/></svg>Not claimed</li>
+</ul>
+<figcaption class="cf-fig-caption">Every rule has at least one plane; the secret scan is the one rule every plane enforces. Hooks and Guard are the local planes; Remote is branch protection.</figcaption>
+<details class="cf-fig-details">
+<summary>Details</summary>
+<p class="cf-fig-description">A grid of seven rules against four planes. Conventional subject: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. Body bullets only: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. No AI attribution: git hooks covered, session git-guard covered, CI covered, remote branch protection not applicable. Secret scan: git hooks covered, session git-guard covered, CI covered, remote branch protection covered. Protected branch push: git hooks covered, session git-guard covered, CI not applicable, remote branch protection covered. Breaking change footer: git hooks partial, session git-guard not run, CI covered, remote branch protection not applicable. Ticket reference: git hooks covered, session git-guard not applicable, CI partial, remote branch protection not claimed.</p>
+<div class="cf-twin-scroll"><table>
+<thead><tr><th scope="col">Rule</th><th scope="col">Git hooks</th><th scope="col">Session git-guard</th><th scope="col">CI</th><th scope="col">Remote branch protection</th></tr></thead><tbody>
+<tr><td>Conventional subject</td><td>Covered</td><td>Partial</td><td>Covered</td><td>Not applicable</td></tr>
+<tr><td>Body bullets only</td><td>Covered</td><td>Partial</td><td>Covered</td><td>Not applicable</td></tr>
+<tr><td>No AI attribution</td><td>Covered</td><td>Covered</td><td>Covered</td><td>Not applicable</td></tr>
+<tr><td>Secret scan</td><td>Covered</td><td>Covered</td><td>Covered</td><td>Covered</td></tr>
+<tr><td>Protected branch push</td><td>Covered</td><td>Covered</td><td>Not applicable</td><td>Covered</td></tr>
+<tr><td>Breaking change footer</td><td>Partial</td><td>Not run</td><td>Covered</td><td>Not applicable</td></tr>
+<tr><td>Ticket reference</td><td>Covered</td><td>Not applicable</td><td>Partial</td><td>Not claimed</td></tr>
+</tbody></table></div></details>
+</figure>
+
+            <p>The policy lives in <code>.codeflow/policy.json</code> at the repository root. Hooks and CI read it through the same <code>codeflow ci</code> checks, so a rule changes in one place.</p>
+          </section>
+          <section class="cf-section" data-cf-section aria-labelledby="start-a-task-in-a-worktree">
+            <h2 class="cf-h2" id="start-a-task-in-a-worktree">Start a task in a worktree</h2>
+            <p class="cf-lead">Three assertions come before the first mutation.</p>
+<figure class="cf-fig" data-cf-figure="sequence">
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 4</span> · <span class="cf-fig-name">The checks that come before the first edit</span></p>
+  <div class="cf-fig-stage">
+    <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 416" role="img" aria-labelledby="f4w-t f4w-d">
+      <title id="f4w-t">The checks that come before the first edit</title>
+      <desc id="f4w-d">Time runs down. Identity with git worktree list. Intent match, comparing with the assignment; on a mismatch the task stops and surfaces the problem. git fetch origin. Currency, checking the base is the tip of origin/main. git worktree add .worktrees/slug. codeflow work start TSK-NNN. First edit.</desc>
+      <text class="cf-t cf-t--mute" x="40" y="22" text-anchor="middle">Time</text>
+      <path class="cf-f-axis" data-state="time" d="M40 38V394"/>
+      <path class="cf-f-axis-head" d="M34.5 394L40 406L45.5 394Z"/>
+      <path class="cf-m-done" data-state="done" d="M330 50V386"/>
+      <path class="cf-m-todo" data-state="todo" d="M319 106H110"/>
+      <line class="cf-m-stop" data-state="stop" x1="100" y1="95" x2="100" y2="117"/>
+      <text class="cf-t" x="114" y="136">Mismatch: stop and surface</text>
+      <circle class="cf-m-human" data-state="human" cx="330" cy="50" r="9"/>
+      <text class="cf-t cf-t--strong" x="351" y="55">Identity</text><text class="cf-t cf-t--mono" x="461" y="55">git worktree list</text>
+      <circle class="cf-m-human" data-state="human" cx="330" cy="106" r="9"/>
+      <text class="cf-t cf-t--strong" x="351" y="111">Intent match</text><text class="cf-t cf-t--mute" x="461" y="111">compare with the assignment</text>
+      <circle class="cf-m-agent" data-state="agent" cx="330" cy="162" r="8"/>
+      <text class="cf-t cf-t--mono" x="351" y="167">git fetch origin</text>
+      <circle class="cf-m-human" data-state="human" cx="330" cy="218" r="9"/>
+      <text class="cf-t cf-t--strong" x="351" y="223">Currency</text><text class="cf-t cf-t--mute" x="461" y="223">base is the tip of origin/main</text>
+      <circle class="cf-m-agent" data-state="agent" cx="330" cy="274" r="8"/>
+      <text class="cf-t cf-t--mono" x="351" y="279">git worktree add .worktrees/&lt;slug&gt;</text>
+      <circle class="cf-m-agent" data-state="agent" cx="330" cy="330" r="8"/>
+      <text class="cf-t cf-t--mono" x="351" y="335">codeflow work start TSK-NNN</text>
+      <circle class="cf-m-agent" data-state="agent" cx="330" cy="386" r="8"/>
+      <text class="cf-t" x="351" y="391">First edit</text>
+    </svg>
+    <svg class="cf-fig-svg cf-fig-svg--narrow" viewBox="0 0 343 412" role="img" aria-labelledby="f4n-t f4n-d">
+      <title id="f4n-t">The checks that come before the first edit</title>
+      <desc id="f4n-d">Time runs down. Identity with git worktree list. Intent match, comparing with the assignment; on a mismatch the task stops and surfaces the problem. git fetch origin. Currency, checking the base is the tip of origin/main. git worktree add .worktrees/slug. codeflow work start TSK-NNN. First edit.</desc>
+      <path class="cf-m-done" data-state="done" d="M24 44V398"/>
+      <path class="cf-m-todo" data-state="todo" d="M31 118L38 146Q42 158 54 158H192"/>
+      <line class="cf-m-stop" data-state="stop" x1="204" y1="147" x2="204" y2="169"/>
+      <text class="cf-t" x="216" y="155"><tspan x="216">Mismatch:</tspan><tspan x="216" dy="18">stop and surface</tspan></text>
+      <circle class="cf-m-human" data-state="human" cx="24" cy="44" r="9"/>
+      <text class="cf-t cf-t--strong" x="45" y="41">Identity</text><text class="cf-t cf-t--mono" x="45" y="59">git worktree list</text>
+      <circle class="cf-m-human" data-state="human" cx="24" cy="110" r="9"/>
+      <text class="cf-t cf-t--strong" x="45" y="107">Intent match</text><text class="cf-t cf-t--mute" x="45" y="125">compare with the assignment</text>
+      <circle class="cf-m-agent" data-state="agent" cx="24" cy="186" r="8"/>
+      <text class="cf-t cf-t--mono" x="45" y="191">git fetch origin</text>
+      <circle class="cf-m-human" data-state="human" cx="24" cy="244" r="9"/>
+      <text class="cf-t cf-t--strong" x="45" y="241">Currency</text><text class="cf-t cf-t--mute" x="45" y="259">base is the tip of origin/main</text>
+      <circle class="cf-m-agent" data-state="agent" cx="24" cy="302" r="8"/>
+      <text class="cf-t cf-t--mono" x="45" y="307">git worktree add .worktrees/&lt;slug&gt;</text>
+      <circle class="cf-m-agent" data-state="agent" cx="24" cy="350" r="8"/>
+      <text class="cf-t cf-t--mono" x="45" y="355">codeflow work start TSK-NNN</text>
+      <circle class="cf-m-agent" data-state="agent" cx="24" cy="398" r="8"/>
+      <text class="cf-t" x="45" y="403">First edit</text>
+    </svg>
+  </div>
+  <ul class="cf-legend" aria-label="Legend">
+    <li data-state="human"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle class="cf-m-human" cx="14" cy="8" r="6"/></svg>Assertion</li>
+    <li data-state="agent"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle class="cf-m-agent" cx="14" cy="8" r="6.5"/></svg>Command</li>
+    <li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-done" d="M3 8H25"/></svg>Order of steps</li>
+    <li data-state="todo"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-todo" d="M2 8H26"/></svg>Taken only on a mismatch</li>
+    <li data-state="stop"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line class="cf-m-stop" x1="14" y1="1" x2="14" y2="15"/></svg>Stop and surface</li>
+    <li data-state="time" data-cf-wide><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-f-axis" d="M3 8H21"/><path class="cf-f-axis-head" d="M20 3.5L26 8L20 12.5Z"/></svg>Time</li>
+  </ul>
+  <figcaption class="cf-fig-caption">Identity, intent match and currency are checked in that order, and a mismatch stops the task before any edit.</figcaption>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">Time runs down. Identity with git worktree list. Intent match, comparing with the assignment; on a mismatch the task stops and surfaces the problem. git fetch origin. Currency, checking the base is the tip of origin/main. git worktree add .worktrees/slug. codeflow work start TSK-NNN. First edit.</p>
+    <div class="cf-twin-scroll"><table>
+      <thead><tr><th scope="col">Step</th><th scope="col">Command</th><th scope="col">What it proves</th></tr></thead>
+      <tbody>
+        <tr><td>Identity</td><td><code>git worktree list</code>, <code>git branch --show-current</code></td><td>Where you actually are</td></tr>
+        <tr><td>Intent match</td><td>Compare with the assignment</td><td>This is the worktree and branch the task named. On a mismatch, stop and surface it</td></tr>
+        <tr><td>Fetch</td><td><code>git fetch origin</code></td><td>The remote state is current</td></tr>
+        <tr><td>Currency</td><td>Compare the base with <code>origin/main</code></td><td>New work starts off the current tip</td></tr>
+        <tr><td>Create the worktree</td><td><code>git worktree add .worktrees/&lt;slug&gt;</code></td><td>Work is isolated from other sessions</td></tr>
+        <tr><td>Start the task</td><td><code>codeflow work start TSK-NNN</code></td><td>The task, its target and its specs are anchored</td></tr>
+        <tr><td>First edit</td><td>None</td><td>Editing begins only after every check passed</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+</figure>
+
+            <p>The commands for <a class="cf-id" href="#/portal/tasks#TSK-060" data-cf-id="TSK-060">TSK-060</a>:</p>
+<pre class="cf-pre"><code>git worktree list
+git branch --show-current
+git fetch origin
+git worktree add .worktrees/tsk-060 -b task/TSK-060-portal-themes origin/main
+codeflow work start TSK-060</code></pre>
+            <ul>
+              <li>Wrong branch is the failure to prevent.</li>
+              <li>New work starts off the current tip unless the task pins a base.</li>
+            </ul>
+          </section>
+          <section class="cf-section" data-cf-section aria-labelledby="when-a-gate-blocks">
+            <h2 class="cf-h2" id="when-a-gate-blocks">When a gate blocks</h2>
+            <p class="cf-lead">A blocked change has one route: fix the cause, then continue.</p>
+<figure class="cf-fig" data-cf-figure="state">
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 5</span> · <span class="cf-fig-name">States of a change and the one route out of a red check</span></p>
+  <div class="cf-fig-stage">
+    <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 236" role="img" aria-labelledby="f5w-t f5w-d">
+      <title id="f5w-t">States of a change and the one route out of a red check</title>
+      <desc id="f5w-d">Editing, committed, pushed, pull request open, then checks green and merged. From pull request open a failing check leads to checks red. From checks red the only route returns to editing to fix the cause. A route from checks red to merged, a bypass, is forbidden.</desc>
+      <defs>
+        <marker id="f5w-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="cf-m-trans-head" d="M0 0L10 5L0 10Z"/></marker>
+        <marker id="f5w-r" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="cf-m-return-head" d="M0 0L10 5L0 10Z"/></marker>
+      </defs>
+      <path class="cf-m-trans" data-state="trans" d="M97 60H150" marker-end="url(#f5w-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M251 60H304" marker-end="url(#f5w-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M385 60H438" marker-end="url(#f5w-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M525 60H578" marker-end="url(#f5w-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M482 79V170" marker-end="url(#f5w-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M637 79V170" marker-end="url(#f5w-a)"/>
+      <path class="cf-m-return" data-state="return" d="M433 190C300 190 58 236 58 84" marker-end="url(#f5w-r)"/>
+      <text class="cf-t" x="196" y="176">fix the cause</text>
+      <path class="cf-m-blocked" data-state="blocked" d="M531 190H595"/>
+      <path class="cf-m-cross" d="M556 184L568 196M568 184L556 196"/>
+      <text class="cf-t cf-t--mute" x="562" y="170" text-anchor="middle">bypass</text>
+      <rect class="cf-m-state" data-state="state" x="20" y="42" width="76" height="36" rx="8"/><text class="cf-t" x="58" y="65" text-anchor="middle">editing</text>
+      <rect class="cf-m-state" data-state="state" x="152" y="42" width="98" height="36" rx="8"/><text class="cf-t" x="201" y="65" text-anchor="middle">committed</text>
+      <rect class="cf-m-state" data-state="state" x="306" y="42" width="78" height="36" rx="8"/><text class="cf-t" x="345" y="65" text-anchor="middle">pushed</text>
+      <rect class="cf-m-state" data-state="state" x="440" y="42" width="84" height="36" rx="8"/><text class="cf-t" x="482" y="65" text-anchor="middle">PR open</text>
+      <rect class="cf-m-state" data-state="state" x="580" y="42" width="114" height="36" rx="8"/><text class="cf-t" x="637" y="65" text-anchor="middle">checks green</text>
+      <rect class="cf-m-state" data-state="state" x="435" y="172" width="94" height="36" rx="8"/><text class="cf-t cf-t--strong" x="482" y="195" text-anchor="middle">checks red</text>
+      <rect class="cf-m-state" data-state="state" x="597" y="172" width="80" height="36" rx="8"/><text class="cf-t" x="637" y="195" text-anchor="middle">merged</text>
+    </svg>
+    <svg class="cf-fig-svg cf-fig-svg--narrow" viewBox="0 0 343 370" role="img" aria-labelledby="f5n-t f5n-d">
+      <title id="f5n-t">States of a change and the one route out of a red check</title>
+      <desc id="f5n-d">Editing, committed, pushed, pull request open, then checks green and merged, top to bottom. From pull request open a failing check leads to checks red. From checks red the only route returns to editing to fix the cause. A route from checks red to merged, a bypass, is forbidden.</desc>
+      <defs>
+        <marker id="f5n-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="cf-m-trans-head" d="M0 0L10 5L0 10Z"/></marker>
+        <marker id="f5n-r" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="cf-m-return-head" d="M0 0L10 5L0 10Z"/></marker>
+      </defs>
+      <path class="cf-m-trans" data-state="trans" d="M90 49V72" marker-end="url(#f5n-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M90 111V134" marker-end="url(#f5n-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M90 173V196" marker-end="url(#f5n-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M90 235V258" marker-end="url(#f5n-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M90 297V320" marker-end="url(#f5n-a)"/>
+      <path class="cf-m-trans" data-state="trans" d="M147 216H250Q262 216 262 228V258" marker-end="url(#f5n-a)"/>
+      <path class="cf-m-return" data-state="return" d="M310 278H318Q328 278 328 268V40Q328 30 318 30H150" marker-end="url(#f5n-r)"/>
+      <text class="cf-t" x="316" y="124" text-anchor="end">fix the cause</text>
+      <path class="cf-m-blocked" data-state="blocked" d="M262 297V330Q262 340 252 340H148"/>
+      <path class="cf-m-cross" d="M256 310L268 322M268 310L256 322"/>
+      <text class="cf-t cf-t--mute" x="280" y="321">bypass</text>
+      <rect class="cf-m-state" data-state="state" x="34" y="12" width="112" height="36" rx="8"/><text class="cf-t" x="90" y="35" text-anchor="middle">editing</text>
+      <rect class="cf-m-state" data-state="state" x="34" y="74" width="112" height="36" rx="8"/><text class="cf-t" x="90" y="97" text-anchor="middle">committed</text>
+      <rect class="cf-m-state" data-state="state" x="34" y="136" width="112" height="36" rx="8"/><text class="cf-t" x="90" y="159" text-anchor="middle">pushed</text>
+      <rect class="cf-m-state" data-state="state" x="34" y="198" width="112" height="36" rx="8"/><text class="cf-t" x="90" y="221" text-anchor="middle">PR open</text>
+      <rect class="cf-m-state" data-state="state" x="34" y="260" width="112" height="36" rx="8"/><text class="cf-t" x="90" y="283" text-anchor="middle">checks green</text>
+      <rect class="cf-m-state" data-state="state" x="34" y="322" width="112" height="36" rx="8"/><text class="cf-t" x="90" y="345" text-anchor="middle">merged</text>
+      <rect class="cf-m-state" data-state="state" x="215" y="260" width="94" height="36" rx="8"/><text class="cf-t cf-t--strong" x="262" y="283" text-anchor="middle">checks red</text>
+    </svg>
+  </div>
+  <ul class="cf-legend" aria-label="Legend">
+    <li data-state="state"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-state" x="2" y="2" width="24" height="12" rx="4"/></svg>State</li>
+    <li data-state="trans"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-trans" d="M2 8H20"/><path class="cf-m-trans-head" d="M19 3.5L26 8L19 12.5Z"/></svg>Normal transition</li>
+    <li data-state="return"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-return" d="M3 8H19"/><path class="cf-m-return-head" d="M18 2.5L26.5 8L18 13.5Z"/></svg>Return to fix</li>
+    <li data-state="blocked"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-blocked" d="M1 8H27"/><path class="cf-m-cross" d="M9 3L19 13M19 3L9 13"/></svg>Forbidden route</li>
+  </ul>
+  <figcaption class="cf-fig-caption">A red check returns the change to editing; there is no route from red to merged.</figcaption>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">Editing, committed, pushed, pull request open, then checks green and merged. From pull request open a failing check leads to checks red. From checks red the only route returns to editing to fix the cause. A route from checks red to merged, a bypass, is forbidden.</p>
+    <div class="cf-twin-scroll"><table>
+      <thead><tr><th scope="col">From</th><th scope="col">Event</th><th scope="col">To</th></tr></thead>
+      <tbody>
+        <tr><td>editing</td><td>commit</td><td>committed</td></tr>
+        <tr><td>committed</td><td>push</td><td>pushed</td></tr>
+        <tr><td>pushed</td><td>open a pull request</td><td>PR open</td></tr>
+        <tr><td>PR open</td><td>required checks pass</td><td>checks green</td></tr>
+        <tr><td>PR open</td><td>a required check fails</td><td>checks red</td></tr>
+        <tr><td>checks green</td><td>a person merges</td><td>merged</td></tr>
+        <tr><td>checks red</td><td>fix the cause</td><td>editing</td></tr>
+        <tr><td>checks red</td><td>bypass</td><td>Forbidden, no such route</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+</figure>
+
+            <ul>
+              <li>Never use <code>--no-verify</code>, edit hooks or export gate tokens.</li>
+              <li>An unfinished CI job is missing evidence, not a failure.</li>
+              <li>Push the branch after each committed unit so work survives a machine failure.</li>
+            </ul>
+          </section>
+          <section class="cf-section" data-cf-section aria-labelledby="commit-message-limits">
+            <h2 class="cf-h2" id="commit-message-limits">Commit message limits</h2>
+            <p class="cf-lead">The rules are lengths and a shape.</p>
+<figure class="cf-fig" data-cf-figure="extent">
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 6</span> · <span class="cf-fig-name">Commit message limits drawn to length</span></p>
+  <div class="cf-fig-stage">
+    <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 328" role="img" aria-labelledby="f6w-t f6w-d">
+      <title id="f6w-t">Commit message limits drawn to length</title>
+      <desc id="f6w-d">The subject feat(portal): add display panel uses 31 of 72 characters, with marks at 50 for the description and 72 for the whole line. The body holds three bullets, each at most 72 characters; a fourth bullet is not allowed. An optional BREAKING CHANGE footer follows.</desc>
+      <text class="cf-t cf-t--strong" x="0" y="85">Subject</text>
+      <text class="cf-t cf-t--mono" x="100" y="58">feat(portal): add display panel</text>
+      <rect class="cf-m-used" data-state="used" x="100" y="74" width="261" height="12" rx="3"/>
+      <path class="cf-m-warn" data-state="warn" d="M365 80H703"/>
+      <line class="cf-m-limit" data-state="limit" x1="521" y1="66" x2="521" y2="94"/>
+      <line class="cf-m-limit" data-state="limit" x1="707" y1="66" x2="707" y2="94"/>
+      <text class="cf-t cf-t--mute" x="521" y="118" text-anchor="middle">50 description</text>
+      <text class="cf-t cf-t--mute" x="712" y="118" text-anchor="end">72 line</text>
+      <text class="cf-t" x="0" y="169">Bullet 1</text>
+      <text class="cf-t" x="0" y="193">Bullet 2</text>
+      <text class="cf-t" x="0" y="217">Bullet 3</text>
+      <text class="cf-t cf-t--mute" x="0" y="241">Bullet 4</text>
+      <rect class="cf-m-used" data-state="used" x="100" y="159" width="388" height="10" rx="3"/>
+      <rect class="cf-m-used" data-state="used" x="100" y="183" width="506" height="10" rx="3"/>
+      <rect class="cf-m-used" data-state="used" x="100" y="207" width="320" height="10" rx="3"/>
+      <path class="cf-m-warn" data-state="warn" d="M492 164H703"/>
+      <path class="cf-m-warn" data-state="warn" d="M610 188H703"/>
+      <path class="cf-m-warn" data-state="warn" d="M424 212H703"/>
+      <rect class="cf-m-denied" data-state="denied" x="100.75" y="230.75" width="606" height="10.5" rx="3"/>
+      <path class="cf-m-cross" d="M397 230L409 242M409 230L397 242"/>
+      <line class="cf-m-limit" data-state="limit" x1="707" y1="146" x2="707" y2="248"/>
+      <text class="cf-t cf-t--strong" x="0" y="313">Footer</text>
+      <text class="cf-t cf-t--mono" x="100" y="288">BREAKING CHANGE:</text>
+      <rect class="cf-m-optional" data-state="optional" x="100.75" y="302.75" width="134" height="10.5" rx="3"/>
+    </svg>
+    <svg class="cf-fig-svg cf-fig-svg--narrow" viewBox="0 0 343 290" role="img" aria-labelledby="f6n-t f6n-d">
+      <title id="f6n-t">Commit message limits drawn to length</title>
+      <desc id="f6n-d">The subject feat(portal): add display panel uses 31 of 72 characters, with marks at 50 for the description and 72 for the whole line. The body holds three bullets, each at most 72 characters; a fourth bullet is not allowed. An optional BREAKING CHANGE footer follows.</desc>
+      <text class="cf-t cf-t--strong" x="0" y="16">Subject</text>
+      <text class="cf-t cf-t--mono" x="8" y="36">feat(portal): add display panel</text>
+      <rect class="cf-m-used" data-state="used" x="8" y="56" width="136" height="10" rx="3"/>
+      <path class="cf-m-warn" data-state="warn" d="M148 61H321"/>
+      <line class="cf-m-limit" data-state="limit" x1="228" y1="50" x2="228" y2="72"/>
+      <line class="cf-m-limit" data-state="limit" x1="325" y1="50" x2="325" y2="72"/>
+      <text class="cf-t cf-t--mute" x="228" y="96" text-anchor="middle">50</text>
+      <text class="cf-t cf-t--mute" x="325" y="96" text-anchor="middle">72</text>
+      <text class="cf-t cf-t--strong" x="0" y="122">Body</text>
+      <rect class="cf-m-used" data-state="used" x="8" y="136" width="202" height="8" rx="3"/>
+      <rect class="cf-m-used" data-state="used" x="8" y="154" width="264" height="8" rx="3"/>
+      <rect class="cf-m-used" data-state="used" x="8" y="172" width="167" height="8" rx="3"/>
+      <path class="cf-m-warn" data-state="warn" d="M214 140H321"/>
+      <path class="cf-m-warn" data-state="warn" d="M276 158H321"/>
+      <path class="cf-m-warn" data-state="warn" d="M179 176H321"/>
+      <rect class="cf-m-denied" data-state="denied" x="8.75" y="189.75" width="316" height="9.5" rx="3"/>
+      <path class="cf-m-cross" d="M161 189L171 199M171 189L161 199"/>
+      <line class="cf-m-limit" data-state="limit" x1="325" y1="130" x2="325" y2="206"/>
+      <text class="cf-t cf-t--strong" x="0" y="236">Footer</text>
+      <text class="cf-t cf-t--mono" x="8" y="258">BREAKING CHANGE:</text>
+      <rect class="cf-m-optional" data-state="optional" x="8.75" y="270.75" width="70" height="9.5" rx="3"/>
+    </svg>
+  </div>
+  <ul class="cf-legend" aria-label="Legend">
+    <li data-state="used"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-used" x="2" y="3" width="24" height="10" rx="3"/></svg>Used length</li>
+    <li data-state="warn"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-warn" d="M1 8H27"/></svg>Room left</li>
+    <li data-state="limit"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line class="cf-m-limit" x1="14" y1="1" x2="14" y2="15"/></svg>Limit</li>
+    <li data-state="denied"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-denied" x="1.75" y="3.75" width="24.5" height="8.5" rx="2"/><path class="cf-m-cross" d="M10 3L18 13M18 3L10 13"/></svg>Not allowed</li>
+    <li data-state="optional"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-optional" x="1.75" y="3.75" width="24.5" height="8.5" rx="2"/></svg>Optional</li>
+  </ul>
+  <figcaption class="cf-fig-caption">Subject description 50, subject line 72, at most three body bullets of 72, one optional breaking footer.</figcaption>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">The subject feat(portal): add display panel uses 31 of 72 characters, with marks at 50 for the description and 72 for the whole line. The body holds three bullets, each at most 72 characters; a fourth bullet is not allowed. An optional BREAKING CHANGE footer follows.</p>
+    <div class="cf-twin-scroll"><table>
+      <thead><tr><th scope="col">Part</th><th scope="col">Limit</th><th scope="col">Example</th></tr></thead>
+      <tbody>
+        <tr><td>Subject description</td><td>50 characters</td><td><code>add display panel</code></td></tr>
+        <tr><td>Subject line</td><td>72 characters</td><td><code>feat(portal): add display panel</code></td></tr>
+        <tr><td>Body</td><td>At most 3 bullets, each one line of 72</td><td><code>- persist choices before first paint</code></td></tr>
+        <tr><td>Footer</td><td>Optional, only for a breaking change</td><td><code>BREAKING CHANGE: rename cf.mode to cf.theme</code></td></tr>
+      </tbody>
+    </table></div>
+  </details>
+</figure>
+
+<pre class="cf-pre"><code>feat(portal): add display panel
+
+- add font, size, palette and appearance pills
+- apply stored choices before first paint
+- keep palette controls out of the header</code></pre>
+            <p>A breaking change adds <code>!</code> after the type, as in <code>feat!:</code>, and ends with a <code>BREAKING CHANGE:</code> footer that explains the migration.</p>
+          </section>
+        </div>
+      </article>
+    </main>
+
+    <aside class="cf-panel cf-panel--toc" id="cf-toc" aria-labelledby="cf-toc-label">
+      <div class="cf-panel-inner">
+        <span class="cf-kicker cf-toc-kicker" id="cf-toc-label">On this page</span>
+        <ul class="cf-toc-list" data-cf-toc></ul>
+      </div>
+    </aside>
+
+    <nav class="cf-footnav" aria-label="Previous and next page">
+      <div class="cf-footnav-grid">
+        <a class="cf-footcard cf-footcard--prev" href="#/portal/what-codeflow-is"><span class="cf-kicker">Previous</span><span class="cf-footcard-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>What CodeFlow is</span></a>
+        <a class="cf-footcard cf-footcard--next" href="#/portal/capabilities"><span class="cf-kicker">Next</span><span class="cf-footcard-title">Capabilities<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span></a>
+      </div>
+    </nav>
+  </div>
+
+  <div class="cf-peek-strip cf-peek-strip--left" data-cf-peek="nav" aria-hidden="true"></div>
+  <div class="cf-peek-strip cf-peek-strip--right" data-cf-peek="toc" aria-hidden="true"></div>
+  <div class="cf-sheet cf-sheet--left" role="dialog" aria-label="Guide navigation" data-cf-sheet="nav">
+    <div class="cf-sheet-head"><span class="cf-kicker">Guide</span><button class="cf-icon-btn" type="button" data-cf-pin="nav" aria-label="Keep navigation open" title="Keep navigation open"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></svg></button><button class="cf-icon-btn" type="button" data-cf-close-sheet aria-label="Close navigation" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="cf-sheet-body" data-cf-sheet-body></div>
+  </div>
+  <div class="cf-sheet cf-sheet--right" role="dialog" aria-label="On this page" data-cf-sheet="toc">
+    <div class="cf-sheet-head"><span class="cf-kicker">On this page</span><button class="cf-icon-btn" type="button" data-cf-pin="toc" aria-label="Keep the outline open" title="Keep the outline open"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M14.5 4.5v15"/></svg></button><button class="cf-icon-btn" type="button" data-cf-close-sheet aria-label="Close outline" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div class="cf-sheet-body"><ul class="cf-toc-list" data-cf-toc></ul></div>
+  </div>
+</div>
+<!-- Demo data read by chrome.js: record previews, recent pages and search entries for pages outside this reference -->
+<script type="application/json" id="cf-data">
+{
+ "records": {
+  "CAP-016": {
+   "kind": "Capability",
+   "title": "Utility presentation system",
+   "status": "shipped",
+   "statusLabel": "Shipped",
+   "summary": "Portal and present share one set of tokens, chrome and figure rules.",
+   "route": "#/portal/capabilities#CAP-016"
+  },
+  "ADR-0017": {
+   "kind": "Decision",
+   "title": "Remote rules derive from policy",
+   "status": "accepted",
+   "statusLabel": "Accepted",
+   "summary": "Remote branch protection is generated from .codeflow/policy.json.",
+   "route": "#/portal/decisions#ADR-0017"
+  },
+  "TSK-060": {
+   "kind": "Task",
+   "title": "Portal themes, panels and tab strip",
+   "status": "todo",
+   "statusLabel": "To do",
+   "summary": "Display panel, collapsible panels and the altitude tab strip.",
+   "route": "#/portal/tasks#TSK-060"
+  },
+  "EPC-016": {
+   "kind": "Epic",
+   "title": "Visual guide doctrine and portal rebuild",
+   "status": "planning",
+   "statusLabel": "Planning",
+   "summary": "Figure grammar for every altitude and the rebuilt docs portal.",
+   "route": "#/portal/epics#EPC-016"
+  }
+ },
+ "recent": [
+  {
+   "title": "How a change lands",
+   "altitude": "Technical",
+   "route": "#/portal/how-a-change-lands#technical",
+   "anchor": "when-a-gate-blocks",
+   "text": "Guide / Orient · When a gate blocks"
+  },
+  {
+   "title": "What CodeFlow is",
+   "altitude": "Concept",
+   "route": "#/portal/what-codeflow-is",
+   "text": "Guide / Orient"
+  },
+  {
+   "title": "Policy and hooks",
+   "altitude": "Technical",
+   "route": "#/portal/policy-and-hooks",
+   "text": "Guide / Reference"
+  }
+ ],
+ "pages": [
+  {
+   "page": "What CodeFlow is",
+   "crumb": "Guide / Orient",
+   "title": "What CodeFlow is",
+   "altitude": "Concept",
+   "route": "#/portal/what-codeflow-is",
+   "text": "CodeFlow is the discipline layer you install into any repository. One binary scaffolds, enforces, verifies and remembers."
+  },
+  {
+   "page": "Policy and hooks",
+   "crumb": "Guide / Reference",
+   "title": "Hook installation",
+   "altitude": "Technical",
+   "route": "#/portal/policy-and-hooks",
+   "text": "Hooks and CI share .codeflow/policy.json. A gate exists only where a mistake is irreversible or invisible."
+  },
+  {
+   "page": "Policy and hooks",
+   "crumb": "Guide / Reference",
+   "title": "Gate tokens",
+   "altitude": "Technical",
+   "route": "#/portal/policy-and-hooks",
+   "text": "Gate tokens are never exported by an agent. When a gate blocks, fix the cause."
+  },
+  {
+   "page": "Command line",
+   "crumb": "Guide / Reference",
+   "title": "codeflow integrate",
+   "altitude": "Technical",
+   "route": "#/portal/command-line",
+   "text": "codeflow integrate <branch> --into <target> lands a task branch on an integration branch and reruns the gates."
+  }
+ ]
+}
+</script>
+</body>
+</html>

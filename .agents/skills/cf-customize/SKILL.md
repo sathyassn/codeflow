@@ -3,7 +3,7 @@ name: cf-customize
 description: Tailor a CodeFlow scaffold to its consuming project. Verify both interactive duo lanes, their effective autonomy/network/secret boundaries, and the research, source-control, test, security, browser/UI, design, and project-specific MCP tools the work needs. Then derive and confirm the consuming project's product, architecture, operating-contract, policy, workflow, parallelism, and model-routing specifics from evidence already in the repo. Use when customizing after init, after `codeflow update` brings new defaults, or when the operator asks to tailor the scaffold. Analyze before editing; never invent project facts or auto-install tools. Do not use for ordinary feature work.
 ---
 
-# cf-customize — tailor a scaffolded project to itself
+# cf-customize: tailor a scaffolded project to itself
 
 `codeflow init` seeds generic one-liners, templates, and warn-level defaults.
 This skill is its evidence-driven reasoning companion: it tailors *this*
@@ -18,27 +18,27 @@ Run two jobs in order: **Part A** verifies required flow tools and offers fixes;
 1. **Analyze before editing.** Report missing Part A and generic Part B items in
    priority order, then walk fixes interactively one at a time.
 2. **Use a working branch.** Use `chore/codeflow-customize` or another `chore/`
-   branch, scoped commits, durability pushes (backup, not merge), and a PR—never
+   branch, scoped commits, durability pushes (backup, not merge), and a PR, never
    a protected branch.
 3. **Stay idempotent.** At init or after update, leave tailored sections alone
    and propose only defaults that still need a project decision (including new
    `security_review` / `dep_audit` levels).
 
-## Part A — flow-aware tool preflight
+## Part A: flow-aware tool preflight
 
 First decide **which flows this project uses**, then verify each flow's tools.
-Standard/full installs default every non-trivial repository task to the duo;
+Standard/full installs route adopter-facing work to the duo by touched paths;
 solo is a preflight-proven degradation, not an equivalent preference:
 
-- **Solo** (`/cf-develop`) — always in play.
-- **Duo** (`/cf-model-orchestrator`) — host-neutral when both native
+- **Solo** (`/cf-develop`): always in play.
+- **Duo** (`/cf-model-orchestrator`): host-neutral when both native
   interactive seats are available: Claude Code → Codex through the official
   plugin/app-server, Codex → Claude through Herdr (tmux degraded), Grok →
   Codex through official `codex` CLI + app-server (CodeFlow ADR-0023, ADR-0055).
-- **Batch** — the pipeline preset; single-vendor by design, even when its
+- **Batch**: the pipeline preset; single-vendor by design, even when its
   assurance stages resemble parts of the duo.
 
-Then verify and **offer** remediation — never install silently.
+Then verify and **offer** remediation; never install silently.
 
 - **Core (every flow).** git, the `codeflow` binary, the active harness, and the
   stack test toolchain. Read inspectable health from **`codeflow doctor`**; its
@@ -46,30 +46,24 @@ Then verify and **offer** remediation — never install silently.
   tmux. Retain live interactive canaries because status commands cannot prove a
   native TTY session and its tools work.
 - **Duo flow** (codex configured / `cf-model-orchestrator` in use):
-  - **Claude-host lane** — `codex login status`, `codex mcp list`, the enabled
-    `codex@openai-codex` plugin, and a scoped `/codex:setup`/tool canary. The
-    plugin/app-server is preferred. If unavailable or incompatible, qualify
-    the official native fallback in `cf-delegate`; missing plugin alone does
-    not establish a missing Codex seat. Verify task tools and safety boundaries.
-    Never use headless `codex exec`, a hand-rolled app-server driver,
-    or a third-party Grok Codex plugin.
-  - **Codex-host lane** — `claude --version` (2.1.187 or newer for sandbox
-    environment-variable denies), `herdr` when `HERDR_ENV=1` else `tmux`, and
-    `claude mcp list`, followed by authenticated interactive TTY canaries for
-    the current ensemble's Claude primary at default effort. Escalation
-    efforts are exercised by in-family workers, not canaried on the primary.
-    Production uses `bypassPermissions`; consult/no-edit review uses
-    auto with `autoMode.classifyAllShell: true` through `--settings`, plus one
-    schema-v2 round trip — `delegate init` → wait-ready → `arm` → canonical
-    UTF-8/internal-LF exact-byte delivery → wait-accepted → wait-terminal with
-    bounded cleanup — including the `cf-delegate` sibling Stop-hook preflight.
-    Never use `claude -p`, bare `tmux wait-for`, or pane
-    stability as the work protocol. If the preferred Claude primary is
-    unavailable, use the ensemble's recorded same-Claude primary fallback;
-    never claim the fallback was the selected primary.
-  - **Autonomy settings** — parse and inspect the effective files rather than
+  - **Lane preflight and canary:** run those of the lane this host uses, as
+    `cf-delegate` and its lane files set out: the plugin lane on a Claude host
+    (a missing plugin alone does not establish a missing Codex seat; qualify
+    the official native fallback), the lifecycle lane on a Codex host
+    (`herdr` when `HERDR_ENV=1`, else `tmux`, and one schema-v2 round trip
+    with the sibling Stop-hook preflight). `codeflow doctor` reports the
+    inspectable part; the live canary proves the native session and its
+    tools. Canary the current ensemble's primaries at default effort;
+    escalation efforts are exercised by in-family workers. Never use
+    headless `codex exec` or `claude -p`, a hand-rolled app-server driver,
+    a third-party Grok Codex plugin, bare `tmux wait-for` or pane stability
+    as the work protocol. If the preferred Claude primary is unavailable,
+    use the ensemble's recorded same-Claude primary fallback; never claim
+    the fallback was the selected primary.
+  - **Autonomy settings**: parse and inspect the effective files rather than
     trusting their comments:
-    - `.claude/settings.json`: sandbox enabled and fail-closed, sandboxed Bash
+    - `.claude/settings.json` (Claude Code 2.1.187 or newer applies the
+      sandbox environment-variable denies): sandbox enabled and fail-closed, sandboxed Bash
       auto-approved, classified unsandboxed retry enabled only for trusted
       installed tools that fail because they require host state, wildcard
       public-domain egress present for dependency/tool subprocesses, common private/link-local
@@ -82,15 +76,15 @@ Then verify and **offer** remediation — never install silently.
     - `.codex/config.toml`: guarded workspace default, no legacy `sandbox_mode`,
       public network/live search. Production combines `approval_policy = "never"`
       and `--sandbox danger-full-access`: no prompts/OS sandbox; guards, hooks,
-      and CI remain floors, not task authority. Consult `workspace-write` still
-      denies workspace keys/certificates and `~/.codex/auth.json`;
+      and CI remain floors, not task authority. A reviewer's `cf-guard` profile
+      still denies root-level keys/certificates and `~/.codex/auth.json`;
       `ignore_default_excludes = false` retains secret-environment filtering.
       Verify the effective boundary: settings alone neither authorize external
       communication nor protect arbitrary PII/public queries. Obtain needed
       operator authority in the authenticated conversation without a global
       mode change; approval never waives an agent-blocked floor. A missing
       required hard control withholds that risky lane, not safe work.
-  - **Research and task tools** — live web search/fetch and authoritative docs;
+  - **Research and task tools**: live web search/fetch and authoritative docs;
     GitHub/source-control; the project's format, lint, test, coverage,
     dependency, and security tools; one supported Playwright route in every
     native harness that will operate web UI; other-lineage Computer Use QA of
@@ -100,8 +94,8 @@ Then verify and **offer** remediation — never install silently.
     project-specific issue-tracker, database, cloud, or private-document MCPs.
     Prove tool access through the actual peer lane, not only by listing
     configuration.
-- **Stack test toolchain.** The runner the detected stack tests with — cargo /
-  npm / pytest / go — aligned with `cf-stack` and what `codeflow test` invokes.
+- **Stack test toolchain.** The runner the detected stack tests with (cargo /
+  npm / pytest / go), aligned with `cf-stack` and what `codeflow test` invokes.
   A missing runner means the test gate cannot run.
   Inspect the selected deterministic security lane too: language-native
   analysis, SAST/dataflow/taint, SCA, and secret scanning are different
@@ -128,7 +122,7 @@ or outward action. The fixes:
 - codex-plugin-cc not installed → **from a Claude Code session only**:
   `/plugin marketplace add openai/codex-plugin-cc` → `/plugin install
   codex@openai-codex` → `/reload-plugins` → `/codex:setup`. These are Claude
-  Code slash commands — if this session is another harness, do **not** offer
+  Code slash commands; if this session is another harness, do **not** offer
   them; report the gap for the user to fix from a Claude Code session.
 - codex present but unauthenticated → `codex login`
 - outdated Codex or Claude CLI → present the vendor-supported update command
@@ -158,7 +152,7 @@ or outward action. The fixes:
   browser-resource contract rather than relying on MCP defaults:
   - a task/run ID owns a fresh isolated context/profile; use `--isolated` by
     default, or a task-specific `--user-data-dir` only when persistent state is
-    required—never the operator's default browser profile;
+    required, never the operator's default browser profile;
   - the project allocates non-overlapping loopback application/service ports
     and, only for a listening MCP transport, a distinct MCP port. Record the
     allocator or safe range; CodeFlow does not impose universal port numbers;
@@ -175,7 +169,7 @@ or outward action. The fixes:
 
 - Claude auto mode unavailable → show the failed capability check; use
   `acceptEdits` with the fail-closed project sandbox for this run. Do not write
-  `defaultMode: auto` into `.claude/settings.json`—Claude ignores it at project
+  `defaultMode: auto` into `.claude/settings.json`: Claude ignores it at project
   scope. Offer the user-level setting only with approval. A lifecycle peer run
   already uses its one immutable CLI settings file for hooks, so repeated
   `--settings` flags are not a supported composition mechanism; when user-scope
@@ -197,37 +191,37 @@ or outward action. The fixes:
   the file deny and configure a broker instead. If storage cannot be proven,
   fail closed and report the tool unavailable rather than reading the file.
 
-If a tool is absent and the user declines the fix, **degrade legibly**—name the
+If a tool is absent and the user declines the fix, **degrade legibly**: name the
 missing lane/evidence and use solo `/cf-develop`. Never label the run duo or
 quietly replace the missing vendor with another instance of the host model.
 
-## Part B — project-artifact customization
+## Part B: project-artifact customization
 
 Analyze what is still at template defaults, then propose filling each. First
 discover candidate facts from the consuming repository's README, manifests,
 package metadata, CI workflows, code layout, existing docs, and supported
 commands. Reconcile contradictions and cite where every proposed fact came
-from. Walk the result interactively—never invent project facts; the owner
+from. Walk the result interactively; never invent project facts; the owner
 confirms the final content.
 
-- **`docs/product.md`** — the WHY layer: purpose, users, scope, non-goals. Init
+- **`docs/product.md`**: the WHY layer: purpose, users, scope, non-goals. Init
   seeds only the one-liner; fill the four sections. Non-goals are the
-  load-bearing part—the orchestrator/`cf-plan` checks new work against them.
+  load-bearing part: the orchestrator/`cf-plan` checks new work against them.
   This describes the consuming project, never CodeFlow itself.
-- **`docs/architecture.md`** — the HOW layer: major components, boundaries,
+- **`docs/architecture.md`**: the HOW layer: major components, boundaries,
   ownership, state, integrations, and repository paths, with ADR links rather
   than duplicated decisions. Fill its overview and area sections from the
   actual layout.
-- **`AGENTS.md`** — the common project-owned operating section *outside* the
+- **`AGENTS.md`**: the common project-owned operating section *outside* the
   `codeflow:managed` markers: supported setup/dev/build/format/lint/test/security
   commands, prerequisites, repository map, environment constraints, and
   project-specific guardrails. Common project facts live here, not duplicated
   into every harness adapter.
-- **`CLAUDE.md`** — append only genuinely Claude-specific project differences
+- **`CLAUDE.md`**: append only genuinely Claude-specific project differences
   outside its managed region. Do not repeat the project brief or common commands
   already owned by `docs/product.md`, `docs/architecture.md`, or `AGENTS.md`.
-  **Never edit inside either managed block**—`codeflow update` owns it.
-- **Project shape and work authority** — load
+  **Never edit inside either managed block**; `codeflow update` owns it.
+- **Project shape and work authority**: load
   `cf-method/references/project-organization.md`. Map accepted responsibilities,
   interfaces, native build/runtime/release units, data/trust owners, and local
   instructions before proposing folders. Preserve coherent existing layout and
@@ -237,17 +231,20 @@ confirms the final content.
   Without active tracking, claim no workgraph parity and do not silently raise
   tier. Use opaque links, never status mirroring or a host-local database as
   shared team truth. Migrate only for an evidenced failure.
-- **Agentic operating/estimation method** — when useful to this project's
-  delivery or capacity decisions, invoke `cf-estimate` for a concrete preview
-  against its existing planning authority. Confirm new adoption, reuse a
-  compatible profile or honor a recorded decline until its material re-offer
-  event. Never seed forecasts, calibration tables or `.codeflow/estimate.json`
+- **Estimation** only on an explicit request, through `cf-estimate`. Never
+  seed forecasts, calibration tables or `.codeflow/estimate.json`
   automatically; a setup walkthrough does not authorize method adoption.
-- **Releases** — follow `cf-ship/references/release-policy.md` for setup.
-- **`.codeflow/policy.json`** — gate levels: harden `dep_audit` /
+- **Releases**: follow `cf-ship/references/release-policy.md` for setup.
+- **Issue tracker**: when a work item is planned, started, blocked, completed
+  or cancelled, any board gets a one-way projection that follows
+  [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle);
+  record which MCP or CLI projects which events.
+- **`.codeflow/policy.json`**: A change to `.codeflow/policy.json` needs a
+  human: propose the exact change, and a human makes or approves it, since the
+  policy is the gate the agent works under. Gate levels: harden `dep_audit` /
   `security_review` from `warn` → `block` once the project's scanners and
   allowlists are ready; protected-branch globs; branch prefixes. **Footer
-  policy** — the commit body is `-` bullets + a `BREAKING CHANGE:` footer only by
+  policy**: the commit body is `-` bullets + a `BREAKING CHANGE:` footer only by
   default; every other trailer blocks until opted in. Decide per class: (a)
   **track tickets in commits?** if yes, set `commit_ticket_keys` (e.g.
   `["Refs","Closes"]`) to *allow* them, then `commit_ticket_required`
@@ -256,19 +253,19 @@ confirms the final content.
   token to `commit_required_footers` (e.g. `["Signed-off-by"]`) to require it on
   every commit; (c) any other trailer a workflow needs → add it to
   `commit_footer_tokens` to allow it. Leave every list empty for the strict
-  default — an agent fills any slot you open, so open only what you mean.
-- **`.claude/workflows/pipeline.workflow.js`** — per-stage model selection and
+  default; an agent fills any slot you open, so open only what you mean.
+- **`.claude/workflows/pipeline.workflow.js`**: per-stage model selection and
   the honest single-vendor assurance preset. Define bounded concurrency from
   the host's actual memory/CPU/tool budget; independent work gets separate
   branches/worktrees, explicit file ownership, and serialized integration. It
   is user-owned; `codeflow update` never touches it.
-- **Harness model/MCP config** — read the current primary selectors, effort
+- **Harness model/MCP config**: read the current primary selectors, effort
   defaults/escalations, and permitted internal routes from
   `../cf-model-orchestrator/resources/current-ensemble.json`. Then inspect
   `.codeflow/model-selection.json`: absent/empty means the managed default;
   every override references only a local binding ID qualified for that exact
   stable role. Run `codeflow doctor --check model-bindings` before proposing an
-  override. A failure blocks the selection—never write a raw selector, partially
+  override. A failure blocks the selection; never write a raw selector, partially
   apply entries, or silently fall back. Invoke each effective primary directly,
   leave internal routing to that primary, and follow `cf-model-orchestrator`'s
   candidate/scoped-qualified contract. Keep configuration, native availability,
@@ -282,7 +279,7 @@ confirms the final content.
   keep fast-aging version pins out of shared doctrine.
   Claude context/compaction: read
   [policy](references/claude-context-policy.md).
-- **Presentation utility** — leave `.codeflow/present/config.toml` and primitive
+- **Presentation utility**: leave `.codeflow/present/config.toml` and primitive
   tokens absent unless the project explicitly wants different closed-session
   retention or a one-way adaptation of project primitives into `cf-present`.
   When warranted, use the managed schemas and the examples in the `cf-present`
@@ -290,14 +287,14 @@ confirms the final content.
   project-owned content, and run one light/dark accessibility canary. Never
   import product CSS, components, classes, frameworks, font files, paths, or
   runtime dependencies; never make the utility's defaults product authority.
-- **Repository guide** — use `cf-docs-portal` when durable sources justify a
+- **Repository guide**: use `cf-docs-portal` when durable sources justify a
   layered guide. Confirm adoption separately from customization. Use supported
   config/token seams; preserve managed-runtime edits and missing project files.
   Bespoke runtime changes require explicit whole-runtime transfer, not a source
   merge or automatic abandonment of updates. Read the skill's operations
   reference before legacy migration or recovery; no portal is installed merely
   because setup or customization was requested.
-- **Product and design direction** — for projects with user-facing surfaces,
+- **Product and design direction**: for projects with user-facing surfaces,
   locate the product brief, audience/user research, operator-approved
   references, brand guidance, design-system source, platform conventions, and
   accessibility target that `cf-design` should consult. Reconcile conflicting
@@ -306,10 +303,10 @@ confirms the final content.
   research, prescribe a visual style, create a design system for one surface,
   or add a mandatory design document where the project already has a durable
   home.
-- **README and CI reconciliation** — update human-facing setup or CI only when
+- **README and CI reconciliation**: update human-facing setup or CI only when
   the discovered canonical commands and documented behavior disagree. README is
   the human front door, not a second agent authority.
-- **Editorial voice** — find existing project-owned voice/style guidance and
+- **Editorial voice**: find existing project-owned voice/style guidance and
   representative human-approved examples. If none exists, ask whether durable
   guidance is wanted; never infer a persona from generated text. Keep the
   canonical guidance in the project's existing content/style home and add only
@@ -331,5 +328,6 @@ content. Do **not** propose auto-running the skill.
 
 Report completion with the prioritized findings, the tool fixes applied or
 declined (and what each declined fix costs), the artifacts filled, and the gate
-output. Apply `cf-editorial-review` to the substantive report and artifact
-edits, then hand off to `cf-ship` to land the PR — a human merges it.
+output. `cf-editorial-review` applies to the report and artifact edits where
+its description triggers it; then hand off to `cf-ship` to land the PR,
+whose step 8 says who merges it.

@@ -8,11 +8,11 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
-use std::process::Command;
 
 use crate::capability::{parse_capabilities, CapabilityEntry};
 use crate::models::{Epic, EpicFilter, Task, TaskFilter, TaskStatus};
-use crate::workgraph::{MarkdownStore, RecordStore};
+use crate::workgraph::readiness::{self, Backlog, State};
+use crate::workgraph::{durable_work_tracking_enabled, MarkdownStore, RecordStore};
 
 /// A git worktree attached to the repository.
 #[derive(Debug, Clone)]
@@ -41,6 +41,9 @@ pub enum CleanupDisposition {
     PreserveDirty,
     /// Clean, but landing could not be proven from local Git evidence.
     RetainUnproven,
+    /// An integration line an open task still targets (SPC-013 R-44), or a
+    /// task branch holding an open claim (R-27).
+    RetainLive,
 }
 
 impl CleanupDisposition {
@@ -49,6 +52,7 @@ impl CleanupDisposition {
             Self::Removable => "removable",
             Self::PreserveDirty => "preserve-dirty",
             Self::RetainUnproven => "retain-unproven",
+            Self::RetainLive => "retain-live",
         }
     }
 }
@@ -113,6 +117,9 @@ pub struct StatusView {
     pub cleanup: Vec<CleanupInfo>,
     /// `None` when the project-management tier is absent.
     pub work: Option<WorkSummary>,
+    /// Derived task states from the readiness core (SPC-013 R-27); `None`
+    /// when durable work tracking is off or the refs cannot be read.
+    pub derived: Option<Backlog>,
     /// `None` when `docs/capabilities.md` is absent.
     pub capabilities: Option<Vec<CapabilityEntry>>,
     /// Per-capability delivery rollup. `None` when either the registry or the
@@ -149,6 +156,16 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         };
 
     let work = collect_work(repo_root, &mut notes);
+    let derived = match durable_work_tracking_enabled(repo_root) {
+        Ok(true) => match readiness::backlog(repo_root) {
+            Ok(backlog) => Some(backlog),
+            Err(error) => {
+                notes.push(format!("derived task states unavailable: {error}"));
+                None
+            }
+        },
+        _ => None,
+    };
     let capabilities = collect_capabilities(repo_root, &mut notes);
     let delivery = collect_delivery(repo_root, capabilities.as_deref());
 
@@ -158,6 +175,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         cleanup_target,
         cleanup,
         work,
+        derived,
         capabilities,
         delivery,
         notes,
@@ -325,12 +343,24 @@ fn classify_cleanup(
         Some(false) => {}
     }
 
+    if branch.is_some_and(|name| readiness::is_live_integration_line(repo_root, name)) {
+        return (
+            CleanupDisposition::RetainLive,
+            "live integration line: an open task targets it".to_string(),
+        );
+    }
     let (Some(oid), Some(target)) = (oid, target) else {
         return (
             CleanupDisposition::RetainUnproven,
             "landing target or revision unavailable".to_string(),
         );
     };
+    if branch.is_some_and(|name| readiness::is_open_claim(repo_root, repo, name, oid, target.oid)) {
+        return (
+            CleanupDisposition::RetainLive,
+            format!("open claim: nothing of it has landed in {}", target.name),
+        );
+    }
     if oid == target.oid || repo.graph_descendant_of(target.oid, oid).unwrap_or(false) {
         return (
             CleanupDisposition::Removable,
@@ -362,23 +392,7 @@ fn repository_dirty(path: &Path) -> Option<bool> {
 }
 
 fn patch_equivalent(repo_root: &Path, target: &str, branch: &str) -> bool {
-    if target.starts_with('-') || branch.starts_with('-') {
-        return false;
-    }
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(["cherry", target, branch])
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines();
-    let Some(first) = lines.next() else {
-        return false;
-    };
-    output.status.success() && first.starts_with('-') && lines.all(|line| line.starts_with('-'))
+    readiness::cherry_landed(repo_root, target, branch)
 }
 
 fn list_worktrees(repo: &git2::Repository) -> Vec<WorktreeInfo> {
@@ -585,6 +599,9 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
             let _ = writeln!(out, "work: (no project-management tier)");
         }
     }
+    if let Some(backlog) = &view.derived {
+        render_derived(&mut out, backlog);
+    }
 
     match &view.capabilities {
         Some(entries) => {
@@ -626,6 +643,56 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
     }
 
     out
+}
+
+fn render_derived(out: &mut String, backlog: &Backlog) {
+    let _ = writeln!(out, "tasks: {}", backlog.counts_line());
+    let _ = writeln!(out, "  {}", backlog.snapshot_line());
+    for entry in backlog.in_state(State::Active) {
+        let _ = writeln!(
+            out,
+            "  active: {} {} ({})",
+            entry.task_id,
+            entry.title,
+            entry.branches.join(", ")
+        );
+    }
+    for entry in backlog.in_state(State::Ready) {
+        let _ = writeln!(out, "  ready: {} {}", entry.task_id, entry.title);
+    }
+    // A Blocker or an invalid record outranks a claim; the branch stays shown.
+    for state in [State::Blocked, State::Invalid] {
+        for entry in backlog
+            .in_state(state)
+            .filter(|entry| !entry.branches.is_empty())
+        {
+            let _ = writeln!(
+                out,
+                "  {}: {} ({}; {})",
+                state.as_str(),
+                entry.task_id,
+                entry.reason,
+                entry.branches.join(", ")
+            );
+        }
+    }
+    for (task_id, branches) in &backlog.conflicts {
+        let _ = writeln!(
+            out,
+            "  conflict: {task_id} is carried by {} (claims are advisory; settle one owner)",
+            branches.join(", ")
+        );
+    }
+    for branch in &backlog.landed {
+        let _ = writeln!(out, "  landed: {branch}");
+    }
+    for (epic, progress) in &backlog.epics {
+        let _ = writeln!(
+            out,
+            "  epic {epic}: {}/{} complete, {} cancelled",
+            progress.complete, progress.total, progress.cancelled
+        );
+    }
 }
 
 fn render_cleanup(out: &mut String, view: &StatusView) {
@@ -739,10 +806,9 @@ fn format_counts(counts: &BTreeMap<String, usize>) -> String {
 mod tests {
     use super::*;
     use crate::models::{Epic, EpicStatus, Task, TaskStatus};
-    use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = crate::git::command()
             .args(args)
             .env("GIT_AUTHOR_NAME", "Test")
             .env("GIT_AUTHOR_EMAIL", "test@example.com")

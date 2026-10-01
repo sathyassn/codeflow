@@ -3,8 +3,8 @@ export const CHROME_ROOT_ID = "cf-present-chrome";
 export const CONFIG_ID = "cf-present-config";
 export const REQUEST_HEADER = "X-CF-Present";
 
-export type UtilityTheme = "instrument" | "editorial" | "ink" | "technical";
-export type Typeface = "instrument" | "editorial" | "plex";
+export type UtilityTheme = "graphite" | "slate" | "sage";
+export type Typeface = "archivo" | "inter" | "plex";
 export type TypeScale = "compact" | "default" | "large";
 export type AppearanceMode = "system" | "light" | "dark";
 export type ResolvedMode = Exclude<AppearanceMode, "system">;
@@ -16,7 +16,10 @@ export type ReviewVerdict =
 export type FeedbackLifecycle = "received" | "delivered" | "addressed" | "dismissed";
 export type FeedbackAnchor =
   | Readonly<{ state: "block"; block_id: string }>
-  | Readonly<{ state: "anchored" | "reanchored"; start_utf16: number; end_utf16: number }>
+  | Readonly<{ state: "anchored" | "reanchored"; start_utf16: number; end_utf16: number; changed?: boolean }>
+  | Readonly<{ state: "entity_anchored"; entity_id: string }>
+  | Readonly<{ state: "entity_reanchored"; entity_id: string; label_changed: boolean }>
+  | Readonly<{ state: "block_fallback"; block_id: string; reason: string }>
   | Readonly<{ state: "element_anchored" | "element_reanchored"; element_path: string }>
   | Readonly<{
       state: "region_anchored" | "region_reanchored";
@@ -43,6 +46,8 @@ export interface FeedbackHistoryItem {
   readonly source_revision: number;
   readonly event_version: number;
   readonly lifecycle: FeedbackLifecycle;
+  /** The agent acknowledged the review (SPC-014 B8), apart from delivery. */
+  readonly acknowledged?: boolean;
   readonly verdict: ReviewVerdict;
   readonly instruction?: string;
   readonly notes: readonly FeedbackHistoryNote[];
@@ -58,6 +63,7 @@ export interface ChromeConfig {
   readonly session_id: string;
   readonly revision: number;
   readonly event_sequence: number;
+  readonly response_sequence: number;
   readonly title: string;
   readonly shortcuts_enabled: boolean;
   readonly review_limits: Readonly<{
@@ -95,6 +101,38 @@ export interface ElementSelector {
   readonly block_digest: string;
 }
 
+/** SPC-014 I2: a note on a named entity, checked by the service at submit. */
+export interface EntitySelector {
+  readonly entity_id: string;
+  readonly label: string;
+  readonly block_digest: string;
+  readonly variant?: "wide" | "narrow";
+  readonly crop_box?: Readonly<{ x: number; y: number; width: number; height: number }>;
+}
+
+/** SPC-014 I3: the body of a refused review. */
+export interface ServiceErrorBody {
+  readonly error: string;
+  readonly message: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+export function parseServiceError(text: string): ServiceErrorBody | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(value) || typeof value.error !== "string" || typeof value.message !== "string") return null;
+  if (value.details !== undefined && !isRecord(value.details)) return null;
+  return {
+    error: value.error,
+    message: value.message,
+    ...(value.details !== undefined ? { details: value.details } : {}),
+  };
+}
+
 export type RegionScope = "block" | "document";
 
 export interface RegionSelector {
@@ -117,11 +155,12 @@ export interface PendingFeedback {
   readonly body: string;
   readonly selector?: TextSelector;
   readonly element_selector?: ElementSelector;
+  readonly entity_selector?: EntitySelector;
   readonly region_selector?: RegionSelector;
   readonly target_summary?: string;
   readonly excerpt?: {
     readonly text?: string;
-    readonly image?: { readonly media_type: "image/jpeg"; readonly data_base64: string };
+    readonly image?: { readonly media_type: "image/jpeg" | "image/png"; readonly data_base64: string };
   };
 }
 
@@ -139,10 +178,42 @@ export interface ReviewResponse {
   readonly state: "received" | "duplicate";
 }
 
+/** Where an answer is on its way to the agent (SPC-014 B8). */
+export type AnswerDelivery = "pending" | "delivered" | "acknowledged";
+
+export interface AnswerStateEntry {
+  readonly answer_id: string;
+  readonly status: AnswerDelivery;
+}
+
+/** A form's answer as a reload renders it; a closure carries one per form. */
+export interface FormAnswerEntry {
+  readonly form_id: string;
+  readonly form_digest: string;
+  /** The original answer, which a correction names. */
+  readonly answer_id: string;
+  /** The latest answer or correction, whose state is shown. */
+  readonly latest_answer_id: string;
+  readonly state: "stored" | "delivered" | "acknowledged";
+}
+
+/**
+ * What a form's latest answer or correction sent, as the service renders it
+ * on the form (`data-cf-answer-sent`): the page puts it back in the controls.
+ */
+export interface SentAnswer {
+  readonly outcome: "submit" | "decline" | "cancel";
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly rationales: Readonly<Record<string, string>>;
+  readonly reason?: string;
+}
+
 export interface SessionEvent {
   readonly cursor: string;
-  readonly kind: "feedback_state" | "revision" | "session_closed";
+  readonly kind: "feedback_state" | "revision" | "session_closed" | "answer_state" | "thread";
   readonly message?: string;
+  readonly answers?: readonly AnswerStateEntry[];
+  readonly forms?: readonly FormAnswerEntry[];
 }
 
 export function readChromeConfig(root: HTMLElement): ChromeConfig {
@@ -163,6 +234,9 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
     typeof value.event_sequence !== "number" ||
     !Number.isSafeInteger(value.event_sequence) ||
     value.event_sequence < 0 ||
+    typeof value.response_sequence !== "number" ||
+    !Number.isSafeInteger(value.response_sequence) ||
+    value.response_sequence < 0 ||
     typeof value.title !== "string" ||
     typeof value.shortcuts_enabled !== "boolean"
   ) {
@@ -196,6 +270,7 @@ export function readChromeConfig(root: HTMLElement): ChromeConfig {
     session_id: value.session_id,
     revision: value.revision,
     event_sequence: value.event_sequence,
+    response_sequence: value.response_sequence,
     title: value.title,
     shortcuts_enabled: value.shortcuts_enabled,
     review_limits: value.review_limits,
@@ -212,7 +287,7 @@ function isReviewLimits(value: unknown): value is ChromeConfig["review_limits"] 
   );
 }
 
-function isFeedbackSnapshot(
+export function isFeedbackSnapshot(
   value: unknown,
   limits: ChromeConfig["review_limits"],
 ): value is FeedbackSnapshot {
@@ -234,6 +309,7 @@ function isFeedbackSnapshot(
       item.event_version < 1 ||
       (item.instruction !== undefined && typeof item.instruction !== "string") ||
       !["received", "delivered", "addressed", "dismissed"].includes(String(item.lifecycle)) ||
+      (item.acknowledged !== undefined && typeof item.acknowledged !== "boolean") ||
       !["approve", "approve_with_notes", "request_changes"].includes(String(item.verdict))
     ) return false;
     return item.notes.every((note) =>
@@ -252,6 +328,9 @@ function isFeedbackAnchor(value: unknown): value is FeedbackAnchor {
   if (!isRecord(value) || typeof value.state !== "string") return false;
   if (value.state === "block") return typeof value.block_id === "string";
   if (value.state === "orphaned") return typeof value.reason === "string";
+  if (value.state === "entity_anchored") return typeof value.entity_id === "string";
+  if (value.state === "entity_reanchored") return typeof value.entity_id === "string" && typeof value.label_changed === "boolean";
+  if (value.state === "block_fallback") return typeof value.block_id === "string" && typeof value.reason === "string";
   if (value.state === "element_anchored" || value.state === "element_reanchored") {
     return typeof value.element_path === "string";
   }
@@ -271,7 +350,8 @@ function isFeedbackAnchor(value: unknown): value is FeedbackAnchor {
     value.start_utf16 >= 0 &&
     typeof value.end_utf16 === "number" &&
     Number.isSafeInteger(value.end_utf16) &&
-    value.end_utf16 > value.start_utf16
+    value.end_utf16 > value.start_utf16 &&
+    (value.changed === undefined || typeof value.changed === "boolean")
   );
 }
 
@@ -287,7 +367,7 @@ function isIdentity(value: unknown): value is NonNullable<ChromeConfig["identity
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

@@ -1,5 +1,6 @@
 ---
 id: ADR-0029
+uid: 862f675b-9292-45f8-9d44-45470cc5cb67
 title: permit classified sandbox retry for trusted installed tools
 date: 2026-07-18
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: the Claude runtime boundary now permits a classifier-reviewed host retry for trusted installed tools whose state cannot be used from the OS sandbox, while preserving the sandbox as the default execution boundary
 ---
 
-# ADR-0029 — classified trusted-tool sandbox retry
+# ADR-0029: classified trusted-tool sandbox retry
 
 ## Context
 

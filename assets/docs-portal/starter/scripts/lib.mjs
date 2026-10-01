@@ -8,6 +8,8 @@ import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import YAML from "yaml";
+import { slugHeading } from "./figure-grammar.mjs";
+import { ALTITUDE_PANELS, DERIVED_LOOKUPS, LOOKUP_COLUMNS, PAGE_CLASS_REASONS, PANEL_CARRIER_ALTERNATES } from "./page-classes.mjs";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -102,7 +104,7 @@ export function validatePageMetadata(frontmatter, sourcePath) {
 
 export function rewriteRepositoryMarkdown(body, {
   sourcePath, sourceRoutes, repositoryFiles = new Map(), repositoryDirectories = new Set(), pinnedSourceUrl = () => null,
-  commit = "", base, strictTargets, mediaReferences, sourceAnchors = new Map(),
+  commit = "", base, strictTargets, mediaReferences, sourceAnchors = new Map(), recordTargets = new Map(), selfRoute = null,
 }) {
   const tree = markdownTree(body);
   const referenceKinds = new Map();
@@ -147,14 +149,22 @@ export function rewriteRepositoryMarkdown(body, {
       return;
     }
     if (node.type !== "text" || ancestors.some((ancestor) => ["link", "linkReference", "definition", "code", "inlineCode", "html"].includes(ancestor.type))) return;
+    // A preview tooltip inside a heading would join the heading text, so the
+    // slugged id and the "On this page" entry would both swallow the page
+    // title and source path it carries. Headings keep the plain link.
+    const inHeading = ancestors.some((ancestor) => ancestor.type === "heading");
     const children = [];
     let cursor = 0;
     for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) {
       if (!strictId(match[0])) continue;
       if (match.index > cursor) children.push({ type: "text", value: node.value.slice(cursor, match.index) });
       const target = strictTargets.get(match[0]);
-      if (!target) children.push({ type: "text", value: match[0] });
-      else children.push({ type: "html", value: strictIdPreview(match[0], target, `${sha256(sourcePath).slice(0, 10)}-${previewSequence++}`) });
+      const record = target ? null : recordTargets.get(match[0]);
+      if (target && inHeading && target.route === selfRoute) children.push({ type: "text", value: match[0] });
+      else if (target && inHeading) children.push({ type: "html", value: `<a href="${escapeGeneratedHtml(target.route)}">${match[0]}</a>` });
+      else if (target) children.push({ type: "html", value: strictIdPreview(match[0], target, `${sha256(sourcePath).slice(0, 10)}-${previewSequence++}`) });
+      else if (record) children.push({ type: "html", value: recordReferenceLink(match[0], record) });
+      else children.push({ type: "text", value: match[0] });
       cursor = match.index + match[0].length;
     }
     if (!children.length) return;
@@ -253,6 +263,70 @@ export function renderStageFences(markdown, context = "cf-stage") {
     changed = true;
   });
   return changed ? stringifyMarkdown(tree) : markdown;
+}
+
+// Capability registry fences (ADR-0064). The canonical registry declares one
+// YAML block per capability. The guide renders those blocks as structure: a
+// generated summary table at the top of the page and a compact definition
+// table where each fence stood, never a raw code block a reader must parse.
+const CAPABILITY_FIELD_LIMIT = 16;
+const CAPABILITY_VALUE_LIMIT = 1024;
+
+export function capabilityFenceRecords(markdown, sourcePath = "capability registry") {
+  const records = [];
+  for (const node of markdownNodes(markdownTree(markdown), "code")) {
+    const record = capabilityRecord(node, sourcePath);
+    if (record !== null) records.push(record);
+  }
+  return records;
+}
+
+export function renderCapabilityFences(markdown, escapeCell, sourcePath = "capability registry") {
+  const tree = markdownTree(markdown);
+  let changed = false;
+  visitMarkdown(tree, (node, parent, index) => {
+    if (node.type !== "code") return;
+    const record = capabilityRecord(node, sourcePath);
+    if (record === null) return;
+    const rows = record.fields.map(([field, value]) => `| ${escapeCell(field)} | ${escapeCell(value)} |`);
+    parent.children[index] = { type: "html", value: `<div class="portal-definition">\n\n| Field | Value |\n|---|---|\n${rows.join("\n")}\n\n</div>` };
+    changed = true;
+  });
+  return changed ? stringifyMarkdown(tree) : markdown;
+}
+
+// The generated summary replaces the hand written registry table when the
+// source carries one, and otherwise opens the page.
+export function placeCapabilityTable(markdown, generated) {
+  if (generated === null) return markdown;
+  const tree = markdownTree(markdown);
+  const replacement = markdownTree(generated).children;
+  const index = tree.children.findIndex((node) => node.type === "table" && visibleNodeText(node.children?.[0]?.children?.[0] ?? {}).trim().toLowerCase() === "capability");
+  tree.children.splice(index < 0 ? 0 : index, index < 0 ? 0 : 1, ...replacement);
+  return stringifyMarkdown(tree);
+}
+
+function capabilityRecord(node, sourcePath) {
+  if (node.type !== "code" || !/^ya?ml$/i.test(node.lang ?? "")) return null;
+  let parsed;
+  try { parsed = YAML.parse(node.value); } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const id = parsed.id;
+  if (typeof id !== "string" || !/^CAP-\d{3,}$/.test(id)) return null;
+  const entries = Object.entries(parsed);
+  if (entries.length > CAPABILITY_FIELD_LIMIT) throw new Error(`${sourcePath}: capability ${id} declares more than ${CAPABILITY_FIELD_LIMIT} fields`);
+  const fields = entries.map(([field, value]) => [field, capabilityValueText(value)]);
+  if (fields.some(([field, value]) => field.length > 64 || value.length > CAPABILITY_VALUE_LIMIT)) {
+    throw new Error(`${sourcePath}: capability ${id} declares a field beyond the rendered bounds`);
+  }
+  return { id, fields, lookup: new Map(fields) };
+}
+
+function capabilityValueText(value) {
+  if (Array.isArray(value)) return value.map((item) => capabilityValueText(item)).join(", ");
+  if (value === null || value === undefined) return "none";
+  if (typeof value === "object") return Object.entries(value).map(([key, item]) => `${key}: ${capabilityValueText(item)}`).join("; ");
+  return String(value).replace(/\s+/g, " ").trim();
 }
 
 const ALTITUDE_LAYERS = ["concept", "architecture", "technical"];
@@ -416,6 +490,13 @@ function sourceReferenceNode(node, sourcePath, commit) {
   };
 }
 
+// An id whose record is not a portal source is never a dangling link: it
+// resolves to the repository file at the built commit, or to the pointer page
+// for its folder when the portal has no provider URL to pin.
+function recordReferenceLink(id, record) {
+  return `<a class="portal-record-link" href="${escapeGeneratedHtml(record.href)}" title="${escapeGeneratedHtml(record.title)}">${id}</a>`;
+}
+
 function strictIdPreview(id, target, suffix) {
   const statusText = target.status;
   const status = typeof statusText === "string" && statusText ? `<span>Status: ${escapeGeneratedHtml(statusText)}</span>` : "";
@@ -431,6 +512,24 @@ export function amendmentHeadings(markdown) {
     if (match) headings.push(match[1].trim());
   }
   return headings;
+}
+
+// Record files are found by the id their filename declares, so a template, a
+// README or any other note in the folder is counted by nobody and linked by
+// nobody. The scan reads the committed inventory, never the working tree.
+export function recordFilesFor(pointer, repositoryFiles) {
+  const prefix = pointer.id_prefix;
+  const pattern = prefix === "TSK"
+    ? /^(TSK-\d{3,}(?:-\d{3,})?)(?:-[^/]*)?\.md$/
+    : new RegExp(`^(${prefix}-\\d{3,})(?:-[^/]*)?\\.md$`);
+  const found = new Map();
+  for (const sourcePath of repositoryFiles.keys()) {
+    if (!sourcePath.startsWith(`${pointer.folder}/`)) continue;
+    const match = path.posix.basename(sourcePath).match(pattern);
+    if (!match || !strictId(match[1]) || found.has(match[1])) continue;
+    found.set(match[1], { id: match[1], path: sourcePath });
+  }
+  return [...found.values()].sort((left, right) => compareDeterministicText(left.id, right.id));
 }
 
 export function strictId(value) {
@@ -495,14 +594,32 @@ const relationshipFields = [
   ["adrs", "decision"], ["related", "related"], ["superseded_by", "superseded_by"],
 ];
 
-export function extractRelationships(frontmatter, sourcePath = "frontmatter") {
-  return relationshipFields.flatMap(([field, kind]) => {
+// A record's depends_on entry is an id, or a research or decision input written
+// as a mapping whose `id` names it; validate --docs owns the other keys (kind,
+// pin), so they are not read here. Legacy `dependencies` is a task-record key:
+// it reads as depends_on only on a record whose id is a task id. A task depends
+// only on tasks, as validate --docs requires.
+const recordDependencyField = ["dependencies", "depends_on"];
+
+function dependencyTarget(item) {
+  return item !== null && typeof item === "object" && !Array.isArray(item) ? item.id : item;
+}
+
+export function extractRelationships(frontmatter, sourcePath = "frontmatter", { record = true } = {}) {
+  const task = record && typeof frontmatter.id === "string" && frontmatter.id.startsWith("TSK-") && strictId(frontmatter.id);
+  if (task && Object.hasOwn(frontmatter, "depends_on") && Object.hasOwn(frontmatter, "dependencies")) {
+    throw new Error(`${sourcePath}: declares both depends_on and legacy dependencies; keep only depends_on`);
+  }
+  const fields = task ? [...relationshipFields, recordDependencyField] : relationshipFields;
+  return fields.flatMap(([field, kind]) => {
     if (!Object.hasOwn(frontmatter, field)) return [];
     const value = frontmatter[field];
     if (value === null) return [];
     const values = Array.isArray(value) ? value : [value];
-    if (values.some((item) => typeof item !== "string" || !strictId(item))) throw new Error(`${sourcePath}: declared ${field} relationship is invalid`);
-    return values.map((target) => ({ type: kind, target }));
+    const targets = record && kind === "depends_on" && Array.isArray(value) ? values.map(dependencyTarget) : values;
+    const allowed = (item) => typeof item === "string" && strictId(item) && !(task && kind === "depends_on" && !item.startsWith("TSK-"));
+    if (!targets.every(allowed)) throw new Error(`${sourcePath}: declared ${field} relationship is invalid`);
+    return targets.map((target) => ({ type: kind, target }));
   });
 }
 
@@ -510,10 +627,11 @@ export function extractPageRelationships(frontmatter, text, sourcePath) {
   const sourceId = typeof frontmatter.id === "string" && strictId(frontmatter.id) ? frontmatter.id : null;
   const relationships = extractRelationships(frontmatter, sourcePath).map((relationship) => ({ ...relationship, source_id: sourceId }));
   if (sourcePath !== "docs/capabilities.md") return relationships;
+  // Capability entries keep their own string-list schema (validate --docs).
   for (const block of yamlFences(text)) {
     const record = YAML.parse(block);
     if (record && typeof record === "object" && !Array.isArray(record) && strictId(record.id ?? "")) {
-      relationships.push(...extractRelationships(record, sourcePath).map((relationship) => ({ ...relationship, source_id: record.id })));
+      relationships.push(...extractRelationships(record, sourcePath, { record: false }).map((relationship) => ({ ...relationship, source_id: record.id })));
     }
   }
   return relationships;
@@ -550,14 +668,19 @@ export function withBase(base, route) {
   return `${validateBase(base)}${encodedRoute}/`.replace(/^\/\//, "/");
 }
 
+// The themes a configuration may name: the three skins, then the two earlier
+// names kept as aliases (signal is graphite, folio is sage). The Rust
+// validator holds the same list and a parity test compares them.
+export const PORTAL_THEMES = Object.freeze(["graphite", "slate", "sage", "signal", "folio"]);
+
 export function validatePortalConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("portal.config.json: expected an object");
-  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "base"]);
+  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "records", "page_carriers", "page_classes", "figures", "base"]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`portal.config.json: unknown key ${key}`);
   if (value.schema_version !== 1) throw new Error("portal.config.json: unsupported schema_version");
   boundedString(value.title, "title", 1, 120);
   boundedString(value.description, "description", 1, 400);
-  if (!["signal", "folio"].includes(value.theme)) throw new Error("portal.config.json: theme must be signal or folio");
+  if (!PORTAL_THEMES.includes(value.theme)) throw new Error("portal.config.json: theme must be graphite, slate or sage (signal and folio remain aliases)");
   if (value.repository_url !== null) {
     boundedString(value.repository_url, "repository_url", 1, 2048);
     if (!validRepositoryUrl(value.repository_url)) throw new Error("repository_url: expected an HTTPS repository URL with an ASCII or punycode host and without credentials, query, or fragment");
@@ -585,7 +708,128 @@ export function validatePortalConfig(value) {
     if (layer.fallback === true) fallback += 1;
   }
   if (fallback !== 1) throw new Error("portal.config.json: exactly one layer must be the fallback");
+  value.records = validateRecordsSwitch(value.records, value.layers);
+  value.page_carriers = validatePageCarriers(value.page_carriers);
+  value.page_classes = validatePageClasses(value.page_classes);
+  value.figures = validateFigureBindings(value.figures);
   return value;
+}
+
+// A page leaves the explanatory class only by a declaration here, naming its
+// source or a source prefix. Pass-through takes one reason from a closed set;
+// the no-relationship reason also records the judgment in a note. Neither
+// class drops a route or changes the bytes of its source.
+function validatePageClasses(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 256) throw new Error("portal.config.json: page_classes must be an array of at most 256 entries");
+  const keys = new Set();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("portal.config.json: each page_classes entry must be an object");
+    for (const key of Object.keys(entry)) if (!["source", "prefix", "class", "reason", "note", "derive"].includes(key)) throw new Error(`portal.config.json: unknown page_classes key ${key}`);
+    const named = ["source", "prefix"].filter((key) => entry[key] !== undefined);
+    if (named.length !== 1) throw new Error("portal.config.json: each page_classes entry names exactly one source or prefix");
+    const target = portablePathKey(entry[named[0]], `page_classes ${named[0]}`);
+    if (keys.has(target)) throw new Error(`portal.config.json: duplicate page_classes entry ${entry[named[0]]}`);
+    keys.add(target);
+    if (!["illustrated", "pass-through", "derived-lookup"].includes(entry.class)) throw new Error(`portal.config.json: page_classes ${entry[named[0]]} class must be illustrated, pass-through or derived-lookup`);
+    if (entry.class === "pass-through") {
+      if (!PAGE_CLASS_REASONS.includes(entry.reason)) throw new Error(`portal.config.json: pass-through ${entry[named[0]]} needs a reason from ${PAGE_CLASS_REASONS.join(", ")}`);
+      if (entry.reason === "no-relationship") boundedString(entry.note, `page_classes ${entry[named[0]]} note`, 1, 300);
+      else if (entry.note !== undefined) boundedString(entry.note, `page_classes ${entry[named[0]]} note`, 1, 300);
+    } else if (entry.reason !== undefined || entry.note !== undefined) throw new Error(`portal.config.json: only a pass-through entry carries a reason: ${entry[named[0]]}`);
+    if (entry.class === "derived-lookup") {
+      if (!DERIVED_LOOKUPS.includes(entry.derive) || entry.source === undefined) throw new Error(`portal.config.json: derived-lookup ${entry[named[0]]} names one source and derive ${DERIVED_LOOKUPS.join(" or ")}`);
+    } else if (entry.derive !== undefined) throw new Error(`portal.config.json: only a derived-lookup entry names derive: ${entry[named[0]]}`);
+  }
+  return value;
+}
+
+// Every figure is bound to its page here, by route and by an altitude panel
+// (optionally narrowed to a section anchor inside that panel) or a section
+// anchor of an illustrated source, never by a marker inside a source. The
+// declaration file is a committed repository input.
+function validateFigureBindings(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 512) throw new Error("portal.config.json: figures must be an array of at most 512 bindings");
+  const seen = new Set();
+  for (const binding of value) {
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)) throw new Error("portal.config.json: each figures binding must be an object");
+    for (const key of Object.keys(binding)) if (!["declaration", "route", "panel", "anchor"].includes(key)) throw new Error(`portal.config.json: unknown figures key ${key}`);
+    safeRelative(binding.declaration, "figures declaration");
+    if (!binding.declaration.endsWith(".json")) throw new Error(`portal.config.json: figure declaration ${binding.declaration} must be a JSON file`);
+    safeRelative(binding.route, "figures route");
+    if (binding.panel !== undefined && !ALTITUDE_PANELS.includes(binding.panel)) throw new Error(`portal.config.json: figure ${binding.declaration} panel must be one of ${ALTITUDE_PANELS.join(", ")}`);
+    if (binding.anchor !== undefined && (typeof binding.anchor !== "string" || !/^[\p{L}\p{N}_-]{1,200}$/u.test(binding.anchor))) throw new Error(`portal.config.json: figure ${binding.declaration} anchor must be a heading slug`);
+    const key = `${binding.route}\u0000${binding.declaration}`;
+    if (seen.has(key)) throw new Error(`portal.config.json: figure ${binding.declaration} is bound to ${binding.route} twice`);
+    seen.add(key);
+  }
+  return value;
+}
+
+// A page whose subject is its own carrier declares that here, per source. The
+// panels, and the alternates each one accepts, are the composition gate's own
+// table, so a configuration can never invent a carrier the rules do not know
+// or quietly let a page off the carrier its altitude calls for.
+function validatePageCarriers(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 64) throw new Error("portal.config.json: page_carriers must be an array of at most 64 entries");
+  const panels = Object.keys(PANEL_CARRIER_ALTERNATES);
+  const sources = new Set();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("portal.config.json: each page_carriers entry must be an object");
+    const allowed = new Set(["source", ...panels]);
+    for (const key of Object.keys(entry)) if (!allowed.has(key)) throw new Error(`portal.config.json: unknown page_carriers key ${key}`);
+    const source = portablePathKey(entry.source, "page_carriers source");
+    if (sources.has(source)) throw new Error(`portal.config.json: duplicate page_carriers entry ${entry.source}`);
+    sources.add(source);
+    const declared = panels.filter((panel) => entry[panel] !== undefined);
+    if (declared.length === 0) throw new Error(`portal.config.json: page_carriers entry ${entry.source} declares no panel carrier`);
+    for (const panel of declared) {
+      const alternates = Object.keys(PANEL_CARRIER_ALTERNATES[panel]);
+      if (!alternates.includes(entry[panel])) throw new Error(`portal.config.json: ${entry.source} ${panel} carrier must be one of ${alternates.join(", ")}`);
+    }
+  }
+  return value;
+}
+
+// The records switch (ADR-0064). Off, the configured pointer folders leave the
+// page set entirely and one generated page points at the folders instead. On,
+// a project takes the lookup form for those sources and steps outside the
+// guide doctrine, so it declares no pointers.
+export const RECORD_ID_PREFIXES = Object.freeze(["ADR", "CAP", "EPC", "SPC", "TSK"]);
+
+export function validateRecordsSwitch(value, layers) {
+  if (value === undefined || value === null) return { enabled: false, layer: null, pointers: [] };
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("portal.config.json: records must be an object");
+  for (const key of Object.keys(value)) if (!["enabled", "layer", "pointers"].includes(key)) throw new Error(`portal.config.json: unknown records key ${key}`);
+  if (typeof value.enabled !== "boolean") throw new Error("portal.config.json: records.enabled must be boolean");
+  const pointers = value.pointers ?? [];
+  if (!Array.isArray(pointers) || pointers.length > 16) throw new Error("portal.config.json: records.pointers must be 0 to 16 folders");
+  const folders = new Set();
+  for (const pointer of pointers) {
+    if (!pointer || typeof pointer !== "object" || Array.isArray(pointer)) throw new Error("portal.config.json: each records pointer must be an object");
+    for (const key of Object.keys(pointer)) if (!["folder", "id_prefix", "purpose"].includes(key)) throw new Error(`portal.config.json: unknown records pointer key ${key}`);
+    safeRelative(pointer.folder, "records pointer folder");
+    if (!RECORD_ID_PREFIXES.includes(pointer.id_prefix)) throw new Error(`portal.config.json: records pointer id_prefix must be one of ${RECORD_ID_PREFIXES.join(", ")}`);
+    boundedString(pointer.purpose, "records pointer purpose", 1, 200);
+    const key = portablePathKey(pointer.folder, "records pointer folder");
+    if (folders.has(key)) throw new Error(`portal.config.json: duplicate records pointer folder ${pointer.folder}`);
+    folders.add(key);
+  }
+  const layer = value.layer ?? null;
+  if (layer !== null && !layers.some((item) => item.id === layer)) throw new Error(`portal.config.json: records.layer must name a configured layer: ${layer}`);
+  if (pointers.length && value.enabled) throw new Error("portal.config.json: records pointers describe folders the portal does not publish, so they need records.enabled false");
+  if (pointers.length && layer === null) throw new Error("portal.config.json: records pointers need records.layer to place their pointer page");
+  if (!value.enabled) {
+    for (const item of layers) {
+      const owned = [...(item.paths ?? []), ...(item.prefixes ?? [])];
+      if (owned.length && owned.every((entry) => pointers.some((pointer) => entry === pointer.folder || entry.startsWith(`${pointer.folder}/`)))) {
+        throw new Error(`portal.config.json: layer ${item.id} publishes only record folders while records are disabled`);
+      }
+    }
+  }
+  return { enabled: value.enabled, layer, pointers: pointers.map((pointer) => ({ folder: pointer.folder, id_prefix: pointer.id_prefix, purpose: pointer.purpose })) };
 }
 
 export function validRepositoryUrl(value) {
@@ -615,16 +859,21 @@ function validPortSuffix(value) {
 // Reader-selectable skins, not only the initial config theme. Browser tests
 // bind these validation backgrounds to the actual utility CSS.
 export const PORTAL_ACCENT_BACKGROUNDS = Object.freeze({
-  instrument: { light: ["#ffffff", "#f5f8f5", "#e8eee9", "#eaf2f9"], dark: ["#121c18", "#182420", "#1e2c26", "#153040"] },
-  editorial: { light: ["#fafaf8", "#f1f1ee", "#e4e4df", "#e8eef1"], dark: ["#1f1c1a", "#282422", "#322e2b", "#1e2a30"] },
-  ink: { light: ["#fbf6ec", "#f3eadc", "#e8dccb", "#f3e6d6"], dark: ["#241e17", "#2e261e", "#3a3127", "#3a2a1c"] },
+  graphite: { light: ["#ffffff", "#ffffff", "#ececec", "#dcefec"], dark: ["#232323", "#2b2b2b", "#303030", "#1e3c39"] },
+  slate: { light: ["#f8fafc", "#ffffff", "#e2e7ed", "#f5e3d9"], dark: ["#1a2028", "#222a34", "#262e39", "#3e2b20"] },
+  sage: { light: ["#fafbf8", "#ffffff", "#e8ece6", "#dcece5"], dark: ["#1d2320", "#252c28", "#29312c", "#213b32"] },
 });
+
+export function portalSkinOrder(theme) {
+  const initial = ({ signal: "graphite", folio: "sage" })[theme] ?? theme;
+  return [initial, ...Object.keys(PORTAL_ACCENT_BACKGROUNDS).filter((skin) => skin !== initial)];
+}
 
 export function validatePrimitiveTokens(value, theme) {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== "dark,light,schema_version" || value.schema_version !== 1) {
     throw new Error("primitive token import must contain exactly schema_version, light, and dark");
   }
-  const skins = theme === "folio" ? ["ink", "instrument", "editorial"] : ["instrument", "editorial", "ink"];
+  const skins = portalSkinOrder(theme);
   for (const mode of ["light", "dark"]) {
     const record = value[mode];
     if (!record || typeof record !== "object" || Array.isArray(record) || Object.keys(record).sort().join(",") !== "accent" || !/^#[a-fA-F0-9]{6}$/.test(record.accent ?? "")) {
@@ -703,4 +952,197 @@ function validatePathArray(value, label, min, max) {
   if (!Array.isArray(value) || value.length < min || value.length > max) throw new Error(`${label}: expected ${min} to ${max} paths`);
   const paths = value.map((item) => safeRelative(item, label));
   if (new Set(paths.map((item) => portablePathKey(item, label))).size !== paths.length) throw new Error(`${label}: duplicate or case-colliding path`);
+}
+
+// An illustrated or pass-through source renders as it is. Its region is the
+// body after the frontmatter, less one leading level-one heading that repeats
+// the page title (the shell already renders the title). The validator
+// re-derives the same start from the committed bytes, so this rule is kept to
+// raw lines: blank lines, one ATX heading, blank lines.
+export function asIsRegionStart(body, title) {
+  const lines = body.split("\n");
+  let index = 0;
+  let offset = 0;
+  const advanceBlank = () => {
+    while (index < lines.length - 1 && lines[index].trim() === "") { offset += lines[index].length + 1; index += 1; }
+  };
+  advanceBlank();
+  const heading = (lines[index] ?? "").match(/^ {0,3}#[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/);
+  if (!heading || index >= lines.length - 1 || !asIsTitleMatches(heading[1], title)) return 0;
+  offset += lines[index].length + 1;
+  index += 1;
+  advanceBlank();
+  return offset;
+}
+
+// The prose words in each altitude panel of an explanatory source, counted by
+// a rule simple enough that the Rust validator recounts it byte for byte: YAML
+// frontmatter is not prose and is skipped whole; after it, a line
+// `## Concept`, `## Architecture` or `## Technical`
+// opens that panel and any other level-two heading closes it; lines inside a
+// fence (the markdownSections fence rule), inside an HTML comment (from a line
+// starting `<!--` through the line holding `-->`), headings (`#`) and table
+// rows (`|`) are skipped; every other line in a panel adds its ASCII
+// whitespace-separated tokens.
+export function altitudeWords(text) {
+  const words = { concept: 0, architecture: 0, technical: 0 };
+  const trim = (line) => line.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+  let panel = null;
+  let fence = null;
+  let comment = false;
+  const normalized = String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const end = normalized.startsWith("---\n") ? normalized.indexOf("\n---\n", 4) : -1;
+  const body = end < 0 ? normalized : normalized.slice(end + 5);
+  for (const line of body.split("\n")) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence !== null) {
+      if (marker && marker[1][0] === fence.char && marker[1].length >= fence.length && marker[2].trim() === "") fence = null;
+      continue;
+    }
+    if (marker && !(marker[1][0] === "`" && marker[2].includes("`"))) { fence = { char: marker[1][0], length: marker[1].length }; continue; }
+    const trimmed = trim(line);
+    if (comment) { if (trimmed.includes("-->")) comment = false; continue; }
+    if (trimmed.startsWith("<!--")) { if (!trimmed.includes("-->")) comment = true; continue; }
+    const level2 = line.match(/^## (.*)$/);
+    if (level2) { const label = trim(level2[1]).toLowerCase(); panel = Object.hasOwn(words, label) ? label : null; continue; }
+    if (panel === null || trimmed.startsWith("#") || trimmed.startsWith("|")) continue;
+    words[panel] += trimmed.split(/[\t\n\f\r ]+/).filter(Boolean).length;
+  }
+  return words;
+}
+
+// The body rows of every table on a page: the row count a generated lookup
+// records, which the validator compares with the rows it regenerates.
+export function tableRowCount(markdown) {
+  return markdownNodes(markdownTree(markdown), "table").reduce((total, table) => total + Math.max(table.children.length - 1, 0), 0);
+}
+
+// Whether an as-is region still carries a level-one heading once the title
+// the adapter drops is gone: a second title, a title under a leading comment,
+// or deliberate h1 sections. The site's Markdown step then renders every
+// heading in the region one level lower (h6 stays h6), so the page title is
+// the only h1 and the source keeps its structure; the bytes never change.
+export function asIsHeadingsDemoted(source) {
+  return markdownNodes(markdownTree(source), "heading").some((node) => node.depth === 1);
+}
+
+export function asIsTitleMatches(raw, title) {
+  const visible = String(raw).replace(/[`*_]/g, "").trim();
+  const wanted = String(title).replace(/[`*_]/g, "").trim();
+  const unprefixed = visible.replace(/^(?:ADR|EPC|SPC|TSK|CAP)-\d+(?:-\d+)?\s*[\u2014\u2013:-]\s*/, "");
+  return visible === wanted || unprefixed === wanted
+    || (unprefixed.slice(1) === wanted.slice(1) && unprefixed.slice(0, 1).toLowerCase() === wanted.slice(0, 1).toLowerCase());
+}
+
+// The destinations an as-is region's links resolve to in the portal. The
+// bytes stay as the source wrote them; the site's Markdown step reads this
+// map and points each link at its route, its pinned file or its fragment,
+// exactly as a composed page's links resolve.
+export function resolveAsIsLinks(markdown, options) {
+  if (/<!--\s*codeflow-/i.test(markdown)) throw new Error(`${options.sourcePath}: an as-is source may not carry a codeflow marker comment`);
+  const tree = markdownTree(markdown);
+  const referenceKinds = new Map();
+  visitMarkdown(tree, (node) => {
+    if (!["linkReference", "imageReference"].includes(node.type)) return;
+    const kind = node.type === "imageReference" ? "image" : "link";
+    const prior = referenceKinds.get(node.identifier);
+    if (prior && prior !== kind) throw new Error(`${options.sourcePath}: reference ${node.identifier} is used as both a link and an image`);
+    referenceKinds.set(node.identifier, kind);
+  });
+  const links = {};
+  visitMarkdown(tree, (node) => {
+    if (!["link", "image", "definition"].includes(node.type)) return;
+    const kind = node.type === "definition" ? referenceKinds.get(node.identifier) : node.type;
+    if (kind === undefined) {
+      if (unsafeUrl(node.url)) throw new Error(`${options.sourcePath}: unsafe Markdown URL scheme`);
+      return;
+    }
+    const key = `${kind}:${node.url}`;
+    const resolved = Object.hasOwn(links, key) ? links[key] : resolveRepositoryUrl(node.url, { ...options, kind });
+    links[key] = resolved.sourceReference ? { code: resolved.sourceReference } : resolved.url !== undefined ? { url: resolved.url } : resolved;
+    if (node.type === "definition") links[`reference:${node.identifier}`] = links[key];
+  });
+  return links;
+}
+
+// A figure bound to an altitude panel sits directly under that panel's
+// heading. The heading must exist: a binding to a panel the source does not
+// author is a configuration error, never a silent drop.
+// Each block is a companion string placed directly under its panel heading,
+// or { value, heading } placed directly under the one heading inside that
+// panel whose slug equals the slug of `heading`, the source text of the
+// anchored heading the adapter already proved lies inside the panel.
+export function insertPanelFigures(markdown, blocksByPanel, sourcePath) {
+  if (!blocksByPanel.size) return markdown;
+  const tree = markdownTree(markdown);
+  const found = new Map();
+  tree.children.forEach((node, index) => {
+    if (node.type !== "heading" || node.depth !== 2) return;
+    const label = visibleNodeText(node).trim().toLowerCase();
+    if (blocksByPanel.has(label) && !found.has(label)) found.set(label, index);
+  });
+  for (const panel of blocksByPanel.keys()) {
+    if (!found.has(panel)) throw new Error(`${sourcePath}: a figure is bound to the ${panel} panel, but the source has no "## ${panel[0].toUpperCase()}${panel.slice(1)}" section`);
+  }
+  const inserts = [];
+  for (const [panel, index] of found) {
+    const next = tree.children.findIndex((node, position) => position > index && node.type === "heading" && node.depth <= 2);
+    const end = next === -1 ? tree.children.length : next;
+    const atPanel = [];
+    for (const block of blocksByPanel.get(panel)) {
+      if (typeof block === "string") { atPanel.push(block); continue; }
+      const want = slugHeading(block.heading);
+      const matches = [];
+      for (let position = index + 1; position < end; position += 1) {
+        const node = tree.children[position];
+        if (node.type === "heading" && node.depth > 2 && slugHeading(visibleNodeText(node)) === want) matches.push(position);
+      }
+      if (matches.length !== 1) throw new Error(`${sourcePath}: a figure is bound to the section "${block.heading}" of the ${panel} panel, which names ${matches.length} headings there, not one`);
+      inserts.push({ at: matches[0], values: [block.value] });
+    }
+    if (atPanel.length) inserts.push({ at: index, values: atPanel });
+  }
+  const merged = new Map();
+  for (const insert of inserts) merged.set(insert.at, [...(merged.get(insert.at) ?? []), ...insert.values]);
+  for (const [at, values] of [...merged].sort((left, right) => right[0] - left[0])) {
+    tree.children.splice(at + 1, 0, ...values.map((value) => ({ type: "html", value })));
+  }
+  return stringifyMarkdown(tree);
+}
+
+// The top-level raw HTML blocks of a generated page, in order. An as-is page
+// uses this to prove its source and companion markers each parse as their own
+// block, so no open fence or raw HTML block in the source can swallow them.
+export function topLevelHtmlBlocks(markdown) {
+  return markdownTree(markdown).children.filter((node) => node.type === "html").map((node) => node.value.trim());
+}
+
+// A generated lookup's tables, each wrapped so the starter's stylesheet
+// stacks it at phone width under its column labels. Only a table whose
+// header is the generator's column list is wrapped (an authored table on the
+// same page keeps its own layout), and a page with no such table fails, since
+// its generated region has lost its shape.
+export function wrapLookupTables(markdown, derive, sourcePath) {
+  const columns = LOOKUP_COLUMNS[derive].join("\u0000");
+  const lines = markdown.split("\n");
+  const out = [];
+  let fence = null;
+  let wrapped = 0;
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    const marker = line.match(/^\s*(`{3,}|~{3,})/);
+    if (marker !== null && (fence === null || marker[1].startsWith(fence))) fence = fence === null ? marker[1] : null;
+    if (fence !== null || !line.startsWith("|")) { out.push(line); index += 1; continue; }
+    let end = index;
+    while (end < lines.length && lines[end].startsWith("|")) end += 1;
+    const block = lines.slice(index, end);
+    const header = block[0].replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim()).join("\u0000");
+    if (header === columns) {
+      out.push(`<div class="portal-lookup" data-cf-lookup="${derive}">`, "", ...block, "", "</div>");
+      wrapped += 1;
+    } else out.push(...block);
+    index = end;
+  }
+  if (wrapped === 0) throw new Error(`${sourcePath}: the ${derive} page carries no table with the generated columns ${LOOKUP_COLUMNS[derive].join(", ")}`);
+  return out.join("\n");
 }

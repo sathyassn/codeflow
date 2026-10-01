@@ -103,7 +103,7 @@ impl Project {
         for file in files {
             let expected = std::fs::read(source.join(&file)).unwrap();
             for harness in [".agents", ".claude"] {
-                let dest = format!("{harness}/skills/cf-estimate/{}", file.to_str().unwrap());
+                let dest = format!("{harness}/skills/cf-estimate/{}", slash_path(&file));
                 assert!(manifest["files"].get(&dest).is_some(), "unmanaged {dest}");
                 assert_eq!(self.read(&dest), expected, "installed {dest}");
                 assert_eq!(
@@ -133,6 +133,14 @@ impl Project {
             assert_eq!(totals, [5400, 9600, 15600]);
         }
     }
+}
+
+/// Manifest keys use `/` on every platform, so join components with it.
+fn slash_path(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn collect_files(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) {

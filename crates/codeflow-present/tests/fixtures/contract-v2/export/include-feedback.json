@@ -1,0 +1,10 @@
+{
+  "setup": [
+    "anchors/entity-valid-figure.json",
+    "answers/submit-valid.json",
+    "threads/tombstone.json"
+  ],
+  "args": [
+    "--include-feedback"
+  ]
+}

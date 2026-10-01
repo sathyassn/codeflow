@@ -1,5 +1,6 @@
 ---
 id: ADR-0028
+uid: a1560451-1045-46a4-a3e6-e0dceeac0c71
 title: route model effort by evidence and task demand
 date: 2026-07-18
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — native duo seats use high by default, xhigh on explicit complexity or failure triggers, and bounded native workers without transferring primary ownership
 ---
 
-# ADR-0028 — evidence-routed model effort
+# ADR-0028: evidence-routed model effort
 
 ## Context
 
@@ -70,3 +71,12 @@ ADR-0055 amends the default: primaries start at medium and escalate to high
 then xhigh on recorded complexity/difficulty triggers. The rest of this
 decision (primary-owned internals, no worker replacing a primary, qualification
 before a binding change) stands.
+
+## Note (2026-09-25)
+
+ADR-0069 makes the models named here catalog data. The Claude seat and its
+workers are resolved per duty from `current-ensemble.json` schema 5. An xhigh
+trigger adds an `xhigh-reasoning` worker obligation in the seat's own family
+while the seat stays at high and keeps approval (ADR-0056); with no eligible
+worker the obligation stays open and the trigger is unmet. The current roster
+and its designation date are in ADR-0069.

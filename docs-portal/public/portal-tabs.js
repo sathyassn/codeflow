@@ -1,6 +1,6 @@
 // Altitude tabs (utility presentation system): one visible panel per page,
-// arrow-key tablist, hash-addressable panels. Also binds "/" to the portal
-// search. Without JavaScript the panels stack in document order.
+// arrow-key tablist, hash-addressable panels. Without JavaScript the panels
+// stack in document order; portal-chrome.js owns search shortcuts.
 const containers = [];
 
 function panelForHash(hash) {
@@ -26,6 +26,7 @@ function initTabs(tablist) {
     });
     if (hash) history.replaceState(null, "", `#${tabs[index].dataset.anchor}`);
     if (focus) tabs[index].focus();
+    document.dispatchEvent(new CustomEvent("cf:altitude"));
   };
   tabs.forEach((tab, index) => {
     tab.addEventListener("click", () => select(index));
@@ -69,13 +70,3 @@ document.documentElement.dataset.cfpTabs = "on";
 document.querySelectorAll(".portal-altitude-tabs").forEach(initTabs);
 window.addEventListener("hashchange", revealHash);
 if (containers.length > 0) revealHash();
-
-document.addEventListener("keydown", (event) => {
-  if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented) return;
-  const active = document.activeElement;
-  if (active && (active.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName))) return;
-  const open = document.querySelector("site-search button[data-open-modal]");
-  if (!open) return;
-  event.preventDefault();
-  open.click();
-});

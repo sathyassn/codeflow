@@ -1,0 +1,67 @@
+registry-check	Set up job	﻿2026-09-26T22:37:51.3812944Z Current runner version: '2.337.0'
+registry-check	Set up job	2026-09-26T22:37:51.3840753Z ##[group]Runner Image Provisioner
+registry-check	Set up job	2026-09-26T22:37:51.3841680Z Hosted Compute Agent
+registry-check	Set up job	2026-09-26T22:37:51.3842274Z Version: 20260828.587
+registry-check	Set up job	2026-09-26T22:37:51.3842998Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+registry-check	Set up job	2026-09-26T22:37:51.3843739Z Build Date: 2026-08-28T16:44:25Z
+registry-check	Set up job	2026-09-26T22:37:51.3844406Z Worker ID: {114a29f6-c115-4bb8-ad86-184c99fdb2ed}
+registry-check	Set up job	2026-09-26T22:37:51.3845219Z Azure Region: northcentralus
+registry-check	Set up job	2026-09-26T22:37:51.3846348Z ##[endgroup]
+registry-check	Set up job	2026-09-26T22:37:51.3848010Z ##[group]Operating System
+registry-check	Set up job	2026-09-26T22:37:51.3848684Z Ubuntu
+registry-check	Set up job	2026-09-26T22:37:51.3849192Z 24.04.5
+registry-check	Set up job	2026-09-26T22:37:51.3849846Z LTS
+registry-check	Set up job	2026-09-26T22:37:51.3850418Z ##[endgroup]
+registry-check	Set up job	2026-09-26T22:37:51.3851046Z ##[group]Runner Image
+registry-check	Set up job	2026-09-26T22:37:51.3851659Z Image: ubuntu-24.04
+registry-check	Set up job	2026-09-26T22:37:51.3852229Z Version: 20260920.314.1
+registry-check	Set up job	2026-09-26T22:37:51.3853380Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260920.314/images/ubuntu/Ubuntu2404-Readme.md
+registry-check	Set up job	2026-09-26T22:37:51.3855147Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260920.314
+registry-check	Set up job	2026-09-26T22:37:51.3856512Z ##[endgroup]
+registry-check	Set up job	2026-09-26T22:37:51.3857734Z ##[group]GITHUB_TOKEN Permissions
+registry-check	Set up job	2026-09-26T22:37:51.3859872Z Contents: read
+registry-check	Set up job	2026-09-26T22:37:51.3860522Z Metadata: read
+registry-check	Set up job	2026-09-26T22:37:51.3861215Z ##[endgroup]
+registry-check	Set up job	2026-09-26T22:37:51.3863296Z Secret source: Actions
+registry-check	Set up job	2026-09-26T22:37:51.3864391Z Cache mode: write
+registry-check	Set up job	2026-09-26T22:37:51.3865774Z Prepare workflow directory
+registry-check	Set up job	2026-09-26T22:37:51.4344852Z Prepare all required actions
+registry-check	Set up job	2026-09-26T22:37:51.4497595Z Complete job name: registry-check
+registry-check	Registry check (read only)	﻿2026-09-26T22:37:51.5396045Z ##[group]Run set -euo pipefail
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5396942Z [36;1mset -euo pipefail[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5397611Z [36;1mgit init -q work && cd work[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5398415Z [36;1mgit remote add origin "https://github.com/${REPO}.git"[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5399670Z [36;1m# R-20: fetch the registry explicitly, full history, never forced.[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5400600Z [36;1mgit fetch --no-tags -q origin \[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5401528Z [36;1m  refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5402462Z [36;1mif [ "$EVENT" = pull_request ]; then[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5403185Z [36;1m  git fetch --no-tags -q origin \[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5404125Z [36;1m    "refs/heads/${BASE_REF}:refs/remotes/origin/target" \[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5405003Z [36;1m    "refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5406136Z [36;1m  mode=(--pr-base origin/target --pr-head pr/head)[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5406888Z [36;1melse[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5407654Z [36;1m  git fetch --no-tags -q origin \[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5408438Z [36;1m    "refs/heads/${REF_NAME}:refs/remotes/origin/target"[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5409266Z [36;1m  mode=(--target origin/target)[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5409934Z [36;1mfi[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5410730Z [36;1mecho "event: ${EVENT}; check code from $(git rev-parse --short origin/target):ci/ids.py"[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5411945Z [36;1mgit show origin/target:ci/ids.py > "${RUNNER_TEMP}/ids.py"[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5412837Z [36;1mpython3 "${RUNNER_TEMP}/ids.py" check \[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.5413704Z [36;1m  --registry origin/codeflow/registry "${mode[@]}"[0m
+registry-check	Registry check (read only)	2026-09-26T22:37:51.6221592Z shell: /usr/bin/bash -e {0}
+registry-check	Registry check (read only)	2026-09-26T22:37:51.6222871Z env:
+registry-check	Registry check (read only)	2026-09-26T22:37:51.6223502Z   EVENT: workflow_dispatch
+registry-check	Registry check (read only)	2026-09-26T22:37:51.6224144Z   BASE_REF: 
+registry-check	Registry check (read only)	2026-09-26T22:37:51.6224810Z   PR_NUMBER: 
+registry-check	Registry check (read only)	2026-09-26T22:37:51.6225359Z   REF_NAME: main
+registry-check	Registry check (read only)	2026-09-26T22:37:51.6226193Z   REPO: sathyassn/codeflow-registry-proof
+registry-check	Registry check (read only)	2026-09-26T22:37:51.6227019Z ##[endgroup]
+registry-check	Registry check (read only)	2026-09-26T22:37:52.3751301Z event: workflow_dispatch; check code from af843e0:ci/ids.py
+registry-check	Registry check (read only)	2026-09-26T22:37:52.4694006Z registry: origin/codeflow/registry tip 1d116a57e436, 9 commits, 8 ids ever added
+registry-check	Registry check (read only)	2026-09-26T22:37:52.4696121Z mode: target origin/target, 1 paths under project-management/
+registry-check	Registry check (read only)	2026-09-26T22:37:52.4697911Z bound: TSK-001 -> b9463d36-6d9b-48d8-9e7c-0dc8dbada6fc
+registry-check	Registry check (read only)	2026-09-26T22:37:52.4699156Z FINDING 1d116a57e436: deletes ids/TSK/008.toml (R-8)
+registry-check	Registry check (read only)	2026-09-26T22:37:52.4700733Z FINDING damaged: ids/TSK/008.toml (added in 1e69821a47a0) is absent from the tip (R-9)
+registry-check	Registry check (read only)	2026-09-26T22:37:52.4702576Z registry check: FAIL (2 findings)
+registry-check	Registry check (read only)	2026-09-26T22:37:52.4777394Z ##[error]Process completed with exit code 1.
+registry-check	Complete job	﻿2026-09-26T22:37:52.4942643Z Cleaning up orphan processes

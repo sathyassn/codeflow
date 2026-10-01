@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{
     error::{PresentError, Result},
     limits,
-    render::{render_document, render_unsupported, RenderOptions},
+    render::{render_document, render_retired, render_unsupported, RenderOptions},
     service::{load_manifest, EmbeddedAssets},
     state::{discard_new_file, open_private_create_new, RevisionContent, SessionStore},
 };
@@ -16,8 +16,13 @@ const EXPORT_BOOTSTRAP: &str = "(async()=>{const e=document.getElementById('cf-p
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportTheme {
+    Graphite,
+    Slate,
+    Sage,
+    /// Compatibility name for Slate.
     Editorial,
-    Technical,
+    /// Compatibility name for Graphite.
+    Instrument,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,9 +39,30 @@ pub fn export_session(
     theme: ExportTheme,
     mode: ExportMode,
 ) -> Result<()> {
+    export_inner(store, session_id, output, theme, mode, false)
+}
+
+pub fn export_session_with_notes(
+    store: &SessionStore,
+    session_id: Uuid,
+    output: &Path,
+    theme: ExportTheme,
+    mode: ExportMode,
+) -> Result<()> {
+    export_inner(store, session_id, output, theme, mode, true)
+}
+
+fn export_inner(
+    store: &SessionStore,
+    session_id: Uuid,
+    output: &Path,
+    theme: ExportTheme,
+    mode: ExportMode,
+    with_notes: bool,
+) -> Result<()> {
     let revision = store.current_revision(session_id)?;
     let utility_style = store.utility_tokens()?.map(|tokens| tokens.css());
-    let html = match revision.content {
+    let mut html = match revision.content {
         RevisionContent::Supported { document } => {
             let static_html = render_document(
                 &document,
@@ -44,6 +70,8 @@ pub fn export_session(
                     session_id: "export",
                     revision: revision.revision,
                     event_sequence: 0,
+                    response_sequence: 0,
+                    answers: None,
                     script_path: None,
                     style_path: None,
                     prepaint_source: None,
@@ -52,6 +80,7 @@ pub fn export_session(
                     feedback: None,
                     read_only_warning: None,
                     interactive: false,
+                    retired: None,
                 },
             );
             let base_bytes = static_html.len();
@@ -75,7 +104,21 @@ pub fn export_session(
             schema_version,
             raw,
         } => render_unsupported(&raw, schema_version),
+        RevisionContent::Retired {
+            document, readable, ..
+        } => render_retired(&document, &readable, revision.revision),
     };
+    if with_notes {
+        let history = store.history(session_id)?;
+        let notes = serde_json::to_string_pretty(
+            &serde_json::json!({"reviews":history.feedback_events,"responses":history.response_events}),
+        )?;
+        let escaped = notes
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        html = html.replacen("</body>",&format!("<section aria-label=\"Conversation\"><h2>Conversation</h2><pre>{escaped}</pre></section></body>"),1);
+    }
     write_new_private(output, html.as_bytes())
 }
 
@@ -124,8 +167,9 @@ fn enhance_export(
     );
     let marker = "</head>";
     let theme = match theme {
-        ExportTheme::Editorial => "editorial",
-        ExportTheme::Technical => "technical",
+        ExportTheme::Slate | ExportTheme::Editorial => "slate",
+        ExportTheme::Graphite | ExportTheme::Instrument => "graphite",
+        ExportTheme::Sage => "sage",
     };
     let (mode, resolved) = match mode {
         ExportMode::System => ("system", "light"),
@@ -140,9 +184,11 @@ fn enhance_export(
         1,
     );
     let styles = include_str!("../web/src/styles.css");
+    // The figure block's sheet: the kit's figure.css, byte for byte.
+    let figure_styles = include_str!("../web/src/figure.css");
     let system_fallback = include_str!("../web/src/export-fallback.css");
     let head = format!(
-        "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\"><meta name=\"referrer\" content=\"no-referrer\"><style data-cf-present-export-style=\"true\">{styles}\n{system_fallback}\n{utility_style}</style>"
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\"><meta name=\"referrer\" content=\"no-referrer\"><style data-cf-present-export-style=\"true\">{styles}\n{figure_styles}\n{system_fallback}\n{utility_style}</style>"
     );
     html = html.replacen(marker, &format!("{head}{marker}"), 1);
     let payload = format!(
@@ -180,6 +226,30 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{write_new_private, EXPORT_BOOTSTRAP};
+
+    #[test]
+    fn a_new_export_of_a_retired_revision_carries_the_notice_and_no_renderer() {
+        let temporary = tempdir().expect("temporary directory");
+        let store = crate::state::SessionStore::at_root(
+            temporary.path().join("project"),
+            "key".to_string(),
+        )
+        .expect("store");
+        let id =
+            crate::state::retired_fixture::install(&store, crate::state::retired_fixture::REVISION);
+        let output = temporary.path().join("retired.html");
+        super::export_session(
+            &store,
+            id,
+            &output,
+            super::ExportTheme::Editorial,
+            super::ExportMode::System,
+        )
+        .expect("export a retired revision");
+        let html = fs::read_to_string(&output).expect("read export");
+        crate::render::tests::assert_retired_page(&html);
+        assert!(!html.contains("cf-present-export-payload"));
+    }
 
     #[test]
     fn export_bootstrap_never_contains_network_endpoint_or_auth_name() {

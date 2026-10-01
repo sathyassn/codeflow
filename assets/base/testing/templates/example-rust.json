@@ -32,6 +32,22 @@
           }
         ]
       }
+    },
+    {
+      "name": "rust-lint",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings"
+        },
+        "full": {
+          "command": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings"
+        },
+        "quick": {
+          "command": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings"
+        }
+      }
     }
   ]
 }

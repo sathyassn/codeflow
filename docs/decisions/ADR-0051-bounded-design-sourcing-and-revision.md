@@ -1,5 +1,6 @@
 ---
 id: ADR-0051
+uid: 742bd00b-4861-4c7c-a7ba-0a77f040c94d
 title: extend product design with bounded variation, trustworthy sourcing, and revision provenance
 date: 2026-08-01
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — cf-design gains a delta-only progressive-disclosure sourcing contract and the existing versioned plan retains reviewed-design provenance
 ---
 
-# ADR-0051 — bounded design sourcing and revision
+# ADR-0051: bounded design sourcing and revision
 
 ## Context
 

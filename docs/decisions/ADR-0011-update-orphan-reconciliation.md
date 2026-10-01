@@ -1,5 +1,6 @@
 ---
 id: ADR-0011
+uid: d3222ffd-7c8a-47f8-9cc4-4d13422b63ce
 title: update reconciles orphaned managed files (prune on upstream rename/removal)
 date: 2026-07-04
 status: accepted
@@ -10,7 +11,7 @@ architecture_impact: none
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0011 — update reconciles orphaned managed files
+# ADR-0011: update reconciles orphaned managed files
 
 ## Context
 

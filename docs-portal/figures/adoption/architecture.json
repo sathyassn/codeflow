@@ -1,0 +1,514 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "adoption-ownership",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What may update touch in each class of file?",
+    "idea": "Update rewrites managed files and regions and engine output, only adds new policy keys, and never touches the docs you own.",
+    "title": "What update may change, by ownership class",
+    "kicker": "Ownership classes",
+    "caption": "Your edits survive an update because the ownership class of each path, not its content, decides what update may do.",
+    "states": [
+      {
+        "name": "update",
+        "mark": "agent",
+        "means": "The update command"
+      },
+      {
+        "name": "class",
+        "mark": "layer",
+        "means": "Ownership class"
+      },
+      {
+        "name": "rewrites",
+        "mark": "trans",
+        "means": "May rewrite"
+      },
+      {
+        "name": "adds",
+        "mark": "return",
+        "means": "Adds new keys only"
+      },
+      {
+        "name": "never",
+        "mark": "blocked",
+        "means": "Never touches"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "update never mutates user-owned docs",
+        "source": "docs/adoption.md#architecture",
+        "derive": "the user-owned docs row",
+        "check": {
+          "kind": "contains",
+          "text": "Seeded once at init; `update` never mutates them"
+        },
+        "value": true
+      },
+      {
+        "claim": "only new keys are added to user-owned schema-versioned files",
+        "source": "docs/adoption.md#architecture",
+        "derive": "the schema-versioned row",
+        "check": {
+          "kind": "contains",
+          "text": "Only *new* keys are added with their defaults and reported"
+        },
+        "value": true
+      },
+      {
+        "claim": "five classes cover every managed path",
+        "source": "docs/adoption.md#architecture",
+        "derive": "the class count sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Five classes cover every managed path."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 334,
+      "draw": [
+        {
+          "state": "update",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 170,
+          "r": 12,
+          "id": "u"
+        },
+        {
+          "text": "update",
+          "x": 60,
+          "y": 150,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "u"
+          ]
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 300,
+          "y": 16,
+          "w": 404,
+          "h": 52,
+          "rx": 8,
+          "id": "c1"
+        },
+        {
+          "text": "Fully-managed",
+          "x": 316,
+          "y": 37,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "replaced, or 3-way merged if you edited it",
+          "x": 316,
+          "y": 58,
+          "style": "mute",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "rewrites",
+          "shape": "path",
+          "d": "M74 170C190 170 190 42 298 42",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 300,
+          "y": 80,
+          "w": 404,
+          "h": 52,
+          "rx": 8,
+          "id": "c2"
+        },
+        {
+          "text": "Managed-region",
+          "x": 316,
+          "y": 101,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "only the marked region is rewritten",
+          "x": 316,
+          "y": 122,
+          "style": "mute",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "rewrites",
+          "shape": "path",
+          "d": "M74 170C190 170 190 106 298 106",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 300,
+          "y": 144,
+          "w": 404,
+          "h": 52,
+          "rx": 8,
+          "id": "c3"
+        },
+        {
+          "text": "User-owned, schema-versioned",
+          "x": 316,
+          "y": 165,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "only new keys are added",
+          "x": 316,
+          "y": 186,
+          "style": "mute",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "adds",
+          "shape": "path",
+          "d": "M74 170C190 170 190 170 298 170",
+          "open": "end",
+          "id": "e2"
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 300,
+          "y": 208,
+          "w": 404,
+          "h": 52,
+          "rx": 8,
+          "id": "c4"
+        },
+        {
+          "text": "User-owned docs",
+          "x": 316,
+          "y": 229,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "never touched after the seed",
+          "x": 316,
+          "y": 250,
+          "style": "mute",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "never",
+          "shape": "path",
+          "d": "M74 170C190 170 190 234 298 234",
+          "cross": {
+            "cx": 250,
+            "cy": 242,
+            "size": 12
+          },
+          "id": "e3"
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 300,
+          "y": 272,
+          "w": 404,
+          "h": 52,
+          "rx": 8,
+          "id": "c5"
+        },
+        {
+          "text": "Engine-generated",
+          "x": 316,
+          "y": 293,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "rewritten by the binary",
+          "x": 316,
+          "y": 314,
+          "style": "mute",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "rewrites",
+          "shape": "path",
+          "d": "M74 170C190 170 190 298 298 298",
+          "head": "end",
+          "id": "e4"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 344,
+      "draw": [
+        {
+          "state": "update",
+          "shape": "circle",
+          "cx": 24,
+          "cy": 22,
+          "r": 11,
+          "id": "u"
+        },
+        {
+          "text": "codeflow update",
+          "x": 44,
+          "y": 27,
+          "style": "mono",
+          "for": [
+            "u"
+          ]
+        },
+        {
+          "state": "rewrites",
+          "shape": "path",
+          "d": "M24 35V318",
+          "id": "bus"
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 70,
+          "y": 52,
+          "w": 282,
+          "h": 48,
+          "rx": 8,
+          "id": "c1"
+        },
+        {
+          "text": "Fully-managed",
+          "x": 82,
+          "y": 70,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "replaced, or 3-way merged if edited",
+          "x": 82,
+          "y": 91,
+          "style": "mute",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "rewrites",
+          "shape": "path",
+          "d": "M24 76H68",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 70,
+          "y": 110,
+          "w": 282,
+          "h": 48,
+          "rx": 8,
+          "id": "c2"
+        },
+        {
+          "text": "Managed-region",
+          "x": 82,
+          "y": 128,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "only the marked region is rewritten",
+          "x": 82,
+          "y": 149,
+          "style": "mute",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "rewrites",
+          "shape": "path",
+          "d": "M24 134H68",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 70,
+          "y": 168,
+          "w": 282,
+          "h": 48,
+          "rx": 8,
+          "id": "c3"
+        },
+        {
+          "text": "User-owned, schema-versioned",
+          "x": 82,
+          "y": 186,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "only new keys are added",
+          "x": 82,
+          "y": 207,
+          "style": "mute",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "adds",
+          "shape": "path",
+          "d": "M24 192H68",
+          "open": "end",
+          "id": "e2"
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 70,
+          "y": 226,
+          "w": 282,
+          "h": 48,
+          "rx": 8,
+          "id": "c4"
+        },
+        {
+          "text": "User-owned docs",
+          "x": 82,
+          "y": 244,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "never touched after the seed",
+          "x": 82,
+          "y": 265,
+          "style": "mute",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "never",
+          "shape": "path",
+          "d": "M24 250H68",
+          "cross": {
+            "cx": 46,
+            "cy": 250,
+            "size": 11
+          },
+          "id": "e3"
+        },
+        {
+          "state": "class",
+          "shape": "rect",
+          "x": 70,
+          "y": 284,
+          "w": 282,
+          "h": 48,
+          "rx": 8,
+          "id": "c5"
+        },
+        {
+          "text": "Engine-generated",
+          "x": 82,
+          "y": 302,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "rewritten by the binary",
+          "x": 82,
+          "y": 323,
+          "style": "mute",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "rewrites",
+          "shape": "path",
+          "d": "M24 308H68",
+          "head": "end",
+          "id": "e4"
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Class",
+        "What update does"
+      ],
+      "rows": [
+        [
+          "Fully-managed",
+          "replaced, or 3-way merged if you edited it"
+        ],
+        [
+          "Managed-region",
+          "only the marked region is rewritten"
+        ],
+        [
+          "User-owned, schema-versioned",
+          "only new keys are added"
+        ],
+        [
+          "User-owned docs",
+          "never touched after the seed"
+        ],
+        [
+          "Engine-generated",
+          "rewritten by the binary"
+        ]
+      ]
+    }
+  }
+}

@@ -1,5 +1,6 @@
 ---
 id: ADR-0041
+uid: 022b3ef1-05b6-466b-bc2e-61a6a576949a
 title: select qualified model bindings by stable project roles
 date: 2026-07-25
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — qualified model evidence gains a user-owned, reference-only project selection layer while the shipped ensemble remains fully managed
 ---
 
-# ADR-0041 — role-based project model selection
+# ADR-0041: role-based project model selection
 
 ## Context
 
@@ -75,3 +76,12 @@ workers.
   evaluation and human-approval concerns.
 - Project overrides for internal workers: they couple CodeFlow to private
   harness scheduling without transferring primary responsibility.
+
+## Note (2026-09-25)
+
+The concrete bindings named above give way to the catalog roster in
+ADR-0069. `.codeflow/model-selection.json` stays at schema 1: it references
+approved binding ids for exact roles and harnesses, and is checked against the
+schema 5 catalog, which stays fully managed. A personal overlay,
+`~/.codeflow/model-catalog.local.json`, may add candidate versions or exclude
+versions on one machine; it cannot designate a seat or claim evidence.

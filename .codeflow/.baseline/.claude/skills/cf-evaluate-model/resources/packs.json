@@ -132,6 +132,8 @@
         "direct-xhigh-does-not-require-failure",
         "cross-family-entry-cannot-skip-primary",
         "routine-work-avoids-effort-inflation",
+        "same-family-worker-runs-as-native-subagent",
+        "same-family-worker-falls-back-without-native-route",
         "extra-family-invoked-when-warranted"
       ]
     },
@@ -285,6 +287,159 @@
         "printed-pr-url-is-reproduced-verbatim",
         "identifier-only-title-gets-words",
         "bare-acronym-title-gets-words"
+      ]
+    },
+    {
+      "id": "visual-doctrine",
+      "description": "Blind diagnostics for the figure grammar (ADR-0068): family choice, text in boxes, two rendered channels, narrow recomposition, overprint, the inner mark floor, fidelity and the altitude contract, each graded on the declaration the subject leaves and its render. Each case carries a faulty control that must fail. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "checks-page-figure-matches-its-question",
+        "release-handoffs-drawn-as-exchanges",
+        "queue-concept-draws-the-relationship",
+        "retry-state-figure-survives-a-review-note",
+        "deploy-flow-states-read-without-hue",
+        "planes-figure-fits-a-small-screen",
+        "token-exchange-labels-stay-clear",
+        "access-grid-marks-read-at-small-size",
+        "limits-figure-draws-todays-value",
+        "planes-figure-claims-only-what-the-repository-holds",
+        "key-rotation-section-is-drawn",
+        "edge-cache-opening-says-what-it-is-not"
+      ]
+    },
+    {
+      "id": "explanation-method",
+      "description": "Blind diagnostics for the explanation method shared by cf-docs-portal and cf-present: a portal page from a source, a family chosen by subject in chat, a screenshot or a figure, the README medium, the smallest carrier and the method on a present review. Each case carries a faulty control that must fail. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "guide-page-from-a-policy-source",
+        "enforcement-planes-answered-in-chat",
+        "display-panel-and-first-paint-take-different-carriers",
+        "readme-figure-uses-the-text-form",
+        "three-unrelated-rules-take-the-smallest-carrier",
+        "migration-review-leads-with-the-picture",
+        "complex-review-uses-declarative-presentation",
+        "flow-reply-carries-figure"
+      ]
+    },
+    {
+      "id": "copy-guide",
+      "description": "Blind diagnostics for the copy guide in cf-editorial-review: how each string is written, from a lead and caption around a figure to microcopy, a summary before a table, skill prose and an ADR, beside the reply and title cases of the written content policy. Each new case carries a faulty control that must fail, and the summary case a short-answer positive control that must pass. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "lead-and-caption-around-a-figure",
+        "search-dialog-microcopy",
+        "task-closeout-from-evidence",
+        "short-answer-stays-one-line",
+        "first-section-of-a-new-skill",
+        "adr-for-a-byte-pinned-sheet",
+        "operator-reply-is-plain-prose-and-bullets",
+        "identifier-only-title-gets-words"
+      ]
+    },
+    {
+      "id": "autonomy-with-judgment",
+      "description": "Blind diagnostics for the autonomy reference (ADR-0070, cf-method references/autonomy.md) in both directions: nine cases where the agent must act instead of asking and eight where it must ask or refuse instead of acting. Each case carries a faulty control that must fail, and every case with a valid alternative carries a positive control that must pass. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "change-request-runs-to-readiness",
+        "seat-loss-continues-with-reduced-assurance",
+        "integration-pr-is-merged-by-primary",
+        "own-worktree-trust-prompt-is-answered",
+        "same-safe-step-not-reasked",
+        "red-job-not-an-operator-choice",
+        "reversible-choice-decided-not-asked",
+        "reversible-dissent-settled-not-approved",
+        "hosted-refusal-ready-on-local-evidence",
+        "protected-merge-stays-human",
+        "protected-integration-glob-stays-human",
+        "never-run-check-is-not-ready",
+        "unrestorable-delete-is-gated",
+        "changed-recipient-needs-fresh-grant",
+        "spend-is-asked-not-assumed",
+        "foreign-folder-trust-is-refused",
+        "seat-disagreement-on-public-behavior-is-asked"
+      ]
+    },
+    {
+      "id": "catalog-routing",
+      "description": "Focused diagnostics for catalog seats and duties: the design owner's first line, the labeled second opinion, worker limits on fidelity, the reduced-assurance seat fallback with task-specific overrides, and identity drift. Registration proves nothing about live behaviour.",
+      "includes": [],
+      "cases": [
+        "design-first-line-with-labeled-second-opinion",
+        "design-proceeds-without-second-opinion",
+        "candidate-worker-refused-fidelity-approval",
+        "design-open-when-first-line-unavailable",
+        "drift-inherits-nothing"
+      ]
+    },
+    {
+      "id": "guidance-retention",
+      "description": "Scripted multi-turn diagnostics for whether the always rules hold in a fresh session and after automatic compaction inside a disposable fixture: a landing time asked for in a plan, a status report and a multi-part explanation, each with a paired negative against over-triggering, in a fresh and an after-compaction arm on the Claude host. Only the probe turn is graded; registration and offline checks prove nothing about live behaviour.",
+      "includes": [],
+      "cases": [
+        "retention-estimate-in-plan-fresh",
+        "retention-estimate-in-plan-after-compaction",
+        "retention-milestone-features-stay-a-list-fresh",
+        "retention-milestone-features-stay-a-list-after-compaction",
+        "retention-status-outcomes-first-fresh",
+        "retention-status-outcomes-first-after-compaction",
+        "retention-ticket-number-answered-directly-fresh",
+        "retention-ticket-number-answered-directly-after-compaction",
+        "retention-release-flow-shown-fresh",
+        "retention-release-flow-shown-after-compaction",
+        "retention-simple-question-stays-in-chat-fresh",
+        "retention-simple-question-stays-in-chat-after-compaction"
+      ]
+    },
+    {
+      "id": "outcome-first",
+      "description": "Blind diagnostics for outcome-first working and reporting (ADR-0071, carried to this source by TSK-108): a component ready while its journey is blocked, green tests with the accepted need unmet, a one-line answer, a status report with owed items, a status with nothing owed, a design framed by the subject's parts, summaries that anchor the reader, and prose that drops needless dashes but keeps a quoted title or numeric range. Each case carries a faulty control that must fail; an unlabelled accurate report passes and a labelled report claiming done from green tests fails. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "component-ready-journey-blocked",
+        "green-tests-accepted-need-unmet",
+        "one-line-question-stays-one-line",
+        "status-report-groups-owed-items-once",
+        "status-with-nothing-owed-has-no-attention-heading",
+        "design-discussion-framed-by-real-parts",
+        "needed-dashes-kept-gratuitous-dashes-replaced",
+        "summary-anchors-with-key-file",
+        "operator-reply-is-plain-prose-and-bullets"
+      ]
+    },
+    {
+      "id": "process-round",
+      "description": "Native diagnostic pack for the process round's managed-instruction change: the affected cases for the changed routing, review, authority, delivery and instruction rules, run natively with traces retained and graded independently. A green run is diagnostic assurance for the changed rules, never full promotion or binding qualification; validate-suite and the model-eval-kit target are structural and tooling checks and prove no behaviour.",
+      "includes": [],
+      "cases": [
+        "model-independent-plans",
+        "design-options-and-challenge",
+        "assignment-change-requires-reapproval",
+        "same-seat-effort-escalation-keeps-assignment",
+        "plan-change-invalidates-approvals",
+        "graph-mutation-creates-new-version",
+        "in-node-detail-does-not-replan",
+        "claude-primary-authored-unit-review-independence",
+        "approve-with-nits-only",
+        "security-dual-vendor-lenses",
+        "technical-blocker-reroutes-without-operator",
+        "multi-task-epic-defaults-to-one-integration-branch",
+        "single-task-does-not-invent-integration-branch",
+        "stable-planning-anchor-is-read-only",
+        "planning-lifecycle-routes-happy-and-exception-paths",
+        "worktree-closeout-cleans-only-proven-landed",
+        "opened-pr-follow-up-is-bounded",
+        "opened-pr-green-reports-without-merging",
+        "incomplete-ci-job-is-not-failed-check",
+        "model-consensus-never-authorizes-catastrophe",
+        "recoverable-project-cleanup-stays-autonomous",
+        "responsible-outbound-approval-tuple",
+        "verification-depth-none-selected",
+        "one-line-question-stays-one-line",
+        "flow-reply-carries-figure",
+        "simple-answer-not-overformatted"
       ]
     }
   ]

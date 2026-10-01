@@ -1,5 +1,6 @@
 ---
 id: ADR-0024
+uid: 1b84af4e-b919-44b8-b0a4-4ed7d2368bf3
 title: stage-aware duo default with bounded parallel worktrees
 date: 2026-07-16
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: the scaffold contract routes every non-trivial repository task through one stage-aware Claude+Codex entry point and adds an explicit bounded-parallel integration contract
 ---
 
-# ADR-0024 — stage-aware duo and bounded parallelism
+# ADR-0024: stage-aware duo and bounded parallelism
 
 ## Context
 
@@ -87,3 +88,13 @@ The standard/full `AGENTS.md`, `CLAUDE.md`, `cf-method`, `cf-plan`, and
 The shared quality resource owns the branch/worktree/resource/integration
 contract. The core binary does not become a model router.
 
+
+## Note (2026-09-25)
+
+ADR-0069 moves concrete models into the managed catalog. The reasoning,
+synthesis, design, coordination and final review duties above belong to seat
+`claude-primary`, whose first line owns design, and the coding duties to seat
+`codex-primary`; `codeflow models resolve` returns the pinned id and effort
+for each duty. Seats enter at high under ADR-0056, so the xhigh default here
+stays amended as ADR-0028 and ADR-0055 record. The Fable and Opus classes
+named above describe the roster at the time. The rest of this decision stands.

@@ -1,0 +1,15 @@
+# Windows uses the same membership and writes its raw referee report here.
+# Nextest keeps reports in the workspace Cargo target directory, while
+# instrumented binaries live below CARGO_LLVM_COV_TARGET_DIR.
+[test-groups.serial]
+max-threads = 1
+
+[profile.codeflow]
+fail-fast = false
+
+[profile.codeflow.junit]
+path = "junit.xml"
+
+[[profile.codeflow.overrides]]
+filter = 'package(codeflow-present) | binary(present_cli) | binary(init_e2e) | test(process_group) | binary(test_gate_cli)'
+test-group = "serial"

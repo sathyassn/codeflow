@@ -6,13 +6,17 @@
 //!   the new shipped version; record and baseline refreshed.
 //! - **managed, user-modified**: 3-way merge with base = `.codeflow/.baseline/`
 //!   copy, ours = the user's file, theirs = the new shipped version. Clean
-//!   merge is applied and reported; a conflict writes `<path>.new` and the
-//!   report — the user's file is NEVER clobbered and NEVER silently skipped.
+//!   merge is applied and reported; a conflict writes `<path>.new` holding
+//!   the merge with conflict markers (the user's non-overlapping changes
+//!   kept) and the report; the user's file is NEVER clobbered and NEVER
+//!   silently skipped.
 //! - **managed-region**: only the marked block (markdown/hash) or the
 //!   codeflow-owned keys (settings JSON) are regenerated.
 //! - **user-owned**: never mutated; schema-versioned JSON (policy.json) gains
 //!   NEW default keys (absent from both the user file and the old shipped
-//!   default), added with defaults and reported.
+//!   default), added with defaults and reported, and a scalar that still
+//!   equals the old shipped default moves to a changed new default, reported
+//!   (ADR-0075); a value that differs from the old default is kept.
 //!
 //! Manifest invariant: a managed file's recorded `sha256` is the hash of the
 //! pristine shipped version (== the `.baseline/` copy), NEVER the hash of a
@@ -44,14 +48,19 @@ use std::path::{Path, PathBuf};
 
 use super::init::{build_context, render_entry};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
+use super::prior_release;
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
-use super::settings_merge::merge_settings_from_baseline;
-use super::state::{
-    guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file, Baseline,
-    InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
+use super::settings_merge::{
+    merge_settings_from_baseline, merge_settings_from_prior_release, KEPT_REMOVAL,
 };
-use super::{hash, should_skip_initial_stack_adr, ScaffoldError};
+use super::state::{
+    guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file,
+    write_record, Baseline, InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
+    SyncBatch, PROJECT_TOML,
+};
+use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
+use crate::hooks::policy_schema::DEPRECATED_KEYS;
 
 /// Options for [`update`].
 #[derive(Debug, Clone)]
@@ -75,6 +84,19 @@ pub struct UpdateOptions {
 /// `.codeflow/project.toml`; otherwise IO, JSON, or manifest failures.
 /// Per-file merge conflicts are NOT errors — they are reported.
 pub fn update(
+    source: &dyn super::AssetSource,
+    root: &Path,
+    opts: &UpdateOptions,
+) -> Result<Report, ScaffoldError> {
+    // One run flushes each touched directory and the device once (TSK-153).
+    let batch = SyncBatch::begin();
+    let report = update_writes(source, root, opts)?;
+    batch.finish()?;
+    Ok(report)
+}
+
+#[allow(clippy::too_many_lines)] // linear phase orchestration, as in `init`
+fn update_writes(
     source: &dyn super::AssetSource,
     root: &Path,
     opts: &UpdateOptions,
@@ -108,6 +130,8 @@ pub fn update(
         state.scaffold_version, opts.binary_version, state.tier
     ));
     let mut diffs = String::new();
+    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")
+        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
 
     for entry in &manifest.entries {
         if !entry.applies(state.tier, &state.permission_preset) {
@@ -136,6 +160,23 @@ pub fn update(
             );
             continue;
         }
+        if let Some(kept) = kept_template
+            .as_ref()
+            .filter(|_| entry.dest == pr_template::MANAGED_TEMPLATE)
+        {
+            // A kept brownfield template is the project's (SPC-013 R-84):
+            // never merged into, never shadowed by a sidecar or a second
+            // template.
+            report.file_with_notes(
+                &entry.dest,
+                Action::Skipped,
+                vec![format!(
+                    "the project's PR template {} is kept; see git.pr_section_mapping",
+                    kept.path
+                )],
+            );
+            continue;
+        }
         update_entry(
             source,
             root,
@@ -150,11 +191,42 @@ pub fn update(
     }
 
     prune_orphans(root, &manifest, &ignore, &mut installed, &mut report)?;
+    if let Some(kept) = &kept_template {
+        if root.join(".codeflow/policy.json").exists() {
+            let diagnosis = pr_template::diagnose(root, kept, false)?;
+            if let Some(line) = pr_template::describe(kept, &diagnosis, false) {
+                report.notes.push(line);
+            }
+            if matches!(
+                diagnosis,
+                pr_template::Diagnosis::Diagnosed { .. }
+                    | pr_template::Diagnosis::Recorded(
+                        crate::hooks::policy::MappingState::Diagnosed
+                    )
+            ) {
+                report.pending_pr_template = Some(kept.clone());
+            }
+        }
+    }
 
     installed.scaffold_version.clone_from(&opts.binary_version);
     installed.store(root)?;
     state.scaffold_version.clone_from(&opts.binary_version);
+    // The release rule's adoption marker (SPC-013 R-120): written once by
+    // the release that brings the rule, never rewritten; never a table.
+    state.release_rules.get_or_insert(1);
     state.store(root)?;
+    if let Some(note) = record_work_records_baseline(root)? {
+        report.notes.push(note);
+    }
+    // The brownfield hook choice stays visible until the adopter makes it.
+    if super::detect::configured_hooks_path(root).as_deref()
+        == Some(super::detect::CODEFLOW_HOOKS_PATH)
+    {
+        if let Some(found) = super::detect::git_dir_hooks(root) {
+            report.notes.push(found.report_note());
+        }
+    }
 
     if let Some(path) = &opts.diff_out {
         let mut out = report.to_string();
@@ -169,6 +241,56 @@ pub fn update(
     }
 
     Ok(report)
+}
+
+/// The work-record migration (SPC-013 R-83): an existing project whose
+/// records predate the lifecycle rules gets its migration baseline recorded
+/// once, as the current `HEAD`, so older records keep their exact blobs
+/// exempt and the rules apply by transition from here. A project with no
+/// record, no commit, or a recorded baseline is left alone.
+fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldError> {
+    use crate::workgraph::lifecycle::{recorded_baseline, Graph, BASELINE_KEY};
+    if !recorded_baseline(root).is_empty() || Graph::from_worktree(root).records.is_empty() {
+        return Ok(None);
+    }
+    let Some(head) = git2::Repository::discover(root).ok().and_then(|repo| {
+        let id = repo.head().ok()?.peel_to_commit().ok()?.id();
+        Some(id.to_string())
+    }) else {
+        return Ok(None);
+    };
+    let path = ProjectState::path(root);
+    let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
+    let mut table: toml::Table =
+        toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+            what: path.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    table.insert(BASELINE_KEY.to_string(), toml::Value::String(head.clone()));
+    let next = toml::to_string_pretty(&table).map_err(|e| ScaffoldError::InvalidState {
+        what: path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    write_record(root, PROJECT_TOML, next.as_bytes())?;
+    Ok(Some(format!(
+        "recorded {BASELINE_KEY} = {head}: work-record rules apply to records changed after this commit"
+    )))
+}
+
+/// Policy values a released binary no longer accepts, rewritten to their
+/// nearest accepted value with a note. Only `git.work_records = "off"` from
+/// an unreleased build qualifies (SPC-013 R-81); every other value is kept.
+fn migrate_policy_values(dest: &str, user: &mut serde_json::Value) -> Vec<String> {
+    if dest != ".codeflow/policy.json" {
+        return Vec::new();
+    }
+    match user.pointer_mut("/git/work_records") {
+        Some(value) if value.as_str() == Some("off") => {
+            *value = serde_json::Value::from("warn");
+            vec!["git.work_records `off` no longer exists; rewritten to `warn`".to_string()]
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn record(installed: &mut InstalledManifest, entry: &ManifestEntry, sha256: String) {
@@ -307,7 +429,8 @@ fn update_entry(
                 );
                 return Ok(());
             }
-            if let Ok(merged) = diffy::merge(&base, &current, &rendered) {
+            let merge = diffy::merge(&base, &current, &rendered);
+            if let Ok(merged) = merge {
                 write_dest(root, entry, &merged)?;
                 // Record the pristine shipped hash (not the merged file's), so the
                 // manifest invariant `recorded == hash(baseline)` holds: the merged
@@ -323,17 +446,27 @@ fn update_entry(
                     Action::Merged,
                     vec!["3-way merge applied cleanly (base = shipped baseline)".to_string()],
                 );
-            } else {
+            } else if let Err(conflicted) = merge {
+                // The proposal is the 3-way merge with conflict markers, not
+                // the bare shipped file: every change of yours that does not
+                // overlap an upstream change (a job you added to a workflow,
+                // a section you appended) is kept in it, and only the
+                // overlapping hunks wait for you.
                 let new_path = format!("{}.new", entry.dest);
-                write_beneath_root(root, &new_path, rendered.as_bytes())?;
-                report.file_with_notes(
-                    &entry.dest,
-                    Action::Conflicted,
-                    vec![format!(
-                        "your modifications conflict with the new shipped version; \
-                         file untouched, new version written to {new_path}"
-                    )],
-                );
+                write_beneath_root(root, &new_path, conflicted.as_bytes())?;
+                let mut notes = vec![format!(
+                    "your modifications conflict with the new shipped version; file untouched. \
+                     {new_path} holds the 3-way merge: your changes are kept and each \
+                     overlapping hunk carries conflict markers to resolve before you replace the file"
+                )];
+                if entry.src == "ci/codeflow-ci.yml" {
+                    notes.push(
+                        "the commit standards job moved to .github/workflows/codeflow-policy.yml on \
+                         pull_request_target; drop the commit-lint job from this file when you resolve"
+                            .to_string(),
+                    );
+                }
+                report.file_with_notes(&entry.dest, Action::Conflicted, notes);
             }
         }
         Ownership::ManagedRegion => match entry.region.unwrap_or(RegionFormat::Markdown) {
@@ -349,16 +482,30 @@ fn update_entry(
                     .map_err(|e| ScaffoldError::io(&dest_path, e))?;
                 let previous = Baseline::read(root, &entry.dest);
                 let mut lines = vec![];
-                let merged = merge_settings_from_baseline(
-                    &current,
-                    previous.as_deref(),
-                    &rendered,
-                    &mut lines,
-                )?;
+                let prior = previous
+                    .is_none()
+                    .then(|| prior_release::settings(&entry.src))
+                    .flatten();
+                let merged = if let Some(prior) = prior {
+                    let merged =
+                        merge_settings_from_prior_release(&current, prior, &rendered, &mut lines)?;
+                    lines.insert(0, prior_release_note());
+                    merged
+                } else {
+                    merge_settings_from_baseline(
+                        &current,
+                        previous.as_deref(),
+                        &rendered,
+                        &mut lines,
+                    )?
+                };
                 record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;
                 if merged == current {
-                    report.file(&entry.dest, Action::Unchanged);
+                    // A kept removal is reported on every run: the project
+                    // still runs without a shipped rule.
+                    lines.retain(|line| line.contains(KEPT_REMOVAL));
+                    report.file_with_notes(&entry.dest, Action::Unchanged, lines);
                 } else {
                     write_dest(root, entry, &merged)?;
                     push_diff(diffs, &entry.dest, &current, &merged);
@@ -465,23 +612,46 @@ fn sync_user_owned_json(
         Baseline::read(root, &entry.dest).and_then(|t| serde_json::from_str(&t).ok());
 
     let mut added: Vec<String> = vec![];
-    if old_default.is_some() {
-        add_new_keys(
-            &mut user,
-            old_default.as_ref(),
-            &new_default,
-            "",
-            &mut added,
-        );
+    let mut moved: Vec<MovedDefault> = vec![];
+    let mut recommended: Vec<String> = vec![];
+    // Without a recorded baseline, the policies earlier versions shipped
+    // stand in for it: the oldest decides which keys are new, and a value
+    // still equal to any of their defaults moves.
+    let prior: Vec<serde_json::Value> = if old_default.is_none() {
+        prior_release::policies(&entry.src)
+            .into_iter()
+            .flatten()
+            .filter_map(|text| serde_json::from_str(text).ok())
+            .collect()
+    } else {
+        vec![]
+    };
+    if let Some(old) = old_default.as_ref().or(prior.first()) {
+        add_new_keys(&mut user, Some(old), &new_default, "", &mut added);
+        move_unchanged_defaults(&mut user, old, &new_default, "", &mut moved);
+        recommended = recommend_defaults(&user, old, &new_default);
     }
+    for old in prior.iter().skip(1) {
+        move_unchanged_defaults(&mut user, old, &new_default, "", &mut moved);
+    }
+
+    // Keys the new shipped default dropped and the schema deprecates are
+    // deleted (TSK-137): they are inert, and the loader warns while they stay.
+    let removed = remove_deprecated_keys(&mut user, &new_default);
+    added.extend(removed.iter().map(|k| format!("-{k}")));
+
+    let migrated = migrate_policy_values(&entry.dest, &mut user);
 
     // Refresh the shipped-default baseline and record either way.
     Baseline::write(root, &entry.dest, rendered)?;
     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
 
-    if added.is_empty() {
+    if added.is_empty() && migrated.is_empty() && moved.is_empty() {
         let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
-        if old_default.is_none() {
+        notes.extend(recommended);
+        if !prior.is_empty() {
+            notes.push(prior_release_note());
+        } else if old_default.is_none() {
             notes.push(
                 "no shipped-default baseline existed; key sync starts from this version"
                     .to_string(),
@@ -493,7 +663,21 @@ fn sync_user_owned_json(
 
     // schema_version awareness: carry the new default's schema_version when
     // keys were added and the user has not customized it past the default.
-    let mut notes: Vec<String> = added.iter().map(|k| format!("added key {k}")).collect();
+    let mut notes: Vec<String> = added
+        .iter()
+        .map(|k| match k.strip_prefix('-') {
+            Some(gone) => format!("removed deprecated key {gone}"),
+            None => format!("added key {k}"),
+        })
+        .collect();
+    notes.extend(moved.iter().map(MovedDefault::note));
+    if !prior.is_empty() {
+        notes.insert(0, prior_release_note());
+    }
+    let migrated_any = !migrated.is_empty();
+    notes.extend(migrated);
+    notes.extend(recommended);
+    let mut schema_advanced = false;
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
             .and_then(serde_json::Value::as_u64),
@@ -504,15 +688,202 @@ fn sync_user_owned_json(
         if new_sv > user_sv {
             user["schema_version"] = serde_json::Value::from(new_sv);
             notes.push(format!("schema_version advanced {user_sv} -> {new_sv}"));
+            schema_advanced = true;
         }
     }
 
-    let mut next = serde_json::to_string_pretty(&user)?;
-    next.push('\n');
+    // Splice only the added keys into the adopter's bytes; a migrated value
+    // or a layout the splice cannot reproduce falls back to a rewrite.
+    let preserved = if migrated_any {
+        None
+    } else {
+        preserving_edit(&current_text, &user, &added, &moved, schema_advanced)
+    };
+    let next = if let Some(text) = preserved {
+        text
+    } else {
+        let mut text = serde_json::to_string_pretty(&user)?;
+        text.push('\n');
+        text
+    };
     write_file(&dest_path, next.as_bytes())?;
     push_diff(diffs, &entry.dest, &current_text, &next);
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
+}
+
+/// The report line for an update that compared with an earlier release's
+/// shipped copy because no baseline was recorded.
+fn prior_release_note() -> String {
+    format!(
+        "no shipped-default baseline was recorded; compared with the copy CodeFlow {} shipped",
+        prior_release::RELEASE
+    )
+}
+
+/// The adopter's file with only the `added` keys (and removed deprecated
+/// ones), and an advanced `schema_version`, spliced in, when that reproduces
+/// `user` exactly: every
+/// byte the adopter wrote stays as written (TSK-107 review F6).
+fn preserving_edit(
+    current: &str,
+    user: &serde_json::Value,
+    added: &[String],
+    moved: &[MovedDefault],
+    schema_advanced: bool,
+) -> Option<String> {
+    let mut text = current.to_string();
+    for change in moved {
+        let parts: Vec<&str> = change.path.split('.').collect();
+        text = super::json_edit::replace_value(&text, &parts, &change.new.to_string())?;
+    }
+    for path in added {
+        // A `-` marks a deprecated key the sync removed.
+        if let Some(gone) = path.strip_prefix('-') {
+            let parts: Vec<&str> = gone.split('.').collect();
+            text = super::json_edit::remove_member_line(&text, &parts)?;
+            continue;
+        }
+        let parts: Vec<&str> = path.split('.').collect();
+        let (key, parent) = parts.split_last()?;
+        let value = user.pointer(&format!("/{}", parts.join("/")))?;
+        text = super::json_edit::insert_member(
+            &text,
+            parent,
+            key,
+            &serde_json::to_string(value).ok()?,
+        )?;
+    }
+    if schema_advanced {
+        let version = user.get("schema_version")?.to_string();
+        text = super::json_edit::replace_value(&text, &["schema_version"], &version)?;
+    }
+    super::json_edit::verified(text, user)
+}
+
+/// A policy scalar that still held the prior shipped default and moved to
+/// the new one (ADR-0075, TSK-171).
+struct MovedDefault {
+    path: String,
+    old: serde_json::Value,
+    new: serde_json::Value,
+}
+
+impl MovedDefault {
+    fn note(&self) -> String {
+        format!(
+            "moved {} from {} to {}: it held the previous shipped default. \
+             To keep {}, set it again in .codeflow/policy.json; update keeps a \
+             value that differs from the shipped default",
+            self.path, self.old, self.new, self.old
+        )
+    }
+}
+
+/// Move every scalar leaf whose value equals the prior shipped default to
+/// the new default, when the default changed. A value that differs from the
+/// prior default is the project's choice and is kept; arrays and objects are
+/// never replaced here.
+fn move_unchanged_defaults(
+    user: &mut serde_json::Value,
+    old_default: &serde_json::Value,
+    new_default: &serde_json::Value,
+    path: &str,
+    moved: &mut Vec<MovedDefault>,
+) {
+    let (Some(user_obj), Some(new_obj)) = (user.as_object_mut(), new_default.as_object()) else {
+        return;
+    };
+    for (key, new_val) in new_obj {
+        let Some(old_val) = old_default.get(key) else {
+            continue;
+        };
+        let Some(user_val) = user_obj.get_mut(key) else {
+            continue;
+        };
+        let key_path = if path.is_empty() {
+            key.clone()
+        } else {
+            format!("{path}.{key}")
+        };
+        if new_val.is_object() {
+            move_unchanged_defaults(user_val, old_val, new_val, &key_path, moved);
+            continue;
+        }
+        let scalar = |value: &serde_json::Value| !value.is_object() && !value.is_array();
+        if key_path != "schema_version"
+            && scalar(new_val)
+            && scalar(old_val)
+            && old_val != new_val
+            && *user_val == *old_val
+        {
+            *user_val = new_val.clone();
+            moved.push(MovedDefault {
+                path: key_path,
+                old: old_val.clone(),
+                new: new_val.clone(),
+            });
+        }
+    }
+}
+
+/// Changed shipped defaults that `codeflow update` recommends to an existing
+/// install whose value differs from both the old and the new default:
+/// `(dotted key path, reason)`. A value equal to the old default moves to
+/// the new one ([`move_unchanged_defaults`]).
+const RECOMMENDED_DEFAULTS: &[(&str, &str)] = &[(
+    "git.test_gate_on_push",
+    "the push set now finishes in seconds and blocks a failed push (TSK-132)",
+)];
+
+/// One note per [`RECOMMENDED_DEFAULTS`] key whose shipped default changed
+/// and whose current value differs from the new default.
+fn recommend_defaults(
+    user: &serde_json::Value,
+    old_default: &serde_json::Value,
+    new_default: &serde_json::Value,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    for (path, reason) in RECOMMENDED_DEFAULTS {
+        let pointer = format!("/{}", path.replace('.', "/"));
+        let (Some(old), Some(new), Some(current)) = (
+            old_default.pointer(&pointer),
+            new_default.pointer(&pointer),
+            user.pointer(&pointer),
+        ) else {
+            continue;
+        };
+        if old != new && current != new {
+            notes.push(format!(
+                "kept {path} = {current}; new installs default to {new}: {reason}. \
+                 To adopt it, set it to {new} in .codeflow/policy.json"
+            ));
+        }
+    }
+    notes
+}
+
+/// Delete each dotted-path [`DEPRECATED_KEYS`] entry the user file carries and
+/// the new shipped default does not. Returns the removed keys.
+fn remove_deprecated_keys(
+    user: &mut serde_json::Value,
+    new_default: &serde_json::Value,
+) -> Vec<String> {
+    DEPRECATED_KEYS
+        .iter()
+        .map(|(key, _)| *key)
+        .filter(|key| {
+            let pointer = format!("/{}", key.replace('.', "/"));
+            if new_default.pointer(&pointer).is_some() {
+                return false;
+            }
+            let (parent, leaf) = pointer.rsplit_once('/').expect("pointer has a slash");
+            user.pointer_mut(parent)
+                .and_then(serde_json::Value::as_object_mut)
+                .is_some_and(|obj| obj.remove(leaf).is_some())
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 /// Recursively adds keys present in `new_default` but absent from both
@@ -668,6 +1039,28 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 
 #[cfg(test)]
 mod tests {
+    /// `CodeFlow`'s release jobs live in its own `codeflow-release.yml`, not
+    /// in its copy of the managed CI file (TSK-106, SPC-013 R-96), so an
+    /// update proposal for that file carries none of them (TSK-107 kept them
+    /// through the merge while they lived there).
+    #[test]
+    fn dogfood_ci_proposal_carries_no_release_job() {
+        let base =
+            include_str!("../../../../.codeflow/.baseline/.github/workflows/codeflow-ci.yml");
+        let ours = include_str!("../../../../.github/workflows/codeflow-ci.yml");
+        let theirs = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
+        let own = include_str!("../../../../.github/workflows/codeflow-release.yml");
+        let proposal = match diffy::merge(base, ours, theirs) {
+            Ok(merged) | Err(merged) => merged,
+        };
+        for text in [ours, &proposal] {
+            assert!(!text.contains("\n  release-impact:\n"), "{text}");
+            assert!(!text.contains("scripts/release.py"), "{text}");
+        }
+        assert!(own.contains("\n  release-impact:\n"));
+        assert!(own.contains("scripts/release.py check-pr"));
+    }
+
     #[test]
     fn test_unsafe_dest_rejected() {
         // codex pre-flip review: a tampered manifest must not escape the repo.

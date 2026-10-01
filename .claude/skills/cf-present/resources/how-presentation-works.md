@@ -1,12 +1,17 @@
-# How presentation works (how to think)
+# How presentation works (what the human sees)
 
-**Required.** Read this before writing any present JSON.
+**Load order:** the one list in [SKILL.md](../SKILL.md).
+
+The way to think before any explanation is `explanation-method.md`: reader
+and question, altitude, carrier, draft, check. This file adds what is
+particular to present: what the human sees when the surface opens, why block
+order is attention order, and a worked contrast.
 
 You are not “filling a schema.” You are staging **what a human will see** when
 the review surface opens. The JSON is only the handoff format. The operator
 never reads it. They see a page: chrome above, document column in the middle,
 optional Comment rail when armed. **Whatever structure you choose in JSON is
-exactly the structure of that page**—calm utility styling, no magic upgrade.
+exactly the structure of that page**: calm utility styling, no magic upgrade.
 
 If the JSON is a chat dump in blocks, the page is a chat dump with better type.
 That is a failed present.
@@ -15,7 +20,7 @@ That is a failed present.
 
 ## 1. What the human actually encounters
 
-Imagine the window after open—not the file on disk.
+Imagine the window after open, not the file on disk.
 
 - **Top:** title of the review, appearance, **Comment**. Quiet. Not content.
 - **Left (wide layouts):** a thin route of block labels. Those labels come from
@@ -25,7 +30,7 @@ Imagine the window after open—not the file on disk.
   between them. The first screenful is almost the whole argument for many
   people. Later blocks are for those who scroll.
 - **Comment (when armed):** mode strip + notes rail. Humans mark **what is on
-  the page**—figures, lines of a diff, a status row—not your JSON keys.
+  the page** (figures, lines of a diff, a status row), not your JSON keys.
 
 So: **order of `blocks[]` = order of attention.** First block owns the fold.
 A long narrative first means they start by reading. A structural figure first
@@ -33,12 +38,10 @@ means they start by *seeing* a relationship.
 
 Chrome does not fix weak content. It only frames it.
 
-The design-exploration board that settled utility craft is a **reference**, not
-a document to clone. Do not reproduce its demo subject (system + present +
-portal tabs, sample lineage figure, sample comments). Author **this session's**
-subject into catalog blocks so the same chrome, tokens, and Comment system can
-be used again. Portal work is a different skill (`cf-docs-portal`) on the same
-craft.
+Author **this session's** subject into catalog blocks so the same chrome,
+tokens, and Comment system can be used again, and draw figures to
+`figure-grammar.md`. Portal work is a different skill (`cf-docs-portal`) on the
+same craft.
 
 ---
 
@@ -52,100 +55,61 @@ Think in jobs, not tags:
 
 | Job for the reader | What they need to perceive | Instrument (block) | What goes wrong if you substitute prose |
 |--------------------|----------------------------|--------------------|----------------------------------------|
-| Grasp a relationship, flow, or split | Geometry: nodes, edges, order, fork | authored **stage** (justified `html`) / **diagram** / **tree** | They re-linearise your sentences and miss the shape |
+| Grasp a relationship, flow, or split | Geometry: nodes, edges, order, fork | **figure** in one grammar family / **tree**; a flow stage (`html`) only as the flow interim | They re-linearise your sentences and miss the shape |
 | Compare peers | Side-by-side columns of equal rank | **comparison** | A bullet list collapses peers into sequence (implies ranking by order) |
 | Trust evidence | Scanable states: pass / fail / pending / not-run | **status** | A paragraph “tests are mostly fine” cannot be annotated as a row |
 | Inspect exact change | Monospace change surface | **diff** / **code** | Paraphrase hides the line they need to mark |
 | Hold one decision | Named choice + state | **decision** | Buried ask in a closing paragraph |
 | Absorb continuity | Short reading band | **narrative** | Fine *after* the figure; fatal as the only carrier of structure |
-| Enumerate peer points | Equal list items | **bullets** | Everything same weight—no hierarchy, no spine |
+| Enumerate peer points | Equal list items | **bullets** | Everything same weight: no hierarchy, no spine |
 | Signal risk / exception | One edged callout | **callout** | If everything is a callout, nothing is |
 | Ask for a verdict | One clear closing demand | **feedback_prompt** | Vague “thoughts?” wastes the surface |
 
 **Important:** `comparison` of three text cards is still **text** if the cards
 only restate chat. Geometry only helps when the **difference between columns**
-is the point. A diagram whose Mermaid is a fig leaf for more sentences is still
-a wall—just with a code block on top. And when the governing claim needs a true
-stage — labeled nodes, named edges, deliberate scale and margins — **author
-one**: a justified `html` stage drawn with utility tokens (see the example
-JSON). Mermaid and ASCII are quick supporting forms; they are **never the
-primary page form** when geometry should teach.
+is the point. A figure whose geometry only restates more sentences is still a
+wall, just drawn. When the governing claim needs geometry,
+**author a `figure` block**: a declaration in the family whose relationship the
+reader must see (`figure-grammar.md`), which the runtime draws with its legend,
+caption and table twin. A justified `html` stage drawn with utility tokens
+remains only as the flow family's interim form (see the example JSON). ASCII is
+a chat form, **never the primary page form** when geometry should teach.
+Mermaid is unsupported on both surfaces: present refuses a `diagram` block and
+the portal shows a Mermaid fence as code.
 
 The system will not invent a lineage board, a confidence strip, or a stage
 diagram for you. Those exist only if **you** author a carrier whose shape
-encodes them (diagram/tree/table/media/justified html)—or you stay in chat.
+encodes them (figure/tree/table/media), or you stay in chat.
 
 ---
 
-## 3. How you should think (before any JSON)
+## 3. Before any JSON
 
-Work **backward from the open page**, not forward from your notes.
+Work through `explanation-method.md` first: its stages settle the reader, the
+altitudes and the carrier, and its check decides whether the page opens. On
+present, the stage 3 carrier is the first block, and the draft is the page
+walked top to bottom in plain words before JSON encodes it, with stable `id`s
+for blocks that persist across revisions.
 
-### Step A — Name the job
-
-In one sentence: what should the human be able to **do or decide** after this
-surface that they could not do from chat? If you cannot name it, do not open
-present.
-
-### Step B — Name the 5‑second picture
-
-With almost no reading, what should still be true?
-
-Examples of real 5‑second pictures:
+The first block should give the reader the picture in about five seconds,
+with almost no reading. Pictures that do:
 
 - “Two lanes only meet at settle.”
-- “Ship vs hold—these two options, this one open risk.”
+- “Ship or hold: these two options, this one open risk.”
 - “This diff is the whole dispute.”
 
-If your honest answer is “they’ll need to read the bullets,” you do not have a
-presentation yet. You have a memo.
+Ask what the reader holds after those five seconds. If the honest answer is
+“they will need to read the bullets”, there is no picture yet: the page is a
+memo.
 
-### Step C — Choose one primary carrier
-
-Pick the **single** instrument that makes that 5‑second picture true **without
-depending on sentences**. That block goes **first** (or immediately after a
-one-line frame if the figure needs a title in prose—still keep prose short).
-
-Ask: *If I delete every sentence on the page and leave only this carrier’s
-structure, is the governing idea still there?*  
-If no → wrong carrier, or the idea is not ready to present.
-
-### Step D — Support, then prove, then ask
-
-Altitude is a **reading path**, not section labels:
-
-1. **Concept** — primary carrier + at most a short frame of prose  
-2. **Architecture / mechanism** — only if the claim needs a second structural
-   view (not a second essay)  
-3. **Technical** — status, diff, code, table: things someone can verify or mark  
-4. **Ask** — one `feedback_prompt` that matches the job from Step A  
-
-Do not “cover everything you know.” Present is expensive. Every block is another
-band of attention. Prefer fewer, heavier instruments over many light ones.
-
-### Step E — Mentally walk the page
-
-Top to bottom, say out loud what the eye hits:
-
-1. …  
-2. …  
-3. …  
-
-If the walk is “paragraph, list, list, three cards, paragraph,” you have
-restyled chat. Stop. Rebuild from Step B.
-
-If the walk is “figure of the dispute → two options → evidence rows → one ask,”
-you are thinking correctly—even before JSON exists.
-
-### Step F — Only then encode
-
-Now write JSON as a **faithful encoding** of that walk. Stable `id`s for blocks
-that will persist across revisions (so comments stay meaningful). No secrets,
-no paths, no performance of thoroughness.
+Read that walk for its shape. If it reads “paragraph, list, list, three
+cards, paragraph”, it is chat restyled: stop and choose the carrier again.
+If it reads “figure of the dispute, two options, evidence rows, one ask”, the
+structure is doing the work before any JSON exists.
 
 ---
 
-## 4. Mental models that prevent stupid presents
+## 4. Mental models for present blocks
 
 ### “Blocks are not headings”
 
@@ -155,21 +119,23 @@ when **layout** carries mechanism (stage, tree, table of responsibilities).
 
 ### “The catalog is a palette of instruments, not a form to complete”
 
-You do not score points for using every block type. A strong present might be:
-one diagram, one status, one prompt. A weak present often uses eight types and
-still teaches nothing.
+You do not score points for using every block type. Present is expensive:
+every block is another band of attention, so prefer fewer, heavier
+instruments over many light ones. A strong present might be one figure, one
+status, one prompt. A weak present often uses eight types and still teaches
+nothing.
 
 ### “Comparison is for peers; sequence is for process”
 
-If the truth is a pipeline, a left‑to‑right (or top‑to‑bottom) **diagram**
-beats three columns labeled Phase 1/2/3 full of prose. If the truth is a fork
-in the road, **comparison** beats a numbered list.
+If the truth is a pipeline, a left‑to‑right (or top‑to‑bottom) flow
+**figure** beats three columns labeled Phase 1/2/3 full of prose. If the
+truth is a fork in the road, **comparison** beats a numbered list.
 
 ### “Evidence is a surface you can point at”
 
 Comment exists so humans can pin **what they see**. Prefer carriers with
 durable visual targets: a node, a row, a diff line, a column. A soup of prose
-forces them to select sentences—and trains you to dump more sentences.
+forces them to select sentences and trains you to dump more sentences.
 
 ### “Utility craft is quiet on purpose”
 
@@ -213,18 +179,6 @@ Same facts. Different **responsibility** for structure. Only the second is a
 present.
 
 ---
-
-## 6. Self-check (judgment, not ceremony)
-
-Before `present open`:
-
-1. Can I describe the **5‑second picture** without listing bullets?  
-2. Is the **first** block the instrument that creates that picture?  
-3. If sentences vanished, would the **structure** still argue?  
-4. Does each block earn its place on the walk, or is it leftover chat?  
-5. Does the final ask match the job—and can a human mark the page to disagree?
-
-If any answer is weak, do not open. Restructure or stay in chat.
 
 Catalog fields and envelope rules:
 [references/document-authoring.md](../references/document-authoring.md).  

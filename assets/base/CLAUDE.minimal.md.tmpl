@@ -4,22 +4,26 @@
 
 - This is codeflow's **minimal** tier: the four-plane enforcement floor and a
   lean contract, no method machinery. There is no `.claude/skills/` and no
-  workflow runtime here — so this file documents only the session wiring, not a
-  skill ladder. `codeflow init --standard` is the additive upgrade that adds the
-  develop-loop skills, the reviewer agents, and the pipeline.
+  workflow runtime here, so this file documents only the session wiring, not a
+  skill ladder. `codeflow init --standard` is the additive upgrade that adds
+  the develop-loop skills, the reviewer agents, and the pipeline.
 - Session hooks are wired in `.claude/settings.json`: the orient digest at
-  SessionStart, the session summary at SessionEnd, and `git-guard` + `exec-guard`
-  before every Bash call. When a command is blocked, read the guard message — it
-  names the violated policy rule and the sanctioned path.
+  SessionStart, the session summary at SessionEnd, and `git-guard` and
+  `exec-guard` before every Bash call. When a command is blocked, read the
+  guard message: it names the violated policy rule and the sanctioned path.
 - The Claude project preset and fail-closed sandbox live in
-  `.claude/settings.json`: sandbox-contained Bash and web research are enabled,
-  local dev binding is available, and a sandbox failure may request one
-  auto-classified unsandboxed retry for a trusted installed tool requiring host
-  state. This is not a general bypass; destructive/privileged/secret boundaries
-  remain. Codex uses the separate
-  guarded profile in `.codex/config.toml`; one harness's settings do not
-  configure the other.
-- The AGENTS.md git rules are **hook-enforced** here — the commit-msg, pre-push,
+  `.claude/settings.json`: sandbox-contained Bash and web research are
+  enabled, local dev binding is available, and a sandbox failure may request
+  one auto-classified unsandboxed retry for a trusted installed tool
+  requiring host state. This is not a general bypass; destructive,
+  privileged and secret boundaries remain. Codex uses the separate guarded
+  profile in `.codex/config.toml`; one harness's settings do not configure
+  the other. Grok Build uses `.grok/hooks/` in the same in-session guard
+  plane. The four planes remain git hooks, in-session guards, scaffolded CI,
+  and configured remote branch protection.
+- The git rules are **hook-enforced** here: the commit-msg, pre-push,
   pre-merge-commit, and reference-transaction hooks plus `git-guard` block
-  violations before they land, so fix the cause, never route around them. Full
-  rules: AGENTS.md, "Git rules."
+  violations before they land, so fix the cause, never route around them.
+  Full rules: `.codeflow/rules/git-rules.md`.
+- When the session offers `show_widget`, a complex answer carries an inline
+  HTML widget; in the terminal, fenced ASCII.

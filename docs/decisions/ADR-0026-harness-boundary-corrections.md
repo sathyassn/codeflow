@@ -1,5 +1,6 @@
 ---
 id: ADR-0026
+uid: 650c8f3b-0968-4eb5-bd04-19c5a0844b56
 title: correct harness credential and destructive-action boundaries
 date: 2026-07-17
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — the runtime-settings plane now names the high-confidence workspace secret globs, raw environment credentials, and destructive operations enforced by each native harness
 ---
 
-# ADR-0026 — harness permission-boundary corrections
+# ADR-0026: harness permission-boundary corrections
 
 ## Context
 

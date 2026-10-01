@@ -11,20 +11,22 @@ need Node or npm.
   schema validation, state, authentication, and service policy.
 - Preact mounts only in the sibling `#cf-present-chrome`. Chrome updates must
   not replace or rerender the document root.
-- Syntax and diagram enhancement is direct, bounded DOM enhancement. It loads
-  only when a corresponding block approaches the viewport.
+- Syntax highlighting and figure drawing are direct, bounded DOM enhancement.
+  Each loads only when a corresponding block approaches the viewport. The app
+  entry's dynamic imports are exactly the syntax, figure and fonts chunks.
 - Service requests are same-origin paths below `/app`, carry the static
   `X-CF-Present: 1` header, and rely on the HttpOnly session cookie. No bearer
   value belongs in this bundle or its configuration payload.
 
 The exact HTML attributes and configuration fields are defined in
-`src/contracts.ts`, `src/selection.ts`, `src/syntax.ts`, and `src/diagram.ts`.
+`src/contracts.ts`, `src/selection.ts`, `src/syntax.ts`, and `src/figure.ts`.
 Changing them requires a matching Rust change and contract test.
 
 ## Maintainer workflow
 
 Use the official Node 26.4.0 distribution and npm 11.17.0, as pinned in
-`package.json`. The build also checks the bundled zlib and Brotli versions:
+`package.json` and `.node-version`; the full gate selects that version for
+this package's target with `scripts/with-node.py`. The build also checks the bundled zlib and Brotli versions:
 system-library builds can report the same Node version but emit different
 compressed bytes. CI's `actions/setup-node` uses the official distribution.
 On a deliberate toolchain upgrade, requalify compression and regenerate all
@@ -38,11 +40,24 @@ npm run build
 npm run supply-chain
 npm run check
 npm run check:browser
+npm run check:figures
 ```
 
 `check:browser` uses a fresh headless browser profile and never attaches to the
 operator's active browser. Set `CF_PRESENT_BROWSER` when the qualified browser
 is not in one of the explicit platform locations in the script.
+
+The checks that drive the real binary (`check:entities`, `check:figures`,
+`check:forms`, `check:matrix` and `check:real-browser`) use
+`CF_PRESENT_CODEFLOW` when it is set, else the debug build in
+`CARGO_TARGET_DIR`, else `target/debug/codeflow` in the repository.
+
+`check:figures` needs that built binary. It opens a document of
+the figure specimens through the real binary, exports it in light and dark, and
+reads each drawn figure with the portal's figure probe at 1280 and 390 px. The
+rule outcomes must equal the portal's specimen table. `src/figure-grammar.mjs`
+and `src/figure.css` are byte copies of the portal's grammar module and the
+design kit's figure sheet; edit the originals and copy them here.
 
 Commit the exact lockfile together with all generated changes under
 `../assets/`. Never hand-edit generated payloads, the integrity manifest, audit,
@@ -59,13 +74,26 @@ compares them byte-for-byte with the committed service/export tree.
 - `present.export` — the separate all-feature gzip renderer for standalone
   export.
 
-Service payloads are content-hashed and committed only as Brotli. Their public
-request path and private stored path are distinct manifest fields. The export
-renderer is one deterministic gzip payload; it is not a service fallback.
-Raising a build budget requires new measured ADR evidence.
+Service payloads are content-hashed and committed as Brotli and deterministic
+gzip variants. The service prefers an acceptable explicit `br` token, then
+`gzip`; q=0 excludes an encoding. Neither acceptable token yields 406; raw
+assets are never served. Safari on loopback HTTP uses gzip. Public request
+paths are shared, while stored paths, encoding and ETags belong to each variant.
+Both variants have integrity hashes and file components in
+`assets/service-sbom.cdx.json`; the unchanged dependency SBOM lives in
+`assets/supply-chain/npm-sbom.cdx.json`. Clean-build checks cover both variants,
+byte-equivalent decoded content, and gzip headers with no mtime and OS byte 255.
+The export renderer remains a separate deterministic gzip payload.
+Raising a build budget requires new measured ADR evidence. ADR-0049's
+2026-09-30 amendment records the gzip storage and request costs. Run
+`npm run check:browser` against the built CLI: after the three-engine browser
+suite it runs `check:transport` to enforce prose, code and figure request caps
+with native Chrome and WebKit requests. `check:transport` also runs on its own
+for diagnosis. The old spike targets were never enforced; the new caps have
+15.9%, 13.0% and 19.3% headroom above the measured gzip pages, respectively.
 
-The browser check covers prose-only lazy loading, code and Mermaid rendering,
-zero non-loopback requests, Rust-document node identity, UTF-16 selection,
-both themes in light and dark modes, WCAG-tagged axe checks, and 320 CSS-pixel
-reflow. The broader platform, assistive-technology, browser-launch, print, and
+The browser check covers prose-only lazy loading, code highlighting and figure
+drawing, zero CSP violations, zero non-loopback requests, Rust-document node
+identity, UTF-16 selection, both themes in light and dark modes, WCAG-tagged
+axe checks, and 320 CSS-pixel reflow. The broader platform, assistive-technology, browser-launch, print, and
 render matrix remains the task-level native verification boundary.

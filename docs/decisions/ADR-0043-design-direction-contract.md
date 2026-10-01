@@ -1,5 +1,6 @@
 ---
 id: ADR-0043
+uid: 50fc5c87-44e7-4546-9c9e-eab9ea8f64e3
 title: make product and interface design direction an explicit proportionate contract
 date: 2026-07-26
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — standard/full scaffolds gain a progressive-disclosure design skill, a versioned DESIGN_INTENT plan field, anchored fidelity review, and behavioral design evals
 ---
 
-# ADR-0043 — design direction contract
+# ADR-0043: design direction contract
 
 ## Context
 

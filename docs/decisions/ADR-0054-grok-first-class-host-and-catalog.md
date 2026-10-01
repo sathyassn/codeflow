@@ -1,5 +1,6 @@
 ---
 id: ADR-0054
+uid: 8c2e907b-5ea1-4b48-acd1-fb16b43375e6
 title: Grok as first-class host and catalog family; standing pair remains the quality floor
 date: 2026-09-01
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — Grok Build joins Claude Code and Codex as a first-class host; the ensemble splits standing pair from catalog families; extra-family review is named, never a silent third vote
 ---
 
-# ADR-0054 — Grok as first-class host and catalog family
+# ADR-0054: Grok as first-class host and catalog family
 
 ## Context
 
@@ -130,3 +131,11 @@ schema-v2 (Opus medium after Fable 429; Fable was not the answering seat)
 and Grok-started Codex Herdr (`gpt-6-astra` medium). Catalog Grok is still
 not a promoted qualified binding.
 ---
+
+## Note (2026-09-25)
+
+Item 2 is restated by ADR-0069. The managed catalog is schema 5; the standing
+seats are `claude-primary` and `codex-primary`; seat `grok-primary` serves its
+product line, whose current version is in ADR-0069's roster. The version named
+in item 2 is retired. Grok joins a review as a triggered participant on the
+routing-policy triggers, unchanged until the operator answers Q4.

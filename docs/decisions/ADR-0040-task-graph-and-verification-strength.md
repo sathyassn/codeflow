@@ -1,5 +1,6 @@
 ---
 id: ADR-0040
+uid: f497ce8a-be43-4a6e-93c4-8913d8beacc9
 title: settle task graphs and select verification strength by evidence
 date: 2026-07-25
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — multi-task plans gain a non-executable task graph with structurally validated task dependencies, and verification planning gains evidence-triggered property, mutation, and architecture-fitness options
 ---
 
-# ADR-0040 — task graphs and verification strength
+# ADR-0040: task graphs and verification strength
 
 ## Context
 
@@ -82,3 +83,16 @@ prerequisite for every cheap in-suite invariant.
 The records validator owns structural task dependency integrity. The scaffolded
 orchestrator owns Plan graph settlement, mutation boundaries, and
 evidence-selected verification guidance; neither surface executes the graph.
+
+## Note, 2026-09-29: ADR-0076 narrows one clause
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. It
+narrows one clause of this record and no other.
+
+- "A material node, edge, guard, interface, ownership, acceptance, or
+  safety change creates Plan vN+1". Narrowed: Plan vN+1 is needed for a
+  material change of outcome, cross-task interface, dependency graph or
+  safety boundary. An ownership change rides in the batched epic
+  amendment, and a task's own criteria change rides in its PR, where CI
+  prints it for the reviewer (SPC-013 R-52, R-74). The graph validation and
+  the evidence-selected verification options are unchanged.

@@ -1,0 +1,730 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codeflow:schema:present:session-history:2",
+  "title": "CodeFlow presentation session history v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "session",
+    "revisions",
+    "feedback_events"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "session": {
+      "$ref": "#/$defs/session"
+    },
+    "revisions": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/revision"
+      }
+    },
+    "feedback_events": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    },
+    "response_events": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "$ref": "urn:codeflow:schema:present:session-responses:1"
+      }
+    }
+  },
+  "$comment": "This public history contract excludes capabilities, cookies, service/browser identities, local paths, ports, and private review chrome. The runtime additionally enforces bounded encoded event and history state. Version 2 (SPC-014): notes may carry an entity_selector and revisions may hold schema_version 2 documents. present history prints this version only for a session that holds such data. Repository context, source path snapshots and response events are additive v2 history fields; old records omit them. Deleted note bodies, selectors, excerpts and note replies are redacted in this projection.",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^TSK-[0-9]{3}(?:-[0-9]{3})?$"
+        },
+        "spec_id": {
+          "type": "string",
+          "pattern": "^SPC-[0-9]{3}$"
+        },
+        "adr_id": {
+          "type": "string",
+          "pattern": "^ADR-[0-9]{4}$"
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "status",
+        "current_revision",
+        "created_at_unix",
+        "updated_at_unix",
+        "closed_at_unix",
+        "provenance"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "x-codeflow-max-bytes": 512
+        },
+        "status": {
+          "enum": [
+            "active",
+            "closed"
+          ]
+        },
+        "current_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "created_at_unix": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updated_at_unix": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "closed_at_unix": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        }
+      }
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state_schema_version",
+        "revision",
+        "created_at_unix",
+        "content"
+      ],
+      "properties": {
+        "state_schema_version": {
+          "const": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "created_at_unix": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "document"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "supported"
+                },
+                "document": {
+                  "oneOf": [
+                    {
+                      "$ref": "urn:codeflow:schema:present:document:1"
+                    },
+                    {
+                      "$ref": "urn:codeflow:schema:present:document:2"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "schema_version",
+                "raw"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "unsupported"
+                },
+                "schema_version": {
+                  "type": "integer",
+                  "minimum": 3,
+                  "maximum": 4294967295
+                },
+                "raw": {
+                  "type": "string",
+                  "x-codeflow-max-bytes": 8388608
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "document",
+                "diagram_ids"
+              ],
+              "$comment": "A revision a pre-release build stored with a diagram block, which was removed with Mermaid. It loads read only, is never rewritten, and carries the stored document unchanged with the ids of its diagram blocks.",
+              "properties": {
+                "kind": {
+                  "const": "retired"
+                },
+                "document": {
+                  "type": "object"
+                },
+                "diagram_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commit",
+            "dirty"
+          ],
+          "properties": {
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40,64}$"
+            },
+            "dirty": {
+              "type": "boolean"
+            }
+          }
+        },
+        "snapshots": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "block_id",
+              "path",
+              "commit"
+            ],
+            "properties": {
+              "block_id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "commit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exact",
+        "start_utf16",
+        "end_utf16"
+      ],
+      "properties": {
+        "exact": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "prefix": {
+          "type": "string",
+          "default": "",
+          "x-codeflow-max-utf16-units": 32
+        },
+        "suffix": {
+          "type": "string",
+          "default": "",
+          "x-codeflow-max-utf16-units": 32
+        },
+        "start_utf16": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "end_utf16": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        }
+      },
+      "$comment": "The runtime requires end_utf16 > start_utf16, exact length equal to the UTF-16 range, and exact/prefix/suffix to match canonical block review text."
+    },
+    "element_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "element_path",
+        "tag_name",
+        "label",
+        "block_digest"
+      ],
+      "properties": {
+        "element_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^:scope$|^[a-z0-9-]+(?::nth-of-type\\([1-9][0-9]*\\))?(?: > [a-z0-9-]+(?::nth-of-type\\([1-9][0-9]*\\))?)*$"
+        },
+        "tag_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "\\S"
+        },
+        "block_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "region_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "anchor_id",
+        "block_digest",
+        "x_ppm",
+        "y_ppm",
+        "width_ppm",
+        "height_ppm",
+        "capture_width_px",
+        "capture_height_px"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "block",
+            "document"
+          ]
+        },
+        "anchor_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "\\S"
+        },
+        "block_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "x_ppm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        "y_ppm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        "width_ppm": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "height_ppm": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "capture_width_px": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "capture_height_px": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "note": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "selector",
+              "element_selector"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "selector",
+              "region_selector"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "element_selector",
+              "region_selector"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "entity_selector"
+            ]
+          },
+          "then": {
+            "required": [
+              "element_selector"
+            ]
+          }
+        }
+      ],
+      "required": [
+        "id",
+        "block_id",
+        "block_label",
+        "kind",
+        "body"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "block_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "block_label": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "kind": {
+          "enum": [
+            "comment",
+            "question",
+            "decision",
+            "suggestion",
+            "adjustment"
+          ]
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        },
+        "element_selector": {
+          "$ref": "#/$defs/element_selector"
+        },
+        "region_selector": {
+          "$ref": "#/$defs/region_selector"
+        },
+        "excerpt": {
+          "$ref": "#/$defs/excerpt"
+        },
+        "entity_selector": {
+          "$ref": "#/$defs/entity_selector"
+        }
+      }
+    },
+    "excerpt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "x-codeflow-max-bytes": 4096
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "media_type",
+            "data_base64"
+          ],
+          "properties": {
+            "media_type": {
+              "enum": [
+                "image/jpeg",
+                "image/png"
+              ]
+            },
+            "data_base64": {
+              "type": "string",
+              "minLength": 1,
+              "x-codeflow-max-bytes": 32768
+            }
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "text"
+          ]
+        },
+        {
+          "required": [
+            "image"
+          ]
+        }
+      ]
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "session_id",
+        "revision",
+        "actor",
+        "verdict",
+        "notes",
+        "created_at_unix"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "session_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S",
+          "x-codeflow-max-bytes": 256
+        },
+        "verdict": {
+          "enum": [
+            "approve",
+            "approve_with_notes",
+            "request_changes"
+          ]
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        },
+        "created_at_unix": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "verdict": {
+                "const": "request_changes"
+              }
+            },
+            "required": [
+              "verdict"
+            ]
+          },
+          "then": {
+            "required": [
+              "instruction"
+            ],
+            "properties": {
+              "instruction": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            }
+          }
+        }
+      ],
+      "$comment": "The runtime requires unique note IDs, current session/revision/block attribution, and a 256 KiB aggregate feedback bound."
+    },
+    "event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "event",
+            "sequence",
+            "envelope"
+          ],
+          "properties": {
+            "event": {
+              "const": "received"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "envelope": {
+              "$ref": "#/$defs/envelope"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "event",
+            "sequence",
+            "event_id",
+            "at_unix"
+          ],
+          "properties": {
+            "event": {
+              "enum": [
+                "delivered",
+                "addressed",
+                "dismissed"
+              ]
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "event_id": {
+              "$ref": "#/$defs/uuid"
+            },
+            "at_unix": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      ]
+    },
+    "entity_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_id",
+        "label",
+        "block_digest"
+      ],
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "block_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "variant": {
+          "enum": [
+            "wide",
+            "narrow"
+          ]
+        },
+        "crop_box": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
+          ],
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            }
+          }
+        },
+        "crop_check": {
+          "const": "unverified"
+        }
+      },
+      "$comment": "SPC-014 I2: stored on the note inside its review envelope; crop_check appears only when the service could not check the crop."
+    }
+  }
+}

@@ -64,8 +64,9 @@
 #                  shims (pre-commit, commit-msg, pre-push, pre-merge-commit,
 #                  reference-transaction), the scaffolded CI, the in-session
 #                  git-guard/exec-guard + orient/summary hooks (.claude/settings.json
-#                  + the .codex/ starter), the armed policy.json, and a lean
-#                  agent contract (AGENTS.md + CLAUDE.md). For ANY repo.
+#                  + the .codex/ starter + .grok/hooks/, all one plane), the
+#                  armed policy.json, and a lean agent contract (AGENTS.md +
+#                  CLAUDE.md). For ANY repo.
 #     - standard = + the develop-loop method (cf-* skills, reviewer agents, the
 #                  pipeline) + the traceability spine (product/capabilities/
 #                  architecture/ADRs) + the full contract + harness convenience.
@@ -84,22 +85,29 @@ schema_version = 1
 
 # --- root contracts ---------------------------------------------------------
 
-# AGENTS.md and CLAUDE.md are tier-honest: two entries each, one dest, selected
-# by tier (the same same-dest / disjoint-selector shape the settings presets
-# use). The full contract advertises the whole method — the six-layer model, the
-# /cf-* skills, project-management/, the session digest. A --minimal repo installs
-# the four-plane enforcement floor but none of that method machinery, so it gets a
-# trimmed contract that advertises only what its tier installs: the git rules
-# (now all hook-enforced at minimal) and the working principles. Both minimal and
-# the full tiers ship a CLAUDE.md, because minimal now wires .claude/settings.json
-# (the git-guard/exec-guard + orient/summary hooks) and Claude Code needs the lean
-# contract to document them.
+# AGENTS.md and CLAUDE.md are tier-honest and rendered from one kernel,
+# `rule-map.toml` (TSK-127): one AGENTS entry per tier and one CLAUDE entry
+# for minimal and one for the method tiers, each dest selected by tier (the
+# same same-dest / disjoint-selector shape the settings presets use). Each
+# map points only at files its tier installs: the minimal map at the
+# references under .codeflow/rules/, the standard and full maps also at the
+# /cf-* skills, and only the full map at project-management/. Every tier ships
+# a CLAUDE.md, because every tier wires .claude/settings.json (the
+# git-guard/exec-guard + orient/summary hooks).
 [[entry]]
 src = "AGENTS.md.tmpl"
 dest = "AGENTS.md"
 ownership = "managed-region"
 region = "markdown"
-tiers = ["standard", "full"]
+tiers = ["standard"]
+template = true
+
+[[entry]]
+src = "AGENTS.full.md.tmpl"
+dest = "AGENTS.md"
+ownership = "managed-region"
+region = "markdown"
+tiers = ["full"]
 template = true
 
 [[entry]]
@@ -131,6 +139,33 @@ src = "gitignore"
 dest = ".gitignore"
 ownership = "managed-region"
 region = "hash"
+tiers = ["minimal", "standard", "full"]
+
+# The references one hop away from the rule map (TSK-127): the full text
+# behind the always rules and the moment table, at every tier.
+[[entry]]
+src = "rules/workflow-discipline.md"
+dest = ".codeflow/rules/workflow-discipline.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "rules/git-rules.md"
+dest = ".codeflow/rules/git-rules.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "rules/worktrees.md"
+dest = ".codeflow/rules/worktrees.md"
+ownership = "managed"
+template = true
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "rules/writing.md"
+dest = ".codeflow/rules/writing.md"
+ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
 # --- policy (user-owned, schema-versioned) ----------------------------------
@@ -230,8 +265,9 @@ ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
 # Grok Build reads `.grok/hooks/*.json` (and may also scan Claude settings).
-# Same PreToolUse git-guard/exec-guard binaries as Codex. SessionStart is
-# once-per-session on Grok; compaction uses PreCompact/PostCompact.
+# Same PreToolUse git-guard/exec-guard binaries as Codex. Grok's session,
+# compaction and prompt events exist but their output never reaches the
+# model, so no advisory hook is wired here (TSK-128).
 # Project hooks need `/hooks-trust` or `--trust` once.
 [[entry]]
 src = "grok/hooks.json"
@@ -243,6 +279,25 @@ tiers = ["minimal", "standard", "full"]
 src = "codex/config.toml"
 dest = ".codex/config.toml"
 ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+# Codex command rules generated from the action table (ADR-0075,
+# `crates/codeflow-core/src/security/actions.json`): `forbidden` refuses the
+# operator's actions without a prompt, under every approval policy and
+# sandbox. Part of the enforcement floor, so minimal installs it.
+[[entry]]
+src = "codex/rules/codeflow.rules"
+dest = ".codex/rules/codeflow.rules"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+# Grok Build sandbox profiles `cf-guard` and `cf-guard-worktree` (ADR-0075
+# D3). Written only when absent and never overwritten, so an adopter's
+# profile stays theirs.
+[[entry]]
+src = "grok/sandbox.toml"
+dest = ".grok/sandbox.toml"
+ownership = "user-owned"
 tiers = ["minimal", "standard", "full"]
 
 # --- Claude artifacts (§4.4 minimalism, reconciled to the commands->skills merge: ships 2 agents, 15 skills, 1 workflow;
@@ -282,8 +337,20 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "claude/skills/cf-method/references/delivery-process.md"
+dest = ".claude/skills/cf-method/references/delivery-process.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "claude/skills/cf-method/references/workflow-lifecycle.md"
 dest = ".claude/skills/cf-method/references/workflow-lifecycle.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-method/references/autonomy.md"
+dest = ".claude/skills/cf-method/references/autonomy.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -302,6 +369,30 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "claude/skills/cf-delegate/resources/native-fallback.md"
 dest = ".claude/skills/cf-delegate/resources/native-fallback.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/agy.md"
+dest = ".claude/skills/cf-delegate/resources/agy.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/lane-plugin.md"
+dest = ".claude/skills/cf-delegate/resources/lane-plugin.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/lane-lifecycle.md"
+dest = ".claude/skills/cf-delegate/resources/lane-lifecycle.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/edit-access.md"
+dest = ".claude/skills/cf-delegate/resources/edit-access.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -338,6 +429,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-ship/references/pr-checks.md"
+dest = ".claude/skills/cf-ship/references/pr-checks.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-ship/references/release-policy.md"
 dest = ".claude/skills/cf-ship/references/release-policy.md"
 ownership = "managed"
@@ -362,6 +459,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-herdr/scripts/deliver.py"
+dest = ".claude/skills/cf-herdr/scripts/deliver.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-model-orchestrator/SKILL.md"
 dest = ".claude/skills/cf-model-orchestrator/SKILL.md"
 ownership = "managed"
@@ -374,8 +477,128 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/authority.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/authority.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/completion.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/completion.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/coverage.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/coverage.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/design-implementation.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/editorial.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/editorial.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/evidence.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/findings.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/findings.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/irreversible.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/irreversible.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/materiality.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/materiality.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/parallel.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/parallel.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/performance.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/performance.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/plan.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/plan.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/research-planning.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/research-planning.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/review.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/review.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/ui-design.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/ui-design.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/verification.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/verification.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/capability-routing.md"
 dest = ".claude/skills/cf-model-orchestrator/resources/capability-routing.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/design.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/design.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/evidence.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/route-status.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -406,6 +629,36 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/grok-host.md"
 dest = ".claude/skills/cf-model-orchestrator/resources/grok-host.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/codex-host.md"
+dest = ".claude/skills/cf-model-orchestrator/references/codex-host.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/estimates.md"
+dest = ".claude/skills/cf-model-orchestrator/references/estimates.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/model-overrides.md"
+dest = ".claude/skills/cf-model-orchestrator/references/model-overrides.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/parallel-tasks.md"
+dest = ".claude/skills/cf-model-orchestrator/references/parallel-tasks.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/solo-fallback.md"
+dest = ".claude/skills/cf-model-orchestrator/references/solo-fallback.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -456,6 +709,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/references/feedback-loop.md"
+dest = ".claude/skills/cf-present/references/feedback-loop.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/references/visual-craft.md"
 dest = ".claude/skills/cf-present/references/visual-craft.md"
 ownership = "managed"
@@ -468,14 +727,80 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/explanation-method.md"
+dest = ".claude/skills/cf-present/resources/explanation-method.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/resources/utility-presentation-system.md"
 dest = ".claude/skills/cf-present/resources/utility-presentation-system.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/figure-grammar.md"
+dest = ".claude/skills/cf-present/resources/figure-grammar.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/figure-grammar-specimens.md"
+dest = ".claude/skills/cf-present/resources/figure-grammar-specimens.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/resources/present-document.example.json"
 dest = ".claude/skills/cf-present/resources/present-document.example.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/README.md"
+dest = ".claude/skills/cf-present/resources/design-system/README.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/tokens.json"
+dest = ".claude/skills/cf-present/resources/design-system/tokens.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/tokens.css"
+dest = ".claude/skills/cf-present/resources/design-system/tokens.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/chrome.css"
+dest = ".claude/skills/cf-present/resources/design-system/chrome.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/figure.css"
+dest = ".claude/skills/cf-present/resources/design-system/figure.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/chrome.js"
+dest = ".claude/skills/cf-present/resources/design-system/chrome.js"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/portal.reference.html"
+dest = ".claude/skills/cf-present/resources/design-system/portal.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/present.reference.html"
+dest = ".claude/skills/cf-present/resources/design-system/present.reference.html"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -537,14 +862,80 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-docs-portal/resources/explanation-method.md"
+dest = ".claude/skills/cf-docs-portal/resources/explanation-method.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-docs-portal/resources/utility-presentation-system.md"
 dest = ".claude/skills/cf-docs-portal/resources/utility-presentation-system.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-docs-portal/resources/figure-grammar.md"
+dest = ".claude/skills/cf-docs-portal/resources/figure-grammar.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md"
+dest = ".claude/skills/cf-docs-portal/resources/figure-grammar-specimens.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-docs-portal/resources/portal-page-shape.example.md"
 dest = ".claude/skills/cf-docs-portal/resources/portal-page-shape.example.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/README.md"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/README.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/tokens.json"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/tokens.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/tokens.css"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/tokens.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/chrome.css"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/chrome.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/figure.css"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/figure.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/chrome.js"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/chrome.js"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/portal.reference.html"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/portal.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/present.reference.html"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/present.reference.html"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -565,6 +956,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-editorial-review/references/editorial-smells.md"
 dest = ".claude/skills/cf-editorial-review/references/editorial-smells.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-editorial-review/references/copy-guide.md"
+dest = ".claude/skills/cf-editorial-review/references/copy-guide.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -717,8 +1114,20 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "claude/skills/cf-method/references/delivery-process.md"
+dest = ".agents/skills/cf-method/references/delivery-process.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "claude/skills/cf-method/references/workflow-lifecycle.md"
 dest = ".agents/skills/cf-method/references/workflow-lifecycle.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-method/references/autonomy.md"
+dest = ".agents/skills/cf-method/references/autonomy.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -737,6 +1146,30 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "claude/skills/cf-delegate/resources/native-fallback.md"
 dest = ".agents/skills/cf-delegate/resources/native-fallback.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/agy.md"
+dest = ".agents/skills/cf-delegate/resources/agy.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/lane-plugin.md"
+dest = ".agents/skills/cf-delegate/resources/lane-plugin.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/lane-lifecycle.md"
+dest = ".agents/skills/cf-delegate/resources/lane-lifecycle.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/edit-access.md"
+dest = ".agents/skills/cf-delegate/resources/edit-access.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -765,6 +1198,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-ship/references/pr-checks.md"
+dest = ".agents/skills/cf-ship/references/pr-checks.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-ship/references/release-policy.md"
 dest = ".agents/skills/cf-ship/references/release-policy.md"
 ownership = "managed"
@@ -789,6 +1228,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-herdr/scripts/deliver.py"
+dest = ".agents/skills/cf-herdr/scripts/deliver.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-model-orchestrator/SKILL.md"
 dest = ".agents/skills/cf-model-orchestrator/SKILL.md"
 ownership = "managed"
@@ -801,8 +1246,128 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/authority.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/authority.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/completion.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/completion.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/coverage.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/coverage.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/editorial.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/editorial.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/evidence.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/findings.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/findings.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/irreversible.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/irreversible.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/materiality.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/materiality.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/parallel.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/parallel.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/performance.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/performance.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/plan.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/plan.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/research-planning.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/research-planning.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/review.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/review.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/ui-design.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/ui-design.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/verification.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/verification.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/capability-routing.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/capability-routing.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/design.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/design.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/evidence.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -833,6 +1398,36 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/grok-host.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/grok-host.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/codex-host.md"
+dest = ".agents/skills/cf-model-orchestrator/references/codex-host.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/estimates.md"
+dest = ".agents/skills/cf-model-orchestrator/references/estimates.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/model-overrides.md"
+dest = ".agents/skills/cf-model-orchestrator/references/model-overrides.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/parallel-tasks.md"
+dest = ".agents/skills/cf-model-orchestrator/references/parallel-tasks.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/solo-fallback.md"
+dest = ".agents/skills/cf-model-orchestrator/references/solo-fallback.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -879,6 +1474,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/references/feedback-loop.md"
+dest = ".agents/skills/cf-present/references/feedback-loop.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/references/visual-craft.md"
 dest = ".agents/skills/cf-present/references/visual-craft.md"
 ownership = "managed"
@@ -891,14 +1492,80 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/explanation-method.md"
+dest = ".agents/skills/cf-present/resources/explanation-method.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/resources/utility-presentation-system.md"
 dest = ".agents/skills/cf-present/resources/utility-presentation-system.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/figure-grammar.md"
+dest = ".agents/skills/cf-present/resources/figure-grammar.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/figure-grammar-specimens.md"
+dest = ".agents/skills/cf-present/resources/figure-grammar-specimens.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/resources/present-document.example.json"
 dest = ".agents/skills/cf-present/resources/present-document.example.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/README.md"
+dest = ".agents/skills/cf-present/resources/design-system/README.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/tokens.json"
+dest = ".agents/skills/cf-present/resources/design-system/tokens.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/tokens.css"
+dest = ".agents/skills/cf-present/resources/design-system/tokens.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/chrome.css"
+dest = ".agents/skills/cf-present/resources/design-system/chrome.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/figure.css"
+dest = ".agents/skills/cf-present/resources/design-system/figure.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/chrome.js"
+dest = ".agents/skills/cf-present/resources/design-system/chrome.js"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/portal.reference.html"
+dest = ".agents/skills/cf-present/resources/design-system/portal.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/present.reference.html"
+dest = ".agents/skills/cf-present/resources/design-system/present.reference.html"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -957,14 +1624,80 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-docs-portal/resources/explanation-method.md"
+dest = ".agents/skills/cf-docs-portal/resources/explanation-method.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-docs-portal/resources/utility-presentation-system.md"
 dest = ".agents/skills/cf-docs-portal/resources/utility-presentation-system.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-docs-portal/resources/figure-grammar.md"
+dest = ".agents/skills/cf-docs-portal/resources/figure-grammar.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md"
+dest = ".agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-docs-portal/resources/portal-page-shape.example.md"
 dest = ".agents/skills/cf-docs-portal/resources/portal-page-shape.example.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/README.md"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/README.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/tokens.json"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/tokens.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/tokens.css"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/tokens.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/chrome.css"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/chrome.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/figure.css"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/figure.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/chrome.js"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/chrome.js"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/portal.reference.html"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/portal.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/present.reference.html"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/present.reference.html"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -983,6 +1716,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-editorial-review/references/editorial-smells.md"
 dest = ".agents/skills/cf-editorial-review/references/editorial-smells.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-editorial-review/references/copy-guide.md"
+dest = ".agents/skills/cf-editorial-review/references/copy-guide.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -1170,12 +1909,36 @@ dest = ".codeflow/schemas/present/session-history-v1.schema.json"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "present/schemas/document-v2.schema.json"
+dest = ".codeflow/schemas/present/document-v2.schema.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "present/schemas/session-history-v2.schema.json"
+dest = ".codeflow/schemas/present/session-history-v2.schema.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "present/schemas/session-responses-v1.schema.json"
+dest = ".codeflow/schemas/present/session-responses-v1.schema.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # --- CI (fully-managed — charter §4.3: unmodified → replaced on update; ------
 #     user-modified → 3-way merged, never clobbered) --------------------------
 
 [[entry]]
 src = "ci/codeflow-ci.yml"
 dest = ".github/workflows/codeflow-ci.yml"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "ci/codeflow-policy.yml"
+dest = ".github/workflows/codeflow-policy.yml"
 ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 

@@ -5,9 +5,9 @@ On-demand detail for a Grok Build (`grok` CLI) host. Durable duties stay in
 
 ## In-session guards
 
-CodeFlow binds `codeflow hook git-guard` / `exec-guard` on PreToolUse and
-`session-orient` on SessionStart plus Grok `PreCompact`/`PostCompact`, via
-`.grok/hooks/codeflow.json`.
+CodeFlow binds `codeflow hook git-guard` / `exec-guard` on PreToolUse via
+`.grok/hooks/codeflow.json`. Grok drops event output: after a compaction,
+run `codeflow orient`.
 The guard parser accepts Grok's camelCase stdin (`toolName`, `toolInput`,
 `run_terminal_command`) as well as Claude/Codex snake_case. Grok also scans
 `.claude/settings.json` when compat is on. Project hooks load only after
@@ -18,7 +18,10 @@ when Grok hosts Claude.
 
 ## Launch
 
-Take selector and effort from the current ensemble record. Production host:
+Before a Grok seat takes work, `grok --version` succeeds and a short
+**interactive** Grok canary authenticates; an authentication failure stops
+for operator action. Take selector and effort from the current ensemble
+record. Production host:
 
 ```text
 grok --model <selector> --reasoning-effort <effort> --always-approve
@@ -35,10 +38,11 @@ the flag; the Grok Build user guide names `workspace` / `read-only` /
 
 A Grok host reaches Claude through Herdr (`claude` + schema-v2). It reaches
 Codex through the official `codex` CLI, which talks to the local app-server
-daemon — start `codex app-server daemon start` when the socket is missing,
+daemon: start `codex app-server daemon start` when the socket is missing,
 then Herdr `codex` (tmux degraded). If the daemon cannot start, keep the
 interactive CLI in Herdr. Do not install third-party Grok Codex plugins. The
-Claude-Code `codex-plugin-cc` is not a Grok-host lane.
+Claude-Code `codex-plugin-cc` is not a Grok-host lane. Neither lane is
+claimed complete until its own canary succeeds on this host.
 
 Grok-started Claude schema-v2 (Herdr `send-text` of the armed file) and
 Codex Herdr consult canaries are recorded in the CodeFlow repository under
@@ -49,11 +53,12 @@ not claim the lanes.
 
 ## Duties
 
-Host is not duty. Apply the canonical responsibility-versus-execution and route
-status rules in `capability-routing.md`; this adapter does not redefine them.
+Host is not duty. Apply the responsibility-versus-execution rules in the seat
+section of `SKILL.md` and the plan's assignment line, and the route status
+rules in `capability-routing.md`; this adapter does not redefine them.
 The Claude design owner produces direction and real design execution in its
-native session unless Plan vN records an explicit task-specific operator
-override—Claude absence alone is not one. A Grok high host stays the
+native session unless the plan records an explicit task-specific operator
+override; Claude absence alone is not one. A Grok high host stays the
 orchestrator and may use its own permitted routes. Catalog Grok may execute or
 take named extra-family review when a documented trigger fires and it is
 available; actual authored lineage determines independent review, and the

@@ -1,0 +1,49 @@
+
+## run at 2026-09-26T22:35:13Z against sathyassn/codeflow-registry-proof
+
+## host rule listing: initial
+rulesets:
+effective rules:
+{"branch":"main","rules":[]}
+{"branch":"codeflow/registry","rules":[]}
+$ gh api repos/sathyassn/codeflow-registry-proof/branches/main/protection
+{"message":"Branch not protected","documentation_url":"https://docs.github.com/rest/branches/branch-protection#get-branch-protection","status":"404"}gh: Branch not protected (HTTP 404)
+
+## record TSK-001 on main (the code branch)
+$ gh api -X PUT repos/sathyassn/codeflow-registry-proof/contents/project-management/tasks/TSK-001.md (message: docs: add proof record TSK-001)
+commit 02844a55b156a87395d9fe30f5832bfd34a1679a
+$ git -C $WORK/maint fetch -q origin main
+[exit 0]
+
+## seed: orphan registry whose root commit adds only ids/ files (R-109)
+$ git push --porcelain origin 9ea9910bf349:refs/heads/codeflow/registry
+remote: 
+remote: Create a pull request for 'codeflow/registry' on GitHub by visiting:        
+remote:      https://github.com/sathyassn/codeflow-registry-proof/pull/new/codeflow/registry        
+remote: 
+To https://github.com/sathyassn/codeflow-registry-proof.git
+*	9ea9910bf3497f942e666c6338edae4d1536307e:refs/heads/codeflow/registry	[new branch]
+Done
+[exit 0]
+classified: accepted
+PASS: seed push accepted
+
+## code-branch check on main: ci/ids.py, then the workflow
+$ gh api -X PUT repos/sathyassn/codeflow-registry-proof/contents/ci/ids.py (message: ci: add registry proof check)
+commit cbc2536f12b6cd2588e1cbff521a22f351ae2bae
+$ gh api -X PUT repos/sathyassn/codeflow-registry-proof/contents/.github/workflows/registry-check.yml (message: ci: run the registry check)
+commit af843e04c96abd63fbaeb76c012e51d72fed30ce
+{"attempt":1,"conclusion":"success","createdAt":"2026-09-26T22:35:28Z","databaseId":36276768160,"event":"push","headBranch":"main","headSha":"af843e04c96abd63fbaeb76c012e51d72fed30ce","url":"https://github.com/sathyassn/codeflow-registry-proof/actions/runs/36276768160"}
+log: run-36276768160-push-attempt1.log
+2026-09-26T22:35:31.7686381Z [36;1mecho "event: ${EVENT}; check code from $(git rev-parse --short origin/target):ci/ids.py"[0m
+2026-09-26T22:35:32.5020852Z event: push; check code from af843e0:ci/ids.py
+2026-09-26T22:35:32.5554236Z bound: TSK-001 -> b9463d36-6d9b-48d8-9e7c-0dc8dbada6fc
+2026-09-26T22:35:32.5557123Z registry check: pass
+PASS: push job on main is green on the healthy registry
+
+## baseline code-profile ruleset on main (fixture for the unchanged check)
+$ gh api -X POST repos/sathyassn/codeflow-registry-proof/rulesets --input - --jq {id, name}
+{"id":24054247,"name":"proof-main-code-profile"}
+[exit 0]
+
+## result: 0 failed assertions

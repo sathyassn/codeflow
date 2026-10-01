@@ -1,5 +1,6 @@
 ---
 id: ADR-0055
+uid: 9cc0c4f2-3ef3-48a4-b17b-c5499cbf175b
 title: Medium-default effort, Astra Codex primary, contained worktrees, Herdr project cwd
 date: 2026-09-05
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — duo seats default to medium and escalate on complexity; Codex primary is Astra via app-server then CLI; worktrees live under .worktrees/; Herdr/tmux cwd is the project being worked
 ---
 
-# ADR-0055 — medium-default effort, Astra Codex primary, contained worktrees
+# ADR-0055: medium-default effort, Astra Codex primary, contained worktrees
 
 ## Context
 
@@ -77,3 +78,13 @@ orchestrator and spawns same-family workers at that effort. It does not
 restart the host session. Judgment, plan approval, and named review stay
 with the primary. Opus/Sol/Terra remain bounded/simple routes, not the
 high-effort substitute for Fable/Astra. Grok internals may use xhigh.
+
+## Note (2026-09-25)
+
+Item 2's bindings are replaced by the ADR-0069 roster. On seat
+`claude-primary` the first line designs and orchestrates; the second line is
+the recorded fallback for orchestration, planning and review with reduced
+assurance and never designs without a task-specific `OPERATOR_OVERRIDE`. On
+seat `codex-primary` the first line serves, then the second line's versions,
+newest first, the oldest being fallback-only. Fallbacks are catalog data that
+`codeflow models resolve` reads, not prose. Seat effort follows ADR-0056.

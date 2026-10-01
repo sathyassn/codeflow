@@ -1,0 +1,66 @@
+
+## run at 2026-09-26T22:36:07Z against sathyassn/codeflow-registry-proof
+
+## both issuers fetch the same tip
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+$ git -C $WORK/B fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+A sees 	9ea9910bf349
+B sees 	9ea9910bf349
+
+## A issues: plain push of the reservation (R-12)
+$ ids $WORK/A check --registry refs/remotes/origin/codeflow/registry
+registry: refs/remotes/origin/codeflow/registry tip 9ea9910bf349, 1 commits, 1 ids ever added
+mode: registry history only
+registry check: pass
+[exit 0]
+next TSK: registry history max 001, refs max 001
+$ git push --porcelain origin 690e8e295317:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	690e8e2953176e5de8363b69845573ec5bda3cea:refs/heads/codeflow/registry	9ea9910..690e8e2
+Done
+[exit 0]
+classified: accepted
+PASS: A's plain push of TSK-002 is accepted
+
+## B, still on the old tip, pushes onto the moved tip
+next TSK: registry history max 001, refs max 001
+B computed TSK-002 from its stale view
+$ git push --porcelain origin f346738d63f2:refs/heads/codeflow/registry
+error: failed to push some refs to 'https://github.com/sathyassn/codeflow-registry-proof.git'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+To https://github.com/sathyassn/codeflow-registry-proof.git
+!	f346738d63f246cd41d9ad1dd6de727a9a676888:refs/heads/codeflow/registry	[rejected] (fetch first)
+Done
+[exit 1]
+classified: moved
+PASS: B's plain push onto the moved tip is rejected as moved
+
+## B retries by the protocol (R-13)
+issue attempt 1 for uid 1da96a37-6bdc-4358-812f-7684a07e02f4
+$ git -C $WORK/B fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+registry: refs/remotes/origin/codeflow/registry tip 690e8e295317, 2 commits, 2 ids ever added
+mode: registry history only
+registry check: pass
+next TSK: registry history max 002, refs max 001
+$ git push --porcelain origin 073af20a4b50:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	073af20a4b5088150fbb8cb4951c0a3120d96805:refs/heads/codeflow/registry	690e8e2..073af20
+Done
+[exit 0]
+classified: accepted
+reserved TSK-003 for uid 1da96a37-6bdc-4358-812f-7684a07e02f4
+PASS: B's retry reserves the next number
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+read back: TSK-002 bound to 0195e539-1c34-4dcd-98f2-526d11bc8930 on tip 073af20a4b50
+reserved: the tip reaches 690e8e295317, which binds TSK-002 to our uid
+PASS: TSK-002 is bound to A's uid
+
+## result: 0 failed assertions

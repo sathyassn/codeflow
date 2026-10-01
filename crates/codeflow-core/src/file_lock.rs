@@ -25,11 +25,11 @@ use serde_json::Value;
 /// Creates `{path}.lock` (ensuring parent dirs exist) and acquires an
 /// exclusive `fs2` lock on it. Returns the lock file handle — the lock is
 /// held until the handle is dropped.
-fn acquire_exclusive_lock(path: &Path) -> Result<fs::File, String> {
+fn acquire_exclusive_lock(path: &Path) -> Result<fs::File, RmwError> {
     let lock_path = sidecar_lock_path(path);
 
     if let Some(dir) = lock_path.parent() {
-        let _ = fs::create_dir_all(dir);
+        fs::create_dir_all(dir).map_err(|e| RmwError::Io("lock dir", e))?;
     }
 
     let lock_file = fs::OpenOptions::new()
@@ -37,11 +37,41 @@ fn acquire_exclusive_lock(path: &Path) -> Result<fs::File, String> {
         .write(true)
         .truncate(false)
         .open(&lock_path)
-        .map_err(|e| format!("lock open: {e}"))?;
+        .map_err(|e| RmwError::Io("lock open", e))?;
 
-    FileExt::lock_exclusive(&lock_file).map_err(|e| format!("lock acquire: {e}"))?;
+    FileExt::lock_exclusive(&lock_file).map_err(|e| RmwError::Io("lock acquire", e))?;
 
     Ok(lock_file)
+}
+
+/// A failed locked read-modify-write. An I/O failure keeps its OS error, so
+/// a caller can tell a permission denial (a sandbox, a read-only home) from
+/// other failures; it displays as `<step>: <error>`.
+#[derive(Debug)]
+pub(crate) enum RmwError {
+    /// The step that failed and its OS error.
+    Io(&'static str, std::io::Error),
+    /// A parse, callback or serialize failure.
+    Other(String),
+}
+
+impl RmwError {
+    /// The OS error of an I/O failure.
+    pub(crate) fn io(&self) -> Option<&std::io::Error> {
+        match self {
+            Self::Io(_, error) => Some(error),
+            Self::Other(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for RmwError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(step, error) => write!(f, "{step}: {error}"),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
 }
 
 /// Acquire a shared sidecar lock for the given data file path.
@@ -103,7 +133,7 @@ pub fn locked_rmw<F>(path: &Path, f: F) -> Result<(), String>
 where
     F: FnOnce(&mut Value),
 {
-    let _lock = acquire_exclusive_lock(path)?;
+    let _lock = acquire_exclusive_lock(path).map_err(|e| e.to_string())?;
 
     // Read
     let data = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
@@ -199,21 +229,38 @@ where
     T: Serialize + DeserializeOwned,
     F: FnOnce(&mut T) -> Result<(), String>,
 {
+    locked_rmw_typed_io(path, default_fn, f).map_err(|e| e.to_string())
+}
+
+/// [`locked_rmw_typed`], keeping the OS error of an I/O failure (lock, read
+/// or atomic write) typed in [`RmwError::Io`].
+pub(crate) fn locked_rmw_typed_io<T, F>(
+    path: &Path,
+    default_fn: fn() -> T,
+    f: F,
+) -> Result<(), RmwError>
+where
+    T: Serialize + DeserializeOwned,
+    F: FnOnce(&mut T) -> Result<(), String>,
+{
     let _lock = acquire_exclusive_lock(path)?;
 
     // Read (default on NotFound)
     let mut value: T = match fs::read_to_string(path) {
-        Ok(data) => serde_json::from_str(&data).map_err(|e| format!("parse: {e}"))?,
+        Ok(data) => {
+            serde_json::from_str(&data).map_err(|e| RmwError::Other(format!("parse: {e}")))?
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => default_fn(),
-        Err(e) => return Err(format!("read: {e}")),
+        Err(e) => return Err(RmwError::Io("read", e)),
     };
 
     // Modify (fallible)
-    f(&mut value)?;
+    f(&mut value).map_err(RmwError::Other)?;
 
     // Write atomically (tmp + rename)
-    let pretty = serde_json::to_string_pretty(&value).map_err(|e| format!("serialize: {e}"))?;
-    atomic_write(path, format!("{pretty}\n").as_bytes()).map_err(|e| format!("write: {e}"))?;
+    let pretty = serde_json::to_string_pretty(&value)
+        .map_err(|e| RmwError::Other(format!("serialize: {e}")))?;
+    atomic_write(path, format!("{pretty}\n").as_bytes()).map_err(|e| RmwError::Io("write", e))?;
 
     // Lock released on drop
     Ok(())

@@ -1,0 +1,11 @@
+{
+  "setup": [
+    "answers/submit-valid.json",
+    "delivered",
+    "acknowledged"
+  ],
+  "request": {
+    "session_id": "7c1e2d3a-0000-4000-8000-000000000001",
+    "target": "{{answer_id:0}}"
+  }
+}

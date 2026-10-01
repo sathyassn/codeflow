@@ -1,16 +1,30 @@
 ---
 name: cf-editorial-review
-description: Review or revise substantial repository and user-facing prose without semantic drift. Use for documentation, ADRs, proposals, release notes, PR narratives, operator communications, and other consequential copy whose structure, voice, credibility, or audience fit materially affects the outcome. Do not invoke for every short conversational response, mechanical text substitution, exact quoted text, or generated machine-readable content.
+description: Review or revise substantial repository and user-facing prose without semantic drift. This description is the one trigger, by consequence. Use for substantial documentation, ADRs, proposals, release notes, operator communications, and user-facing copy whose structure, voice, credibility, or audience fit materially affects the outcome, in the same pass as the technical review where one is due. Do not invoke for every PR body, short conversational response, mechanical text substitution, exact quoted text, or generated machine-readable content.
 ---
 
-# cf-editorial-review — preserve meaning, improve delivery
+# cf-editorial-review: preserve meaning, improve delivery
+
+**Write plainly.** Everything an agent writes, replies and status updates
+included, is simple, straightforward and clear, with the detail the reader
+needs and no more. Avoid mannered prose, writing that performs for effect:
+slogans, "not X but Y" turns, rhetorical triplets, dramatic fragments,
+stacked hedges, colon reveals, self-narration, ceremonial framing and walls
+of text. State the fact directly. Default to short prose and bullets, and
+write long prose only when the reader asks for it or the artifact is prose
+by nature. "Mannered prose" in
+[references/editorial-smells.md](references/editorial-smells.md) lists each
+pattern with its plain rewrite.
 
 Review the artifact in its real project, audience, medium, and task context.
 Improve clarity and credibility without flattening a legitimate voice or
 inventing one.
 
-This skill and its contextual-smells reference are the canonical CodeFlow home
-for shared language guidance. Other skills should route here instead of copying
+This skill, its copy guide and its contextual-smells reference are the
+canonical CodeFlow home for shared language guidance. Load
+[references/copy-guide.md](references/copy-guide.md) when writing and
+[references/editorial-smells.md](references/editorial-smells.md) when
+reviewing. Other skills route here instead of copying
 title, emoji, personality, or authority rules into parallel checklists.
 
 ## Authority order
@@ -25,7 +39,8 @@ Resolve conflicts in this order:
 
 Never use a lower layer to distort a higher one. Surface the conflict when a
 requested tone would overstate certainty, hide a limitation, violate policy, or
-misrepresent the author or project.
+misrepresent the author or project. Within those limits, explicit operator
+style direction outranks this skill's defaults.
 
 ## Review workflow
 
@@ -35,8 +50,7 @@ misrepresent the author or project.
    manufacture personality, experience, feelings, familiarity, or slang.
 2. **Read coherent context.** Review the whole artifact or a complete section,
    plus the surrounding project material needed to understand it. For a batch,
-   cluster items by shared purpose and audience rather than applying one global
-   rewrite.
+   cluster items by shared purpose and audience, not one global rewrite.
 3. **Protect meaning first.** Freeze identifiers, commands, numbers, citations,
    qualifications, decisions, requirements, and security or compatibility
    claims. Verify material assertions or mark them unverified. Never trade
@@ -60,10 +74,13 @@ misrepresent the author or project.
    understandable in context.
    Utility copy does not become product voice, and CodeFlow does not supply a
    personality for either. Keep formatting proportionate: a simple
-   answer needs no apparatus, and when relationships, hierarchy, state,
-   timelines, mappings, or a decision are materially clearer drawn, use a
-   diagram whose scope and detail fit the explanation, in the form the
-   surface renders as the lifecycle reply rule sets out. Prefer the least
+   answer needs no apparatus, and when a relationship is materially clearer
+   drawn, use a diagram whose scope and detail fit the explanation, in one
+   of the nine families of the explanation method
+   (`cf-present/resources/explanation-method.md`) and in the form the
+   surface renders, as `.codeflow/rules/writing.md` "Figures by surface"
+   sets out. In a Markdown file (a README, doc, record or PR body) that form is fenced ASCII, and on a
+   docs-portal page it is the portal's figure grammar. Prefer the least
    complicated form that remains complete, not the physically smallest;
    complex subjects may need a larger, layered, or multi-view diagram. Add a
    brief caption or legend when it aids orientation. A decorative or forced
@@ -83,10 +100,9 @@ misrepresent the author or project.
 Within the CodeFlow duo, both primary seats check factual and technical
 correctness. The directly invoked `claude-judgment-primary` reviews the
 substantial artifact's design, voice, and final editorial quality, even when
-Claude drafted it; use a fresh context for an independent final pass when that
-primary authored material text. Helpers may collect evidence but do not own the
-judgment. If the selected primary is unavailable, record the fallback and
-reduced assurance.
+Claude drafted it, in the same pass as the technical review where one is
+due. Helpers may collect evidence but do not own the judgment. If the
+selected primary is unavailable, record the fallback and reduced assurance.
 
 ## Review output
 

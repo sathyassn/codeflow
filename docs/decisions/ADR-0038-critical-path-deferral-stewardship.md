@@ -1,5 +1,6 @@
 ---
 id: ADR-0038
+uid: 4302c423-27af-4612-aede-75fb07053941
 title: preserve critical-path focus without reflexive deferral or escalation
 date: 2026-07-24
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: workflow, duo quality, reviewer, develop-loop, and model-evaluation artifacts share one execution-focus, deferral, and blocker-navigation rule
 ---
 
-# ADR-0038 — critical-path focus and deferral stewardship
+# ADR-0038: critical-path focus and deferral stewardship
 
 ## Context
 

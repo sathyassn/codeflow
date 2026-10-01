@@ -7,11 +7,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
 import axe from "axe-core";
 import { validateWindowsQualificationConfinement } from "./windows-qualification-scope.mjs";
+import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
+import { codeflowBinary } from "./codeflow-binary.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
-const codeflow = resolve(process.env.CF_PRESENT_CODEFLOW ?? join(repoRoot, "target/debug/codeflow"));
+const codeflow = codeflowBinary(repoRoot);
 await access(codeflow);
+// A figure block the grammar draws with no rule failure (the portal's state specimen).
+const figureDeclaration = JSON.parse(await readFile(join(repoRoot, "docs-portal/tests/fixtures/figures/05-state.json"), "utf8"));
+// A revision a pre-removal build stored with diagram blocks (TSK-087).
+const retiredRevision = JSON.parse(await readFile(join(repoRoot, "crates/codeflow-present/tests/fixtures/retired-diagram/revision.json"), "utf8"));
 
 const functionalEnvironmentNames = [
   "APPDATA", "CARGO_HOME", "COMSPEC", "HOME", "LANG", "LC_ALL", "LC_CTYPE",
@@ -29,6 +35,9 @@ const BOOTSTRAP_COMMIT_TIMEOUT_MS = 120_000;
 const BROWSER_CLOSE_TIMEOUT_MS = 15_000;
 const BROWSER_TERMINATION_GRACE_MS = 2_500;
 const PROCESS_INVENTORY_TIMEOUT_MS = 10_000;
+// A busy machine lists more than execFileSync's 1 MiB default; the inventory
+// must not fail on the length of other processes' command lines.
+const PROCESS_INVENTORY_MAX_BUFFER = 64 * 1024 * 1024;
 
 class BoundedTimeoutError extends Error {
   constructor(timeout, phase) {
@@ -38,7 +47,11 @@ class BoundedTimeoutError extends Error {
 }
 const runId = `${runPrefix}-${process.pid}-${randomUUID()}`;
 const windowsProfileConfinement = qualifyWindowsEnvironment();
-const runRoot = await mkdtemp(join(tmpdir(), `${runId}-`));
+// Keep the root name short: Chromium puts its singleton socket under TMPDIR
+// (this root's tmp/) and aborts at launch when that Unix socket path exceeds
+// 107 bytes on Linux. mkdtemp's suffix keeps the root unique; the marker keeps
+// the full runId.
+const runRoot = await mkdtemp(join(tmpdir(), `${runPrefix}-${process.pid}-`));
 const marker = join(runRoot, ".cf-present-qualification-root");
 const project = join(runRoot, "project");
 const home = join(runRoot, "home");
@@ -66,6 +79,8 @@ const childEnvironment = {
   TMP: taskTemp,
   TEMP: taskTemp,
   NODE_DISABLE_COMPILE_CACHE: "1",
+  // A service this check starts exits once this process is gone.
+  CF_PRESENT_OWNER_PID: String(process.pid),
   AWS_SECRET_ACCESS_KEY: "aws-real-browser-canary",
   AWS_SESSION_TOKEN: "aws-session-real-browser-canary",
   OPENAI_API_KEY: "openai-real-browser-canary",
@@ -169,8 +184,8 @@ try {
       && getComputedStyle(authored).fontWeight === "700";
   });
   if (!isolated) throw new Error("Authored CSS hid or overlaid review chrome, or valid scoped styling failed");
-  await page.locator("[data-cf-diagram]").scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector("[data-cf-diagram]")?.getAttribute("data-cf-diagram") === "ready");
+  await page.locator("[data-cf-figure-block]").scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector("[data-cf-figure-block]")?.getAttribute("data-cf-figure-block") === "ready");
   await page.locator("code[data-cf-language='rust']").scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready");
   if (injectCleanupFailure) {
@@ -185,12 +200,8 @@ try {
       .click();
     await page.keyboard.press("Escape");
     await page.getByTestId("settings-panel").waitFor({ state: "detached" });
-    const accessibility = await page.evaluate(async () => globalThis.axe.run(document, {
-      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
-    }));
-    if (accessibility.violations.length) {
-      throw new Error(`${mode} accessibility violations: ${accessibility.violations.map((item) => item.id).join(", ")}`);
-    }
+    // browser-check owns the shared chrome's WCAG checks across skins and
+    // appearances. This real pass records launch, persisted feedback and cleanup.
     await page.screenshot({ path: join(output, `review-${mode}.png`), fullPage: true });
   }
 
@@ -217,7 +228,7 @@ try {
   await saveComposerNote("Keep the implementation example aligned with the verified contract.");
 
   await page.getByRole("button", { name: "Select area" }).click();
-  const regionTarget = page.locator("[data-cf-diagram-title='Qualification flow']");
+  const regionTarget = page.locator("[data-cf-block-id='flow'] [data-cf-figure-block]");
   await regionTarget.scrollIntoViewIfNeeded();
   const regionBox = await regionTarget.boundingBox();
   if (!regionBox) throw new Error("Real-browser region target is not visible");
@@ -241,6 +252,7 @@ try {
   await page.getByLabel("Verdict").selectOption("approve_with_notes");
   await page.getByRole("button", { name: "Submit review" }).click();
   await page.getByRole("status").getByText(/Review received/u).waitFor();
+  await assertNoPolicyViolations(page, "first revision");
   const delivered = JSON.parse(run(codeflow, ["present", "feedback", sessionId], project).trim());
   if (delivered.verdict !== "approve_with_notes" || delivered.notes?.length !== 3) {
     throw new Error(`The real browser review was incomplete: ${JSON.stringify(delivered)}`);
@@ -295,12 +307,12 @@ try {
   await openAuthenticatedPresentation(revisedPage, secondBootstrapPath, port);
   await revisedPage.locator("#cf-present-document").getByText("Second revision").waitFor();
   const exportPath = join(output, "review.html");
-  run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "technical", "--mode", "dark"], project);
+  run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "graphite", "--mode", "dark"], project);
   const exportPage = await context.newPage();
   await exportPage.goto(pathToFileURL(exportPath).href);
   await exportPage.locator("#cf-present-document").getByText("Second revision").waitFor();
   await exportPage.waitForFunction(() => (
-    document.querySelector("[data-cf-diagram]")?.getAttribute("data-cf-diagram") === "ready"
+    document.querySelector("[data-cf-figure-block]")?.getAttribute("data-cf-figure-block") === "ready"
   ));
   await exportPage.waitForFunction(() => (
     document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready"
@@ -312,9 +324,28 @@ try {
     throw new Error(`export accessibility violations: ${exportAccessibility.violations.map((item) => item.id).join(", ")}`);
   }
   await exportPage.screenshot({ path: join(output, "export-dark.png"), fullPage: true });
+  await assertNoPolicyViolations(exportPage, "offline export");
+  await assertNoPolicyViolations(revisedPage, "second revision");
   await delay(100);
   await Promise.all(observerTasks);
   await exportPage.close();
+
+  // A stored diagram revision (TSK-087): the served page and a new export show
+  // the conversion notice and each escaped source, and draw nothing.
+  const revisionPath = await findRevisionFile(runRoot, sessionId, 2);
+  await writeFile(revisionPath, `${JSON.stringify({ ...retiredRevision, revision: 2 }, null, 2)}\n`, { mode: 0o600 });
+  const retiredRequestStart = requests.length;
+  await revisedPage.reload({ waitUntil: "load" });
+  await assertRetiredPage(revisedPage, "served retired revision");
+  const retiredScripts = requests.slice(retiredRequestStart).filter((request) => /\/app\/assets\/.+\.js$/u.test(request));
+  if (retiredScripts.length) throw new Error(`The retired revision page requested scripts: ${retiredScripts.join(", ")}`);
+  await revisedPage.screenshot({ path: join(output, "retired-revision.png"), fullPage: true });
+  const retiredExportPath = join(output, "retired.html");
+  run(codeflow, ["present", "export", sessionId, "--out", retiredExportPath], project);
+  const retiredExportPage = await context.newPage();
+  await retiredExportPage.goto(pathToFileURL(retiredExportPath).href);
+  await assertRetiredPage(retiredExportPage, "exported retired revision");
+  await retiredExportPage.close();
 
   if (requests.some(isRemoteRequest)) {
     throw new Error(`Real presentation attempted remote network: ${requests.join(", ")}`);
@@ -367,7 +398,9 @@ try {
       real_service_bootstrap: "pass",
       declarative_rendering: "pass",
       accessibility_light_dark: "pass",
-      syntax_and_diagram: "pass",
+      syntax_and_figure: "pass",
+      retired_diagram_revision_page_and_export: "pass",
+      csp_violations: "none observed",
       element_region_and_document_feedback_delivery: "pass",
       feedback_delivery_and_resolution: "pass",
       immutable_revision_update: "pass",
@@ -525,7 +558,7 @@ function documentFixture(revisionText) {
         { label: "Native Windows", state: "not_run", detail: "Never inferred from this macOS run" },
       ] },
       { type: "code", id: "code", language: "rust", code: "fn qualified() -> bool { true }", caption: "Qualification example" },
-      { type: "diagram", id: "flow", kind: "flowchart", source: "flowchart LR\nInput-->Review-->Evidence", acc_title: "Qualification flow", acc_description: "Input moves through review to evidence." },
+      { type: "figure", id: "flow", declaration: figureDeclaration },
       { type: "feedback_prompt", id: "decision", prompt: "Approve or request a concrete change." },
       { type: "html", id: "css-isolation", title: "CSS isolation", html: "<style>body, #cf-present-chrome { display:none } .isolation-label { font-weight:700 } .isolation-overlay { position:fixed; inset:0; z-index:2147483647 }</style><p class='isolation-label'>Valid authored styling stays local.</p><div class='isolation-overlay' aria-hidden='true'></div>" },
     ],
@@ -580,12 +613,14 @@ async function launchBrowser(profile) {
     headless: true,
     viewport: { width: 1280, height: 900 },
     env: browserEnvironment,
+    // Never pass --disable-crashpad-for-testing: on Linux Chromium it makes
+    // the network service abort with an FD ownership violation and restart in
+    // a tight loop, so no navigation commits and the runner is starved.
     args: [
       "--disable-background-networking",
       "--disable-component-update",
       "--disable-breakpad",
       "--disable-crash-reporter",
-      "--disable-crashpad-for-testing",
       "--disable-default-apps",
       "--disable-sync",
       "--no-default-browser-check",
@@ -594,7 +629,48 @@ async function launchBrowser(profile) {
     ],
   });
   await launched.addInitScript({ content: axe.source });
+  await recordPolicyViolations(launched);
   return launched;
+}
+
+async function findRevisionFile(root, id, revision) {
+  const name = `${String(revision).padStart(20, "0")}.json`;
+  const walk = async (directory) => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const path = join(directory, entry.name);
+      if (entry.name === id && directory.endsWith("sessions")) return join(path, "revisions", name);
+      const found = await walk(path);
+      if (found) return found;
+    }
+    return null;
+  };
+  const found = await walk(root);
+  if (!found) throw new Error(`No stored revision ${revision} for session ${id}`);
+  return found;
+}
+
+async function assertRetiredPage(page, label) {
+  const evidence = await page.evaluate(() => ({
+    notice: document.querySelector("aside.version-warning")?.textContent ?? "",
+    kept: document.querySelector("main")?.textContent ?? "",
+    sources: [...document.querySelectorAll("main pre code")].map((code) => code.textContent),
+    hooks: document.querySelectorAll("[data-cf-diagram], [data-cf-figure-block], template").length,
+    scripts: document.querySelectorAll("script").length,
+  }));
+  if (!evidence.notice.includes("This revision holds a diagram block, which was removed with Mermaid")) {
+    throw new Error(`${label} omitted the conversion notice: ${JSON.stringify(evidence)}`);
+  }
+  // T114-1: every other block renders as it always did.
+  for (const kept of [retiredRevision.content.document.blocks[0].markdown, retiredRevision.content.document.blocks[2].summary]) {
+    if (!evidence.kept.includes(kept)) throw new Error(`${label} omitted ${JSON.stringify(kept)}: ${JSON.stringify(evidence)}`);
+  }
+  const expected = [retiredRevision.content.document.blocks[1].source, retiredRevision.content.document.blocks[2].blocks[0].source];
+  if (JSON.stringify(evidence.sources) !== JSON.stringify(expected)) {
+    throw new Error(`${label} did not show each diagram source as text: ${JSON.stringify(evidence)}`);
+  }
+  if (evidence.hooks || evidence.scripts) throw new Error(`${label} carries a drawing hook or script: ${JSON.stringify(evidence)}`);
+  await assertNoPolicyViolations(page, label);
 }
 
 function recordBrowserVersion(openContext) {
@@ -866,7 +942,7 @@ function processInventory() {
       const raw = execFileSync(powershell, [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
         "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress",
-      ], { env: browserEnvironment, encoding: "utf8", timeout: PROCESS_INVENTORY_TIMEOUT_MS });
+      ], { env: browserEnvironment, encoding: "utf8", timeout: PROCESS_INVENTORY_TIMEOUT_MS, maxBuffer: PROCESS_INVENTORY_MAX_BUFFER });
       const parsed = JSON.parse(raw || "[]");
       return (Array.isArray(parsed) ? parsed : [parsed]).map((entry) => ({
         pid: Number(entry.ProcessId),
@@ -879,6 +955,7 @@ function processInventory() {
       env: browserEnvironment,
       encoding: "utf8",
       timeout: PROCESS_INVENTORY_TIMEOUT_MS,
+      maxBuffer: PROCESS_INVENTORY_MAX_BUFFER,
     });
     return raw.split("\n").flatMap((line) => {
       const match = line.match(/^\s*(\d+)\s+(\d+)\s+((?:\S+\s+){4}\d{4})\s+(.+)$/u);

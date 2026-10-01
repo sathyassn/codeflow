@@ -33,7 +33,7 @@ fn plan_synthesizes_settled_ground_and_asks_only_live_questions() {
         "assets/base/agents/skills/cf-plan/SKILL.md",
         &[
             "synthesize that settled ground",
-            "not already answered by the brief or Plan vN",
+            "Still ask every *live* operator-owned question the brief and the plan do not answer",
         ],
     );
 }
@@ -45,7 +45,7 @@ fn develop_and_quality_contract_require_a_failing_symptom_command() {
         &["named interfaces first", "exact reported symptom"],
     );
     assert_contains(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
         &["exact reported symptom"],
     );
 }
@@ -127,7 +127,11 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
             "a job's `PASS` is not a coverage number",
             "Do not relabel subset coverage as workspace coverage",
             "unavailable or stale evidence is a gap",
-            "codeflow test --mode essential --strict",
+            // TSK-184: builders cite targeted and quick runs; the full gate
+            // runs once on the landing candidate and is cited durably.
+            "pastes its targeted tests and its `codeflow test --mode quick` run",
+            "The full gate runs once on the landing candidate",
+            "Cite a gate run by its run id and revision from its durable home",
         ],
     );
     // Projects may extend their PR template without changing the shared scaffold.
@@ -152,8 +156,10 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
 
 /// The repository's own policy requires the four always-present body
 /// sections, and Testing for code, and its template carries each of them as
-/// a heading. The shipped default policy stays at Summary and Changes so no
-/// consumer's unchanged policy starts blocking on an update.
+/// a heading: its release script reads Release impact on every PR. The
+/// shipped default requires Summary, Changes and Reviews; Release impact is
+/// judged by its own rule (a protected base or a breaking commit), not by the
+/// required list (TSK-184 AC-10).
 #[test]
 fn repository_policy_requires_the_always_present_pr_sections() {
     let policy: serde_json::Value =
@@ -182,9 +188,21 @@ fn repository_policy_requires_the_always_present_pr_sections() {
         serde_json::from_str(&read("assets/base/policy.json")).expect("shipped policy JSON");
     assert_eq!(
         shipped["git"]["pr_required_sections"],
-        serde_json::json!(["Summary", "Changes", "Reviews", "Release impact"]),
-        "fresh installs require the approved template sections"
+        serde_json::json!(["Summary", "Changes", "Reviews"]),
+        "fresh installs require the always-present template sections"
     );
+}
+
+/// The dash rule (ADR-0067, note of 2026-09-25) is a writing guideline that
+/// ships at warn, while this repository keeps blocking its own new text.
+#[test]
+fn repository_policy_blocks_policy_characters_while_the_shipped_default_warns() {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(".codeflow/policy.json")).expect("policy JSON");
+    assert_eq!(policy["git"]["policy_characters"], "block");
+    let shipped: serde_json::Value =
+        serde_json::from_str(&read("assets/base/policy.json")).expect("shipped policy JSON");
+    assert_eq!(shipped["git"]["policy_characters"], "warn");
 }
 
 #[test]
@@ -208,6 +226,35 @@ fn reviewer_labels_axis_and_disposition() {
         "assets/base/claude/agents/cf-reviewer.md",
         &["axis: standards", "axis: spec", "fix now", "track once"],
     );
+}
+
+/// TSK-105 (review round 1, T105-6): the reviewer refuses a block reviewed
+/// before a later change; ship states the default completion in the task's
+/// own pull request and the late completion the checker's merge rule takes.
+#[test]
+fn reviewer_and_ship_state_the_acceptance_binding() {
+    assert_contains(
+        "assets/base/claude/agents/cf-reviewer.md",
+        &[
+            "`reviewed` is this head, or an ancestor after which only this record's status and Closeout changed",
+        ],
+    );
+    assert_contains(
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        &[
+            "a task PR's last commit runs `codeflow task status <id>",
+            "complete --acceptance <file>`; its block names the reviewed code commit",
+            "(late: the clean landing merge's second parent, or its reviewed ancestor",
+            "followed only by that record's status and Closeout)",
+            "stay `deferred`, never verified at build time",
+        ],
+    );
+    for path in [
+        "assets/base/claude/agents/cf-reviewer.md",
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+    ] {
+        assert!(!read(path).contains("must be this head"), "{path}");
+    }
 }
 
 #[test]

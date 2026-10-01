@@ -1,41 +1,13 @@
-//! `exec-guard` — the `PreToolUse` shell security hook (ADR-0008).
+//! Shell execution policy, backed by the shared action table (ADR-0075).
 //!
-//! A thin adapter over two existing security modules — [`DangerousModule`] and
-//! [`PrivilegeModule`] — that runs them against a Bash command. Catastrophic
-//! commands are a non-relaxable block; privilege escalation maps to the level
-//! configured in `policy.json`'s `security` section. It sits alongside
-//! `git-guard` on the `PreToolUse` (Bash/PowerShell) event and
-//! shares its lenient payload contract, so the same binary serves both Claude
-//! and the Codex hooks engine (ADR-0008).
-//!
-//! ## Why these two modules, and why block vs warn
-//!
-//! The owner posture is autonomy by default: hard protections exist only for
-//! (a) credential/secret reads, (b) truly destructive commands, (c) protected
-//! refs. This guard owns (b), and only advises on privilege escalation:
-//!
-//! - **`dangerous_commands` = block.** `rm -rf` on `/`, `~`, or a system dir;
-//!   `dd` to a block device; `mkfs`; fork bombs; recursive chmod/chown on system
-//!   paths. None of these is ever a legitimate project operation, so there is no
-//!   sanctioned path to offer — a hard block is the whole point.
-//! - **`privilege_escalation` = warn, deliberately NOT block.** sudo/su/doas/
-//!   pkexec, shell `-c` chains, `LD_PRELOAD`/PATH injection. A hook that exited 2
-//!   here would override even an explicit human approval, because a `PreToolUse`
-//!   deny wins unconditionally. The guard therefore advises on stderr; the agent
-//!   obtains applicable task authority in the authenticated conversation and
-//!   observes effective harness controls. Some production modes show no
-//!   permission prompt. Set `block` in `policy.json` to harden a specific repo;
-//!   authorization never relaxes the catastrophic floor above.
-//!
-//! [`network`](crate::security::network) and [`tmp`](crate::security::tmp) are
-//! intentionally NOT wired here: v1 network semantics conflict with the v2 PR
-//! doctrine, and the tmp module is inert without managed scratch folders. The
-//! remaining modules (`git`, `path`, `fileops`, `branch`) and the
-//! `SecurityChecker` orchestrator are likewise unwired anywhere today — the
-//! live git protections are the separate `hooks/git_guard.rs` implementation
-//! (see the `security` module doc for the full wired/unwired map).
+//! Catastrophic commands always block. Privilege, outward actions, secret
+//! reads and headless peer runs use their existing policy levels. The family
+//! classifier unwraps supported launchers; interpreter literals use the same
+//! rule as the action they name. Enforcement-path references use
+//! `git.hook_integrity`. Opaque child programs remain outside this parser.
 
 use crate::security::dangerous::DangerousModule;
+use crate::security::headless::{headless_peer_run, HeadlessRun};
 use crate::security::privilege::PrivilegeModule;
 use crate::security::{CheckContext, SecurityModule, SecurityPolicy, Verdict};
 
@@ -50,6 +22,19 @@ use super::Violation;
 /// checking is a non-relaxable floor.
 #[must_use]
 pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+    evaluate_at(command, levels, PolicyLevel::Block, &cwd, &cwd)
+}
+
+/// Evaluate commands and interpreter literals at the shell's actual directory.
+#[must_use]
+pub fn evaluate_at(
+    command: &str,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+) -> Vec<Violation> {
     // The dangerous/privilege modules read only `command`; branch, sandbox
     // bypass, and the protected-path policy are irrelevant to them, so default
     // values suffice.
@@ -67,36 +52,89 @@ pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
     // downgrade it to advice. The serialized key stays explicit for policy
     // compatibility, but a stale or hand-edited weaker value is not authority.
     if let Some(verdict) = DangerousModule.check(&ctx) {
-        violations.push(dangerous_violation(PolicyLevel::Block, &verdict));
+        violations.push(dangerous_violation(&verdict));
     }
     if levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
         }
     }
+    if levels.headless_peer_runs.is_active() {
+        if let Some(run) = headless_peer_run(command) {
+            violations.push(headless_violation(levels.headless_peer_runs, &run));
+        }
+    }
 
+    for violation in crate::security::outward::evaluate_at(command, levels, Some(cwd)) {
+        let duplicate = violations.iter().any(|existing| {
+            existing.rule == violation.rule
+                && (existing.message == violation.message
+                    || violation.rule == "security.privilege_escalation")
+        });
+        if !duplicate {
+            violations.push(violation);
+        }
+    }
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from);
+    for finding in crate::security::interpreter::evaluate(
+        command,
+        levels,
+        integrity,
+        cwd,
+        root,
+        home.as_deref(),
+    ) {
+        if !violations.iter().any(|v| v.rule == finding.rule) {
+            violations.push(finding);
+        }
+    }
     violations
 }
 
-fn dangerous_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
+pub(crate) fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Violation {
+    let enforcement = if level == PolicyLevel::Block {
+        "configured policy refuses it"
+    } else {
+        "the configured warn level lets a script outside a delegation run"
+    };
     Violation::new(
-        "security.dangerous_commands",
+        "security.headless_peer_runs",
         level,
+        format!(
+            "headless peer run `{}`{}: peer seats run interactively, so a headless run has no \
+             verified native session, task tools or recheckable thread",
+            run.form,
+            if run.parsed {
+                ""
+            } else {
+                " (the line could not be fully parsed; its text names the peer with a \
+                 headless flag)"
+            }
+        ),
+        crate::remedy::HEADLESS_PEER_RUN.with(&[("enforcement", enforcement)]),
+    )
+}
+
+fn dangerous_violation(verdict: &Verdict) -> Violation {
+    Violation::always_blocking(
+        "security.dangerous_commands",
         format!(
             "{cat}: {reason} (pattern `{pat}`)",
             cat = verdict.category,
             reason = verdict.reason,
             pat = verdict.pattern,
         ),
-        "destructive commands have no sanctioned path — do not run them; if this is a false positive, scope the command away from system paths".to_string(),
+        "destructive commands have no sanctioned path — do not run them; if this is a false positive, scope the command away from system paths",
     )
 }
 
 fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
     let enforcement = if level == PolicyLevel::Block {
-        "configured policy denies this action"
+        "policy refuses it; the operator runs privileged commands"
     } else {
-        "the default warn policy advises only"
+        "the configured warn level advises only"
     };
     Violation::new(
         "security.privilege_escalation",
@@ -107,7 +145,7 @@ fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
             reason = verdict.reason,
             pat = verdict.pattern,
         ),
-        format!("privilege escalation needs applicable operator authority; {enforcement}; the effective harness may show no permission prompt (policy security.privilege_escalation)"),
+        crate::remedy::PRIVILEGE_ESCALATION.with(&[("enforcement", enforcement)]),
     )
 }
 
@@ -120,14 +158,132 @@ mod tests {
         SecuritySection {
             dangerous_commands: dangerous,
             privilege_escalation: privilege,
+            headless_peer_runs: PolicyLevel::Warn,
+            ..SecuritySection::default()
         }
     }
 
     #[test]
-    fn test_default_levels_are_block_and_warn() {
+    fn test_headless_peer_run_blocks_by_default_and_warns_when_set() {
+        let v = evaluate("codex exec 'fix it'", &SecuritySection::default());
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "security.headless_peer_runs");
+        assert_eq!(v[0].level, PolicyLevel::Block);
+        assert!(any_blocking(&v));
+        assert!(v[0].message.contains("`codex exec`"));
+        assert!(v[0].remedy.contains("codeflow delegate"));
+
+        let warn = SecuritySection {
+            headless_peer_runs: PolicyLevel::Warn,
+            ..SecuritySection::default()
+        };
+        let v = evaluate("claude -p 'review'", &warn);
+        assert_eq!(v[0].level, PolicyLevel::Warn);
+        assert!(!any_blocking(&v));
+        let block = SecuritySection::default();
+
+        let off = SecuritySection {
+            headless_peer_runs: PolicyLevel::Off,
+            ..SecuritySection::default()
+        };
+        assert!(evaluate("grok -p x", &off).is_empty());
+        assert!(evaluate("codex --version", &block).is_empty());
+    }
+
+    /// A help or version invocation raises nothing at `warn` or `block`; the
+    /// same tokens given as data still raise the headless rule (TSK-141 AC-3).
+    #[test]
+    fn a_help_invocation_passes_and_its_data_twin_is_reported_at_every_level() {
+        for level in [PolicyLevel::Warn, PolicyLevel::Block] {
+            let section = SecuritySection {
+                headless_peer_runs: level,
+                ..SecuritySection::default()
+            };
+            for (help, twin) in crate::security::guard_forms::HELP_PAIRS {
+                assert!(evaluate(help, &section).is_empty(), "{level:?}: {help}");
+                let v = evaluate(twin, &section);
+                assert_eq!(v.len(), 1, "{level:?}: {twin}");
+                assert_eq!(v[0].rule, "security.headless_peer_runs", "{twin}");
+                assert_eq!(v[0].level, level, "{twin}");
+                assert_eq!(any_blocking(&v), level == PolicyLevel::Block, "{twin}");
+            }
+        }
+    }
+
+    /// A peer run through a package runner is reported as its direct form
+    /// at `warn` and `block`, and its help passes (TSK-141 AC-6).
+    #[test]
+    fn a_package_runner_peer_run_is_reported_as_its_direct_form_at_every_level() {
+        for level in [PolicyLevel::Warn, PolicyLevel::Block] {
+            let section = SecuritySection {
+                headless_peer_runs: level,
+                ..SecuritySection::default()
+            };
+            for (direct, runner) in crate::security::guard_forms::PACKAGE_RUNNER_PAIRS {
+                let expected = evaluate(direct, &section);
+                let v = evaluate(runner, &section);
+                assert_eq!(v.len(), expected.len(), "{level:?}: {runner}");
+                for (got, want) in v.iter().zip(&expected) {
+                    assert_eq!(got.rule, want.rule, "{runner}");
+                    assert_eq!(got.level, level, "{runner}");
+                }
+                assert_eq!(any_blocking(&v), any_blocking(&expected), "{runner}");
+            }
+        }
+    }
+
+    /// Each composed deletion is refused under `security.dangerous_commands`
+    /// with the message its `rm -rf` equivalent gets, alone and nested; a
+    /// project deletion raises nothing (TSK-141 AC-1, AC-2).
+    #[test]
+    fn a_composed_deletion_is_refused_as_its_rm_equivalent() {
+        use crate::security::guard_forms::{COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS};
+        let section = SecuritySection::default();
+        for (form, equivalent) in COMPOSED_PAIRS {
+            let expected = evaluate(equivalent, &section);
+            assert_eq!(expected.len(), 1, "{equivalent}");
+            assert_eq!(expected[0].rule, "security.dangerous_commands");
+            for nesting in NESTINGS {
+                let nested = nesting.replace("{}", form);
+                let v = evaluate(&nested, &section);
+                let refused: Vec<_> = v
+                    .iter()
+                    .filter(|v| v.rule == "security.dangerous_commands")
+                    .collect();
+                assert_eq!(refused.len(), 1, "{nested}");
+                assert!(any_blocking(&v), "{nested}");
+                if *nesting == "{}" {
+                    // A target reached on only some paths says so; the
+                    // pattern it names is the equivalent's either way.
+                    let pattern = |m: &str| m.rfind("(pattern").map(|at| m[at..].to_string());
+                    if refused[0].message.contains("one of several values") {
+                        assert_eq!(
+                            pattern(&refused[0].message),
+                            pattern(&expected[0].message),
+                            "{form} as {equivalent}"
+                        );
+                    } else {
+                        assert_eq!(
+                            refused[0].message, expected[0].message,
+                            "{form} as {equivalent}"
+                        );
+                    }
+                }
+            }
+        }
+        for command in PROJECT_DELETIONS {
+            for nesting in NESTINGS {
+                let nested = nesting.replace("{}", command);
+                assert!(evaluate(&nested, &section).is_empty(), "{nested}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_default_levels_block() {
         let s = SecuritySection::default();
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
-        assert_eq!(s.privilege_escalation, PolicyLevel::Warn);
+        assert_eq!(s.privilege_escalation, PolicyLevel::Block);
     }
 
     #[test]
@@ -158,18 +314,25 @@ mod tests {
     }
 
     #[test]
-    fn test_privilege_warns_not_blocks_by_default() {
-        // sudo produces advice, not a veto; task authority and technical harness
-        // prompting are separate, and some production modes show no prompt.
+    fn test_privilege_blocks_by_default_and_can_be_set_to_warn() {
+        // D5 (ADR-0075): the operator runs privileged commands; a project
+        // may still set warn, which only advises.
         let v = evaluate("sudo apt-get install foo", &SecuritySection::default());
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "security.privilege_escalation");
-        assert_eq!(v[0].level, PolicyLevel::Warn);
-        assert!(
-            !any_blocking(&v),
-            "privilege escalation must not block by default"
+        assert_eq!(v[0].level, PolicyLevel::Block);
+        assert!(any_blocking(&v));
+        assert!(v[0]
+            .remedy
+            .contains("the operator runs privileged commands"));
+
+        let v = evaluate(
+            "sudo apt-get install foo",
+            &levels(PolicyLevel::Block, PolicyLevel::Warn),
         );
-        assert!(v[0].remedy.contains("default warn policy advises only"));
+        assert_eq!(v[0].level, PolicyLevel::Warn);
+        assert!(!any_blocking(&v));
+        assert!(v[0].remedy.contains("configured warn level advises only"));
         assert!(v[0].remedy.contains("may show no permission prompt"));
         assert!(!v[0].remedy.contains("approve it there"));
     }
@@ -183,7 +346,7 @@ mod tests {
         assert_eq!(v[0].rule, "security.privilege_escalation");
         assert_eq!(v[0].level, PolicyLevel::Block);
         assert!(any_blocking(&v));
-        assert!(v[0].remedy.contains("configured policy denies"));
+        assert!(v[0].remedy.contains("policy refuses it"));
         assert!(!v[0].remedy.contains("advises only"));
     }
 
@@ -209,6 +372,25 @@ mod tests {
         assert!(v.iter().any(|x| {
             x.rule == "security.privilege_escalation" && x.level == PolicyLevel::Warn
         }));
+    }
+
+    /// Grok review of TSK-171: blocking escalation by default must not
+    /// refuse ordinary shell work.
+    #[test]
+    fn test_ordinary_shell_work_is_not_blocked_by_default() {
+        for cmd in [
+            "bash -c 'printf ok'",
+            "source .venv/bin/activate",
+            "LD_LIBRARY_PATH=/opt/lib cargo test",
+        ] {
+            let v = evaluate(cmd, &SecuritySection::default());
+            assert!(!any_blocking(&v), "{cmd}: {v:?}");
+        }
+        for cmd in ["sudo id", "bash -c 'sudo id'", "LD_PRELOAD=/tmp/x.so ls"] {
+            let v = evaluate(cmd, &SecuritySection::default());
+            assert!(any_blocking(&v), "{cmd}");
+            assert_eq!(v[0].rule, "security.privilege_escalation");
+        }
     }
 
     #[test]

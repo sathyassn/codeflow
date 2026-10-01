@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "harness-platform-sandbox",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "On which platform does each harness get OS-enforced containment?",
+    "idea": "Both harnesses have an OS sandbox on macOS, Linux and WSL2, and only Codex has one on native Windows.",
+    "title": "OS sandboxing by platform",
+    "kicker": "Platform assurance",
+    "caption": "On native Windows, Claude work that needs real containment moves to WSL2 or a container, or it stops.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "OS sandbox available"
+      },
+      {
+        "name": "nc",
+        "mark": "nc",
+        "means": "No OS sandbox"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "native Windows Codex uses its elevated Windows sandbox",
+        "source": "docs/harness-posture.md#technical",
+        "derive": "the Codex Windows row",
+        "check": {
+          "kind": "contains",
+          "text": "| Native Windows, Codex | its elevated Windows sandbox, selected by default |"
+        },
+        "value": true
+      },
+      {
+        "claim": "native Windows Claude Code has no OS sandbox",
+        "source": "docs/harness-posture.md#technical",
+        "derive": "the Claude Windows row",
+        "check": {
+          "kind": "contains",
+          "text": "| Native Windows, Claude Code | none; Git Bash or PowerShell work, but Claude's OS sandbox is not available |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Linux and WSL2 use the harness Linux sandbox implementations",
+        "source": "docs/harness-posture.md#technical",
+        "derive": "the Linux row",
+        "check": {
+          "kind": "contains",
+          "text": "| Linux, WSL2 | the harness Linux sandbox implementations |"
+        },
+        "value": true
+      }
+    ],
+    "layout": {
+      "kind": "coverage",
+      "columns": [
+        "Codex",
+        "Claude"
+      ],
+      "rows": [
+        {
+          "label": "macOS",
+          "cells": [
+            "cov",
+            "cov"
+          ]
+        },
+        {
+          "label": "Linux, WSL2",
+          "cells": [
+            "cov",
+            "cov"
+          ]
+        },
+        {
+          "label": "native Windows",
+          "cells": [
+            "cov",
+            "nc"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "reason": "Each platform lists its two harnesses as the same marks at phone width, with the harness named beside each mark."
+    },
+    "twin": {
+      "columns": [
+        "Platform",
+        "Codex",
+        "Claude Code"
+      ],
+      "rows": [
+        [
+          "macOS",
+          "OS sandbox",
+          "OS sandbox"
+        ],
+        [
+          "Linux, WSL2",
+          "OS sandbox",
+          "OS sandbox"
+        ],
+        [
+          "native Windows",
+          "OS sandbox",
+          "none"
+        ]
+      ]
+    }
+  }
+}

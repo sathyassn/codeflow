@@ -2,25 +2,126 @@
   "$schema": "test-config.schema.json",
   "schema_version": "1.0",
   "execution": {
-    "parallel": false,
-    "fail_fast": false
+    "parallel": true,
+    "max_parallel": 3,
+    "fail_fast": false,
+    "run_everything": [
+      "crates/**",
+      "assets/**",
+      "Cargo.*",
+      "rust-toolchain*",
+      ".cargo/**",
+      ".config/**",
+      ".codeflow/**",
+      ".github/**",
+      "scripts/journey-gate.py",
+      "scripts/test_journey_gate.py",
+      "scripts/gate-parity.py",
+      "scripts/test_gate_parity.py",
+      "scripts/gate-binary.py",
+      "scripts/with-node.py",
+      "scripts/test_with_node.py",
+      "scripts/check-present-binary-delta.mjs",
+      "scripts/test_binary_delta.mjs",
+      "scripts/check-gate-browser.mjs",
+      "scripts/*.sh",
+      "scripts/*.mjs",
+      "tests/release-qualification/**",
+      "journey_gate.toml",
+      ".codex/**",
+      ".grok/**",
+      ".claude/workflows/**",
+      ".gitattributes",
+      ".gitignore",
+      ".gitleaks*",
+      "*.md",
+      "LICENSE-*",
+      "dist-workspace.toml",
+      ".claude/settings.json",
+      "scripts/proofs/**",
+      "scripts/test_gate_contracts.py"
+    ]
   },
   "defaults": {
     "coverage": []
   },
   "targets": [
     {
+      "name": "present-web-build",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web\""
+        },
+        "full": {
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web\""
+        }
+      },
+      "requires": [],
+      "outputs": [
+        "crates/codeflow-present/assets/manifest.json"
+      ],
+      "exclusive": true,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "rust-build",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "cargo build --workspace --all-targets --locked"
+        },
+        "full": {
+          "command": "cargo build --workspace --all-targets --locked"
+        }
+      },
+      "requires": [
+        "present-web-build"
+      ],
+      "outputs": [],
+      "exclusive": false,
+      "timeout_seconds": 1200
+    },
+    {
+      "name": "codeflow-bin",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "cargo build --locked -p codeflow-cli"
+        },
+        "full": {
+          "command": "cargo build --locked -p codeflow-cli"
+        }
+      },
+      "requires": [
+        "present-web-build",
+        "rust-build"
+      ],
+      "outputs": [
+        "target/debug/codeflow"
+      ],
+      "exclusive": false,
+      "timeout_seconds": 600
+    },
+    {
       "name": "rust-format",
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "cargo fmt --all -- --check"
+        },
         "essential": {
           "command": "cargo fmt --all -- --check"
         },
         "full": {
           "command": "cargo fmt --all -- --check"
         }
-      }
+      },
+      "requires": []
     },
     {
       "name": "rust-workspace",
@@ -29,24 +130,41 @@
       "modes": {
         "essential": {
           "command": "cargo test --workspace --quiet"
-        },
-        "full": {
-          "command": "cargo test --workspace"
         }
-      }
+      },
+      "requires": [
+        "rust-build"
+      ]
+    },
+    {
+      "name": "rust-doctest",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "cargo test --workspace --doc"
+        }
+      },
+      "requires": [
+        "rust-build"
+      ]
     },
     {
       "name": "rust-clippy",
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "cargo clippy --workspace --all-targets -- -D warnings"
+        },
         "essential": {
           "command": "cargo clippy --workspace --all-targets -- -D warnings"
         },
         "full": {
           "command": "cargo clippy --workspace --all-targets -- -D warnings"
         }
-      }
+      },
+      "requires": []
     },
     {
       "name": "rustdoc",
@@ -59,7 +177,10 @@
         "full": {
           "command": "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps"
         }
-      }
+      },
+      "requires": [
+        "rust-build"
+      ]
     },
     {
       "name": "rust-coverage",
@@ -67,8 +188,16 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "cargo llvm-cov --workspace --summary-only --fail-under-lines 90"
+          "command": "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
         }
+      },
+      "timeout_seconds": 1800,
+      "requires": [
+        "rust-build"
+      ],
+      "report": {
+        "format": "junit",
+        "path": "target/nextest/codeflow/junit.xml"
       }
     },
     {
@@ -82,18 +211,31 @@
         "full": {
           "command": "python3 -B scripts/test_release.py"
         }
-      }
+      },
+      "requires": [
+        "codeflow-bin"
+      ],
+      "narrow": [
+        "scripts/release.py",
+        "scripts/test_release.py",
+        "scripts/fixtures/**",
+        ".release/**",
+        "CHANGELOG.md"
+      ]
     },
     {
       "name": "gate-parity",
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py"
+        },
         "essential": {
-          "command": "python3 scripts/gate-parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py"
         },
         "full": {
-          "command": "python3 scripts/gate-parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py"
         }
       }
     },
@@ -103,38 +245,76 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "python3 -B evals/model-artifacts/test_eval_kit.py"
+          "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py"
         },
         "full": {
-          "command": "python3 -B evals/model-artifacts/test_eval_kit.py"
+          "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py"
         }
+      },
+      "narrow": [
+        "evals/**",
+        ".agents/skills/**",
+        ".claude/skills/**",
+        ".claude/agents/**"
+      ],
+      "env": {
+        "CODEFLOW_CHECK_KIND": "structural"
       }
+    },
+    {
+      "name": "visual-eval-controls",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal && node --test evals/model-artifacts/visual_controls.test.mjs\""
+        }
+      },
+      "timeout_seconds": 300
     },
     {
       "name": "skill-triggers",
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "python3 -B evals/skill-triggers/test_triggers.py"
+        },
         "essential": {
           "command": "python3 -B evals/skill-triggers/test_triggers.py"
         },
         "full": {
           "command": "python3 -B evals/skill-triggers/test_triggers.py"
         }
-      }
+      },
+      "narrow": [
+        "evals/**",
+        ".agents/skills/**",
+        ".claude/skills/**",
+        ".claude/agents/**"
+      ]
     },
     {
       "name": "herdr-delivery",
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "python3 -B evals/herdr-delivery/test_delivery.py"
+        },
         "essential": {
           "command": "python3 -B evals/herdr-delivery/test_delivery.py"
         },
         "full": {
           "command": "python3 -B evals/herdr-delivery/test_delivery.py"
         }
-      }
+      },
+      "narrow": [
+        "evals/**",
+        ".agents/skills/**",
+        ".claude/skills/**",
+        ".claude/agents/**"
+      ]
     },
     {
       "name": "docs-validation",
@@ -142,12 +322,33 @@
       "runner": "custom",
       "modes": {
         "essential": {
-          "command": "cargo run --quiet -p codeflow-cli -- validate --docs"
+          "command": "\"$CODEFLOW_BIN\" validate --docs"
         },
         "full": {
-          "command": "cargo run --quiet -p codeflow-cli -- validate --docs"
+          "command": "\"$CODEFLOW_BIN\" validate --docs"
         }
-      }
+      },
+      "requires": [
+        "codeflow-bin"
+      ],
+      "narrow": [
+        "docs/**",
+        "project-management/**"
+      ]
+    },
+    {
+      "name": "journey-gate",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "python3 -B scripts/test_journey_gate.py && python3 -B scripts/journey-gate.py --results \"$CODEFLOW_GATE_RESULTS\""
+        }
+      },
+      "timeout_seconds": 3600,
+      "requires": [
+        "rust-coverage"
+      ]
     },
     {
       "name": "cf-present-qualification",
@@ -155,10 +356,13 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "npm ci --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web && npm run supply-chain --prefix crates/codeflow-present/web && npm run check --prefix crates/codeflow-present/web && npm run check:browser --prefix crates/codeflow-present/web && npm run check:windows-profile-confinement --prefix crates/codeflow-present/web && cargo test -p codeflow-present -- --test-threads=1 && cargo test -p codeflow-cli --test present_cli --test init_e2e -- --test-threads=1 && node scripts/check-present-binary-delta.mjs && cargo build -p codeflow-cli && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web"
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run check --prefix crates/codeflow-present/web && npm run check:windows-profile-confinement --prefix crates/codeflow-present/web\""
         }
       },
-      "timeout_seconds": 900
+      "timeout_seconds": 900,
+      "requires": [
+        "codeflow-bin"
+      ]
     },
     {
       "name": "docs-portal",
@@ -166,10 +370,84 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "npm run deps:install --prefix docs-portal && npm run check --prefix docs-portal && npm run build --prefix docs-portal && cargo run --quiet -p codeflow-cli -- validate --portal docs-portal"
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal && node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
         }
       },
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "requires": [
+        "codeflow-bin"
+      ],
+      "narrow": [
+        "docs-portal/**",
+        "docs/**",
+        "project-management/**",
+        ".codeflow/docs-portal.json"
+      ]
+    },
+    {
+      "name": "read-benchmark",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "cargo test --release -p codeflow-cli --test read_benchmark -- --include-ignored"
+        }
+      },
+      "requires": [
+        "rust-build"
+      ],
+      "outputs": [],
+      "exclusive": true,
+      "timeout_seconds": 2400
+    },
+    {
+      "name": "present-supply-chain",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run supply-chain --prefix crates/codeflow-present/web\""
+        }
+      },
+      "requires": [
+        "present-web-build"
+      ],
+      "outputs": [],
+      "exclusive": false,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "present-browser",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run check:browser --prefix crates/codeflow-present/web && npm run check:figures --prefix crates/codeflow-present/web && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web\""
+        }
+      },
+      "requires": [
+        "codeflow-bin"
+      ],
+      "outputs": [],
+      "exclusive": true,
+      "timeout_seconds": 900
+    },
+    {
+      "name": "present-binary-delta",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"node --test scripts/test_binary_delta.mjs && node scripts/check-present-binary-delta.mjs\""
+        }
+      },
+      "requires": [
+        "codeflow-bin"
+      ],
+      "outputs": [],
+      "exclusive": false,
+      "timeout_seconds": 2400
     }
-  ]
+  ],
+  "_description": "Candidate gate: model-eval-kit is a structural and tooling check, not native behavioural qualification."
 }

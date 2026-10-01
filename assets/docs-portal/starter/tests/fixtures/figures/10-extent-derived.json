@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "commit-limits",
+    "family": "extent",
+    "binding": "derived",
+    "question": "How long may each part of a commit message be?",
+    "idea": "The subject description is the tightest limit, well inside the subject line.",
+    "title": "Commit message limits",
+    "caption": "Each bar is a limit read from the policy file, drawn against the same scale.",
+    "states": [
+      { "name": "used", "mark": "used", "means": "Characters allowed" },
+      { "name": "limit", "mark": "limit", "means": "Line length ceiling" }
+    ],
+    "facts": [
+      { "claim": "The subject description allows 50 characters", "source": "policy.json", "derive": "git.commit_desc_max_len", "check": { "kind": "json", "select": "git.commit_desc_max_len" }, "value": 50 },
+      { "claim": "The subject line allows 72 characters", "source": "policy.json", "derive": "git.commit_subject_max_len", "check": { "kind": "json", "select": "git.commit_subject_max_len" }, "value": 72 }
+    ],
+    "source": { "path": "policy.json", "select": "git" },
+    "layout": {
+      "kind": "extent",
+      "max": 80,
+      "unit": "chars",
+      "rows": [
+        { "label": "Description", "value": "commit_desc_max_len", "state": "used" },
+        { "label": "Subject line", "value": "commit_subject_max_len", "state": "used" }
+      ],
+      "limits": [
+        { "label": "Ceiling", "value": "commit_subject_max_len", "state": "limit" }
+      ]
+    },
+    "narrow": { "recompose": "stack", "drops": [], "marks": "same", "elongation_max": 2, "reason": "Two rows stacked under their labels need twice the height at phone width." },
+    "twin": "facts"
+  }
+}

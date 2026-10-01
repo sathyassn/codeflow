@@ -1,0 +1,248 @@
+# Release-rule cutoffs and the seven legacy landings, 2026-09-27
+
+## Scope
+
+This is the verification record for TSK-145 AC-10 (SPC-013 R-120,
+planning resolution 28). The raw 3.0.0 rehearsal replay refused seven
+criteria changes because each landed on its line in a task pull request
+that also changed code. R-120 is newer than those landings, so it applies
+from a per-line cutoff recorded on the default target. This record lists
+the seven, what each changed, and which review approved each pull request.
+
+## Evidence
+
+- Merges and diffs: `git diff <merge>^1 <merge> -- project-management/tasks/<id>.md`,
+  comparing the `## Acceptance Criteria` sections with `- [ ]` and `- [x]`
+  ticks normalized.
+- Pull requests: `gh pr view <n> --repo sathyassn/codeflow-archive`.
+  None of the seven has a GitHub review object or comment, and the
+  operator account `sathyassn` merged all seven.
+- Review reports: the session review files named in each PR body.
+  They live in the session scratchpad and are not versioned, so their
+  content is recheckable there but not authenticated. "Codex" and "Grok"
+  are the reviewer labels those files and PR bodies use.
+
+## The seven landings
+
+| Record | Line | Landing merge (PR) | What changed in the criteria | Review that approved the PR |
+|---|---|---|---|---|
+| TSK-134 | EPC-020 | `787e53448` (#585) | AC-3 moved from "shall refuse a `CARGO_TARGET_DIR` outside the worktree" to "shall warn about" it and still run, in commit `7c4bf8608` | The primary (the orchestrator) sanctioned the amendment during review; the criterion records it with its reason (see below). Codex rounds 1 (`531c0e2d6`) and 2 (`b977fc994`) both ended `changes_requested` on other findings, and the acceptance block's `verdict: approved` is the primary's. |
+| TSK-101 | EPC-020 | `972c15b61` (#590) | AC-14 (the pinned, checksum-verified installer) was replaced by "Moved to TSK-107", in commit `7dd43bed5` | Codex round 3 `approved` at `c04a70f22`, a confirm-only check of one finding. Round 1 saw the move and did not count it as a finding, but ended `changes_requested`. Commits after `c04a70f22` were checked by the primary only. |
+| TSK-103 | EPC-020 | `cf206a232` (#598) | AC-9's own-branch context changed from "`work start` and pre-commit" to "`work start` and CI's own-branch preflight", in commit `a99af1edc` | None. Codex rounds 1 and 2 ended `changes_requested`, and the primary read the final diff instead of a third round. |
+| TSK-104 | EPC-020 | `8ad5b6fce` (#587) | AC-2 dropped pre-commit from where the classification runs ("`work start` and pre-commit" became "`work start`"), in commit `f7ed15bc0` | None. Codex rounds 1 and 2 ended `changes_requested`. Round 1 accepted removing the pre-commit preflight as behaviour, but not the criterion text. |
+| TSK-112 | EPC-020 | `383ee8c48` (#592) | AC-3 was tightened: an unresolved target now blocks a mutation from any session branch. Result lines were appended to AC-1 to AC-4. | None. Codex rounds 1 to 5 all ended `changes_requested`. Round 1 finding T112-4 asked for the tightening, and round 2 marked it resolved. |
+| TSK-115 | EPC-020 | `dd8a6e596` (#601) | No criterion wording changed. Evidence text was appended under AC-1 to AC-4, which the parser reads as criterion text. | Codex round 2 `approved` at `1cd1f519b`, excluding AC-3, whose evidence came after the approval. |
+| TSK-093 | EPC-016 | `f5f2b6158` (#613) | No criterion statement changed against its planning version (`b2aae5400`). Ticks, appended evidence and pending lines, the target and a sequencing paragraph changed. | Grok round 1 `approved` at `fc54d9191`, the merged head. It did not examine the criteria. |
+
+Three of the seven pull requests reached an approving review verdict
+(#590, #601, #613). The other four landed on the primary's decision after
+the last review verdict was `changes_requested`.
+
+## TSK-134 AC-3
+
+The primary, the orchestrator acting during review, sanctioned moving
+AC-3 from "refuse" to "warn". The criterion records the amendment and its
+reason at `project-management/tasks/TSK-134.md` lines 47 to 49: "amended by
+the primary during review: the gate lock already keeps two gates apart and
+a shared target directory is a legitimate adopter setup". The round 1
+brief told the reviewer the change was coming, and round 1 judged the
+warning behaviour on its merits. No separate task is needed.
+
+## The TSK-101 waiver
+
+TSK-101's first completion waives AC-14 against `7dd43bed5` as its
+planning amendment. That commit is not a planning amendment and not a
+Closeout correction: it is a commit on `task/TSK-101-id-registry` made
+before the task landed (parent `ae318a7a8`, the task still `todo` on both
+sides), and besides `TSK-101.md` it changes `CHANGELOG.md`,
+`docs/architecture.md` and two ADRs. The binding check therefore refuses
+the waiver (`work.acceptance_binding`), and the cutoff does not exempt it:
+the exemption covers only the brought criteria-landing finding.
+
+The EPC-020 line has since repaired it through the ordinary route, before
+its cutoff `2921df9f5`: planning PR #639 (`dc62ef03f`) restates AC-14 and
+records the old block as superseded, and PR #640 (`f6cd1c3c3`) completes
+TSK-101 again with its AC-14 waiver naming `dc62ef03f`. A release branch
+that imports EPC-020 only at or after `dc62ef03f` never brings the old
+waiver. A release branch that imported EPC-020 between #590 and #639, as
+the rehearsal did at `7f8d3bc47`, `0583c69ba`, `0b2eee788` and
+`cd0ac7e74`, brought the old completion too. A later import of the repair
+supersedes it (SPC-013 R-120): a completion brought later from the task's
+own line, which binds where it was introduced there, becomes the
+completion in force. The old waiver is never accepted; it stops being the
+completion in force. An invalid later completion, or one that reaches the
+release through another line, leaves the old finding in place.
+
+## The reconstructed candidate
+
+The candidate of TSK-145 AC-6 was rebuilt on a disposable authority
+(labelled a reconstruction, not the historical commits):
+
+- The authority's `main` is the real `main` (`2c9c77f5c`) plus the
+  cutoffs below. Each line is advertised at its cutoff tip; EPC-020 also
+  carries a planning merge that gives TSK-010 `role: release-integration`.
+- The rehearsal (`cbc0b2ec8`) was cut from the EPC-020 line at
+  `405caf064`. Here that point is an import merge from `main`, and every
+  later first-parent commit of the rehearsal is replayed with its own tree
+  and second parent, the cutoff table kept.
+- Left out are the direct record edits the EPC-014 line has since landed
+  itself: `1dc0033a2` (the TSK-049 completion), `08aef53c0` (landed there
+  as `3f9c7b0dd`) and the EPC-014 part of `082d36488` (landed as
+  `ccfb1d8f0`).
+- Each line is then imported at its cutoff tip, the records baseline names
+  those tips, and TSK-010 completes at the head.
+
+| Run | Exit | Legacy notices | Blocking findings |
+|---|---|---|---|
+| Pre-push (`git push` from the release checkout)[^tree] | 1, the ref not published | the seven | 2, the same as CI |
+| CI, release range from the authority's `main` | 1 | the seven | 2 |
+| Final pull request into `main` (`--into main`) | 1 | the seven | 2 |
+
+[^tree]: Pre-push judged everything the release branch adds to the
+    authority's `main`. Its tree checks (`validate --docs` and the quick
+    targets) were kept out by a changed tracked file, because the replayed
+    tree is not a buildable release. Its release preflight did not run: the
+    replayed tree's `release.py` has no `preflight` subcommand.
+
+The release-line judge reports no blocking finding. The TSK-101 waiver's
+refusal is gone because the EPC-020 import at its cutoff brings the
+re-completion of PR #640. The two remaining findings come from the records
+rule, and TSK-140 owns both:
+
+| Rule | Finding | Owner |
+|---|---|---|
+| `work.records` | SPC-002 becomes `approved` in a range that also changes code. EPC-020 approved it in planning PR #655 (`e4ff8eb4e`), but the rule judges spec approval across the whole range, not where it was introduced. | TSK-140 AC-11 |
+| `work.records` | TSK-069 is complete without an acceptance block. Its only change against `main` is the `uid` backfill EPC-020 landed in #654 (`a579cf17a`); naming the EPC-020 cutoff in the records baseline does not clear it. | TSK-140 AC-12 |
+
+The rule raises both on any pull request into this `main` that brings
+EPC-020's current records with code, so they would block the real 3.0.0
+pull request. Importing the current line tips (EPC-016 at `385218852`,
+EPC-020 at `99ad91a78`) with the same cutoffs gives the same seven
+notices and the same two findings: none of the criteria changes this
+candidate brings landed with code after a cutoff, and the cutoff values
+need no change.
+
+The first reconstructions also showed three judge faults, fixed with this
+record:
+
+- A new release branch's push was judged from one line's tip, which
+  re-checked 1,221 commits including history `main` already has.
+- A completion that the release branch first held in one form and later
+  brought, block and all, from its own line was still bound at the release
+  head.
+- An earlier brought completion that a valid re-completion from the task's
+  own line had replaced still refused (the TSK-101 waiver above).
+
+### Push-set cost on the release-sized range
+
+The pre-push push set on this reconstruction (1,164 commits and 220
+merges from `main`, head `89f3f8581`) took over its 60 s guideline. A
+sampling profile of `codeflow ci` placed about 94% of its time outside
+the release-line judge, in work repeated per commit or per record:
+
+| Cost | Share of samples | Fix |
+|---|---|---|
+| The id registry's merge rule ran a full-history `git log` for each record it asked about, and one `git show` per record | about 36% | one add log per revision, one batched read of the record texts |
+| The shipped-asset check read and decompressed the embedded asset once per added line | about 17% | decided once per file |
+| One `git diff-tree` process per commit for the contract-surface tripwire | most of the commit checks' 19% subprocess wait | one batched `diff-tree --stdin` |
+| The reopen scan parsed each candidate record at every commit | about 13% | parsed once per blob |
+| The release-line judge (imports, line positions) | about 6% | line positions remembered |
+
+Measured on the same reconstruction, release builds, the pre-push hook
+alone, back to back at the same load (load averages 20 to 40):
+
+| Build | Push set | Hook wall | User / system CPU |
+|---|---|---|---|
+| `cea4586ae` | 69.3 s, 71.0 s | 69.4 s, 71.0 s | 39.5 / 24.1 s |
+| This head | 4.8 s, 4.7 s | 4.8 s, 5.4 s | 3.5 / 1.1 s |
+
+The verdicts are identical: the same seven notices and the same two
+findings, and the same refusal. A real `git push` of the release branch
+through the hook then took 5.9 s. No budget change is proposed.
+
+## Rerun under TSK-140, 2026-09-29
+
+TSK-140 AC-10 asks for the real 3.0.0 release tree with no blocking
+finding. That tree is TSK-010's release rebuild, which does not merge
+cleanly yet, so this rerun judges a narrower candidate on a disposable
+authority, labelled a reconstruction:
+
+- The authority's `main` is the real `main` (`2c9c77f5c`) plus one
+  commit (`540772217`) that adds `release_rules = 1` and both transition
+  tables with the cutoffs below.
+- EPC-020 is advertised at `0da32446f`, its last point without direct
+  commits on its first-parent chain, plus a planning merge that gives
+  TSK-010 `role: release-integration`. The other three lines are left
+  out.
+- `integration/release-3-0-0-r2` is cut from `2c9c77f5c`, imports
+  EPC-020, merges the authority's `main` (resolving
+  `.codeflow/project.toml`), and completes TSK-010 at the head with a
+  placeholder block.
+
+Judged by this branch's build through CI, the final pull request into
+`main` (`--into main`) and the pre-push hook, with `validate --docs`:
+
+| Candidate | Exits (CI, into main, pre-push, validate) | Notices | Blocking findings |
+|---|---|---|---|
+| As above (head `6f633bb3c`) | 1, 1, 1, 0 | TSK-098 and TSK-100 as legacy records | 1: TSK-101 |
+| EPC-020 also re-completes TSK-101 in one planning merge (head `08b7122d5`) | 0, 0, 0, 0 | the same two | none |
+
+- The records-rule findings are cleared. SPC-002's approval is judged
+  at its planning-only landing (TSK-140 AC-11), TSK-069's `uid`
+  backfill is not judged again (AC-12), and TSK-098 and TSK-100 are
+  listed as legacy records under the records cutoff (AC-13).
+- No legacy criteria change is listed. `main` has none of the seven
+  records, so the release brings each one as new and no criteria change
+  reaches the judge. The seven notices appear only on a release base
+  that already holds those records, as the rehearsal did.
+- TSK-101's second completion (`3529d1f80`) keeps the reviewed commit
+  from before its reopen (`250bd901c`). R-60 and R-119 refuse that, and
+  the cutoffs do not cover completion binding. The EPC-020 line clears
+  it by one planning pull request that reopens TSK-101 and completes it
+  again with a review inside that range; the second row shows the judge
+  then passes. That review is the line's work, not this record's.
+- The first run also refused TSK-102, whose fix landed after its
+  separate reopen pull request. That was a TSK-140 fault, fixed with
+  `a_separate_reopen_then_a_landed_fix_binds_a_late_recompletion`.
+- The reconstruction of TSK-145 AC-6 was rerun as well. Its `main`
+  carries the cutoff table without the adoption marker, so every release
+  check now refuses, naming the table, as the one-time bridge requires.
+
+## Cutoffs to record
+
+The cutoffs are each line's tip when this record was written (advertised
+by `origin`, 2026-09-27). They take effect only once they are on the
+default target, `main`, in `.codeflow/project.toml`:
+
+```toml
+[release_rule_baseline]
+"integration/EPC-014-public-docs" = "d618075e229d49f706cf1c0e9ab5b10a3c9c69e3"
+"integration/EPC-015-engineering-bar" = "db55fc01c30f75d0eb1bd5f3df1de9dd8f9d1bff"
+"integration/EPC-016-visual-guide" = "51ee9374b506d9a359150ac15663c26c914b57cf"
+"integration/EPC-018-autonomy-roster" = "ccd56fa85160ac58d66828933e96c000357c4baa"
+"integration/EPC-020-delivery-system" = "2921df9f52a5e787f896146233a85201720591d3"
+```
+
+With these, a release range lists each of the seven as information, for
+example "legacy criteria change, landed before the release rule: TSK-134
+on integration/EPC-020-delivery-system, landing 787e53448, cutoff
+2921df9f5, policy main at <tip>". Every other check still applies to
+them, including import qualification, full tree entries, completion
+binding and the release-integration owner.
+
+Under TSK-140 the table is honoured only as a one-time bridge (SPC-013
+R-120, planning resolution 29). It lands on `main` in one commit that
+also adds `release_rules = 1` and the records table
+`release_records_baseline`, and it is never changed after that commit.
+A cutoff's own tree must not carry the marker, so on EPC-020, where
+TSK-140 adds the marker to this repository's project config, the cutoff
+lies before that landing; `2921df9f5` does.
+
+## Not verified
+
+- The reviewer identity behind each label, and whether the scratchpad
+  review files were edited after they were written.
+- The source of the "ruled 2026-09-27" notes in TSK-103 and TSK-104
+  beyond the records themselves.
+- Whether commits landed after each last review changed behaviour beyond
+  what their PR bodies say.

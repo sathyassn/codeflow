@@ -1,5 +1,6 @@
 ---
 id: ADR-0045
+uid: 87f62666-6c09-42f3-9656-b3a175518538
 title: define durable work authority and canonical record layout
 date: 2026-07-28
 status: superseded
@@ -7,7 +8,7 @@ superseded_by: ADR-0046
 architecture_impact: docs/architecture.md — project-management records gain one canonical flat layout, shared enumeration, legacy read compatibility, and spec recall
 ---
 
-# ADR-0045 — durable work authority and canonical record layout
+# ADR-0045: durable work authority and canonical record layout
 
 ## Context
 

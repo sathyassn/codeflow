@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "about": "Committed answers for every new case of the explanation-method pack (TSK-062). Each entry records the signals a grader reads off the answer and the decision the kit must compute from them. test_eval_kit.py checks the decision and ties every form signal (fence, language, image, alt text, markers, block order, asks, bindings, families) to the committed files. A directory answer is laid over the case's fixture: its docs/ files replace or add files and its config.json adds figure bindings and page classes; visual_controls.test.mjs runs the portal adapter on it and applies the explanatory page class rules to the adapted page, and visual_controls_browser.test.mjs renders every declaration it carries. A .json answer is a present document; crates/codeflow-present/tests/method_controls.rs validates it with the present validator. Family, placement, altitude and caption judgments stay the grader's and are recorded, not re-derived. The existing present case in the pack keeps its own controls.",
+  "cases": {
+    "enforcement-planes-answered-in-chat": [
+      {
+        "role": "passing",
+        "answer": "planes-terminal-ci-inactive.md",
+        "surface": "terminal",
+        "signals": [
+          "layering_figure_in_the_form_the_surface_calls_for",
+          "each_plane_placed_at_its_moments",
+          "ci_plane_shown_not_active_here",
+          "remote_plane_shown_armed_at_merge",
+          "legend_present",
+          "one_caption_sentence",
+          "short_prose_around_figure",
+          "ci_plane_drawn_with_inactive_mark"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "passing",
+        "answer": "planes-terminal-ci-omitted.md",
+        "surface": "terminal",
+        "signals": [
+          "layering_figure_in_the_form_the_surface_calls_for",
+          "each_plane_placed_at_its_moments",
+          "ci_plane_shown_not_active_here",
+          "remote_plane_shown_armed_at_merge",
+          "legend_present",
+          "one_caption_sentence",
+          "short_prose_around_figure",
+          "ci_plane_omitted_with_caption_note"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "planes-terminal-commit-flow.md",
+        "surface": "terminal",
+        "signals": [
+          "commit_flow_figure_for_planes_question",
+          "one_caption_sentence",
+          "short_prose_around_figure"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "planes-terminal-ci-active.md",
+        "surface": "terminal",
+        "signals": [
+          "layering_figure_in_the_form_the_surface_calls_for",
+          "each_plane_placed_at_its_moments",
+          "remote_plane_shown_armed_at_merge",
+          "legend_present",
+          "one_caption_sentence",
+          "short_prose_around_figure",
+          "ci_plane_marked_active"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "planes-mermaid.md",
+        "surface": "terminal",
+        "signals": [
+          "each_plane_placed_at_its_moments",
+          "ci_plane_shown_not_active_here",
+          "remote_plane_shown_armed_at_merge",
+          "one_caption_sentence",
+          "short_prose_around_figure",
+          "mermaid_figure_in_reply"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "readme-figure-uses-the-text-form": [
+      {
+        "role": "passing",
+        "answer": "readme-text-figure.md",
+        "signals": [
+          "fenced_text_figure_in_readme",
+          "figure_in_a_named_family_with_legend_and_caption",
+          "figure_matches_documented_parts"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "readme-mermaid.md",
+        "signals": [
+          "mermaid_fence_in_readme",
+          "figure_matches_documented_parts"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "readme-svg-link.md",
+        "signals": [
+          "svg_file_linked_from_readme"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "three-unrelated-rules-take-the-smallest-carrier": [
+      {
+        "role": "passing",
+        "answer": "rules-three-bullets.md",
+        "surface": "terminal",
+        "signals": [
+          "every_rule_stated",
+          "no_figure",
+          "bullets_or_small_table"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "rules-figure.md",
+        "surface": "terminal",
+        "signals": [
+          "every_rule_stated",
+          "figure_for_unrelated_facts"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "guide-page-from-a-policy-source": [
+      {
+        "role": "passing",
+        "answer": "guide-page/passing",
+        "signals": [
+          "each_altitude_answers_its_reader_question",
+          "concept_says_who_it_is_for_and_what_it_is_not",
+          "panel_family_matches_its_relationship",
+          "lead_above_and_caption_below_each_figure",
+          "twin_present_for_each_figure",
+          "command_table_kept_as_lookup"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "guide-page/faulty",
+        "signals": [
+          "command_table_kept_as_lookup",
+          "source_reprinted_under_altitudes_with_box_stage"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "display-panel-and-first-paint-take-different-carriers": [
+      {
+        "role": "passing",
+        "answer": "display/passing",
+        "signals": [
+          "display_panel_image_committed_with_skin_mode_and_scale_named",
+          "display_panel_alt_text_names_surface_and_state",
+          "display_panel_image_annotated_by_numbered_markers_only",
+          "first_paint_drawn_in_sequence_family",
+          "first_paint_has_no_image"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "display/faulty",
+        "signals": [
+          "display_panel_drawn_as_ascii_art",
+          "first_paint_shown_as_screenshot"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "migration-review-leads-with-the-picture": [
+      {
+        "role": "passing",
+        "answer": "migration/passing.json",
+        "signals": [
+          "governing_comparison_is_first_block",
+          "comparison_carries_downtime_cost_and_evidence",
+          "one_ask",
+          "unverified_peak_load_stated"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "migration/faulty.json",
+        "signals": [
+          "narrative_first_text_cards_ask_last",
+          "more_than_one_ask"
+        ],
+        "decision": "fail"
+      }
+    ]
+  }
+}

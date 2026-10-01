@@ -20,8 +20,8 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
 - [x] C — guards import: 376 tests green, clippy clean (security scanner ×10 modules, git/conflict + ci, file_lock, error pruned 1178→476 lines, doctor v2 check table, settings structured-merge per §4.3 class 2)
 - [x] D — scaffold engine: 43 tests green, clippy clean (init w/ bootstrap grace + tier system + husky/hooksPath detection; update w/ 3-way merge via .baseline + `.new` conflicts + additive policy key sync; managed-region + structured settings merge; scaffold-manifest.toml spec; rust-embed CLI with disk-loading in debug; version-skew warning). Integrated: **926 tests green**, clippy 0; asset gaps (gitignore, develop.workflow.js) filled at integration
 - [x] E — initial corpus authored, embedded, and instantiated for dogfood. The
-  current size and semantic contract is §4.4 plus
-  `artifact_budget_contract`; this historical milestone no longer carries a
+  current reading structure, size guidelines and semantic contract are §4.4
+  plus `artifact_budget_contract`; this historical milestone no longer carries a
   line-count snapshot that later decisions made false.
 - [x] Integration: probe+E+A+B+C merged serially into main; **883 tests green** (exact workstream sum), **clippy 0 warnings workspace-wide**
 
@@ -148,11 +148,18 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   denies, and no shadowing legacy `sandbox_mode`; every Claude preset is
   fail-closed and sandbox-autonomous, while auto/classifier policy is supplied
   at user or explicit CLI scope because project scope is intentionally ignored.
-- Artifact budgets corrected (2026-08-02): §4.4 now has one current contract,
-  enforced by `crates/codeflow-core/tests/artifact_budget_contract.rs`. Bytes
-  are the ratchet and lines are diagnostic only; the test rejects a smaller
-  artifact that loses pinned orchestration, safety, evidence, review, or
-  verification duties. Exact measurements at integration base `e9a872f2`:
+- Reading checked by structure, sizes reported (TSK-150, 2026-09-27): §4.4
+  now fails on reading structure (kernel, reachability, no orphans, a trigger
+  for every conditional read) and reports sizes against guideline numbers in
+  `codeflow doctor`; the byte ratchets and class ceilings below are no longer
+  failures. The one byte failure left is the complete generated `AGENTS.md`
+  against Codex's 32 KiB instruction limit.
+- Artifact budgets corrected (2026-08-02, history since TSK-150): §4.4 then
+  had one contract, enforced by
+  `crates/codeflow-core/tests/artifact_budget_contract.rs`. Bytes were the
+  ratchet and lines diagnostic only; the test rejected a smaller artifact that
+  lost pinned orchestration, safety, evidence, review, or verification duties.
+  Exact measurements at integration base `e9a872f2`:
 
   | Surface | Current | Ratchet | Headroom |
   |---|---:|---:|---:|
@@ -167,11 +174,11 @@ Live tracker for the charter's §12 execution plan. Updated as waves complete.
   | `cf-customize` skill | 20,903 B | 21 KiB | 601 B |
 
   Source, active Claude/Codex mirrors, managed baselines, manifest-selected
-  tiers, and reviewer-agent role contracts are checked together. Every skill
-  has one explicit source ratchet (the complete table is in §4.4); the 24 KiB
+  tiers, and reviewer-agent role contracts were checked together. Every skill
+  had one explicit source ratchet (now its guideline number in §4.4); the 24 KiB
   ordinary and 28 KiB routing/orchestration limits were the measured-base class ceilings,
-  not default growth allowances. There are no skill budget exceptions. Crossing
-  a class ceiling requires an exact manifest source, matching reviewed ratchet,
+  not default growth allowances. There were no skill budget exceptions. Crossing
+  a class ceiling required an exact manifest source, matching reviewed ratchet,
   and an existing durable evidence file. On-demand references, eval fixtures,
   and resource data retain purpose-specific bounds rather than one blunt
   instruction-file ceiling.

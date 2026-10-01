@@ -1,0 +1,5 @@
+{
+  "files": {
+    ".agents/skills/cf-rollback/SKILL.md#opening": "# cf-rollback: prepare and record a rollback\n\nUse this skill when a post-deploy check fails and the deployed release\nmust go back to the previous one. The agent prepares the rollback; the\noperator runs it in production.\n\n1. Find the previous release tag in the release ledger.\n2. Verify the artifact hash of that tag against the ledger entry.\n3. Run `deploy --to <tag>` in staging and confirm the failing check passes\n   there.\n4. Hand the production command to the operator. Never run it yourself:\n   the operator says go.\n5. Record the rollback in the release ledger with the reason and the\n   failing check.\n\nDo not roll back a database migration with this skill; use `cf-migrate`.\n"
+  }
+}

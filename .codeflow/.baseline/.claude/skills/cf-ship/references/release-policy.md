@@ -73,7 +73,7 @@ custom release framework; prose alone is not enforcement.
 ## Keep pending metadata in the work PR
 
 For the same-PR starter, calculate the next pending version from the **verified
-last published version** and highest remaining reviewed pending impact—not the
+last published version** and highest remaining reviewed pending impact, not the
 previous source version or PR count. From published `1.4.0`, two pending fixes
 still target `1.4.1`; adding a compatible feature targets `1.5.0`; another fix
 keeps `1.5.0`. Once `1.5.0` is actually published, the next fix targets `1.5.1`.
@@ -105,6 +105,28 @@ not silently rewritten by a later work PR. These checks
 cover actual state, not a second release ledger or a mandatory extra approval
 role. The independent reviewer still judges the meaning of the change.
 
+## Check release state early
+
+Check release state as early as it is cheap, and keep the pull request check
+authoritative:
+
+- Before push, warn when behavior paths change with no entry added or edited
+  and no declared `none`; block only a push that breaks state its base kept
+  valid, so work in progress can still be backed up.
+- On an integration line, check the structure of the release state before
+  each landing and say what was not checked against the host.
+- When the base itself fails its release state, accept only a repair that
+  changes the changelog and coupled version stamps, judged by the base's
+  configuration, keeps every existing entry's words, and leaves each stamp,
+  baseline and recorded hash consistent; refuse other work until it lands.
+  A pull request runs the checker in its own merge tree, so ship this repair
+  path before the state can break: a checker without it cannot pass a repair.
+
+A published section stays byte-identical. Correct it with a dated erratum
+that names the version, never by editing the section. Before the tag, render
+the notes from the final source and read them twice: as a new user and as a
+user upgrading from the last release, in the order they would act.
+
 ## Assess each change
 
 Judge compatibility against the released contract and actual target-relative
@@ -127,28 +149,10 @@ themselves prove either a release or an exemption is needed. Pre-1.0 and other
 version schemes use the adopted project's explicit rules.
 
 Use the project's required PR declaration, fragments or annotations; never
-create a competing input. The PR's Release impact block states the change in
-four fields, then the project's own fields (unit, changelog entry, evidence):
-
-- `Impact`: the change level a consumer sees.
-- `Breaking`: `yes` or `no`, the plain compatibility statement. It replaces
-  the older three-state `Contract` field. On a watched contract path,
-  `Breaking: no` is the explicit compatibility claim, so it is never
-  prefilled.
-- `Rationale`: the consumer-visible effect and the evidence for the level.
-- `Migration`: always present. It is normally `none` for nonbreaking work.
-  When Breaking is yes, give steps or a pointer to a Breaking change section.
-  A nonbreaking PR that refines or reconciles a pending breaking entry, such
-  as a wording-only edit declared `none`, still carries that entry's
-  migration reference.
-- A value is chosen, never left as the template's alternatives.
-
-In stable SemVer, as CodeFlow uses it, Breaking is yes if and only if Impact
-is major, and its checker enforces both directions. Pre-1.0 and other
-schemes name the level a break takes in their adopted policy. Compare a PR's
-declaration with the entries it adds, never with the cumulative pending
-version: an additive task declares minor and Breaking no even when earlier
-work already made the pending release major.
+create a competing input. The PR's Release impact fields (`Impact`,
+`Breaking`, `Rationale`, `Migration`, then the project's own) are defined
+once in [pr-evidence.md](pr-evidence.md), "Release impact and evidence",
+with when the section is required.
 For a commit-driven calculator, the commits that will actually land must retain
 the reviewed markers: a corrected PR title alone is insufficient for merge or
 rebase workflows. For a fragment-driven tool, review its authoritative entries.
@@ -174,6 +178,12 @@ together. A moving branch, tag-shaped string, green syntax check, old review or
 ordinary merged PR is not release authorization. Revalidate the exact source
 that will be published using the project's supported merge strategy. Keep
 untrusted PR code/text away from publication credentials and shell interpolation.
+For a multi-platform binary or installer release, keep native Windows and
+WSL2/Linux evidence separate: the native Windows installer must select its
+Windows binary, while WSL2 uses the Linux installer and binary. Cross-build
+success proves compilation and linking only; it never replaces native
+macOS/Linux/Windows tests or installer canaries. Missing platform evidence
+blocks publication rather than becoming an inferred pass.
 
 Stage assets before declaring success. Retry only the same candidate; compare
 existing tag targets and asset hashes, and reject conflicts rather than

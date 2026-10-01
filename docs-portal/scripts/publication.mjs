@@ -5,6 +5,7 @@ import path from "node:path";
 import { compareDeterministicText, portablePathKey, safeRelative } from "./lib.mjs";
 
 const PUBLICATION_LIVE_PATHS = new Set([".portal/generated", "src/content/docs", "public"]);
+const COMMITTED_FILE_MODES = new Set([0o644, 0o755]);
 const RESERVED_PUBLIC_FILES = new Set(["llms.txt"]);
 const RESERVED_PUBLIC_PREFIXES = ["markdown", "media"];
 const MAX_PRESERVED_UNKNOWN_BYTES = 64 * 1024 * 1024;
@@ -526,11 +527,19 @@ async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, si
         plannedKeys.add(portable);
         planned.set(safe, content);
       }
+      // A committed file keeps its git mode when published, so generation
+      // leaves the checkout it was read from unchanged.
+      const modes = new Map();
+      for (const [relative, mode] of group.modes ?? []) {
+        const safe = safeRelative(relative, "generated file mode");
+        if (!planned.has(safe) || !COMMITTED_FILE_MODES.has(mode)) throw new Error(`invalid generated file mode: ${safe}`);
+        modes.set(safe, mode);
+      }
       const live = path.join(portalRoot, group.live);
       const stageRelative = `${stageRoot}/${index}`;
       const backupRelative = `${backupRoot}/${index}`;
       transactionGroups.push({ live: group.live, stage: stageRelative, backup: backupRelative, had_live: await exists(live) });
-      preparedGroups.push({ logicalLive: group.live, live, stage: path.join(portalRoot, stageRelative), planned, preserveUnknown: group.preserveUnknown === true });
+      preparedGroups.push({ logicalLive: group.live, live, stage: path.join(portalRoot, stageRelative), planned, modes, preserveUnknown: group.preserveUnknown === true });
     }
     const transaction = { schema_version: 1, phase: "preparing", stage_root: stageRoot, backup_root: backupRoot, groups: transactionGroups };
     validateTransaction(transaction);
@@ -540,7 +549,7 @@ async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, si
     maybeFault("after-journal", faultAt);
     for (const [index, group] of preparedGroups.entries()) {
       await refreshPublicationLease(portalRoot, lease);
-      await prepareOwnedStage(group.logicalLive, group.live, group.stage, group.planned, group.preserveUnknown, testHooks);
+      await prepareOwnedStage(group.logicalLive, group.live, group.stage, group.planned, group.modes, group.preserveUnknown, testHooks);
       maybeFault(`after-prepare-${index}`, faultAt);
     }
     transaction.phase = "prepared";
@@ -577,7 +586,7 @@ async function publishOwnedCorpusLocked(portalRoot, groups, { faultAt = null, si
   }
 }
 
-async function prepareOwnedStage(logicalLive, live, stage, planned, preserveUnknown, testHooks) {
+async function prepareOwnedStage(logicalLive, live, stage, planned, modes, preserveUnknown, testHooks) {
   const { inventory } = await inspectOwnedDirectory(live, preserveUnknown, logicalLive === "public");
   const owned = new Set(inventory ?? []);
   await rm(stage, { recursive: true, force: true });
@@ -591,7 +600,7 @@ async function prepareOwnedStage(logicalLive, live, stage, planned, preserveUnkn
     if (planned.has(relative)) throw new Error(`refusing to overwrite unowned generated path: ${path.join(live, relative)}`);
     const source = path.join(live, relative);
     const remaining = MAX_PRESERVED_UNKNOWN_BYTES - preservedBytes;
-    const bytes = await readBoundedRegularFile(source, remaining, "preserved unknown portal file", {
+    const { bytes, mode } = await readStableRegularFile(source, remaining, "preserved unknown portal file", {
       afterOpen: testHooks.afterPreservedOpen === undefined ? undefined : () => testHooks.afterPreservedOpen(source),
     });
     preservedBytes += bytes.length;
@@ -599,9 +608,10 @@ async function prepareOwnedStage(logicalLive, live, stage, planned, preserveUnkn
     await assertNoSymlink(live, path.posix.dirname(relative));
     await assertNoSymlink(stage, path.posix.dirname(relative));
     await mkdir(path.dirname(destination), { recursive: true });
-    await writeText(destination, bytes);
+    // Keep the preserved file's mode, read from the validated open file.
+    await writeText(destination, bytes, mode);
   }
-  for (const [relative, content] of planned) await writeText(path.join(stage, relative), content);
+  for (const [relative, content] of planned) await writeText(path.join(stage, relative), content, modes.get(relative));
   await writeText(path.join(stage, ".codeflow-generated.json"), `${JSON.stringify({ schema_version: 1, files: [...planned.keys()].sort(compareDeterministicText) }, null, 2)}\n`);
 }
 
@@ -714,12 +724,17 @@ async function syncDirectory(directory) {
   catch (error) { if (!["EINVAL", "ENOTSUP", "EISDIR"].includes(error?.code)) throw error; }
 }
 
-export async function writeText(file, text) {
+export async function writeText(file, text, mode) {
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
   try {
     const handle = await open(temporary, "wx", 0o600);
-    try { await handle.writeFile(text, "utf8"); await handle.sync(); }
+    try {
+      await handle.writeFile(text, "utf8");
+      // An explicit mode is exact, whatever the umask; the default is private.
+      if (mode !== undefined && process.platform !== "win32") await handle.chmod(mode);
+      await handle.sync();
+    }
     finally { await handle.close(); }
     await rename(temporary, file);
     await syncDirectory(path.dirname(file));
@@ -847,6 +862,10 @@ export async function hashBoundedRegularFile(file, maximumBytes, label = "file",
 }
 
 export async function readBoundedRegularFile(file, maximumBytes, label = "file", testHooks = {}) {
+  return (await readStableRegularFile(file, maximumBytes, label, testHooks)).bytes;
+}
+
+async function readStableRegularFile(file, maximumBytes, label, testHooks) {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0) throw new Error("maximumBytes: expected a non-negative safe integer");
   if (testHooks.afterOpen !== undefined && typeof testHooks.afterOpen !== "function") throw new Error("afterOpen: expected a function");
   const { handle, opened } = await openStableRegularFile(file, maximumBytes, label);
@@ -866,7 +885,7 @@ export async function readBoundedRegularFile(file, maximumBytes, label = "file",
       position += result.bytesRead;
     }
     await assertStableRegularFile(file, handle, opened, bytes, label);
-    return Buffer.concat(chunks, bytes);
+    return { bytes: Buffer.concat(chunks, bytes), mode: Number(opened.mode) & 0o777 };
   } finally { await handle.close(); }
 }
 

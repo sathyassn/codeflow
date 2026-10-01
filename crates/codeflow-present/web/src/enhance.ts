@@ -2,9 +2,18 @@ const observed = new WeakSet<Element>();
 const MAX_EAGER_ENHANCEMENT_MILLISECONDS = 5_000;
 
 export function enhanceDocument(root: HTMLElement, eager = false): () => void {
+  for (const stage of root.querySelectorAll<SVGSVGElement>(".block--html .cf-stage-svg")) {
+    const width = stage.viewBox.baseVal.width;
+    if (!Number.isFinite(width) || width <= 0) continue;
+    stage.style.minWidth = `${Math.ceil(width * 0.75)}px`;
+    // A floored stage pans inside its host, so the host takes keyboard focus
+    // and can be scrolled without a pointer.
+    const host = stage.closest<HTMLElement>(".cf-stage-host");
+    if (host && !host.hasAttribute("tabindex")) host.tabIndex = 0;
+  }
   const targets = [
     ...root.querySelectorAll<HTMLElement>("code[data-cf-language]"),
-    ...root.querySelectorAll<HTMLElement>("[data-cf-diagram='pending']"),
+    ...root.querySelectorAll<HTMLElement>("[data-cf-figure-block='pending']"),
   ];
   if (eager || !("IntersectionObserver" in globalThis)) {
     void enhanceSequentially(targets, MAX_EAGER_ENHANCEMENT_MILLISECONDS);
@@ -42,10 +51,8 @@ async function enhanceSequentially(targets: HTMLElement[], budgetMilliseconds: n
 }
 
 function markDeferredFailure(target: HTMLElement): void {
-  if (!target.matches("[data-cf-diagram='pending']")) return;
-  target.dataset.cfDiagram = "failed";
-  const status = target.querySelector<HTMLElement>("[data-cf-diagram-status]");
-  if (status) status.textContent = "Diagram rendering stopped at the local time budget. Its source remains available.";
+  if (!target.matches("[data-cf-figure-block='pending']")) return;
+  void import("./figure").then(({ markFigureFailure }) => markFigureFailure(target, "Figure drawing stopped at the local time budget."));
 }
 
 async function enhance(target: HTMLElement): Promise<void> {
@@ -54,8 +61,8 @@ async function enhance(target: HTMLElement): Promise<void> {
     await highlightCode(target, target.dataset.cfLanguage ?? "");
     return;
   }
-  if (target.matches("[data-cf-diagram='pending']")) {
-    const { renderDiagram } = await import("./diagram");
-    await renderDiagram(target);
+  if (target.matches("[data-cf-figure-block='pending']")) {
+    const { renderFigureBlock } = await import("./figure");
+    renderFigureBlock(target);
   }
 }

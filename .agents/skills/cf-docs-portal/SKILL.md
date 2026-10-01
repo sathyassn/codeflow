@@ -3,42 +3,48 @@ name: cf-docs-portal
 description: Adopt, configure, build, update, transfer, or verify the optional CodeFlow documentation portal for a consuming repository. Use when a project asks for a layered repository guide, browsable technical documentation, source-linked views, Markdown twins or llms.txt, or maintenance and ownership of an adopted portal. Do not use for product UI design, a transient response surface, or ordinary Markdown-only documentation.
 ---
 
-# cf-docs-portal — repository guide utility
+# cf-docs-portal: repository guide utility
 
-Create and maintain a navigable view over repository-owned documentation. The
-portal is a derived utility, never a second source of truth. Product behavior,
-architecture, capabilities, decisions, specs, epics, tasks, and code remain in
-their established files.
+Create and maintain a guide to the project as it stands over repository-owned
+documentation. The portal is a derived utility, never a second source of
+truth. Product behavior, architecture, capabilities, decisions, specs, epics,
+tasks, and code remain in their established files; records are pointed to as
+folders, never listed page by page.
 
-This is a supporting flow inside `cf-model-orchestrator` for non-trivial work.
+This is a supporting flow inside `cf-model-orchestrator` for routed work.
 
 Docs for **this or any consuming repo** reuse the same utility design
 system as `cf-present`: author repository sources; the portal applies
-tokens, altitude, and stage grammar. Do not clone the design-exploration
-board or copy present Comment chrome.
+tokens, altitude and the figure grammar. Do not copy present Comment chrome
+or lifecycle.
 
 **Before theming, layering, or authoring portal pages, load in order:**
 
-1. [resources/utility-presentation-system.md](resources/utility-presentation-system.md)
-   — **canonical** utility presentation system (shared with `cf-present`)
-2. [references/visual-craft.md](references/visual-craft.md) — portal checklist
-3. Other references below as the task requires
+1. [resources/explanation-method.md](resources/explanation-method.md):
+   reader, altitude, carrier, draft, check
+2. [resources/utility-presentation-system.md](resources/utility-presentation-system.md):
+   shared doctrine (ADR-0063)
+3. [resources/figure-grammar.md](resources/figure-grammar.md): families,
+   rules, altitude (ADR-0068)
+4. [resources/design-system/](resources/design-system/README.md): the kit
+5. [references/visual-craft.md](references/visual-craft.md): portal profile
+6. Other references as the task requires
 
-Pass the portal composition gate in the canonical resource. A prose-card wall
-or a marketing layout fails this skill.
+Pass the page composition gate in `references/visual-craft.md`. A prose-card
+wall, a marketing layout, or a page that is the source Markdown re-rendered
+fails this skill: the portal composes sources visually.
 
 Apply `cf-design` only when the **consuming product** needs experience
-direction, never to utility portal themes. Portal themes, Starlight
-components, and utility tokens are never product brand authority, and
-product DS stays out of the portal. Apply `cf-editorial-review` to
-substantive explanatory copy.
+direction, never to utility portal themes; utility tokens and Starlight
+components are never product brand authority; product DS stays out of the
+portal. Apply `cf-editorial-review` by its trigger.
 
 ## 1. Decide whether to adopt
 
 Use the portal when layered browsing, cross-linking, or machine-readable twins
 materially improve understanding. Keep Markdown-only docs when the repository
 is tiny, short-lived, or lacks the durable sources to justify a build
-dependency. Record an honest refusal instead of decorative or empty pages.
+dependency. Record an honest refusal, not decorative or empty pages.
 
 Adoption is explicit:
 
@@ -75,15 +81,12 @@ does not upgrade or repair that runtime. Never transfer merely to clear a failed
 update. Keep valid evidence, dependency review and rendered-quality checks after
 transfer; ownership is not a validation exemption.
 
-Read
-[references/information-architecture.md](references/information-architecture.md)
-before choosing source roots, layers, or more than one portal. It defines the
-single-project and monorepo defaults and the narrow reasons to split.
-Read [references/content-contract.md](references/content-contract.md) before
-changing source interpretation, IDs, relationships, provenance, or stale-page
-behavior. Read [references/operations.md](references/operations.md) before
-installing dependencies, publishing, upgrading, or collecting acceptance
-evidence.
+Read [references/information-architecture.md](references/information-architecture.md)
+before choosing source roots, layers, or more than one portal;
+[references/content-contract.md](references/content-contract.md) before changing
+source interpretation, IDs, relationships, provenance, or stale-page behavior;
+[references/operations.md](references/operations.md) before installing
+dependencies, publishing, upgrading, or collecting acceptance evidence.
 
 ## 3. Build one layered route system
 
@@ -92,37 +95,38 @@ Expose progressive depth where sources support it (altitude grammar):
 ```text
 purpose and mental model                         (concept)
   -> capabilities and journeys
-    -> architecture, decisions, and work         (architecture)
-      -> technical source references and evidence (technical)
+    -> architecture and boundaries in effect     (architecture)
+      -> reference, operations and evidence      (technical)
+records: decisions, epics, tasks and specs are pointed to as folders
 ```
 
-Keep navigation predictable and searchable. Prefer plain language, descriptive
-titles, concise prose, and bullets when they improve scanning. Match an
-established project voice when it exists; otherwise use calm, direct,
-third-person documentation language. Avoid cryptic headings, invented
-personality, gratuitous emoji, and promotional language.
+Keep navigation predictable. Write the pages plainly: simple,
+straightforward and clear, no mannered prose (see
+`.codeflow/rules/writing.md`), with descriptive titles and short prose and
+bullets by default. Follow the copy guide
+(`cf-editorial-review/references/copy-guide.md`) and documented voice.
 
-### Visual craft (utility presentation system—mandatory)
+### Visual craft (utility presentation system, mandatory)
 
-Normative detail:
-[resources/utility-presentation-system.md](resources/utility-presentation-system.md)
-and [references/visual-craft.md](references/visual-craft.md). Page shape example:
+Page shape:
 [resources/portal-page-shape.example.md](resources/portal-page-shape.example.md).
 
-- **Visuals** only when they clarify relationship, hierarchy, state, or flow.
-  Text inside decorated boxes is not a visual explanation.
-- **Architecture-layer sources** each author the altitude trio plus a stage —
-  full-width labeled structure, not caption micro-boxes; verification fails a
-  trio page that shows more than one panel.
-- **Type roles:** display / prose / label / mono-evidence; themes own faces and
-  scale. Do not ship ad-hoc font stacks in content.
-- **Themes:** `signal`/`folio` map to utility skins instrument/ink; readers
-  switch skin, face, scale, and appearance in the Display panel. A project may
+- **Figures** lead every altitude panel and how-to section, one family
+  each, drawn by the figure block in the portal's figure grammar; text in
+  boxes is not a figure.
+- **Explanatory sources** author the altitude trio with a figure framed by
+  short plain prose in every panel; verification fails a trio page showing
+  more than one panel or an explanatory page with no trio.
+- **Records** are one generated page of folder pointers, not portal pages;
+  the adapter's records switch stays off.
+- **Type roles:** display / prose / label / mono-evidence. Display controls
+  face and scale independently of skin; content adds no ad-hoc font stacks.
+- **Themes:** Graphite, Slate and Sage are independent of font; readers
+  switch skin, face, scale and appearance in the Display panel. A project may
   adapt the utility once from its brand; never feed portal palette/type/
   components back into the product design system.
-- **Motion:** minimal; meaning at rest; respect reduced motion and no wrong-mode
+- **Motion:** minimal; meaning at rest; honor reduced motion; no wrong-mode
   flash on first paint.
-- **No present Comment lifecycle** in portal chrome.
 
 For a monorepo, keep global orientation and shared concepts above area or
 surface drill-down. Use multiple `source_roots` and layer paths to expose that
@@ -130,13 +134,13 @@ graph; do not dump one navigation folder per package or duplicate shared prose.
 
 ## 4. Preserve evidence and safety
 
-Run the locked workflow from the adopted portal root:
+Run what the change needs from the portal root: content gets the block
+below; navigation, search, theme, runtime or accessibility also section 5.
 
 ```sh
 npm run deps:install
 npm run check
 npm run build
-npm run browser:verify
 codeflow validate --portal <repository-relative-directory>
 ```
 
@@ -144,7 +148,7 @@ The managed installer verifies the lockfile's lifecycle-script inventory and
 runs the locked install with dependency scripts disabled under a non-secret
 environment allowlist. Do not replace it with plain `npm ci` or an ad-hoc
 `npm rebuild`; follow the reviewed-exception process in `references/operations.md`
-if a future pinned dependency genuinely requires a lifecycle script.
+if a pinned dependency genuinely requires a lifecycle script.
 
 The Node adapter alone derives the content graph and evidence manifest. The
 Rust validator executes no project code and writes nothing; it verifies the

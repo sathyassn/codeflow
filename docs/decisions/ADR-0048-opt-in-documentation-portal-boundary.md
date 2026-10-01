@@ -1,5 +1,6 @@
 ---
 id: ADR-0048
+uid: 1a48fa65-7d23-411b-b4a1-2e1fb99f2da3
 title: isolate portal adoption and verify derived evidence
 date: 2026-08-01
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: ADR-0058
 architecture_impact: docs/architecture.md — an opt-in managed portal starter is embedded once outside the mirrored skills, while validate gains a read-only verifier for its derived evidence manifest
 ---
 
-# ADR-0048 — isolate portal adoption and verify derived evidence
+# ADR-0048: isolate portal adoption and verify derived evidence
 
 ## Context
 

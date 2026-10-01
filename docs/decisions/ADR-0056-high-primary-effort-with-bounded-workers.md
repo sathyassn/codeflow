@@ -1,5 +1,6 @@
 ---
 id: ADR-0056
+uid: b8347aae-67fc-41f6-88a8-689c3babe070
 title: High primary effort with bounded workers
 date: 2026-09-07
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — development primaries default to high; worker effort remains task-dependent
 ---
 
-# ADR-0056 — high primary effort with bounded workers
+# ADR-0056: high primary effort with bounded workers
 
 ## Context
 

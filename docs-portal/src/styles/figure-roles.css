@@ -1,0 +1,26 @@
+/* The figure sheet reads --cf-fig-* tokens. Until the product token sets carry
+   them (TSK-060), this bridge maps each one to the portal role it stands for,
+   so every figure colour follows the active skin and appearance. */
+:root {
+  --cf-fig-font: var(--cf-font-sans);
+  --cf-fig-mono: var(--cf-font-mono);
+  --cf-fig-ground: var(--cf-surface);
+  --cf-fig-rule: var(--cf-border);
+  --cf-fig-line: var(--cf-diagram-line);
+  --cf-fig-line-mid: var(--cf-text-muted);
+  --cf-fig-line-soft: color-mix(in srgb, var(--cf-text-muted) 55%, var(--cf-surface));
+  --cf-fig-fill: var(--cf-surface-subtle);
+  --cf-fig-hatch: var(--cf-border-strong);
+  --cf-fig-accent: var(--cf-accent);
+  --cf-fig-warn: var(--cf-warning);
+  --cf-fig-stop: var(--cf-danger);
+  --cf-fig-na-alpha: 0.5;
+}
+:root[data-theme="dark"] { --cf-fig-na-alpha: 0.65; }
+
+/* A companion figure says where it comes from, under the figure. The
+   companion opts out of Starlight's content styles (not-content), which
+   would otherwise reach the figure's legend keys and twin marker, so the
+   source line sets its own inline code. */
+.cf-companion-source { margin: -6px 0 18px; font-size: var(--cf-fs-caption); color: var(--cf-text-muted); }
+.cf-companion-source code { padding: 0.125rem 0.375rem; font-size: var(--sl-text-code-sm); background-color: var(--sl-color-bg-inline-code); }

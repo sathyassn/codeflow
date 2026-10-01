@@ -1,37 +1,56 @@
 <!-- Linted by `codeflow ci`: no AI attribution, no emoji, no em or en dash.
-     The five sections below are always present, in this order. Conditional
-     sections are listed at the end. Aim for about 65 rows wrapped at 100
-     columns for a task PR, about 80 with Whole-flow evidence, and about 90
-     for an epic; never drop evidence to fit. A figure here is a fenced
-     ASCII block, never Mermaid. -->
+     Write it plainly: simple, straightforward and clear, no mannered prose
+     (see `.codeflow/rules/writing.md`).
+     The sections a PR needs follow what its range touches. A range with
+     code, config, scripts, shipped templates or agent instructions needs
+     the sections below, in this order. A range of only documentation files
+     leaves out Testing. A range of only Markdown under
+     docs/ or project-management/, outside product, watched contract and
+     template paths, needs Summary and Changes; Testing and Reviews are
+     optional there. Conditional sections are listed at the end.
+     `codeflow ci` warns on unclosed HTML and on a Testing section with no
+     `Not tested:` line. Link records instead of copying them; never drop
+     evidence to shorten the body. A figure here is a fenced ASCII block,
+     never Mermaid. -->
+
+<!-- Every PR names its work. Where durable tracking is active: TSK-NNN, or
+     EPC-NNN for the breakdown PR and the PR to main. Where it is not: the
+     name of the harness's tracked unit. A missing or empty line is refused. -->
+Task: `TSK-NNN | EPC-NNN | <unit name>`
 
 ## Summary
 
-<!-- One to three short sentences of context: what this is, why, and the
-     outcome, for a reader with no context. No file names, identifiers,
-     numbers or caveats; details go in Changes. Cover the whole branch:
+<!-- A few lines of plain prose that anchor a reader with no context: the
+     result this gives its consumer, why it matters and where it stands. A
+     key file name or number belongs here when it is part of that context;
+     other details go in Changes. Cover the whole branch:
      derive from `git log --oneline <base>..<head>` and
      `git diff --stat <base>...<head>`, and inspect the full diff. Do not
-     write from the last conversation turn, review round or commit. -->
+     write from the last conversation turn, review round or commit. Where
+     `cf-editorial-review` is installed, its copy guide has the full rules;
+     otherwise this comment is the whole rule. -->
 
 ## Changes
 
 <!-- One bullet per logical change, most important first; number them only
-     for a sequence. About eight for a task PR; one line per task for an
-     epic. -->
+     for a sequence; one line per task for an epic. -->
 
 -
 
 ## Testing
 
-<!-- Evidence already run: the tested revision and command, then the gate's
-     summary lines in a fenced block (about twelve lines, never a full log).
+<!-- Evidence already run: the tested revision and command, then the
+     summary lines in a fenced block, never a full log. A task PR pastes its
+     targeted tests and its quick run; the full gate on the landing
+     candidate is cited by run id and revision when the batch lands, and a
+     standalone PR runs it as its own candidate.
      Coverage when the range is code: the measured TOTAL from the project's
      command; name revision, command, metric, and scope; CI PASS alone is
      insufficient; unmeasured is a stated gap. New tests: count and suites.
-     Missing required checks keep the PR draft. Docs only: say so and name
-     the doc checks run; scripts, hook settings, shipped templates and agent
-     instructions are not docs only. -->
+     Missing required checks keep the PR draft. Docs or planning only: the
+     section is optional; when kept, say so and name the doc checks run.
+     Scripts, hook settings, shipped templates and agent instructions are
+     not docs only. -->
 
 - Revision and command:
 
@@ -55,7 +74,9 @@
 
 ## Release impact
 
-<!-- Impact is the change level a consumer sees; the project's release
+<!-- Required on a PR into a protected branch or whose range carries a
+     breaking commit; elsewhere optional, and checked whenever present.
+     Impact is the change level a consumer sees; the project's release
      policy maps it to a version and names the level a break takes.
      Breaking states compatibility. Choose each value; never leave the
      alternatives. Migration is normally `none` for nonbreaking work; it

@@ -1,5 +1,6 @@
 ---
 id: ADR-0050
+uid: 4e7af7d4-3340-4941-82ac-80cf85f27417
 title: versioned cf-present document and session contract
 date: 2026-08-01
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: add versioned presentation documents, immutable revisions, anchor selectors, and feedback delivery semantics
 ---
 
-# ADR-0050 — versioned cf-present document and session contract
+# ADR-0050: versioned cf-present document and session contract
 
 ## Context
 

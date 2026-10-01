@@ -9,24 +9,31 @@
 - Build only from one clean, full Git commit. Read configuration, source
   Markdown, optional primitive tokens, and referenced local media from bounded
   Git blobs at that commit. Compare the adopted runtime and every configured
-  worktree input—configuration, source Markdown, optional primitive tokens,
-  and referenced media—byte-for-byte with those blobs; dirty, staged, deleted,
+  worktree input (configuration, source Markdown, optional primitive tokens,
+  and referenced media) byte-for-byte with those blobs; dirty, staged, deleted,
   untracked, ignored, inaccessible, masked (`assume-unchanged` or
   `skip-worktree`), or changing inputs block publication. Read worktree files
   through bounded, no-follow handles and order evidence with the starter's
   locale-independent comparator. Never label worktree bytes with `HEAD`.
 - Resolve relationships from declared frontmatter and strict stable IDs. Inline
-  ID mentions may become links, but never invent a declared dependency.
+  ID mentions may become links, but never invent a declared dependency. An ID
+  whose record is not a portal source links to the repository file, or to the
+  pointer page for its folder; it is never a dangling link and never a page.
 - Depth-2 `Concept` / `Architecture` / `Technical` sections are the altitude
   grammar: the adapter renders the trio as a tablist with one visible panel in
   the derived page only. Sources stay plain Markdown; raw source HTML stays
   escaped.
-- A leading depth-1 heading that repeats the page title — exactly, or with
-  only a record-ID prefix such as `ADR-0001 —` — renders once (the shell
+- A leading depth-1 heading that repeats the page title, exactly or with
+  only a record-ID prefix such as `ADR-0001:`, renders once (the shell
   already shows the title); any other heading is author content.
 - A `cf-stage` fence is generated-figure input: bounded node/stage/caption
   grammar, every text field escaped, roles whitelisted. An invalid figure
   produces the bounded error page, never partial or unescaped output.
+- A figure declaration bound in `portal.config.json` is generated-figure input
+  under the same pins as a source: the build refuses a declaration that fails
+  the grammar, a fact its source does not give, or a binding to a missing
+  route or anchor. An illustrated or pass-through source keeps its bytes; the
+  page and its Markdown twin attribute companion figures to the declaration.
 - Treat an explicit ID or relationship field as authority: a wrong type,
   malformed ID, invalid target, or duplicate key produces the bounded error
   page. Infer a supported ID from the filename only when `id` is absent.
@@ -65,6 +72,9 @@ blobs whose signatures, headers, dimensions, and aggregate pixel/byte budgets
 are verified and recorded in evidence. Remote images, active
 SVG/PDF copies, traversal, unsupported schemes, and broken targets fail closed;
 ordinary HTTPS and mail links remain links and are never fetched.
+For authors: on the portal and in present a figure is inline SVG through the
+figure block, in a README it is the ASCII chat form, and in a chat reply the
+surface rule in `cf-method/references/workflow-lifecycle.md` picks the form.
 Pin source links to the evidenced commit on known GitHub, GitLab, and Bitbucket
 HTTPS repository URLs. A committed document excluded from the portal remains a
 pinned provider file link. A relative link to a committed directory uses the

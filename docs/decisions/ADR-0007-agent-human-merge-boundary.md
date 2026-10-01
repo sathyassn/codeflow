@@ -1,6 +1,7 @@
 ---
 id: ADR-0007
-title: agent/human merge boundary — protected-branch merge and ref controls
+uid: 5354e7b9-89ae-4e8a-b8b1-364235568792
+title: "agent and human merge boundary: protected branch merge and ref controls"
 date: 2026-07-02
 status: accepted
 superseded_by: null
@@ -10,7 +11,7 @@ architecture_impact: docs/architecture.md — doctor check count 6→7 (adds rep
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0007 — agent/human merge boundary
+# ADR-0007: agent/human merge boundary
 
 ## Context
 

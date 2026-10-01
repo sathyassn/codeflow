@@ -243,6 +243,8 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
         "check-runs?filter=all&per_page=100",
         "actions/workflows/codeflow-ci.yml/runs?branch=main&event=push&head_sha=",
         "--runs-state /tmp/authority-runs.json",
+        "actions/workflows/codeflow-release.yml/runs?branch=main&event=push&head_sha=",
+        "--runs-state /tmp/authority-release-runs.json",
         "scripts/release.py verify-publication",
         "scripts/release.py host-state",
         "scripts/release.py verify-host-state",
@@ -271,6 +273,11 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
         recheck.contains("actions/workflows/codeflow-ci.yml/runs?branch=main&event=push&head_sha=")
     );
     assert!(recheck.contains("--runs-state /tmp/authority-runs.json"));
+    // TSK-106: the release-state check runs in its own workflow, whose
+    // latest main-push run publication reads as well.
+    assert!(recheck
+        .contains("actions/workflows/codeflow-release.yml/runs?branch=main&event=push&head_sha="));
+    assert!(recheck.contains("--runs-state /tmp/authority-release-runs.json"));
     assert!(recheck.contains("--source \"$GITHUB_SHA\""));
     assert!(recheck.contains("--main-source \"$main_sha\""));
     assert!(recheck.contains("GITHUB_TRIGGERING_ACTOR"));
@@ -297,21 +304,28 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
 fn strict_repository_gate_installs_its_declared_coverage_tool() {
     let workflow = fs::read_to_string(workspace_root().join(".github/workflows/codeflow-ci.yml"))
         .expect("repository CI workflow must be readable");
-    assert!(workflow.contains("types: [opened, synchronize, reopened, edited]"));
-    let release_impact = workflow
+    // TSK-106: the release jobs, and the body-edit trigger they need, run
+    // from the CodeFlow-only release workflow with a pinned checkout.
+    assert!(!workflow.contains("release-impact:"));
+    let release =
+        fs::read_to_string(workspace_root().join(".github/workflows/codeflow-release.yml"))
+            .expect("release workflow must be readable");
+    assert!(release.contains("types: [opened, synchronize, reopened, edited]"));
+    let release_impact = release
         .split("  release-impact:\n")
         .nth(1)
         .expect("release-impact job must exist")
-        .split("\n  gates:")
+        .split("\n  release-state:")
         .next()
-        .expect("release-impact must precede gates");
+        .expect("release-impact must precede release-state");
     assert!(release_impact.contains("actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"));
     let gates = workflow
         .split("\n  rust:")
         .next()
         .expect("codeflow gates job must precede the Rust job");
+    // TSK-184: one pinned install step supplies nextest and llvm-cov.
     let install = gates
-        .find("uses: taiki-e/install-action@cargo-llvm-cov")
+        .find("cargo-llvm-cov@")
         .expect("strict gate must install cargo-llvm-cov on a clean runner");
     let strict = gates
         .find("run: codeflow test --mode full --strict")

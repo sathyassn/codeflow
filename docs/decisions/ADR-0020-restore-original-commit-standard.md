@@ -1,6 +1,7 @@
 ---
 id: ADR-0020
-title: restore the original commit standard — 50/72 subject, bullet-only body, block-enforced
+uid: 3cb29038-ac1b-4d80-81a4-1f1635bf8856
+title: "restore the original commit standard: 50/72 subject, bullet only body, block enforced"
 date: 2026-07-12
 status: accepted
 superseded_by: null
@@ -10,7 +11,7 @@ architecture_impact: The four enforcement planes are unchanged in shape; this ad
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0020 — restore the original commit standard
+# ADR-0020: restore the original commit standard
 
 ## Context
 

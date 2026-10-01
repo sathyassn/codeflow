@@ -1,13 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use pulldown_cmark::{Event, Options, Parser};
+use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{PresentError, Result},
     limits,
     media::matches_declared_media,
+    retired::refuse_retired_blocks,
     safe_html::{validate_sandbox_html, visible_text_from_html},
 };
 
@@ -20,6 +21,9 @@ pub struct PresentationDocument {
     pub language: Option<String>,
     #[serde(default)]
     pub provenance: Provenance,
+    /// Schema v2: a one-line summary `present list` shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     pub blocks: Vec<Block>,
 }
 
@@ -58,16 +62,43 @@ pub enum Block {
         id: String,
         columns: Vec<ComparisonColumn>,
     },
+    /// Schema v1: a decision the author states, with its `status`.
+    /// Schema v2: a question with one choice (`options`, an optional
+    /// `rationale` mode) that the reviewer answers; it has no `status`
+    /// (SPC-014 B6).
     Decision {
         id: String,
         title: String,
-        status: DecisionStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<DecisionStatus>,
         markdown: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        options: Option<Vec<crate::form::Choice>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rationale: Option<crate::form::RationaleMode>,
+    },
+    /// Schema v2: typed questions the reviewer answers (SPC-014 B6). The
+    /// runtime renders the fields; answers are stored against the revision
+    /// shown.
+    Form {
+        id: String,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        markdown: Option<String>,
+        fields: Vec<crate::form::FormField>,
+        #[serde(default)]
+        required: Vec<String>,
     },
     Table {
         id: String,
         columns: Vec<String>,
         rows: Vec<Vec<String>>,
+        /// Schema v2: required; the runtime renders "Table N · title".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        /// Schema v2: optional.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
     },
     Status {
         id: String,
@@ -79,24 +110,30 @@ pub enum Block {
         code: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caption: Option<String>,
+        /// Schema v2: the repository file the snippet was captured from
+        /// (SPC-014 B10); `open` and `update` record its provenance.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<SnapshotSource>,
     },
     Diff {
         id: String,
         diff: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caption: Option<String>,
+        /// Schema v2, as on `code`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<SnapshotSource>,
     },
     Tree {
         id: String,
         label: String,
         nodes: Vec<TreeNode>,
     },
-    Diagram {
+    /// A figure-grammar declaration (`figure-grammar.md`), drawn on the
+    /// client by the grammar module the docs portal also runs.
+    Figure {
         id: String,
-        kind: DiagramKind,
-        source: String,
-        acc_title: String,
-        acc_description: String,
+        declaration: serde_json::Value,
     },
     Media {
         id: String,
@@ -124,7 +161,30 @@ pub enum Block {
         html: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// Schema v2: required; every v2 stage is a framed figure.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+        /// Schema v2: optional, 1 to 12 entries.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        legend: Option<Vec<LegendEntry>>,
+        /// Schema v2: optional, shown in the Details disclosure.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotSource {
+    /// A repository-relative path: no leading slash, no `..`, no backslash.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LegendEntry {
+    pub label: String,
+    pub means: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -144,18 +204,6 @@ pub enum DecisionStatus {
     Accepted,
     Rejected,
     Open,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagramKind {
-    Flowchart,
-    Sequence,
-    Timeline,
-    State,
-    Class,
-    EntityRelationship,
-    Mindmap,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -258,19 +306,20 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParsedDocument> {
                 "schema_version must be a non-negative 32-bit integer".to_string(),
             )
         })?;
-    if version > limits::SCHEMA_VERSION {
+    if version > limits::MAX_DOCUMENT_SCHEMA_VERSION {
         return Ok(ParsedDocument::Unsupported {
             schema_version: version,
             raw: raw.to_string(),
         });
     }
-    if version != limits::SCHEMA_VERSION {
+    if version == 0 {
         return Err(PresentError::UnsupportedSchema {
             found: version,
-            supported: limits::SCHEMA_VERSION,
+            supported: limits::MAX_DOCUMENT_SCHEMA_VERSION,
         });
     }
 
+    refuse_retired_blocks(&probe)?;
     let document: PresentationDocument = serde_json::from_value(probe)?;
     document.validate()?;
     Ok(ParsedDocument::Supported(document))
@@ -278,27 +327,297 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParsedDocument> {
 
 impl PresentationDocument {
     pub fn validate(&self) -> Result<()> {
+        let version = self.schema_version;
+        if !(1..=limits::MAX_DOCUMENT_SCHEMA_VERSION).contains(&version) {
+            return Err(PresentError::UnsupportedSchema {
+                found: version,
+                supported: limits::MAX_DOCUMENT_SCHEMA_VERSION,
+            });
+        }
         require_nonempty_bounded("title", &self.title, limits::MAX_TITLE_BYTES)?;
         if let Some(language) = &self.language {
             validate_language(language)?;
         }
         validate_provenance(&self.provenance)?;
+        match (&self.summary, version) {
+            (None, _) => {}
+            (Some(_), 1) => return Err(needs_v2("summary", "the document")),
+            (Some(summary), _) => {
+                let characters = summary.trim().chars().count();
+                if characters == 0
+                    || summary.contains(['\n', '\r'])
+                    || summary.chars().count() > limits::MAX_SUMMARY_CHARS
+                {
+                    return Err(invalid(format!(
+                        "summary must be 1 to {} characters",
+                        limits::MAX_SUMMARY_CHARS
+                    )));
+                }
+            }
+        }
         if self.blocks.is_empty() {
             return Err(invalid("blocks must not be empty"));
         }
         let mut ids = HashSet::new();
         let mut count = 0;
-        let mut diagram_count = 0;
+        let mut drawn_count = 0;
         let mut collection_items = 0;
         validate_blocks(
             &self.blocks,
+            version,
             1,
             &mut count,
-            &mut diagram_count,
+            &mut drawn_count,
             &mut collection_items,
             &mut ids,
-        )
+        )?;
+        if version >= 2 {
+            validate_references(self)?;
+            let forms = self
+                .walk()
+                .into_iter()
+                .filter(|block| crate::form::FormView::of(block).is_some())
+                .count();
+            if forms > limits::MAX_FORMS_PER_DOCUMENT {
+                return Err(invalid(format!(
+                    "a document holds at most {} form and decision blocks; this one holds {forms}",
+                    limits::MAX_FORMS_PER_DOCUMENT
+                )));
+            }
+        }
+        Ok(())
     }
+
+    /// Every block in document order, depth first through disclosures and
+    /// tabs.
+    #[must_use]
+    pub fn walk(&self) -> Vec<&Block> {
+        let mut output = Vec::new();
+        walk_blocks(&self.blocks, &mut output);
+        output
+    }
+}
+
+fn walk_blocks<'a>(blocks: &'a [Block], output: &mut Vec<&'a Block>) {
+    for block in blocks {
+        output.push(block);
+        match block {
+            Block::Disclosure { blocks, .. } => walk_blocks(blocks, output),
+            Block::Tabs { tabs, .. } => {
+                for tab in tabs {
+                    walk_blocks(&tab.blocks, output);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What a framed block is numbered as (SPC-014 B5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameKind {
+    Figure,
+    Table,
+}
+
+impl FrameKind {
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self {
+            Self::Figure => "Figure",
+            Self::Table => "Table",
+        }
+    }
+
+    pub(crate) const fn reference_prefix(self) -> &'static str {
+        match self {
+            Self::Figure => "fig",
+            Self::Table => "table",
+        }
+    }
+
+    /// The frame kind a block is numbered as in a v2 document.
+    #[must_use]
+    pub const fn of(block: &Block) -> Option<Self> {
+        match block {
+            Block::Figure { .. } | Block::Html { .. } => Some(Self::Figure),
+            Block::Table { .. } => Some(Self::Table),
+            _ => None,
+        }
+    }
+}
+
+/// The document-level framing a v2 document gets: figure and table numbers
+/// by a depth-first walk, and references resolved to them. A v1 document
+/// has none, so its references stay literal text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Framing {
+    enabled: bool,
+    numbers: HashMap<String, (FrameKind, usize)>,
+}
+
+impl Framing {
+    #[must_use]
+    pub fn of(document: &PresentationDocument) -> Self {
+        if document.schema_version < 2 {
+            return Self::default();
+        }
+        let mut numbers = HashMap::new();
+        let (mut figures, mut tables) = (0, 0);
+        for block in document.walk() {
+            let number = match FrameKind::of(block) {
+                Some(FrameKind::Figure) => {
+                    figures += 1;
+                    (FrameKind::Figure, figures)
+                }
+                Some(FrameKind::Table) => {
+                    tables += 1;
+                    (FrameKind::Table, tables)
+                }
+                None => continue,
+            };
+            numbers.insert(block.id().to_string(), number);
+        }
+        Self {
+            enabled: true,
+            numbers,
+        }
+    }
+
+    /// Whether this is a v2 document's framing (numbers and references).
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn number(&self, block_id: &str) -> Option<(FrameKind, usize)> {
+        self.numbers.get(block_id).copied()
+    }
+
+    /// "Figure N" or "Table N" for a reference, when it resolves.
+    #[must_use]
+    pub fn reference_label(&self, kind: FrameKind, block_id: &str) -> Option<String> {
+        self.number(block_id)
+            .filter(|(numbered, _)| *numbered == kind)
+            .map(|(kind, number)| format!("{} {number}", kind.noun()))
+    }
+}
+
+/// A run of Markdown text split at `[fig:<id>]` and `[table:<id>]`
+/// references.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TextSegment<'a> {
+    Text(&'a str),
+    Reference { kind: FrameKind, id: &'a str },
+}
+
+pub(crate) fn reference_segments(text: &str) -> Vec<TextSegment<'_>> {
+    let mut segments = Vec::new();
+    let mut literal_start = 0;
+    let mut index = 0;
+    while let Some(offset) = text[index..].find('[') {
+        let open = index + offset;
+        let found = [FrameKind::Figure, FrameKind::Table]
+            .into_iter()
+            .find_map(|kind| {
+                let rest = text[open + 1..].strip_prefix(kind.reference_prefix())?;
+                let rest = rest.strip_prefix(':')?;
+                let close = rest.find(']')?;
+                let id = &rest[..close];
+                valid_block_id(id).then_some((kind, id))
+            });
+        match found {
+            Some((kind, id)) => {
+                if literal_start < open {
+                    segments.push(TextSegment::Text(&text[literal_start..open]));
+                }
+                segments.push(TextSegment::Reference { kind, id });
+                index = open + 1 + kind.reference_prefix().len() + 1 + id.len() + 1;
+                literal_start = index;
+            }
+            None => index = open + 1,
+        }
+    }
+    if literal_start < text.len() {
+        segments.push(TextSegment::Text(&text[literal_start..]));
+    }
+    segments
+}
+
+/// Markdown events with adjacent text runs merged, so a reference the parser
+/// split at its brackets reads as one run. Text inside a link is marked so
+/// references there stay literal.
+pub(crate) fn coalesced_markdown(markdown: &str) -> Vec<(Event<'_>, bool)> {
+    let mut output: Vec<(Event<'_>, bool)> = Vec::new();
+    let mut link_depth = 0_usize;
+    for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
+        match &event {
+            Event::Start(Tag::Link { .. }) => link_depth += 1,
+            Event::End(TagEnd::Link) => link_depth = link_depth.saturating_sub(1),
+            _ => {}
+        }
+        let in_link = link_depth > 0;
+        if let (Event::Text(next), Some((Event::Text(previous), previous_in_link))) =
+            (&event, output.last_mut())
+        {
+            if *previous_in_link == in_link {
+                *previous = CowStr::Boxed(format!("{previous}{next}").into_boxed_str());
+                continue;
+            }
+        }
+        output.push((event, in_link));
+    }
+    output
+}
+
+fn validate_references(document: &PresentationDocument) -> Result<()> {
+    let kinds = document
+        .walk()
+        .into_iter()
+        .map(|block| (block.id(), FrameKind::of(block)))
+        .collect::<HashMap<_, _>>();
+    for block in document.walk() {
+        for markdown in block.markdown_fields() {
+            for (event, in_link) in coalesced_markdown(markdown) {
+                let Event::Text(text) = event else {
+                    continue;
+                };
+                if in_link {
+                    continue;
+                }
+                for segment in reference_segments(&text) {
+                    let TextSegment::Reference { kind, id } = segment else {
+                        continue;
+                    };
+                    let reference = format!("[{}:{id}]", kind.reference_prefix());
+                    match kinds.get(id) {
+                        None => {
+                            return Err(invalid(format!(
+                                "block {}: the reference {reference} names no block",
+                                block.id()
+                            )))
+                        }
+                        Some(found) if *found != Some(kind) => {
+                            return Err(invalid(format!(
+                            "block {}: the reference {reference} names a block that is not a {}",
+                            block.id(),
+                            kind.noun().to_lowercase()
+                        )))
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn needs_v2(field: &str, owner: &str) -> PresentError {
+    invalid(format!(
+        "{field} on {owner} is a schema_version 2 field; set schema_version 2 or remove it"
+    ))
 }
 
 impl Block {
@@ -310,12 +629,13 @@ impl Block {
             | Self::Callout { id, .. }
             | Self::Comparison { id, .. }
             | Self::Decision { id, .. }
+            | Self::Form { id, .. }
             | Self::Table { id, .. }
             | Self::Status { id, .. }
             | Self::Code { id, .. }
             | Self::Diff { id, .. }
             | Self::Tree { id, .. }
-            | Self::Diagram { id, .. }
+            | Self::Figure { id, .. }
             | Self::Media { id, .. }
             | Self::Disclosure { id, .. }
             | Self::Tabs { id, .. }
@@ -324,75 +644,90 @@ impl Block {
         }
     }
 
+    /// The Markdown fields of this block, in which v2 references resolve.
     #[must_use]
-    pub fn canonical_review_text(&self) -> String {
+    pub fn markdown_fields(&self) -> Vec<&str> {
+        match self {
+            Self::Narrative { markdown, .. }
+            | Self::Callout { markdown, .. }
+            | Self::Decision { markdown, .. } => vec![markdown],
+            Self::Form { markdown, .. } => markdown.iter().map(String::as_str).collect(),
+            Self::Bullets { items, .. } => items.iter().map(String::as_str).collect(),
+            Self::Comparison { columns, .. } => columns
+                .iter()
+                .map(|column| column.markdown.as_str())
+                .collect(),
+            Self::Table { rows, .. } => rows.iter().flatten().map(String::as_str).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The text a text note is anchored in. In a v2 document a reference
+    /// reads as its rendered label ("Figure 1"), as the page shows it.
+    #[must_use]
+    pub fn canonical_review_text(&self, framing: &Framing) -> String {
+        let markdown_text = |markdown: &str| markdown_text(markdown, framing);
         match self {
             Self::Narrative { markdown, .. } => markdown_text(markdown),
             Self::Callout {
                 title, markdown, ..
-            } => format!(
-                "{}{}",
-                title.as_deref().unwrap_or_default(),
-                markdown_text(markdown)
-            ),
+            } => join_parts([title.clone().unwrap_or_default(), markdown_text(markdown)]),
             Self::Decision {
                 title,
-                status,
+                status: Some(status),
                 markdown,
                 ..
-            } => format!("{title}{status:?}{}", markdown_text(markdown)),
-            Self::Bullets { items, .. } => items.iter().map(|item| markdown_text(item)).collect(),
-            Self::Comparison { columns, .. } => {
-                let mut output = String::new();
-                for column in columns {
-                    output.push_str(&column.title);
-                    output.push_str(&markdown_text(&column.markdown));
-                }
-                output
-            }
-            Self::Table { columns, rows, .. } => columns
-                .iter()
-                .cloned()
-                .chain(rows.iter().flatten().map(|cell| markdown_text(cell)))
-                .collect(),
-            Self::Status { items, .. } => {
-                let mut output = String::new();
-                for item in items {
-                    output.push_str(&item.label);
-                    output.push_str(item.detail.as_deref().unwrap_or_default());
-                }
-                output
-            }
+            } => join_parts([
+                title.clone(),
+                format!("{status:?}"),
+                markdown_text(markdown),
+            ]),
+            Self::Decision { .. } | Self::Form { .. } => form_review_text(self, framing),
+            Self::Bullets { items, .. } => join_parts(items.iter().map(|item| markdown_text(item))),
+            Self::Comparison { columns, .. } => join_parts(
+                columns
+                    .iter()
+                    .flat_map(|column| [column.title.clone(), markdown_text(&column.markdown)]),
+            ),
+            Self::Table { columns, rows, .. } => join_parts(
+                columns
+                    .iter()
+                    .cloned()
+                    .chain(rows.iter().flatten().map(|cell| markdown_text(cell))),
+            ),
+            Self::Status { items, .. } => join_parts(
+                items
+                    .iter()
+                    .flat_map(|item| [item.label.clone(), item.detail.clone().unwrap_or_default()]),
+            ),
             Self::Code { code, caption, .. } => {
-                format!("{}{}", caption.as_deref().unwrap_or_default(), code)
+                join_parts([caption.clone().unwrap_or_default(), code.clone()])
             }
             Self::Diff { diff, caption, .. } => {
                 let mut output = caption.clone().unwrap_or_default();
+                if !output.is_empty() {
+                    output.push('\n');
+                }
+                // What the reader sees and selects: a changed line without its
+                // marker, and without the screen-reader label the page gives it.
                 for line in diff.lines() {
-                    if line.starts_with('+') && !line.starts_with("+++") {
-                        output.push_str("Added: ");
-                    } else if line.starts_with('-') && !line.starts_with("---") {
-                        output.push_str("Removed: ");
-                    }
-                    output.push_str(line);
+                    output.push_str(diff_line_parts(line).2);
                     output.push('\n');
                 }
                 output
             }
             Self::Tree { label, nodes, .. } => {
                 let mut output = label.clone();
-                append_tree_text(nodes, &mut output, false);
+                append_tree_text(nodes, &mut output);
                 output
             }
-            Self::Diagram {
-                acc_title,
-                acc_description,
-                source,
-                ..
-            } => format!("{source}{acc_title} — {acc_description}"),
+            Self::Figure { declaration, .. } => {
+                let (title, caption) = figure_text(declaration);
+                join_parts([title, caption])
+            }
             Self::Media { caption, .. } => caption.clone().unwrap_or_default(),
             Self::Disclosure { summary, .. } => summary.clone(),
-            Self::Tabs { tabs, .. } => tabs.iter().map(|tab| tab.label.as_str()).collect(),
+            Self::Tabs { tabs, .. } => join_parts(tabs.iter().map(|tab| tab.label.as_str())),
             Self::FeedbackPrompt { prompt, .. } => prompt.clone(),
             Self::Html { title, html, .. } => [
                 title.as_deref().unwrap_or_default(),
@@ -404,6 +739,51 @@ impl Block {
             .collect::<Vec<_>>()
             .join(" "),
         }
+    }
+
+    /// A diff's review text as 3.0.x wrote it, before TSK-071: each changed
+    /// line began with its screen-reader label and marker ("Added: +") and
+    /// the caption ran straight into the first line. With it come, for each
+    /// of its UTF-16 offsets, where a range starting and where a range ending
+    /// there falls in the review text as it is now (one more entry than its
+    /// length). A generated label and marker fall at the start of their
+    /// line's text; the diff's own text maps one to one. `None` for a block
+    /// that is not a diff.
+    #[must_use]
+    pub fn legacy_diff_review_text(&self) -> Option<(String, Vec<(usize, usize)>)> {
+        let Self::Diff { diff, caption, .. } = self else {
+            return None;
+        };
+        let mut text = String::new();
+        let mut offsets = Vec::new();
+        let mut current = 0;
+        // The line break the caption now ends with: a range ending before
+        // it stops at the caption, one starting after it at the first line.
+        let mut ended_before = None;
+        let mut push =
+            |part: &str, generated: bool, current: &mut usize, ended: &mut Option<usize>| {
+                for _ in part.encode_utf16() {
+                    offsets.push((*current, ended.take().unwrap_or(*current)));
+                    if !generated {
+                        *current += 1;
+                    }
+                }
+                text.push_str(part);
+            };
+        if let Some(caption) = caption.as_deref().filter(|caption| !caption.is_empty()) {
+            push(caption, false, &mut current, &mut ended_before);
+            ended_before = Some(current);
+            current += 1;
+        }
+        for line in diff.lines() {
+            let (label, marker, rest) = diff_line_parts(line);
+            push(label, true, &mut current, &mut ended_before);
+            push(marker, true, &mut current, &mut ended_before);
+            push(rest, false, &mut current, &mut ended_before);
+            push("\n", false, &mut current, &mut ended_before);
+        }
+        offsets.push((current, ended_before.unwrap_or(current)));
+        Some((text, offsets))
     }
 
     /// Short, scannable label for TOC / feedback notes. Not the full prose of
@@ -425,9 +805,24 @@ impl Block {
             | Self::Html {
                 title: Some(title), ..
             }
+            | Self::Table {
+                title: Some(title), ..
+            }
             | Self::Decision { title, .. }
+            | Self::Form { title, .. }
             | Self::Tree { label: title, .. } => title.clone(),
-            Self::Diagram { acc_title, .. } => acc_title.clone(),
+            // No raw ids in the nav (QA defect 8): a name the reader can see.
+            Self::Tabs { tabs, .. } => tabs
+                .iter()
+                .map(|tab| tab.label.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            Self::Bullets { items, .. } => items
+                .first()
+                .map_or_else(|| "List".to_string(), |item| prose_nav_label(item)),
+            Self::Code { .. } => "Code".to_string(),
+            Self::Diff { .. } => "Diff".to_string(),
+            Self::Figure { declaration, .. } => figure_text(declaration).0.to_string(),
             Self::Media { alt, .. } => alt.clone(),
             Self::Disclosure { summary, .. } => summary.clone(),
             // Full prompt is rendered in the block body; never dump it into the nav.
@@ -443,16 +838,75 @@ impl Block {
     }
 }
 
+/// A form or a v2 decision reads as the page shows it (SPC-014 B6): the
+/// title, the prompt, then each field's label, description and option
+/// labels in order. A decision's one field is labelled by the title, which
+/// is not repeated.
+fn form_review_text(block: &Block, framing: &Framing) -> String {
+    let (title, markdown) = match block {
+        Block::Decision {
+            title, markdown, ..
+        } => (title, Some(markdown.as_str())),
+        Block::Form {
+            title, markdown, ..
+        } => (title, markdown.as_deref()),
+        _ => return String::new(),
+    };
+    let mut parts = vec![
+        title.clone(),
+        markdown
+            .map(|markdown| markdown_text(markdown, framing))
+            .unwrap_or_default(),
+    ];
+    if let Some(view) = crate::form::FormView::of(block) {
+        let decision = matches!(block, Block::Decision { .. });
+        for field in view.fields.iter() {
+            if !decision {
+                parts.push(field.label.clone());
+            }
+            parts.extend(field.description.clone());
+            parts.extend(
+                field
+                    .options
+                    .iter()
+                    .flatten()
+                    .map(|option| option.label.clone()),
+            );
+        }
+    }
+    join_parts(parts)
+}
+
+/// The first sentence of the rendered text: Markdown syntax gone, its
+/// words (underscores in a name included) kept, line breaks as spaces.
 fn prose_nav_label(markdown: &str) -> String {
-    let stripped: String = markdown
-        .chars()
-        .filter(|ch| !matches!(ch, '*' | '_' | '`' | '#' | '[' | ']' | '>'))
+    let text: String = Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH)
+        .filter_map(|event| match event {
+            Event::Text(text) | Event::Code(text) => Some(text.into_string()),
+            // A heading or paragraph ends a sentence; a line break does not.
+            Event::End(pulldown_cmark::TagEnd::Heading(_) | pulldown_cmark::TagEnd::Paragraph) => {
+                Some(". ".to_string())
+            }
+            Event::SoftBreak | Event::HardBreak | Event::End(_) => Some(" ".to_string()),
+            _ => None,
+        })
         .collect();
-    let first = stripped
-        .split(['.', '!', '?'])
+    let mut collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // A reference reads as its kind: the label has no numbering at hand.
+    for (token, word) in [("[fig:", "Figure"), ("[table:", "Table")] {
+        while let Some(start) = collapsed.find(token) {
+            let end = collapsed[start..]
+                .find(']')
+                .map_or(collapsed.len(), |end| start + end + 1);
+            collapsed.replace_range(start..end, word);
+        }
+    }
+    let first = collapsed
+        .split_inclusive(['.', '!', '?'])
         .next()
-        .unwrap_or(stripped.as_str())
-        .trim();
+        .unwrap_or(collapsed.as_str())
+        .trim()
+        .trim_end_matches(['.', '!', '?']);
     if first.is_empty() {
         "Section".to_string()
     } else {
@@ -462,7 +916,8 @@ fn prose_nav_label(markdown: &str) -> String {
 
 /// Nav / TOC labels stay one short line so long titles cannot collapse the rail.
 fn truncate_nav_label(label: &str, max_chars: usize) -> String {
-    let trimmed = label.trim();
+    let collapsed = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.as_str();
     if trimmed.is_empty() {
         return "Section".to_string();
     }
@@ -482,9 +937,10 @@ fn truncate_nav_label(label: &str, max_chars: usize) -> String {
 
 fn validate_blocks(
     blocks: &[Block],
+    version: u32,
     depth: usize,
     count: &mut usize,
-    diagram_count: &mut usize,
+    drawn_count: &mut usize,
     collection_items: &mut usize,
     ids: &mut HashSet<String>,
 ) -> Result<()> {
@@ -502,12 +958,12 @@ fn validate_blocks(
                 limits::MAX_BLOCKS
             )));
         }
-        if matches!(block, Block::Diagram { .. }) {
-            *diagram_count += 1;
-            if *diagram_count > limits::MAX_DIAGRAM_BLOCKS {
+        if matches!(block, Block::Figure { .. }) {
+            *drawn_count += 1;
+            if *drawn_count > limits::MAX_FIGURE_BLOCKS {
                 return Err(invalid(format!(
-                    "diagram count exceeds {}",
-                    limits::MAX_DIAGRAM_BLOCKS
+                    "figure count exceeds {}",
+                    limits::MAX_FIGURE_BLOCKS
                 )));
             }
         }
@@ -515,7 +971,15 @@ fn validate_blocks(
         if !ids.insert(block.id().to_string()) {
             return Err(invalid(format!("duplicate block id {}", block.id())));
         }
-        validate_block(block, depth, count, diagram_count, collection_items, ids)?;
+        validate_block(
+            block,
+            version,
+            depth,
+            count,
+            drawn_count,
+            collection_items,
+            ids,
+        )?;
     }
     Ok(())
 }
@@ -523,9 +987,10 @@ fn validate_blocks(
 #[allow(clippy::too_many_lines)]
 fn validate_block(
     block: &Block,
+    version: u32,
     depth: usize,
     count: &mut usize,
-    diagram_count: &mut usize,
+    drawn_count: &mut usize,
     collection_items: &mut usize,
     ids: &mut HashSet<String>,
 ) -> Result<()> {
@@ -564,12 +1029,93 @@ fn validate_block(
             Ok(())
         }
         Block::Decision {
-            title, markdown, ..
+            id,
+            title,
+            status,
+            markdown,
+            options,
+            rationale,
         } => {
             require_nonempty_bounded("decision title", title, limits::MAX_TITLE_BYTES)?;
-            bounded("decision markdown", markdown, limits::MAX_PROSE_BYTES)
+            bounded("decision markdown", markdown, limits::MAX_PROSE_BYTES)?;
+            if version == 1 {
+                if status.is_none() {
+                    return Err(invalid(format!(
+                        "decision block {id} needs a status in a schema_version 1 document"
+                    )));
+                }
+                if options.is_some() {
+                    return Err(needs_v2("options", &format!("decision block {id}")));
+                }
+                if rationale.is_some() {
+                    return Err(needs_v2("rationale", &format!("decision block {id}")));
+                }
+                return Ok(());
+            }
+            if status.is_some() {
+                return Err(invalid(format!(
+                    "decision block {id}: a schema_version 2 decision has no status; the reviewer's answer is its outcome, so list its options instead"
+                )));
+            }
+            let Some(options) = options else {
+                return Err(invalid(format!(
+                    "decision block {id} needs options: a schema_version 2 decision is a question the reviewer answers"
+                )));
+            };
+            crate::form::validate_decision_options(id, options)
         }
-        Block::Table { columns, rows, .. } => {
+        Block::Form {
+            id,
+            title,
+            markdown,
+            fields,
+            required,
+        } => {
+            if version == 1 {
+                return Err(invalid(format!(
+                    "form block {id} is a schema_version 2 block; set schema_version 2 or remove it"
+                )));
+            }
+            optional_bounded(
+                "form markdown",
+                markdown.as_deref(),
+                limits::MAX_PROSE_BYTES,
+            )?;
+            crate::form::validate_form(id, title, fields, required)
+        }
+        Block::Table {
+            id,
+            columns,
+            rows,
+            title,
+            caption,
+        } => {
+            if version == 1 {
+                if title.is_some() {
+                    return Err(needs_v2("title", &format!("table block {id}")));
+                }
+                if caption.is_some() {
+                    return Err(needs_v2("caption", &format!("table block {id}")));
+                }
+            } else {
+                let Some(title) = title else {
+                    return Err(invalid(format!(
+                        "table block {id} needs a title: a schema_version 2 table is framed as \"Table N · title\""
+                    )));
+                };
+                require_nonempty_bounded(
+                    &format!("table block {id} title"),
+                    title,
+                    limits::MAX_TITLE_BYTES,
+                )?;
+                if let Some(caption) = caption {
+                    require_nonempty_bounded(
+                        &format!("table block {id} caption"),
+                        caption,
+                        limits::MAX_TITLE_BYTES,
+                    )?;
+                }
+            }
             if columns.is_empty() || columns.len() > limits::MAX_TABLE_COLUMNS {
                 return Err(invalid("table column count is outside the allowed range"));
             }
@@ -608,17 +1154,25 @@ fn validate_block(
             Ok(())
         }
         Block::Code {
+            id,
             language,
             code,
             caption,
-            ..
+            source,
         } => {
             require_nonempty_bounded("code language", language, 64)?;
             bounded("code", code, limits::MAX_CODE_BYTES)?;
+            validate_snapshot_source(id, source.as_ref(), version)?;
             optional_bounded("code caption", caption.as_deref(), limits::MAX_TITLE_BYTES)
         }
-        Block::Diff { diff, caption, .. } => {
+        Block::Diff {
+            id,
+            diff,
+            caption,
+            source,
+        } => {
             bounded("diff", diff, limits::MAX_CODE_BYTES)?;
+            validate_snapshot_source(id, source.as_ref(), version)?;
             optional_bounded("diff caption", caption.as_deref(), limits::MAX_TITLE_BYTES)
         }
         Block::Tree { label, nodes, .. } => {
@@ -629,23 +1183,12 @@ fn validate_block(
             let mut tree_items = 0;
             validate_tree(nodes, depth + 1, &mut tree_items, collection_items)
         }
-        Block::Diagram {
-            source,
-            acc_title,
-            acc_description,
-            ..
-        } => {
-            bounded("diagram source", source, limits::MAX_DIAGRAM_BYTES)?;
-            require_nonempty_bounded(
-                "diagram accessible title",
-                acc_title,
-                limits::MAX_TITLE_BYTES,
-            )?;
-            require_nonempty_bounded(
-                "diagram accessible description",
-                acc_description,
-                limits::MAX_PROSE_BYTES,
-            )
+        Block::Figure { id, declaration } => {
+            validate_figure_declaration(declaration)?;
+            if version >= 2 {
+                validate_figure_marks(id, declaration)?;
+            }
+            Ok(())
         }
         Block::Media {
             mime_type,
@@ -675,9 +1218,10 @@ fn validate_block(
             require_nonempty_bounded("disclosure summary", summary, limits::MAX_TITLE_BYTES)?;
             validate_blocks(
                 blocks,
+                version,
                 depth + 1,
                 count,
-                diagram_count,
+                drawn_count,
                 collection_items,
                 ids,
             )
@@ -691,9 +1235,10 @@ fn validate_block(
                 require_nonempty_bounded("tab label", &tab.label, limits::MAX_TITLE_BYTES)?;
                 validate_blocks(
                     &tab.blocks,
+                    version,
                     depth + 1,
                     count,
-                    diagram_count,
+                    drawn_count,
                     collection_items,
                     ids,
                 )?;
@@ -703,13 +1248,41 @@ fn validate_block(
         Block::FeedbackPrompt { prompt, .. } => {
             require_nonempty_bounded("feedback prompt", prompt, limits::MAX_LABEL_BYTES)
         }
-        Block::Html { html, title, .. } => {
+        Block::Html {
+            id,
+            html,
+            title,
+            caption,
+            legend,
+            description,
+        } => {
             bounded("sandboxed html", html, limits::MAX_HTML_BYTES)?;
-            validate_sandbox_html(html)?;
-            optional_bounded(
-                "sandboxed html title",
+            if version == 1 {
+                validate_sandbox_html(html, version)?;
+                for (field, present) in [
+                    ("caption", caption.is_some()),
+                    ("legend", legend.is_some()),
+                    ("description", description.is_some()),
+                ] {
+                    if present {
+                        return Err(needs_v2(field, &format!("html block {id}")));
+                    }
+                }
+                return optional_bounded(
+                    "sandboxed html title",
+                    title.as_deref(),
+                    limits::MAX_TITLE_BYTES,
+                );
+            }
+            validate_sandbox_html(html, version).map_err(|error| {
+                invalid(format!("html block {id}: {}", document_message(error)))
+            })?;
+            validate_stage_framing(
+                id,
                 title.as_deref(),
-                limits::MAX_TITLE_BYTES,
+                caption.as_deref(),
+                legend.as_deref(),
+                description.as_deref(),
             )
         }
     }
@@ -778,37 +1351,260 @@ fn validate_tree(
     Ok(())
 }
 
-fn append_tree_text(nodes: &[TreeNode], output: &mut String, separated: bool) {
+fn append_tree_text(nodes: &[TreeNode], output: &mut String) {
     for node in nodes {
-        if separated {
-            output.push('\n');
-        }
+        output.push('\n');
         output.push_str(&node.label);
-        append_tree_text(&node.children, output, separated);
+        append_tree_text(&node.children, output);
     }
 }
 
-fn markdown_text(markdown: &str) -> String {
-    Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH)
-        .filter_map(|event| match event {
-            Event::Text(text) | Event::Code(text) => Some(text.into_string()),
-            Event::SoftBreak | Event::HardBreak => Some("\n".to_string()),
-            _ => None,
-        })
-        .collect()
+/// A diff line as the page draws it: the screen-reader label ("Added: ",
+/// "Removed: " or none), the marker the reader sees but never quotes ("+",
+/// "-" or none) and the text that is the line's review text. File headers
+/// ("+++", "---") and context lines have no marker.
+#[must_use]
+pub fn diff_line_parts(line: &str) -> (&'static str, &str, &str) {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        ("Added: ", &line[..1], &line[1..])
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        ("Removed: ", &line[..1], &line[1..])
+    } else {
+        ("", "", line)
+    }
+}
+
+/// Joins a block's parts with one line break, so a quote or its context that
+/// crosses two parts (two status items, a tree's nodes, two table cells) keeps
+/// a separator (QA defect 8). Empty parts add none.
+fn join_parts<S: AsRef<str>>(parts: impl IntoIterator<Item = S>) -> String {
+    let mut output = String::new();
+    for part in parts {
+        let part = part.as_ref();
+        if part.is_empty() {
+            continue;
+        }
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(part);
+    }
+    output
+}
+
+/// Ends a Markdown paragraph, heading or list item with one line break, so
+/// adjacent blocks of text do not run together in the review text.
+fn end_markdown_block(output: &mut String) {
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+}
+
+fn markdown_text(markdown: &str, framing: &Framing) -> String {
+    if !framing.enabled() {
+        let mut output = String::new();
+        for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
+            match event {
+                Event::Text(text) | Event::Code(text) => output.push_str(&text),
+                Event::SoftBreak | Event::HardBreak => output.push('\n'),
+                Event::End(TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item) => {
+                    end_markdown_block(&mut output);
+                }
+                _ => {}
+            }
+        }
+        output.truncate(output.trim_end_matches('\n').len());
+        return output;
+    }
+    let mut output = String::new();
+    for (event, in_link) in coalesced_markdown(markdown) {
+        match event {
+            Event::Text(text) if !in_link => {
+                for segment in reference_segments(&text) {
+                    match segment {
+                        TextSegment::Text(text) => output.push_str(text),
+                        TextSegment::Reference { kind, id } => {
+                            if let Some(label) = framing.reference_label(kind, id) {
+                                output.push_str(&label);
+                            } else {
+                                output.push('[');
+                                output.push_str(kind.reference_prefix());
+                                output.push(':');
+                                output.push_str(id);
+                                output.push(']');
+                            }
+                        }
+                    }
+                }
+            }
+            Event::Text(text) | Event::Code(text) => output.push_str(&text),
+            Event::SoftBreak | Event::HardBreak => output.push('\n'),
+            Event::End(TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item) => {
+                end_markdown_block(&mut output);
+            }
+            _ => {}
+        }
+    }
+    output.truncate(output.trim_end_matches('\n').len());
+    output
+}
+
+/// The message of a document error without its "invalid presentation
+/// document" prefix, to nest it under a block.
+fn document_message(error: PresentError) -> String {
+    match error {
+        PresentError::InvalidDocument(message) => message,
+        other => other.to_string(),
+    }
+}
+
+/// A v2 snapshot source names a repository-relative file; `open` and
+/// `update` resolve it inside the work tree (SPC-014 B10).
+fn validate_snapshot_source(id: &str, source: Option<&SnapshotSource>, version: u32) -> Result<()> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    if version == 1 {
+        return Err(needs_v2("source", &format!("block {id}")));
+    }
+    let path = &source.path;
+    let relative = !path.is_empty()
+        && path.len() <= 1024
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..");
+    if !relative {
+        return Err(invalid(format!(
+            "block {id}: source.path {path:?} must be a repository-relative path without . or .. parts"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_stage_framing(
+    id: &str,
+    title: Option<&str>,
+    caption: Option<&str>,
+    legend: Option<&[LegendEntry]>,
+    description: Option<&str>,
+) -> Result<()> {
+    let Some(title) = title else {
+        return Err(invalid(format!(
+            "html block {id} needs a title: every schema_version 2 stage is a figure framed as \"Figure N · title\""
+        )));
+    };
+    require_nonempty_bounded(
+        &format!("html block {id} title"),
+        title,
+        limits::MAX_TITLE_BYTES,
+    )?;
+    let Some(caption) = caption else {
+        return Err(invalid(format!(
+            "html block {id} needs a caption: every schema_version 2 stage states its takeaway"
+        )));
+    };
+    require_nonempty_bounded(
+        &format!("html block {id} caption"),
+        caption,
+        limits::MAX_TITLE_BYTES,
+    )?;
+    if let Some(legend) = legend {
+        if legend.is_empty() || legend.len() > limits::MAX_LEGEND_ENTRIES {
+            return Err(invalid(format!(
+                "html block {id} legend must list 1 to {} entries",
+                limits::MAX_LEGEND_ENTRIES
+            )));
+        }
+        for entry in legend {
+            require_nonempty_bounded(
+                &format!("html block {id} legend label"),
+                &entry.label,
+                limits::MAX_TITLE_BYTES,
+            )?;
+            require_nonempty_bounded(
+                &format!("html block {id} legend means"),
+                &entry.means,
+                limits::MAX_TITLE_BYTES,
+            )?;
+        }
+    }
+    if let Some(description) = description {
+        if description.trim().is_empty()
+            || description.chars().count() > limits::MAX_DESCRIPTION_CHARS
+        {
+            return Err(invalid(format!(
+                "html block {id} description must be 1 to {} characters",
+                limits::MAX_DESCRIPTION_CHARS
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Schema v2: every mark an authored figure draws names itself, because an
+/// unnamed mark could only be told apart by its position (B2). A figure
+/// drawn from a layout keys its marks from the layout instead.
+fn validate_figure_marks(id: &str, declaration: &serde_json::Value) -> Result<()> {
+    let Some(figure) = declaration.get("figure") else {
+        return Ok(());
+    };
+    if figure.get("layout").is_some() {
+        return Ok(());
+    }
+    for composition in ["wide", "narrow"] {
+        let Some(draw) = figure
+            .pointer(&format!("/{composition}/draw"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        for (index, item) in draw.iter().enumerate() {
+            let Some(state) = item.get("state") else {
+                continue;
+            };
+            let Some(mark) = item.get("id").and_then(serde_json::Value::as_str) else {
+                return Err(invalid(format!(
+                    "figure block {id}: {composition}.draw[{index}] draws the state {state} without an id; a schema_version 2 authored figure names every mark"
+                )));
+            };
+            if !crate::entity::is_entity_id(mark) {
+                return Err(invalid(format!(
+                    "figure block {id}: mark id {mark:?} does not match the entity id grammar (lower-case kebab-case, at most 64 characters)"
+                )));
+            }
+            if mark.starts_with(crate::entity::LEGEND_PREFIX) {
+                return Err(invalid(format!(
+                    "figure block {id}: mark id {mark:?} uses the prefix legend-, which is reserved for legend entries"
+                )));
+            }
+            if !seen.insert(mark) {
+                return Err(invalid(format!(
+                    "figure block {id}: mark id {mark:?} is used twice in the {composition} composition"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_id(id: &str) -> Result<()> {
-    if id.is_empty()
-        || id.len() > 64
-        || !id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        || !id.as_bytes()[0].is_ascii_alphanumeric()
-    {
+    if !valid_block_id(id) {
         return Err(invalid(format!("invalid block id {id:?}")));
     }
     Ok(())
+}
+
+fn valid_block_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && id.as_bytes()[0].is_ascii_alphanumeric()
 }
 
 fn validate_provenance(provenance: &Provenance) -> Result<()> {
@@ -852,6 +1648,79 @@ fn valid_three_digits(value: &str) -> bool {
     value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+/// The figure families of `figure-grammar.md`, in the grammar module's order.
+pub const FIGURE_FAMILIES: [&str; 9] = [
+    "flow",
+    "structure",
+    "layering",
+    "sequence",
+    "state",
+    "coverage",
+    "extent",
+    "derivation",
+    "graph",
+];
+
+/// The title and caption a figure placeholder shows before the grammar module
+/// draws it; they are also the block's canonical review text.
+fn figure_text(declaration: &serde_json::Value) -> (&str, &str) {
+    let field = |name: &str| {
+        declaration
+            .pointer(&format!("/figure/{name}"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+    };
+    (field("title"), field("caption"))
+}
+
+/// The envelope the service can check. The client validates the rest with the
+/// grammar module before it draws, and shows the failure in place of the
+/// figure. Present has no repository source to bind, so it draws authored
+/// figures only; a derived figure binds its data in the docs portal.
+fn validate_figure_declaration(declaration: &serde_json::Value) -> Result<()> {
+    let encoded = serde_json::to_vec(declaration)
+        .map_err(|_| invalid("figure declaration is not serializable"))?;
+    if encoded.len() > limits::MAX_FIGURE_DECLARATION_BYTES {
+        return Err(invalid(format!(
+            "figure declaration exceeds {} bytes",
+            limits::MAX_FIGURE_DECLARATION_BYTES
+        )));
+    }
+    let Some(root) = declaration.as_object() else {
+        return Err(invalid("figure declaration must be an object"));
+    };
+    if root
+        .keys()
+        .any(|key| key != "schema_version" && key != "figure")
+        || root.get("schema_version") != Some(&serde_json::Value::from(1))
+    {
+        return Err(invalid(
+            "figure declaration must be { schema_version: 1, figure: { ... } }",
+        ));
+    }
+    let Some(figure) = root.get("figure").and_then(serde_json::Value::as_object) else {
+        return Err(invalid("figure declaration must carry a figure object"));
+    };
+    let family = figure
+        .get("family")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !FIGURE_FAMILIES.contains(&family) {
+        return Err(invalid(format!(
+            "figure family must be one of {}",
+            FIGURE_FAMILIES.join(", ")
+        )));
+    }
+    if figure.get("binding").and_then(serde_json::Value::as_str) != Some("authored") {
+        return Err(invalid(
+            "present draws authored figures; a derived figure binds its data in the docs portal",
+        ));
+    }
+    let (title, caption) = figure_text(declaration);
+    require_nonempty_bounded("figure title", title, limits::MAX_TITLE_BYTES)?;
+    require_nonempty_bounded("figure caption", caption, limits::MAX_TITLE_BYTES)
+}
+
 fn require_nonempty_bounded(name: &str, value: &str, max: usize) -> Result<()> {
     if value.trim().is_empty() {
         return Err(invalid(format!("{name} must not be empty")));
@@ -874,12 +1743,102 @@ fn invalid(message: impl Into<String>) -> PresentError {
     PresentError::InvalidDocument(message.into())
 }
 
+/// Collect independent authoring faults without a browser or a session mutation.
+#[derive(Debug, Serialize)]
+pub struct CheckFault {
+    pub block_id: Option<String>,
+    pub rule: &'static str,
+    pub message: String,
+}
+
+#[must_use]
+pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
+    let document: PresentationDocument = match serde_json::from_slice(bytes) {
+        Ok(document) => document,
+        Err(error) => {
+            return vec![CheckFault {
+                block_id: None,
+                rule: "schema",
+                message: error.to_string(),
+            }]
+        }
+    };
+    let mut faults = Vec::new();
+    // Visit children first so every independent fault names its own block.
+    for block in document.walk().into_iter().rev() {
+        let mut ids = HashSet::new();
+        if let Err(error) = validate_blocks(
+            std::slice::from_ref(block),
+            document.schema_version,
+            1,
+            &mut 0,
+            &mut 0,
+            &mut 0,
+            &mut ids,
+        ) {
+            let message = error.to_string();
+            if !faults.iter().any(|f: &CheckFault| f.message == message) {
+                faults.push(CheckFault {
+                    block_id: Some(block.id().into()),
+                    rule: if crate::form::FormView::of(block).is_some() {
+                        "form"
+                    } else {
+                        "block"
+                    },
+                    message,
+                });
+            }
+        }
+    }
+    let kinds: HashMap<_, _> = document
+        .walk()
+        .into_iter()
+        .map(|b| (b.id(), FrameKind::of(b)))
+        .collect();
+    for block in document.walk() {
+        for markdown in block.markdown_fields() {
+            for (event, in_link) in coalesced_markdown(markdown) {
+                let Event::Text(text) = event else { continue };
+                if in_link {
+                    continue;
+                }
+                for segment in reference_segments(&text) {
+                    if let TextSegment::Reference { kind, id } = segment {
+                        if kinds.get(id) != Some(&Some(kind)) {
+                            faults.push(CheckFault {
+                                block_id: Some(block.id().into()),
+                                rule: "anchor",
+                                message: format!(
+                                    "reference [{}:{id}] has no matching framed block",
+                                    kind.reference_prefix()
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Err(error) = document.validate() {
+        let message = error.to_string();
+        if !faults.iter().any(|f| f.message == message) {
+            faults.push(CheckFault {
+                block_id: None,
+                rule: "document",
+                message,
+            });
+        }
+    }
+    faults
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn document(blocks: Vec<Block>) -> PresentationDocument {
         PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Review".to_string(),
             language: None,
@@ -913,11 +1872,11 @@ mod tests {
 
     #[test]
     fn newer_schema_is_complete_raw_fallback() {
-        let raw = br#"{"schema_version":2,"title":"Future","blocks":[],"new":true}"#;
+        let raw = br#"{"schema_version":3,"title":"Future","blocks":[],"new":true}"#;
         assert_eq!(
             parse_document(raw).unwrap(),
             ParsedDocument::Unsupported {
-                schema_version: 2,
+                schema_version: 3,
                 raw: String::from_utf8(raw.to_vec()).unwrap()
             }
         );
@@ -942,11 +1901,14 @@ mod tests {
     #[test]
     fn html_canonical_text_includes_visible_stage_labels() {
         let block = Block::Html {
+            caption: None,
+            legend: None,
+            description: None,
             id: "stage".to_string(),
             title: Some("Stage title".to_string()),
             html: "<figure><svg><text>Element · click a figure</text></svg></figure>".to_string(),
         };
-        let canonical = block.canonical_review_text();
+        let canonical = block.canonical_review_text(&crate::document::Framing::default());
         assert!(canonical.contains("Stage title"));
         assert!(
             canonical.contains("Element · click a figure"),
@@ -980,21 +1942,132 @@ mod tests {
     }
 
     #[test]
-    fn diagram_sources_and_document_counts_are_bounded_before_rendering() {
-        let diagram = |index: usize, source: String| Block::Diagram {
-            id: format!("diagram-{index}"),
-            kind: DiagramKind::Flowchart,
-            source,
-            acc_title: format!("Diagram {index}"),
-            acc_description: "A bounded test diagram.".to_string(),
-        };
-        let oversized = document(vec![diagram(0, "x".repeat(limits::MAX_DIAGRAM_BYTES + 1))]);
-        assert!(oversized.validate().is_err());
+    fn diagram_blocks_are_refused_before_typed_parsing() {
+        let raw = br#"{
+          "schema_version": 1,
+          "title": "Retired",
+          "blocks": [{"type":"tabs","id":"views","tabs":[{"label":"One","blocks":[
+            {"type":"diagram","id":"flow","kind":"flowchart","source":"flowchart LR","acc_title":"Flow","acc_description":"A flow."}
+          ]}]}]
+        }"#;
+        let message = parse_document(raw).unwrap_err().to_string();
+        assert!(
+            message.contains("block \"flow\" is a diagram block, which was removed with Mermaid"),
+            "{message}"
+        );
+        assert!(
+            message.contains("convert its flowchart to a flow figure"),
+            "{message}"
+        );
 
-        let diagrams = (0..=limits::MAX_DIAGRAM_BLOCKS)
-            .map(|index| diagram(index, "flowchart LR\nA-->B".to_string()))
-            .collect();
-        assert!(document(diagrams).validate().is_err());
+        // Refused before typed parsing: a diagram whose shape would never
+        // parse still names the conversion instead of a serde error.
+        let malformed =
+            br#"{"schema_version":1,"title":"T","blocks":[{"type":"diagram","kind":"mindmap"}]}"#;
+        let message = parse_document(malformed).unwrap_err().to_string();
+        assert!(
+            message.contains("the block at blocks[0] is a diagram block"),
+            "{message}"
+        );
+        assert!(
+            message.contains("convert its mindmap to a tree block"),
+            "{message}"
+        );
+    }
+
+    fn figure(id: &str, declaration: serde_json::Value) -> Block {
+        Block::Figure {
+            id: id.to_string(),
+            declaration,
+        }
+    }
+
+    fn authored_declaration() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "figure": {
+                "id": "review-path",
+                "family": "flow",
+                "binding": "authored",
+                "title": "One change on its review path",
+                "caption": "A change passes review before it lands."
+            }
+        })
+    }
+
+    #[test]
+    fn figure_declarations_are_checked_at_the_envelope_and_share_the_drawn_budget() {
+        let valid = authored_declaration();
+        assert!(document(vec![figure("fig", valid.clone())])
+            .validate()
+            .is_ok());
+        let block = figure("fig", valid.clone());
+        assert_eq!(block.review_label(), "One change on its review path");
+        assert_eq!(
+            block.canonical_review_text(&crate::document::Framing::default()),
+            "One change on its review path\nA change passes review before it lands."
+        );
+
+        let refused = |change: &dyn Fn(&mut serde_json::Value), expected: &str| {
+            let mut declaration = valid.clone();
+            change(&mut declaration);
+            let error = document(vec![figure("fig", declaration)])
+                .validate()
+                .expect_err(expected)
+                .to_string();
+            assert!(error.contains(expected), "{error}");
+        };
+        refused(
+            &|value| value["figure"]["binding"] = "derived".into(),
+            "present draws authored figures",
+        );
+        refused(
+            &|value| value["figure"]["family"] = "chart".into(),
+            "figure family must be one of",
+        );
+        refused(
+            &|value| value["figure"]["caption"] = " ".into(),
+            "figure caption must not be empty",
+        );
+        refused(
+            &|value| value["extra"] = true.into(),
+            "schema_version: 1, figure",
+        );
+        refused(
+            &|value| value["schema_version"] = 2.into(),
+            "schema_version: 1, figure",
+        );
+        refused(
+            &|value| {
+                value["figure"]["description"] =
+                    "x".repeat(limits::MAX_FIGURE_DECLARATION_BYTES).into();
+            },
+            "figure declaration exceeds",
+        );
+        refused(&|value| *value = serde_json::json!([]), "must be an object");
+
+        // The drawn budget counts figure blocks across the nested tree.
+        let drawn = |count: usize| -> Vec<Block> {
+            (0..count)
+                .map(|index| figure(&format!("fig-{index}"), valid.clone()))
+                .collect()
+        };
+        assert!(document(drawn(limits::MAX_FIGURE_BLOCKS))
+            .validate()
+            .is_ok());
+        let over = document(vec![
+            Block::Disclosure {
+                id: "more".to_string(),
+                summary: "More".to_string(),
+                blocks: drawn(limits::MAX_FIGURE_BLOCKS),
+            },
+            figure("one-more", valid.clone()),
+        ]);
+        let error = over
+            .validate()
+            .expect_err("over the drawn budget")
+            .to_string();
+        assert!(error.contains("figure count exceeds 24"), "{error}");
     }
 
     #[test]
@@ -1033,6 +2106,123 @@ mod tests {
         assert!(oversized_tree.validate().is_err());
     }
 
+    /// QA defect 8: a quote across two parts of a block keeps a separator.
+    #[test]
+    fn review_text_separates_a_blocks_parts() {
+        let text = |value: serde_json::Value| {
+            serde_json::from_value::<Block>(value)
+                .unwrap()
+                .canonical_review_text(&crate::document::Framing::default())
+        };
+        assert_eq!(
+            text(serde_json::json!({"type": "status", "id": "s", "items": [
+                {"label": "Linux Chrome run", "state": "pending", "detail": "one crop was a sliver"},
+                {"label": "macOS run", "state": "pending"}
+            ]})),
+            "Linux Chrome run\none crop was a sliver\nmacOS run"
+        );
+        assert_eq!(
+            text(
+                serde_json::json!({"type": "tree", "id": "t", "label": "crates", "nodes": [
+                    {"label": "state.rs", "children": [{"label": "limits.rs"}]}, {"label": "lib.rs"}
+                ]})
+            ),
+            "crates\nstate.rs\nlimits.rs\nlib.rs"
+        );
+        assert_eq!(
+            text(
+                serde_json::json!({"type": "narrative", "id": "n", "markdown": "# Why\n\nOne.\n\n- a\n- b"})
+            ),
+            "Why\nOne.\na\nb"
+        );
+    }
+
+    /// TSK-071 round 3: a diff's review text is what the reader sees and
+    /// selects, a changed line without its marker and without the screen
+    /// reader label; file headers and context lines are unchanged.
+    #[test]
+    fn diff_review_text_holds_no_label_or_marker() {
+        let block: Block = serde_json::from_value(serde_json::json!({
+            "type": "diff", "id": "change", "caption": "One change.",
+            "diff": "--- a/x.rs\n+++ b/x.rs\n fn f() {\n-    let n = 1;\n+    let n = 2;\n }"
+        }))
+        .unwrap();
+        let text = block.canonical_review_text(&crate::document::Framing::default());
+        assert_eq!(
+            text,
+            "One change.\n--- a/x.rs\n+++ b/x.rs\n fn f() {\n    let n = 1;\n    let n = 2;\n }\n"
+        );
+        assert!(!text.contains("Added") && !text.contains("Removed"));
+        assert_eq!(diff_line_parts("+x"), ("Added: ", "+", "x"));
+        assert_eq!(diff_line_parts("-x"), ("Removed: ", "-", "x"));
+        assert_eq!(diff_line_parts("+++ b/x"), ("", "", "+++ b/x"));
+        assert_eq!(diff_line_parts(" x"), ("", "", " x"));
+    }
+
+    /// The 3.0.x diff text that stored quotes were taken in, and where its
+    /// offsets fall now: the caption runs into the first line then, and a
+    /// generated label maps to the start of its line's text.
+    #[test]
+    fn a_legacy_diff_text_maps_onto_the_review_text() {
+        let block: Block = serde_json::from_value(serde_json::json!({
+            "type": "diff", "id": "d", "caption": "Cap", "diff": "+x\n y"
+        }))
+        .unwrap();
+        assert_eq!(
+            block.canonical_review_text(&Framing::default()),
+            "Cap\nx\n y\n"
+        );
+        let (text, offsets) = block.legacy_diff_review_text().unwrap();
+        assert_eq!(text, "CapAdded: +x\n y\n");
+        assert_eq!(offsets.len(), text.encode_utf16().count() + 1);
+        // A range ending after the caption stops before the new line break;
+        // one starting at the label starts at the line's text.
+        assert_eq!(offsets[3], (4, 3));
+        assert_eq!(offsets[4], (4, 4));
+        assert_eq!(offsets[11], (4, 4));
+        assert_eq!(offsets[12], (5, 5));
+        assert_eq!(offsets[16], (9, 9));
+    }
+
+    #[test]
+    fn review_labels_are_readable_names_never_raw_ids() {
+        // QA defect 8: underscores kept, no Markdown syntax, a heading ends
+        // the label, references read as their kind, and no block shows its id.
+        let block = |value: serde_json::Value| -> Block { serde_json::from_value(value).unwrap() };
+        for (value, expected) in [
+            (
+                serde_json::json!({"type": "narrative", "id": "a", "markdown": "## Why `snake_case` wins\n\nMore text."}),
+                "Why snake_case wins",
+            ),
+            (
+                serde_json::json!({"type": "narrative", "id": "b", "markdown": "See [fig:flow] for\nthe path. Then more."}),
+                "See Figure for the path",
+            ),
+            (
+                serde_json::json!({"type": "table", "id": "t", "title": "Review limits", "columns": ["A"], "rows": [["1"]]}),
+                "Review limits",
+            ),
+            (
+                serde_json::json!({"type": "tabs", "id": "views", "tabs": [{"label": "Plan", "blocks": []}, {"label": "Risks", "blocks": []}]}),
+                "Plan, Risks",
+            ),
+            (
+                serde_json::json!({"type": "bullets", "id": "points", "items": ["Select **words** to quote them."]}),
+                "Select words to quote them",
+            ),
+            (
+                serde_json::json!({"type": "code", "id": "snippet", "language": "rust", "code": "fn main() {}"}),
+                "Code",
+            ),
+            (
+                serde_json::json!({"type": "diff", "id": "change", "diff": "+a"}),
+                "Diff",
+            ),
+        ] {
+            assert_eq!(block(value).review_label(), expected);
+        }
+    }
+
     #[test]
     fn review_label_keeps_nav_scannable_for_long_feedback_and_titles() {
         let long_prompt = "Give the exact release decision: Ship current build (macOS/Linux only; no Windows claim), Hold until native Windows is qualified, or Request changes with anchored notes.";
@@ -1043,14 +2233,10 @@ mod tests {
         assert_eq!(feedback.review_label(), "Feedback request");
         assert!(feedback.review_label().chars().count() <= 40);
 
-        let diagram = Block::Diagram {
-            id: "fig".to_string(),
-            kind: DiagramKind::Flowchart,
-            source: "flowchart LR\n  A-->B".to_string(),
-            acc_title: "Verified native paths versus open Windows gap and more words".to_string(),
-            acc_description: "Long description for accessibility only.".to_string(),
-        };
-        let label = diagram.review_label();
+        let mut declaration = authored_declaration();
+        declaration["figure"]["title"] =
+            "Verified native paths versus open Windows gap and more words".into();
+        let label = figure("fig", declaration).review_label();
         assert!(label.chars().count() <= 40, "{label}");
         assert!(label.ends_with('…'), "{label}");
         // Full prompt still available for body rendering via prompt field, not review_label.
@@ -1067,6 +2253,21 @@ mod tests {
             items: Vec::new(),
         };
         assert_eq!(status.review_label(), "Evidence");
+
+        // A v2 table is named by its title; a v1 table has none and keeps
+        // its id.
+        let table = |title: Option<&str>| Block::Table {
+            id: "gates".to_string(),
+            columns: vec!["Check".to_string()],
+            rows: Vec::new(),
+            title: title.map(str::to_string),
+            caption: None,
+        };
+        assert_eq!(
+            table(Some("Where each check runs")).review_label(),
+            "Where each check runs"
+        );
+        assert_eq!(table(None).review_label(), "gates");
     }
 
     #[test]

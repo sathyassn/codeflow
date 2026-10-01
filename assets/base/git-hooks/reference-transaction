@@ -1,6 +1,30 @@
 #!/bin/sh
-# codeflow git-hook shim — managed by `codeflow update`.
-# No-ops gracefully when the codeflow binary is not on PATH; all policy lives
-# in .codeflow/policy.json and is evaluated by the binary, never here.
-command -v codeflow >/dev/null 2>&1 || exit 0
-exec codeflow git-hook reference-transaction "$@"
+# codeflow git-hook shim, managed by `codeflow update`.
+# Contract 3: a missing or older binary refuses the operation.
+repair() {
+  echo "codeflow: missing, older or failed hook binary; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update" >&2
+}
+if [ -n "${CODEFLOW_HOOK_BINARY+set}" ]; then
+  codeflow_bin=$CODEFLOW_HOOK_BINARY
+  if [ ! -f "$codeflow_bin" ] || [ ! -x "$codeflow_bin" ]; then
+    repair
+    exit 1
+  fi
+else
+  if ! command -v codeflow >/dev/null 2>&1; then
+    repair
+    exit 1
+  fi
+  codeflow_bin=codeflow
+fi
+if ! "$codeflow_bin" git-hook capabilities </dev/null 2>/dev/null | grep -qx 'hooks 3'; then
+  repair
+  exit 1
+fi
+"$codeflow_bin" git-hook reference-transaction "$@"
+codeflow_status=$?
+if [ "$codeflow_status" -ne 0 ]; then
+  if [ "$codeflow_status" -ne 1 ]; then repair; fi
+  exit 1
+fi
+exit 0

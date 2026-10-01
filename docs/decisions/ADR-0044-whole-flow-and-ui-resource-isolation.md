@@ -1,5 +1,6 @@
 ---
 id: ADR-0044
+uid: 99f2ed55-f45b-403a-8354-08005302a7f6
 title: require whole-flow evidence and isolated UI resources
 date: 2026-07-26
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — verification planning gains an affected-journey topology and task-owned browser-resource lease, while existing worktree evidence gains closeout cadence
 ---
 
-# ADR-0044 — whole-flow and UI resource isolation
+# ADR-0044: whole-flow and UI resource isolation
 
 ## Context
 

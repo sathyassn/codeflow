@@ -4,7 +4,10 @@
   "title": "CodeFlow Test Configuration",
   "description": "Declarative test configuration for the CodeFlow generic testing engine.",
   "type": "object",
-  "required": ["schema_version", "targets"],
+  "required": [
+    "schema_version",
+    "targets"
+  ],
   "properties": {
     "$schema": {
       "type": "string",
@@ -12,7 +15,9 @@
     },
     "schema_version": {
       "type": "string",
-      "enum": ["1.0"],
+      "enum": [
+        "1.0"
+      ],
       "description": "Schema version. '1.0' supported. Optional 'structural' and 'tags' fields added 2026-04 are non-breaking additions."
     },
     "execution": {
@@ -28,6 +33,18 @@
           "type": "boolean",
           "default": false,
           "description": "Stop on first target failure."
+        },
+        "max_parallel": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum concurrent targets."
+        },
+        "run_everything": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Shared input globs that select all targets."
         }
       },
       "additionalProperties": false
@@ -52,17 +69,25 @@
       "items": {
         "$ref": "#/$defs/target"
       }
+    },
+    "_description": {
+      "type": "string",
+      "description": "Human-readable configuration purpose and structural-check labels."
     }
   },
   "additionalProperties": false,
   "$defs": {
     "target": {
       "type": "object",
-      "required": ["name", "runner", "modes"],
+      "required": [
+        "name",
+        "runner",
+        "modes"
+      ],
       "properties": {
         "name": {
           "type": "string",
-          "description": "Unique target identifier, used in --only/--skip flags and PR body tables."
+          "description": "Unique target identifier."
         },
         "enabled": {
           "type": "boolean",
@@ -82,13 +107,23 @@
         },
         "runner": {
           "type": "string",
-          "enum": ["cargo", "pytest", "jest", "vitest", "go", "mocha", "rspec", "phpunit", "custom"],
+          "enum": [
+            "cargo",
+            "pytest",
+            "jest",
+            "vitest",
+            "go",
+            "mocha",
+            "rspec",
+            "phpunit",
+            "custom"
+          ],
           "description": "Test runner type."
         },
         "modes": {
           "type": "object",
           "minProperties": 1,
-          "description": "Mode-specific commands. The public modes are full (CLI default), essential (explicit lighter run), and quick (pre-push name). When quick is requested and no target defines it, CodeFlow aliases quick to essential only when essential is defined; an explicit quick command is honored. At least one mode must be defined.",
+          "description": "Mode-specific commands. The public modes are full (CLI default), essential (explicit lighter run), and quick (the push set). The pre-push hook runs exactly the targets that define quick, so keep it to fast format and lint checks and leave the test suite to full. A manual `codeflow test --mode quick` aliases quick to essential only when no target defines quick. At least one mode must be defined.",
           "properties": {
             "quick": {
               "$ref": "#/$defs/mode_command"
@@ -138,20 +173,53 @@
           "type": "integer",
           "minimum": 1,
           "default": 600,
-          "description": "Per-target wall-clock timeout in seconds. When the command runs longer, the runner kills it and the target fails loudly. Omitted → 600s. Guards the gate/pre-push against a single hanging target blocking forever."
+          "description": "Per-target wall-clock timeout in seconds. When the command runs longer, the runner kills it and the target fails loudly. Omitted \u2192 600s. Guards the gate/pre-push against a single hanging target blocking forever."
         },
         "shell": {
           "type": "string",
-          "enum": ["auto", "sh", "powershell", "cmd"],
+          "enum": [
+            "auto",
+            "sh",
+            "powershell",
+            "cmd"
+          ],
           "default": "auto",
           "description": "Shell for mode commands. auto uses sh on macOS/Linux/WSL2 and cmd.exe on native Windows so generated && command chains work without an extra dependency; choose an explicit shell only when the project requires it."
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Prerequisites that must finish green; includes closure."
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Produced repository-relative paths; target/ follows CARGO_TARGET_DIR."
+        },
+        "narrow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Only select on matching inputs; empty always selects."
+        },
+        "exclusive": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run alone."
         }
       },
       "additionalProperties": false
     },
     "mode_command": {
       "type": "object",
-      "required": ["command"],
+      "required": [
+        "command"
+      ],
       "properties": {
         "command": {
           "type": "string",
@@ -162,11 +230,17 @@
     },
     "report_config": {
       "type": "object",
-      "required": ["format", "path"],
+      "required": [
+        "format",
+        "path"
+      ],
       "properties": {
         "format": {
           "type": "string",
-          "enum": ["junit", "ctrf"],
+          "enum": [
+            "junit",
+            "ctrf"
+          ],
           "description": "Report format."
         },
         "path": {
@@ -175,7 +249,9 @@
         },
         "derive_from": {
           "type": "string",
-          "enum": ["junit"],
+          "enum": [
+            "junit"
+          ],
           "description": "When format is CTRF but emitted format is JUnit, triggers internal conversion."
         }
       },
@@ -183,11 +259,19 @@
     },
     "coverage_config": {
       "type": "object",
-      "required": ["format", "path"],
+      "required": [
+        "format",
+        "path"
+      ],
       "properties": {
         "format": {
           "type": "string",
-          "enum": ["lcov", "cobertura", "istanbul-summary", "go-cover"],
+          "enum": [
+            "lcov",
+            "cobertura",
+            "istanbul-summary",
+            "go-cover"
+          ],
           "description": "Coverage artifact format."
         },
         "path": {
@@ -217,11 +301,19 @@
     },
     "coverage_rule": {
       "type": "object",
-      "required": ["scope", "minimum"],
+      "required": [
+        "scope",
+        "minimum"
+      ],
       "properties": {
         "scope": {
           "type": "string",
-          "enum": ["per_file", "per_package", "per_module", "global"],
+          "enum": [
+            "per_file",
+            "per_package",
+            "per_module",
+            "global"
+          ],
           "description": "Coverage evaluation scope."
         },
         "include": {
@@ -249,7 +341,12 @@
     },
     "coverage_exception": {
       "type": "object",
-      "required": ["file", "threshold", "reason", "remove_when"],
+      "required": [
+        "file",
+        "threshold",
+        "reason",
+        "remove_when"
+      ],
       "properties": {
         "file": {
           "type": "string",
@@ -274,12 +371,19 @@
     },
     "tag": {
       "type": "string",
-      "enum": ["critical", "high", "medium", "low"],
-      "description": "Test priority tag used by --only-tag / --skip-tag filters."
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ],
+      "description": "Optional test priority tag."
     },
     "test_file_entry": {
       "type": "object",
-      "required": ["path"],
+      "required": [
+        "path"
+      ],
       "properties": {
         "path": {
           "type": "string",
@@ -346,7 +450,10 @@
     },
     "pattern_map_entry": {
       "type": "object",
-      "required": ["source", "test"],
+      "required": [
+        "source",
+        "test"
+      ],
       "properties": {
         "source": {
           "type": "string",
@@ -361,7 +468,9 @@
     },
     "exclusion_entry": {
       "type": "object",
-      "required": ["pattern"],
+      "required": [
+        "pattern"
+      ],
       "properties": {
         "pattern": {
           "type": "string",

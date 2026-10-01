@@ -1,5 +1,6 @@
 ---
 id: ADR-0062
+uid: 32d8762e-3556-45e4-b882-444e54bd27ee
 title: keep release state in the normal work PR
 date: 2026-09-13
 status: accepted
@@ -7,7 +8,7 @@ supersedes: ADR-0061
 architecture_impact: docs/releasing.md — cumulative pending state replaces candidate branches and release-only PRs while cargo-dist remains the sole publisher
 ---
 
-# ADR-0062 — keep release state in the normal work PR
+# ADR-0062: keep release state in the normal work PR
 
 ## Context
 

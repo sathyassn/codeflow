@@ -5,6 +5,7 @@
 
 mod bounded_file;
 pub mod capability;
+pub mod ceremony;
 pub mod delegate;
 pub mod doctor;
 pub mod error;
@@ -12,13 +13,19 @@ pub mod estimate;
 pub mod file_lock;
 pub mod git;
 pub mod hooks;
+pub mod ids;
 pub mod integrate;
 pub mod ledger;
+pub mod model_catalog;
 pub mod model_qualification;
 pub mod models;
+pub mod reading;
 pub mod recall;
 pub mod registry;
+pub mod release_local;
+pub mod remedy;
 pub mod remote;
+pub mod root_checkout;
 pub mod scaffold;
 pub mod security;
 pub mod settings;

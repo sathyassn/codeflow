@@ -1,5 +1,6 @@
 ---
 id: ADR-0034
+uid: 2813fd85-6c95-43cf-9281-87465909e4ea
 title: prioritize substantiated material findings without issue farming
 date: 2026-07-20
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: the always-loaded workflow principle, duo quality contract, reviewer adapters, and model evaluator share one materiality and proactive-routing rule
 ---
 
-# ADR-0034 — materiality and proactive stewardship
+# ADR-0034: materiality and proactive stewardship
 
 ## Context
 

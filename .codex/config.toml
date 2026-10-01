@@ -1,19 +1,45 @@
-# Codex config for a CodeFlow-managed repository (CodeFlow ADR-0008).
+# Codex config for a CodeFlow-managed repository (CodeFlow ADR-0008, ADR-0055,
+# ADR-0075).
 #
-# Project hooks provide session guidance and fast feedback. The named permission
-# profile below is the OS-enforced boundary: normal work has workspace write
-# access, broad public-network access, and loopback access for local UI testing,
-# while sensitive files, private-network destinations, privileged operations,
-# and destructive escalations remain guarded. Ordinary eligible escalation
-# prompts would go to Codex's reviewer subagent if approval_policy were
-# on-request. Production is `never` (never request approval) plus CLI
-# `--sandbox danger-full-access` (ADR-0055), so no approval prompts fire and
-# the OS sandbox is off for that process; git-guard/exec-guard/git hooks/CI
-# remain. Keep `approvals_reviewer` so flipping back to on-request restores
-# auto-review. Select `user` before any catastrophic/high-blast-radius action.
-# `never` alone grants no permissions: blocked operations fail rather than
-# asking. Filesystem/network authority comes from the effective sandbox profile.
+# The `cf-guard` profile below is the OS-enforced boundary for a Codex seat
+# with no `--sandbox` flag: workspace writes with the enforcement files read
+# only, the pure-secret stores denied, and public network through the proxy
+# with private and link-local targets blocked. `cf-builder` is defined for a
+# builder seat but not selected. Tested on Codex 0.159.1 (probes of
+# 2026-09-29; the profiles and the proxy were first qualified on 0.157.1);
+# earlier versions are unqualified, not unsupported.
+#
+# On macOS, Playwright's Chromium did not start under the three sandboxed
+# profiles probed (`cf-guard`, `cf-builder` and the built-in `:workspace`):
+# the sandbox denies its Mach port rendezvous (`mach-register
+# org.chromium.Chromium.MachPortRendezvousServer`). It starts unsandboxed, so
+# a full-access builder (D1) can run browser tests. Other browsers were not
+# probed.
+#
+# Launch postures are set by the launcher, not by this file (ADR-0055
+# decision 3; cf-herdr). Operator decisions of 2026-09-28 (ADR-0075):
+# - D1 builder seats: `--ask-for-approval never --sandbox danger-full-access`
+#   until the cf-builder spike passes (fetch, worktree add, commit and builds,
+#   all unattended); then `--ask-for-approval never` with
+#   `-c default_permissions="cf-builder"` from the main checkout root. The
+#   spike of 2026-09-29 (Codex 0.159.1) did not pass: fetch, worktree add,
+#   stage, commit, cargo and npm builds ran unattended with `.git/hooks` and
+#   `.git/config` unwritable, but a push to a bare remote outside the
+#   workspace root was denied, and a push to a hosted remote was not tried.
+#   Full access stays. A seat launched inside a linked worktree cannot write
+#   its Git metadata at all, since Codex refuses `..` paths. Under
+#   full access a `--sandbox` flag replaces the profile, so the floor is the
+#   PreToolUse hooks, the forbidden rules in `.codex/rules/codeflow.rules`, the
+#   git hooks and CI (codex-rs 4fd5745e: core/src/tools/registry.rs:603-650,
+#   core/src/exec_policy.rs:393-404).
+# - D2 reviewer seats: `--ask-for-approval never` with no `--sandbox` flag,
+#   which selects `cf-guard` below.
+#
+# `approval_policy = "never"` never asks: an operation outside the sandbox
+# fails instead of prompting. A failing tool under a profile is reported, never
+# answered by switching to full access or turning the proxy off.
 
+# Keep `approvals_reviewer` so switching to `on-request` restores auto review.
 approval_policy = "never"
 approvals_reviewer = "auto_review"
 web_search = "live"
@@ -29,9 +55,15 @@ sandbox = "elevated"
 
 [features]
 hooks = true
+# Domain rules and the local/private-network guard exist only with the proxy
+# (docs: permissions, "Local and private networks"). Under full access there
+# is no sandbox and the proxy is not in the path.
+network_proxy = true
 
-# Keep Codex's built-in case-insensitive KEY/SECRET/TOKEN environment scrub
-# active for every shell command even if the upstream default changes.
+# Codex passes KEY, SECRET and TOKEN variables through by default
+# (`ignore_default_excludes` defaults to true, codex-rs
+# config/src/shell_environment_policy.rs:135-136). `false` turns the built-in
+# scrub on for every shell command, in every sandbox mode.
 [shell_environment_policy]
 ignore_default_excludes = false
 
@@ -51,33 +83,86 @@ glob_scan_max_depth = 6
 "~/.kube/**" = "deny"
 "~/.cargo/credentials*" = "deny"
 "~/.codex/auth.json" = "deny"
+"~/.grok/auth.json" = "deny"
+"~/.grok/mcp_credentials.json" = "deny"
+"~/.pypirc" = "deny"
+"~/.gem/credentials" = "deny"
+"~/.password-store/**" = "deny"
 
+# Secret files are denied at the workspace root only. A wildcard in a
+# directory part (`**/.env`, `*/.env`) makes Codex deny deleting and renaming
+# every directory the pattern could reach, so a seat could not run `cargo
+# build` (Codex 0.159.1). Nested secret files, such as `sub/.env` or the
+# `.env` of a linked worktree under `.worktrees/`, can be read, changed and
+# deleted: a recorded gap.
 [permissions.cf-guard.filesystem.":workspace_roots"]
-"**/.env" = "deny"
-"**/.env.*" = "deny"
-"**/*.pem" = "deny"
-"**/*.key" = "deny"
-"**/*.p12" = "deny"
-"**/*.pfx" = "deny"
-"**/.netrc" = "deny"
-"**/id_rsa*" = "deny"
-"**/id_ed25519*" = "deny"
+".env" = "deny"
+".env.*" = "deny"
+"*.pem" = "deny"
+"*.key" = "deny"
+"*.p12" = "deny"
+"*.pfx" = "deny"
+".netrc" = "deny"
+"id_rsa*" = "deny"
+"id_ed25519*" = "deny"
+# The enforcement plane is read-only inside the writable root. `.codex`, `.git`
+# and `.agents` are already protected under `:workspace`. An exact relative
+# path set to "read" wins over the root's write (docs: permissions,
+# "Configuration spec"; codex-rs protocol/src/permissions.rs:1030-1048).
+".claude/settings.json" = "read"
+".claude/settings.local.json" = "read"
+".codeflow/policy.json" = "read"
+".codeflow/project.toml" = "read"
+".codeflow/git-hooks" = "read"
+".grok" = "read"
+".github/workflows/codeflow-ci.yml" = "read"
 
-# Allow research, dependency resolution, and external tool APIs on public
-# hosts. Keep private/link-local destinations and arbitrary Unix sockets closed;
-# exact loopback exceptions support local dev servers and browser/UI tests.
 [permissions.cf-guard.network]
 enabled = true
-# Use the full subprocess-network proxy so public research, package managers,
-# and authenticated tool APIs are not constrained by the limited proxy mode.
-# The domain rules and private-network boundary below still constrain targets.
 mode = "full"
 allow_local_binding = false
 allow_upstream_proxy = false
 dangerously_allow_non_loopback_proxy = false
 dangerously_allow_all_unix_sockets = false
 
+# With the proxy on and `allow_local_binding = false`, private and link-local
+# targets are blocked even under "*" = "allow", and only the literal local
+# hosts below are reachable (docs: permissions, "Local and private networks").
+# A reviewer runs no dev server, so it loses nothing.
 [permissions.cf-guard.network.domains]
+"*" = "allow"
+"localhost" = "allow"
+"127.0.0.1" = "allow"
+"::1" = "allow"
+
+# Builder seat without full access (D1; selected only after the spike
+# passes). Launch from the main checkout's root, so
+# the common `.git` (objects, refs, worktrees/) is inside the workspace root,
+# and work in `.worktrees/<slug>` (ADR-0055 decision 5). An explicit write
+# rule on a metadata path lifts the default `.git` protection (codex-rs
+# protocol/src/permissions.rs:2470-2506); hooks and config stay read-only
+# because hook commands run unsandboxed later. Secret denies are inherited
+# from `cf-guard`. `allow_local_binding = true` lets dev servers listen and
+# also turns the private-network guard off for this profile: a recorded gap.
+# Not selected: its spike did not pass (see D1 above), because a push to a
+# remote outside the workspace root is denied.
+[permissions.cf-builder]
+extends = "cf-guard"
+
+[permissions.cf-builder.filesystem.":workspace_roots"]
+".git" = "write"
+".git/hooks" = "read"
+".git/config" = "read"
+
+[permissions.cf-builder.network]
+enabled = true
+mode = "full"
+allow_local_binding = true
+allow_upstream_proxy = false
+dangerously_allow_non_loopback_proxy = false
+dangerously_allow_all_unix_sockets = false
+
+[permissions.cf-builder.network.domains]
 "*" = "allow"
 "localhost" = "allow"
 "127.0.0.1" = "allow"

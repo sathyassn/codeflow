@@ -1,5 +1,6 @@
 ---
 id: ADR-0049
+uid: 2317badb-5a08-4c38-904b-8c001e0a3fa8
 title: bounded cf-present runtime and renderer boundary
 date: 2026-08-01
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: add the session-scoped presentation renderer, service, browser-isolation, and build boundaries
 ---
 
-# ADR-0049 — bounded cf-present runtime and renderer boundary
+# ADR-0049: bounded cf-present runtime and renderer boundary
 
 ## Context
 
@@ -184,3 +185,116 @@ kill.
 `docs/architecture.md` gains the `cf-present` crate, immutable renderer-asset
 pipeline, per-session loopback service, tokenless browser bootstrap, isolated
 profile, sandbox document, platform-state authority, and cleanup boundaries.
+
+## Update 2026-09-25: Mermaid retired (TSK-087)
+
+The operator decided on 2026-09-24 that figures are HTML and never Mermaid
+(ADR-0068, update of that date). TSK-087 carries the removal in 3.0.0, the
+first release of present, so no released consumer holds a diagram document.
+
+- The `diagram` block, its Mermaid 11.16.1 renderer, the sanitizer and the
+  packages they bundled leave the build. The renderer paragraph above, which
+  lazy-loads Mermaid for diagram blocks, describes the runtime before this
+  update. The lazy chunks are now figure, fonts and syntax, and the SBOM,
+  license inventory and size budgets were regenerated.
+- The v1 document schema narrows: the `diagram` definition leaves its block
+  catalog, and a document draws at most 24 figure blocks. New `present open`
+  and `update` input that carries a `diagram` block is refused before typed
+  parsing, with the replacement for its kind and the conversion section of
+  the `cf-present` authoring reference.
+- A revision stored with a `diagram` block by a pre-release build still
+  loads, as the `retired` revision kind of the history schema. It is read
+  only and never rewritten: the page and a new export render every other
+  block as before and show a notice and each diagram's escaped source with
+  its conversion in the diagram's place, so a session too large for
+  `present history` still shows its whole document, and feedback on it is
+  refused until `present update` stores a converted revision. A record that
+  is broken in any other way keeps its own error.
+- The consequence above that export enhancement covers diagrams no longer
+  applies; export enhancement covers syntax highlighting and figures.
+
+## Update 2026-09-26: live html stages are inlined (TSK-117)
+
+The paragraph above on the sandboxed HTML block describes the runtime before
+`eb3718896` (2026-08-15). Since then the live session inlines a validated
+`html` stage into the page, scoped to a host id, so a note can target a node
+or an edge inside it; the stage still passes the same validation (no
+script, event handler, link, embed, form, remote URL or `data-cf-*` name
+outside the closed vocabulary of SPC-014) and runs under the application
+CSP (`script-src 'self'`, `form-action 'none'`). Export keeps a sandboxed
+`iframe` with `srcdoc` and no `allow-scripts` or `allow-same-origin`, since
+an exported file may be opened outside the session CSP. The
+`/sandbox/<revision>/<id>` route is no longer used by the page; TSK-118
+removes it. ADR-0073 records the review contract v2 decisions that build on
+this boundary.
+
+## Amendment 2026-09-30: gzip service variants for Safari (TSK-193)
+
+The primary approved deterministic gzip variants alongside preferred Brotli.
+This supersedes the Brotli-only service rule above. Safari's loopback HTTP
+requests do not advertise Brotli, so the previous 406 left the default Mac
+browser without the stylesheet, application or Comment control. AC-5 keeps
+Safari qualification; the transport adapts to that accepted intent.
+
+Every hashed service asset now has committed `.br` and `.gz` representations.
+The pinned Node toolchain emits gzip level 9 with no mtime and OS byte 255.
+The manifest records each encoding's size, SHA-256 and ETag; a reproducible
+file-level CycloneDX SBOM covers both representations alongside the unchanged
+production dependency SBOM. Two clean builds and decoded-content comparisons
+verify the variants. No raw representation or Rust decoder is added.
+
+The service prefers an explicit acceptable `br`, then `gzip`. A quality of
+zero excludes an encoding; malformed qualities are refused. When neither is
+acceptable it keeps the 406 explanation and `--no-launch` recovery. Exact
+MIME, matching Content-Encoding, Vary, immutable caching and nosniff remain;
+loopback, authentication, cookie, CSP and repository-file boundaries are
+unchanged.
+
+### Measured cost and budgets
+
+The 15 service assets remain 279,815 B Brotli. Gzip adds 305,879 B, with a
+largest chunk of 132,502 B. Service payload storage goes from 279,815 B to
+585,694 B (2.09 times); combined service and export payload storage goes from
+550,094 B to 855,973 B (1.56 times). The export remains 270,279 B. The same
+worktree's release CLI grows from 18,960,816 B to 19,278,272 B, a 317,456 B
+increment including code and manifest changes. The full embedded asset tree,
+including metadata and supply-chain files, grows from 615,788 B to 941,746 B
+(1.53 times). This is an incremental binary measurement, not a fresh
+no-assets baseline qualification.
+
+The TSK-087 Brotli corpus/chunk caps remain 295,000/145,000 B. New gzip
+corpus/chunk caps are 340,000/150,000 B, each the measurement plus 10% rounded
+up to 5,000 B. The spike's 1,250,000 B service and 2,600,000 B combined binary
+delta bounds are unchanged. Both compressed service corpora together are
+585,694 B; the full release baseline check remains a release gate.
+
+Cold production-service page measurements include the HTML and encoded asset
+response bodies, excluding bootstrap, API polling and HTTP headers. They use
+fresh headless profiles with native request headers, no forced encoding.
+
+| Page | Chrome Brotli | WebKit gzip | Previous request cap | New cap |
+|---|---:|---:|---:|---:|
+| Prose | 178,467 B | 185,547 B | 7,500 B | 215,000 B |
+| Rust code | 229,800 B | 243,371 B | 75,000 B | 275,000 B |
+| Basic flow figure | 201,230 B | 209,621 B | 250,000 B | 250,000 B |
+
+The first two old spike caps predate the current conversation runtime and
+bundled fonts; even the unchanged Brotli corpus exceeds them. This amendment
+makes that pre-existing growth explicit and allows the measured gzip cost,
+with bounded headroom. The figure cap does not rise. `npm run check:transport`
+enforces all three caps on both native clients through the production service.
+The full conversation journey passes in Chrome, Firefox and WebKit at 1280
+and 375 px; the earlier native WebKit 406 is the fail-before evidence.
+
+### Clarification 2026-09-30: request-cap enforcement (TSK-193 fix round 2)
+
+The spike's 7,500 / 75,000 / 250,000 B page figures were documented targets
+only, never enforced by a check. The table above compares those targets with
+new measured caps; it does not describe a passing gate being loosened.
+The new prose cap has 15.9% headroom above the measured gzip page, the code
+cap has 13.0%, and the retained figure cap has 19.3%.
+
+`npm run check:browser` now runs the existing three-engine browser suite and
+then `check:transport`, so the measured page caps are part of that browser
+gate. The transport subcheck uses native Chrome Brotli and WebKit gzip on
+three cold pages each. It remains independently runnable for diagnosis.

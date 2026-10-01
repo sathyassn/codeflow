@@ -1,5 +1,6 @@
 ---
 id: ADR-0030
+uid: 287b9c1a-6d4e-4de2-8801-2b33fc02af7d
 title: make proportionate design and code quality a duo gate
 date: 2026-07-18
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: the shared duo contract and evaluator now block speculative or unjustified design and implementation complexity, with Codex first verification and Fable final review
 ---
 
-# ADR-0030 — proportionate design and code quality
+# ADR-0030: proportionate design and code quality
 
 ## Context
 

@@ -50,11 +50,42 @@ impl std::fmt::Display for DocsLintIssue {
 #[derive(Debug, Default)]
 pub struct DocsLintReport {
     pub issues: Vec<DocsLintIssue>,
-    /// Skipped-layer notes (absent tiers).
-    pub notes: Vec<String>,
+    /// Skipped-layer notes, each with the step that clears it: a layer the
+    /// project's tier installs is missing, or a reference points into an
+    /// absent layer.
+    pub notes: Vec<crate::remedy::Finding>,
+    /// References not checked because their layer is absent, by layer.
+    unchecked: std::collections::BTreeMap<&'static str, std::collections::BTreeSet<String>>,
 }
 
 impl DocsLintReport {
+    /// Record a reference into `layer` that could not be checked.
+    fn unchecked(&mut self, layer: &'static str, reference: &str) {
+        self.unchecked
+            .entry(layer)
+            .or_default()
+            .insert(reference.to_string());
+    }
+
+    /// One note per absent layer that something refers to.
+    fn note_unchecked(&mut self) {
+        for (layer, references) in std::mem::take(&mut self.unchecked) {
+            let clearing = match layer {
+                EPICS_LAYER => &crate::remedy::DOCS_EPICS_UNCHECKED,
+                SPECS_LAYER => &crate::remedy::DOCS_SPECS_UNCHECKED,
+                ADRS_LAYER => &crate::remedy::DOCS_ADRS_UNCHECKED,
+                _ => &crate::remedy::DOCS_CAPABILITIES_UNCHECKED,
+            };
+            self.notes.push(crate::remedy::Finding::new(
+                format!(
+                    "{layer} is absent, so these references are not checked: {}",
+                    references.into_iter().collect::<Vec<_>>().join(", ")
+                ),
+                clearing.remedy(),
+            ));
+        }
+    }
+
     /// `true` when no blocking issue was found.
     #[must_use]
     pub fn is_clean(&self) -> bool {
@@ -93,8 +124,23 @@ pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     lint_epics(repo_root, &graph, &mut report);
     lint_capability_epic_reciprocity(repo_root, &mut report);
     lint_tasks(repo_root, &graph, &mut report);
+    report.note_unchecked();
 
     report
+}
+
+const CAPABILITIES_LAYER: &str = "docs/capabilities.md";
+const ADRS_LAYER: &str = "docs/decisions/";
+const EPICS_LAYER: &str = "project-management/epics/";
+const SPECS_LAYER: &str = "project-management/specs/";
+
+/// Whether the project's tier installs the docs layers (capabilities and
+/// decisions): the standard and full tiers do. An unscaffolded tree or the
+/// minimal tier never had them, so their absence is not a finding.
+fn tier_installs_docs(repo_root: &Path) -> bool {
+    use crate::scaffold::manifest::Tier;
+    crate::scaffold::state::ProjectState::load(repo_root)
+        .is_ok_and(|state| matches!(state.tier, Tier::Standard | Tier::Full))
 }
 
 fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintReport) {
@@ -173,9 +219,12 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
         let (entries, _) = parse_capabilities(&content);
         Some(entries.into_iter().map(|e| e.id).collect())
     } else {
-        report
-            .notes
-            .push("docs/capabilities.md absent — capability checks skipped".to_string());
+        if tier_installs_docs(repo_root) {
+            report.notes.push(crate::remedy::Finding::new(
+                "docs/capabilities.md absent; capability checks skipped",
+                crate::remedy::DOCS_LAYER_ABSENT.with(&[("path", CAPABILITIES_LAYER)]),
+            ));
+        }
         None
     };
 
@@ -202,9 +251,12 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
         }
         Some(ids)
     } else {
-        report
-            .notes
-            .push("docs/decisions/ absent — ADR checks skipped".to_string());
+        if tier_installs_docs(repo_root) {
+            report.notes.push(crate::remedy::Finding::new(
+                "docs/decisions/ absent; ADR checks skipped",
+                crate::remedy::DOCS_LAYER_ABSENT.with(&[("path", ADRS_LAYER)]),
+            ));
+        }
         None
     };
 
@@ -219,9 +271,6 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
                 .collect(),
         )
     } else {
-        report
-            .notes
-            .push("project-management/epics/ absent — epic reference checks skipped".to_string());
         None
     };
 
@@ -235,9 +284,6 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
                 .collect(),
         )
     } else {
-        report
-            .notes
-            .push("project-management/specs/ absent — spec reference checks skipped".to_string());
         None
     };
 
@@ -300,6 +346,11 @@ fn lint_capabilities(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintRe
         }
 
         // epics[] resolve to project-management epic files.
+        if graph.epics.is_none() {
+            for epic_ref in &entry.epics {
+                report.unchecked(EPICS_LAYER, epic_ref);
+            }
+        }
         if let Some(epic_ids) = &graph.epics {
             for epic_ref in &entry.epics {
                 if !epic_ids.contains(epic_ref) {
@@ -316,6 +367,11 @@ fn lint_capabilities(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintRe
         }
 
         // adrs[] resolve to docs/decisions files.
+        if graph.adrs.is_none() {
+            for adr_ref in &entry.adrs {
+                report.unchecked(ADRS_LAYER, adr_ref);
+            }
+        }
         if let Some(adr_ids) = &graph.adrs {
             for adr_ref in &entry.adrs {
                 if !adr_ids.contains(adr_ref) {
@@ -407,6 +463,11 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
         };
 
         // capabilities[] resolve back into the registry.
+        if graph.capabilities.is_none() {
+            for cap_ref in string_list(&data, "capabilities") {
+                report.unchecked(CAPABILITIES_LAYER, &cap_ref);
+            }
+        }
         if let Some(capability_ids) = &graph.capabilities {
             for cap_ref in string_list(&data, "capabilities") {
                 if !capability_ids.contains(&cap_ref) {
@@ -422,6 +483,11 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
         }
 
         // adrs[] resolve to decisions files.
+        if graph.adrs.is_none() {
+            for adr_ref in string_list(&data, "adrs") {
+                report.unchecked(ADRS_LAYER, &adr_ref);
+            }
+        }
         if let Some(adr_ids) = &graph.adrs {
             for adr_ref in string_list(&data, "adrs") {
                 if !adr_ids.contains(&adr_ref) {
@@ -436,6 +502,11 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
             }
         }
 
+        if graph.specs.is_none() {
+            for spec_ref in string_list(&data, "specs") {
+                report.unchecked(SPECS_LAYER, &spec_ref);
+            }
+        }
         if let Some(spec_ids) = &graph.specs {
             for spec_ref in string_list(&data, "specs") {
                 if !spec_ids.contains(&spec_ref) {
@@ -465,12 +536,8 @@ struct TaskGraphRecord {
 
 fn lint_tasks(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
     let files = crate::workgraph::layout::task_record_files(&repo_root.join("project-management"));
+    // No task records: nothing to check, and nothing to note.
     if files.is_empty() {
-        if !repo_root.join("project-management/tasks").is_dir() {
-            report
-                .notes
-                .push("project-management/tasks/ absent — task graph checks skipped".to_string());
-        }
         return;
     }
 
@@ -533,25 +600,13 @@ fn parse_task_graph_record(
         .and_then(|field| find_line(&content, &format!("{field}:")))
         .unwrap_or(1);
     let field_name = field.unwrap_or("depends_on");
-    let depends_on = match value {
-        None => Vec::new(),
-        Some(serde_yaml::Value::Sequence(values)) => values
-            .iter()
-            .map(|value| value.as_str().map(str::to_owned))
-            .collect::<Option<Vec<_>>>()
-            .or_else(|| {
-                report.issues.push(DocsLintIssue {
-                    file: rel.clone(),
-                    line: dependency_line,
-                    message: format!("task {id} {field_name} must contain only task-id strings"),
-                });
-                None
-            })?,
-        Some(_) => {
+    let depends_on = match crate::workgraph::deps::parse_dependencies(value) {
+        Ok(deps) => deps.into_iter().map(|dep| dep.id).collect(),
+        Err(error) => {
             report.issues.push(DocsLintIssue {
                 file: rel.clone(),
                 line: dependency_line,
-                message: format!("task {id} {field_name} must be a YAML list"),
+                message: format!("task {id} {field_name}: {error}"),
             });
             return None;
         }
@@ -621,6 +676,9 @@ fn index_task_records(records: &[TaskGraphRecord], report: &mut DocsLintReport) 
 fn lint_task_parent(record: &TaskGraphRecord, doc_graph: &DocGraph, report: &mut DocsLintReport) {
     match record.epic_id.as_deref() {
         Some(epic_id) => {
+            if doc_graph.epics.is_none() && is_valid_epic_format_id(epic_id) {
+                report.unchecked(EPICS_LAYER, epic_id);
+            }
             if !is_valid_epic_format_id(epic_id)
                 || doc_graph
                     .epics
@@ -665,6 +723,11 @@ fn lint_task_parent(record: &TaskGraphRecord, doc_graph: &DocGraph, report: &mut
 }
 
 fn lint_task_specs(record: &TaskGraphRecord, doc_graph: &DocGraph, report: &mut DocsLintReport) {
+    if doc_graph.specs.is_none() {
+        for spec_id in record.specs.iter().filter(|id| is_valid_spec_format_id(id)) {
+            report.unchecked(SPECS_LAYER, spec_id);
+        }
+    }
     if let Some(spec_ids) = &doc_graph.specs {
         for spec_id in &record.specs {
             if !is_valid_spec_format_id(spec_id) || !spec_ids.contains(spec_id) {
@@ -1295,18 +1358,86 @@ mod tests {
         assert!(report.issues.iter().any(|i| i.message.contains("ADR-0777")));
     }
 
-    #[test]
-    fn absent_tiers_skip_with_notes_and_lint_clean() {
+    /// A project whose `.codeflow/project.toml` records `tier`.
+    fn at_tier(tier: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let report = lint_docs(dir.path());
+        write(
+            dir.path(),
+            ".codeflow/project.toml",
+            &format!(
+                "schema_version = 1\ntier = \"{tier}\"\nscaffold_version = \"3.0.0\"\n\
+                 stack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\n\
+                 permission_preset = \"default\"\n"
+            ),
+        );
+        dir
+    }
+
+    #[test]
+    fn absent_layers_a_project_never_installed_print_nothing() {
+        // TSK-147: a note nobody can act on is noise. An unscaffolded tree
+        // and a standard tier without project-management skip quietly.
+        let bare = tempfile::tempdir().unwrap();
+        let report = lint_docs(bare.path());
         assert!(report.is_clean());
-        assert_eq!(report.notes.len(), 5, "notes: {:?}", report.notes);
-        assert!(report.notes.iter().any(|n| n.contains("capabilities.md")));
-        assert!(report.notes.iter().any(|n| n.contains("decisions")));
-        assert!(report
-            .notes
-            .iter()
-            .any(|n| n.contains("project-management")));
+        assert!(report.notes.is_empty(), "notes: {:?}", report.notes);
+
+        let standard = at_tier("standard");
+        write(standard.path(), "docs/capabilities.md", "# caps\n");
+        std::fs::create_dir_all(standard.path().join("docs/decisions")).unwrap();
+        let report = lint_docs(standard.path());
+        assert!(report.is_clean(), "{:?}", report.issues);
+        assert!(report.notes.is_empty(), "notes: {:?}", report.notes);
+    }
+
+    #[test]
+    fn an_absent_layer_the_tier_installs_is_noted_with_its_step() {
+        let standard = at_tier("standard");
+        let report = lint_docs(standard.path());
+        let texts: Vec<&str> = report.notes.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(report.notes.len(), 2, "notes: {texts:?}");
+        assert!(
+            texts.iter().any(|t| t.contains("capabilities.md")),
+            "{texts:?}"
+        );
+        assert!(texts.iter().any(|t| t.contains("decisions")), "{texts:?}");
+        assert!(
+            report
+                .notes
+                .iter()
+                .all(|n| n.remedy.contains("codeflow update")),
+            "{:?}",
+            report.notes
+        );
+
+        // A fresh full tier has no records yet: nothing refers to the
+        // record layers, so their absence is not noted.
+        let full = at_tier("full");
+        write(
+            full.path(),
+            "docs/capabilities.md",
+            &format!(
+                "# caps\n\n{}",
+                capability_block("CAP-001", "building", "[]", "[]", "[]")
+            ),
+        );
+        std::fs::create_dir_all(full.path().join("docs/decisions")).unwrap();
+        assert!(lint_docs(full.path()).notes.is_empty());
+        // A reference into an absent layer is noted with the step that
+        // creates what it names.
+        write(
+            full.path(),
+            "docs/capabilities.md",
+            &format!(
+                "# caps\n\n{}",
+                capability_block("CAP-001", "building", "[EPC-001]", "[]", "[]")
+            ),
+        );
+        let report = lint_docs(full.path());
+        assert_eq!(report.notes.len(), 1, "notes: {:?}", report.notes);
+        assert!(report.notes[0].text.contains("project-management/epics/"));
+        assert!(report.notes[0].text.contains("EPC-001"));
+        assert!(report.notes[0].remedy.contains("codeflow epic new"));
     }
 
     #[test]
@@ -1328,7 +1459,7 @@ mod tests {
         assert!(report
             .notes
             .iter()
-            .any(|n| n.contains("project-management")));
+            .any(|n| n.text.contains("project-management")));
     }
 
     #[test]
@@ -1351,6 +1482,44 @@ mod tests {
 
         let report = lint_docs(dir.path());
         assert!(report.is_clean(), "issues: {:?}", report.issues);
+    }
+
+    /// TSK-103 AC-10: a dependency is a bare id or `{id, kind, pin}`; the
+    /// object form resolves and joins the cycle check like a bare id, and a
+    /// malformed entry is reported.
+    #[test]
+    fn dependency_kinds_are_linted_like_bare_ids() {
+        let dir = clean_repo();
+        task_file(dir.path(), "TSK-001-001", "[]");
+        task_file(dir.path(), "TSK-001-002", "[TSK-001-001]");
+        task_file(
+            dir.path(),
+            "TSK-001-003",
+            "[{id: TSK-001-001, kind: research, pin: 0123abcd}, {id: TSK-001-002, kind: decision}]",
+        );
+        let report = lint_docs(dir.path());
+        assert!(report.is_clean(), "issues: {:?}", report.issues);
+
+        task_file(
+            dir.path(),
+            "TSK-001-004",
+            "[{id: TSK-001-404, kind: research, pin: 0123abcd}]",
+        );
+        task_file(dir.path(), "TSK-001-005", "[{id: TSK-001-001, kind: code}]");
+        let report = lint_docs(dir.path());
+        let messages: Vec<&str> = report
+            .issues
+            .iter()
+            .map(|issue| issue.message.as_str())
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains("TSK-001-404")),
+            "{messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("bare id")),
+            "{messages:?}"
+        );
     }
 
     #[test]

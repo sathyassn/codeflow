@@ -12,7 +12,7 @@ lcov.info
 /docs-portal/.portal/
 
 # codeflow:managed:begin
-# secrets — never tracked
+# secrets, never tracked
 .env
 .env.*
 *.pem
@@ -25,8 +25,9 @@ lcov.info
 .DS_Store
 *.swp
 
-# local-only claude settings
+# local-only claude settings and the Claude Code write journal
 .claude/settings.local.json
+.claude/.cc-writes/
 
 # linked worktree checkouts (not git's .git/worktrees/ metadata)
 .worktrees/

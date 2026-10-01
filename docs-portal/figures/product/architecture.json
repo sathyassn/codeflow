@@ -1,0 +1,704 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "product-architecture",
+    "family": "layering",
+    "binding": "authored",
+    "question": "Which layer holds which station of the traceability spine?",
+    "idea": "The spine runs from a capability through a work item and an ADR or spec to the ledger, four of the six layers hold its stations, and the pull request it crosses is held by none.",
+    "title": "The six knowledge layers along the traceability spine",
+    "kicker": "The knowledge model",
+    "description": "The axis is the five stations of the traceability spine: capability, work item, ADR or spec, pull request, ledger. WHAT holds capability, WORK holds the work item and also reaches ADR or spec because specs live in project-management, HOW holds ADR or spec, and TRACE holds the ledger. The spine enters each of those four layers at a disc and runs left to right in the source's order; it crosses the pull request station between HOW and TRACE, where no layer holds it. WHY and RULES hold no station and draw no bar. Beside its name, WHY is marked human-owned.",
+    "caption": "The spine runs through WHAT, WORK, HOW and TRACE in that order, and the pull request it crosses on the way to the ledger is held by no layer.",
+    "states": [
+      {
+        "name": "layer",
+        "mark": "layer",
+        "means": "Layer, drawn over the spine stations it holds"
+      },
+      {
+        "name": "act",
+        "mark": "act",
+        "means": "Where the spine enters the layer"
+      },
+      {
+        "name": "done",
+        "mark": "done",
+        "means": "Traceability spine, capability to ledger"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the product layer is human-owned",
+        "source": "docs/product.md",
+        "derive": "the WHY layer comment",
+        "check": {
+          "kind": "contains",
+          "text": "WHY layer. Human-owned:"
+        },
+        "value": true
+      },
+      {
+        "claim": "the rules live in AGENTS.md's managed block, the rules directory and the skills",
+        "source": "assets/base/rules/workflow-discipline.md#changing-these-instructions",
+        "derive": "the managed instruction sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The managed block of `AGENTS.md`, this directory and the skills"
+        },
+        "value": true
+      },
+      {
+        "claim": "the capability registry is the what layer",
+        "source": "AGENTS.md",
+        "derive": "the where things live line",
+        "check": {
+          "kind": "contains",
+          "text": "`docs/capabilities.md` (what)"
+        },
+        "value": true
+      },
+      {
+        "claim": "planned and active work lives in project-management/",
+        "source": "AGENTS.md",
+        "derive": "the where things live line",
+        "check": {
+          "kind": "contains",
+          "text": "`project-management/` (work)"
+        },
+        "value": true
+      },
+      {
+        "claim": "specs live in the WORK layer",
+        "source": "docs/adoption.md",
+        "derive": "the full tier row",
+        "check": {
+          "kind": "contains",
+          "text": "`project-management/` (epics, tasks, specs, templates)"
+        },
+        "value": true
+      },
+      {
+        "claim": "architecture and decisions live in docs/architecture.md and docs/decisions/",
+        "source": "AGENTS.md",
+        "derive": "the where things live line",
+        "check": {
+          "kind": "contains",
+          "text": "`docs/architecture.md` and `docs/decisions/`"
+        },
+        "value": true
+      },
+      {
+        "claim": "the trace layer is the ledger and codeflow recall",
+        "source": "AGENTS.md",
+        "derive": "the where things live line",
+        "check": {
+          "kind": "contains",
+          "text": "the ledger and `codeflow recall`"
+        },
+        "value": true
+      },
+      {
+        "claim": "the spine runs from capability through a work item",
+        "source": "docs/product.md#architecture",
+        "derive": "the spine sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The traceability spine links a capability to its epics and tasks"
+        },
+        "value": true
+      },
+      {
+        "claim": "the spine passes the pull request between the ADR or spec and the ledger",
+        "source": "docs/product.md#architecture",
+        "derive": "the spine sentence",
+        "check": {
+          "kind": "contains",
+          "text": "decisions and specs, the pull request and the ledger"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 352,
+      "draw": [
+        {
+          "text": "capability",
+          "x": 240,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "work item",
+          "x": 350,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "ADR or spec",
+          "x": 460,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "pull request",
+          "x": 570,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "ledger",
+          "x": 680,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 205,
+          "y1": 36,
+          "x2": 712,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 240,
+          "y1": 30,
+          "x2": 240,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 350,
+          "y1": 30,
+          "x2": 350,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 460,
+          "y1": 30,
+          "x2": 460,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 570,
+          "y1": 30,
+          "x2": 570,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 680,
+          "y1": 30,
+          "x2": 680,
+          "y2": 36
+        },
+        {
+          "text": "WHY",
+          "x": 0,
+          "y": 64,
+          "style": "strong"
+        },
+        {
+          "text": "human-owned",
+          "x": 58,
+          "y": 64,
+          "style": "mute"
+        },
+        {
+          "text": "docs/product.md",
+          "x": 0,
+          "y": 85,
+          "style": "mono"
+        },
+        {
+          "text": "RULES",
+          "x": 0,
+          "y": 112,
+          "style": "strong"
+        },
+        {
+          "text": "AGENTS.md, rules, skills",
+          "x": 0,
+          "y": 133,
+          "style": "mono"
+        },
+        {
+          "text": "WHAT",
+          "x": 0,
+          "y": 160,
+          "style": "strong",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "text": "docs/capabilities.md",
+          "x": 0,
+          "y": 181,
+          "style": "mono",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 208,
+          "y": 151,
+          "w": 64,
+          "h": 22,
+          "rx": 6,
+          "id": "b2"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 240,
+          "cy": 162,
+          "r": 8,
+          "id": "a2"
+        },
+        {
+          "text": "WORK",
+          "x": 0,
+          "y": 208,
+          "style": "strong",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "project-management/",
+          "x": 0,
+          "y": 229,
+          "style": "mono",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 318,
+          "y": 199,
+          "w": 174,
+          "h": 22,
+          "rx": 6,
+          "id": "b3"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 350,
+          "cy": 210,
+          "r": 8,
+          "id": "a3"
+        },
+        {
+          "text": "HOW",
+          "x": 0,
+          "y": 256,
+          "style": "strong",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "text": "architecture.md, decisions/",
+          "x": 0,
+          "y": 277,
+          "style": "mono",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 428,
+          "y": 247,
+          "w": 64,
+          "h": 22,
+          "rx": 6,
+          "id": "b4"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 460,
+          "cy": 258,
+          "r": 8,
+          "id": "a4"
+        },
+        {
+          "text": "TRACE",
+          "x": 0,
+          "y": 304,
+          "style": "strong",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "ledger, codeflow recall",
+          "x": 0,
+          "y": 325,
+          "style": "mono",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 648,
+          "y": 295,
+          "w": 64,
+          "h": 22,
+          "rx": 6,
+          "id": "b5"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 680,
+          "cy": 306,
+          "r": 8,
+          "id": "a5"
+        },
+        {
+          "state": "done",
+          "shape": "polyline",
+          "points": [
+            [
+              240,
+              162
+            ],
+            [
+              350,
+              210
+            ],
+            [
+              460,
+              258
+            ],
+            [
+              680,
+              306
+            ]
+          ],
+          "id": "s"
+        },
+        {
+          "text": "no layer holds the pull request",
+          "x": 560,
+          "y": 304,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "traceability spine",
+          "x": 712,
+          "y": 346,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 344,
+      "draw": [
+        {
+          "text": "capability",
+          "x": 188,
+          "y": 18,
+          "style": "mute"
+        },
+        {
+          "text": "ledger",
+          "x": 348,
+          "y": 18,
+          "anchor": "end",
+          "style": "mute"
+        },
+        {
+          "text": "WHY",
+          "x": 8,
+          "y": 43,
+          "style": "strong"
+        },
+        {
+          "text": "human-owned",
+          "x": 72,
+          "y": 43,
+          "style": "mute"
+        },
+        {
+          "text": "docs/product.md",
+          "x": 8,
+          "y": 64,
+          "style": "mono"
+        },
+        {
+          "text": "RULES",
+          "x": 8,
+          "y": 93,
+          "style": "strong"
+        },
+        {
+          "text": "AGENTS.md, rules, skills",
+          "x": 8,
+          "y": 114,
+          "style": "mono"
+        },
+        {
+          "text": "WHAT",
+          "x": 8,
+          "y": 143,
+          "style": "strong",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "text": "docs/capabilities.md",
+          "x": 8,
+          "y": 164,
+          "style": "mono",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 188,
+          "y": 138,
+          "w": 24,
+          "h": 20,
+          "rx": 6,
+          "id": "b2"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 200,
+          "cy": 148,
+          "r": 8,
+          "id": "a2"
+        },
+        {
+          "text": "WORK",
+          "x": 8,
+          "y": 193,
+          "style": "strong",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "project-management/",
+          "x": 8,
+          "y": 214,
+          "style": "mono",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 222,
+          "y": 188,
+          "w": 58,
+          "h": 20,
+          "rx": 6,
+          "id": "b3"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 234,
+          "cy": 198,
+          "r": 8,
+          "id": "a3"
+        },
+        {
+          "text": "HOW",
+          "x": 8,
+          "y": 243,
+          "style": "strong",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "text": "architecture.md, decisions/",
+          "x": 8,
+          "y": 264,
+          "style": "mono",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 256,
+          "y": 238,
+          "w": 24,
+          "h": 20,
+          "rx": 6,
+          "id": "b4"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 268,
+          "cy": 248,
+          "r": 8,
+          "id": "a4"
+        },
+        {
+          "text": "TRACE",
+          "x": 8,
+          "y": 293,
+          "style": "strong",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "ledger, codeflow recall",
+          "x": 8,
+          "y": 314,
+          "style": "mono",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 324,
+          "y": 288,
+          "w": 24,
+          "h": 20,
+          "rx": 6,
+          "id": "b5"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 336,
+          "cy": 298,
+          "r": 8,
+          "id": "a5"
+        },
+        {
+          "state": "done",
+          "shape": "polyline",
+          "points": [
+            [
+              200,
+              148
+            ],
+            [
+              234,
+              198
+            ],
+            [
+              268,
+              248
+            ],
+            [
+              336,
+              298
+            ]
+          ],
+          "id": "s"
+        },
+        {
+          "text": "traceability spine",
+          "x": 352,
+          "y": 334,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Layer",
+        "Holds",
+        "Lives in",
+        "Spine station"
+      ],
+      "rows": [
+        [
+          "WHY",
+          "purpose, users, scope, non-goals",
+          "docs/product.md (human-owned)",
+          "none"
+        ],
+        [
+          "RULES",
+          "how we work",
+          "AGENTS.md, .codeflow/rules/ and the skills",
+          "none"
+        ],
+        [
+          "WHAT",
+          "what the system does",
+          "docs/capabilities.md",
+          "capability"
+        ],
+        [
+          "WORK",
+          "planned and active work",
+          "project-management/ (epics, specs, tasks, allocated by the CLI)",
+          "work item; also holds the spec"
+        ],
+        [
+          "HOW",
+          "structure and decisions",
+          "docs/architecture.md and docs/decisions/",
+          "ADR or spec"
+        ],
+        [
+          "TRACE",
+          "what happened and why",
+          "the ledger and codeflow recall",
+          "ledger"
+        ]
+      ]
+    }
+  }
+}

@@ -1,6 +1,7 @@
 ---
 id: ADR-0015
-title: duo-model orchestration — the Claude+codex develop flow (cf-model-orchestrator)
+uid: 68dd51d4-99cd-4a11-86b7-944a48e056d8
+title: "duo-model orchestration: the Claude and Codex develop flow (cf-model-orchestrator)"
 date: 2026-07-10
 status: accepted
 superseded_by: ADR-0023
@@ -10,7 +11,7 @@ architecture_impact: none — the duo flow ships as the `cf-model-orchestrator` 
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0015 — duo-model orchestration for the develop flow
+# ADR-0015: duo-model orchestration for the develop flow
 
 ## Context
 
@@ -153,3 +154,11 @@ preflight now checks the orchestrating harness and the plugin surface, not
 just codex auth, and degrades to solo from either missing half. This ADR is
 not fully superseded (the flow, roles, gate, and degradation doctrine stand);
 `superseded_by` stays null.
+
+## Note, 2026-09-29: ADR-0076 removes the round bounds
+
+ADR-0076 (one PR per task and planning once per epic) is accepted. The
+bounded fix loop of the Decision ("≤2 rounds to plan-agreement, then a
+human tiebreak; the build loop keeps `cf-develop`'s max-3-rework bound")
+is superseded: no round or rework count decides review, which ends on
+evidence. The accepted text above is unchanged.

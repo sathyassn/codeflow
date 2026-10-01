@@ -11,8 +11,10 @@ use std::{
 use clap::{Args, Subcommand};
 use codeflow_present::{
     browser,
+    delivery::{DeliveryStatus, EventFilter, EventKind},
     document::parse_document,
     export::{export_session, ExportMode, ExportTheme},
+    limits,
     service::{serve_session, HealthRecord, ReadyRecord},
     state::{FeedbackResolution, SessionStatus, SessionStore},
     PresentError,
@@ -40,6 +42,31 @@ enum PresentCommand {
         #[arg(long)]
         no_launch: bool,
     },
+    /// Reply to a review, note or answer in the thread rail.
+    Reply {
+        session_id: String,
+        event_id: String,
+        #[arg(long)]
+        note: Option<String>,
+        text: String,
+    },
+    /// Compare blocks and carried feedback between revisions.
+    Diff {
+        session_id: String,
+        #[arg(long)]
+        from: u64,
+        #[arg(long)]
+        to: u64,
+    },
+    /// Check framing, anchors and forms without a browser.
+    Check {
+        #[arg(required_unless_present = "file", conflicts_with = "file")]
+        session_id: Option<String>,
+        #[arg(long)]
+        file: Option<PathBuf>,
+        #[arg(long, requires = "session_id")]
+        revision: Option<u64>,
+    },
     /// List presentation sessions for this project.
     List,
     /// Reopen an active presentation session.
@@ -53,15 +80,45 @@ enum PresentCommand {
     Update {
         session_id: String,
         document: PathBuf,
+        /// Apply the update only while revision N is current; otherwise
+        /// exit 8 and write nothing.
+        #[arg(long, value_name = "N")]
+        expected_revision: Option<u64>,
     },
     /// Print the append-only feedback history as JSON.
     History { session_id: String },
-    /// Deliver pending review envelopes as JSON lines.
+    /// Deliver pending events as JSON lines: review envelopes (v1) or
+    /// typed review and answer events (v2).
     Feedback {
         session_id: String,
         /// Continue until the session closes.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "wait")]
         follow: bool,
+        /// Wait until an event is pending, print every pending one and exit
+        /// 0; exit 6 on timeout, 7 when the session closes with none pending.
+        #[arg(long)]
+        wait: bool,
+        /// Stop waiting after S seconds (1 to 86400).
+        #[arg(
+            long,
+            value_name = "S",
+            requires = "wait",
+            value_parser = clap::value_parser!(u64).range(1..=86_400)
+        )]
+        timeout: Option<u64>,
+        /// v1: review envelopes only, as 3.0.0 printed them; v2: typed events.
+        #[arg(long, default_value = "v1", value_parser = ["v1", "v2"])]
+        format: String,
+    },
+    /// Read stored events as v2 lines without delivering them.
+    Responses {
+        #[command(subcommand)]
+        command: ResponsesCommand,
+    },
+    /// Acknowledge a delivered event; acknowledging again changes nothing.
+    Ack {
+        session_id: String,
+        event_id: String,
     },
     /// Mark one delivered feedback event addressed or dismissed.
     Resolve {
@@ -80,10 +137,13 @@ enum PresentCommand {
         session_id: String,
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
-        #[arg(long, default_value = "editorial", value_parser = ["editorial", "technical"])]
+        #[arg(long, default_value = "editorial", value_parser = ["graphite", "slate", "sage", "editorial", "instrument", "technical", "ink"])]
         theme: String,
         #[arg(long, default_value = "system", value_parser = ["system", "light", "dark"])]
         mode: String,
+        /// Include the private conversation as a read-only appendix.
+        #[arg(long, alias = "include-feedback")]
+        with_notes: bool,
     },
     /// Remove eligible closed session state.
     Clear {
@@ -97,9 +157,47 @@ enum PresentCommand {
     ServeInternal { session_id: String },
 }
 
+#[derive(Debug, Subcommand)]
+enum ResponsesCommand {
+    /// List events with their status; filters combine with AND.
+    List {
+        session_id: String,
+        #[arg(long, value_name = "N")]
+        revision: Option<u64>,
+        /// A form or v2 decision block id.
+        #[arg(long, value_name = "BLOCK_ID")]
+        form: Option<String>,
+        #[arg(long, value_parser = ["pending", "delivered", "acknowledged"])]
+        status: Option<String>,
+        #[arg(long, value_parser = ["review", "answer", "amendment", "reopen", "tombstone"])]
+        kind: Option<String>,
+    },
+}
+
+/// `feedback --wait` found nothing pending before its timeout (SPC-014 I5).
+const EXIT_TIMEOUT: i32 = 6;
+/// `feedback --wait` saw the session close with nothing pending.
+const EXIT_CLOSED: i32 = 7;
+
+/// Create the cf-present state root during `init` and `update`, which run
+/// outside the agent sandbox; the sandbox preset can write only inside it.
+/// A failure is reported but does not fail the scaffold operation.
+pub fn provision_state_root_or_warn() {
+    if let Err(error) = codeflow_present::state::provision_state_root() {
+        eprintln!("warning: could not create the cf-present state directory: {error}");
+    }
+}
+
 pub fn run(args: &PresentArgs) -> i32 {
     match run_inner(&args.command) {
-        Ok(()) => 0,
+        Ok(code) => code,
+        Err(PresentError::RevisionConflict { expected, current }) => {
+            // The exact line of SPC-014 I5, for an agent to parse.
+            eprintln!(
+                r#"{{"error":"revision_conflict","expected":{expected},"current":{current}}}"#
+            );
+            8
+        }
         Err(error) => {
             eprintln!("present: {error}");
             exit_code(&error)
@@ -107,14 +205,152 @@ pub fn run(args: &PresentArgs) -> i32 {
     }
 }
 
-fn run_inner(command: &PresentCommand) -> codeflow_present::Result<()> {
+fn run_inner(command: &PresentCommand) -> codeflow_present::Result<i32> {
     let project = std::env::current_dir().map_err(|error| PresentError::io(".", error))?;
     let store = SessionStore::discover(&project)?;
+    match command {
+        PresentCommand::Check {
+            session_id,
+            file,
+            revision,
+        } => check(&store, session_id.as_deref(), file.as_deref(), *revision),
+        PresentCommand::Feedback {
+            session_id,
+            follow,
+            wait,
+            timeout,
+            format,
+        } => deliver_feedback(
+            &store,
+            parse_id(session_id)?,
+            &FeedbackOptions {
+                follow: *follow,
+                wait: *wait,
+                timeout: timeout.map(Duration::from_secs),
+                v2: format == "v2",
+            },
+        ),
+        PresentCommand::Responses {
+            command:
+                ResponsesCommand::List {
+                    session_id,
+                    revision,
+                    form,
+                    status,
+                    kind,
+                },
+        } => {
+            let filter = EventFilter {
+                revision: *revision,
+                form: form.clone(),
+                status: status.as_deref().map(|status| match status {
+                    "pending" => DeliveryStatus::Pending,
+                    "delivered" => DeliveryStatus::Delivered,
+                    "acknowledged" => DeliveryStatus::Acknowledged,
+                    _ => unreachable!("clap validates statuses"),
+                }),
+                kind: kind.as_deref().map(|kind| match kind {
+                    "review" => EventKind::Review,
+                    "answer" => EventKind::Answer,
+                    "amendment" => EventKind::Amendment,
+                    "reopen" => EventKind::Reopen,
+                    "tombstone" => EventKind::Tombstone,
+                    _ => unreachable!("clap validates kinds"),
+                }),
+            };
+            let stdout = std::io::stdout();
+            let mut output = stdout.lock();
+            for line in store.feedback_lines(parse_id(session_id)?, &filter)? {
+                write_line(&mut output, &serde_json::to_vec(&line)?)?;
+            }
+            Ok(0)
+        }
+        PresentCommand::Ack {
+            session_id,
+            event_id,
+        } => {
+            if store.acknowledge(parse_id(session_id)?, parse_id(event_id)?)? {
+                println!("acknowledged {event_id}");
+            } else {
+                println!("{event_id} was already acknowledged");
+            }
+            Ok(0)
+        }
+        other => run_command(&store, project, other).map(|()| 0),
+    }
+}
+
+fn check(
+    store: &SessionStore,
+    session_id: Option<&str>,
+    file: Option<&Path>,
+    revision: Option<u64>,
+) -> codeflow_present::Result<i32> {
+    let bytes = if let Some(path) = file {
+        read_document(path)?
+    } else {
+        let id = parse_id(session_id.expect("clap requires session or file"))?;
+        let record = match revision {
+            Some(n) => store.revision(id, n)?,
+            None => store.current_revision(id)?,
+        };
+        match record.content {
+            codeflow_present::state::RevisionContent::Supported { document } => {
+                serde_json::to_vec(&document)?
+            }
+            codeflow_present::state::RevisionContent::Unsupported { raw, .. } => raw.into_bytes(),
+            codeflow_present::state::RevisionContent::Retired { document, .. } => {
+                serde_json::to_vec(&document)?
+            }
+        }
+    };
+    let faults = codeflow_present::document::check_document(&bytes);
+    for fault in &faults {
+        println!("{}", serde_json::to_string(fault)?);
+    }
+    println!(
+        "{}",
+        serde_json::json!({"faults":faults.len(),"valid":faults.is_empty()})
+    );
+    Ok(if faults.is_empty() { 0 } else { 9 })
+}
+
+fn run_command(
+    store: &SessionStore,
+    project: PathBuf,
+    command: &PresentCommand,
+) -> codeflow_present::Result<()> {
     match command {
         PresentCommand::Open {
             document,
             no_launch,
-        } => open(&store, document, *no_launch),
+        } => open(store, document, *no_launch),
+        PresentCommand::Reply {
+            session_id,
+            event_id,
+            note,
+            text,
+        } => {
+            let id = store.reply(
+                parse_id(session_id)?,
+                parse_id(event_id)?,
+                note.as_deref().map(parse_id).transpose()?,
+                text,
+            )?;
+            println!("reply {id}");
+            Ok(())
+        }
+        PresentCommand::Diff {
+            session_id,
+            from,
+            to,
+        } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&store.diff(parse_id(session_id)?, *from, *to)?)?
+            );
+            Ok(())
+        }
         PresentCommand::List => {
             println!("{}", serde_json::to_string_pretty(&store.list()?)?);
             Ok(())
@@ -122,13 +358,18 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<()> {
         PresentCommand::Show {
             session_id,
             no_launch,
-        } => show(&store, parse_id(session_id)?, *no_launch),
+        } => show(store, parse_id(session_id)?, *no_launch),
         PresentCommand::Update {
             session_id,
             document,
+            expected_revision,
         } => {
             let bytes = read_document(document)?;
-            let revision = store.update_document(parse_id(session_id)?, parse_document(&bytes)?)?;
+            let revision = store.update_document_expecting(
+                parse_id(session_id)?,
+                parse_document(&bytes)?,
+                *expected_revision,
+            )?;
             println!("updated {session_id} to revision {revision}");
             Ok(())
         }
@@ -139,28 +380,30 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<()> {
             );
             Ok(())
         }
-        PresentCommand::Feedback { session_id, follow } => {
-            deliver_feedback(&store, parse_id(session_id)?, *follow)
-        }
         PresentCommand::Resolve {
             session_id,
             event_id,
             event_version,
             status,
-        } => resolve_feedback(&store, session_id, event_id, *event_version, status),
-        PresentCommand::Close { session_id } => close(&store, session_id),
+        } => resolve_feedback(store, session_id, event_id, *event_version, status),
+        PresentCommand::Close { session_id } => close(store, session_id),
         PresentCommand::Export {
             session_id,
             out,
             theme,
             mode,
-        } => export(&store, session_id, out, theme, mode),
+            with_notes,
+        } => export(store, session_id, out, theme, mode, *with_notes),
         PresentCommand::Clear {
             session_id,
             older_than,
             dry_run,
-        } => clear(&store, session_id.as_deref(), older_than, *dry_run),
+        } => clear(store, session_id.as_deref(), older_than, *dry_run),
         PresentCommand::ServeInternal { session_id } => serve(project, session_id),
+        PresentCommand::Check { .. }
+        | PresentCommand::Feedback { .. }
+        | PresentCommand::Responses { .. }
+        | PresentCommand::Ack { .. } => unreachable!("run_inner handles delivery commands"),
     }
 }
 
@@ -195,7 +438,17 @@ fn close(store: &SessionStore, session_id: &str) -> codeflow_present::Result<()>
     if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
         browser::terminate_isolated(store, id, pid, instance_id, &profile)?;
     }
+    let exited = store.wait_for_service_exit(
+        id,
+        Duration::from_secs(codeflow_present::limits::SERVICE_EXIT_WAIT_SECONDS),
+    )?;
     store.enforce_retention()?;
+    if !exited {
+        return Err(PresentError::ServiceUnavailable(format!(
+            "session {id} is closed, but its service did not exit within {} s; run `codeflow present clear` later",
+            codeflow_present::limits::SERVICE_EXIT_WAIT_SECONDS
+        )));
+    }
     println!("closed {id}");
     Ok(())
 }
@@ -206,10 +459,12 @@ fn export(
     out: &Path,
     theme: &str,
     mode: &str,
+    with_notes: bool,
 ) -> codeflow_present::Result<()> {
     let theme = match theme {
-        "editorial" => ExportTheme::Editorial,
-        "technical" => ExportTheme::Technical,
+        "slate" | "editorial" => ExportTheme::Slate,
+        "graphite" | "instrument" | "technical" => ExportTheme::Graphite,
+        "sage" | "ink" => ExportTheme::Sage,
         _ => unreachable!("clap validates export themes"),
     };
     let mode = match mode {
@@ -218,7 +473,17 @@ fn export(
         "dark" => ExportMode::Dark,
         _ => unreachable!("clap validates export modes"),
     };
-    export_session(store, parse_id(session_id)?, out, theme, mode)?;
+    if with_notes {
+        codeflow_present::export::export_session_with_notes(
+            store,
+            parse_id(session_id)?,
+            out,
+            theme,
+            mode,
+        )?;
+    } else {
+        export_session(store, parse_id(session_id)?, out, theme, mode)?;
+    }
     println!("exported {}", out.display());
     Ok(())
 }
@@ -231,6 +496,10 @@ fn clear(
 ) -> codeflow_present::Result<()> {
     let selected = session_id.map(parse_id).transpose()?;
     let removed = store.clear(selected, parse_duration(older_than)?, dry_run)?;
+    // An empty result says so, so a dry run is never silent (QA defect 10).
+    if removed.is_empty() {
+        println!("nothing to clear: no closed session older than {older_than}");
+    }
     for id in removed {
         println!("{} {id}", if dry_run { "would remove" } else { "removed" });
     }
@@ -257,6 +526,7 @@ fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_pres
             session.id,
             ready.bootstrap_path.display()
         );
+        print_handoff_link(store, &ready.bootstrap_path)?;
         return Ok(());
     }
     let profile = store.runtime_dir(session.id)?.join("browser-profile");
@@ -294,6 +564,7 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
                 ready.bootstrap_path.display(),
                 profile.display()
             );
+            print_handoff_link(store, &ready.bootstrap_path)?;
             return Ok(());
         }
         launch_or_focus_guard(store, id, &ready.bootstrap_path, None, &profile)?;
@@ -327,10 +598,22 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
             ready.bootstrap_path.display(),
             profile.display()
         );
+        print_handoff_link(store, &ready.bootstrap_path)?;
     } else {
         browser::launch_isolated(store, id, &ready.bootstrap_path, &profile)?;
         println!("opened {id}");
     }
+    Ok(())
+}
+
+/// Print the openable link an agent hands to the operator when `codeflow` does
+/// not launch the browser itself, such as from an agent sandbox.
+fn print_handoff_link(store: &SessionStore, bootstrap_path: &Path) -> codeflow_present::Result<()> {
+    println!(
+        "handoff link (single use, open within {} seconds): {}",
+        limits::BOOTSTRAP_TTL_SECONDS,
+        browser::handoff_link(store, bootstrap_path)?
+    );
     Ok(())
 }
 
@@ -474,6 +757,7 @@ fn apply_minimal_service_environment(command: &mut Command) {
         "XDG_RUNTIME_DIR",
         "SYSTEMROOT",
         "WINDIR",
+        codeflow_present::service::OWNER_PID_ENV,
     ];
     command.env_clear();
     for name in ALLOWED {
@@ -560,24 +844,109 @@ fn verify_service(id: Uuid, port: u16, instance_id: Uuid) -> codeflow_present::R
     Ok(())
 }
 
-fn deliver_feedback(store: &SessionStore, id: Uuid, follow: bool) -> codeflow_present::Result<()> {
+struct FeedbackOptions {
+    follow: bool,
+    wait: bool,
+    timeout: Option<Duration>,
+    v2: bool,
+}
+
+/// `present feedback` (SPC-014 B8). Each pending event is printed, then
+/// marked delivered. Without `--wait` or `--follow` it reads once. `--wait`
+/// polls every 250 ms until an event of the chosen format is pending and
+/// exits 0 once it printed them, 6 when `--timeout` passes first, 7 when the
+/// session closes with nothing pending. The v1 stream never carries an
+/// answer: it names pending ones on stderr, once when it starts or when the
+/// first arrives, and again when a wait or follow ends with some pending.
+fn deliver_feedback(
+    store: &SessionStore,
+    id: Uuid,
+    options: &FeedbackOptions,
+) -> codeflow_present::Result<i32> {
     let stdout = std::io::stdout();
     let mut output = stdout.lock();
+    let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
+    let mut announced = false;
     loop {
-        let pending = store.pending_feedback(id)?;
-        for envelope in &pending {
-            serde_json::to_writer(&mut output, envelope)?;
-            output
-                .write_all(b"\n")
-                .and_then(|()| output.flush())
-                .map_err(|error| PresentError::io("stdout", error))?;
-            store.mark_delivered(id, &[envelope.event_id])?;
-        }
-        if !follow || store.load(id)?.status == SessionStatus::Closed {
-            return Ok(());
+        // Closure is read first: an event stored before the session closed
+        // is then seen by the pending read below.
+        let closed = store.load(id)?.status == SessionStatus::Closed;
+        let delivered = deliver_pending(store, id, options.v2, &mut output)?;
+        let noticed = !options.v2 && !announced && announce_v2_pending(store, id)?;
+        announced |= noticed;
+        let code = if !options.wait {
+            (!options.follow || closed).then_some(0)
+        } else if delivered > 0 {
+            Some(0)
+        } else if closed {
+            Some(EXIT_CLOSED)
+        } else if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            Some(EXIT_TIMEOUT)
+        } else {
+            None
+        };
+        if let Some(code) = code {
+            if !options.v2 && (options.wait || options.follow) && !noticed {
+                announce_v2_pending(store, id)?;
+            }
+            return Ok(code);
         }
         thread::sleep(Duration::from_millis(250));
     }
+}
+
+/// Prints and delivers every pending event of the format; returns how many.
+fn deliver_pending(
+    store: &SessionStore,
+    id: Uuid,
+    v2: bool,
+    output: &mut impl Write,
+) -> codeflow_present::Result<usize> {
+    if !v2 {
+        let pending = store.pending_feedback(id)?;
+        for envelope in &pending {
+            write_line(output, &serde_json::to_vec(&envelope.v1_view())?)?;
+            store.mark_delivered(id, &[envelope.event_id])?;
+        }
+        return Ok(pending.len());
+    }
+    let filter = EventFilter {
+        status: Some(DeliveryStatus::Pending),
+        ..EventFilter::default()
+    };
+    let pending = store.feedback_lines(id, &filter)?;
+    for mut line in pending.iter().cloned() {
+        // The line is the delivery: it reads as the state it leaves behind.
+        line.status = DeliveryStatus::Delivered;
+        write_line(output, &serde_json::to_vec(&line)?)?;
+        store.deliver(id, &[line.event_id])?;
+    }
+    Ok(pending.len())
+}
+
+/// The v1 stream's notice of pending answers on stderr; returns whether it
+/// printed one.
+fn announce_v2_pending(store: &SessionStore, id: Uuid) -> codeflow_present::Result<bool> {
+    let count = store.pending_v2_only(id)?;
+    match count {
+        0 => return Ok(false),
+        1 => eprintln!(
+            "present: 1 pending answer event is not on the v1 stream; read it with --format v2"
+        ),
+        _ => eprintln!(
+            "present: {count} pending answer events are not on the v1 stream; read them with --format v2"
+        ),
+    }
+    Ok(true)
+}
+
+/// Writes one JSON line and flushes it, so a reader sees each event whole.
+fn write_line(output: &mut impl Write, json: &[u8]) -> codeflow_present::Result<()> {
+    output
+        .write_all(json)
+        .and_then(|()| output.write_all(b"\n"))
+        .and_then(|()| output.flush())
+        .map_err(|error| PresentError::io("stdout", error))
 }
 
 fn read_document(path: &Path) -> codeflow_present::Result<Vec<u8>> {
@@ -664,7 +1033,7 @@ fn parse_id(value: &str) -> codeflow_present::Result<Uuid> {
 fn parse_duration(value: &str) -> codeflow_present::Result<Duration> {
     let (number, unit) = value.split_at(value.len().saturating_sub(1));
     let amount = number.parse::<u64>().map_err(|_| {
-        PresentError::InvalidDocument("duration must look like 24h, 30d, or 2w".to_string())
+        PresentError::InvalidRequest("duration must look like 24h, 30d, or 2w".to_string())
     })?;
     let seconds = match unit {
         "h" => amount.checked_mul(60 * 60),
@@ -672,7 +1041,7 @@ fn parse_duration(value: &str) -> codeflow_present::Result<Duration> {
         "w" => amount.checked_mul(7 * 24 * 60 * 60),
         _ => None,
     }
-    .ok_or_else(|| PresentError::InvalidDocument("duration is invalid or too large".to_string()))?;
+    .ok_or_else(|| PresentError::InvalidRequest("duration is invalid or too large".to_string()))?;
     Ok(Duration::from_secs(seconds))
 }
 
@@ -680,14 +1049,18 @@ fn exit_code(error: &PresentError) -> i32 {
     match error {
         PresentError::DocumentTooLarge { .. }
         | PresentError::InvalidDocument(_)
+        | PresentError::InvalidRequest(_)
         | PresentError::UnsupportedSchema { .. }
         | PresentError::InvalidSessionId(_)
+        | PresentError::Review { .. }
         | PresentError::Json(_) => 2,
         PresentError::SessionNotFound(_) => 3,
         PresentError::BrowserUnavailable(_) | PresentError::ServiceUnavailable(_) => 4,
         PresentError::UnsafePath(_) | PresentError::CorruptState(_) => 5,
+        PresentError::RevisionConflict { .. } => 8,
         PresentError::SessionClosed(_)
         | PresentError::PartialCleanup { .. }
+        | PresentError::StateRootUnavailable { .. }
         | PresentError::Io { .. } => 1,
     }
 }

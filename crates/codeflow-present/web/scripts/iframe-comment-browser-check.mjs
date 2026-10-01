@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
 
 /** Exercise native hit-testing, rather than a programmatic annotation click. */
 export async function checkIframeComments(browser, origin) {
@@ -6,6 +7,7 @@ export async function checkIframeComments(browser, origin) {
   context.setDefaultTimeout(5000);
   try {
     const page = await context.newPage();
+    await recordPolicyViolations(page);
     const reviews = [];
     await page.route("**/app/api/reviews", async (route) => {
       reviews.push(route.request().postDataJSON());
@@ -54,7 +56,7 @@ export async function checkIframeComments(browser, origin) {
     await page.mouse.up();
     await page.keyboard.up("Shift");
     await page.getByTestId("float-chip").waitFor();
-    assert.equal((await page.getByTestId("float-chip").locator(".lab").innerText()).trim(), "Region");
+    assert.equal((await page.getByTestId("float-chip").locator(".lab").innerText()).trim(), "Area");
     await page.keyboard.press("Escape");
     await page.getByTestId("float-chip").waitFor({ state: "detached" });
     if (await page.locator(".cf-feedback-close").isVisible()) await page.locator(".cf-feedback-close").click();
@@ -62,6 +64,8 @@ export async function checkIframeComments(browser, origin) {
     await page.getByTestId("float-comment").click();
     await page.getByTestId("composer-text").fill("Review the embedded figure.");
     await page.getByTestId("composer-save").click();
+    // At phone width a saved note leaves the notes sheet expanded, with Submit.
+    await page.locator("#cf-feedback-panel[data-open='true'][data-expanded='true']").waitFor();
     await page.getByTestId("submit-all").click();
     await page.waitForFunction(() => document.querySelector("#cf-comment-toggle")?.getAttribute("aria-pressed") === "false");
     assert.equal(reviews.length, 1);
@@ -96,6 +100,7 @@ export async function checkIframeComments(browser, origin) {
       await page.keyboard.press("c");
       await page.waitForFunction(() => document.querySelector("iframe").style.getPropertyValue("pointer-events") === "");
     }
+    await assertNoPolicyViolations(page, "iframe comments");
     process.stdout.write("cf-present iframe comment checks passed: figure targeting, clipping, transforms, reflow, and reversible cleanup\n");
   } finally {
     await context.close();

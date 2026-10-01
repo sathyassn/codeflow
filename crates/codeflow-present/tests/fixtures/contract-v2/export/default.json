@@ -1,0 +1,7 @@
+{
+  "setup": [
+    "anchors/entity-valid-figure.json",
+    "answers/submit-valid.json"
+  ],
+  "args": []
+}

@@ -1,5 +1,6 @@
 ---
 id: ADR-0052
+uid: ab5f793d-0286-42f5-9bb4-8b2472a667e5
 title: separate cf-present ephemeral runtime from durable state
 date: 2026-08-01
 status: accepted
@@ -7,7 +8,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — separate the derived browser runtime from durable session authority and tighten identity-scoped recovery
 ---
 
-# ADR-0052 — separate cf-present runtime from durable state
+# ADR-0052: separate cf-present runtime from durable state
 
 ## Context
 

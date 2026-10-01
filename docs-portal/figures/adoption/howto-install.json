@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "adoption-install",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "How do I install the binary, and what tells me it worked?",
+    "idea": "One of three install paths places the binary on PATH, and codeflow --version prints the version you installed.",
+    "title": "Installing the binary",
+    "kicker": "How-to",
+    "caption": "Whichever path you pick, the check is the same: the binary on PATH reports the version you meant to install.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Acts on"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Reports back"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "codeflow --version prints the installed version",
+        "source": "docs/adoption.md#technical",
+        "derive": "the check sentence",
+        "check": {
+          "kind": "contains",
+          "text": "`codeflow --version` prints the version you installed."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 236,
+      "draw": [
+        {
+          "text": "you",
+          "x": 70,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "release or checkout",
+          "x": 360,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "PATH",
+          "x": 650,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 70,
+          "y1": 34,
+          "x2": 70,
+          "y2": 228
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 360,
+          "y1": 34,
+          "x2": 360,
+          "y2": 228
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 650,
+          "y1": 34,
+          "x2": 650,
+          "y2": 228
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 62H352",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "installer, cargo or gh",
+          "x": 215,
+          "y": 52,
+          "anchor": "middle",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M368 108H642",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "text": "codeflow binary",
+          "x": 505,
+          "y": 98,
+          "anchor": "middle",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 154H642",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "text": "codeflow --version",
+          "x": 215,
+          "y": 144,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M642 200H78",
+          "open": "end",
+          "id": "m4"
+        },
+        {
+          "text": "the installed version",
+          "x": 215,
+          "y": 190,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m4"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 252,
+      "draw": [
+        {
+          "text": "you",
+          "x": 8,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 24H186",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "text": "release or checkout",
+          "x": 352,
+          "y": 29,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "installer, cargo or gh",
+          "x": 8,
+          "y": 52,
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "release or checkout",
+          "x": 8,
+          "y": 89,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M174 84H309",
+          "head": "end",
+          "id": "c2"
+        },
+        {
+          "text": "PATH",
+          "x": 352,
+          "y": 89,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "codeflow binary",
+          "x": 8,
+          "y": 112,
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 149,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 144H309",
+          "head": "end",
+          "id": "c3"
+        },
+        {
+          "text": "PATH",
+          "x": 352,
+          "y": 149,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "codeflow --version",
+          "x": 8,
+          "y": 172,
+          "style": "mono",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "PATH",
+          "x": 8,
+          "y": 209,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M51 204H317",
+          "open": "end",
+          "id": "c4"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 209,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "the installed version",
+          "x": 8,
+          "y": 232,
+          "style": "mute",
+          "for": [
+            "c4"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "run the installer, `cargo install --path crates/codeflow-cli`, or `gh release download` one archive"
+        ],
+        [
+          "2",
+          "the `codeflow` binary lands in a directory on `PATH`"
+        ],
+        [
+          "3",
+          "run `codeflow --version`"
+        ],
+        [
+          "4",
+          "it prints the version you installed"
+        ]
+      ]
+    }
+  }
+}

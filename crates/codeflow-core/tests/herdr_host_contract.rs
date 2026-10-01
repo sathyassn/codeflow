@@ -29,6 +29,8 @@ fn assert_contains(relative: &str, markers: &[&str]) {
 const HERDR: &str = "assets/base/agents/skills/cf-herdr/SKILL.md";
 const CONSULT: &str = "assets/base/agents/skills/cf-consult/SKILL.md";
 const DELEGATE: &str = "assets/base/claude/skills/cf-delegate/SKILL.md";
+const DELEGATE_LIFECYCLE_LANE: &str =
+    "assets/base/claude/skills/cf-delegate/resources/lane-lifecycle.md";
 
 #[test]
 fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
@@ -43,7 +45,10 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
             "`idle` or `done` is **not**",
             "schema-v2",
             "label that path **degraded**",
-            "Herdr wins",
+            // TSK-184 removed the Herdr run cache (change list WP5, cf-herdr
+            // row), so "Herdr wins" over the cache has nothing to rule; the
+            // live cwd check on resume stays.
+            "pane `cwd` is `$PWD`",
             "intended worktree",
             "Default production launch is ADR-conformant",
             "--always-approve",
@@ -90,16 +95,61 @@ fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
             "cf-herdr",
             "HERDR_ENV=1",
             "axis: standards",
-            "herdr pane send-text",
+            // TSK-184: consult points at cf-delegate for the launch; the
+            // lifecycle lane (below) owns the Herdr delivery command.
+            "`cf-herdr` hosts the seat in a named tab and never takes over the caller pane",
         ],
     );
+    // TSK-129: the Herdr host rules and delivery moved with the lifecycle into
+    // its lane file; the core names that lane.
+    assert_contains(DELEGATE, &["resources/lane-lifecycle.md"]);
     assert_contains(
-        DELEGATE,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "cf-herdr",
             "tmux is the degraded TTY host",
             "idle`/`done` is not turn completion",
             "herdr pane send-text",
+        ],
+    );
+}
+
+const HERDR_DELIVER: &str = "assets/base/agents/skills/cf-herdr/scripts/deliver.py";
+
+/// TSK-144 AC-1 and AC-2: delivery goes through the script that confirms a
+/// started turn, sends one Enter only and refuses a busy or unknown seat or
+/// one whose folder is gone; resume uses the same
+/// script; cleanup keeps a live seat's worktree; the Claude lane keeps its
+/// `accepted` wait. The behaviour itself is proven against a stub `herdr` in
+/// `evals/herdr-delivery/test_delivery.py`.
+#[test]
+fn herdr_delivery_confirms_a_started_turn_and_checks_the_seat_folder() {
+    assert_contains(
+        HERDR,
+        &[
+            "python3 \"$D\" --pane \"$pane_id\" --file \"$P\"",
+            "--lifecycle",
+            "--until accepted",
+            "confirms within 20 s",
+            "sends one Enter only: Herdr cannot tell the input from the scrollback",
+            "`unknown` (exit 5)",
+            "else exits 4 naming the pane",
+            "never resend blindly",
+            "sends nothing when the seat's folder is gone",
+            "Resume delivers through the same script",
+            "keep a worktree that a live seat uses as its folder until that seat's tab is closed",
+        ],
+    );
+    assert_contains(
+        HERDR_DELIVER,
+        &[
+            "\"agent\", \"get\"",
+            "state_change_seq",
+            "turn not confirmed on pane",
+            "no second Enter was sent",
+            "BUSY = STARTED | {\"unknown\"}",
+            "nothing was sent. To relaunch",
+            "LIMIT = 256 * 1024",
         ],
     );
 }

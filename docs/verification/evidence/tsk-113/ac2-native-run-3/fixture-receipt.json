@@ -1,0 +1,17 @@
+{
+  "case_id": "same-family-worker-runs-as-native-subagent",
+  "codeflow_executable": {
+    "path": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-113/target/debug/codeflow",
+    "sha256": "sha256:888a4f329af756596ad9ac2feb1028d6166e487db37762f0b6a7c6417a0b4701"
+  },
+  "fixture_digest": "sha256:70a861c50432f811f0e1b4f6c2797dc78c529ec2916aae8341e4fae75b80c06a",
+  "fixture_id": "same-family-native-subagent",
+  "fixture_state": {
+    "branch": "fixture/same-family-native-subagent",
+    "peer": "available"
+  },
+  "path": "/private/tmp/claude-501/-Volumes-DATA-Local-software-workspace-projects-agentic-systems/b10bd2b1-c9e2-4199-ae6f-b26a79836e8e/scratchpad/eval-tsk113-ac2-r3/workspaces/aa1e9be7e682d7288a5b/repository",
+  "run_id": "20260927T083628Z-6ac27f46",
+  "schema_version": 1,
+  "trial": 1
+}

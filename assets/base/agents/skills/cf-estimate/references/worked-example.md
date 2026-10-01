@@ -68,7 +68,8 @@ grade-to-duration relationship nor predictive calibration.
 
 The distributed [forecast.json](../examples/forecast.json) includes all three
 scenarios, explicit resource windows, stage allocations, a milestone and SHA-256
-pins for its fictional profile, brief and the distributed rubric. From the root
+pins for its fictional [profile](../examples/profile.md),
+[brief](../examples/brief.md) and the distributed rubric. From the root
 of a standard/full project with the updated checker installed:
 
 ```sh

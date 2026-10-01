@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "planes-technical",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Which plane catches which protected action?",
+    "idea": "Only the in-session guard sees every protected action: the remote plane sees only protected-branch actions, CI only commits, and command-level misuse is guard only.",
+    "title": "Which plane catches which protected action",
+    "kicker": "Plane coverage",
+    "caption": "Every protected action is seen by at least one plane, and the guard alone sees command-level misuse before git runs.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Catches it"
+      },
+      {
+        "name": "part",
+        "mark": "part",
+        "means": "Partial, or warns only"
+      },
+      {
+        "name": "na",
+        "mark": "na",
+        "means": "Cannot see it"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "Commit or merge commit on protected",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the matrix row for commit or merge commit on protected",
+        "check": {
+          "kind": "contains",
+          "text": "| Commit / non-ff merge commit on protected | pre-commit / pre-merge-commit | git-guard | yes | yes |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Fast-forward, reset, delete protected",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the matrix row for fast-forward, reset, delete on protected",
+        "check": {
+          "kind": "contains",
+          "text": "| FF-merge, `reset --hard`, `branch -D` on protected | reference-transaction | git-guard | none | yes (result unpushable) |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Push, force-push, delete to protected",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the matrix row for push, force-push, delete to protected",
+        "check": {
+          "kind": "contains",
+          "text": "| Push / force-push / delete to protected | pre-push | git-guard | none | yes |"
+        },
+        "value": true
+      },
+      {
+        "claim": "gh pr merge into a protected base",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the matrix row for gh pr merge into a protected base",
+        "check": {
+          "kind": "contains",
+          "text": "| `gh pr merge` into a protected base | none (hooks cannot see a PR) | git-guard | none | yes |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Destructive command",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the matrix row for destructive command",
+        "check": {
+          "kind": "contains",
+          "text": "| Destructive command (`rm -rf /`, `mkfs`, fork bomb) | none | exec-guard (block) | none | none |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Privilege escalation",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the matrix row for privilege escalation",
+        "check": {
+          "kind": "contains",
+          "text": "| Privilege escalation (`sudo`, `LD_PRELOAD`) | none | preset deny rules, exec-guard (block) | none | none |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Commit format, attribution, secrets",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the matrix row for commit format, attribution, secrets",
+        "check": {
+          "kind": "contains",
+          "text": "| Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | none |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Host attribution injection",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the matrix row for host attribution injection",
+        "check": {
+          "kind": "contains",
+          "text": "| Host attribution injection (`Co-Authored-By`, \"Generated with\") | commit-msg | git-guard (PR body) | yes | none |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Override laundering, --no-verify",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the matrix row for override laundering, --no-verify",
+        "check": {
+          "kind": "contains",
+          "text": "| Override-token laundering, `--no-verify` bypass | none | git-guard (structural) | none | none |"
+        },
+        "value": true
+      }
+    ],
+    "layout": {
+      "kind": "coverage",
+      "columns": [
+        "git hooks",
+        "guard",
+        "CI",
+        "remote"
+      ],
+      "rows": [
+        {
+          "label": "Commit or merge commit on protected",
+          "cells": [
+            "cov",
+            "cov",
+            "cov",
+            "cov"
+          ]
+        },
+        {
+          "label": "Fast-forward, reset, delete protected",
+          "cells": [
+            "cov",
+            "cov",
+            "na",
+            "cov"
+          ]
+        },
+        {
+          "label": "Push, force-push, delete to protected",
+          "cells": [
+            "cov",
+            "cov",
+            "na",
+            "cov"
+          ]
+        },
+        {
+          "label": "gh pr merge into a protected base",
+          "cells": [
+            "na",
+            "cov",
+            "na",
+            "cov"
+          ]
+        },
+        {
+          "label": "Destructive command",
+          "cells": [
+            "na",
+            "cov",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "Privilege escalation",
+          "cells": [
+            "na",
+            "cov",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "Commit format, attribution, secrets",
+          "cells": [
+            "cov",
+            "part",
+            "cov",
+            "na"
+          ]
+        },
+        {
+          "label": "Host attribution injection",
+          "cells": [
+            "cov",
+            "cov",
+            "cov",
+            "na"
+          ]
+        },
+        {
+          "label": "Override laundering, --no-verify",
+          "cells": [
+            "na",
+            "cov",
+            "na",
+            "na"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "elongation_max": 2.3,
+      "reason": "Nine protected actions list one under another at phone width, each with its four planes named beside them."
+    },
+    "twin": {
+      "columns": [
+        "Protected action",
+        "git hooks",
+        "in-session guard",
+        "CI",
+        "remote"
+      ],
+      "rows": [
+        [
+          "Commit or merge commit on protected",
+          "catches",
+          "catches",
+          "catches",
+          "catches"
+        ],
+        [
+          "Fast-forward, reset, delete protected",
+          "catches",
+          "catches",
+          "no",
+          "catches"
+        ],
+        [
+          "Push, force-push, delete to protected",
+          "catches",
+          "catches",
+          "no",
+          "catches"
+        ],
+        [
+          "gh pr merge into a protected base",
+          "no",
+          "catches",
+          "no",
+          "catches"
+        ],
+        [
+          "Destructive command",
+          "no",
+          "catches",
+          "no",
+          "no"
+        ],
+        [
+          "Privilege escalation",
+          "no",
+          "catches",
+          "no",
+          "no"
+        ],
+        [
+          "Commit format, attribution, secrets",
+          "catches",
+          "partial",
+          "catches",
+          "no"
+        ],
+        [
+          "Host attribution injection",
+          "catches",
+          "catches",
+          "catches",
+          "no"
+        ],
+        [
+          "Override laundering, --no-verify",
+          "no",
+          "catches",
+          "no",
+          "no"
+        ]
+      ]
+    }
+  }
+}

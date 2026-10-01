@@ -1,0 +1,418 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "portal-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What is the portal, and what is it not?",
+    "idea": "The Markdown sources own every fact, the guide is derived from them, records stay folders it points to, and nothing is published.",
+    "title": "What the portal owns and what it derives",
+    "kicker": "Documentation portal",
+    "caption": "The guide can be deleted and rebuilt from any commit, because every fact it shows lives in the Markdown.",
+    "states": [
+      {
+        "name": "authority",
+        "mark": "layer-remote",
+        "means": "The only authority"
+      },
+      {
+        "name": "view",
+        "mark": "layer",
+        "means": "Derived view"
+      },
+      {
+        "name": "records",
+        "mark": "optional",
+        "means": "Folders the guide names"
+      },
+      {
+        "name": "derives",
+        "mark": "trans",
+        "means": "Derives"
+      },
+      {
+        "name": "points",
+        "mark": "return",
+        "means": "Points to"
+      },
+      {
+        "name": "denied",
+        "mark": "denied",
+        "means": "Not something the portal does"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the Markdown stays the only authority",
+        "source": "docs/capabilities/CAP-015-opt-in-documentation-portal.md#concept",
+        "derive": "the lead sentence",
+        "check": {
+          "kind": "contains",
+          "text": "out, and the Markdown stays the only authority."
+        },
+        "value": true
+      },
+      {
+        "claim": "records stay folders the guide points to, and a local build never publishes",
+        "source": "docs/capabilities/CAP-015-opt-in-documentation-portal.md#concept",
+        "derive": "the records sentence",
+        "check": {
+          "kind": "contains",
+          "text": "records stay folders the guide points to, and a local build never publishes a"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 240,
+      "draw": [
+        {
+          "state": "authority",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 232,
+          "h": 112,
+          "rx": 8,
+          "cap": "end",
+          "id": "s"
+        },
+        {
+          "text": "Markdown sources",
+          "x": 32,
+          "y": 66,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "docs/",
+          "x": 32,
+          "y": 94,
+          "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "project-management/",
+          "x": 32,
+          "y": 118,
+          "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "the only authority",
+          "x": 32,
+          "y": 140,
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M250 96H328",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "text": "derives",
+          "x": 289,
+          "y": 86,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e1"
+          ]
+        },
+        {
+          "state": "view",
+          "shape": "rect",
+          "x": 330,
+          "y": 40,
+          "w": 374,
+          "h": 112,
+          "rx": 8,
+          "id": "g"
+        },
+        {
+          "text": "the guide",
+          "x": 346,
+          "y": 66,
+          "style": "strong",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "pages and Markdown twins",
+          "x": 346,
+          "y": 94,
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "search and llms.txt",
+          "x": 346,
+          "y": 116,
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "disposable, rebuilt from a commit",
+          "x": 346,
+          "y": 138,
+          "style": "mute",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "points",
+          "shape": "path",
+          "d": "M400 154V204H250",
+          "open": "end",
+          "id": "e2"
+        },
+        {
+          "text": "points to",
+          "x": 412,
+          "y": 186,
+          "style": "mute",
+          "for": [
+            "e2"
+          ]
+        },
+        {
+          "state": "records",
+          "shape": "rect",
+          "x": 16,
+          "y": 182,
+          "w": 232,
+          "h": 44,
+          "rx": 6,
+          "id": "r"
+        },
+        {
+          "text": "decision and task folders",
+          "x": 32,
+          "y": 209,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 500,
+          "y": 182,
+          "w": 204,
+          "h": 44,
+          "rx": 6,
+          "cross": {
+            "cx": 684,
+            "cy": 204,
+            "size": 12
+          },
+          "id": "n"
+        },
+        {
+          "text": "a published site",
+          "x": 516,
+          "y": 209,
+          "for": [
+            "n"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 354,
+      "draw": [
+        {
+          "state": "authority",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 88,
+          "rx": 8,
+          "cap": "end",
+          "id": "s"
+        },
+        {
+          "text": "Markdown sources",
+          "x": 22,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "docs/",
+          "x": 22,
+          "y": 58,
+          "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "project-management/",
+          "x": 22,
+          "y": 80,
+          "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "the only authority",
+          "x": 180,
+          "y": 34,
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M60 102V136",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "text": "derives",
+          "x": 76,
+          "y": 124,
+          "style": "mute",
+          "for": [
+            "e1"
+          ]
+        },
+        {
+          "state": "view",
+          "shape": "rect",
+          "x": 8,
+          "y": 140,
+          "w": 344,
+          "h": 64,
+          "rx": 8,
+          "id": "g"
+        },
+        {
+          "text": "the guide",
+          "x": 22,
+          "y": 164,
+          "style": "strong",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "pages, twins, search, llms.txt",
+          "x": 22,
+          "y": 188,
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "points",
+          "shape": "path",
+          "d": "M60 208V242",
+          "open": "end",
+          "id": "e2"
+        },
+        {
+          "text": "points to",
+          "x": 76,
+          "y": 230,
+          "style": "mute",
+          "for": [
+            "e2"
+          ]
+        },
+        {
+          "state": "records",
+          "shape": "rect",
+          "x": 8,
+          "y": 246,
+          "w": 344,
+          "h": 44,
+          "rx": 6,
+          "id": "r"
+        },
+        {
+          "text": "decision and task folders",
+          "x": 22,
+          "y": 273,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 8,
+          "y": 300,
+          "w": 344,
+          "h": 44,
+          "rx": 6,
+          "cross": {
+            "cx": 330,
+            "cy": 322,
+            "size": 12
+          },
+          "id": "n"
+        },
+        {
+          "text": "a published site",
+          "x": 22,
+          "y": 327,
+          "for": [
+            "n"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Role"
+      ],
+      "rows": [
+        [
+          "Markdown sources under `docs/` and `project-management/`",
+          "the only authority"
+        ],
+        [
+          "the guide: pages, twins, search, `llms.txt`",
+          "derived, disposable, rebuilt from a commit"
+        ],
+        [
+          "decision and task folders",
+          "named by a pointer page, not rendered as pages"
+        ],
+        [
+          "a published site",
+          "never produced by a local build"
+        ]
+      ]
+    }
+  }
+}

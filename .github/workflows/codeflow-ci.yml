@@ -2,57 +2,35 @@
 # depends on local state. Written by `codeflow init` and managed by `codeflow
 # update` (charter §4.3): an unmodified copy is replaced on update; your edits
 # are preserved via 3-way merge, never clobbered.
+#
+# The commit, branch and PR-body standards run in codeflow-policy.yml on
+# `pull_request_target`, so a pull request cannot edit the job that judges it.
 name: codeflow-ci
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
   push:
-    branches: [main, master]
+    branches: [main, master, "integration/**"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  release-impact:
-    name: release impact
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with:
-          fetch-depth: 0
-      - name: Validate reviewed release intent
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git fetch origin "$BASE_REF"
-          python3 scripts/release.py check-pr \
-            --base "$BASE_SHA" --head "$HEAD_SHA" \
-            --target-ref "origin/$BASE_REF" --body-env CODEFLOW_PR_BODY
-
-  release-state:
-    name: release state
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with:
-          fetch-depth: 0
-      - name: Validate merged release state without writes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/release.py check-state --ref "$GITHUB_SHA"
-
+  # Ubuntu jobs pin the runner image (ubuntu-24.04), so a move of the
+  # ubuntu-latest label to a new Ubuntu release cannot change the toolchain
+  # under these jobs without a commit here. Move the label deliberately, after
+  # a green run on the new image. Actions are on the node24 runtime.
+  # The Windows job keeps windows-latest; this pin covers Ubuntu only.
   gates:
+    if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
     name: codeflow gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -64,77 +42,105 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      # Each Node target pins its version in a version file, and the full
+      # gate runs it through scripts/with-node.py, which finds that version
+      # here in the tool cache (TSK-142). gate-parity holds these pins to
+      # the version files. The later setup is first on PATH.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: docs-portal/package-lock.json
+      - uses: actions/setup-node@v6
         with:
           node-version: 26.4.0
           cache: npm
-          cache-dependency-path: |
-            docs-portal/package-lock.json
-            crates/codeflow-present/web/package-lock.json
+          cache-dependency-path: crates/codeflow-present/web/package-lock.json
 
       - name: Install exact npm for the owned presentation renderer
         run: npm install --global npm@11.17.0
 
-      # The repository's full test configuration includes the same coverage
-      # target enforced by the dedicated coverage job. A clean runner must not
-      # rely on ambient developer tooling for the strict aggregate gate.
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      # The present browser checks launch Firefox and WebKit through
+      # Playwright's own builds, which a clean runner does not have. The
+      # renderer's locked playwright-core installs them, so the browsers match
+      # the version both Node workspaces lock (checked equal here).
+      - name: Read the locked Playwright version
+        id: playwright
+        run: |
+          present=$(node -p "require('./crates/codeflow-present/web/package-lock.json').packages['node_modules/playwright-core'].version")
+          portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
+          test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
+          echo "version=$present" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - name: Install Playwright browsers from the lockfile
+        run: |
+          npm ci --ignore-scripts --prefix crates/codeflow-present/web
+          crates/codeflow-present/web/node_modules/.bin/playwright-core install --with-deps chromium firefox webkit
+
+      # One instrumented suite owns Linux test and coverage evidence.
+      - name: Install nextest and llvm-cov
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129,cargo-llvm-cov@0.8.4
 
       - name: Build codeflow from source
         run: |
           cargo build --release -p codeflow-cli
           echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
-      # Umbrella restack of targets already run in rust/coverage/windows jobs.
-      # An infra death here (runner lost communication, OOM, billing cutoff)
-      # is missing job evidence, not an assertion-red of those sibling checks.
+      # The Linux candidate has one full gate. Windows independently runs raw
+      # Rust checks; Unix-only journeys and the read benchmark remain Linux-only.
       - name: codeflow test --mode full --strict
-        run: codeflow test --mode full --strict
+        run: codeflow test --mode full --strict --all
 
-      - name: codeflow validate --docs
-        run: codeflow validate --docs
 
-  rust:
-    name: rust (format + test + clippy)
-    runs-on: ubuntu-latest
+  windows:
+    if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
+    name: windows (build + test + clippy)
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129
 
       - name: cargo fmt --all --check
         run: cargo fmt --all -- --check
 
-      - name: cargo test --workspace
-        run: cargo test --workspace
+      - name: Begin raw referee run
+        shell: bash
+        run: |
+          rm -f target/nextest/codeflow/junit.xml
+          echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
 
-      - name: cargo clippy --workspace --all-targets -D warnings
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo nextest run
+        run: cargo nextest run --workspace --no-fail-fast --profile codeflow
 
-      - name: cargo doc --workspace -D warnings
+      - name: cargo doctests
+        run: cargo test --workspace --doc
+
+      - name: cargo rustdoc
+        shell: bash
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-      - name: codeflow validate --docs from source
-        run: cargo run --quiet -p codeflow-cli -- validate --docs
-
-  windows:
-    name: windows (build + test + clippy)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-
-      - name: cargo test --workspace
-        run: cargo test --workspace
-
       - name: cargo clippy --workspace --all-targets -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - uses: actions/setup-node@v4
+      # Consume this raw run's exact results. Unix-only journeys and the own
+      # read-benchmark target are disclosed as skipped on Windows.
+      - name: journey gate
+        shell: bash
+        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/codeflow/junit.xml --skip-benchmark
+
+      - uses: actions/setup-node@v6
         with:
           node-version: 24.18.0
           cache: npm
@@ -143,13 +149,16 @@ jobs:
       - name: docs portal JavaScript authority suite
         run: |
           npm run deps:install --prefix docs-portal
-          node --test docs-portal/tests/adapter.test.mjs
+          node --test docs-portal/tests/adapter.test.mjs docs-portal/tests/composition.test.mjs docs-portal/tests/figure-grammar.test.mjs
+
+      - name: Windows Node target through cmd.exe
+        run: python scripts/test_gate_parity.py
 
   secret-scan:
     name: secret scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -168,9 +177,9 @@ jobs:
 
   security-review:
     name: security review
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -218,55 +227,3 @@ jobs:
           else
             echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
           fi
-
-  commit-lint:
-    name: commit standards
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # Dogfood: this repo IS codeflow, so it runs the SAME `codeflow ci` binary
-      # the shipped template runs — one source of truth with the git-client hooks
-      # and the Claude git-guard, no inline regex to drift (CodeFlow ADR-0017).
-      # It builds
-      # from source (as the gates job does) rather than the release installer a
-      # consumer project would use.
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build codeflow from source
-        run: |
-          cargo build --release -p codeflow-cli
-          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
-
-      # The PR body is passed via CODEFLOW_PR_BODY in `env:` (not interpolated
-      # into the script), so an untrusted body cannot inject shell.
-      - name: codeflow ci (commit + branch + PR-body standards)
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
-        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF"
-
-  # Line-coverage floor: fails the build when workspace line coverage drops
-  # below 90% (current ~95% — headroom to avoid flakiness while still catching
-  # real regressions instead of letting them land silently).
-  coverage:
-    name: coverage report
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Coverage summary + floor (fails under 90% line coverage)
-        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 90

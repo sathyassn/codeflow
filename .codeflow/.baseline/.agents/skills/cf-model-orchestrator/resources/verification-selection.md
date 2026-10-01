@@ -5,10 +5,11 @@ testing, and architecture fitness checks strengthen it when evidence shows they
 will expose material risk. They never replace example-based tests, integration
 or end-to-end evidence, security review, UI verification, or coverage.
 
-Record the selected technique and its trigger evidence in `TEST_AND_UI_PLAN`.
-`none selected` is a valid and common result. Adding a triggerless heavyweight
-technique is avoidable complexity; omitting an earned technique is brittle
-under-testing.
+Read this resource once per session. When a technique is selected, name it
+and its trigger evidence in the plan's test plan and the task record; when
+none is selected, write nothing: no `none selected` line per task. Adding a
+triggerless heavyweight technique is avoidable complexity; omitting an earned
+technique is brittle under-testing.
 
 Concrete tools, thresholds, commands, and CI cadence belong to the consuming
 project. CodeFlow supplies the selection contract, not a universal test stack.

@@ -31,7 +31,7 @@ pub const LEVEL_VALUES_TEXT: &str = "off, warn, allow, block";
 pub const LEVEL_LEGEND: &str =
     "block = violations stop the operation; warn = violations are reported \
      and the operation proceeds; allow = explicitly permitted; off = the check \
-     is not run. `allow` and `off` are BOTH inactive — only warn/block enforce.";
+     is not run. `allow` and `off` are BOTH inactive; only warn/block enforce.";
 
 /// The JSON value kind of a policy leaf key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,12 @@ pub enum KeyKind {
     String,
     /// A closed enum accepting exactly the listed values.
     Enum(&'static [&'static str]),
+    /// A list of automation profile objects (SPC-013 R-82).
+    Profiles,
+    /// The PR-section mapping object (SPC-013 R-84).
+    SectionMapping,
+    /// A list of argument-bound retry entry objects (TSK-174).
+    RetryEntries,
 }
 
 impl KeyKind {
@@ -58,6 +64,9 @@ impl KeyKind {
             Self::StringList => "string list",
             Self::String => "string",
             Self::Enum(_) => "enum",
+            Self::Profiles => "profile list",
+            Self::SectionMapping => "object",
+            Self::RetryEntries => "entry list",
         }
     }
 }
@@ -81,9 +90,9 @@ pub struct KeySpec {
 const LEVEL_VALID: &str = "off | warn | allow | block";
 
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
-/// in file order (top-level, then `git`, then `security`). A drift-guard test
+/// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 42] = [
+pub const SCHEMA: [KeySpec; 64] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -92,14 +101,6 @@ pub const SCHEMA: [KeySpec; 42] = [
         purpose: "Version of the policy.json schema.",
         notes: "The scaffold writes 1; the loader does not read or migrate on \
                 it today (inert).",
-    },
-    KeySpec {
-        path: "human_authorization",
-        kind: KeyKind::Enum(&["none"]),
-        valid: "none",
-        purpose: "Out-of-band human-authorization mode for irreversible actions (ADR-0009).",
-        notes: "Only `none` exists today — an inert seam for future \
-                totp/push/webauthn adapters.",
     },
     // ---- git: protected branches -----------------------------------------
     KeySpec {
@@ -135,7 +136,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "A force-push to a NON-protected branch.",
-        notes: "The only non-strict default (allow) — it sanctions the \
+        notes: "The only non-strict default (allow); it sanctions the \
                 durability push with --force-with-lease; set block to forbid.",
     },
     KeySpec {
@@ -181,8 +182,35 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
-        notes: "git-guard only (ADR-0009); suspended only in the \
-                pre-first-commit bootstrap window.",
+        notes: "Agent guards (ADR-0009). Local-edit relief never disables protection \
+                of remote-tracking refs, packed-refs or Git config authority metadata.",
+    },
+    // ---- git: root checkout ----------------------------------------------
+    KeySpec {
+        path: "git.root_branch",
+        kind: KeyKind::String,
+        valid: "empty, or a valid branch name",
+        purpose: "The branch the root checkout holds; empty means the repository's default branch.",
+        notes: "Set it only for an umbrella repository whose root is a working \
+                checkout; `codeflow init --workspace` writes the convention name.",
+    },
+    KeySpec {
+        path: "git.root_checkout_commits",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "A commit at the root checkout on any branch other than git.root_branch.",
+        notes: "git-guard applies the level to agents; the git hooks apply it \
+                when a harness marker is set and only warn otherwise. \
+                Suspended in the pre-first-commit bootstrap window.",
+    },
+    KeySpec {
+        path: "git.worktree_locations",
+        kind: KeyKind::StringList,
+        valid: "folders: relative to the root checkout, absolute, ~/..., \
+                $CODEX_HOME/... or $GROK_HOME/...",
+        purpose: "Where linked worktrees may live; doctor reports one outside them.",
+        notes: "The default covers .worktrees and the folders the Claude \
+                desktop app, Codex and Grok manage.",
     },
     // ---- git: commit format ----------------------------------------------
     KeySpec {
@@ -191,7 +219,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         valid: LEVEL_VALID,
         purpose: "Conventional-commit subject shape: `type(scope): description`.",
         notes: "Governs three checks: commit_types, commit_desc_max_len, and \
-                commit_subject_max_len — off/allow disables all of them.",
+                commit_subject_max_len; off/allow disables all of them.",
     },
     KeySpec {
         path: "git.commit_types",
@@ -204,7 +232,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         path: "git.commit_desc_max_len",
         kind: KeyKind::UInt,
         valid: "a non-negative integer (character count)",
-        purpose: "Max length of the description — the text after `type(scope): `.",
+        purpose: "Max length of the description, the text after `type(scope): `.",
         notes: "Enforced under commit_format.",
     },
     KeySpec {
@@ -221,7 +249,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         valid: LEVEL_VALID,
         purpose: "Shape of the commit body: only `- ` bullets, blank lines, and sanctioned footers.",
         notes: "Governs the whole body family: the bullet caps, footer \
-                tokens, required footers, and ticket trailers — off/allow \
+                tokens, required footers, and ticket trailers; off/allow \
                 disables them all. Merge/revert/fixup/squash commits are exempt.",
     },
     KeySpec {
@@ -269,7 +297,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         valid: LEVEL_VALID,
         purpose: "Whether a matching ticket-reference trailer is REQUIRED on every commit.",
         notes: "Only meaningful when commit_ticket_keys is non-empty; `allow` \
-                behaves like `off` here (inactive) — use warn or block to \
+                behaves like `off` here (inactive); use warn or block to \
                 require. Merge/revert/fixup/squash commits are exempt.",
     },
     KeySpec {
@@ -311,17 +339,20 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "En and em dashes (U+2013, U+2014) in commit messages, PR bodies, and lines a ci range adds under the written-content trees (ADR-0067).",
-        notes: "Judges new text only: `codeflow ci` checks lines the range \
-                adds under docs/, project-management/ and the skill trees, so \
-                existing bytes are grandfathered and nothing asks for a sweep.",
+        notes: "Defaults to warn: a writing guideline review and evaluation \
+                judge; set block to enforce it. Judges new text only: \
+                `codeflow ci` checks lines the range adds under docs/, \
+                project-management/ and the skill trees, so existing bytes are \
+                grandfathered, and skips a file whose bytes are exactly the \
+                whole-file managed asset this binary ships for that path.",
     },
     // ---- git: PR-body structure --------------------------------------------
     KeySpec {
         path: "git.pr_sections",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Required sections in the PR/MR body — the structure check `codeflow ci` runs on a provided PR body.",
-        notes: "Governs pr_required_sections and pr_code_sections — off/allow \
+        purpose: "Required sections in the PR/MR body: the structure check `codeflow ci` runs on a provided PR body.",
+        notes: "Governs pr_required_sections and pr_code_sections; off/allow \
                 disables both. PR events require a non-empty body; local/push runs without one skip. \
                 Presentation and template-remnant checks always warn, never block.",
     },
@@ -355,9 +386,87 @@ pub const SCHEMA: [KeySpec; 42] = [
         valid: "an array of heading names without the leading ## (e.g. Testing)",
         purpose: "Headings required only when the commit range touches non-docs files.",
         notes: "Docs-only = every changed path is *.md, *.txt, LICENSE*, \
-                docs/**, or a .github template; anything else — or a range \
-                whose files could not be resolved — counts as code. Enforced \
+                docs/**, or a .github template; anything else, or a range \
+                whose files could not be resolved, counts as code. Enforced \
                 under pr_sections.",
+    },
+    // ---- git: work records -------------------------------------------------
+    KeySpec {
+        path: "git.work_records",
+        kind: KeyKind::Enum(&["block", "warn"]),
+        valid: "block | warn",
+        purpose: "Level of the adjustable work-record rules: the acceptance block bound to the reviewed commit and the journey criterion (SPC-013 R-80).",
+        notes: "There is no `off`: once work tracking is on the rules always \
+                run, at block or warn. The transition rules (a Blocker for \
+                blocked, a Closeout for cancelled, an acceptance block for \
+                complete) always block whatever this says. `codeflow update` \
+                rewrites a stale `off` to `warn` and keeps every other value.",
+    },
+    KeySpec {
+        path: "git.work_planning",
+        kind: KeyKind::Enum(&["block", "warn"]),
+        valid: "block | warn",
+        purpose: "Level of the planning checks run once per task at `work start` and in `codeflow ci`, on any work prefix: a valid visible workgraph, a task record for the branch's task, and that record anchored on its target.",
+        notes: "There is no `off`: with work tracking on, the checks always \
+                run. Pre-commit does not repeat them. An undeterminable \
+                tracking state and pull request classification block \
+                whatever this says. `codeflow update` keeps the value a \
+                project set.",
+    },
+    // ---- git: adopter fit ----------------------------------------------------
+    KeySpec {
+        path: "git.automation_profiles",
+        kind: KeyKind::Profiles,
+        valid: "an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}, task: optional task line}",
+        purpose: "Trusted bots whose pull requests skip branch naming and the commit message shape rules (SPC-013 R-82).",
+        notes: "Applies in `codeflow ci` only when the actor the workflow passes \
+                and the head branch both match, read from the target side of \
+                the range. Locally and on fork pull requests the actor is \
+                `unknown` and nothing applies. Tests, the secret scan, AI \
+                attribution, emoji, policy characters, PR sections and the \
+                release declaration still run at their configured level; \
+                `sections` only supplies content for headings the bot body omits.",
+    },
+    KeySpec {
+        path: "git.pr_section_mapping",
+        kind: KeyKind::SectionMapping,
+        valid: "{state: diagnosed | accepted | refused | custom, headings: {required heading: template heading}, decided: YYYY-MM-DD or none}",
+        purpose: "The decision about a kept PR template whose headings differ from pr_required_sections (SPC-013 R-84).",
+        notes: "Absent by default. `init` and `update` write `diagnosed` with a \
+                proposed mapping; `accepted` checks the mapped headings, \
+                `refused` and `custom` check pr_required_sections. While \
+                diagnosed the check runs at warn only when init created the \
+                policy file without a pr_sections key; a pr_sections key in \
+                the file always wins (R-115).",
+    },
+    KeySpec {
+        path: "git.product_paths",
+        kind: KeyKind::StringList,
+        valid: "an array of path globs (e.g. src/**)",
+        purpose: "The project's product code extends the adopter-facing paths requiring a journey criterion (SPC-013 R-114); every PR names its task or epic (R-70).",
+        notes: "`codeflow init` writes the default for the detected stack and \
+                `codeflow update` adds it once; a value the project sets is \
+                kept. Absent, the binary assumes the stack default. The shared \
+                adopter-facing paths continue to require journey coverage.",
+    },
+    KeySpec {
+        path: "git.direct_changes",
+        kind: KeyKind::Enum(&["allow", "forbid"]),
+        valid: "allow | forbid",
+        purpose: "Retired compatibility key; accepted and ignored.",
+        notes: "Every pull request names its task or epic (R-70), regardless of this retained key.",
+    },
+    KeySpec {
+        path: "git.release_branch_pattern",
+        kind: KeyKind::String,
+        valid: "a branch glob (e.g. release/*); absent means integration/release-*",
+        purpose: "Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120).",
+        notes: "Read only from the policy at the default target's tip at the \
+                destination, so a pushed branch or a pull request cannot set \
+                its own scope; a change takes effect once it lands on the \
+                default target. A pattern that could match a protected branch \
+                or an epic line name (`integration/EPC-*`) is refused, so the \
+                default target and epic lines keep their own rules.",
     },
     KeySpec {
         path: "git.branch_naming",
@@ -381,8 +490,20 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Pre-commit scan for staged secrets and .env files.",
-        notes: "Never suspended by bootstrap grace — but off/allow HERE does \
+        notes: "Never suspended by bootstrap grace, but off/allow HERE does \
                 disable the scan (it is policy, not hardcoded); leave at block.",
+    },
+    KeySpec {
+        path: "git.conflict_markers",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170).",
+        notes: "Defaults to block. Only added lines are judged. A separator \
+                line counts only between an opening and a closing marker, so \
+                a Markdown heading underline passes. A file that must hold \
+                markers sets `conflict-marker-size` for its path in \
+                .gitattributes to a length its markers do not have. \
+                Suspended by bootstrap grace.",
     },
     KeySpec {
         path: "git.test_gate_on_push",
@@ -405,6 +526,22 @@ pub const SCHEMA: [KeySpec; 42] = [
         purpose: "The dependency-audit gate in CI.",
         notes: "Ships at warn (ADR-0016); harden to block when ready.",
     },
+    KeySpec {
+        path: "git.discard_uncommitted",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Commands in an agent session that discard locally unique uncommitted work (ADR-0075).",
+        notes: "Default block. The in-session guard judges it; a human \
+                terminal and the git hooks are unaffected.",
+    },
+    KeySpec {
+        path: "git.clean_regenerable",
+        kind: KeyKind::StringList,
+        valid: "an array of directory paths, each ending with `/`",
+        purpose: "Regenerable build and dependency directories `git clean` may remove without a discard refusal (ADR-0075).",
+        notes: "Default target/, node_modules/, dist/, build/, .venv/, \
+                __pycache__/, coverage/.",
+    },
     // ---- security ----------------------------------------------------------
     KeySpec {
         path: "security.dangerous_commands",
@@ -419,8 +556,88 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Privilege escalation the exec-guard catches (Unix sudo/su/doas/pkexec, Windows gsudo/runas/elevated PowerShell, LD_PRELOAD/PATH injection).",
-        notes: "Default warn, not block — the harness's ask tier owns sudo \
-                prompting; the guard only surfaces in-session feedback.",
+        notes: "Default block (ADR-0075 D5): the presets deny the plain forms \
+                without a prompt, the guard refuses the wrapped ones, and the \
+                operator runs privileged commands. `codeflow update` moves a \
+                project still at the old warn default to block.",
+    },
+    KeySpec {
+        path: "security.headless_peer_runs",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate).",
+        notes: "Default block (ADR-0075 D4): a project that needs a headless \
+                run sets security.headless_peer_runs to warn or off. `codeflow \
+                update` moves a project still at the old warn default to block.",
+    },
+    KeySpec {
+        path: "security.script_bypass",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Refused actions found inside a script file a command runs (ADR-0075).",
+        notes: "Default warn: a script is read on a best-effort basis.",
+    },
+    KeySpec {
+        path: "security.outward_actions",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075).",
+        notes: "Default block.",
+    },
+    KeySpec {
+        path: "security.interpreter_scan",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Refused actions embedded in an interpreter call (`python -c`, `node -e`) (ADR-0075).",
+        notes: "Default block.",
+    },
+    KeySpec {
+        path: "security.secret_reads",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Shell reads of the secret stores the presets deny to the file tools (ADR-0075).",
+        notes: "Default block.",
+    },
+    KeySpec {
+        path: "security.enforcement_baseline",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Commits and ref moves whose enforcement files match no identity the operator approved (ADR-0075).",
+        notes: "Default block.",
+    },
+    KeySpec {
+        path: "security.workflow_pushes",
+        kind: KeyKind::Enum(&["queue", "allow"]),
+        valid: "queue | allow",
+        purpose: "A push from an agent session that introduces a `.github/workflows/` change (ADR-0075 D9).",
+        notes: "Default queue: refused and queued for the operator, whose \
+                login can push workflows. `allow` is for an agent credential \
+                with workflow rights.",
+    },
+    KeySpec {
+        path: "security.sandbox_retry",
+        kind: KeyKind::Enum(&["allowlist", "block"]),
+        valid: "allowlist | block",
+        purpose: "Claude's unsandboxed retry from a primary session (ADR-0075 decision 6).",
+        notes: "Default allowlist: only an argument vector an entry of \
+                sandbox_retry_allow spells out. `block` refuses every retry.",
+    },
+    KeySpec {
+        path: "security.sandbox_retry_allow",
+        kind: KeyKind::RetryEntries,
+        valid: "an array of entry objects, each naming its `program`",
+        purpose: "The argument-bound entries the unsandboxed retry may run (ADR-0075 decision 6).",
+        notes: "The shipped entry is the Codex plugin companion, pinned by \
+                path, version and digest at qualification.",
+    },
+    // ---- guidance ----------------------------------------------------------
+    KeySpec {
+        path: "guidance.prompt_reminders",
+        kind: KeyKind::Enum(&["off", "allow", "warn"]),
+        valid: "off | allow | warn",
+        purpose: "The one-line rule reminder the prompt hook adds when a prompt asks for a duration, a status or a complex explanation.",
+        notes: "Advisory only: warn adds the line, off and allow add nothing; \
+                block is refused because a reminder never stops a prompt.",
     },
 ];
 
@@ -516,6 +733,60 @@ fn show_value(v: &Value) -> String {
     }
 }
 
+/// Keys removed from the policy schema that an older file may still carry:
+/// `(key, why)`. Validation accepts them, [`deprecation_warnings`] names
+/// them, and `codeflow update` deletes them.
+pub const DEPRECATED_KEYS: &[(&str, &str)] = &[
+    (
+        "human_authorization",
+        "it accepted only \"none\" and changed nothing (removed in TSK-137, ADR-0009 amendment)",
+    ),
+    (
+        "security.headless_opt_in",
+        "it never changed enforcement; security.headless_peer_runs is the sole policy level for headless runs (TSK-188)",
+    ),
+];
+
+fn deprecated_key(key: &str) -> Option<&'static str> {
+    DEPRECATED_KEYS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, why)| *why)
+}
+
+/// One warning per deprecated key present in `<root>/.codeflow/policy.json`.
+/// An absent or unreadable file gives none; [`validate_policy`] reports that.
+#[must_use]
+pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
+    let Ok(data) = std::fs::read_to_string(root.join(".codeflow").join("policy.json")) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&data) else {
+        return Vec::new();
+    };
+    let mut warnings: Vec<_> = DEPRECATED_KEYS
+        .iter()
+        .filter(|(key, _)| {
+            value
+                .pointer(&format!("/{}", key.replace('.', "/")))
+                .is_some()
+        })
+        .map(|(key, why)| {
+            crate::remedy::Finding::new(
+                format!("policy key {key} is deprecated and ignored: {why}"),
+                crate::remedy::POLICY_DEPRECATED.with(&[("key", key)]),
+            )
+        })
+        .collect();
+    if value.pointer("/git/direct_changes").is_some() {
+        warnings.push(crate::remedy::Finding::new(
+            "policy key git.direct_changes is retired and ignored; every PR names its task or epic",
+            crate::remedy::POLICY_DEPRECATED.with(&[("key", "git.direct_changes")]),
+        ));
+    }
+    warnings
+}
+
 /// Strictly validate `<root>/.codeflow/policy.json`. See [`validate_policy_file`].
 ///
 /// # Errors
@@ -568,9 +839,12 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
 
     let mut errors = Vec::new();
     for (key, value) in obj {
+        if deprecated_key(key).is_some() {
+            continue;
+        }
         match key.as_str() {
             // The two object sections: walk their leaves with the prefix.
-            section @ ("git" | "security") => match value.as_object() {
+            section @ ("git" | "security" | "guidance") => match value.as_object() {
                 Some(section_obj) => {
                     for (leaf, leaf_value) in section_obj {
                         validate_leaf(&format!("{section}.{leaf}"), leaf_value, &mut errors);
@@ -581,6 +855,8 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
             _ => validate_leaf(key, value, &mut errors),
         }
     }
+
+    release_pattern_errors(obj, &mut errors);
 
     // Backstop: catch anything the schema walk did not model (a structural
     // error, or a registry gap) rather than let the enforcement loader
@@ -598,9 +874,86 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
     }
 }
 
+/// Refuse a `git.release_branch_pattern` that is not a glob or that could
+/// name the default target or an epic line (SPC-013 R-120), judged against
+/// the file's protected branches, or the defaults when it sets none.
+fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec<PolicyError>) {
+    let git = obj.get("git").and_then(Value::as_object);
+    let Some(pattern) = git
+        .and_then(|git| git.get("release_branch_pattern"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let protected: Vec<String> = git
+        .and_then(|git| git.get("protected_branches"))
+        .and_then(Value::as_array)
+        .map_or_else(
+            || Policy::default().git.protected_branches,
+            |items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            },
+        );
+    if let Some(problem) = crate::workgraph::release_line::pattern_problem(pattern, &protected) {
+        errors.push(PolicyError {
+            key: "git.release_branch_pattern".to_string(),
+            message: format!("invalid value '{pattern}' for git.release_branch_pattern; {problem}"),
+        });
+    }
+}
+
+/// The value checks for the root-checkout keys that their kind alone does
+/// not catch: `git.root_branch` must be a branch name, and each
+/// `git.worktree_locations` entry must be a folder `doctor` can expand.
+fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    match path {
+        "git.root_branch" => {
+            if let Some(s) = value.as_str() {
+                if !s.is_empty() && !crate::root_checkout::is_valid_branch_name(s) {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!(
+                            "invalid value '{s}' for {path}; not a valid branch name (empty \
+                             means the default branch)"
+                        ),
+                    });
+                }
+            }
+        }
+        "git.worktree_locations" => {
+            for entry in value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !crate::root_checkout::is_valid_location(entry) {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!(
+                            "invalid entry '{entry}' in {path}; use a folder relative to the \
+                             root checkout, an absolute folder, ~/..., $CODEX_HOME/... or \
+                             $GROK_HOME/..."
+                        ),
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Validate one leaf `path`/`value` pair against its [`KeySpec`]; a path the
 /// schema does not know is an unknown-key error.
 fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    if deprecated_key(path).is_some() {
+        return;
+    }
+    validate_root_checkout_key(path, value, errors);
     let Some(spec) = spec_for(path) else {
         errors.push(PolicyError {
             key: path.to_string(),
@@ -667,6 +1020,9 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
             }
             None => errors.push(PolicyError::invalid_value(path, value, "a string")),
         },
+        KeyKind::Profiles => validate_profiles(path, value, errors),
+        KeyKind::SectionMapping => validate_mapping(path, value, errors),
+        KeyKind::RetryEntries => validate_retry_entries(path, value, errors),
         KeyKind::Enum(values) => {
             if !value.as_str().is_some_and(|s| values.contains(&s)) {
                 errors.push(PolicyError::invalid_value(
@@ -679,9 +1035,233 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     }
 }
 
+/// The two-step upgrade message (R-113) when the policy names keys this
+/// binary does not know: the head added keys the target's pinned binary
+/// cannot read. `None` when no error is an unknown key.
+#[must_use]
+pub fn upgrade_order_hint(errors: &[PolicyError], binary_version: &str) -> Option<String> {
+    errors
+        .iter()
+        .any(|e| e.message.starts_with("unknown key"))
+        .then(|| {
+            format!(
+                "this policy names keys codeflow {binary_version} cannot read. Upgrades take two pull requests, in order: first raise only `scaffold_version` in .codeflow/project.toml (the pinned CI binary) and land it; then run `codeflow update` on a new branch, so the new binary judges the new keys"
+            )
+        })
+}
+
+/// Push one finding for a nested policy value.
+fn nested_error(errors: &mut Vec<PolicyError>, path: &str, message: &str) {
+    errors.push(PolicyError {
+        key: path.to_string(),
+        message: format!("invalid {path}: {message}"),
+    });
+}
+
+/// `true` for an object whose values are all strings.
+fn string_map(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|m| m.values().all(Value::is_string))
+}
+
+/// Validate `git.automation_profiles`: every entry an object with a
+/// non-empty `name`, a non-empty `actors` list of non-empty strings, a valid
+/// non-empty `branch_pattern` glob, an optional `sections` map of heading to
+/// content, an optional non-empty `task` unit name, and no other field. A
+/// malformed profile would otherwise be
+/// dropped by the loader and its bot would fail, or worse, a typo would read
+/// as a wider pattern.
+fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let Some(list) = value.as_array() else {
+        errors.push(PolicyError::invalid_value(
+            path,
+            value,
+            "an array of profile objects",
+        ));
+        return;
+    };
+    for (i, profile) in list.iter().enumerate() {
+        let at = format!("{path}[{i}]");
+        let Some(obj) = profile.as_object() else {
+            nested_error(errors, &at, "expected an object");
+            continue;
+        };
+        for key in obj.keys() {
+            if !matches!(
+                key.as_str(),
+                "name" | "actors" | "branch_pattern" | "sections" | "task"
+            ) {
+                nested_error(
+                    errors,
+                    &at,
+                    &format!(
+                        "unknown field `{key}`; expected name, actors, branch_pattern, sections, task"
+                    ),
+                );
+            }
+        }
+        if obj
+            .get("task")
+            .is_some_and(|task| task.as_str().is_none_or(|t| t.trim().is_empty()))
+        {
+            nested_error(
+                errors,
+                &at,
+                "`task` must be a non-empty string when present",
+            );
+        }
+        if obj
+            .get("name")
+            .and_then(Value::as_str)
+            .is_none_or(|n| n.trim().is_empty())
+        {
+            nested_error(errors, &at, "`name` must be a non-empty string");
+        }
+        let actors_ok = obj
+            .get("actors")
+            .and_then(Value::as_array)
+            .is_some_and(|a| {
+                !a.is_empty()
+                    && a.iter().all(|x| {
+                        x.as_str().is_some_and(|s| {
+                            !s.trim().is_empty() && s != super::policy::UNKNOWN_ACTOR
+                        })
+                    })
+            });
+        if !actors_ok {
+            nested_error(
+                errors,
+                &at,
+                "`actors` must be a non-empty array of actor names or app ids (not `unknown`)",
+            );
+        }
+        match obj.get("branch_pattern").and_then(Value::as_str) {
+            Some(p) if !p.trim().is_empty() && p.trim() != "*" && p.trim() != "**" => {
+                if let Err(e) = glob::Pattern::new(p) {
+                    nested_error(
+                        errors,
+                        &at,
+                        &format!("`branch_pattern` is not a valid glob ({e})"),
+                    );
+                }
+            }
+            _ => nested_error(
+                errors,
+                &at,
+                "`branch_pattern` must be a glob narrower than `*`, such as `dependabot/*`",
+            ),
+        }
+        if let Some(sections) = obj.get("sections") {
+            if !string_map(sections) {
+                nested_error(
+                    errors,
+                    &at,
+                    "`sections` must map each heading to its content as strings",
+                );
+            }
+        }
+    }
+}
+
+/// Validate `git.pr_section_mapping`: an object with a known `state`, an
+/// optional `headings` map of strings, and `decided` as `none` or a date.
+/// Validate `security.sandbox_retry_allow` as far as this unit owns it: an
+/// array of objects, each naming a non-empty `program`. The retry check
+/// (TSK-174) owns the meaning of every other field.
+fn validate_retry_entries(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let Some(list) = value.as_array() else {
+        errors.push(PolicyError::invalid_value(
+            path,
+            value,
+            "an array of entry objects",
+        ));
+        return;
+    };
+    for (i, entry) in list.iter().enumerate() {
+        let program_ok = entry
+            .get("program")
+            .and_then(Value::as_str)
+            .is_some_and(|p| !p.trim().is_empty());
+        if !program_ok {
+            nested_error(
+                errors,
+                &format!("{path}[{i}]"),
+                "expected an object with a non-empty `program`",
+            );
+        }
+    }
+}
+
+fn validate_mapping(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let Some(obj) = value.as_object() else {
+        errors.push(PolicyError::invalid_value(path, value, "an object"));
+        return;
+    };
+    for key in obj.keys() {
+        if !matches!(key.as_str(), "state" | "headings" | "decided") {
+            nested_error(
+                errors,
+                path,
+                &format!("unknown field `{key}`; expected state, headings, decided"),
+            );
+        }
+    }
+    if !obj
+        .get("state")
+        .and_then(Value::as_str)
+        .is_some_and(|s| matches!(s, "diagnosed" | "accepted" | "refused" | "custom"))
+    {
+        nested_error(
+            errors,
+            path,
+            "`state` must be one of: diagnosed, accepted, refused, custom",
+        );
+    }
+    if let Some(headings) = obj.get("headings") {
+        if !string_map(headings) {
+            nested_error(
+                errors,
+                path,
+                "`headings` must map each required heading to the template heading",
+            );
+        }
+    }
+    if let Some(decided) = obj.get("decided") {
+        let ok = decided.as_str().is_some_and(|d| {
+            d == "none"
+                || (d.len() == 10
+                    && d.bytes().enumerate().all(|(i, b)| {
+                        if i == 4 || i == 7 {
+                            b == b'-'
+                        } else {
+                            b.is_ascii_digit()
+                        }
+                    }))
+        });
+        if !ok {
+            nested_error(
+                errors,
+                path,
+                "`decided` must be `none` or a YYYY-MM-DD date",
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automation_profile_schema_names_the_task_field() {
+        assert!(schema()
+            .iter()
+            .find(|key| key.path == "git.automation_profiles")
+            .unwrap()
+            .valid
+            .contains("task"));
+    }
 
     /// Collect every dotted leaf path in a serialized policy JSON object.
     fn leaf_paths(value: &Value, prefix: &str, out: &mut Vec<String>) {
@@ -702,6 +1282,9 @@ mod tests {
 
     #[test]
     fn test_schema_covers_every_policy_leaf_both_ways() {
+        // Keys that are absent by default serialize nothing; they are still
+        // schema keys the file may carry.
+        const OPTIONAL: [&str; 2] = ["git.pr_section_mapping", "git.release_branch_pattern"];
         // The drift guard: every leaf the default Policy serializes must be in
         // the schema, and every schema path must be a real serde leaf — a new
         // field (or a renamed one) fails this test until the registry follows.
@@ -716,11 +1299,15 @@ mod tests {
         }
         for p in &schema_paths {
             assert!(
-                struct_paths.iter().any(|s| s == p),
+                OPTIONAL.contains(p) || struct_paths.iter().any(|s| s == p),
                 "schema registry lists {p}, which is not a policy field"
             );
         }
-        assert_eq!(struct_paths.len(), SCHEMA.len(), "one spec per leaf");
+        assert_eq!(
+            struct_paths.len() + OPTIONAL.len(),
+            SCHEMA.len(),
+            "one spec per leaf"
+        );
     }
 
     #[test]
@@ -732,7 +1319,6 @@ mod tests {
         assert_eq!(get("git.commit_desc_max_len"), "50");
         assert_eq!(get("git.commit_ticket_pattern"), "\"\"");
         assert_eq!(get("git.protected_branches"), r#"["main","master"]"#);
-        assert_eq!(get("human_authorization"), "none");
     }
 
     #[test]
@@ -795,15 +1381,173 @@ mod tests {
         assert!(errs[0].message.contains("array of strings"));
         let errs = validate_policy_str(r#"{"git":[]}"#).unwrap_err();
         assert!(errs[0].message.contains("expected a JSON object"));
-        let errs = validate_policy_str(r#"{"human_authorization":"totp"}"#).unwrap_err();
-        assert!(
-            errs[0].message.contains("expected one of: none"),
-            "{}",
-            errs[0]
-        );
         let errs =
             validate_policy_str(r#"{"security":{"dangerous_commands":"nope"}}"#).unwrap_err();
         assert_eq!(errs[0].key, "security.dangerous_commands");
+    }
+
+    #[test]
+    fn test_conflict_markers_takes_every_level_and_refuses_others() {
+        // TSK-170 AC-5.
+        for level in ["block", "warn", "allow", "off"] {
+            let json = format!(r#"{{"git":{{"conflict_markers":"{level}"}}}}"#);
+            assert!(validate_policy_str(&json).is_ok(), "{level}");
+        }
+        let errs = validate_policy_str(r#"{"git":{"conflict_markers":"strict"}}"#).unwrap_err();
+        assert_eq!(errs[0].key, "git.conflict_markers");
+    }
+
+    #[test]
+    fn test_work_planning_accepts_block_or_warn_and_refuses_off() {
+        for level in ["block", "warn"] {
+            let json = format!(r#"{{"git":{{"work_planning":"{level}"}}}}"#);
+            assert!(validate_policy_str(&json).is_ok(), "{level}");
+        }
+        for level in ["off", "allow"] {
+            let json = format!(r#"{{"git":{{"work_planning":"{level}"}}}}"#);
+            let errs = validate_policy_str(&json).unwrap_err();
+            assert_eq!(errs[0].key, "git.work_planning");
+        }
+        let mut git = super::super::policy::GitPolicy::default();
+        assert_eq!(git.work_planning_level(), super::super::PolicyLevel::Block);
+        git.work_planning = super::super::PolicyLevel::Off;
+        assert_eq!(git.work_planning_level(), super::super::PolicyLevel::Block);
+        git.work_planning = super::super::PolicyLevel::Warn;
+        assert_eq!(git.work_planning_level(), super::super::PolicyLevel::Warn);
+    }
+
+    #[test]
+    fn test_work_records_accepts_block_or_warn_and_refuses_off() {
+        for level in ["block", "warn"] {
+            let json = format!(r#"{{"git":{{"work_records":"{level}"}}}}"#);
+            assert!(validate_policy_str(&json).is_ok(), "{level}");
+        }
+        for level in ["off", "allow", "blok"] {
+            let json = format!(r#"{{"git":{{"work_records":"{level}"}}}}"#);
+            let errs = validate_policy_str(&json).unwrap_err();
+            assert_eq!(errs[0].key, "git.work_records");
+            assert!(errs[0].message.contains("block, warn"), "{}", errs[0]);
+        }
+        let mut git = super::super::policy::GitPolicy::default();
+        assert_eq!(git.work_records_level(), super::super::PolicyLevel::Block);
+        git.work_records = super::super::PolicyLevel::Off;
+        assert_eq!(git.work_records_level(), super::super::PolicyLevel::Block);
+        git.work_records = super::super::PolicyLevel::Warn;
+        assert_eq!(git.work_records_level(), super::super::PolicyLevel::Warn);
+    }
+
+    #[test]
+    fn test_deprecated_human_authorization_validates_and_warns_once() {
+        assert!(validate_policy_str(r#"{"human_authorization":"none"}"#).is_ok());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            r#"{"human_authorization":"none","git":{}}"#,
+        )
+        .unwrap();
+        assert!(validate_policy(dir.path()).is_ok());
+        let warnings = deprecation_warnings(dir.path());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0]
+            .text
+            .contains("human_authorization is deprecated"));
+        assert!(
+            warnings[0].remedy.contains("codeflow update"),
+            "{}",
+            warnings[0]
+        );
+        std::fs::write(dir.path().join(".codeflow/policy.json"), r#"{"git":{}}"#).unwrap();
+        assert!(deprecation_warnings(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn upgrade_hint_names_the_two_step_order_for_unknown_keys_only() {
+        let errs = validate_policy_str(r#"{"git":{"future_key":"block"}}"#).unwrap_err();
+        let hint = upgrade_order_hint(&errs, "3.0.0").unwrap();
+        assert!(hint.contains("two pull requests"));
+        assert!(hint.contains("scaffold_version"));
+        let errs = validate_policy_str(r#"{"git":{"commit_format":"worn"}}"#).unwrap_err();
+        assert!(upgrade_order_hint(&errs, "3.0.0").is_none());
+    }
+
+    #[test]
+    fn retired_headless_opt_in_validates_warns_and_never_relaxes() {
+        let data = r#"{"security":{"headless_opt_in":{"families":["codex"],"reason":"CI"}}}"#;
+        assert!(validate_policy_str(data).is_ok());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(dir.path().join(".codeflow/policy.json"), data).unwrap();
+        let warnings = deprecation_warnings(dir.path());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0]
+            .text
+            .contains("security.headless_opt_in is deprecated and ignored"));
+        assert!(warnings[0].text.contains("security.headless_peer_runs"));
+        let policy: Policy = serde_json::from_str(data).unwrap();
+        assert!(
+            super::super::exec_guard::evaluate("codex exec task", &policy.security)
+                .iter()
+                .any(|v| v.rule == "security.headless_peer_runs"
+                    && v.level == super::super::PolicyLevel::Block)
+        );
+        for level in ["block", "warn", "off"] {
+            assert!(validate_policy_str(&format!(
+                r#"{{"security":{{"headless_peer_runs":"{level}"}}}}"#
+            ))
+            .is_ok());
+        }
+    }
+
+    #[test]
+    fn test_new_security_keys_validate_their_values() {
+        for ok in [
+            r#"{"security": {"workflow_pushes": "allow", "sandbox_retry": "block"}}"#,
+            r#"{"security": {"sandbox_retry_allow": [{"program": "node"}]}}"#,
+            r#"{"git": {"discard_uncommitted": "warn", "clean_regenerable": ["out/"]}}"#,
+        ] {
+            assert!(validate_policy_str(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            r#"{"security": {"workflow_pushes": "block"}}"#,
+            r#"{"security": {"sandbox_retry": "allow"}}"#,
+            r#"{"security": {"sandbox_retry_allow": [{"script": "x"}]}}"#,
+            r#"{"security": {"outward_actions": "deny"}}"#,
+        ] {
+            assert!(validate_policy_str(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn test_automation_profiles_and_mapping_validate() {
+        let ok = r#"{"git":{"automation_profiles":[{"name":"dependabot","actors":["dependabot[bot]"],"branch_pattern":"dependabot/*","sections":{"Testing":"CI runs the full suite."}}],"pr_section_mapping":{"state":"accepted","headings":{"Summary":"What"},"decided":"2026-09-26"}}}"#;
+        assert!(
+            validate_policy_str(ok).is_ok(),
+            "{:?}",
+            validate_policy_str(ok)
+        );
+        let policy: Policy = serde_json::from_str(ok).unwrap();
+        assert_eq!(policy.git.automation_profiles.len(), 1);
+        assert!(policy.git.pr_section_mapping.is_some());
+
+        for bad in [
+            r#"{"git":{"automation_profiles":{}}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":[],"branch_pattern":"bot/*"}]}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":["unknown"],"branch_pattern":"bot/*"}]}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":["b"],"branch_pattern":"*"}]}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":["b"],"branch_pattern":"bot/*","level":"off"}]}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":["b"],"branch_pattern":"bot/*","sections":{"Testing":1}}]}}"#,
+            r#"{"git":{"pr_section_mapping":{"state":"maybe"}}}"#,
+            r#"{"git":{"pr_section_mapping":{"state":"accepted","decided":"yesterday"}}}"#,
+            r#"{"git":{"pr_section_mapping":{"state":"accepted","extra":true}}}"#,
+        ] {
+            let errs = validate_policy_str(bad).expect_err(bad);
+            assert!(
+                errs[0].key.starts_with("git.automation_profiles")
+                    || errs[0].key.starts_with("git.pr_section_mapping"),
+                "{bad}: {errs:?}"
+            );
+        }
     }
 
     #[test]
@@ -837,7 +1581,7 @@ mod tests {
     fn test_validate_valid_opt_in_config_ok() {
         let json = r#"{"schema_version":1,"git":{"commit_footer_tokens":["Signed-off-by"],
             "commit_ticket_keys":["Refs"],"commit_ticket_required":"block",
-            "commit_ticket_pattern":"^PROJ-\\d+$"},"human_authorization":"none"}"#;
+            "commit_ticket_pattern":"^PROJ-\\d+$"}}"#;
         assert!(validate_policy_str(json).is_ok());
     }
 }

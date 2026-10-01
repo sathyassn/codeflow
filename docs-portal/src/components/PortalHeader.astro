@@ -1,0 +1,18 @@
+---
+import PortalDisplay from "./PortalDisplay.astro";
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+---
+  <header class="cf-header">
+    <div class="cf-header-start">
+      <button class="cf-icon-btn" type="button" data-cf-toggle="nav" aria-label="Navigation" aria-pressed="true" aria-controls="cf-nav" title="Hide navigation"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></svg></button>
+      <a class="cf-brand" href={siteTitleHref} aria-label={`${siteTitle} home`}><span class="cf-brand-mark" aria-hidden="true"></span><span class="cf-brand-name">{siteTitle}</span>{!/guide$/i.test(siteTitle) && <span class="cf-brand-sub">guide</span>}</a>
+    </div>
+    <div class="cf-header-mid">
+      <button class="cf-search-trigger" type="button" data-cf-open="search" aria-haspopup="dialog" aria-keyshortcuts="/ Control+K Meta+K"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg><span>Search the guide</span><kbd class="cf-kbd" aria-hidden="true">/</kbd></button>
+    </div>
+    <div class="cf-header-end">
+      <button class="cf-icon-btn cf-search-icon" type="button" data-cf-open="search" aria-haspopup="dialog" aria-label="Search the guide" title="Search the guide"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></button>
+      <PortalDisplay />
+      <button class="cf-icon-btn" type="button" data-cf-toggle="toc" aria-label="On this page" aria-pressed="true" aria-controls="cf-toc" title="Hide page outline"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M14.5 4.5v15"/></svg></button>
+    </div>
+  </header>

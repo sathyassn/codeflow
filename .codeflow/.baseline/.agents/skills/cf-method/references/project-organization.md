@@ -79,27 +79,18 @@ Relationships, not encoded numbers, form the graph:
 
 - `task.epic_id` points to one epic, or is null with a non-empty
   `standalone_reason`;
-- `task.depends_on` lists direct task predecessors;
-- an epic or task lists the specs it consumes in `specs`; a task inherits its
-  epic's specs;
+- `task.depends_on` lists direct task predecessors, typed as the
+  [work lifecycle](#the-work-lifecycle) states;
+- `specs` links follow the spec and epic rule there;
 - a spec does not duplicate a parent, and an epic does not duplicate a task
   roster.
 
-Use `codeflow epic new`, `codeflow spec new --for EPC-NNN|TSK-NNN`, and
-`codeflow task new --epic EPC-NNN` (or `--standalone-reason "..."`), with
-`--into integration/<epic-id>-<slug>` for every task in a multi-task epic.
-For a supplied task set or batch, first partition by coherent durable outcome
-and direct dependencies; the request boundary is not automatically an epic or
-integration boundary. A batch may therefore produce multiple epics, standalone
-tasks, or both, each with its own appropriate landing route.
-Create that one shared branch from the intended protected target before
-allocating the tasks. The integration branch is the default for a multi-task
-body; a different landing shape requires an explicit Plan vN rationale and
-approval from both primary seats before allocation. Use it only for the epic's
-coherent outcome, never to batch unrelated standalone tasks. The CLI refuses a
-missing target, task branch, tag, object ID, or revision expression. Allocation
-creates files exclusively. Parallel planners therefore serialize allocation or
-use one allocator; a collision is renumbered before merge, never overwritten.
+The [work lifecycle](#the-work-lifecycle) names the allocation verbs and the
+planning routes; `cf-method`, "Managing a body of work", owns the landing
+shape. The CLI refuses a missing target, task branch, tag, object ID, or
+revision expression. Allocation creates files exclusively. Parallel planners
+therefore serialize allocation or use one allocator; a collision is renumbered
+before merge, never overwritten.
 
 CodeFlow reads historical dual-identity and `TSK-NNN-NNN` records, including
 the old nested epic/task layout. New records use the flat shape and one ID.
@@ -116,13 +107,18 @@ small workgraph.
 authority. A future local SQLite index may accelerate queries, but must remain
 rebuildable from Git Markdown and must never become a second source of truth.
 
-## From discussion to delivered work
+## The work lifecycle
+
+This is the one statement of how a durable work item moves and which verbs
+move it. The stage skills (`cf-plan`, `cf-develop`, `cf-ship`,
+`cf-customize`) and the orchestrator's task graph follow it and do not restate
+it.
 
 ```text
 brief / discussion
         |
         v
-discover facts locally and externally
+discover facts locally and externally; findings -> docs/research/
         |
         +-- operator-owned outcome, scope, public behavior,
         |   authority, security, or irreversible choice unclear?
@@ -132,26 +128,31 @@ discover facts locally and externally
 cf-model-orchestrator: independent Claude + Codex discovery
         |
         v
-settle and dual-approve Plan vN
+one plan, drafted by Claude, challenged by Codex, approved once
         |
         v
 cf-plan partitions any supplied batch, then materializes warranted records
         |
-        +-- one bounded durable outcome ----------> TSK-NNN
-        +-- multi-session/PR/capability outcome --> EPC-NNN + TSK-NNN...
+        +-- one outcome --------------------------> TSK-NNN (standalone):
+        |                                            record + code in ONE PR
+        +-- multi-session/PR/capability outcome --> EPC-NNN + TSK-NNN...:
+        |                                            ONE planning PR, merged
+        |                                            into the integration target
         `-- behavior/interface must be frozen ----> SPC-NNN, linked by consumer
         |
         v
-validate workgraph -> merge planning PR into each task's integration_target
+codeflow work next -> codeflow work claim TSK-NNN
         |
         v
 task/<TSK-NNN>-<slug> worktree -> codeflow work start TSK-NNN
         |
         v
-implement -> verify -> cross-lineage review -> integrated judgment -> ship
+implement -> verify -> merge the line in -> cross-lineage review ->
+integrated judgment -> ship
         |
         v
-update statuses/capabilities/ADRs, merge PR, prove landing, clean resources
+task status complete as the PR's last commit, capabilities/ADRs synced,
+batch candidate gated once, merge, prove landing, clean resources
 ```
 
 `cf-model-orchestrator` owns independent discovery, reconciliation, design and
@@ -167,19 +168,134 @@ would change the accepted outcome, public behavior, authority, material
 security posture, irreversible action, or another decision the operator owns.
 State the evidence, viable options, consequences, and recommendation.
 
-Planning records are created on a planning branch, validated, reviewed, and
-merged into the task's declared `integration_target` before implementation.
-That target is a protected release branch or a body-of-work `integration/`
-branch, never the task branch itself; the anchored task record must declare the
-same logical target. It must resolve to a real local or remote-tracking branch,
-not `HEAD`, a tag, an object ID, or a revision expression.
-`codeflow work start` is a read-only preflight: it checks the task branch,
-merge-base anchor, parent/standalone rationale, approved specs, and completed
-dependencies. Whenever a task branch stages work, pre-commit first validates
-the visible graph and then applies the same anchor check; CI repeats both,
-including in detached checkouts. Planning records belong on `plan/`, never on a
-task branch that could authorize itself. These checks do not create branches,
-worktrees, records, or status changes.
+### Discovery, specs and the standalone test
+
+- **Research.** Findings live under `docs/research/`, one file per question
+  with its sources. A spec, ADR or epic that draws on them lists them in an
+  `inputs` list. A record may cite a research file; a research file never
+  carries status. A spike is a task with `work_type: spike` on a `spike/`
+  branch: `work start` runs for it, and its pull request lands findings (files
+  under `docs/research/` and its own record), never product code.
+- **Spec and epic.** Spec and epic are many to many, with one owner per link.
+  An epic lists the specs it consumes, in full or in part, in `specs`; a task
+  lists its own and inherits its epic's. A spec keeps no consumer list: its
+  consumers are read from their `specs` lists, so the two sides never
+  disagree. An epic with no spec is valid; its own criteria carry acceptance.
+- **Standalone.** A task may stand alone when its outcome is one reviewable
+  pull request. It records a `standalone_reason` and may list capabilities
+  and specs directly; its record and code land in that one PR. Anything
+  larger is an epic with tasks. Challenge a standalone task that looks like
+  one node of a larger outcome.
+
+### Planning records
+
+Records are allocated only by the CLI, and allocation creates files
+exclusively. An epic and its tasks are allocated on a `plan/` branch of their
+target; a standalone task's record is allocated on its own task branch:
+
+- `codeflow epic new "<title>" --integration` allocates an epic and cuts and
+  pushes its `integration/EPC-NNN-<slug>` branch from the protected target.
+- `codeflow spec new --for EPC-NNN --for TSK-NNN "<title>"` allocates a spec
+  and writes its id into every named consumer's `specs` list.
+- `codeflow task new --epic EPC-NNN --into <target> "<title>"` allocates a
+  task; `--standalone-reason "<why>"` replaces `--epic` for a standalone task,
+  and `codeflow task new --follow-up-of TSK-NNN "<title>"` files a follow-up
+  that inherits its epic and target.
+- `codeflow adr new "<title>"` allocates a decision record.
+
+The epic's one planning change is validated with `codeflow validate --docs`,
+reviewed once, and merged into each task's declared `integration_target`
+before implementation; it anchors every task of the epic, and an epic task
+never authorizes its own record from its task branch. A standalone task's
+record and code land in one independently reviewed PR, where CI admits that
+one record and no other. Later follow-ups, re-sizing and other tasks'
+criteria ride in one batched epic amendment on a `plan/` branch; a task's own
+criteria amendment and status ride in its own PR. The target is a protected
+release branch or a body-of-work `integration/` branch, never a task branch,
+and it resolves to a real local or remote-tracking branch, never `HEAD`, a
+tag, an object ID, or a revision expression.
+
+### Dependencies
+
+An entry of `depends_on` is either a bare task id, a code dependency, or
+`{id: TSK-NNN, kind: research | decision, pin: "<commit sha>"}`, with the pin
+quoted. The kind is never inferred from the predecessor's `work_type`.
+
+- A **code dependency** is met when the predecessor is `complete` and its
+  accepted change is in this task's execution base, by merge or an explicit
+  reviewed port. A predecessor complete only on another line is not here yet,
+  and an unfetched line is unknown, never met. Before that, a task may be
+  claimed and started on the predecessor's exact reviewed head, named with
+  `--on TSK-NNN@<sha>`: the tool checks the pin structurally (an ancestor of
+  HEAD, on the predecessor's branch, still its tip), which is not
+  authentication of the review. CI still requires the predecessor complete at
+  the merge base when the task lands, so the stack lands in order.
+- A **research or decision dependency** is met when the predecessor is
+  `complete` at the pinned commit on its target. The planner writes the pin
+  when it is known; an entry without a pin is unmet.
+- **Guarded plans:** only the selected branch of a decision is written into
+  `depends_on`. Until the selection is approved on the target, the join task
+  carries `awaiting_selection: <plan or decision path>`, is `blocked` with the
+  reason "awaiting selection" and that path as its revisit event, and may
+  have an empty `depends_on`. The selection lands only by the batched epic
+  amendment that removes `awaiting_selection`, writes the selected
+  dependencies and unblocks the join. A cancelled, unselected alternative
+  never blocks a join.
+
+### Picking up and starting work
+
+- `codeflow work next --epic EPC-NNN --json` lists ready tasks first, then
+  waiting and blocked ones with their reasons, and names the fetched snapshot
+  it judged; both flags are optional.
+- `codeflow work claim TSK-NNN` checks readiness against the fetched target
+  tip, creates `task/TSK-NNN-<slug>` from it (or from a named reviewed pin,
+  `--on`) and pushes it; on a branch that already holds a new standalone
+  record, it renames that branch instead. The pushed branch is an advisory
+  claim, never a lock; two branches carrying one id show as a conflict in
+  `codeflow status`.
+- Before product edits, `codeflow work start TSK-NNN` runs on the task branch.
+  It is a read-only preflight: it checks the task branch, the anchor (at the
+  merge-base for an epic task, at head for a standalone task's own record),
+  parent or standalone rationale, approved specs, and met dependencies.
+  A task branch is not an integration target and cannot authorize its own
+  epic planning record. The target must resolve to a real local or
+  remote-tracking branch, never HEAD, a tag, object ID or revision expression.
+  `codeflow work start`, `codeflow ci` and pre-commit enforce these same
+  target and anchor checks.
+  Whenever a task branch stages work, pre-commit validates the visible graph
+  and applies the same check; CI repeats both, including in detached
+  checkouts. None of them creates branches, worktrees, records, or status
+  changes.
+
+### Status and closeout
+
+`codeflow task status` is the safe way to change a task's status, and the
+change rides in the task's PR. It is not the only writer: a hand edit in a
+reviewed pull request is judged by the same rules, and any transition this
+table does not list is refused, whoever writes it:
+
+| Transition | Command | Carries |
+|---|---|---|
+| todo to blocked | `codeflow task status TSK-NNN blocked --reason <why> --owner <who> --revisit <event>` | the Blocker section |
+| blocked to todo | `codeflow task status TSK-NNN todo` | the blocker cleared |
+| todo to complete | `codeflow task status TSK-NNN complete --acceptance <file>` | an acceptance block naming the reviewed code commit, as the task PR's last commit (`cf-ship`) |
+| todo or blocked to cancelled | `codeflow task status TSK-NNN cancelled --reason <why> --scope <where it went>` | the reason and scope disposition in the Closeout |
+| complete to todo (reopen) | `codeflow task status TSK-NNN todo --reason <why>` | the old acceptance block, kept and marked superseded |
+
+`in_progress` stays readable on older records, but no verb writes it: a
+visible task branch shows the work in progress. The acceptance block is the
+completion record; each follow-up gets one real home, filed with
+`--follow-up-of` in the batched epic amendment.
+
+A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
+question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
+revision replaces it. `implemented` is derived when every consumer is
+complete; nobody writes it. An epic closes with `codeflow epic status EPC-NNN
+complete --acceptance <file>` once every task is terminal and every criterion
+is verified; `cancelled` and `archived` are its other terminal acts. A
+multi-task epic lands in gated batch candidates on its integration branch and
+reaches the protected branch as one reviewed body (cf-method, "Managing a body
+of work").
 
 ## Choose the lightest durable artifact
 
@@ -187,22 +303,27 @@ worktrees, records, or status changes.
 Will the work or its rationale need to survive this session?
 ├─ no  -> native session task/plan; no durable record
 └─ yes
-   ├─ one independently reviewable outcome -> standalone task
+   ├─ one reviewable pull request -> standalone task (the standalone test)
    └─ shared outcome spans tasks, sessions, PRs, or capabilities -> epic + tasks
       └─ behavior/interface/format must be agreed before building? -> add spec
 ```
 
 An epic owns a coherent outcome and boundary, not a time box. A task owns one
 independently reviewable acceptance boundary and normally one producer. A
-standalone task is deliberate, not an orphan escape hatch: record why no
-durable parent outcome exists. During review, challenge a standalone task that
-appears to be one node of a larger outcome.
+standalone task is deliberate, not an orphan escape hatch; the standalone test
+in the [work lifecycle](#the-work-lifecycle) decides it.
 
 A spec pins behavior, interfaces, or formats that multiple implementation
 choices must obey. It is created during planning, reaches `approved` only with
-no unresolved open question, and becomes `implemented` when its consuming work
-ships. Later semantic change gets a new spec or an explicit superseding record;
-do not rewrite history. Create an ADR only for a durable architectural decision.
+no unresolved open question, and is derived `implemented` once every consumer
+is complete. While it is approved and not yet `implemented`, a change to it is
+Plan vN+1, amended in place through a reviewed planning change: each change of
+meaning gets a dated note naming its resolution (an editorial change needs
+none), and the superseded decision stays visible as history. That change names
+each consumer bound to a changed requirement and its disposition: unaffected,
+criteria amended in the same change, or reopened. An `implemented` spec is
+frozen, so a later change gets a new spec or an explicit superseding record; do
+not rewrite history. Create an ADR only for a durable architectural decision.
 Do not repeat the same prose at several altitudes.
 
 Maintained requirements and executable interface schemas remain current in
@@ -311,9 +432,10 @@ checklist theater. A record instantiates only what is specific:
 - outcome, audience where relevant, scope, and non-goals;
 - affected capabilities, surfaces, interfaces, and direct dependencies;
 - testable acceptance criteria and selected evidence;
-- agreed Plan version and producer/reviewer assignment for non-trivial work;
-- task-specific risk, recovery, test-data, or environment requirements;
-- closeout evidence, bounded discoveries, and routed follow-ups.
+- producer and reviewer for non-trivial work;
+- task-specific risk, recovery, test-data, or environment requirements, in
+  the description;
+- the acceptance block with evidence per criterion, and routed follow-ups.
 
 Implementation discoveries follow one boundary:
 
@@ -321,12 +443,14 @@ Implementation discoveries follow one boundary:
 Does the discovery change outcome, scope, graph, owner, acceptance,
 public interface, authority, or safety boundary?
 ├─ no  -> make the bounded implementation choice; preserve evidence
-└─ yes -> stop; reconcile and dual-approve Plan vN+1; update records; continue
+└─ yes -> stop; a new plan version or the batched epic amendment, as the
+          task-graph mutation rules say; update records; continue
 ```
 
-Closeout never retroactively legitimizes a material deviation. It names the
-approved plan delivered, the relevant bounded deviations, what was and was not
-verified, and each follow-up's single real home. Omit empty ceremony.
+Completion never retroactively legitimizes a material deviation. The
+acceptance block and PR body name what was and was not verified, the relevant
+bounded deviations, and each follow-up's single real home. Omit empty
+ceremony.
 
 ## Spikes and standalone prototypes
 
@@ -335,8 +459,8 @@ code on a protected target. `work_type: spike | experiment` records intent.
 
 | Situation | Home | Lands on protected? |
 |---|---|---|
-| Changing an existing tree | `spike/<task-or-question>` branch; edit the real packages | No. Merge the decision later on `task/TSK-…`. Keep the spike branch as the primary source if needed. |
-| Standalone throwaway (no production path yet) | `spikes/<task-or-question>/` **on that spike/experiment branch** | No. `spikes/` on a PR into `main` or `integration/` is a review defect unless Plan vN archives a named subset as evidence. |
+| Changing an existing tree | `spike/<task-or-question>` branch; edit the real packages | Findings only: the spike task's PR lands files under `docs/research/` and its record, never product code. Build the decision later on `task/TSK-…`. |
+| Standalone throwaway (no production path yet) | `spikes/<task-or-question>/` **on that spike/experiment branch** | No. `spikes/` on a PR into `main` or `integration/` is a review defect unless the approved plan archives a named subset as evidence. |
 | Retained comparison evidence | `docs/verification/<task>/` | Yes, as evidence, not as a product runtime. |
 
 Do not add a mandatory `spikes/` directory on `main`. Do not host prototypes in
@@ -349,17 +473,20 @@ a prototype is for an interaction or logic question that paper cannot settle.
   discoverable or reversible technical detail is researched and decided by the
   agents.
 - **Duo seat unavailable:** record preflight evidence and reduced assurance,
-  then use the documented solo flow; never imply dual approval.
+  then use the documented solo flow; never imply approval by both seats.
 - **Allocation collision:** stop, renumber on the planning branch, repair links,
   and revalidate.
 - **Dangling link, cycle, orphan, draft spec, or incomplete predecessor:** fix
   the graph or sequence; do not bypass validation or `work start`.
-- **Task created only on its implementation branch:** move it through a
-  planning PR and merge it into the declared target before product changes.
-- **Material discovery:** Plan vN+1; no after-the-fact closeout waiver.
+- **Epic task created only on its implementation branch:** move it into the
+  epic's batched amendment and merge that into the declared target before
+  product changes. A standalone task's own record belongs on its branch.
+- **Material discovery:** a new plan version under the task-graph rules; no
+  after-the-fact waiver.
 - **CodeFlow task cancellation:** stop product edits, preserve useful work and
-  evidence, and update its task to `cancelled` with the reason and resource
-  disposition through a reviewed non-task planning/closeout change. Close or
+  evidence, and cancel the task with its reason and scope disposition (the
+  [work lifecycle](#the-work-lifecycle) command) through a reviewed change.
+  Close or
   cancel other work at its declared authority. Never call cancellation
   complete or run the delivery path as though it shipped.
 - **External tracker disagreement:** the declared authority wins; repair the

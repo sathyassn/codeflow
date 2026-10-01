@@ -1,5 +1,6 @@
 ---
 id: ADR-0014
+uid: 842f1a32-5bb4-4edb-87c7-5b11a4823da5
 title: Codex credential read-guard via a named permission profile (cf-guard)
 date: 2026-07-05
 status: accepted
@@ -10,7 +11,7 @@ architecture_impact: docs/architecture.md — the Codex parity note records that
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0014 — Codex credential read-guard via a named permission profile (cf-guard)
+# ADR-0014: Codex credential read-guard via a named permission profile (cf-guard)
 
 ## Context
 

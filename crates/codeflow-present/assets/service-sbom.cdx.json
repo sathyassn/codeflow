@@ -1,0 +1,337 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "file",
+      "bom-ref": "service/app-MDM2S4P6.css.br",
+      "name": "service/app-MDM2S4P6.css.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "30731be4d8c1bc0a33475e90726736687ca1a441ca3e8a0b50d9f9ccb646a1cb"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/app-MDM2S4P6.css.gz",
+      "name": "service/app-MDM2S4P6.css.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "df6875182e49ffe727c2f36ee27089b89fb878748154085e00ce96eb24a927b7"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/app-SLDKUQGB.js.br",
+      "name": "service/app-SLDKUQGB.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2bf6147b602cbece5af253ba8c56d6b3260f360feae55cccdbbf80a21aa86987"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/app-SLDKUQGB.js.gz",
+      "name": "service/app-SLDKUQGB.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b1cc4d2d657d9bb9a1ecaa017f6ae1b6097adf3f098eb93f649b1aeaa36213fd"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-bash-EPX2PC56.js.br",
+      "name": "service/chunk-bash-EPX2PC56.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cde94130e080423d33034e5f21a0fec27ac4f90d63ee62666523568ec69ce626"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-bash-EPX2PC56.js.gz",
+      "name": "service/chunk-bash-EPX2PC56.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "159b2d81cb156bfb2161a3196b8ee62253ced7198fd2b11690f63111b8a46ac1"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-chunk-GOL67HMX.js.br",
+      "name": "service/chunk-chunk-GOL67HMX.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e1802c322bfdccf708e32a192b9ed9b0e9e48bbfdf71eb94fe919f6d6f647433"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-chunk-GOL67HMX.js.gz",
+      "name": "service/chunk-chunk-GOL67HMX.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f8aaf03e4fd4b5b5496cfbf453f27cdefa6ff3be2fb3c6def5db36d771fa7098"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-diff-BI7E6I62.js.br",
+      "name": "service/chunk-diff-BI7E6I62.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "da4218de79c50cb718eeb582d9d1b92a9043f09b0e6e37518159ba7d279e7c88"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-diff-BI7E6I62.js.gz",
+      "name": "service/chunk-diff-BI7E6I62.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "14568c37583eefd05190c750be7bcbd63183f9cb30c9ceb4e292c2775cd2c572"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-figure-HAJA2WKB.js.br",
+      "name": "service/chunk-figure-HAJA2WKB.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a9cff0e9a436a2fd21d988640760a1ce547f716b62c9697c9a23f15703aeebac"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-figure-HAJA2WKB.js.gz",
+      "name": "service/chunk-figure-HAJA2WKB.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9a3cbd2b0aff9b88d21cbec468d80cf1c568e8251d825a73f55ecc61846e3ce6"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-fonts-4A3J6ZMY.js.br",
+      "name": "service/chunk-fonts-4A3J6ZMY.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "07d574ea85778baacdb5e6214cf3edfe492e3be5c9cbb0f7970e974f31c2b518"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-fonts-4A3J6ZMY.js.gz",
+      "name": "service/chunk-fonts-4A3J6ZMY.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "efbcb4105c401c58e47b32ae13d1e1f2459c453932bdb98fa6e9c4d474a9ce61"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-javascript-PB5W56UY.js.br",
+      "name": "service/chunk-javascript-PB5W56UY.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9a36ef39a50443bb0ebb752b83935e90c6e641fa6f32d154cf8815100f621978"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-javascript-PB5W56UY.js.gz",
+      "name": "service/chunk-javascript-PB5W56UY.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2c734f6d1fb2f12bf2b26659b6778d1de68339b24bce6cadad6bdb67d3585f9c"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-json-VJNNX45E.js.br",
+      "name": "service/chunk-json-VJNNX45E.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "156d5c827a25ed6bdad161f4fc00b404edb201bb361b2d58482b2ca5470deac8"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-json-VJNNX45E.js.gz",
+      "name": "service/chunk-json-VJNNX45E.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "59aaa04f3a2d7d39b803d8f30fab4c679ae0f28485ac8f76017823b6fdbb12be"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-python-ZWGDTAYM.js.br",
+      "name": "service/chunk-python-ZWGDTAYM.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0f5b679031eeb786cbcabff3bf94d36156409bde5fccdbcec0cdfb3666769bd5"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-python-ZWGDTAYM.js.gz",
+      "name": "service/chunk-python-ZWGDTAYM.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3bb0dec40562bf27fd9f7fa5184ccb91350d79e46cd4080a7aa97f96d89232e7"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-rust-YIJ2FIW2.js.br",
+      "name": "service/chunk-rust-YIJ2FIW2.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b6b2922d637f18bd484cf6f49a05292b27b99257e2032ce4e2835289df617793"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-rust-YIJ2FIW2.js.gz",
+      "name": "service/chunk-rust-YIJ2FIW2.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "012f48d131d510deb63369767d29fcb4042a3d674c74219d47fe18b8abad22ff"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-syntax-64CEMTPY.js.br",
+      "name": "service/chunk-syntax-64CEMTPY.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a73edc4069814ed7f3343a2885e9c127e370dfbb1b2e47ec431a0ff4091aa0b8"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-syntax-64CEMTPY.js.gz",
+      "name": "service/chunk-syntax-64CEMTPY.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "39bc5118434011734339e36566fcc3a9c5a18a5e9524f28ed15e0bc0cccf737f"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-toml-BCK52IO4.js.br",
+      "name": "service/chunk-toml-BCK52IO4.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1745fd6d61634c5ecc1b0a7f9b24747016163567396ae3e6a80d260487bf5756"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-toml-BCK52IO4.js.gz",
+      "name": "service/chunk-toml-BCK52IO4.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2a2b774af2166a41382d8c2cbee40eabfad6d887279476acb6d5f814e8e8dc09"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-typescript-U4PYKMRH.js.br",
+      "name": "service/chunk-typescript-U4PYKMRH.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "05b1b72d50fbf94fbcba5e18d7695af82fd7acc583892fca8a20b689f1838672"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-typescript-U4PYKMRH.js.gz",
+      "name": "service/chunk-typescript-U4PYKMRH.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a9df70ed3e600949f4067d1feb2add52f833a47649c1bcf239a66f378f7b907a"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-yaml-PEKIX7CZ.js.br",
+      "name": "service/chunk-yaml-PEKIX7CZ.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "705144995fbd2677f10a9b5058af40bea0b225393dd189a154dc6279e656cf12"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/chunk-yaml-PEKIX7CZ.js.gz",
+      "name": "service/chunk-yaml-PEKIX7CZ.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c32d4992bee5b9bfe1fee2de2af136ff43f0bb1b34a9cb76092cd0a7c65ffda9"
+        }
+      ]
+    }
+  ]
+}
