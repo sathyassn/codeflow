@@ -41,3 +41,12 @@ regexes = [
   # example patterns above.
   '''^vulnerable/malicious$''',
 ]
+
+[[allowlists]]
+description = "cf-present project keys in recorded TSK-115 evidence: path hashes, not credentials"
+condition = "AND"
+paths = ['''^docs/verification/evidence/tsk-115/ac3-native-run(?:-2)?/present-state\.txt$''']
+regexTarget = "secret"
+regexes = [
+  '''^[0-9a-f]{64}$''',
+]
