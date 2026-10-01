@@ -45,6 +45,18 @@ publication date._
 > 6. A project that adopted the bundled portal follows the ownership table
 >    in `docs/releasing.md` before its next portal update.
 
+> **Known limits of this release.**
+>
+> - No designated seat has a full-suite qualification record yet, so
+>   `codeflow doctor --check model-bindings` warns on every scaffold. The
+>   first native batch (Claude Opus 5.5, high effort, auto mode) passed 2
+>   of 11 process-round cases; most failures stopped to ask instead of
+>   taking the required step. Three trials were invalid because of kit
+>   gaps, fixed in this release. The full suite on the Claude, Codex and
+>   Grok seats follows in a patch release.
+> - The release gate ran on macOS. The native Linux, Windows and WSL2
+>   rows of the release qualification were not run.
+
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
