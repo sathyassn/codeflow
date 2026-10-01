@@ -6,8 +6,9 @@ description: Land finished work — docs and capability updates, then a PR throu
 # cf-ship — land finished work
 
 1. Before choosing a landing route, read `PLAN.md` and the landing policy
-   in `README.md` when present, alongside the project operating contract.
-   Resolve any conflict with the approved plan before changing its target.
+   in the project README when present, alongside the project operating
+   contract. Resolve any conflict with the approved plan before changing
+   its target.
    Preconditions: the applicable independent review verdict is `approved` and
    every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
    After review, a task PR's last commit runs `codeflow task status <id>
