@@ -599,7 +599,9 @@ async function prepareOwnedStage(logicalLive, live, stage, planned, preserveUnkn
     await assertNoSymlink(live, path.posix.dirname(relative));
     await assertNoSymlink(stage, path.posix.dirname(relative));
     await mkdir(path.dirname(destination), { recursive: true });
-    await writeText(destination, bytes);
+    // Keep the preserved file's mode: a tracked public file rewritten 0600
+    // would change the checkout it was preserved from.
+    await writeText(destination, bytes, (await lstat(source)).mode & 0o777);
   }
   for (const [relative, content] of planned) await writeText(path.join(stage, relative), content);
   await writeText(path.join(stage, ".codeflow-generated.json"), `${JSON.stringify({ schema_version: 1, files: [...planned.keys()].sort(compareDeterministicText) }, null, 2)}\n`);
@@ -714,12 +716,16 @@ async function syncDirectory(directory) {
   catch (error) { if (!["EINVAL", "ENOTSUP", "EISDIR"].includes(error?.code)) throw error; }
 }
 
-export async function writeText(file, text) {
+export async function writeText(file, text, mode = 0o600) {
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
   try {
     const handle = await open(temporary, "wx", 0o600);
-    try { await handle.writeFile(text, "utf8"); await handle.sync(); }
+    try {
+      await handle.writeFile(text, "utf8");
+      if (mode !== 0o600 && process.platform !== "win32") await handle.chmod(mode);
+      await handle.sync();
+    }
     finally { await handle.close(); }
     await rename(temporary, file);
     await syncDirectory(path.dirname(file));

@@ -823,6 +823,18 @@ test("corpus publication preserves unknown files and rolls every directory back 
   } finally { await rm(root, treeRemoval); }
 });
 
+test("corpus publication keeps a preserved public file's mode", { skip: process.platform === "win32" }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-mode-"));
+  try {
+    await mkdir(path.join(root, "public"), { recursive: true });
+    await writeFile(path.join(root, "public/favicon.svg"), "committed");
+    await chmod(path.join(root, "public/favicon.svg"), 0o644);
+    await publishOwnedCorpus(root, [{ live: "public", preserveUnknown: true, files: new Map([["llms.txt", "generated"]]) }]);
+    assert.equal(await readFile(path.join(root, "public/favicon.svg"), "utf8"), "committed");
+    assert.equal((await lstat(path.join(root, "public/favicon.svg"))).mode & 0o777, 0o644);
+  } finally { await rm(root, treeRemoval); }
+});
+
 test("authoritative public publication refuses unknown active files", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-authority-"));
   try {

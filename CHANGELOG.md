@@ -60,6 +60,13 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **Portal publication keeps committed public files' modes.** The docs portal
+  rewrote the committed files it preserves in `public/`, such as
+  `favicon.svg`, as owner-only (0600). In a fresh clone the first full test
+  gate then failed with "generation changed the candidate". Preserved files now
+  keep their mode.
+
+<!-- codeflow:release-impact patch -->
 - **Tracking authority transport checks.** Fetch, pull and remote update reject
   URL rewrites and configuration overrides; fetch and pull also reject arbitrary
   tracking-ref destinations. Direct writes to global Git config
