@@ -64,9 +64,11 @@ publication date._
   request names its release-integration task (`Task: TSK-NNN`), as SPC-013
   R-120 says. `codeflow ci` judged that body by the task pull request rules
   and refused it: a release brings every line's records, and the task
-  completes at the head. On a release head, the task with `role:
-  release-integration` now classifies as the release pull request, which
-  the release checks judge. Any other task named there keeps the task rules.
+  completes at the head. On a release head, under the built-in or the
+  configured release branch pattern, the task the release checks select as
+  owner now classifies as the release pull request, which those checks
+  judge. Any other task named there keeps the task rules, including a
+  `role: release-integration` task cancelled or completed before the range.
 
 <!-- codeflow:release-impact patch -->
 - **Portal publication keeps committed public files' modes.** The docs portal
