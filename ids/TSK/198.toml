@@ -1,0 +1,11 @@
+id = "TSK-198"
+uid = "26aa4849-8890-40cf-8f7b-688c368ade92"
+kind = "TSK"
+title = "Clear the public main secret and dependency scans"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-01T21:05:03Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
