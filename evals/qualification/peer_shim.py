@@ -6,23 +6,27 @@ The runner copies this file into a trial's peer-bin folder as `herdr`,
 nothing from the evaluator's checkout and never names it.
 
 `herdr`: tab and pane creation get the trial environment and stay in the
-trial's Herdr workspace; other workspaces are refused. Everything else passes
-through unchanged.
+trial's Herdr workspace; other workspaces are refused. Typing into another
+pane waits for the watcher's ready record for that pane, then refuses.
+Everything else passes through unchanged.
 
 `claude`, `codex`, `grok`: version, help and sign-in status calls pass
 through. The subject's own seat start passes through once, before readiness.
 Any other start writes a request and waits for the runner's watcher, which
-checks it and answers with the exact argv to run, or a refusal. Without an
-answer nothing runs. This arranges qualified launches; it is not containment:
-a seat started by absolute path or another PATH never reaches this file, and
-the watcher flags it.
+checks it and answers with the exact argv and environment to run, or a
+refusal. Without an answer nothing runs. This arranges qualified launches;
+it grants nothing. Every file here is writable by the subject, so the
+watcher verifies each running peer from its live process state and flags
+what it cannot verify, including seats started by another route.
 """
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+import re
 import secrets
+import subprocess
 import sys
 import time
 
@@ -33,6 +37,12 @@ STATUS = {"codex": ["login", "status"], "claude": ["auth", "status"]}
 # Herdr commands that open a pane or a workspace.
 CREATES = {("tab", "create"), ("pane", "split")}
 OTHER_WORKSPACE = {("workspace", "create"), ("worktree", "create"), ("worktree", "open")}
+# Herdr commands that type into a pane; a peer pane gets them only once ready.
+DELIVERY = {("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"),
+            ("agent", "prompt"), ("agent", "send-keys")}
+BOOLEAN_FLAGS = {"--current", "--wait", "--focus", "--no-focus"}
+# Terminal variables the answer's environment does not carry.
+PANE_VARIABLES = ("TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION")
 
 
 def refuse(message: str) -> None:
@@ -65,12 +75,68 @@ def option(args: list[str], index: int) -> tuple[str, str | None, int]:
     return flag, None, index + 1
 
 
+def target(args: list[str]) -> str | None:
+    """The pane or agent a Herdr command names: --pane, the first positional,
+    or the caller's own pane for --current or no target."""
+    positionals, index = [], 2
+    while index < len(args):
+        if args[index] in BOOLEAN_FLAGS or not args[index].startswith("-"):
+            if not args[index].startswith("-"):
+                positionals.append(args[index])
+            index += 1
+            continue
+        flag, value, index = option(args, index)
+        if flag == "--pane" and value:
+            return value
+    if positionals and "--current" not in args:
+        return positionals[0]
+    return os.environ.get("HERDR_PANE_ID") or None
+
+
+def resolve(context: dict, kind: str, name: str | None) -> dict:
+    """Ask the real Herdr which pane and workspace a target is."""
+    if not name:
+        refuse("cannot tell which pane this Herdr command targets")
+    done = subprocess.run([context["herdr"], kind, "get", name], capture_output=True, text=True, timeout=30)
+    try:
+        info = json.loads(done.stdout)["result"][kind]
+        return {"pane": info["pane_id"], "workspace": info["workspace_id"]}
+    except (ValueError, KeyError, TypeError):
+        refuse(f"cannot resolve the Herdr target {name}")
+
+
+def ready(context: dict, pane: str) -> bool:
+    gate = Path(context["launches"]) / "ready" / (re.sub(r"[^A-Za-z0-9_.-]", "_", pane) + ".json")
+    deadline = time.monotonic() + float(context.get("ready_seconds", 30))
+    while True:
+        try:
+            if json.loads(gate.read_text(encoding="utf-8")).get("ready") is True:
+                return True
+        except (OSError, ValueError):
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
 def herdr(context: dict, args: list[str]) -> None:
     real = context["herdr"]
     command = tuple(args[:2])
     if command in OTHER_WORKSPACE:
         log(context, "herdr-refused", {"args": args})
         refuse(f"herdr {' '.join(command)}: peers stay in the trial's Herdr workspace")
+    if command == ("pane", "split"):
+        where = resolve(context, "pane", target(args))
+        if where["workspace"] != context["workspace"]:
+            log(context, "herdr-refused", {"args": args, "workspace": where["workspace"]})
+            refuse("pane split: peers stay in the trial's Herdr workspace")
+    if command in DELIVERY:
+        where = resolve(context, "agent" if command[0] == "agent" else "pane", target(args))
+        subject = (context.get("subject") or {}).get("pane")
+        if where["pane"] != subject and (where["workspace"] != context["workspace"]
+                                         or not ready(context, where["pane"])):
+            log(context, "herdr-delivery-refused", {"args": args[:2], "pane": where["pane"]})
+            refuse("this pane is not a verified ready peer; nothing was sent")
     if command in CREATES:
         environment = context["environment"]
         given, workspace, index = set(), None, 2
@@ -141,7 +207,10 @@ def seat(context: dict, harness: str, args: list[str]) -> None:
     argv = decision["argv"]
     if argv[:1] != [real]:
         refuse("the trial watcher's answer names another executable")
-    os.execv(real, argv)
+    environment = {key: value for key, value in os.environ.items()
+                   if key.startswith("HERDR_") or key in PANE_VARIABLES}
+    environment.update(decision.get("environment") or {})
+    os.execve(real, argv, environment)
 
 
 def main() -> None:
