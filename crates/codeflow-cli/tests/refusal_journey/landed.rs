@@ -275,12 +275,14 @@ fn fake_codeflow(bin: &Path, probe: &str, refusal: &str) {
 
 /// AC-3: every harness wrapper blocks with exit 2 for a missing binary, an
 /// older one, a current one refusing by policy and one whose capability
-/// probe stalls before or after answering; only the current binary that
-/// answers in time goes without reinstall advice. The probe is bounded, so a
-/// stall still returns exit 2 well inside the harness's 10-second timeout,
+/// probe stalls before or after answering, or stalls after printing lines
+/// shaped like the wrapper's own pid and completion records; only the
+/// current binary that answers in time goes without reinstall advice. The
+/// probe is bounded, so a stall still returns exit 2 well inside the
+/// harness's 10-second timeout,
 /// kills the probe and removes its temporary file.
 fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path, bin: &Path) {
-    for tool in ["mktemp", "sed", "sleep", "rm"] {
+    for tool in ["mktemp", "sleep", "rm", "rmdir"] {
         let source = ["/usr/bin", "/bin"]
             .iter()
             .map(|dir| Path::new(dir).join(tool))
@@ -292,6 +294,14 @@ fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path,
     std::fs::create_dir(&tmp).unwrap();
     let stall = "exec /bin/sleep 30";
     let answer_then_stall = "echo 'hooks 3'; exec /bin/sleep 30";
+    // Output the probe controls must never be taken for the wrapper's
+    // completion marker or the pid it kills.
+    let marker_like = [
+        "echo 'rc diagnostic'; exec /bin/sleep 30",
+        "echo 'hooks 3'; echo 'rc 0'; exec /bin/sleep 30",
+        "echo 'pid 1'; echo 1; echo 'hooks 3'; exec /bin/sleep 30",
+    ];
+    let mut shared_tail: Option<String> = None;
     for path in [
         "codex/hooks.json",
         "grok/hooks.json",
@@ -308,11 +318,17 @@ fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path,
         let mut hooks = Vec::new();
         commands(&value, &mut hooks);
         assert!(!hooks.is_empty());
-        let tail = |command: &str| command.split_once(';').unwrap().1.to_string();
-        for (index, command) in hooks.iter().enumerate() {
+        for command in &hooks {
             assert!(command.contains("--contract 3"), "{command}");
-            // Every handler shares one probe, so the stalls run on the first.
-            assert_eq!(tail(command), tail(&hooks[0]), "{command}");
+            // Every handler in every file shares one probe, so the stalls
+            // run once, on the first handler.
+            let tail = command.split_once(';').unwrap().1.to_string();
+            let first = shared_tail.is_none();
+            assert_eq!(
+                shared_tail.get_or_insert_with(|| tail.clone()),
+                &tail,
+                "{command}"
+            );
             let mut cases = vec![
                 (None, true),
                 (
@@ -327,55 +343,72 @@ fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path,
                     false,
                 ),
             ];
-            if index == 0 {
+            if first {
                 cases.push((Some((stall, "ORIGINAL-REFUSAL")), true));
                 cases.push((Some((answer_then_stall, "ORIGINAL-REFUSAL")), true));
+                for probe in marker_like {
+                    cases.push((Some((probe, "ORIGINAL-REFUSAL")), true));
+                }
             }
             for (binary, advised) in cases {
-                if let Some((probe, refusal)) = binary {
-                    fake_codeflow(bin, probe, refusal);
-                }
-                let started = std::time::Instant::now();
-                let out = repo
-                    .command("/bin/sh")
-                    .args(["-c", command])
-                    .env("PATH", bin)
-                    .env("TMPDIR", &tmp)
-                    .output()
-                    .unwrap();
-                let elapsed = started.elapsed();
-                assert!(
-                    elapsed < std::time::Duration::from_secs(5),
-                    "{binary:?}: {elapsed:?}"
-                );
-                assert_eq!(out.status.code(), Some(2), "{command}: {out:?}");
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                assert_eq!(
-                    stderr.contains("codeflow-cli-installer.sh"),
-                    advised,
-                    "{binary:?} {command}: {stderr}"
-                );
-                assert_eq!(stderr.contains("codeflow update"), advised, "{stderr}");
-                assert_eq!(
-                    std::fs::read_dir(&tmp).unwrap().count(),
-                    0,
-                    "probe file left"
-                );
-                if let Some((probe, refusal)) = binary {
-                    assert!(stderr.contains(refusal), "{stderr}");
-                    let pid = std::fs::read_to_string(bin.join("probe.pid")).unwrap();
-                    if probe.contains("sleep") {
-                        let alive = std::process::Command::new("/bin/kill")
-                            .args(["-0", pid.trim()])
-                            .output()
-                            .unwrap();
-                        assert!(!alive.status.success(), "stalled probe {pid} still runs");
-                    }
-                    std::fs::remove_file(bin.join("codeflow")).unwrap();
-                    std::fs::remove_file(bin.join("probe.pid")).unwrap();
-                }
+                wrapper_case(repo, bin, &tmp, command, binary, advised);
             }
         }
+    }
+}
+
+/// One wrapper run against a fake binary (`None` for a missing one): exit 2
+/// within the bound, advice exactly when `advised`, the refusal text kept,
+/// the temporary directory removed and a stalled probe killed.
+fn wrapper_case(
+    repo: &Repo,
+    bin: &Path,
+    tmp: &Path,
+    command: &str,
+    binary: Option<(&str, &str)>,
+    advised: bool,
+) {
+    if let Some((probe, refusal)) = binary {
+        fake_codeflow(bin, probe, refusal);
+    }
+    let started = std::time::Instant::now();
+    let out = repo
+        .command("/bin/sh")
+        .args(["-c", command])
+        .env("PATH", bin)
+        .env("TMPDIR", tmp)
+        .output()
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "{binary:?}: {elapsed:?}"
+    );
+    assert_eq!(out.status.code(), Some(2), "{command}: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.contains("codeflow-cli-installer.sh"),
+        advised,
+        "{binary:?} {command}: {stderr}"
+    );
+    assert_eq!(stderr.contains("codeflow update"), advised, "{stderr}");
+    assert_eq!(
+        std::fs::read_dir(tmp).unwrap().count(),
+        0,
+        "probe file left"
+    );
+    if let Some((probe, refusal)) = binary {
+        assert!(stderr.contains(refusal), "{stderr}");
+        let pid = std::fs::read_to_string(bin.join("probe.pid")).unwrap();
+        if probe.contains("sleep") {
+            let alive = std::process::Command::new("/bin/kill")
+                .args(["-0", pid.trim()])
+                .output()
+                .unwrap();
+            assert!(!alive.status.success(), "stalled probe {pid} still runs");
+        }
+        std::fs::remove_file(bin.join("codeflow")).unwrap();
+        std::fs::remove_file(bin.join("probe.pid")).unwrap();
     }
 }
 

@@ -11,8 +11,9 @@
 // Usage: node scripts/figure-browser-check.mjs [--screenshots <dir>]
 import { execFileSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright-core";
@@ -250,6 +251,51 @@ async function checkGuard(browser) {
   } finally { await page.close(); }
 }
 
+// Each fact re-derives from a file inside the repository it cites. The path
+// is resolved through every symlink, final component and parents alike, and
+// refused unless the real path stays under the repository's real root, so a
+// fact can never derive from text that exists only outside the checkout.
+function repositorySourceReader(root) {
+  const realRoot = realpathSync(root);
+  return (path) => {
+    let real;
+    try { real = realpathSync(join(realRoot, path)); } catch { return null; }
+    if (real !== realRoot && !real.startsWith(realRoot + sep)) throw new Error(`fact source resolves outside the repository: ${path}`);
+    return readFileSync(real, "utf8");
+  };
+}
+
+// The reader keeps in-repository citations, an in-repository symlink
+// included, and refuses a missing file, a missing anchor, and a symlinked
+// file or parent directory that leads outside the repository.
+async function checkSourceContainment() {
+  const base = await mkdtemp(join(tmpdir(), "cf-fact-sources-"));
+  try {
+    const repo = join(base, "repo");
+    const proof = "# Proof\n\n## Proof\n\nThe cited sentence.\n";
+    await mkdir(join(repo, "docs"), { recursive: true });
+    await mkdir(join(base, "outside"));
+    await writeFile(join(repo, "docs/proof.md"), proof);
+    await writeFile(join(base, "outside.md"), proof);
+    await writeFile(join(base, "outside/proof.md"), proof);
+    symlinkSync("docs/proof.md", join(repo, "alias.md"));
+    symlinkSync("../outside.md", join(repo, "linked.md"));
+    symlinkSync("../outside", join(repo, "linkdir"));
+    const fact = (source) => ({ claim: source, source, derive: "the cited sentence", check: { kind: "contains", text: "The cited sentence." }, value: true });
+    const sources = ["docs/proof.md#proof", "alias.md#proof", "absent.md#proof", "docs/proof.md#elsewhere", "linked.md#proof", "linkdir/proof.md#proof"];
+    const results = checkFacts({ facts: sources.map(fact) }, repositorySourceReader(repo)).map((result) => [result.source, result.matches, result.error]);
+    const expected = [
+      ["docs/proof.md#proof", true, null],
+      ["alias.md#proof", true, null],
+      ["absent.md#proof", false, "fact source does not exist: absent.md"],
+      ["docs/proof.md#elsewhere", false, "fact anchor does not exist: docs/proof.md#elsewhere"],
+      ["linked.md#proof", false, "fact source resolves outside the repository: linked.md"],
+      ["linkdir/proof.md#proof", false, "fact source resolves outside the repository: linkdir/proof.md"],
+    ];
+    if (canonicalJson(results) !== canonicalJson(expected)) throw new Error(`fact source containment differs:\n${JSON.stringify(results, null, 2)}`);
+  } finally { await rm(base, { recursive: true, force: true }); }
+}
+
 async function checkReferenceExample() {
   const grammar = await readFile(join(repoRoot, "assets/base/agents/skills/cf-present/resources/figure-grammar.md"), "utf8");
   const section = grammar.slice(grammar.indexOf("## 6. Figure declaration"));
@@ -258,15 +304,16 @@ async function checkReferenceExample() {
   const declaration = JSON.parse(example);
   validateDeclaration(declaration, "figure-grammar.md section 6 example");
   renderFigure(declaration);
-  const agents = await readFile(join(repoRoot, "AGENTS.md"), "utf8");
-  const facts = checkFacts(declaration.figure, (path) => (path === "AGENTS.md" ? agents : null));
+  await checkSourceContainment();
+  const readSource = repositorySourceReader(repoRoot);
+  const facts = checkFacts(declaration.figure, readSource);
   if (!facts.every((fact) => fact.matches)) throw new Error(`figure-grammar.md section 6 example facts do not derive: ${JSON.stringify(facts)}`);
   // The figure block the conversion section points authors at to copy.
   const review = JSON.parse(await readFile(join(repoRoot, "assets/base/agents/skills/cf-present/assets/review-document.example.json"), "utf8"));
   const converted = review.blocks.find((block) => block.type === "figure")?.declaration;
   validateDeclaration(converted, "review-document.example.json figure");
   renderFigure(converted);
-  const convertedFacts = checkFacts(converted.figure, (path) => (path === "AGENTS.md" ? agents : null));
+  const convertedFacts = checkFacts(converted.figure, readSource);
   if (!convertedFacts.every((fact) => fact.matches)) throw new Error(`review-document.example.json figure facts do not derive: ${JSON.stringify(convertedFacts)}`);
 }
 

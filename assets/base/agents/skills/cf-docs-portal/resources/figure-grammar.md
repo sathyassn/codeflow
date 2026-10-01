@@ -183,8 +183,8 @@ sketches its intent and is not a file the module loads.
     "states": [{ "name": "return", "mark": "return", "means": "The only route out of red" }],
     "facts": [{
       "claim": "a red check returns to editing",
-      "source": "AGENTS.md#git-rules",
-      "derive": "the sentence beginning 'When a gate blocks you, fix the cause'",
+      "source": ".codeflow/rules/git-rules.md#the-rules",
+      "derive": "the rule beginning 'When a gate blocks you, fix the cause'",
       "check": { "kind": "contains", "text": "When a gate blocks you, fix the cause" },
       "value": true
     }],
