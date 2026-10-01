@@ -105,6 +105,20 @@ With that proof, cleanup removes each of these that the task made:
   or other build folder made for the task outside the worktree, and the
   builds made to review it.
 
+Some harness sandboxes deny writes that `git worktree remove` needs:
+Claude Code's denies writes to its protected paths, which include parts of
+`.claude/` and `.git/`. Inside such a sandbox the removal deletes part of the
+worktree, then stops with `Operation not permitted` and leaves it
+half-removed. Where the effective sandbox denies those writes, make the proof
+first (merge, clean worktree, inactive owner), then run the removal once
+through the harness's sanctioned unsandboxed path, such as Claude Code's
+unsandboxed retry under its normal permission check. Do not make a first
+attempt inside the sandbox. If that path is disabled, refused or unavailable,
+keep the worktree and hand the proven removal to the operator with the proof
+and the exact command. Report a removal that already stopped partway the same
+way. Never use `--force`, and never change sandbox or permission settings to
+get past the denial.
+
 A folder another active task still uses stays, and so does a remote branch
 whose tip moved after the recorded head.
 

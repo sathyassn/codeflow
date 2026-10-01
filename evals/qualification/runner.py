@@ -13,7 +13,9 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -247,7 +249,9 @@ def trust_choice(screen: str, harness: str, repository: Path) -> str | None:
     raise Refused("unrecognized trust choices; no acceptance sent")
 
 
-def accept_workspace_trust(pane: str, harness: str, repository: Path, screen: str) -> dict | None:
+def accept_workspace_trust(pane: str, harness: str, repository: Path, screen: str,
+                           before_key=None) -> dict | None:
+    """`before_key`, when given, runs before every key and raises to stop."""
     choice = trust_choice(screen, harness, repository)
     if choice is None:
         return None
@@ -256,11 +260,15 @@ def accept_workspace_trust(pane: str, harness: str, repository: Path, screen: st
     if trust_choice(current, harness, repository) != choice:
         raise Refused("trust dialog changed before key delivery")
     if choice == "no":
+        if before_key:
+            before_key()
         herdr("pane", "send-keys", pane, "Down" if harness == "claude" else "Up")
         time.sleep(0.2)
         current = herdr("pane", "read", pane, "--source", "visible", text=True)
         if trust_choice(current, harness, repository) != "yes":
             raise Refused("trust choice not visibly selected; no Enter sent")
+    if before_key:
+        before_key()
     herdr("pane", "send-keys", pane, "y" if harness == "grok" else "Enter")
     return {"harness": harness, "path": str(repository),
             "screen_sha256": "sha256:" + hashlib.sha256(current.encode()).hexdigest(), "time": time.time()}
@@ -285,7 +293,7 @@ def renderer_choice(screen: str) -> str | None:
     raise Refused("unrecognized renderer dialog; no display choice sent")
 
 
-def decline_renderer(pane: str, screen: str) -> dict | None:
+def decline_renderer(pane: str, screen: str, before_key=None) -> dict | None:
     choice = renderer_choice(screen)
     if choice is None:
         return None
@@ -293,25 +301,29 @@ def decline_renderer(pane: str, screen: str) -> dict | None:
     if renderer_choice(current) != choice:
         raise Refused("renderer dialog changed before key delivery")
     if choice == "yes":
+        if before_key:
+            before_key()
         herdr("pane", "send-keys", pane, "Down")
         time.sleep(0.2)
         current = herdr("pane", "read", pane, "--source", "visible", text=True)
         if renderer_choice(current) != "no":
             raise Refused("Not now not visibly selected; no Enter sent")
+    if before_key:
+        before_key()
     herdr("pane", "send-keys", pane, "Enter")
     return {"harness": "claude", "dialog": "fullscreen-renderer", "choice": "Not now",
             "screen_sha256": "sha256:" + hashlib.sha256(current.encode()).hexdigest(), "time": time.time()}
 
 
 def handle_startup(pane: str, harness: str, repository: Path, screen: str,
-                   acceptances: list, display_choices: list) -> bool:
+                   acceptances: list, display_choices: list, before_key=None) -> bool:
     if trust_choice(screen, harness, repository) is not None:
         if not acceptances:
-            acceptances.append(accept_workspace_trust(pane, harness, repository, screen))
+            acceptances.append(accept_workspace_trust(pane, harness, repository, screen, before_key))
         return True
     if harness == "claude" and renderer_choice(screen) is not None:
         if not display_choices:
-            display_choices.append(decline_renderer(pane, screen))
+            display_choices.append(decline_renderer(pane, screen, before_key))
         return True
     return False
 
@@ -558,7 +570,9 @@ def grok_authenticated_editor(screen: str) -> bool:
 
 def permission_flags(harness: str, native: list[str], cwd: Path | None = None,
                      *, environment: dict[str, str] | None = None,
-                     codex_hook_trust: str = "review") -> dict[str, str]:
+                     codex_hook_trust: str = "review", peer: bool = False) -> dict[str, str]:
+    """Allowlisted native flags. A peer's start (`peer=True`) uses the same
+    allowlist, but its approval flags are the subject's choice, not required."""
     allowed = {"claude": {"--model", "--effort", "--permission-mode"},
                "codex": {"--model", "-c", "--ask-for-approval", "--sandbox"},
                "grok": {"--model", "--reasoning-effort", "--permission-mode", "--always-approve"}}[harness]
@@ -601,6 +615,8 @@ def permission_flags(harness: str, native: list[str], cwd: Path | None = None,
                 "claude": ("--permission-mode",), "grok": ("--permission-mode",)}[harness]
     if harness == "grok" and "--always-approve" in values:
         required = ("--always-approve",)
+    if peer:
+        return values
     for flag in required:
         if flag not in values:
             raise Refused(f"refused native flag: {flag} (required)", flag)
@@ -820,7 +836,23 @@ CONFIG_FILES = {
 }
 
 
-def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | None = None) -> dict:
+def codex_trust_entry(path: Path, repository: Path) -> dict:
+    """The trial repository's Codex project entry, and a digest of the rest.
+    Accepting Codex's folder-trust dialog writes exactly that entry."""
+    try:
+        document = tomllib.loads(hook_settings_bytes(path).decode("utf-8")) if path.is_file() else {}
+    except (Refused, OSError, ValueError):
+        return {"entry": None, "rest_sha256": None}
+    projects = document.get("projects")
+    entry = projects.pop(str(repository), None) if isinstance(projects, dict) else None
+    if projects == {}:
+        del document["projects"]  # the entry may be the file's first project
+    return {"entry": entry, "rest_sha256": "sha256:" + hashlib.sha256(
+        json.dumps(document, sort_keys=True, default=str).encode()).hexdigest()}
+
+
+def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | None = None,
+                    repository: Path | None = None) -> dict:
     result = {}
     for harness, variable in kit.EVALUATOR_HOME_VARIABLES.items():
         root = Path(environment[variable])
@@ -841,6 +873,8 @@ def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | No
                         raise Refused(f"evaluator config exceeds size cap: {harness}")
                     hashes[str(candidate.relative_to(root))] = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
         result[harness] = hashes
+    if repository is not None:
+        result["codex_trust"] = codex_trust_entry(Path(environment["CODEX_HOME"]) / "config.toml", repository)
     if plugin_repository is not None:
         plugins = []
         reject_extra_hook_sources(Path(environment["CODEX_HOME"]), plugins)
@@ -849,8 +883,20 @@ def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | No
     return result
 
 
-def config_drift(before: dict, after: dict) -> list[str]:
-    return ["evaluator_config_drift"] if before != after else []
+def config_drift(before: dict, after: dict, peer_trust_accepted: bool = False) -> list[str]:
+    """Any change drifts, except the one Codex project entry for the trial
+    repository written after a recorded peer folder-trust acceptance."""
+    if before == after:
+        return []
+    if peer_trust_accepted:
+        strip = lambda snapshot: {**snapshot, "codex_trust": None,  # noqa: E731
+                                  "codex": {k: v for k, v in snapshot.get("codex", {}).items() if k != "config.toml"}}
+        old, new = before.get("codex_trust") or {}, after.get("codex_trust") or {}
+        if (strip(before) == strip(after) and old.get("rest_sha256") is not None
+                and old.get("rest_sha256") == new.get("rest_sha256")
+                and new.get("entry") == {"trust_level": "trusted"} and old.get("entry") in (None, new["entry"])):
+            return []
+    return ["evaluator_config_drift"]
 
 
 def load_fixture(record_path: Path) -> tuple[dict, Path, dict]:
@@ -891,7 +937,8 @@ def print_hook_review(record_path: Path) -> str:
             f"(cd {shlex.quote(str(repository))} && {command})\n")
 
 
-def watch_directories(environment: dict[str, str], declared: list[str]) -> list[str]:
+def watch_directories(environment: dict[str, str], declared: list[str],
+                      reserved: list[Path] | None = None) -> list[str]:
     roots = sorted({str(Path(value).resolve()) for value in declared})
     if not roots:
         raise Refused("declare at least one --watch-dir outside harness TMPDIR")
@@ -900,7 +947,597 @@ def watch_directories(environment: dict[str, str], declared: list[str]) -> list[
         root = Path(value)
         if root == scratch or root.is_relative_to(scratch) or scratch.is_relative_to(root):
             raise Refused("watch and planted-control roots must not overlap harness TMPDIR")
+        for kit_owned in reserved or []:
+            kit_owned = kit_owned.resolve()
+            if root == kit_owned or root.is_relative_to(kit_owned) or kit_owned.is_relative_to(root):
+                raise Refused("watch roots must not overlap the trial's peer launcher folders")
     return roots
+
+
+# Seats a subject opens (peers). The subject runs as the operator's user, so
+# nothing it can write (requests, answers, context.json, ready files) is
+# authority, and it can always start a native seat by another route. The
+# launchers on the trial PATH only arrange a correct start. The watcher
+# verifies each peer process from its live state (executable, argv, cwd and
+# environment) and flags anything it cannot verify; such a peer gets no key.
+PEER_HARNESSES = ("claude", "codex", "grok")
+PEER_SHIM = Path(__file__).resolve().with_name("peer_shim.py")
+# The longest interval between two completed watcher polls that still counts
+# as covered.
+WATCH_GAP_SECONDS = 10.0
+PEER_FLAGS = {
+    "refused": "peer_launch_refused", "unanswered": "peer_launch_unanswered",
+    "unrecorded": "peer_launch_unrecorded", "unverified": "peer_launch_unverified",
+    "unobserved": "peer_launch_unobserved", "outside_workspace": "peer_outside_trial_workspace",
+    "startup_refused": "peer_startup_refused", "pending": "peer_not_ready",
+    "plugin_drift": "peer_plugin_drift", "delivered_early": "peer_delivered_before_ready",
+    "delivery_refused": "peer_delivery_refused", "launcher_changed": "peer_launcher_changed",
+    "watch_incomplete": "peer_watch_incomplete",
+}
+LAUNCH_FLAGS = {"unrecorded", "unverified", "startup_refused", "plugin_drift", "pending"}
+
+
+def peer_folders(repository: Path) -> tuple[Path, Path]:
+    trial = repository.parent
+    return trial / "peer-bin", trial / "peer-launches"
+
+
+def digest_file(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def gate_name(pane: str) -> str:
+    """File name of a pane's ready record; peer_shim.py uses the same rule."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", pane) + ".json"
+
+
+def write_peer_context(peers: dict, **changes) -> None:
+    peers["context"].update(changes)
+    path = Path(peers["bin"]) / "context.json"
+    write(path, peers["context"])
+    peers["context_sha256"] = digest_file(path)
+
+
+def prepare_peers(repository: Path, environment: dict[str, str], workspace: str, option: str) -> dict:
+    """Write the trial's peer launchers and put them first on the trial PATH."""
+    shims, launches_root = peer_folders(repository)
+    for path in (shims, launches_root):
+        kit.refuse_symlink_components(path, repository.parent)
+    original = environment["PATH"]
+    executables = {name: shutil.which(name, path=original) for name in (*PEER_HARNESSES, "herdr")}
+    if shims.exists():
+        shutil.rmtree(shims)
+    shims.mkdir()
+    launches = launches_root / secrets.token_hex(8)
+    (launches / "ready").mkdir(parents=True)
+    environment["PATH"] = f"{shims}{os.pathsep}{original}"
+    source = PEER_SHIM.read_text(encoding="utf-8").replace("#!/usr/bin/env python3", f"#!{sys.executable} -B", 1)
+    digests = {}
+    for name, real in executables.items():
+        if real is None:
+            continue
+        target = shims / name
+        target.write_text(source, encoding="utf-8")
+        target.chmod(0o555)
+        digests[name] = digest_file(target)
+    peers = {"bin": str(shims), "launches": str(launches), "executables": executables,
+             "shim_sha256": digests, "interpreters": launcher_interpreters(), "context": {
+                 "schema_version": 1, "workspace": workspace, "option": option,
+                 "herdr": executables["herdr"], "launches": str(launches),
+                 "decision_seconds": 20, "ready_seconds": 30,
+                 "harnesses": {name: executables[name] for name in PEER_HARNESSES if executables[name]},
+                 "environment": dict(environment), "subject": None}}
+    write_peer_context(peers)
+    return peers
+
+
+def decode(value: bytes) -> str:
+    return value.decode("utf-8", "surrogateescape")
+
+
+def parse_procargs(data: bytes) -> tuple[str, list[str], dict[str, str]]:
+    """Parse macOS KERN_PROCARGS2: argc, exec path, padding, argv, environment."""
+    argc = int.from_bytes(data[:4], sys.byteorder)
+    executable, _, rest = data[4:].partition(b"\0")
+    fields = rest.lstrip(b"\0").split(b"\0")
+    environment = {}
+    for item in fields[argc:]:
+        if not item:
+            break
+        key, separator, value = item.partition(b"=")
+        if separator:
+            environment[decode(key)] = decode(value)
+    return decode(executable), [decode(item) for item in fields[:argc]], environment
+
+
+def darwin_procargs(pid: int) -> tuple[str, list[str], dict[str, str]]:
+    import ctypes
+    import ctypes.util
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    maximum, size = ctypes.c_int(0), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
+    if libc.sysctl((ctypes.c_int * 2)(1, 8), 2, ctypes.byref(maximum), ctypes.byref(size), None, 0):
+        raise OSError(ctypes.get_errno(), "cannot read KERN_ARGMAX")
+    buffer, size = ctypes.create_string_buffer(maximum.value), ctypes.c_size_t(maximum.value)
+    if libc.sysctl((ctypes.c_int * 3)(1, 49, pid), 3, buffer, ctypes.byref(size), None, 0):
+        raise OSError(ctypes.get_errno(), f"cannot read the arguments of process {pid}")
+    return parse_procargs(buffer.raw[:size.value])
+
+
+def process_start(pid: int) -> str:
+    done = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10)
+    if done.stderr.strip():
+        raise OSError(f"cannot read the start time of process {pid}: {done.stderr.strip()}")
+    if done.returncode or not done.stdout.strip():
+        raise ProcessLookupError(f"process {pid} is gone")
+    return done.stdout.strip()
+
+
+def live_process(pid: int) -> dict:
+    """A same-user process as the OS reports it, never as files describe it."""
+    start = process_start(pid)
+    if sys.platform == "darwin":
+        executable, argv, environment = darwin_procargs(pid)
+        done = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                              capture_output=True, text=True, timeout=10)
+        cwd = next((line[1:] for line in done.stdout.splitlines() if line.startswith("n")), None)
+    elif sys.platform.startswith("linux"):
+        proc = Path(f"/proc/{pid}")
+        executable, cwd = os.readlink(proc / "exe"), os.readlink(proc / "cwd")
+        argv = [decode(item) for item in (proc / "cmdline").read_bytes().split(b"\0")[:-1]]
+        environment = dict(decode(item).partition("=")[::2] for item in
+                           (proc / "environ").read_bytes().split(b"\0") if b"=" in item)
+    else:
+        raise OSError("live process inspection is not supported on this platform")
+    if cwd is None:
+        raise OSError(f"cannot read the working directory of process {pid}")
+    if process_start(pid) != start:
+        raise ProcessLookupError(f"process {pid} was replaced while it was read")
+    return {"pid": pid, "start": start, "executable": executable, "argv": argv,
+            "environment": environment, "cwd": cwd}
+
+
+def peer_argument_tail(harness: str, environment: dict[str, str], option: str) -> list[str]:
+    """What every peer start ends with: the kit's isolation arguments, then the
+    Codex hook-trust flag only for a Codex peer under the bypass option."""
+    tail = kit.trial_native_args(harness, environment)
+    return [*tail, CODEX_HOOK_TRUST_FLAG] if harness == "codex" and option == "bypass" else tail
+
+
+def check_peer_state(run: dict, harness: str, args: list[str], cwd: str, environment: dict[str, str]) -> dict:
+    """The checks a peer start must pass, for a request or a live process.
+    Raises Refused; returns the recorded flags and hook checks."""
+    repository = Path(run["repository"])
+    option = run["hook_trust"]["option"]
+    if harness not in PEER_HARNESSES:
+        raise Refused("not a qualified peer harness")
+    if os.path.realpath(cwd) != os.path.realpath(repository):
+        raise Refused("peers start in the fixture repository")
+    # The login shell may reorder PATH; it does not decide which seat runs.
+    for key, value in run["environment"].items():
+        if key not in {"TERM", "PATH"} and environment.get(key) != value:
+            raise Refused(f"{key} differs from the trial environment", key)
+    result = {"permission_flags": permission_flags(harness, args, repository, environment=environment,
+                                                   codex_hook_trust=option, peer=True)}
+    if harness == "codex" and option == "bypass":
+        checks = codex_hook_preflight(environment, repository)
+        result["hook_trust"] = {key: checks[key] for key in ("evaluator_home", "hooks_sha256", "checks")}
+        if checks["plugins"] != run["hook_trust"]["plugins"]:
+            raise Refused("plugin inventory changed since launch", CODEX_HOOK_TRUST_FLAG)
+    return result
+
+
+def verify_peer_process(run: dict, harness: str, live: dict) -> dict:
+    """Verify a running peer from its live state, rerunning hook and plugin checks."""
+    result = {"verified": False, "time": time.time(),
+              "flag_used": CODEX_HOOK_TRUST_FLAG in live["argv"]}
+    try:
+        expected = run["peers"]["executables"].get(harness)
+        if not expected or os.path.realpath(live["executable"]) != os.path.realpath(expected):
+            raise Refused(f"the executable is not the trial's {harness}")
+        tail = peer_argument_tail(harness, run["environment"], run["hook_trust"]["option"])
+        args = live["argv"][1:]
+        head = args[:len(args) - len(tail)]
+        if args[len(head):] != tail or CODEX_HOOK_TRUST_FLAG in head:
+            raise Refused("the trial's isolation arguments or hook-trust flag are missing or changed")
+        result.update(check_peer_state(run, harness, head, live["cwd"], live["environment"]))
+        result["verified"] = True
+    except Refused as exc:
+        result["error"] = str(exc)
+    except (OSError, ValueError, KeyError, TypeError, kit.EvalError) as exc:
+        result["error"] = f"cannot verify this peer: {exc}"
+    return result
+
+
+def peer_decision(run: dict, request: dict) -> dict:
+    """Check a start the subject asked for and answer with the exact argv and
+    environment. The answer is a convenience; only live verification counts."""
+    harness, args, pane = request.get("harness"), request.get("args"), request.get("pane")
+    result = {"id": request.get("id"), "allow": False, "harness": harness, "pane": pane, "time": time.time()}
+    try:
+        if harness not in PEER_HARNESSES or not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+            raise Refused("unrecognized peer launch request")
+        if not pane:
+            raise Refused("peers start in their own tab of the trial's Herdr workspace")
+        if pane == run.get("pane"):
+            raise Refused("peers start in their own tab, not in the subject's pane")
+        if state(pane).get("workspace_id") != run["workspace"]:
+            raise Refused("peers stay in the trial's Herdr workspace")
+        environment = request.get("environment") or {}
+        result.update(check_peer_state(run, harness, args, str(request.get("cwd")), environment))
+        # Started with the runner's environment, whatever the request claimed.
+        environment = dict(run["environment"])
+        argv = [run["peers"]["executables"][harness], *(a for a in args if a != CODEX_HOOK_TRUST_FLAG),
+                *peer_argument_tail(harness, environment, run["hook_trust"]["option"])]
+        result.update(allow=True, argv=argv, environment=environment)
+    except Refused as exc:
+        result.update(error=str(exc), refused_flag=exc.flag)
+    except (OSError, ValueError, KeyError, TypeError, kit.EvalError) as exc:
+        result.update(error=f"cannot check this peer launch: {exc}")
+    return result
+
+
+def answer_requests(run: dict, record: dict) -> None:
+    answered = {entry["request"].get("id") for entry in record["requests"]}
+    for path in sorted(Path(run["peers"]["launches"]).glob("*.request.json")):
+        try:
+            request = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(request, dict) or request.get("id") in answered or path.name != f"{request.get('id')}.request.json":
+            continue
+        decision = peer_decision(run, request)
+        reply = {key: decision.get(key) for key in ("id", "allow", "argv", "environment", "error")}
+        temporary = path.with_name(f".{request['id']}.decision.tmp")
+        write(temporary, reply)
+        os.replace(temporary, path.with_name(f"{request['id']}.decision.json"))
+        record["requests"].append({"request": request, "decision": decision, "bound": None})
+        answered.add(request["id"])
+
+
+def harness_process(processes: list[dict], executables: dict) -> dict | None:
+    """A foreground Claude, Codex or Grok process, by name or by its executable."""
+    reals = {os.path.realpath(path) for path in executables.values() if path}
+    for process in processes:
+        argv0 = process.get("argv0") or (process.get("argv") or [""])[0] or ""
+        if (Path(argv0).name in PEER_HARNESSES or process.get("name") in PEER_HARNESSES
+                or (os.path.isabs(argv0) and os.path.realpath(argv0) in reals)):
+            return process
+    return None
+
+
+def set_gate(run: dict, pane: str, launch: dict | None) -> None:
+    """The ready record the herdr launcher waits for before delivering to a peer."""
+    path = Path(run["peers"]["launches"]) / "ready" / gate_name(pane)
+    if launch is None:
+        path.unlink(missing_ok=True)
+    else:
+        write(path, {"pane": pane, "identity": launch["identity"], "ready": True})
+
+
+def claim_decision(record: dict, pane: str, live: dict) -> dict | None:
+    """Bind one unbound answer for this pane to the process the launcher
+    became: it execs in place, so the pid and argv match the request."""
+    for entry in record["requests"]:
+        decision = entry["decision"]
+        if (entry["bound"] is None and decision.get("allow") and decision["pane"] == pane
+                and entry["request"].get("pid") == live["pid"] and decision["argv"] == live["argv"]):
+            return entry
+    return None
+
+
+def identity_of(run: dict, live: dict) -> list:
+    """A launch is one program in one state in one process: pid and start
+    time, plus a digest of the executable, argv, working directory and every
+    trial environment value except TERM and PATH. An exec keeps the pid and
+    start time, so any change to the rest is a new launch, never verified by
+    inheritance."""
+    state = {key: live["environment"].get(key) for key in run["environment"] if key not in {"TERM", "PATH"}}
+    program = json.dumps([live["executable"], live["argv"], os.path.realpath(live["cwd"]), state],
+                         sort_keys=True).encode()
+    return [live["pid"], live["start"], "sha256:" + hashlib.sha256(program).hexdigest()[:16]]
+
+
+def launcher_interpreters() -> list[str]:
+    """The interpreter the launchers' first line names, and the app binary a
+    macOS framework Python re-executes into, as the OS reports them."""
+    paths = {os.path.realpath(sys.executable)}
+    app = Path(sys.prefix) / "Resources/Python.app/Contents/MacOS/Python"
+    if app.is_file():
+        paths.add(os.path.realpath(app))
+    return sorted(paths)
+
+
+def trial_launcher(run: dict, live: dict) -> bool:
+    """The trial's own launcher, still waiting for its answer before it execs
+    in place: the pinned interpreter running `-B <launcher file>`, exactly
+    as the launcher's first line starts it. Anything else is a launch."""
+    peers, argv = run["peers"], live["argv"]
+    if os.path.realpath(live["executable"]) not in peers.get("interpreters", []) or argv[1:2] != ["-B"]:
+        return False
+    if len(argv) < 3:
+        return False
+    script = os.path.realpath(os.path.join(live["cwd"], argv[2]))
+    return any(script == os.path.realpath(Path(peers["bin"]) / name) for name in peers["shim_sha256"])
+
+
+def peer_harness(run: dict, process: dict, live: dict) -> str | None:
+    for name in PEER_HARNESSES:
+        path = run["peers"]["executables"].get(name)
+        if path and os.path.realpath(live["executable"]) == os.path.realpath(path):
+            return name
+    name = Path(process.get("argv0") or process.get("name") or "").name
+    return name if name in PEER_HARNESSES else None
+
+
+def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
+    """One poll of one peer pane. Each process in it is a separate launch,
+    identified by pid and start time and verified from its live state.
+    Keys go only to the current verified launch, only for the dialogs
+    handle_startup accepts, and only after its identity is rechecked."""
+    pane = peer["pane"]
+    if agent.get("workspace_id") != run["workspace"]:
+        peer["outside_workspace"] = True
+        return
+    executables = run["peers"]["executables"]
+    info = herdr("pane", "process-info", "--pane", pane)["result"]["process_info"]
+    process = harness_process(info.get("foreground_processes") or [], executables)
+    launch = peer["launches"][-1] if peer["launches"] else None
+    if process is None:
+        if launch is not None and "ended" not in launch:
+            launch["ended"] = time.time()
+            set_gate(run, pane, None)
+        return
+    try:
+        live = live_process(int(process["pid"]))
+    except ProcessLookupError:
+        return  # exited between the two reads; the next poll decides
+    if trial_launcher(run, live):
+        if launch is not None and "ended" not in launch:
+            launch["ended"] = time.time()
+            set_gate(run, pane, None)
+        return  # it gets no key; what it execs is a new launch
+    identity = identity_of(run, live)
+    if launch is None or launch["identity"] != identity:
+        set_gate(run, pane, None)
+        if launch is not None and "ended" not in launch:
+            launch["ended"] = time.time()  # superseded; its readiness ends here
+        if (launch is not None and launch["identity"][:2] == identity[:2]
+                and launch["status"] in {"pending", "ready"}):
+            launch.update(status="unverified",
+                          error="the process's argv, working directory or environment changed")
+        entry = claim_decision(record, pane, live)
+        harness = entry["decision"]["harness"] if entry else peer_harness(run, process, live)
+        launch = {"identity": identity, "harness": harness, "executable": live["executable"],
+                  "argv": live["argv"], "cwd": live["cwd"], "first_seen": time.time(), "status": "pending",
+                  "request_id": entry["decision"]["id"] if entry else None,
+                  "trust_acceptances": [], "display_choices": []}
+        peer["launches"].append(launch)
+        if entry is None:
+            launch["status"] = "unrecorded"
+            return
+        entry["bound"] = identity
+        launch["verification"] = verify_peer_process(run, harness, live)
+        if not launch["verification"]["verified"]:
+            launch["status"] = "unverified"
+            return
+    if launch["status"] != "pending":
+        return
+    # A prompt needs a ready editor: Herdr's working status means delivery
+    # only once this launch was seen idle at its editor, never in startup.
+    if agent.get("agent_status") == "working" and launch.get("idle_seen"):
+        launch["delivered_before_ready"] = True
+
+    def before_key() -> None:
+        current = herdr("pane", "process-info", "--pane", pane)["result"]["process_info"]
+        now = harness_process(current.get("foreground_processes") or [], executables)
+        if now is None or int(now["pid"]) != live["pid"] or identity_of(run, live_process(live["pid"])) != identity:
+            raise Refused("the peer process changed before a key; no key sent")
+
+    screen = herdr("pane", "read", pane, "--source", "visible", text=True)
+    try:
+        if handle_startup(pane, launch["harness"], Path(run["repository"]), screen,
+                          launch["trust_acceptances"], launch["display_choices"], before_key):
+            return
+    except (Refused, ProcessLookupError) as exc:
+        launch.update(status="startup_refused", error=str(exc),
+                      screen_sha256="sha256:" + hashlib.sha256(screen.encode()).hexdigest())
+        return
+    if agent.get("agent_status") == "idle":
+        launch["idle_seen"] = True
+    if agent.get("agent_status") not in {"idle", "working", "done"}:
+        return
+    # Readiness: verify the live process again, hook and plugin checks included.
+    try:
+        again = live_process(live["pid"])
+    except ProcessLookupError:
+        return
+    if identity_of(run, again) != identity:
+        return  # replaced since this poll began; the next poll sees a new launch
+    launch["ready_check"] = verify_peer_process(run, launch["harness"], again)
+    if launch["ready_check"]["verified"]:
+        launch.update(status="ready", ready_at=time.time())
+        set_gate(run, pane, launch)
+    else:
+        error = launch["ready_check"].get("error", "")
+        launch.update(status="plugin_drift" if "plugin" in error else "unverified", error=error)
+
+
+def watch_once(run: dict, record: dict) -> None:
+    answer_requests(run, record)
+    answered = {entry["decision"]["pane"] for entry in record["requests"] if entry["decision"].get("allow")}
+    trial = Path(os.path.realpath(Path(run["repository"]).parent))
+    for agent in herdr("agent", "list")["result"]["agents"]:
+        pane = agent.get("pane_id")
+        if not pane or pane == run.get("pane"):
+            continue
+        cwd = agent.get("foreground_cwd") or agent.get("cwd")
+        inside = bool(cwd) and Path(os.path.realpath(cwd)).is_relative_to(trial)
+        # A pane is a peer once a start was answered there, or once Herdr sees
+        # an agent working in the trial's folders; it stays one.
+        if pane not in record["peers"] and pane not in answered and not (inside and agent.get("agent")):
+            continue
+        peer = record["peers"].setdefault(pane, {
+            "pane": pane, "tab": agent.get("tab_id"), "workspace": agent.get("workspace_id"),
+            "cwd": cwd, "first_seen": time.time(), "launches": []})
+        observe_peer(run, record, peer, agent)
+
+
+def watch(args) -> None:
+    """Answer peer launches and verify peers until finish stops it. Any failed
+    poll, gap or other ending is recorded and makes the trial invalid."""
+    run = kit.load_json(args.output / "launch.json")
+    state_path, stop = args.output / "peers.json", args.output / "peers.stop"
+    watcher = {"pid": os.getpid(), "started_at": time.time(), "heartbeat": None, "polls": 0,
+               "last_poll": None, "max_gap": 0.0, "stopped_at": None, "stop_reason": None}
+    record = {"watcher": watcher, "requests": [], "peers": {}, "errors": []}
+    deadline = time.monotonic() + args.max_hours * 3600
+    reason = "time limit"
+    try:
+        while True:
+            try:
+                watch_once(run, record)
+                now = time.time()
+                if watcher["last_poll"] is not None:
+                    watcher["max_gap"] = max(watcher["max_gap"], now - watcher["last_poll"])
+                watcher.update(last_poll=now, polls=watcher["polls"] + 1)
+            except Exception as exc:  # recorded, and any error invalidates the trial
+                record["errors"] = [*record["errors"], {"time": time.time(), "error": repr(exc)}][-50:]
+            watcher["heartbeat"] = time.time()
+            write(state_path, record)
+            if stop.exists():
+                reason = "finish"
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(args.interval)
+    except BaseException as exc:
+        reason = f"error: {exc!r}"
+        raise
+    finally:
+        for gate in (Path(run["peers"]["launches"]) / "ready").glob("*.json"):
+            gate.unlink(missing_ok=True)
+        watcher.update(stopped_at=time.time(), stop_reason=reason)
+        write(state_path, record)
+
+
+def start_peer_watch(output: Path) -> dict:
+    log = (output / "peers.log").open("ab")
+    process = subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve()), "watch", "--output", str(output)],
+                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                               cwd=str(output), start_new_session=True)
+    log.close()
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            watcher = kit.load_json(output / "peers.json")["watcher"]
+            if watcher["pid"] == process.pid and watcher["last_poll"]:
+                return {"pid": process.pid, "log": str(output / "peers.log")}
+        except (OSError, ValueError, KeyError, kit.EvalError):
+            pass
+        if process.poll() is not None:
+            raise Refused("the peer watcher exited; see peers.log")
+        time.sleep(0.2)
+    raise Refused("the peer watcher did not start; no prompt delivered")
+
+
+def stop_peer_watch(output: Path, seconds: float = 20) -> dict | None:
+    (output / "peers.stop").write_text("", encoding="utf-8")
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            record = kit.load_json(output / "peers.json")
+        except (OSError, ValueError, kit.EvalError):
+            record = None
+        if (record and record["watcher"].get("stopped_at")) or time.monotonic() >= deadline:
+            return record
+        time.sleep(0.5)
+
+
+def watch_gaps(watcher: dict | None, errors: list) -> list[str]:
+    """Why the watcher's record does not cover the trial through finish."""
+    if not watcher or not watcher.get("stopped_at"):
+        return ["the watcher did not stop"]
+    reasons = []
+    if watcher.get("stop_reason") != "finish":
+        reasons.append(f"the watcher stopped: {watcher.get('stop_reason')}")
+    if errors:
+        reasons.append(f"{len(errors)} failed polls")
+    if not watcher.get("last_poll"):
+        reasons.append("no completed poll")
+    elif (watcher.get("max_gap", 0) > WATCH_GAP_SECONDS
+          or watcher["stopped_at"] - watcher["last_poll"] > WATCH_GAP_SECONDS):
+        reasons.append("an interval longer than the coverage limit")
+    return reasons
+
+
+def peer_findings(run: dict, record: dict | None, watched: bool = True) -> tuple[list[str], dict]:
+    """Validity flags and a summary for every peer launch the trial saw.
+    `watched` is false when launch refused before the watcher started."""
+    peers = run["peers"]
+    flags, summary = set(), {"requests": [], "peers": [], "launcher_logs": [], "watcher": None,
+                             "errors": [], "coverage_gaps": [], "early_deliveries": []}
+    for name, expected in peers["shim_sha256"].items():
+        path = Path(peers["bin"]) / name
+        if not path.is_file() or digest_file(path) != expected:
+            flags.add(PEER_FLAGS["launcher_changed"])
+    context = Path(peers["bin"]) / "context.json"
+    if not context.is_file() or digest_file(context) != peers.get("context_sha256"):
+        flags.add(PEER_FLAGS["launcher_changed"])
+    launches = Path(peers["launches"])
+    for path in sorted(launches.glob("*.json")) if launches.is_dir() else []:
+        if not path.name.endswith((".request.json", ".decision.json")):
+            try:
+                summary["launcher_logs"].append(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                flags.add(PEER_FLAGS["launcher_changed"])
+    kinds = {entry.get("kind") for entry in summary["launcher_logs"]}
+    if "herdr-refused" in kinds:
+        flags.add(PEER_FLAGS["refused"])
+    if "herdr-delivery-refused" in kinds:
+        flags.add(PEER_FLAGS["delivery_refused"])
+    record = record or {"requests": [], "peers": {}, "errors": []}
+    summary.update(watcher=record.get("watcher"), errors=record.get("errors", []))
+    if watched:
+        summary["coverage_gaps"] = watch_gaps(record.get("watcher"), record.get("errors", []))
+        if summary["coverage_gaps"]:
+            flags.add(PEER_FLAGS["watch_incomplete"])
+    answered = {entry["request"].get("id") for entry in record["requests"]}
+    for path in sorted(launches.glob("*.request.json")) if launches.is_dir() else []:
+        if path.name.removesuffix(".request.json") not in answered:
+            flags.add(PEER_FLAGS["unanswered"])
+    for entry in record["requests"]:
+        decision = entry["decision"]
+        summary["requests"].append({**{key: decision.get(key) for key in
+                                       ("id", "harness", "pane", "allow", "argv", "error", "permission_flags", "hook_trust")},
+                                    "bound": entry.get("bound")})
+        if not decision.get("allow"):
+            flags.add(PEER_FLAGS["refused"])
+        elif entry.get("bound") is None:
+            flags.add(PEER_FLAGS["unobserved"])
+    # The trial's herdr logs each delivery it lets through. Each counts against
+    # the launch in that pane at that time, which must already be ready and
+    # not yet ended or superseded; another launch's readiness never counts.
+    for entry in summary["launcher_logs"]:
+        pane, when = entry.get("pane"), entry.get("time", 0)
+        if entry.get("kind") != "herdr-delivery" or pane == run.get("pane"):
+            continue
+        started = [launch for launch in record["peers"].get(pane, {}).get("launches", [])
+                   if launch["first_seen"] <= when]
+        occupant = max(started, key=lambda launch: launch["first_seen"]) if started else None
+        if (occupant is None or occupant.get("ready_at") is None or occupant["ready_at"] > when
+                or occupant.get("ended", float("inf")) <= when):
+            flags.add(PEER_FLAGS["delivered_early"])
+            summary["early_deliveries"].append(entry)
+    for peer in record["peers"].values():
+        summary["peers"].append(peer)
+        if peer.get("outside_workspace"):
+            flags.add(PEER_FLAGS["outside_workspace"])
+        for launch in peer.get("launches", []):
+            if launch["status"] in LAUNCH_FLAGS:
+                flags.add(PEER_FLAGS[launch["status"]])
+            if launch.get("delivered_before_ready"):
+                flags.add(PEER_FLAGS["delivered_early"])
+    return sorted(flags), summary
 
 
 def launch(args) -> None:
@@ -908,7 +1545,7 @@ def launch(args) -> None:
     trial = repository.parent
     environment = dict(record["subject_environment"])
     native = args.native[1:] if args.native[:1] == ["--"] else args.native
-    watched = watch_directories(environment, args.watch_dir)
+    watched = watch_directories(environment, args.watch_dir, list(peer_folders(repository)))
     observation = {"shallow": ["/private/tmp"],
                    "max_entries": args.max_entries, "max_seconds": args.snapshot_seconds}
     for directory in watched:
@@ -923,12 +1560,12 @@ def launch(args) -> None:
     try:
         if args.codex_hook_trust not in {"review", "bypass"}:
             raise Refused("unknown Codex hook-trust option", "--codex-hook-trust")
-        if args.codex_hook_trust == "bypass" and args.harness != "codex":
-            raise Refused("--codex-hook-trust=bypass is only authorized for Codex trials", "--codex-hook-trust")
         permissions = permission_flags(args.harness, native, repository, environment=environment,
                                        codex_hook_trust=args.codex_hook_trust)
         codex = codex_expectation(native, repository) if args.harness == "codex" else None
-        if args.harness == "codex" and args.codex_hook_trust == "bypass":
+        # On any harness the option also covers Codex peers the subject opens;
+        # only a Codex seat itself gets the native flag at launch.
+        if args.codex_hook_trust == "bypass":
             codex_hook_preflight(environment, repository, hook_trust)
             environment["CODEX_HOME"] = hook_trust["evaluator_home"]
     except Refused as exc:
@@ -940,7 +1577,7 @@ def launch(args) -> None:
     authentication = check_evaluator_auth(args.harness, environment, repository)
     # Validate all config roots before a native process could follow a link.
     config_preflight = config_snapshot(environment)
-    if args.harness == "codex" and args.codex_hook_trust == "bypass":
+    if args.codex_hook_trust == "bypass":
         config_preflight["codex"]["plugins"] = hook_trust["plugins"]
     native = [*native, *kit.trial_native_args(args.harness, environment)]
     if args.harness == "codex" and args.codex_hook_trust == "bypass":
@@ -950,9 +1587,11 @@ def launch(args) -> None:
         hook_trust["flag_used"] = True
     elif args.harness == "codex":
         print(print_hook_review(args.record), end="")
+    # After the native status checks, which must not meet the launchers.
+    peers = prepare_peers(repository, environment, args.workspace, args.codex_hook_trust)
     args.output.mkdir(parents=True)
     run = {"schema_version": 1, "fixture_record": str(args.record.resolve()),
-           "repository": str(repository), "harness": args.harness,
+           "repository": str(repository), "harness": args.harness, "workspace": args.workspace, "peers": peers,
            "native_args": native, "permission_flags": permissions,
            "hook_trust": hook_trust, "config_preflight": config_preflight,
            "environment": environment, "declared_directories": watched,
@@ -969,6 +1608,7 @@ def launch(args) -> None:
             argv.extend(["--env", f"{key}={value}"])
         created = herdr(*argv)["result"]
         run.update(tab=created["tab"]["tab_id"], pane=created["root_pane"]["pane_id"])
+        write_peer_context(peers, subject={"pane": run["pane"], "ready": False})
         write(args.output / "launch.json", run)
         end, idle = time.monotonic() + args.start_timeout, 0
         while idle < 2:
@@ -1008,17 +1648,25 @@ def launch(args) -> None:
             if not grok_authenticated_editor(herdr("pane", "read", run["pane"], "--source", "visible", text=True)):
                 raise Refused(AUTH_REFUSAL)
             run["authentication"]["signed_in"] = True
+        # From here a start in the subject's pane is a peer request too.
+        write_peer_context(peers, subject={"pane": run["pane"], "ready": True})
+        peers["subject_start_via_launcher"] = any(
+            path.name.endswith("-subject.json") for path in Path(peers["launches"]).glob("*.json"))
+        bypass = hook_trust["option"] == "bypass"
         try:
             run["config_start"] = config_snapshot(
-                environment, plugin_repository=repository if hook_trust["flag_used"] else None)
+                environment, plugin_repository=repository if bypass else None, repository=repository)
         except (Refused, OSError, ValueError) as exc:
             run["config_start"] = {"error": str(exc)}
             raise Refused(f"plugin/config recheck after readiness refused: {exc}") from exc
-        if hook_trust["flag_used"] and run["config_start"]["codex"]["plugins"] != hook_trust["plugins"]:
+        if bypass and run["config_start"]["codex"]["plugins"] != hook_trust["plugins"]:
             raise Refused("plugin inventory changed after readiness; no prompt delivered")
         run["initial_agent"] = initial
         write(args.output / "launch.json", run)
         write(args.output / "before.json", snapshot(watched, **observation))
+        # The watcher answers peer starts and their dialogs from now to finish.
+        run["peer_watch"] = start_peer_watch(args.output)
+        write(args.output / "launch.json", run)
         prompt = (repository / "TASK.md").read_text(encoding="utf-8")
         if args.harness == "claude":
             run["enters"] = deliver_claude(run["pane"], prompt, initial, args.start_timeout, record.get("branch"), args.output)
@@ -1036,6 +1684,8 @@ def launch(args) -> None:
         run["status"] = "started"
     except (Refused, OSError, subprocess.SubprocessError, KeyError, ValueError) as exc:
         run.update(status="refused", error=str(exc))
+        if "peer_watch" in run:
+            (args.output / "peers.stop").write_text("", encoding="utf-8")
         raise
     finally:
         write(args.output / "launch.json", run)
@@ -1043,6 +1693,8 @@ def launch(args) -> None:
 
 def finish(args) -> None:
     run = kit.load_json(args.output / "launch.json")
+    # Stop answering peer dialogs before the final observation.
+    peer_record = stop_peer_watch(args.output) if "peer_watch" in run else None
     after = snapshot(run["declared_directories"], **run["observation"])
     before_path = args.output / "before.json"
     if before_path.is_file():
@@ -1054,17 +1706,28 @@ def finish(args) -> None:
     try:
         run["config_finish"] = config_snapshot(
             run["environment"], plugin_repository=Path(run["repository"])
-            if run.get("hook_trust", {}).get("flag_used") else None)
+            if run.get("hook_trust", {}).get("flag_used") or run.get("hook_trust", {}).get("option") == "bypass"
+            else None, repository=Path(run["repository"]) if "codex_trust" in run.get("config_start", {}) else None)
+        accepted = any(event.get("harness") == "codex" and event.get("path") == run["repository"]
+                       for peer in (peer_record or {}).get("peers", {}).values()
+                       for launch in peer.get("launches", []) for event in launch.get("trust_acceptances", []))
         if "config_start" not in run:
             result["validity_flags"].append("evaluator_config_unreadable")
         else:
-            result["validity_flags"].extend(config_drift(run["config_start"], run["config_finish"]))
+            drift = config_drift(run["config_start"], run["config_finish"], accepted)
+            result["validity_flags"].extend(drift)
+            if accepted and not drift and run["config_start"] != run["config_finish"]:
+                result["config_allowances"] = ["Codex project trust entry for the trial repository, "
+                                               "written after a recorded peer folder-trust acceptance"]
     except (Refused, OSError, KeyError, ValueError) as exc:
         run["config_finish"] = {"error": str(exc)}
         result["validity_flags"].append("evaluator_config_unreadable")
     write(args.output / "launch.json", run)
     if run["status"] != "started":
         result["validity_flags"].append("native_launch_not_confirmed")
+    if "peers" in run:
+        flags, result["peers"] = peer_findings(run, peer_record, watched="peer_watch" in run)
+        result["validity_flags"].extend(flags)
     write(args.output / "after.json", after)
     if "pane" in run:
         try:
@@ -1096,6 +1759,10 @@ def main() -> int:
     review.add_argument("--record", type=Path, required=True)
     end = sub.add_parser("finish")
     end.add_argument("--output", type=Path, required=True)
+    peers = sub.add_parser("watch", help="answer peer launches and startup dialogs; launch starts it, finish stops it")
+    peers.add_argument("--output", type=Path, required=True)
+    peers.add_argument("--interval", type=float, default=0.5)
+    peers.add_argument("--max-hours", type=float, default=6)
     args = cli.parse_args()
     try:
         if args.command == "launch":
@@ -1106,6 +1773,8 @@ def main() -> int:
             launch(args)
         elif args.command == "print-hook-review":
             print(print_hook_review(args.record), end="")
+        elif args.command == "watch":
+            watch(args)
         else:
             finish(args)
     except (Refused, OSError, subprocess.SubprocessError, KeyError, ValueError, kit.EvalError) as exc:
