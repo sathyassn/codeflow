@@ -5501,6 +5501,91 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual(("pending", "unrecorded"), (old["status"], new["status"]))
             self.assertEqual([], scene.keys)
 
+    def test_peer_watch_revokes_a_launch_whose_live_state_changes(self):
+        """R2-F2: the same pid, start, executable and argv with another home,
+        working directory or no readable environment gets no key and loses
+        its ready record; restoring the old state does not restore it."""
+        changes = {
+            "another CODEX_HOME": lambda live, repository: live["environment"].update(CODEX_HOME="/elsewhere/codex"),
+            "another working directory": lambda live, repository: live.update(cwd=str(repository / "sub")),
+            "environment emptied": lambda live, repository: live.update(environment={}),
+        }
+        for name, change in changes.items():
+            with self.subTest(name, when="before a key"), tempfile.TemporaryDirectory() as temp, \
+                 patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+                runner, run, repository, scene, record, _ = self.watch_trial(Path(temp).resolve())
+                self.ask_peer(runner, run, 4101)
+                scene.agent("peer-pane", cwd=str(repository))
+                self.poll(runner, run, record, scene)
+                scene.run("peer-pane", self.peer_live(run, 4101, self.answer(record, 4101)["argv"]))
+                scene.screens["peer-pane"] = self.CASE_00_PEER_TRUST.format(path=repository)
+                reads = []
+
+                def alter(pane, reads=reads, change=change, repository=repository):
+                    reads.append(pane)
+                    if len(reads) == 2:  # after the first screen read, before the key
+                        change(scene.live[4101], repository)
+                scene.on_read = alter
+                self.poll(runner, run, record, scene)
+                self.assertEqual("startup_refused", record["peers"]["peer-pane"]["launches"][0]["status"])
+                self.assertEqual([], scene.keys)
+                self.assertIn("peer_startup_refused", runner.peer_findings(run, self.stopped(record))[0])
+            with self.subTest(name, when="after readiness"), tempfile.TemporaryDirectory() as temp, \
+                 patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+                runner, run, repository, scene, record, _ = self.watch_trial(Path(temp).resolve())
+                ready = self.ready_peer(runner, run, repository, scene, record)
+                self.assertEqual("ready", ready["status"])
+                original = copy.deepcopy(scene.live[4101])
+                change(scene.live[4101], repository)
+                self.poll(runner, run, record, scene, 3)
+                launches = record["peers"]["peer-pane"]["launches"]
+                self.assertEqual(["unverified", "unrecorded"], [launch["status"] for launch in launches])
+                self.assertIsNone(self.gate(run))
+                # Back to the verified state: a new launch, still unrecorded.
+                scene.live[4101] = original
+                self.poll(runner, run, record, scene, 2)
+                self.assertEqual("unrecorded", record["peers"]["peer-pane"]["launches"][-1]["status"])
+                self.assertIsNone(self.gate(run))
+                self.assertEqual([("peer-pane", "Enter")], scene.keys)
+                flags, _ = runner.peer_findings(run, self.stopped(record))
+                self.assertEqual(["peer_launch_unrecorded", "peer_launch_unverified"], flags)
+
+    def test_peer_watch_skips_only_the_exact_waiting_launcher(self):
+        """R2-F1: only the pinned interpreter running `-B <launcher file>` is
+        the waiting launcher; a native seat naming a launcher path is a launch."""
+        flag = "--dangerously-bypass-hook-trust"
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, scene, record, _ = self.watch_trial(Path(temp).resolve())
+            native, shim = run["peers"]["executables"]["codex"], str(Path(run["peers"]["bin"]) / "codex")
+            disguised = {
+                "launcher path as an argument": [native, shim, flag],
+                "launcher invocation on the native binary": [native, "-B", shim, flag],
+            }
+            for pid, (name, argv) in enumerate(disguised.items(), start=4701):
+                pane = f"pane-{pid}"
+                scene.agent(pane, status="working", cwd=str(repository))
+                scene.run(pane, self.peer_live(run, pid, argv, pane, CODEX_HOME="/elsewhere/codex"))
+                self.poll(runner, run, record, scene, 3)
+                with self.subTest(name):
+                    [launch] = record["peers"][pane]["launches"]
+                    self.assertEqual("unrecorded", launch["status"])
+            # Another interpreter running the launcher file is not the pinned one.
+            scene.agent("pane-other-python", status="idle", cwd=str(repository))
+            other = self.launcher_live(run, 4801, "codex", ["--model", "m"], "pane-other-python")
+            other.update(executable="/usr/local/bin/python3", argv=["/usr/local/bin/python3", *other["argv"][1:]])
+            scene.run("pane-other-python", other, name="codex")
+            self.poll(runner, run, record, scene)
+            self.assertEqual("unrecorded", record["peers"]["pane-other-python"]["launches"][0]["status"])
+            # The genuine waiting launcher is still skipped.
+            self.ask_peer(runner, run, 4901, pane="peer-pane")
+            scene.agent("peer-pane", cwd=str(repository))
+            scene.run("peer-pane", self.launcher_live(run, 4901, "codex", self.peer_request(run)["args"]), name="codex")
+            self.poll(runner, run, record, scene, 2)
+            self.assertEqual([], record["peers"]["peer-pane"]["launches"])
+            self.assertEqual([], scene.keys)
+            flags, _ = runner.peer_findings(run, self.stopped(record))
+            self.assertIn("peer_launch_unrecorded", flags)
+
     def test_peer_watch_keeps_watching_a_ready_pane(self):
         """F2: a later process in a ready pane closes its gate and is flagged;
         a new answered start there gets its own startup state."""
@@ -5832,6 +5917,24 @@ class ProcessRepairTests(unittest.TestCase):
                 child.wait()
             with self.assertRaises(ProcessLookupError):
                 runner.process_start(child.pid)
+        # A real launcher waiting for its answer is recognized from the OS's view.
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, environment, _calls = self.peer_trial(Path(temp).resolve())
+            launches = Path(run["peers"]["launches"])
+            waiting = subprocess.Popen([str(Path(run["peers"]["bin"]) / "codex"), "--model", "m"], cwd=repository,
+                                       env={**environment, "HERDR_PANE_ID": "peer-pane"}, stderr=subprocess.DEVNULL)
+            try:
+                for _ in range(200):
+                    if list(launches.glob("*.request.json")):
+                        break
+                    threading.Event().wait(0.05)
+                live = runner.live_process(waiting.pid)
+                self.assertTrue(runner.trial_launcher(run, live), live["argv"][:3])
+                live["argv"][1:2] = []
+                self.assertFalse(runner.trial_launcher(run, live))
+            finally:
+                waiting.kill()
+                waiting.wait()
 
     def test_closeout_inventory_matches_real_local_worktrees(self):
         with tempfile.TemporaryDirectory() as temp:

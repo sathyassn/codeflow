@@ -443,8 +443,14 @@ the native flag. The bypass flag is never added to a Claude or Grok peer.
 The watcher then reads `herdr agent list`. A pane is a peer once the watcher
 allowed a start there, or once Herdr sees an agent working in the trial's
 folders. Each harness process in a peer pane is a separate launch, identified
-by pid, start time and a digest of its executable and argv, since an exec
-keeps the pid. A launcher still waiting for its answer is not a launch. For
+by pid, start time and a digest of its executable, argv, working directory
+and every trial environment value except TERM and PATH. An exec keeps the
+pid, so any change to the rest, an unreadable environment included, is a new
+launch with no bound answer; the old launch is flagged and loses its ready
+record, and going back to the old state does not restore it. Only the
+launcher still waiting for its answer is not a launch: the interpreter pinned
+at launch running `-B` and the launcher file, exactly as its first line
+starts it. For
 each launch the watcher reads the live process from the OS: on macOS the
 executable, argv and environment through `sysctl` (`KERN_PROCARGS2`), the
 start time through `ps` and the working directory through `lsof`; on Linux
@@ -457,8 +463,8 @@ from `/proc`. A launch counts only when:
 
 A verified launch gets keys only for the dialogs the subject's own startup
 accepts: the exact-path workspace-trust dialog and Claude's renderer prompt.
-Before each key the watcher re-reads the screen and the live process; a
-different process, or the same process re-executed, gets no key. It never
+Before each key the watcher re-reads the screen and the live process; any
+change to its identity, environment or working directory gets no key. It never
 pastes text and never presses Enter in an editor. When Herdr reports the peer
 idle, working or done, the watcher verifies the live process again, hook and
 plugin checks included, and only then writes the pane's ready record, which

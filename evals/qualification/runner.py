@@ -1021,7 +1021,7 @@ def prepare_peers(repository: Path, environment: dict[str, str], workspace: str,
         target.chmod(0o555)
         digests[name] = digest_file(target)
     peers = {"bin": str(shims), "launches": str(launches), "executables": executables,
-             "shim_sha256": digests, "context": {
+             "shim_sha256": digests, "interpreters": launcher_interpreters(), "context": {
                  "schema_version": 1, "workspace": workspace, "option": option,
                  "herdr": executables["herdr"], "launches": str(launches),
                  "decision_seconds": 20, "ready_seconds": 30,
@@ -1225,19 +1225,39 @@ def claim_decision(record: dict, pane: str, live: dict) -> dict | None:
     return None
 
 
-def identity_of(live: dict) -> list:
-    """A launch is one program in one process: pid and start time, plus the
-    executable and argv, since an exec keeps the pid and start time."""
-    program = json.dumps([live["executable"], live["argv"]]).encode()
+def identity_of(run: dict, live: dict) -> list:
+    """A launch is one program in one state in one process: pid and start
+    time, plus a digest of the executable, argv, working directory and every
+    trial environment value except TERM and PATH. An exec keeps the pid and
+    start time, so any change to the rest is a new launch, never verified by
+    inheritance."""
+    state = {key: live["environment"].get(key) for key in run["environment"] if key not in {"TERM", "PATH"}}
+    program = json.dumps([live["executable"], live["argv"], os.path.realpath(live["cwd"]), state],
+                         sort_keys=True).encode()
     return [live["pid"], live["start"], "sha256:" + hashlib.sha256(program).hexdigest()[:16]]
+
+
+def launcher_interpreters() -> list[str]:
+    """The interpreter the launchers' first line names, and the app binary a
+    macOS framework Python re-executes into, as the OS reports them."""
+    paths = {os.path.realpath(sys.executable)}
+    app = Path(sys.prefix) / "Resources/Python.app/Contents/MacOS/Python"
+    if app.is_file():
+        paths.add(os.path.realpath(app))
+    return sorted(paths)
 
 
 def trial_launcher(run: dict, live: dict) -> bool:
     """The trial's own launcher, still waiting for its answer before it execs
-    in place. Its interpreter runs the launcher file from the trial PATH."""
-    shims = os.path.realpath(run["peers"]["bin"])
-    return any(os.path.isabs(item) and os.path.dirname(os.path.realpath(item)) == shims
-               and os.path.basename(item) in run["peers"]["shim_sha256"] for item in live["argv"][1:3])
+    in place: the pinned interpreter running `-B <launcher file>`, exactly
+    as the launcher's first line starts it. Anything else is a launch."""
+    peers, argv = run["peers"], live["argv"]
+    if os.path.realpath(live["executable"]) not in peers.get("interpreters", []) or argv[1:2] != ["-B"]:
+        return False
+    if len(argv) < 3:
+        return False
+    script = os.path.realpath(os.path.join(live["cwd"], argv[2]))
+    return any(script == os.path.realpath(Path(peers["bin"]) / name) for name in peers["shim_sha256"])
 
 
 def peer_harness(run: dict, process: dict, live: dict) -> str | None:
@@ -1276,9 +1296,13 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
             launch["ended"] = time.time()
             set_gate(run, pane, None)
         return  # it gets no key; what it execs is a new launch
-    identity = identity_of(live)
+    identity = identity_of(run, live)
     if launch is None or launch["identity"] != identity:
         set_gate(run, pane, None)
+        if (launch is not None and launch["identity"][:2] == identity[:2]
+                and launch["status"] in {"pending", "ready"}):
+            launch.update(status="unverified",
+                          error="the process's argv, working directory or environment changed")
         entry = claim_decision(record, pane, live)
         harness = entry["decision"]["harness"] if entry else peer_harness(run, process, live)
         launch = {"identity": identity, "harness": harness, "executable": live["executable"],
@@ -1302,7 +1326,7 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
     def before_key() -> None:
         current = herdr("pane", "process-info", "--pane", pane)["result"]["process_info"]
         now = harness_process(current.get("foreground_processes") or [], executables)
-        if now is None or int(now["pid"]) != live["pid"] or identity_of(live_process(live["pid"])) != identity:
+        if now is None or int(now["pid"]) != live["pid"] or identity_of(run, live_process(live["pid"])) != identity:
             raise Refused("the peer process changed before a key; no key sent")
 
     screen = herdr("pane", "read", pane, "--source", "visible", text=True)
@@ -1321,7 +1345,7 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
         again = live_process(live["pid"])
     except ProcessLookupError:
         return
-    if identity_of(again) != identity:
+    if identity_of(run, again) != identity:
         return  # replaced since this poll began; the next poll sees a new launch
     launch["ready_check"] = verify_peer_process(run, launch["harness"], again)
     if launch["ready_check"]["verified"]:
