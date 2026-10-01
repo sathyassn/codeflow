@@ -1,0 +1,11 @@
+id = "TSK-197"
+uid = "548aebe4-2024-4851-abc5-3393d86ff98c"
+kind = "TSK"
+title = "close the release criteria waived at 3.0.0"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-01T17:00:56Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
