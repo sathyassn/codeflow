@@ -595,6 +595,10 @@ fn a_resolution_keeping_a_backfilled_uid_changes_no_criteria() {
             .current_dir(&fx.root)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
             .output()
             .unwrap();
         let body = if take_a { &planned } else { &plain };

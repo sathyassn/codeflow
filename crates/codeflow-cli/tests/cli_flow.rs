@@ -9,13 +9,19 @@ use std::process::{Command, Output};
 /// registry touch reaches the developer's real `~/.codeflow` and parallel
 /// full gates never meet on one machine-wide gate lock (TSK-134). The
 /// harness's own `CARGO_TARGET_DIR` lies outside these temp repositories, so
-/// it is removed, as the gate would refuse it.
+/// it is removed, as the gate would refuse it. `task new` and `spec new`
+/// commit to the ID registry, so the git identity is fixed here, never read
+/// from the developer's or the runner's configuration.
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
     let home = tempfile::tempdir().expect("home tempdir");
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
         .args(args)
         .current_dir(dir)
         .env("CODEFLOW_HOME", home.path())
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
         .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("codeflow binary runs")

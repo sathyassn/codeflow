@@ -586,6 +586,7 @@ fn task_new_resume_writes_an_interrupted_reservation_once() {
         "into": LINE, "title": "interrupted",
     }));
     git(&root, &["config", "user.email", "journey@example.test"]);
+    git(&root, &["config", "user.name", "Journey"]);
     let reserved = codeflow_core::ids::issue::reserve(&root, &request).unwrap();
     assert_eq!(reserved.id.to_string(), "TSK-001");
     assert!(!root.join("project-management/tasks/TSK-001.md").exists());
@@ -704,6 +705,7 @@ fn a_follow_up_task_takes_its_number_from_the_registry() {
         "kind": "task", "follow_up_of": "TSK-001", "title": "interrupted follow-up",
     }));
     git(&root, &["config", "user.email", "journey@example.test"]);
+    git(&root, &["config", "user.name", "Journey"]);
     let reserved = codeflow_core::ids::issue::reserve(&root, &request).unwrap();
     assert_eq!(reserved.id.to_string(), "TSK-003");
     let resumed = ok(

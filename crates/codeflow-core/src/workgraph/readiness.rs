@@ -2036,7 +2036,7 @@ mod tests {
 
     fn bare_from(root: &Path, source: &str) -> tempfile::TempDir {
         let bare = tempfile::tempdir().unwrap();
-        run(bare.path(), &["init", "-q", "--bare"]);
+        run(bare.path(), &["init", "-q", "--bare", "-b", "main"]);
         run(
             root,
             &[

@@ -66,6 +66,12 @@ fn codeflow(dir: &Path, args: &[&str]) -> Output {
         .env("PATH", path)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        // `task new` commits to the ID registry; with no global config, git
+        // would otherwise take the identity from the account's passwd entry.
+        .env("GIT_AUTHOR_NAME", "Journey")
+        .env("GIT_AUTHOR_EMAIL", "journey@example.test")
+        .env("GIT_COMMITTER_NAME", "Journey")
+        .env("GIT_COMMITTER_EMAIL", "journey@example.test")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
