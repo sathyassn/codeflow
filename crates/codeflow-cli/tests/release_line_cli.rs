@@ -2983,14 +2983,39 @@ fn release_body(task: &str) -> String {
     )
 }
 
-/// AC-7 (SPC-013 R-120): the release pull request names its
-/// release-integration task, which completes inside the range at its head
-/// while the range brings records from the lines. It is classified as the
-/// release pull request, which the release checks judge; the same body
-/// naming another task keeps the ordinary task rules.
-#[test]
-fn the_release_pull_request_names_its_release_integration_task() {
-    let fx = Fx::new(true);
+/// A release on branch `release` under `extra_policy`, with two former
+/// holders of the release role on main: TSK-007 completed before the range
+/// and TSK-008 cancelled. Line A lands TSK-001 and plans a new task, which
+/// the release brings; direct code follows, and the open holder TSK-009
+/// completes at the head.
+fn release_with_former_holders(extra_policy: &str, release: &str) -> Fx {
+    let fx = Fx::with_policy(true, extra_policy);
+    let planned = fx.head();
+    let former = |id: &str, status: &str, closeout: &str| {
+        task(
+            id,
+            None,
+            "main",
+            status,
+            CRITERIA,
+            closeout,
+            "role: release-integration\n",
+        )
+    };
+    fx.write(
+        &path("TSK-007"),
+        &former("TSK-007", "complete", &block(&planned)),
+    );
+    fx.write(
+        &path("TSK-008"),
+        &former(
+            "TSK-008",
+            "cancelled",
+            "- cancelled: superseded by TSK-009\n- scope: none\n",
+        ),
+    );
+    fx.commit("docs(records): former release holders");
+    fx.git(&["push", "-q", "origin", "main"]);
     codeflow_ok(&fx, &["ids", "seed"]);
     fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
     fx.land(LINE_A, "task/TSK-001-work");
@@ -3010,8 +3035,17 @@ fn the_release_pull_request_names_its_release_integration_task() {
     );
     fx.commit("docs(records): plan more work");
     fx.land(LINE_A, "plan/more");
-    fx.cut_release();
-    fx.import(LINE_A);
+    fx.git(&["switch", "-q", "-C", release, "main"]);
+    fx.git(&["push", "-q", "origin", release]);
+    fx.git(&["fetch", "-q", "origin"]);
+    fx.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        &format!("merge: import {LINE_A}"),
+        &format!("origin/{LINE_A}"),
+    ]);
     fx.git(&[
         "fetch",
         "-q",
@@ -3026,29 +3060,55 @@ fn the_release_pull_request_names_its_release_integration_task() {
     );
     passes(&fx.status_complete(HOLDER), "the holder completes");
     fx.commit("docs(records): complete the release integration");
+    fx
+}
 
-    let body = release_body(HOLDER);
-    let release = fx.ci_with("main", "HEAD", RELEASE, Some("main"), &["--pr-body", &body]);
-    passes(&release, "the release pull request");
-    assert!(
-        release
-            .1
-            .contains("pull request class: release integration TSK-009 (from the Task: line)"),
-        "{}",
-        release.1
-    );
-
-    // Control: another task named on the release head keeps the task rules.
-    let body = release_body("TSK-001");
-    let other = fx.ci_with("main", "HEAD", RELEASE, Some("main"), &["--pr-body", &body]);
-    blocks(
-        &other,
-        "another task on the release head",
-        &[
-            "pull request class: tracked TSK-001",
-            "a task PR may add only its own standalone task record",
-        ],
-    );
+/// AC-7 (SPC-013 R-120): the release pull request names its
+/// release-integration task, which completes inside the range at its head
+/// while the range brings records from the lines. It is classified as the
+/// release pull request, which the release checks judge, under the built-in
+/// pattern and under a pattern the policy names. The same body naming
+/// another task, a holder completed before the range or a cancelled holder
+/// keeps the ordinary task rules.
+#[test]
+fn the_release_pull_request_names_its_release_integration_task() {
+    for (policy, release) in [
+        ("", RELEASE),
+        (
+            ", \"release_branch_pattern\": \"fix/release-*\"",
+            "fix/release-1",
+        ),
+    ] {
+        let fx = release_with_former_holders(policy, release);
+        let pr = |task: &str| {
+            fx.ci_with(
+                "main",
+                "HEAD",
+                release,
+                Some("main"),
+                &["--pr-body", &release_body(task)],
+            )
+        };
+        let owner = pr(HOLDER);
+        passes(&owner, release);
+        assert!(
+            owner
+                .1
+                .contains("pull request class: release integration TSK-009 (from the Task: line)"),
+            "{release}:\n{}",
+            owner.1
+        );
+        for other in ["TSK-001", "TSK-007", "TSK-008"] {
+            blocks(
+                &pr(other),
+                &format!("{other} named on {release}"),
+                &[
+                    &format!("pull request class: tracked {other}"),
+                    "a task PR may add only its own standalone task record",
+                ],
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

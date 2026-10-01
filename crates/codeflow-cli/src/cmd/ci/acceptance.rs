@@ -161,6 +161,22 @@ fn release_head(
     }
 }
 
+/// On a release range, the one task the release checks select as the owner
+/// of its direct work (SPC-013 R-120), judged at the same head as the
+/// acceptance check; `None` when none or several are eligible, or the
+/// range cannot be read, which the acceptance check refuses.
+pub(super) fn release_owner(
+    root: &Path,
+    range: &Range<'_>,
+    names: &super::Names<'_>,
+) -> Option<String> {
+    let (destination, scope) = release_scope(root, names).ok()??;
+    let head = release_head(root, range, scope).ok()?;
+    release_line::release_owner(root, destination, range.base, &head)
+        .ok()
+        .flatten()
+}
+
 /// On a release range, the records it brings from verified lines, for the
 /// records rule to judge where each was introduced (SPC-013 R-120). `None`
 /// on an ordinary range, and when the range cannot be judged, which the
