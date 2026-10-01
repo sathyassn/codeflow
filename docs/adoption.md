@@ -161,6 +161,7 @@ the project accepts.
 | Case | What to know |
 |---|---|
 | The scaffold commit on a new repository | The one sanctioned commit before the gates guard the repository, so the first PR meets no policy wall. The secret scan is never relaxed, even for that commit |
+| Hooks in `.git/hooks`, such as those `pre-commit install` writes | Git stops running them once `init` sets `core.hooksPath`. The report names each one and moves nothing; you choose to move the check into CI or a supported hook manager, or to call it from a project-owned hooks folder, set as `core.hooksPath`, that also calls the CodeFlow shims. `update` and `codeflow doctor` repeat it while the files stay |
 | Update-ignore settings and `/cf-customize` | Update-ignore settings do not choose paths for the first scaffold, and `/cf-customize` runs after init without resolving collisions for you |
 | Unrelated files in a CodeFlow record home | They can make `validate --docs` report a collision even when durable-work tracking is inactive. Resolve the conflict |
 | Moving up later | Re-run `init` at `--standard`, then `--full`, as the work earns the weight. Each step is additive and idempotent. |

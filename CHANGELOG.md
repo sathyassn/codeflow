@@ -79,6 +79,13 @@ publication date._
   and the Codex hook-trust option only for Codex peers. Trust dialogs are
   answered only for verified launches; other peers flag the trial invalid.
 
+<!-- codeflow:release-impact patch -->
+- **Hooks in `.git/hooks` on adoption.** Setting `core.hooksPath` stops git
+  running a project's own hooks, such as those `pre-commit install` writes.
+  `init` and `update` now name each executable hook in the repository's hooks
+  folder, linked worktrees included, and give the choices; `codeflow doctor`
+  warns while they stay. Nothing is moved, and hooks are not chained.
+
 ### Added
 
 <!-- codeflow:release-impact major -->
