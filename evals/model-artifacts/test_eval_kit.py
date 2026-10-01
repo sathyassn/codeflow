@@ -5602,6 +5602,7 @@ class ProcessRepairTests(unittest.TestCase):
             self.poll(runner, run, record, scene)
             reused = record["peers"]["peer-pane"]["launches"][-1]
             self.assertEqual("unrecorded", reused["status"])
+            self.assertIn("ended", first)
             self.assertIsNone(self.gate(run))
             self.assertEqual([("peer-pane", "Enter")], scene.keys)
             # A new answered start in the same pane.
@@ -5756,8 +5757,10 @@ class ProcessRepairTests(unittest.TestCase):
         """The native dry trial at 93758e0ee (peerdry-3): Codex in w2:pC9 was
         first seen at 1790867106.31, its trust accepted at 107.20 while Herdr
         reported it working during startup, and it was ready at 109.36. The
-        subject's first delivery, through the trial's herdr, came at 116.
-        Replayed with those times and this trial's paths: no flag."""
+        subject's first delivery to it came at 116 by the subject transcript.
+        Replayed with those times and this trial's paths: no flag. That trial
+        did not log allowed deliveries; the entries here are constructed from
+        the transcript's chronology."""
         with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
             runner, run, repository, scene, record, _ = self.watch_trial(
                 Path(temp).resolve(), workspace="w2", subject="w2:pC8")
@@ -5769,10 +5772,10 @@ class ProcessRepairTests(unittest.TestCase):
             scene.agent("w2:pC9", status="idle", cwd=str(repository))
             scene.run("w2:pC9", self.launcher_live(run, 74176, "codex", args, "w2:pC9"), name="codex")
             steps = [
-                # (time, Herdr status, screen): the launcher, then Codex at its
-                # trust screen while Herdr reports it working, then starting.
+                # (time, Herdr status, screen): the launcher, then Codex starting,
+                # its trust screen while Herdr reports it working, then starting.
                 (1790867105.64, "idle", None),
-                (1790867106.31, "working", self.CASE_00_PEER_TRUST.format(path=repository)),
+                (1790867106.31, "unknown", "\n"),
                 (1790867107.20, "working", self.CASE_00_PEER_TRUST.format(path=repository)),
                 (1790867108.30, "unknown", "Starting Codex...\n"),
                 (1790867109.36, "idle", self.CODEX_IDLE),
@@ -5784,13 +5787,17 @@ class ProcessRepairTests(unittest.TestCase):
                     scene.agents["w2:pC9"]["agent_status"] = status
                     if index == 1:
                         scene.run("w2:pC9", self.peer_live(run, 74176, self.answer(record, 74176)["argv"], "w2:pC9"))
-                    if screen is not None and (index != 2 or not scene.keys):
+                    if screen is not None:
                         scene.screens["w2:pC9"] = screen
                     self.poll(runner, run, record, scene)
             [launch] = record["peers"]["w2:pC9"]["launches"]
-            self.assertEqual(("ready", 1790867109.36, 1), (launch["status"], launch["ready_at"], len(launch["trust_acceptances"])))
+            self.assertEqual((1790867106.31, [1790867107.20], "ready", 1790867109.36),
+                             (launch["first_seen"], [event["time"] for event in launch["trust_acceptances"]],
+                              launch["status"], launch["ready_at"]))
+            self.assertEqual([("w2:pC9", "Enter")], scene.keys)
             self.assertNotIn("delivered_before_ready", launch)
-            # The subject's own deliveries and the one to the peer, as the trial's herdr logged them.
+            # Deliveries constructed from the subject transcript's chronology, in
+            # the form the trial's herdr now logs: the subject's own pane, then the peer.
             launches = Path(run["peers"]["launches"])
             for when, pane in [(1790867030.0, "w2:pC8"), (1790867116.0, "w2:pC9"), (1790867121.0, "w2:pC9")]:
                 runner.write(launches / f"{int(when * 1e9)}-90000-herdr-delivery.json",
@@ -5802,6 +5809,27 @@ class ProcessRepairTests(unittest.TestCase):
             runner.write(launches / "1790867108360000000-90000-herdr-delivery.json",
                          {"kind": "herdr-delivery", "time": 1790867108.36, "args": ["agent", "prompt"], "pane": "w2:pC9"})
             self.assertEqual(["peer_delivered_before_ready"], runner.peer_findings(run, self.stopped(record))[0])
+
+    def test_peer_delivery_counts_against_the_launch_in_the_pane_at_that_time(self):
+        """A ready launch that ended never authorizes a delivery to the launch
+        that replaced it in the same pane."""
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, _repository, _scene, _record, _ = self.watch_trial(Path(temp).resolve())
+            first = {"identity": [1, "a", "x"], "first_seen": 90.0, "status": "ready", "ready_at": 100.0, "ended": 200.0}
+            second = {"identity": [2, "b", "y"], "first_seen": 200.0, "status": "ready", "ready_at": 220.0}
+            record = self.stopped({"requests": [], "peers": {"peer-pane": {"pane": "peer-pane", "launches": [first, second]}}})
+            launches = Path(run["peers"]["launches"])
+            for when, expected in [(150.0, []), (210.0, ["peer_delivered_before_ready"]), (230.0, []),
+                                   (95.0, ["peer_delivered_before_ready"])]:
+                with self.subTest(delivery=when):
+                    for old in launches.glob("*-herdr-delivery.json"):
+                        old.unlink()
+                    runner.write(launches / f"{int(when)}-1-herdr-delivery.json",
+                                 {"kind": "herdr-delivery", "time": when, "args": ["pane", "send-text"], "pane": "peer-pane"})
+                    self.assertEqual(expected, runner.peer_findings(run, record)[0])
+            # An ended launch with nothing after it authorizes nothing later.
+            record["peers"]["peer-pane"]["launches"] = [first]
+            self.assertEqual(["peer_delivered_before_ready"], runner.peer_findings(run, record)[0])
 
     def test_peer_watch_flags_other_workspaces_and_unready_peers(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):

@@ -1299,6 +1299,8 @@ def observe_peer(run: dict, record: dict, peer: dict, agent: dict) -> None:
     identity = identity_of(run, live)
     if launch is None or launch["identity"] != identity:
         set_gate(run, pane, None)
+        if launch is not None and "ended" not in launch:
+            launch["ended"] = time.time()  # superseded; its readiness ends here
         if (launch is not None and launch["identity"][:2] == identity[:2]
                 and launch["status"] in {"pending", "ready"}):
             launch.update(status="unverified",
@@ -1512,15 +1514,18 @@ def peer_findings(run: dict, record: dict | None, watched: bool = True) -> tuple
             flags.add(PEER_FLAGS["refused"])
         elif entry.get("bound") is None:
             flags.add(PEER_FLAGS["unobserved"])
-    # The trial's herdr logs each delivery it lets through. One to a peer pane
-    # before a launch there was recorded ready came too early.
+    # The trial's herdr logs each delivery it lets through. Each counts against
+    # the launch in that pane at that time, which must already be ready and
+    # not yet ended or superseded; another launch's readiness never counts.
     for entry in summary["launcher_logs"]:
-        pane = entry.get("pane")
+        pane, when = entry.get("pane"), entry.get("time", 0)
         if entry.get("kind") != "herdr-delivery" or pane == run.get("pane"):
             continue
-        launches = record["peers"].get(pane, {}).get("launches", [])
-        if not any(launch.get("ready_at") is not None and launch["ready_at"] <= entry.get("time", 0)
-                   for launch in launches):
+        started = [launch for launch in record["peers"].get(pane, {}).get("launches", [])
+                   if launch["first_seen"] <= when]
+        occupant = max(started, key=lambda launch: launch["first_seen"]) if started else None
+        if (occupant is None or occupant.get("ready_at") is None or occupant["ready_at"] > when
+                or occupant.get("ended", float("inf")) <= when):
             flags.add(PEER_FLAGS["delivered_early"])
             summary["early_deliveries"].append(entry)
     for peer in record["peers"].values():
