@@ -1,5 +1,6 @@
 ---
 id: ADR-0063
+uid: 80073827-c2c2-4f9a-8dd0-c12c6fb41c6d
 title: one shared utility presentation doctrine with a durable architecture home
 date: 2026-09-19
 status: accepted

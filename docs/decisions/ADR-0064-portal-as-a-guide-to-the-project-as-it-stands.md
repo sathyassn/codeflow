@@ -1,5 +1,6 @@
 ---
 id: ADR-0064
+uid: c313f9c1-3874-45cd-bb51-da7bcf946ab6
 title: "the portal is a guide to the project as it stands"
 date: 2026-09-20
 status: accepted

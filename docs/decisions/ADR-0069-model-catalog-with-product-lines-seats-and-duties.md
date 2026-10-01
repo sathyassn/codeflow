@@ -1,5 +1,6 @@
 ---
 id: ADR-0069
+uid: 89d5fdf0-3b29-43a3-b7b5-658e876b31db
 title: "Model catalog with product lines, seats and duties"
 status: accepted
 date: 2026-09-23

@@ -1,5 +1,6 @@
 ---
 id: ADR-0068
+uid: 9c20e7ff-663b-49ec-a6bf-523a502d4e22
 title: "Figure grammar is the default form of a utility figure"
 status: accepted
 date: 2026-09-22

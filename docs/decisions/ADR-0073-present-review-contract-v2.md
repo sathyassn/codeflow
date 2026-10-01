@@ -1,5 +1,6 @@
 ---
 id: ADR-0073
+uid: c1a34657-03be-476a-8a49-102c0bf3d63f
 title: Present review contract v2
 date: 2026-09-26
 status: accepted
