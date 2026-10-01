@@ -1043,7 +1043,9 @@ fn a_replace_ref_never_stands_in_for_recorded_history() {
 /// AC-13, Codex R145-R7-1: git reads `GIT_REPLACE_REF_BASE` as a literal
 /// prefix, so `refs/custom` selects `refs/custom<id>` and `refs/prefix-`
 /// selects `refs/prefix-<id>`. Each is refused in CI and pre-push over a
-/// valid history that passes without it.
+/// valid history that passes without it. Git 2.55 and later stop on a base
+/// without a trailing slash instead of reading it; there the refusal is
+/// git's own, and neither plane may pass.
 #[test]
 fn a_replace_ref_base_is_a_literal_prefix() {
     let fx = Fx::new(false);
@@ -1058,13 +1060,26 @@ fn a_replace_ref_base_is_a_literal_prefix() {
         let name = format!("{base}{tip}");
         fx.git(&["update-ref", &name, &replacement]);
         let env = [("GIT_REPLACE_REF_BASE", base)];
-        let needle = format!("the replace ref {name}");
-        blocks(&ci_empty_with(&fx.root, &url, &env), base, &[&needle]);
+        let read = clean_env(&mut Command::new("git"))
+            .envs(env)
+            .args(["cat-file", "-t", &tip])
+            .current_dir(&fx.root)
+            .output()
+            .unwrap();
+        let judged = |result: &(i32, String), what: &str| {
+            if read.status.success() {
+                blocks(result, what, &[&format!("the replace ref {name}")]);
+            } else {
+                assert_ne!(result.0, 0, "{what}: git refuses the base:\n{}", result.1);
+                // A git that stops on the base can leave its index lock.
+                let _ = std::fs::remove_file(fx.root.join(".git/index.lock"));
+            }
+        };
+        judged(&ci_empty_with(&fx.root, &url, &env), base);
         fx.git(&["switch", "-q", LINE_A]);
-        blocks(
+        judged(
             &pre_push_new_with(&fx.root, &url, RELEASE, &tip, &env),
             &format!("{base} at pre-push"),
-            &[&needle],
         );
         fx.git(&["switch", "-q", "main"]);
         fx.git(&["update-ref", "-d", &name]);
