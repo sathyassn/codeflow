@@ -11,6 +11,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -350,7 +351,7 @@ class GatePartControls(unittest.TestCase):
     STEP = "      - name: codeflow test --mode full --strict\n"
     GATE_STEP_EXACT = "the gate step must be exactly"
     OWN_KEYS = "own keys must be exactly"
-    TOP_LEVEL = "top level may hold only"
+    TOP_LEVEL = "top level must be exactly"
     STRATEGY = "the gates strategy must be"
 
     def assert_all(self, controls: dict) -> None:
@@ -393,6 +394,17 @@ class GatePartControls(unittest.TestCase):
             "escaped BASH_ENV": (WORKFLOW.replace("\njobs:\n", "\nenv:\n  \"BASH\\u005fENV\": ./skip.sh\n\njobs:\n"),
                                  self.TOP_LEVEL),
         })
+
+    def test_an_indented_root_cannot_hide_a_workflow_env(self):
+        """Indenting every root key by one space still parses, and left a
+        column-zero check nothing to read (TSK-203 review round four)."""
+        lines = WORKFLOW.splitlines(keepends=True)
+        shifted = "".join(" " + line if re.match(r"^[a-z-]+:", line) else line for line in lines)
+        shifted = shifted.replace("\n jobs:\n", "\n env:\n  SHELLOPTS: noexec\n jobs:\n")
+        self.assertIn(" env:\n  SHELLOPTS: noexec\n", shifted)
+        self.assert_problem(shifted, self.TOP_LEVEL)
+        missing = WORKFLOW.replace("\nconcurrency:\n", "\n# concurrency removed\nx-concurrency:\n")
+        self.assert_problem(missing, self.TOP_LEVEL)
 
     def test_a_continued_matrix_value_is_refused(self):
         """A continuation line joins `|| true` onto the command (round three)."""

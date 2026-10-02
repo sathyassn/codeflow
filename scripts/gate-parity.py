@@ -232,11 +232,13 @@ def gate_step_problems(gate: str, workflow: str = "") -> list[str]:
     """The workflow top level, the gates job's keys, its strategy and its
     gate step must each take their one accepted form."""
     problems = []
+    # The root keys must sit at column zero: an indented root still parses,
+    # and a column-zero check would then examine nothing (TSK-203 review).
     top = [line for line in workflow.splitlines() if re.match(r"^[^\s#]", line)]
-    stray = [line for line in top if not re.match(rf"^(?:{'|'.join(TOP_KEYS)}):(?:\s|$)", line)]
-    if stray:
-        problems.append(f"the workflow's top level may hold only {list(TOP_KEYS)}; a top-level env or "
-                        f"defaults reaches every bash step; refused: {stray}")
+    names = [m.group(1) if (m := re.match(r"^([a-z-]+):(?:\s|$)", line)) else line for line in top]
+    if sorted(names) != sorted(TOP_KEYS):
+        problems.append(f"the workflow's top level must be exactly {list(TOP_KEYS)}, each once at column "
+                        f"zero; a top-level env or defaults reaches every bash step; found {names}")
     lines = gate.splitlines()
     own = [line.rstrip() for line in lines if re.match(r"^ {4}[^\s#]", line)]
     keys = [re.match(r"^ {4}([a-z-]+):(?:\s|$)", line) for line in own]
