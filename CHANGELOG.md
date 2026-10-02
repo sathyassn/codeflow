@@ -23,13 +23,16 @@ erratum below, never an edit of the section.
 
 <!-- codeflow:release-impact minor -->
 - **The managed model roster adds Claude Sonnet 5.5 and adopts GPT-6.1 Sol.**
+  The primary seats do not change: the Claude primary seat is Opus 5.5, then
+  Fable 5.1, and the Codex primary seat is GPT-6 Astra, then the Sol line.
   After `codeflow update`, the catalog has a `sonnet` worker line
-  (`claude-sonnet-5-5`, medium and high effort). It is the first Claude
-  choice for bounded execution, evidence collection and the Claude fallback
-  in engineering implementation, ahead of Opus, and holds no seat, design,
-  review or orchestration duty. The Sol line adopts GPT-6.1 Sol
-  (`gpt-6.1-sol`), designated for `codex-primary` on 2026-10-02, and GPT-6
-  Sol becomes fallback-only. Design, architecture and technical planning
+  (`claude-sonnet-5-5`, medium and high effort) that holds no seat. Among
+  workers it is tried before Opus for bounded execution, evidence
+  collection and the Claude fallback in engineering implementation, and it
+  never serves orchestration, planning, design or review. The Sol line
+  adopts GPT-6.1 Sol (`gpt-6.1-sol`), designated for `codex-primary` on
+  2026-10-02; GPT-6 Sol and GPT-5.6 Sol stay as its fallback versions.
+  Design, architecture and technical planning
   stay with the Claude primary seat in its current order, Opus first and
   Fable second; Fable comes first for consultation and reasoning support.
   No new version has a qualification record yet, so `codeflow doctor
