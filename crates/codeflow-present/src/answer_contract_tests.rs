@@ -667,16 +667,16 @@ fn a_torn_ledger_tail_is_truncated_on_open() {
         .replace(FIXTURE_SESSION, &session.id.to_string());
     let whole_line = fixture.find('\n').unwrap() + 1;
     assert!(!fixture.ends_with('\n'), "the fixture's last line is torn");
-    std::fs::write(session.ledger_path(), &fixture).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(
-            session.ledger_path(),
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
+    // A new owner-only file, as the store creates it on each platform.
+    let ledger = session.ledger_path();
+    if ledger.exists() {
+        std::fs::remove_file(&ledger).unwrap();
     }
+    std::io::Write::write_all(
+        &mut crate::state::open_private_create_new(&ledger).unwrap(),
+        fixture.as_bytes(),
+    )
+    .unwrap();
     let events = session.store.responses(session.id).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(

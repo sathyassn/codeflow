@@ -1609,6 +1609,11 @@ fn fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it() {
                     "{tier}: {tree}/{rel} differs from its asset"
                 );
             }
+            // Herdr is a Unix terminal multiplexer, reached over a Unix
+            // socket; native Windows has no Herdr to deliver to.
+            if cfg!(windows) {
+                continue;
+            }
             let cases = run_herdr_delivery_cases(&root.join(tree).join("skills/cf-herdr"));
             assert!(
                 cases.status.success(),

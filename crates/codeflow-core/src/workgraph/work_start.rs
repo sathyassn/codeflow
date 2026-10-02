@@ -2251,6 +2251,7 @@ fn hosted_remote(repo: &Repository, remote_name: &str) -> Result<String, String>
 mod tests {
     use super::*;
     use std::fs;
+    #[cfg(unix)]
     use std::process::Command;
 
     #[cfg(unix)]

@@ -7367,7 +7367,10 @@ fn is_name(name: &str) -> bool {
         && !name.starts_with(|c: char| c.is_ascii_digit())
 }
 
+// Several guard-form tables feed tests that build symlinks, which run on
+// Unix only.
 #[cfg(test)]
+#[cfg_attr(not(unix), allow(dead_code, unused_imports))]
 mod tests {
     use super::super::dangerous::DangerousModule;
     use super::super::guard_forms::{

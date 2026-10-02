@@ -854,13 +854,15 @@ mod tests {
             .collect()
     }
 
+    /// Replace `path` with `bytes` in a new owner-only file, as the store
+    /// creates it on each platform.
     fn private_write(path: &std::path::Path, bytes: &[u8]) {
-        std::fs::write(path, bytes).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        use std::io::Write as _;
+        if path.exists() {
+            std::fs::remove_file(path).unwrap();
         }
+        let mut file = crate::state::open_private_create_new(path).unwrap();
+        file.write_all(bytes).unwrap();
     }
 
     /// AC-3 on the TSK-117 query fixture (`ledger/queries.jsonl`): answers
