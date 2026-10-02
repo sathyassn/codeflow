@@ -250,7 +250,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "codeflow-cli"
-version = "3.0.0"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "codeflow-core"
-version = "3.0.0"
+version = "3.1.0"
 dependencies = [
  "diffy",
  "fs2",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "codeflow-present"
-version = "3.0.0"
+version = "3.1.0"
 dependencies = [
  "axum",
  "base64",

@@ -17,6 +17,28 @@ erratum below, never an edit of the section.
   the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
 
+## [3.1.0]
+
+### Added
+
+<!-- codeflow:release-impact minor -->
+- **`codeflow test --only` runs a gate in parts.** `--only <targets>` runs
+  the named targets and their prerequisites, comma separated or repeated,
+  so one gate can be split across parallel CI jobs. A limited run is
+  recorded as not complete, so it never serves as a green base for
+  `--since`, and a name that is not an enabled target of the mode is
+  refused before any target starts. With `--all`, the named targets keep
+  the full-strength checks of the epic close.
+
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **The release binary reports a clean build.** The 3.0.0 binaries print
+  `dirty=true` in `codeflow --version` although they were built from the
+  tagged source: the release job writes cargo-dist's manifest into the
+  checkout before it builds, and the build counted that untracked file.
+  The file is now ignored, so a release build reports `dirty=false`.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
