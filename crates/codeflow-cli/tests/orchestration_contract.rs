@@ -10,6 +10,8 @@ use codeflow_core::model_catalog::{
     Adoption, Alternative, Catalog, Effort, EligibilityRequest, Lifecycle, ParticipantLabel,
     Resolution, ResolveRequest, Target,
 };
+use codeflow_core::validate::parse_frontmatter;
+use codeflow_core::workgraph::record_text::has_section;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -108,39 +110,99 @@ fn is_date(text: &str) -> bool {
 /// `## Note (YYYY-MM-DD)` heading in it, read from the record.
 fn roster_decision_dates() -> BTreeSet<String> {
     let decisions = repo_root().join("docs/decisions");
-    let path = std::fs::read_dir(&decisions)
+    let matches: Vec<_> = std::fs::read_dir(&decisions)
         .expect("decision records")
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(ROSTER_ADR))
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "md")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(ROSTER_ADR))
         })
-        .expect("roster ADR");
-    let text = std::fs::read_to_string(&path).expect("read roster ADR");
-    let (front, body) = text
-        .strip_prefix("---\n")
-        .and_then(|rest| rest.split_once("\n---\n"))
-        .expect("roster ADR front matter");
-    assert!(
-        front.lines().any(|line| line.trim() == "status: accepted"),
-        "the roster ADR is accepted"
-    );
-    let accepted = front
-        .lines()
-        .find_map(|line| line.strip_prefix("date: "))
-        .map(str::trim)
+        .collect();
+    let [path] = matches.as_slice() else {
+        panic!("expected exactly one {ROSTER_ADR}*.md, found {matches:?}");
+    };
+    let text = std::fs::read_to_string(path).expect("read roster ADR");
+    decision_dates(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// The top-level `status` must be `accepted`; the decisions are the
+/// top-level `date` and each visible level-two `## Note (YYYY-MM-DD)`
+/// heading, read with the validator's own front matter parser and record
+/// scanner, so text in a fence or an HTML comment counts for nothing.
+fn decision_dates(text: &str) -> Result<BTreeSet<String>, String> {
+    let (front, body) = parse_frontmatter(text.as_bytes()).map_err(|error| error.to_string())?;
+    let field = |key: &str| {
+        front
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+    };
+    if field("status") != Some("accepted") {
+        return Err(format!("status {:?} is not accepted", front.get("status")));
+    }
+    let accepted = field("date")
         .filter(|date| is_date(date))
-        .expect("roster ADR acceptance date");
+        .ok_or("no YYYY-MM-DD acceptance date")?;
+    let body = String::from_utf8_lossy(&body);
     let mut dates = BTreeSet::from([accepted.to_string()]);
-    dates.extend(body.lines().filter_map(|line| {
-        line.strip_prefix("## Note (")
-            .and_then(|rest| rest.strip_suffix(')'))
-            .filter(|date| is_date(date))
-            .map(str::to_string)
-    }));
-    dates
+    dates.extend(
+        body.lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("## Note (")?
+                    .strip_suffix(')')
+                    .filter(|date| is_date(date))
+                    .map(str::to_string)
+            })
+            .filter(|date| has_section(&body, &format!("## Note ({date})"))),
+    );
+    Ok(dates)
+}
+
+/// The decision dates come from the ADR's top-level front matter and its
+/// visible `## Note (date)` headings only.
+#[test]
+fn roster_decision_dates_read_top_level_status_and_visible_notes() {
+    let adr = |front: &str, body: &str| format!("---\n{front}\n---\n\n# Roster\n\n{body}");
+    let note = "## Note (2026-11-02)\n\nA later decision.\n";
+    let both = BTreeSet::from(["2026-11-01".to_string(), "2026-11-02".to_string()]);
+    let mut failures = Vec::new();
+    // A proposed record whose nested field says accepted is not accepted.
+    let nested = "id: ADR-0001\nstatus: proposed\nreview:\n  status: accepted\ndate: 2026-11-01";
+    if decision_dates(&adr(nested, note)).is_ok() {
+        failures.push("a nested status: accepted passed a proposed record".to_string());
+    }
+    // Quoted and commented forms of the top-level status are accepted.
+    for status in ["status: \"accepted\"", "status: accepted # reviewed"] {
+        match decision_dates(&adr(
+            &format!("id: ADR-0001\n{status}\ndate: 2026-11-01"),
+            note,
+        )) {
+            Ok(dates) if dates == both => {}
+            other => failures.push(format!("{status}: {other:?}")),
+        }
+    }
+    // An example heading in a fence or an HTML comment authorizes no date.
+    for example in [
+        "```markdown\n## Note (2026-11-03)\n```\n",
+        "~~~\n## Note (2026-11-03)\n~~~\n",
+        "<!--\n## Note (2026-11-03)\n-->\n",
+    ] {
+        let front = "id: ADR-0001\nstatus: accepted\ndate: 2026-11-01";
+        match decision_dates(&adr(front, &format!("{note}\n{example}"))) {
+            Ok(dates) if dates == both => {}
+            other => failures.push(format!("example {example:?}: {other:?}")),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "decision dates misread:\n{}",
+        failures.join("\n")
+    );
 }
 
 const AUTHORS: [Option<&str>; 4] = [None, Some("claude"), Some("codex"), Some("grok")];
@@ -155,14 +217,20 @@ fn fictional_catalog() -> Catalog {
     // TSK-079's fixture keeps a design-implementation duty that is open until
     // scoped evidence exists; the managed catalog defines no such duty.
     catalog.duties.remove("design-implementation");
-    // Its designation records name a file only; cite the decision date as
-    // the managed catalog's records do.
+    // Date its designations on a decision the roster ADR records, never on
+    // the fixture's own literal, and cite that date in each record as the
+    // managed catalog's records do.
+    let decision = roster_decision_dates()
+        .into_iter()
+        .next()
+        .expect("a roster decision date");
     for designation in catalog
         .lines
         .iter_mut()
         .flat_map(|line| &mut line.versions)
         .flat_map(|version| &mut version.designations)
     {
+        designation.date.clone_from(&decision);
         designation.record = format!("{}, {}", designation.record, designation.date);
     }
     catalog
