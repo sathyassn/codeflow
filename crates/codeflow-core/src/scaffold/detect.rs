@@ -159,14 +159,16 @@ pub fn git_dir_hooks(root: &Path) -> Option<GitDirHooks> {
     })
 }
 
-/// `path` as a path from `root` when it lies under it, else as given.
+/// `path` as a path from `root` with `/` separators when it lies under it,
+/// else as given.
 fn display_from(root: &Path, path: &Path) -> String {
-    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let canonical =
+        |p: &Path| crate::portable_path::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let (root, path): (PathBuf, PathBuf) = (canonical(root), canonical(path));
-    path.strip_prefix(&root)
-        .unwrap_or(&path)
-        .display()
-        .to_string()
+    match path.strip_prefix(&root) {
+        Ok(relative) => crate::portable_path::slashed(relative),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 /// Whether git would run `path` as a hook.

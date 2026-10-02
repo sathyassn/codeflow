@@ -394,8 +394,11 @@ fn installed_documented_edit_hook_payloads_protect_paths() {
             include_str!("../../codeflow-core/tests/fixtures/edit-hooks/grok-search-replace.json"),
         ),
     ] {
+        // The root goes into JSON strings, where a Windows path's
+        // backslashes are escaped.
+        let root = serde_json::to_string(project.root.to_str().unwrap()).unwrap();
         let protected = data
-            .replace("/fixture/project", project.root.to_str().unwrap())
+            .replace("/fixture/project", root.trim_matches('"'))
             .replace("hello.txt", ".codex/config.toml")
             .replace("notes.txt", ".codeflow/policy.json");
         let payload = serde_json::from_str(&protected).unwrap();

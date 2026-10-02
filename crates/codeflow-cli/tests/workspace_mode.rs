@@ -69,7 +69,7 @@ fn repo_with_commit(dir: &Path) -> PathBuf {
     std::fs::write(dir.join("README.md"), "x\n").unwrap();
     git(dir, &["add", "README.md"]);
     git(dir, &["commit", "--quiet", "-m", "init"]);
-    dir.canonicalize().unwrap()
+    codeflow_core::portable_path::canonicalize(dir).unwrap()
 }
 
 /// An umbrella on `main` holding a plain repository, a `CodeFlow` project and
@@ -286,7 +286,7 @@ fn journey_the_root_checkout_rule_through_the_real_hooks_and_doctor() {
     let root = dir.path().join("single");
     std::fs::create_dir_all(&root).unwrap();
     git(&root, &["init", "--quiet", "-b", "main"]);
-    let root = root.canonicalize().unwrap();
+    let root = codeflow_core::portable_path::canonicalize(&root).unwrap();
     let init = codeflow(&root, &["init", "--yes", "--minimal"]);
     assert!(init.status.success(), "{}", both(&init));
     // In a repository without commits, init commits the scaffold on main.

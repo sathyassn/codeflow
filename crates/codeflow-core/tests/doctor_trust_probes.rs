@@ -145,8 +145,8 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
             String::new()
         } else {
             format!(
-                "[hooks.state.\"{}:pre_tool_use:0:0\"]\n{body}\n",
-                path.display()
+                "[hooks.state.{}]\n{body}\n",
+                serde_json::to_string(&format!("{}:pre_tool_use:0:0", path.display())).unwrap()
             )
         };
         fs::write(home.join(".codex/config.toml"), config).unwrap();
@@ -190,8 +190,8 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
         fs::write(
             home.join(".codex/config.toml"),
             format!(
-                "[hooks.state.\"{}:{event_name}:0:0\"]\ntrusted_hash = \"sha256:{hash}\"\n",
-                path.display()
+                "[hooks.state.{}]\ntrusted_hash = \"sha256:{hash}\"\n",
+                serde_json::to_string(&format!("{}:{event_name}:0:0", path.display())).unwrap()
             ),
         )
         .unwrap();
@@ -424,8 +424,8 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
     fs::write(
         home.join(".grok/trusted_folders.toml"),
         format!(
-            "[folders.\"{}\"]\ntrusted = true\ndecided_at = \"yesterday\"\n",
-            project.display()
+            "[folders.{}]\ntrusted = true\ndecided_at = \"yesterday\"\n",
+            serde_json::to_string(&project.display().to_string()).unwrap()
         ),
     )
     .unwrap();
@@ -510,7 +510,7 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
 #[test]
 fn no_trust_probe_passes_without_an_observed_run() {
     let base = tempfile::tempdir().unwrap();
-    let base = base.path().canonicalize().unwrap();
+    let base = codeflow_core::portable_path::canonicalize(base.path()).unwrap();
     let results = probes(&base);
     assert!(results.len() >= 30, "{} probes", results.len());
     let mut passed = Vec::new();

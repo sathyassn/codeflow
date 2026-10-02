@@ -443,7 +443,8 @@ enum TempPlace {
 /// Containment is canonical, never lexical: the longest existing prefix is
 /// canonicalized (following symlinks) and the rest appended; a `..` in that
 /// rest, a failed canonicalization or a component that exists but does not
-/// resolve (a dangling link) establishes nothing. A glob is judged by its
+/// resolve (a dangling link) establishes nothing. Native Windows, where these
+/// paths name no fixed place, is the one lexical case (`canonical_operand`). A glob is judged by its
 /// text before the first glob character, and only when the glob is in the
 /// last component, since a match in the middle may itself be a link.
 ///
@@ -508,8 +509,26 @@ fn temp_root_depth(canonical: &str) -> Option<usize> {
     }
 }
 
+/// On native Windows a path that starts with `/` names no fixed place: Git
+/// Bash reads it below its own install root (`/tmp` is the user's temp
+/// folder) and other shells below the current drive, and neither is the
+/// path this process would resolve. Containment is lexical there, and a
+/// `..` establishes nothing.
+#[cfg(windows)]
+fn canonical_operand(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    if parts.contains(&"..") {
+        return None;
+    }
+    Some(format!("/{}", parts.join("/")))
+}
+
 /// Canonicalize the longest existing prefix of an absolute path and append
 /// the rest, or `None` when that cannot be established.
+#[cfg(not(windows))]
 fn canonical_operand(path: &str) -> Option<String> {
     let parts: Vec<&str> = path
         .split('/')
@@ -1536,7 +1555,12 @@ mod tests {
             );
         }
         // A custom `$TMPDIR` nested below a root is protected itself, also
-        // through an alias spelling, and its descendants stay exempt.
+        // through an alias spelling, and its descendants stay exempt. On
+        // native Windows the temp folder lies below no Unix temp root, so
+        // there is no such `$TMPDIR` to protect.
+        if cfg!(windows) {
+            return;
+        }
         let scratch = tempfile::tempdir().unwrap();
         let tmpdir = scratch.path().join("agent-tmp");
         std::fs::create_dir(&tmpdir).unwrap();
