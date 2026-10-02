@@ -45,6 +45,10 @@ GITHUB_RELEASE_BODY_LIMIT = 125_000
 # The longest `owner/name` GitHub allows (39 + 1 + 100): notes that fit with
 # it fit under any repository, so the tree check needs no host name.
 LONGEST_REPOSITORY = "o" * 39 + "/" + "r" * 100
+# cargo-dist embeds the pending section twice in its plan manifest, which the
+# release workflow passes between jobs as one job output, and GitHub caps a
+# job's outputs at 1 MB. A section under this size leaves room for the rest.
+PLAN_SECTION_LIMIT = 400_000
 
 
 class ReleaseError(RuntimeError):
@@ -1029,6 +1033,7 @@ def check_pr(args: argparse.Namespace) -> None:
         if repair is not None:
             repair_baselines(base, proposed, paths, after["version"], repair, cwd=args.root)
         comparable_before = before_text
+    check_publishable(args.root, proposed, after)
     baseline = resolve_baseline(config, state, cwd=args.root)
     if repair is None:
         for section in changelog_sections(comparable_before):
@@ -1398,11 +1403,25 @@ def check_state(args: argparse.Namespace) -> None:
         result["host"] = HOST_UNCHECKED
     else:
         result = validate_release_tree(args.ref, config, get_host_state(args), cwd=args.root)
-    if result["pending"]:
-        # Render the notes as the release authority will, so a pending section
-        # GitHub would refuse fails on its pull request, not at dispatch.
-        release_notes(args.root, args.ref, f"v{result['version']}", "0" * 40, LONGEST_REPOSITORY)
+    check_publishable(args.root, args.ref, result)
     print(json.dumps({"status": "ok", **result}, sort_keys=True))
+
+
+def check_publishable(root: Path, ref: str, release: dict[str, Any]) -> None:
+    """Refuse a pending section the publication could not carry, in the checks
+    that run on its pull request and push rather than at dispatch."""
+    if not release["pending"]:
+        return
+    version = release["version"]
+    text = file_at_ref(ref, "CHANGELOG.md", cwd=root).decode()
+    size = body_size(section_bytes(text, version))
+    if size > PLAN_SECTION_LIMIT:
+        fail(
+            f"the {version} changelog section is {size:,} bytes; the release plan carries it "
+            f"twice in one job output, so keep it under {PLAN_SECTION_LIMIT:,}"
+        )
+    # Rendered as the release authority will, under any repository name.
+    release_notes(root, ref, f"v{version}", "0" * 40, LONGEST_REPOSITORY)
 
 
 def structural_state(config: dict[str, Any], *, cwd: Path) -> dict[str, Any]:
@@ -1600,8 +1619,8 @@ def release_notes(root: Path, ref: str, tag: str, source: str, repository: str) 
     )
     if body_size(notes) > GITHUB_RELEASE_BODY_LIMIT:
         fail(
-            f"{tag} release notes need {body_size(notes):,} characters even with each "
-            f"entry cut to its label; GitHub accepts {GITHUB_RELEASE_BODY_LIMIT:,}"
+            f"{tag} release notes need {body_size(notes):,} bytes even with each "
+            f"entry cut to its label; GitHub accepts {GITHUB_RELEASE_BODY_LIMIT:,} characters"
         )
     return notes
 
@@ -1612,38 +1631,46 @@ def body_size(text: str) -> int:
 
 
 def entry_labels(body: str) -> str:
-    """`body` with each labelled top-level entry cut to its bold label.
-    Headings, prose, quoted notes and unlabelled bullets stay as they are."""
-    out: list[str] = []
+    """`body` with each labelled top-level entry cut to its bold label. An
+    entry ends where `entry_extent` ends it; headings, prose, quoted notes and
+    unlabelled bullets stay as they are."""
+    chunks: list[tuple[bool, str]] = []  # (a cut entry, its text)
     entry: list[str] = []
-    labelled = False  # whether the last block written is a cut entry
+    other: list[str] = []
 
-    def close() -> bool:
-        match = ENTRY_LABEL.match("\n".join(entry))
-        out.append(f"- **{' '.join(match.group(1).split())}**" if match else "\n".join(entry))
-        if not entry[-1].strip():
-            out.append("")
-        return match is not None
+    def flush() -> None:
+        if entry:
+            text = "\n".join(entry).strip()
+            match = ENTRY_LABEL.match(text)
+            label = f"- **{' '.join(match.group(1).split())}**" if match else text
+            chunks.append((match is not None, label))
+            entry.clear()
+        if "\n".join(other).strip():
+            chunks.append((False, "\n".join(other).strip()))
+        other.clear()
 
     for line in body.splitlines():
-        # An entry runs on through blank and indented lines.
-        if entry and (not line.strip() or line[0].isspace()):
-            entry.append(line)
-            continue
         if entry:
-            labelled = close()
-            entry = []
+            unindented = bool(line.strip()) and not line[0].isspace()
+            if not unindented or (entry[-1].strip() and not BLOCK_START.match(line)):
+                entry.append(line)
+                continue
         if line.startswith("- "):
-            # Consecutive cut entries form one tight list.
-            if labelled and out[-1] == "" and line.startswith("- **"):
-                out.pop()
-            entry = [line]
+            flush()
+            entry.append(line)
         else:
-            out.append(line)
-            labelled = False
-    if entry:
-        close()
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+            if entry:
+                flush()
+            other.append(line)
+    flush()
+    # Consecutive cut entries form one tight list; every other block keeps a
+    # blank line before it.
+    out = ""
+    for index, (cut, text) in enumerate(chunks):
+        if index:
+            out += "\n" if cut and chunks[index - 1][0] else "\n\n"
+        out += text
+    return out
 
 
 def merge_subsections(body: str) -> str:

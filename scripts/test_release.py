@@ -1384,6 +1384,16 @@ class PublicationTests(unittest.TestCase):
             "- an unlabelled bullet\n\n### Added\n\n- **Added thing.**",
         )
 
+    def test_entry_labels_end_entries_where_entry_extent_does(self) -> None:
+        self.assertEqual(
+            release.entry_labels(
+                "### Fixed\n\n- **Lazy.** first line\ncontinued lazily\n> a quote right after\n"
+                "- **Next.** body\n  indented\n\n  second paragraph\n- plain bullet\n### Added\n- **Last.** x"
+            ),
+            "### Fixed\n\n- **Lazy.**\n\n> a quote right after\n\n- **Next.**\n\n- plain bullet"
+            "\n\n### Added\n\n- **Last.**",
+        )
+
     def test_release_notes_within_the_host_limit_stay_whole(self) -> None:
         notes = self.notes_for("### Fixed\n\n- **Small fix.** " + "detail " * 100 + "\n")
         self.assertIn("detail detail", notes)
@@ -1667,6 +1677,17 @@ class EntryEditTests(unittest.TestCase):
                 self.repo.args(base=base, head=head, target_ref=base, body_file=body_path, body_env=None)
             )
         return json.loads(output.getvalue())
+
+    def test_a_pull_request_whose_notes_github_would_refuse_fails(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "Fix a crash")])
+        base = self.repo.commit("fix: a crash")
+        self.repo.pending(
+            "2.0.1",
+            [("patch", "Fix a crash")] + [("patch", f"Fix {index} {'word ' * 200}") for index in range(130)],
+        )
+        head = self.repo.commit("fix: many fixes")
+        with self.assertRaisesRegex(release.ReleaseError, "even with each entry cut to its label"):
+            self.check(base, head, self.repo.body("patch"))
 
     def test_a_body_edit_with_code_is_assessed_at_the_entry_impact(self) -> None:
         self.repo.pending("2.1.0", [("minor", "Add a flag", "to the command")])
@@ -2265,6 +2286,12 @@ class PreflightTests(unittest.TestCase):
             release.check_state(self.repo.args(ref="HEAD", structural=True))
         result = json.loads(output.getvalue())
         self.assertEqual((result["status"], result["host"]), ("ok", "not checked against the host"))
+
+    def test_check_state_refuses_a_section_the_plan_cannot_carry(self) -> None:
+        self.repo.pending("2.0.1", [("patch", f"Fix {index}", "detail " * 500) for index in range(130)])
+        self.repo.commit("fix: a very long section")
+        with self.assertRaisesRegex(release.ReleaseError, "carries it twice in one job output"):
+            release.check_state(self.repo.args(ref="HEAD", structural=True))
 
     def test_check_state_refuses_pending_notes_github_would_refuse(self) -> None:
         self.repo.pending("2.0.1", [("patch", f"Fix {index} {'word ' * 200}") for index in range(130)])
