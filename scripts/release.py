@@ -48,7 +48,10 @@ LONGEST_REPOSITORY = "o" * 39 + "/" + "r" * 100
 # GitHub caps one job's outputs at 1 MB, counted in UTF-16. cargo-dist's plan
 # and host jobs each output the whole manifest, which carries the pending
 # section twice as JSON strings (the changelog and the GitHub body); the
-# reserve covers the rest of it, about 13,000 UTF-16 bytes for 3.0.0.
+# reserve covers the rest of it, about 13,000 UTF-16 bytes for 3.0.0. These
+# describe the plan of the cargo-dist named below; a test fails when the
+# pinned cargo-dist changes, so the layout is measured again.
+PLAN_MEASURED_DIST = "0.32.0"
 GITHUB_JOB_OUTPUT_LIMIT = 1_000_000
 PLAN_SECTION_COPIES = 2
 PLAN_RESERVE = 100_000

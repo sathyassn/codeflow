@@ -1422,6 +1422,13 @@ class PublicationTests(unittest.TestCase):
         planned = release.plan_output_size(release.section_bytes(text, "3.0.0"))
         self.assertGreaterEqual(planned, 714_658)
         self.assertLessEqual(planned, release.GITHUB_JOB_OUTPUT_LIMIT)
+        dist = tomllib.loads((REPOSITORY / "dist-workspace.toml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            dist["dist"]["cargo-dist-version"],
+            release.PLAN_MEASURED_DIST,
+            "cargo-dist changed: measure a dry-run plan's job output again (copies of the "
+            "section and the reserve), then update PLAN_MEASURED_DIST",
+        )
         # The legacy group opens with entries under no heading of its own; they
         # stay under the Changed heading placed before the group.
         kind = next(
