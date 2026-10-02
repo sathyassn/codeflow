@@ -1,0 +1,11 @@
+id = "TSK-202"
+uid = "66e93a47-8b08-429c-bdf7-47e7b50da825"
+kind = "TSK"
+title = "Pass only the plan fields the release guards read"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-02T11:23:09Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
