@@ -88,9 +88,19 @@ mod fixture_data;
 
 const CATALOG: &str =
     "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json";
-/// The operator's seat designations of the managed roster: EPC-018 Q2 and
-/// the 2026-10-02 roster refresh (ADR-0069 Note, TSK-204).
-const OPERATOR_DESIGNATIONS: [&str; 2] = ["2026-09-23", "2026-10-02"];
+/// The operator's seat designation of the managed roster (EPC-018 Q2).
+const OPERATOR_DESIGNATION: &str = "2026-09-23";
+/// Versions the operator designated on a later decision, with its date: the
+/// 2026-10-02 roster refresh (ADR-0069 Note, TSK-204). Every other
+/// designated version carries `OPERATOR_DESIGNATION`.
+const LATER_DESIGNATIONS: [(&str, &str); 1] = [("gpt-6.1-sol", "2026-10-02")];
+
+fn designation_date(version: &str) -> &'static str {
+    LATER_DESIGNATIONS
+        .iter()
+        .find(|(id, _)| *id == version)
+        .map_or(OPERATOR_DESIGNATION, |(_, date)| date)
+}
 const AUTHORS: [Option<&str>; 4] = [None, Some("claude"), Some("codex"), Some("grok")];
 
 fn managed_catalog() -> Catalog {
@@ -274,13 +284,15 @@ fn designations_match_seat_lines(catalog: &Catalog) -> Result<(), String> {
                 .iter()
                 .map(|d| d.seat.as_str())
                 .collect();
+            let date = designation_date(&version.id);
             if actual != expected
-                || version.designations.iter().any(|d| {
-                    !OPERATOR_DESIGNATIONS.contains(&d.date.as_str()) || d.record.trim().is_empty()
-                })
+                || version
+                    .designations
+                    .iter()
+                    .any(|d| d.date != date || d.record.trim().is_empty())
             {
                 return Err(format!(
-                    "{} designated {actual:?}, expected {expected:?} dated one of {OPERATOR_DESIGNATIONS:?}",
+                    "{} designated {actual:?}, expected {expected:?} dated {date}",
                     version.id
                 ));
             }
@@ -319,7 +331,7 @@ fn managed_catalog_passes_every_structural_check() {
 #[test]
 fn each_structural_check_fails_on_a_catalog_that_breaks_it() {
     type Break = fn(&mut Catalog);
-    let breaks: [(&str, Break); 9] = [
+    let breaks: [(&str, Break); 10] = [
         ("seat lines", |c| {
             c.lines[1].versions[0].designations.clear();
         }),
@@ -363,6 +375,10 @@ fn each_structural_check_fails_on_a_catalog_that_breaks_it() {
         ("designations", |c| {
             // A designation dated outside the operator's recorded decisions.
             c.lines[2].versions[0].designations[0].date = "2026-09-30".into();
+        }),
+        ("designations", |c| {
+            // A real decision date on a version that decision did not cover.
+            c.lines[2].versions[0].designations[0].date = "2026-10-02".into();
         }),
         ("designations", |c| {
             let mut retired = c.lines[2].versions[0].clone();
@@ -2057,8 +2073,8 @@ fn the_spec_amendment_pin_fails_when_the_rule_is_lost() {
 }
 
 /// TSK-151: the per-stage model example names the placeholder the catalog
-/// resolves, never a model. The catalog scan bars catalog selectors; this pin
-/// also bars the stale `sonnet`, which is not in the catalog.
+/// resolves, never a model. `sonnet` is now a catalog alias, so the catalog
+/// scan bars it too; this pin keeps the example model-free whatever the roster.
 #[test]
 fn pipeline_example_names_the_resolved_selector_not_a_model() {
     for path in [
