@@ -17,6 +17,21 @@ erratum below, never an edit of the section.
   the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
 
+## [3.1.0]
+
+### Changed
+
+<!-- codeflow:release-impact minor -->
+- **The managed model roster follows the operator's October lineup.** After
+  `codeflow update`, the catalog has a `sonnet` worker line (Claude Sonnet
+  5.5, `claude-sonnet-5-5`, medium and high effort). It is the first Claude
+  choice for bounded execution, evidence collection and the Claude fallback
+  in engineering implementation, ahead of Opus, and holds no seat, design,
+  review or orchestration duty. The Sol line adopts GPT-6.1 Sol
+  (`gpt-6.1-sol`), designated for `codex-primary` on 2026-10-02, and GPT-6
+  Sol becomes fallback-only. No new version has a qualification record yet,
+  so `codeflow doctor --check model-bindings` also warns for GPT-6.1 Sol.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
