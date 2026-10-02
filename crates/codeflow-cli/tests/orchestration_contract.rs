@@ -10,6 +10,8 @@ use codeflow_core::model_catalog::{
     Adoption, Alternative, Catalog, Effort, EligibilityRequest, Lifecycle, ParticipantLabel,
     Resolution, ResolveRequest, Target,
 };
+use codeflow_core::validate::parse_frontmatter;
+use codeflow_core::workgraph::record_text::has_section;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -88,8 +90,121 @@ mod fixture_data;
 
 const CATALOG: &str =
     "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json";
-/// The operator's seat designation of the managed roster (EPC-018 Q2).
-const OPERATOR_DESIGNATION: &str = "2026-09-23";
+/// The roster decision record. Its acceptance date and the date of each of
+/// its dated Notes are the operator decisions a designation may carry.
+const ROSTER_ADR: &str = "ADR-0069-";
+
+/// `YYYY-MM-DD`, the only date shape the decision records use.
+fn is_date(text: &str) -> bool {
+    text.len() == 10
+        && text.char_indices().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                c == '-'
+            } else {
+                c.is_ascii_digit()
+            }
+        })
+}
+
+/// The accepted date in the roster ADR's front matter plus every
+/// `## Note (YYYY-MM-DD)` heading in it, read from the record.
+fn roster_decision_dates() -> BTreeSet<String> {
+    let decisions = repo_root().join("docs/decisions");
+    let matches: Vec<_> = std::fs::read_dir(&decisions)
+        .expect("decision records")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "md")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(ROSTER_ADR))
+        })
+        .collect();
+    let [path] = matches.as_slice() else {
+        panic!("expected exactly one {ROSTER_ADR}*.md, found {matches:?}");
+    };
+    let text = std::fs::read_to_string(path).expect("read roster ADR");
+    decision_dates(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// The top-level `status` must be `accepted`; the decisions are the
+/// top-level `date` and each visible level-two `## Note (YYYY-MM-DD)`
+/// heading, read with the validator's own front matter parser and record
+/// scanner, so text in a fence or an HTML comment counts for nothing.
+fn decision_dates(text: &str) -> Result<BTreeSet<String>, String> {
+    let (front, body) = parse_frontmatter(text.as_bytes()).map_err(|error| error.to_string())?;
+    let field = |key: &str| {
+        front
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+    };
+    if field("status") != Some("accepted") {
+        return Err(format!("status {:?} is not accepted", front.get("status")));
+    }
+    let accepted = field("date")
+        .filter(|date| is_date(date))
+        .ok_or("no YYYY-MM-DD acceptance date")?;
+    let body = String::from_utf8_lossy(&body);
+    let mut dates = BTreeSet::from([accepted.to_string()]);
+    dates.extend(
+        body.lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("## Note (")?
+                    .strip_suffix(')')
+                    .filter(|date| is_date(date))
+                    .map(str::to_string)
+            })
+            .filter(|date| has_section(&body, &format!("## Note ({date})"))),
+    );
+    Ok(dates)
+}
+
+/// The decision dates come from the ADR's top-level front matter and its
+/// visible `## Note (date)` headings only.
+#[test]
+fn roster_decision_dates_read_top_level_status_and_visible_notes() {
+    let adr = |front: &str, body: &str| format!("---\n{front}\n---\n\n# Roster\n\n{body}");
+    let note = "## Note (2026-11-02)\n\nA later decision.\n";
+    let both = BTreeSet::from(["2026-11-01".to_string(), "2026-11-02".to_string()]);
+    let mut failures = Vec::new();
+    // A proposed record whose nested field says accepted is not accepted.
+    let nested = "id: ADR-0001\nstatus: proposed\nreview:\n  status: accepted\ndate: 2026-11-01";
+    if decision_dates(&adr(nested, note)).is_ok() {
+        failures.push("a nested status: accepted passed a proposed record".to_string());
+    }
+    // Quoted and commented forms of the top-level status are accepted.
+    for status in ["status: \"accepted\"", "status: accepted # reviewed"] {
+        match decision_dates(&adr(
+            &format!("id: ADR-0001\n{status}\ndate: 2026-11-01"),
+            note,
+        )) {
+            Ok(dates) if dates == both => {}
+            other => failures.push(format!("{status}: {other:?}")),
+        }
+    }
+    // An example heading in a fence or an HTML comment authorizes no date.
+    for example in [
+        "```markdown\n## Note (2026-11-03)\n```\n",
+        "~~~\n## Note (2026-11-03)\n~~~\n",
+        "<!--\n## Note (2026-11-03)\n-->\n",
+    ] {
+        let front = "id: ADR-0001\nstatus: accepted\ndate: 2026-11-01";
+        match decision_dates(&adr(front, &format!("{note}\n{example}"))) {
+            Ok(dates) if dates == both => {}
+            other => failures.push(format!("example {example:?}: {other:?}")),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "decision dates misread:\n{}",
+        failures.join("\n")
+    );
+}
+
 const AUTHORS: [Option<&str>; 4] = [None, Some("claude"), Some("codex"), Some("grok")];
 
 fn managed_catalog() -> Catalog {
@@ -102,6 +217,22 @@ fn fictional_catalog() -> Catalog {
     // TSK-079's fixture keeps a design-implementation duty that is open until
     // scoped evidence exists; the managed catalog defines no such duty.
     catalog.duties.remove("design-implementation");
+    // Date its designations on a decision the roster ADR records, never on
+    // the fixture's own literal, and cite that date in each record as the
+    // managed catalog's records do.
+    let decision = roster_decision_dates()
+        .into_iter()
+        .next()
+        .expect("a roster decision date");
+    for designation in catalog
+        .lines
+        .iter_mut()
+        .flat_map(|line| &mut line.versions)
+        .flat_map(|version| &mut version.designations)
+    {
+        designation.date.clone_from(&decision);
+        designation.record = format!("{}, {}", designation.record, designation.date);
+    }
     catalog
 }
 
@@ -253,8 +384,11 @@ fn design_owner_is_claude(catalog: &Catalog) -> Result<(), String> {
 }
 
 /// Only non-retired versions in seat-listed lines carry the operator's
-/// designation; qualification starts empty everywhere.
+/// designation, dated on a decision the roster ADR records and citing that
+/// date in its record; qualification starts empty everywhere. Which versions
+/// a given decision covered is the ADR's table, checked in review.
 fn designations_match_seat_lines(catalog: &Catalog) -> Result<(), String> {
+    let decisions = roster_decision_dates();
     for line in &catalog.lines {
         let seats: Vec<_> = catalog
             .seats
@@ -273,16 +407,25 @@ fn designations_match_seat_lines(catalog: &Catalog) -> Result<(), String> {
                 .iter()
                 .map(|d| d.seat.as_str())
                 .collect();
-            if actual != expected
-                || version
-                    .designations
-                    .iter()
-                    .any(|d| d.date != OPERATOR_DESIGNATION || d.record.trim().is_empty())
-            {
+            if actual != expected {
                 return Err(format!(
-                    "{} designated {actual:?}, expected {expected:?} dated {OPERATOR_DESIGNATION}",
+                    "{} designated {actual:?}, expected {expected:?}",
                     version.id
                 ));
+            }
+            for designation in &version.designations {
+                if !decisions.contains(&designation.date) {
+                    return Err(format!(
+                        "{} designated on {}, not a roster decision date {decisions:?}",
+                        version.id, designation.date
+                    ));
+                }
+                if !designation.record.contains(&designation.date) {
+                    return Err(format!(
+                        "{} designation record {:?} does not cite its date {}",
+                        version.id, designation.record, designation.date
+                    ));
+                }
             }
             if !version.qualification.is_empty() {
                 return Err(format!("{} carries qualification evidence", version.id));
@@ -319,7 +462,7 @@ fn managed_catalog_passes_every_structural_check() {
 #[test]
 fn each_structural_check_fails_on_a_catalog_that_breaks_it() {
     type Break = fn(&mut Catalog);
-    let breaks: [(&str, Break); 8] = [
+    let breaks: [(&str, Break); 10] = [
         ("seat lines", |c| {
             c.lines[1].versions[0].designations.clear();
         }),
@@ -359,6 +502,16 @@ fn each_structural_check_fails_on_a_catalog_that_breaks_it() {
                 .find(|l| l.id == "quartz-worker")
                 .unwrap();
             line.versions[0].designations = designations;
+        }),
+        ("designations", |c| {
+            // A date no roster decision records, cited by its own record.
+            let designation = &mut c.lines[2].versions[0].designations[0];
+            designation.date = "2026-09-30".into();
+            designation.record = "fixture decision, 2026-09-30".into();
+        }),
+        ("designations", |c| {
+            // A recorded decision date whose record cites another date.
+            c.lines[2].versions[0].designations[0].record = "fixture decision, 2026-10-01".into();
         }),
         ("designations", |c| {
             let mut retired = c.lines[2].versions[0].clone();
@@ -2053,8 +2206,8 @@ fn the_spec_amendment_pin_fails_when_the_rule_is_lost() {
 }
 
 /// TSK-151: the per-stage model example names the placeholder the catalog
-/// resolves, never a model. The catalog scan bars catalog selectors; this pin
-/// also bars the stale `sonnet`, which is not in the catalog.
+/// resolves, never a model. `sonnet` is now a catalog alias, so the catalog
+/// scan bars it too; this pin keeps the example model-free whatever the roster.
 #[test]
 fn pipeline_example_names_the_resolved_selector_not_a_model() {
     for path in [

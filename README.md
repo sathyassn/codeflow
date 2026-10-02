@@ -42,10 +42,10 @@ Or build from a checkout, with a Rust toolchain:
 cargo install --path crates/codeflow-cli
 ```
 
-Native Windows is not supported in 3.0.0: there is no Windows archive,
-PowerShell installer or `codeflow.exe`. Native Windows support is planned for
-3.0.1. On Windows, use WSL2, which runs the Linux installer; WSL2 has not been
-separately qualified for 3.0.0. See
+Native Windows is not supported yet: there is no Windows archive, PowerShell
+installer or `codeflow.exe`. Native Windows support is planned for a later
+release (TSK-197). On Windows, use WSL2, which runs the Linux installer; WSL2
+has not been separately qualified. See
 [platform assurance](docs/harness-posture.md#platform-assurance) in the harness
 posture guide before high-blast-radius work.
 

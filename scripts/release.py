@@ -1362,6 +1362,16 @@ def validate_metadata_paths(root: Path) -> None:
             fail(f"release metadata path escapes repository: {relative}")
 
 
+def updater_reports_version(output: str, version: str) -> bool:
+    """The first line of `codeflow --version` names the program and its
+    version, then optional provenance (`source=`, `dirty=`, `inputs=`).
+    Only the program and version are compared; a missing line, another
+    program or another version fails."""
+    lines = output.splitlines()
+    tokens = lines[0].split() if lines else []
+    return tokens[:2] == ["codeflow", version]
+
+
 def sync(args: argparse.Namespace) -> None:
     # Resolve and validate every metadata input before the first write.
     config, state = load_config(args.config), get_host_state(args)
@@ -1389,7 +1399,7 @@ def sync(args: argparse.Namespace) -> None:
         run([args.cargo, "check", "--workspace"], cwd=args.root)
         run([args.cargo, "build", "--locked", "-p", "codeflow-cli"], cwd=args.root)
         binary = args.root / "target/debug" / ("codeflow.exe" if os.name == "nt" else "codeflow")
-        if run([str(binary), "--version"], cwd=args.root).stdout.strip() != f"codeflow {version}":
+        if not updater_reports_version(run([str(binary), "--version"], cwd=args.root).stdout, version):
             fail("rebuilt updater version disagrees with pending target")
         run([str(binary), "update"], cwd=args.root)
         stamped = validate_version_stamps(

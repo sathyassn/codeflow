@@ -55,7 +55,7 @@ reinterpret an earlier decision.
 - cargo-dist is the only tag, release and artifact publisher. For 3.0.0 it
   builds three target binaries, macOS arm64 and x86-64 and Linux x86-64, plus
   the shell installer. Native Windows and the PowerShell installer return with
-  TSK-197, planned for 3.0.1. Its generated workflow runs only by explicit
+  TSK-197, planned for a later release. Its generated workflow runs only by explicit
   human dispatch on `main`.
 - The generated workflow uses the repository's scoped `GITHUB_TOKEN` and
   provisions no personal access token (PAT) or publication credential. Hosted settings can still
