@@ -318,16 +318,76 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
+    VERDICT_IF = ("    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), "
+                  "github.event.pull_request.base.ref) || github.event_name == 'push')\n    name: codeflow gates\n")
+    EXACT = "must be exactly the verdict job"
+
     def test_the_verdict_must_exist_need_the_parts_and_never_be_skipped(self):
+        self.assertIn(self.VERDICT_IF, WORKFLOW)
         self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
                             "exactly one job must be named")
-        self.assert_problem(WORKFLOW.replace("    needs: gates\n", "    needs: windows\n"),
-                            "must need the gates job")
-        self.assert_problem(WORKFLOW.replace("    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || github.event_name == 'push')\n    name: codeflow gates\n",
+        self.assert_problem(WORKFLOW.replace("    needs: gates\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
                                              "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
-                            "always()")
-        self.assert_problem(WORKFLOW.replace('if [ "$PARTS" != success ]; then', 'if false; then'),
-                            "needs.gates.result is success")
+                            self.EXACT)
+        self.assert_problem(WORKFLOW.replace('if [ "$PARTS" != success ]; then', 'if false; then'), self.EXACT)
+
+    def test_a_verdict_that_could_pass_a_failed_part_is_refused(self):
+        """The four forms the TSK-203 review showed a substring check accepting."""
+        controls = {
+            "a condition that never runs": WORKFLOW.replace(
+                "    if: always() && (github.event_name", "    if: always() && false && (github.event_name"),
+            "a forgiven exit": WORKFLOW.replace(
+                "            exit 1\n          fi\n          echo \"every part",
+                "            exit 0\n          fi\n          echo \"every part"),
+            "continue-on-error on the verdict": WORKFLOW.replace(
+                "    needs: gates\n", "    needs: gates\n    continue-on-error: true\n"),
+        }
+        for label, workflow in controls.items():
+            with self.subTest(label):
+                self.assert_problem(workflow, self.EXACT)
+
+    def test_a_skippable_or_forgiven_gate_step_is_refused(self):
+        step = "      - name: codeflow test --mode full --strict\n"
+        self.assertIn(step, WORKFLOW)
+        self.assert_problem(WORKFLOW.replace(step, step + "        if: false\n"),
+                            "gate step must not carry its own `if:`")
+        self.assert_problem(WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
+                                             "    runs-on: ubuntu-24.04\n    continue-on-error: true\n    strategy:\n"),
+                            "must not use `continue-on-error`")
+        self.assert_problem(WORKFLOW.replace(step, step + "        continue-on-error: true\n"),
+                            "must not use `continue-on-error`")
+
+    def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
+        workflow = WORKFLOW.replace("    needs: gates\n", "    needs: gates\n\n    # the parts\n")
+        self.assertNotEqual(workflow, WORKFLOW)
+        self.assertEqual(self.problems(workflow), [])
+
+
+class SharedInstallControls(unittest.TestCase):
+    """TSK-203 review: one target installs the portal workspace, and every
+    other target on its Node pin waits for it, so no two `npm ci` runs overlap."""
+
+    @staticmethod
+    def target(cfg: dict, name: str) -> dict:
+        return next(t for t in cfg["targets"] if t["name"] == name)
+
+    def test_the_committed_config_installs_each_workspace_once(self):
+        self.assertEqual(parity.shared_install_problems(CONFIG), [])
+
+    def test_a_second_installer_is_refused(self):
+        def reinstall(c):
+            full = self.target(c, "visual-eval-controls")["modes"]["full"]
+            full["command"] = full["command"].replace('"node --test', '"npm run deps:install --prefix docs-portal && node --test')
+        problems = parity.shared_install_problems(mutated(reinstall))
+        self.assertTrue(any("more than one target installs docs-portal" in p for p in problems), problems)
+
+    def test_a_portal_target_that_does_not_wait_for_the_install_is_refused(self):
+        def unordered(c):
+            self.target(c, "docs-portal")["requires"] = ["codeflow-bin"]
+        problems = parity.shared_install_problems(mutated(unordered))
+        self.assertTrue(any("'docs-portal'" in p and "does not require 'docs-portal-deps'" in p for p in problems),
+                        problems)
 
 
 if __name__ == "__main__":

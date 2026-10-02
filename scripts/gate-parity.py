@@ -153,6 +153,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
     twice = sorted({n for n in named if named.count(n) > 1})
     if twice:
         problems.append(f"more than one gate part names: {twice}")
+    problems.extend(gate_step_problems(gate))
     verdicts = [
         (name, text) for name, text in jobs.items()
         if re.search(rf"^ {{4}}name:\s*{re.escape(VERDICT)}\s*$", text, re.M)
@@ -161,13 +162,91 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
         problems.append(f"exactly one job must be named `{VERDICT}`; found {[n for n, _ in verdicts]}")
     else:
         name, text = verdicts[0]
-        if not re.search(r"^ {4}needs:\s*\[?\s*gates\s*\]?\s*$", text, re.M):
-            problems.append(f"`{VERDICT}` ({name}) must need the gates job")
-        if not re.search(r"^ {4}if:\s*always\(\) && ", text, re.M):
-            problems.append(f"`{VERDICT}` ({name}) must run `if: always() && ...`, "
-                            "or a failed part would skip it and a skipped check reads as passed")
-        if "needs.gates.result" not in text or "!= success" not in text:
-            problems.append(f"`{VERDICT}` ({name}) must fail unless needs.gates.result is success")
+        condition = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
+        expected = verdict_job(condition.group(1) if condition else "")
+        if norm_job(text) != norm_job(expected):
+            problems.append(
+                f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
+                "`if: always() && (<the gates job's condition>)`, need the gates job, "
+                "and fail unless needs.gates.result is success; any other form could "
+                "let a skipped, failed or cancelled part read as passed. Expected:\n"
+                + expected)
+    return problems
+
+
+# The one accepted form of the verdict job. A substring check let a false
+# condition, a forgiven exit or `continue-on-error` through (TSK-203 review),
+# so the job must match this text exactly, apart from blank lines, comments
+# and trailing spaces; `{condition}` is the gates job's own `if:` condition.
+VERDICT_JOB = """\
+    if: always() && ({condition})
+    name: codeflow gates
+    needs: gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every part of the full gate passed
+        env:
+          PARTS: ${{{{ needs.gates.result }}}}
+        run: |
+          if [ "$PARTS" != success ]; then
+            echo "::error::the full gate's parts concluded ${{PARTS}}; see the codeflow gates (part) jobs"
+            exit 1
+          fi
+          echo "every part of the full gate passed"
+"""
+
+
+def verdict_job(condition: str) -> str:
+    return VERDICT_JOB.format(condition=condition)
+
+
+def norm_job(text: str) -> list[str]:
+    """A job's lines without blank lines, comment lines or trailing spaces."""
+    return [line.rstrip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+
+
+def gate_step_problems(gate: str) -> list[str]:
+    """The parts job and its gate step must not be skippable or forgiven."""
+    problems = []
+    if re.search(r"^\s*continue-on-error:", gate, re.M):
+        problems.append("the gates job must not use `continue-on-error`; a forgiven part reads as passed")
+    for step in re.split(r"\n(?= {6}- )", gate):
+        if PART_RUN not in norm(step):
+            continue
+        if re.search(r"^ {8}if:", step, re.M):
+            problems.append("the gate step must not carry its own `if:`; a skipped step reads as passed")
+    return problems
+
+
+# TSK-203: `npm run deps:install` runs `npm ci`, which deletes and rewrites
+# the workspace's node_modules. Two targets installing the same workspace can
+# overlap under max_parallel and delete each other's packages, so one target
+# installs each workspace and every other target on that workspace's Node pin
+# requires it.
+INSTALL = re.compile(r"npm run deps:install --prefix (\S+?)(?:\s|\"|$)")
+
+
+def shared_install_problems(cfg: dict) -> list[str]:
+    targets = [t for t in cfg.get("targets", []) if applicable(t)]
+    commands = {t["name"]: norm(t.get("modes", {}).get("full", {}).get("command", "")) for t in targets}
+    installers: dict[str, list[str]] = {}
+    for name, cmd in commands.items():
+        for prefix in INSTALL.findall(cmd):
+            installers.setdefault(prefix, []).append(name)
+    problems = []
+    for prefix, names in sorted(installers.items()):
+        if len(names) != 1:
+            problems.append(f"more than one target installs {prefix} dependencies: {sorted(names)}; "
+                            "concurrent installs delete each other's packages, so keep one installer")
+            continue
+        installer = names[0]
+        for name, cmd in sorted(commands.items()):
+            if name == installer or node_pin(cmd) != f"{prefix}/.node-version":
+                continue
+            if installer not in requires_closure(cfg, {name}) - {name}:
+                problems.append(f"target '{name}' runs on {prefix}'s Node pin but does not require "
+                                f"'{installer}', so it can start before or during the install")
     return problems
 
 
@@ -341,7 +420,7 @@ def main() -> int:
     cfg = json.loads(CONFIG.read_text())
     workflow = WORKFLOW.read_text()
     pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
-            + gate_part_problems(cfg, workflow))
+            + gate_part_problems(cfg, workflow) + shared_install_problems(cfg))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
     status = rust_parity()

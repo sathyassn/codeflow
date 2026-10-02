@@ -45,9 +45,10 @@ jobs:
           - part: coverage
             only: rust-coverage,journey-gate
           # Exclusive: the benchmark times reads, so it runs alone.
-          # visual-eval-controls and docs-portal both reinstall
-          # docs-portal/node_modules with `npm ci`; on one runner they can
-          # overlap and delete each other's packages, so they run apart.
+          # visual-eval-controls sits here to balance the parts. Both portal
+          # targets require docs-portal-deps, the one target that runs
+          # `npm ci` for docs-portal, so a part installs it once (gate-parity
+          # refuses a second installer).
           - part: benchmark
             only: read-benchmark,visual-eval-controls
           - part: present
