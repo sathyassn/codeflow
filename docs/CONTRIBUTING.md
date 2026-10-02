@@ -25,9 +25,9 @@ PATH="$PWD/target/release:$PATH" codeflow test --mode full --strict
 ```
 
 The gate requires `cargo-llvm-cov` (`cargo install cargo-llvm-cov --locked`).
-The 3.0.0 release matrix targets native macOS and Linux binaries; WSL2 uses
-the Linux artifact. Native Windows returns in 3.0.1 (TSK-197); until then the
-Windows CI job is advisory and does not gate a release. Git for Windows
+The release matrix targets native macOS and Linux binaries; WSL2 uses the
+Linux artifact. Native Windows returns in a later release (TSK-197); until
+then the Windows CI job is advisory and does not gate a release. Git for Windows
 supplies the shell environment used by the hook shims on native Windows.
 Cross-target compilation is useful early evidence,
 but the release checklist still requires native platform and installer canaries.
