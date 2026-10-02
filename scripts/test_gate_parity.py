@@ -358,6 +358,51 @@ class GatePartControls(unittest.TestCase):
         self.assert_problem(WORKFLOW.replace(step, step + "        continue-on-error: true\n"),
                             "must not use `continue-on-error`")
 
+    def test_the_gate_step_is_checked_whatever_the_key_order(self):
+        """TSK-203 review round two: a key written first after `- ` slipped past."""
+        step = "      - name: codeflow test --mode full --strict\n"
+        controls = {
+            "if first": (WORKFLOW.replace(step, "      - if: false\n        name: codeflow test --mode full --strict\n"),
+                         "must not carry its own `if:`"),
+            "continue-on-error first": (WORKFLOW.replace(step, "      - continue-on-error: true\n"
+                                                              "        name: codeflow test --mode full --strict\n"),
+                                        "must not use `continue-on-error`"),
+            "working directory": (WORKFLOW.replace(step, step + "        working-directory: docs\n"),
+                                  "must not set `working-directory`"),
+            "no pinned shell": (WORKFLOW.replace(step + "        shell: bash\n", step),
+                                "must pin `shell: bash`"),
+        }
+        for label, (workflow, needle) in controls.items():
+            with self.subTest(label):
+                self.assert_problem(workflow, needle)
+
+    def test_nothing_in_the_workflow_may_reshape_the_gate_or_verdict(self):
+        """TSK-203 review round two: `defaults.run.shell: bash -n {0}` made the
+        verdict exit 0 on a failed part without changing its text."""
+        top = "\njobs:\n"
+        self.assertIn(top, WORKFLOW)
+        controls = {
+            "workflow defaults": (WORKFLOW.replace(top, "\ndefaults:\n  run:\n    shell: bash -n {0}\n" + top),
+                                  "must not set `defaults`"),
+            "gates job defaults": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
+                                                    "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n"
+                                                    "        shell: bash -n {0}\n    strategy:\n"),
+                                   "must not set `defaults`"),
+            "BASH_ENV": (WORKFLOW.replace(top, "\nenv:\n  BASH_ENV: ./skip.sh\n" + top), "BASH_ENV"),
+            "merge key": (WORKFLOW.replace("        shell: bash\n        env:\n          LLVM",
+                                           "        <<: *skipped\n        shell: bash\n        env:\n          LLVM"),
+                          "anchors, aliases, merge keys or flow mappings"),
+            "flow mapping": (WORKFLOW.replace("        env:\n          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n",
+                                              "        env: {LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw}\n"),
+                             "anchors, aliases, merge keys or flow mappings"),
+            "verdict without its shell": (WORKFLOW.replace(
+                "      - name: Every part of the full gate passed\n        shell: bash\n",
+                "      - name: Every part of the full gate passed\n"), self.EXACT),
+        }
+        for label, (workflow, needle) in controls.items():
+            with self.subTest(label):
+                self.assert_problem(workflow, needle)
+
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
         workflow = WORKFLOW.replace("    needs: gates\n", "    needs: gates\n\n    # the parts\n")
         self.assertNotEqual(workflow, WORKFLOW)

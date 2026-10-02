@@ -153,7 +153,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
     twice = sorted({n for n in named if named.count(n) > 1})
     if twice:
         problems.append(f"more than one gate part names: {twice}")
-    problems.extend(gate_step_problems(gate))
+    problems.extend(gate_step_problems(gate, workflow))
     verdicts = [
         (name, text) for name, text in jobs.items()
         if re.search(rf"^ {{4}}name:\s*{re.escape(VERDICT)}\s*$", text, re.M)
@@ -185,6 +185,7 @@ VERDICT_JOB = """\
     runs-on: ubuntu-24.04
     steps:
       - name: Every part of the full gate passed
+        shell: bash
         env:
           PARTS: ${{{{ needs.gates.result }}}}
         run: |
@@ -206,16 +207,40 @@ def norm_job(text: str) -> list[str]:
             if line.strip() and not line.lstrip().startswith("#")]
 
 
-def gate_step_problems(gate: str) -> list[str]:
-    """The parts job and its gate step must not be skippable or forgiven."""
+# A step key is the first key after `- ` or a key at the step's indent, so a
+# check holds whatever order the keys are written in.
+STEP_KEY = re.compile(r"^(?: {6}- | {8})([A-Za-z_-]+):\s*(.*?)\s*$", re.M)
+EXPRESSION = re.compile(r"\$\{\{.*?\}\}")
+
+
+def gate_step_problems(gate: str, workflow: str = "") -> list[str]:
+    """The parts job and its gate step must not be skippable, forgiven or
+    run by an inherited shell, and nothing in the workflow may reshape them:
+    no `defaults`, no `BASH_ENV`, no YAML merge keys, aliases or flow
+    mappings, which a text check cannot follow."""
     problems = []
-    if re.search(r"^\s*continue-on-error:", gate, re.M):
+    if re.search(r"^\s*(?:- )?continue-on-error:", gate, re.M):
         problems.append("the gates job must not use `continue-on-error`; a forgiven part reads as passed")
-    for step in re.split(r"\n(?= {6}- )", gate):
-        if PART_RUN not in norm(step):
-            continue
-        if re.search(r"^ {8}if:", step, re.M):
+    if re.search(r"^defaults:|^ {4}defaults:", workflow + "\n" + gate, re.M):
+        problems.append("the workflow and the gates job must not set `defaults`; an inherited shell or "
+                        "working directory changes what the gate and its verdict run")
+    if "BASH_ENV" in workflow or "BASH_ENV" in gate:
+        problems.append("the workflow must not set `BASH_ENV`; it runs code before every bash step")
+    plain = EXPRESSION.sub("", gate)
+    if re.search(r"<<:|:\s*[&*][A-Za-z]|^\s*-\s*[&*][A-Za-z]|(?::|^\s*-)\s*\{", plain, re.M):
+        problems.append("the gates job must not use YAML anchors, aliases, merge keys or flow mappings; "
+                        "write its keys out so they can be checked")
+    steps = [s for s in re.split(r"\n(?= {6}- )", gate) if PART_RUN in norm(s)]
+    if len(steps) != 1:
+        problems.append(f"exactly one gates step must run `{PART_RUN}`; found {len(steps)}")
+    for step in steps:
+        keys = {key: value for key, value in STEP_KEY.findall(step)}
+        if "if" in keys:
             problems.append("the gate step must not carry its own `if:`; a skipped step reads as passed")
+        if keys.get("shell") != "bash":
+            problems.append("the gate step must pin `shell: bash`, so no inherited default decides how it runs")
+        if "working-directory" in keys:
+            problems.append("the gate step must not set `working-directory`; the gate runs at the repository root")
     return problems
 
 

@@ -130,6 +130,7 @@ jobs:
       # runner's free disk; a merge pool of four per binary keeps under 100 MB
       # with the same counters. cargo-llvm-cov reads this name.
       - name: codeflow test --mode full --strict
+        shell: bash
         env:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
         run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
@@ -143,6 +144,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Every part of the full gate passed
+        shell: bash
         env:
           PARTS: ${{ needs.gates.result }}
         run: |
