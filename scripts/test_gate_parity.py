@@ -347,61 +347,92 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(label):
                 self.assert_problem(workflow, self.EXACT)
 
-    def test_a_skippable_or_forgiven_gate_step_is_refused(self):
-        step = "      - name: codeflow test --mode full --strict\n"
-        self.assertIn(step, WORKFLOW)
-        self.assert_problem(WORKFLOW.replace(step, step + "        if: false\n"),
-                            "gate step must not carry its own `if:`")
-        self.assert_problem(WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
-                                             "    runs-on: ubuntu-24.04\n    continue-on-error: true\n    strategy:\n"),
-                            "must not use `continue-on-error`")
-        self.assert_problem(WORKFLOW.replace(step, step + "        continue-on-error: true\n"),
-                            "must not use `continue-on-error`")
+    STEP = "      - name: codeflow test --mode full --strict\n"
+    GATE_STEP_EXACT = "the gate step must be exactly"
+    OWN_KEYS = "own keys must be exactly"
+    TOP_LEVEL = "top level may hold only"
+    STRATEGY = "the gates strategy must be"
 
-    def test_the_gate_step_is_checked_whatever_the_key_order(self):
-        """TSK-203 review round two: a key written first after `- ` slipped past."""
-        step = "      - name: codeflow test --mode full --strict\n"
-        controls = {
-            "if first": (WORKFLOW.replace(step, "      - if: false\n        name: codeflow test --mode full --strict\n"),
-                         "must not carry its own `if:`"),
-            "continue-on-error first": (WORKFLOW.replace(step, "      - continue-on-error: true\n"
-                                                              "        name: codeflow test --mode full --strict\n"),
-                                        "must not use `continue-on-error`"),
-            "working directory": (WORKFLOW.replace(step, step + "        working-directory: docs\n"),
-                                  "must not set `working-directory`"),
-            "no pinned shell": (WORKFLOW.replace(step + "        shell: bash\n", step),
-                                "must pin `shell: bash`"),
-        }
+    def assert_all(self, controls: dict) -> None:
         for label, (workflow, needle) in controls.items():
             with self.subTest(label):
                 self.assert_problem(workflow, needle)
 
+    def test_a_skippable_forgiven_or_moved_gate_step_is_refused(self):
+        """Key order cannot hide a key (TSK-203 review round two)."""
+        step = self.STEP
+        self.assertIn(step + "        shell: bash\n", WORKFLOW)
+        self.assert_all({
+            "if": (WORKFLOW.replace(step, step + "        if: false\n"), self.GATE_STEP_EXACT),
+            "if first": (WORKFLOW.replace(step, "      - if: false\n        name: codeflow test --mode full --strict\n"),
+                         self.GATE_STEP_EXACT),
+            "continue-on-error first": (WORKFLOW.replace(step, "      - continue-on-error: true\n"
+                                                               "        name: codeflow test --mode full --strict\n"),
+                                        self.GATE_STEP_EXACT),
+            "step continue-on-error": (WORKFLOW.replace(step, step + "        continue-on-error: true\n"),
+                                       self.GATE_STEP_EXACT),
+            "working directory": (WORKFLOW.replace(step, step + "        working-directory: docs\n"),
+                                  self.GATE_STEP_EXACT),
+            "no pinned shell": (WORKFLOW.replace(step + "        shell: bash\n", step), self.GATE_STEP_EXACT),
+            "job continue-on-error": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
+                                                       "    runs-on: ubuntu-24.04\n    continue-on-error: true\n    strategy:\n"),
+                                      self.OWN_KEYS),
+        })
+
+    def test_alternate_yaml_spellings_are_refused(self):
+        """Quoted, spaced or escaped keys decode to the same key (TSK-203 review round three)."""
+        step = self.STEP
+        self.assert_all({
+            "quoted if": (WORKFLOW.replace(step, step + "        'if': false\n"), self.GATE_STEP_EXACT),
+            "spaced if": (WORKFLOW.replace(step, step + "        if : false\n"), self.GATE_STEP_EXACT),
+            "quoted continue-on-error": (WORKFLOW.replace(step, step + "        'continue-on-error': true\n"),
+                                         self.GATE_STEP_EXACT),
+            "quoted job key": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
+                                                "    runs-on: ubuntu-24.04\n    'continue-on-error': true\n    strategy:\n"),
+                               self.OWN_KEYS),
+            "escaped BASH_ENV": (WORKFLOW.replace("\njobs:\n", "\nenv:\n  \"BASH\\u005fENV\": ./skip.sh\n\njobs:\n"),
+                                 self.TOP_LEVEL),
+        })
+
+    def test_a_continued_matrix_value_is_refused(self):
+        """A continuation line joins `|| true` onto the command (round three)."""
+        only = "            only: rust-coverage,journey-gate\n"
+        self.assertIn(only, WORKFLOW)
+        self.assert_problem(WORKFLOW.replace(only, only + "              || true\n"), self.STRATEGY)
+        self.assert_problem(WORKFLOW.replace(only, "            only: 'rust-coverage,journey-gate || true'\n"),
+                            self.STRATEGY)
+
+    def test_a_second_command_in_a_script_is_refused(self):
+        """A heredoc can carry the expected text while bash runs something else (round three)."""
+        step = self.STEP
+        decoy = ("      - name: decoy\n        shell: bash\n        run: |\n          cat <<'X'\n"
+                 "          run: codeflow test --mode full --strict --all --only ${{ matrix.only }}\n"
+                 "          X\n          true\n")
+        self.assert_problem(WORKFLOW.replace(step, decoy + step), self.GATE_STEP_EXACT)
+
     def test_nothing_in_the_workflow_may_reshape_the_gate_or_verdict(self):
-        """TSK-203 review round two: `defaults.run.shell: bash -n {0}` made the
-        verdict exit 0 on a failed part without changing its text."""
+        """`defaults.run.shell: bash -n {0}` made the verdict exit 0 on a failed
+        part without changing its text (round two)."""
         top = "\njobs:\n"
         self.assertIn(top, WORKFLOW)
-        controls = {
+        self.assert_all({
             "workflow defaults": (WORKFLOW.replace(top, "\ndefaults:\n  run:\n    shell: bash -n {0}\n" + top),
-                                  "must not set `defaults`"),
+                                  self.TOP_LEVEL),
+            "workflow env": (WORKFLOW.replace(top, "\nenv:\n  BASH_ENV: ./skip.sh\n" + top), self.TOP_LEVEL),
             "gates job defaults": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
                                                     "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n"
                                                     "        shell: bash -n {0}\n    strategy:\n"),
-                                   "must not set `defaults`"),
-            "BASH_ENV": (WORKFLOW.replace(top, "\nenv:\n  BASH_ENV: ./skip.sh\n" + top), "BASH_ENV"),
+                                   self.OWN_KEYS),
             "merge key": (WORKFLOW.replace("        shell: bash\n        env:\n          LLVM",
                                            "        <<: *skipped\n        shell: bash\n        env:\n          LLVM"),
-                          "anchors, aliases, merge keys or flow mappings"),
+                          self.GATE_STEP_EXACT),
             "flow mapping": (WORKFLOW.replace("        env:\n          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n",
                                               "        env: {LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw}\n"),
-                             "anchors, aliases, merge keys or flow mappings"),
+                             self.GATE_STEP_EXACT),
             "verdict without its shell": (WORKFLOW.replace(
                 "      - name: Every part of the full gate passed\n        shell: bash\n",
                 "      - name: Every part of the full gate passed\n"), self.EXACT),
-        }
-        for label, (workflow, needle) in controls.items():
-            with self.subTest(label):
-                self.assert_problem(workflow, needle)
+        })
 
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
         workflow = WORKFLOW.replace("    needs: gates\n", "    needs: gates\n\n    # the parts\n")

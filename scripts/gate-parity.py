@@ -207,40 +207,58 @@ def norm_job(text: str) -> list[str]:
             if line.strip() and not line.lstrip().startswith("#")]
 
 
-# A step key is the first key after `- ` or a key at the step's indent, so a
-# check holds whatever order the keys are written in.
-STEP_KEY = re.compile(r"^(?: {6}- | {8})([A-Za-z_-]+):\s*(.*?)\s*$", re.M)
-EXPRESSION = re.compile(r"\$\{\{.*?\}\}")
+# A text check can only judge the forms it knows, so the workflow's top
+# level, the gates job's own keys, its strategy and its gate step are
+# allowlisted. Any other spelling (a quoted or escaped key, a continued
+# value, a second `codeflow test` command, defaults or env that a bash step
+# inherits) is refused rather than read past. This catches drift in a
+# reviewed edit; it is not a boundary against someone who also edits this
+# script in the same change.
+TOP_KEYS = ("name", "on", "concurrency", "permissions", "jobs")
+GATES_KEYS = ("if", "name", "runs-on", "strategy", "steps")
+STRATEGY_HEAD = ["    strategy:", "      fail-fast: false", "      matrix:", "        include:"]
+PART_LINE = re.compile(r"^          - part: [a-z0-9-]+$")
+ONLY_LINE = re.compile(r"^            only: [a-z0-9-]+(?:,[a-z0-9-]+)*$")
+GATE_STEP = """\
+      - name: codeflow test --mode full --strict
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
+"""
 
 
 def gate_step_problems(gate: str, workflow: str = "") -> list[str]:
-    """The parts job and its gate step must not be skippable, forgiven or
-    run by an inherited shell, and nothing in the workflow may reshape them:
-    no `defaults`, no `BASH_ENV`, no YAML merge keys, aliases or flow
-    mappings, which a text check cannot follow."""
+    """The workflow top level, the gates job's keys, its strategy and its
+    gate step must each take their one accepted form."""
     problems = []
-    if re.search(r"^\s*(?:- )?continue-on-error:", gate, re.M):
-        problems.append("the gates job must not use `continue-on-error`; a forgiven part reads as passed")
-    if re.search(r"^defaults:|^ {4}defaults:", workflow + "\n" + gate, re.M):
-        problems.append("the workflow and the gates job must not set `defaults`; an inherited shell or "
-                        "working directory changes what the gate and its verdict run")
-    if "BASH_ENV" in workflow or "BASH_ENV" in gate:
-        problems.append("the workflow must not set `BASH_ENV`; it runs code before every bash step")
-    plain = EXPRESSION.sub("", gate)
-    if re.search(r"<<:|:\s*[&*][A-Za-z]|^\s*-\s*[&*][A-Za-z]|(?::|^\s*-)\s*\{", plain, re.M):
-        problems.append("the gates job must not use YAML anchors, aliases, merge keys or flow mappings; "
-                        "write its keys out so they can be checked")
-    steps = [s for s in re.split(r"\n(?= {6}- )", gate) if PART_RUN in norm(s)]
-    if len(steps) != 1:
-        problems.append(f"exactly one gates step must run `{PART_RUN}`; found {len(steps)}")
-    for step in steps:
-        keys = {key: value for key, value in STEP_KEY.findall(step)}
-        if "if" in keys:
-            problems.append("the gate step must not carry its own `if:`; a skipped step reads as passed")
-        if keys.get("shell") != "bash":
-            problems.append("the gate step must pin `shell: bash`, so no inherited default decides how it runs")
-        if "working-directory" in keys:
-            problems.append("the gate step must not set `working-directory`; the gate runs at the repository root")
+    top = [line for line in workflow.splitlines() if re.match(r"^[^\s#]", line)]
+    stray = [line for line in top if not re.match(rf"^(?:{'|'.join(TOP_KEYS)}):(?:\s|$)", line)]
+    if stray:
+        problems.append(f"the workflow's top level may hold only {list(TOP_KEYS)}; a top-level env or "
+                        f"defaults reaches every bash step; refused: {stray}")
+    lines = gate.splitlines()
+    own = [line.rstrip() for line in lines if re.match(r"^ {4}[^\s#]", line)]
+    keys = [re.match(r"^ {4}([a-z-]+):(?:\s|$)", line) for line in own]
+    if any(key is None for key in keys) or [key.group(1) for key in keys] != list(GATES_KEYS):
+        problems.append(f"the gates job's own keys must be exactly {list(GATES_KEYS)} in that order, "
+                        f"so it cannot be forgiven, defaulted or given env; found {own}")
+    if "    strategy:" in lines and "    steps:" in lines:
+        block = [line.rstrip() for line in lines[lines.index("    strategy:"):lines.index("    steps:")]
+                 if line.strip() and not line.lstrip().startswith("#")]
+        entries = block[len(STRATEGY_HEAD):]
+        pairs_ok = (len(entries) % 2 == 0 and entries
+                    and all(PART_LINE.match(a) and ONLY_LINE.match(b) for a, b in zip(entries[::2], entries[1::2])))
+        if block[:len(STRATEGY_HEAD)] != STRATEGY_HEAD or not pairs_ok:
+            problems.append("the gates strategy must be `fail-fast: false` and a matrix `include` of "
+                            "`- part: <name>` / `only: <target>,...` pairs, one line each; refused: "
+                            f"{[line for line in block if line not in STRATEGY_HEAD and not PART_LINE.match(line) and not ONLY_LINE.match(line)]}")
+    else:
+        problems.append("the gates job must have a `strategy:` block before `steps:`")
+    steps = [s for s in re.split(r"\n(?= {6}- )", gate) if "codeflow test" in "\n".join(norm_job(s))]
+    if len(steps) != 1 or norm_job(steps[0]) != norm_job(GATE_STEP):
+        problems.append("the gate step must be exactly this, and the only step that names `codeflow "
+                        "test`; any other form could skip, forgive or replace the command:\n" + GATE_STEP)
     return problems
 
 
