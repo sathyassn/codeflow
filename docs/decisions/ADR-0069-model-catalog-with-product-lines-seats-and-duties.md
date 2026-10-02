@@ -290,10 +290,29 @@ The other rows of the roster table stand. Sonnet holds no seat, design,
 review or orchestration duty. Every new version's qualification field is
 empty.
 
-Fable as the owner of the `design` duty is not applied. "Launch identity
-and design authority" above gives design to the design owner's first line,
-and the engine enforces it: the `design` duty accepts only the design owner
-seat as a target and resolves that seat to its first line. Moving design to
-Fable while Opus keeps orchestration needs a change to that section and to
-the engine, which is a separate decision. Until then the Fable row above
-stands.
+The Fable part of the direction (design, architecture and technical
+planning) is not applied. `design`, `independent-plan` design-primary and
+`body-review` design-primary resolve to the `claude-primary` seat, Opus
+first and Fable second, as before. Only `consultation` and
+`reasoning-support` route to Fable first, as they already did.
+
+No catalog-only route exists. In `crates/codeflow-core/src/model_catalog`:
+
+- Validation accepts only the design owner seat as a `design` target
+  (`validate.rs:333-335`), and resolution fills `design` only from that
+  seat's first line (`resolve.rs:228-232`); a line with no seat never holds
+  direction or fidelity approval (`resolve.rs:233-238`).
+- A line target on `independent-plan` or `body-review` is a worker, and
+  outside the candidate duties (`resolve.rs:168-181`) a worker needs scoped
+  qualification evidence for the exact tuple (`resolve.rs:291-295`), so
+  Fable there stays open.
+- The seat order cannot change instead: there are exactly two standing
+  seats (`validate.rs:154`), the design owner must be the standing Claude
+  seat (`validate.rs:171-176`), and the host seat is the first seat of the
+  host family (`resolve.rs:395-401`). Putting Fable first in
+  `claude-primary` would make Fable orchestrate too.
+
+Moving design, architecture and technical planning to Fable while Opus
+keeps orchestration is an engine change and a change to "Launch identity
+and design authority" above. It was offered to the operator on 2026-10-02
+as their decision. Until then the Fable row above stands.
