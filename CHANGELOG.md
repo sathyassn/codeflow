@@ -32,9 +32,11 @@ erratum below, never an edit of the section.
   never serves orchestration, planning, design or review. The Sol line
   adopts GPT-6.1 Sol (`gpt-6.1-sol`), designated for `codex-primary` on
   2026-10-02; GPT-6 Sol and GPT-5.6 Sol stay as its fallback versions.
-  Design, architecture and technical planning
-  stay with the Claude primary seat in its current order, Opus first and
-  Fable second; Fable comes first for consultation and reasoning support.
+  Orchestration, technical planning and review stay with the Claude
+  primary seat, Opus first and Fable second. Design stays with Opus alone:
+  Fable takes design only under a task's operator override, so without
+  Opus the design duty stays open. Fable comes first for consultation and
+  reasoning support.
   No new version has a qualification record yet, so `codeflow doctor
   --check model-bindings` also warns for GPT-6.1 Sol.
 
