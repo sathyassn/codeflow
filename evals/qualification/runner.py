@@ -81,11 +81,17 @@ def snapshot(directories: list[str], *, shallow: list[str] | None = None,
                 entries[key] = [kind]
             elif top_level:
                 entries[key] = [kind]
-                if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-                    # The inode tells a replaced entry apart even when the
-                    # filesystem clock is too coarse to move the mtime, as
-                    # Linux timestamps are for a swap within one tick.
+                # The inode tells a replaced entry apart even when the
+                # filesystem clock is too coarse to move the mtime, as Linux
+                # timestamps are for a swap within one tick; a file's size
+                # shows a rewrite that changes its length. A directory's own
+                # mtime is left out: writes inside it are not observed here.
+                if stat.S_ISREG(info.st_mode):
+                    entries[key].extend([info.st_mtime_ns, info.st_ino, info.st_size])
+                elif stat.S_ISLNK(info.st_mode):
                     entries[key].extend([info.st_mtime_ns, info.st_ino])
+                elif stat.S_ISDIR(info.st_mode):
+                    entries[key].append(info.st_ino)
             else:
                 entries[key] = [info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
         except OSError as exc:

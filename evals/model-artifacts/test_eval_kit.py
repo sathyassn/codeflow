@@ -6102,14 +6102,18 @@ class ProcessRepairTests(unittest.TestCase):
 
     def test_top_level_entry_changes_still_invalidate(self):
         runner = self.runner()
-        for change in ["new-file", "new-directory", "file-mtime", "type", "symlink-swap", "removed"]:
+        for change in ["new-file", "new-directory", "file-mtime", "type", "symlink-swap", "removed",
+                       "grown-same-mtime", "file-swap-same-mtime", "directory-swap"]:
             with self.subTest(change=change), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp); path = root / "entry"
                 if change == "symlink-swap":
                     path.symlink_to("first-target")
+                elif change == "directory-swap":
+                    path.mkdir()
                 elif change not in {"new-file", "new-directory"}:
                     path.write_text("original")
                 before = runner.snapshot([temp], shallow=[temp])
+                kept = path.lstat() if path.exists() or path.is_symlink() else None
                 if change == "new-file":
                     path.write_text("new")
                 elif change == "new-directory":
@@ -6123,6 +6127,20 @@ class ProcessRepairTests(unittest.TestCase):
                     replacement = root / "replacement"
                     replacement.symlink_to("second-target")
                     replacement.replace(path)
+                elif change == "grown-same-mtime":
+                    # Controls keep the old mtime, as a write within one
+                    # Linux clock tick does, so only size or inode can show it.
+                    path.write_text("original, then much longer")
+                    os.utime(path, ns=(kept.st_atime_ns, kept.st_mtime_ns))
+                elif change == "file-swap-same-mtime":
+                    replacement = root / "replacement"
+                    replacement.write_text("original")
+                    os.utime(replacement, ns=(kept.st_atime_ns, kept.st_mtime_ns))
+                    replacement.replace(path)
+                elif change == "directory-swap":
+                    replacement = root / "replacement"
+                    replacement.mkdir()
+                    os.replace(replacement, path)
                 else:
                     path.unlink()
                 result = runner.compare(before, runner.snapshot([temp], shallow=[temp]))
