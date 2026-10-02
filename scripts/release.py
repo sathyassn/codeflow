@@ -1389,7 +1389,8 @@ def sync(args: argparse.Namespace) -> None:
         run([args.cargo, "check", "--workspace"], cwd=args.root)
         run([args.cargo, "build", "--locked", "-p", "codeflow-cli"], cwd=args.root)
         binary = args.root / "target/debug" / ("codeflow.exe" if os.name == "nt" else "codeflow")
-        if run([str(binary), "--version"], cwd=args.root).stdout.strip() != f"codeflow {version}":
+        # `codeflow --version` appends its source identity after the version.
+        if run([str(binary), "--version"], cwd=args.root).stdout.split()[:2] != ["codeflow", version]:
             fail("rebuilt updater version disagrees with pending target")
         run([str(binary), "update"], cwd=args.root)
         stamped = validate_version_stamps(

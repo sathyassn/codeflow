@@ -330,7 +330,8 @@ class PendingVersionTests(unittest.TestCase):
             "from pathlib import Path\n"
             "import sys\n"
             "if sys.argv[1:] == ['--version']:\n"
-            "    print('codeflow 2.0.1')\n"
+            # The real binary appends its source identity (TSK-203).
+            "    print('codeflow 2.0.1 source=0123abcd dirty=false inputs=89ef')\n"
             "elif sys.argv[1:] == ['update']:\n"
             "    path = Path('Cargo.lock')\n"
             "    path.write_text(path.read_text().replace('9.9.9', '2.0.1'))\n"
