@@ -872,7 +872,8 @@ fn only_runs_the_named_targets_with_prerequisites_and_is_never_complete() {
     assert_eq!(raw["complete"], false, "{raw}");
     assert_eq!(raw["passed"], true, "{raw}");
 
-    // The parts together are the whole gate: naming every target is complete.
+    // A limited run is never complete evidence, even when its names cover
+    // every target: only a run without `--only` stands for the whole gate.
     std::fs::remove_file(dir.path().join("runs")).unwrap();
     let output = run(
         dir.path(),
@@ -885,6 +886,18 @@ fn only_runs_the_named_targets_with_prerequisites_and_is_never_complete() {
             "present,release,producer",
         ],
     );
+    let err = stderr(&output);
+    assert!(output.status.success(), "{err}");
+    let artifact = err
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] durable artifact: "))
+        .unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    assert_eq!(raw["complete"], false, "{raw}");
+    assert_eq!(raw["passed"], true, "{raw}");
+
+    // The same targets run without `--only` are the whole gate.
+    let output = run(dir.path(), home.path(), &["test"]);
     let err = stderr(&output);
     assert!(output.status.success(), "{err}");
     let artifact = err
