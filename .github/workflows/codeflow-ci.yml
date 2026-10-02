@@ -45,12 +45,15 @@ jobs:
           - part: coverage
             only: rust-coverage,journey-gate
           # Exclusive: the benchmark times reads, so it runs alone.
+          # visual-eval-controls and docs-portal both reinstall
+          # docs-portal/node_modules with `npm ci`; on one runner they can
+          # overlap and delete each other's packages, so they run apart.
           - part: benchmark
-            only: read-benchmark
+            only: read-benchmark,visual-eval-controls
           - part: present
             only: present-supply-chain,cf-present-qualification,present-browser,present-binary-delta
           - part: checks
-            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,visual-eval-controls,skill-triggers,herdr-delivery,docs-validation,docs-portal
+            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal
     steps:
       - uses: actions/checkout@v6
         with:
