@@ -29,8 +29,8 @@ reinterpret an earlier decision.
 | Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact none\|patch\|minor\|major` HTML marker directly before each new pending entry |
 | Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, the actual proposed merge tree, pending annotations, coupled stamps and the conventional-marker floor. It checks known contradictions and watched contracts; it does not infer compatibility |
 | Merge | A human | PR CI checks the actual proposed merge tree, which is more than the absence of conflicts. Main-push and integration-line CI repeat the state check without writing. These release jobs live in `codeflow-release.yml`, outside the managed `codeflow-ci.yml` that every adopter receives, and no scaffold installs them. Without strict branch protection a stale clean merge is still possible, so the human merger must require the fresh check |
-| Dispatch | A human with current write, maintain or admin permission | Dispatches with `--ref main` and the `vX.Y.Z` tag. The actor and any rerunning actor must both be GitHub Users with effective permission. `GITHUB_SHA` must still equal current main and be the result of an ordinary PR human-merged into this repository's main. Contributor forks remain valid. No static allowlist or second-human role is implied |
-| Local-artifact authority job | The generated workflow | Records `GITHUB_SHA` on main and checks the dispatch rules above, source, version and notes, the latest exact-source GitHub Actions main-push results of `codeflow-ci` and `codeflow-release` (`publication_workflows`) for `release state`, `codeflow gates`, secret scan and security review, and write-visible host collisions. The Windows job is advisory until TSK-197 and is not read. Its write-scoped token can see draft releases. It fails closed on a wrong tag, source or public release, a foreign draft, or draft assets. It then creates or resumes only the exact source-bound empty draft |
+| Dispatch | A human with current write, maintain or admin permission | First dispatches with `--ref main` and `tag=dry-run`, which builds every artifact and publishes nothing, and waits for it and for current main's push runs of `codeflow-ci` and `codeflow-release` to pass. Then dispatches with `--ref main` and the `vX.Y.Z` tag. The actor and any rerunning actor must both be GitHub Users with effective permission. `GITHUB_SHA` must still equal current main and be the result of an ordinary PR human-merged into this repository's main. Contributor forks remain valid. No static allowlist or second-human role is implied |
+| Local-artifact authority job | The generated workflow | Records `GITHUB_SHA` on main and checks the dispatch rules above, source, version and notes (the curated section, or each entry cut to its label with a link to the full section when the section exceeds GitHub's 125,000-character release body), the latest exact-source GitHub Actions main-push results of `codeflow-ci` and `codeflow-release` (`publication_workflows`) for `release state`, `codeflow gates`, secret scan and security review, and write-visible host collisions. The Windows job is advisory until TSK-197 and is not read. Its write-scoped token can see draft releases. It fails closed on a wrong tag, source or public release, a foreign draft, or draft assets. It then creates or resumes only the exact source-bound empty draft |
 | Global-artifact recheck | The generated workflow | Rechecks main after platform builds. Failed or cancelled guards block hosting and announcing |
 | Upload and announce | cargo-dist | Uploads without `--clobber`, so a later host conflict is never overwritten, and announces last |
 | Post-announce verification | cargo-dist's verifier | Compares tag and source, and every asset name, size and SHA-256 digest, with the same-run files |
@@ -358,7 +358,7 @@ Rotation is not verified by changing YAML alone.
    the fresh check described in the Merge row of Architecture.
 3. Before the tag, render the notes from the final assembled source with
    `python3 scripts/release.py release-notes --ref <source> --source <source>
-   --tag vX.Y.Z --output notes.md`. Read them twice, as a new user (what the
+   --tag vX.Y.Z --repository sathyassn/codeflow --output notes.md`. Read them twice, as a new user (what the
    release does) and as a user upgrading from the last release (what to do,
    in order), and record both reads in the release checklist.
 4. When the evidence is complete, a human dispatches cargo-dist's generated
@@ -406,7 +406,9 @@ assets.
 |---|---|
 | No tag and no release | Reverify current main and redispatch |
 | Exact empty draft, or exact tag-only attempt | Resume, only for the same source and notes |
-| Draft with assets, mismatched draft, or tag with another source | Explicit recovery |
+| Draft with assets, or a mismatched draft, and no tag | A draft is not public and has no tag yet. Confirm `gh api repos/sathyassn/codeflow/git/ref/tags/vX.Y.Z` answers 404, delete the draft with `gh release delete vX.Y.Z --yes`, then reverify current main and redispatch |
+| Public release whose post-announce verification failed | Rerun only the failed job in the same run, which still holds the built files; never edit the release or its tag |
+| Tag with another source | Leave the tag as it is; the operator decides the recovery |
 
 - A public version is spent forever. No tag or version is repurposed.
 - Material work and withdrawals stay blocked while an attempt is unresolved.
