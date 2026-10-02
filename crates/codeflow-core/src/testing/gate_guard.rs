@@ -3,8 +3,8 @@
 //!
 //! **One gate at a time.** Concurrent full gates on one machine turned green
 //! suites into 600 s timeouts. [`acquire_full_gate_lock`] takes an exclusive
-//! advisory lock (`fs2`, released by the OS when the process exits, however
-//! it exits) on up to two files:
+//! lock (`flock` on Unix, a byte-range lock on Windows; the OS releases it
+//! when the process exits, however it exits) on up to two files:
 //!
 //! - the machine-wide lock under the `CodeFlow` home (`CODEFLOW_HOME`, else
 //!   `~/.codeflow`), which spans every repository on the machine;
@@ -46,8 +46,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fs2::FileExt;
-
 /// File name of the gate lock in each lock directory.
 pub const LOCK_FILE: &str = "full-gate.lock";
 
@@ -87,7 +85,7 @@ impl Drop for GateLock {
             // Best effort: an uncleared record only reads as a stale lock,
             // which the next gate reclaims.
             let _ = file.set_len(0);
-            let _ = FileExt::unlock(file);
+            os_lock::unlock(file);
         }
     }
 }
@@ -183,9 +181,9 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
                 });
             }
         };
-        match file.try_lock_exclusive() {
+        match os_lock::try_lock(&file) {
             Ok(()) => {}
-            Err(error) if error.kind() == fs2::lock_contended_error().kind() => {
+            Err(error) if os_lock::is_contended(&error) => {
                 return Err(LockHeld {
                     holder: read_record(&mut file),
                     path,
@@ -307,6 +305,82 @@ fn group_alive(_pgid: u32) -> bool {
     // its gate through the target's job object (TSK-142), so nothing can
     // outlive the gate.
     false
+}
+
+/// The OS lock behind a gate lock. On Unix it is `flock` on the whole file.
+/// Windows locks are mandatory, and a locked range cannot be read through
+/// another handle, so there the lock covers one byte far past any holder
+/// record: every process can still read who holds the gate.
+#[cfg(not(windows))]
+mod os_lock {
+    use fs2::FileExt;
+    use std::fs::File;
+
+    pub(super) fn try_lock(file: &File) -> std::io::Result<()> {
+        file.try_lock_exclusive()
+    }
+
+    pub(super) fn unlock(file: &File) {
+        let _ = FileExt::unlock(file);
+    }
+
+    pub(super) fn is_contended(error: &std::io::Error) -> bool {
+        error.kind() == fs2::lock_contended_error().kind()
+    }
+}
+
+#[cfg(windows)]
+mod os_lock {
+    use std::fs::File;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION;
+    use windows_sys::Win32::Storage::FileSystem::{
+        LockFileEx, UnlockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+
+    /// The locked byte: far past any record, which stays a few hundred bytes.
+    const LOCK_OFFSET: u64 = 1 << 40;
+
+    fn at_lock_offset() -> OVERLAPPED {
+        // SAFETY: OVERLAPPED is plain data; all zeroes is its documented
+        // initial state.
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.Anonymous.Anonymous.Offset = (LOCK_OFFSET & 0xffff_ffff) as u32;
+        overlapped.Anonymous.Anonymous.OffsetHigh = (LOCK_OFFSET >> 32) as u32;
+        overlapped
+    }
+
+    pub(super) fn try_lock(file: &File) -> std::io::Result<()> {
+        let mut overlapped = at_lock_offset();
+        // SAFETY: the handle is open for the call, and the OVERLAPPED lives
+        // across it; a synchronous handle completes before returning.
+        let locked = unsafe {
+            LockFileEx(
+                file.as_raw_handle(),
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                1,
+                0,
+                &raw mut overlapped,
+            )
+        };
+        if locked == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn unlock(file: &File) {
+        let mut overlapped = at_lock_offset();
+        // SAFETY: as in `try_lock`; closing the handle also releases it.
+        unsafe { UnlockFileEx(file.as_raw_handle(), 0, 1, 0, &raw mut overlapped) };
+    }
+
+    pub(super) fn is_contended(error: &std::io::Error) -> bool {
+        error.raw_os_error() == i32::try_from(ERROR_LOCK_VIOLATION).ok()
+    }
 }
 
 fn open_lock_file(path: &Path) -> std::io::Result<File> {
@@ -591,8 +665,7 @@ mod tests {
         let error = acquire_full_gate_lock(&unusable, Path::new("/w")).unwrap_err();
         assert!(error.to_string().contains("gate lock unavailable"));
         let file = open_lock_file(&usable.join(LOCK_FILE)).unwrap();
-        file.try_lock_exclusive()
-            .expect("partial acquisition released its OS lock");
+        os_lock::try_lock(&file).expect("partial acquisition released its OS lock");
     }
 
     #[test]
