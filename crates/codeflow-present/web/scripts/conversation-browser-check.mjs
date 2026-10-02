@@ -1,27 +1,21 @@
 // TSK-193: the built service and CLI, driven through task-owned browser profiles.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, firefox, webkit } from "playwright-core";
 import { codeflowBinary } from "./codeflow-binary.mjs";
+import { installedChrome, playwrightBuild } from "./browser-executables.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const binary = codeflowBinary(repo);
 const evidence = resolve(process.env.CF_PRESENT_EVIDENCE ?? join(repo,"target/tsk193-evidence/browser"));
 await mkdir(evidence,{recursive:true});
-const cache = join(homedir(),"Library/Caches/ms-playwright");
-async function cached(prefix,suffix) {
-  const versions = (await readdir(cache)).filter(n => n.startsWith(prefix)).sort((a,b) => Number(b.slice(prefix.length))-Number(a.slice(prefix.length)));
-  if (!versions.length) throw new Error(`No installed ${prefix} browser`);
-  return join(cache,versions[0],suffix);
-}
 const engines = {
-  chrome: [chromium,"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
-  firefox: [firefox,await cached("firefox-","firefox/Nightly.app/Contents/MacOS/firefox")],
-  webkit: [webkit,await cached("webkit-","pw_run.sh")],
+  chrome: [chromium,await installedChrome()],
+  firefox: [firefox,await playwrightBuild(firefox)],
+  webkit: [webkit,await playwrightBuild(webkit)],
 };
 const selected = process.env.CF_PRESENT_ENGINES?.split(",") ?? Object.keys(engines);
 const widths = process.env.CF_PRESENT_WIDTHS?.split(",").map(Number) ?? [1280,375];

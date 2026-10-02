@@ -52,6 +52,12 @@ uuid = { version = "=1.24.0", features = ["serde", "v4"] }
 all = "deny"
 pedantic = "warn"
 
+# Every hook run hashes its own executable (the judge identity line). An
+# unoptimized sha2 makes that seconds per hook on a Linux debug or coverage
+# binary, which embeds its debug info; tests run thousands of hooks.
+[profile.dev.package.sha2]
+opt-level = 3
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

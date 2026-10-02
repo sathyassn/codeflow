@@ -93,7 +93,13 @@ jobs:
 
       # The Linux candidate has one full gate. Windows independently runs raw
       # Rust checks; Unix-only journeys and the read benchmark remain Linux-only.
+      # The coverage run starts about 31,000 instrumented processes.
+      # One profile per process filled 27.5 GB on Linux, more than the
+      # runner's free disk; a merge pool of four per binary keeps under 100 MB
+      # with the same counters. cargo-llvm-cov reads this name.
       - name: codeflow test --mode full --strict
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
         run: codeflow test --mode full --strict --all
 
 

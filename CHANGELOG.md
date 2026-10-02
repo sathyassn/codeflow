@@ -60,6 +60,15 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **An old Git is named when it cannot read attributes from a commit.**
+  `codeflow ci` reads each changed file's conflict-marker size with
+  `git check-attr --source`, which needs Git 2.40 or later. An older Git
+  refuses the option and exits before it reads the paths. On Linux the path
+  write then failed first, and the check reported a broken pipe with advice
+  to fetch the whole range. It now reports Git's own refusal and says to
+  upgrade Git.
+
+<!-- codeflow:release-impact patch -->
 - **The docs portal starter no longer pins a vulnerable `fast-uri`.** The
   starter's development dependency override moves from 3.1.6 to 3.1.8,
   which fixes GHSA-58mr-gqgx-xq4g, GHSA-qw65-cvwx-89v3 and

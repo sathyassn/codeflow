@@ -1342,7 +1342,9 @@ pub const REVIEW_ROUND_THREE_PROBES: &[(&str, &str, Expect)] = &[
     ),
     (
         "cd-negated",
-        "cd /; ! cd /private/tmp && rm -rf *",
+        // `/tmp` exists on every Unix; `/private/tmp` only on macOS, and
+        // where it is absent the negated `cd` is true and `rm` runs at `/`.
+        "cd /; ! cd /tmp && rm -rf *",
         Expect::Allowed,
     ),
     (
