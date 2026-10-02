@@ -3688,6 +3688,49 @@ class ResultScoringTests(unittest.TestCase):
 
 
 class CleanupSafetyTests(unittest.TestCase):
+    @staticmethod
+    def windows_unlink(refuse_links: bool = False):
+        """`os.unlink` as Windows behaves: a read-only file cannot be
+        deleted until that bit is cleared."""
+        real_unlink = os.unlink
+
+        def unlink(path, *args, dir_fd=None, **kwargs):
+            mode = os.stat(path, dir_fd=dir_fd, follow_symlinks=False).st_mode
+            if (refuse_links and stat.S_ISLNK(mode)) or not mode & stat.S_IWRITE:
+                raise PermissionError(13, "Access is denied", path)
+            return real_unlink(path, *args, dir_fd=dir_fd, **kwargs)
+
+        return unlink
+
+    def test_a_tree_with_read_only_git_objects_is_removed(self) -> None:
+        # Git writes its object files read-only; on Windows a fixture reset
+        # or a run cleanup failed with "Access is denied" on them.
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp) / "repository/.git"
+            objects = tree / "objects/01"
+            objects.mkdir(parents=True)
+            blob = objects / "7813b6d4a0362ec732b337a35fa7396f2fb4dc"
+            blob.write_bytes(b"object")
+            blob.chmod(0o444)
+            with patch("os.unlink", self.windows_unlink()):
+                eval_kit.remove_tree(tree)
+            self.assertFalse(tree.exists())
+
+    @unittest.skipUnless(hasattr(os, "symlink") and os.name == "posix", "needs POSIX symlinks")
+    def test_a_link_is_never_followed_to_clear_its_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            outside = Path(temp) / "outside.txt"
+            outside.write_text("keep", encoding="utf-8")
+            outside.chmod(0o444)
+            tree = Path(temp) / "tree"
+            tree.mkdir()
+            (tree / "link").symlink_to(outside)
+            with patch("os.unlink", self.windows_unlink(refuse_links=True)):
+                with self.assertRaises(PermissionError):
+                    eval_kit.remove_tree(tree)
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o444)
+            outside.chmod(0o644)
+
     def test_grader_material_and_route_are_scrubbed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

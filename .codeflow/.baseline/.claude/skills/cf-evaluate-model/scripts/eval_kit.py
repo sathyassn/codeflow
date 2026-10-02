@@ -1868,13 +1868,35 @@ def ensure_run_root(run_root: Path, subjects_root: Path | None = None) -> dict:
     return marker
 
 
+def remove_tree(path: Path) -> None:
+    """Remove a directory tree, read-only files included.
+
+    Git writes its object files read-only, and on Windows a read-only file
+    cannot be deleted until that bit is cleared. A permission failure on a
+    file that is not a link gets the bit cleared and one more try; any other
+    failure stands.
+    """
+
+    def retry(function, name, error):
+        failure = error if isinstance(error, BaseException) else error[1]
+        if not isinstance(failure, PermissionError) or os.path.islink(name):
+            raise failure
+        os.chmod(name, stat.S_IWRITE)
+        function(name)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=retry)
+    else:
+        shutil.rmtree(path, onerror=retry)
+
+
 def remove_grader_material(fixture_root: Path) -> None:
     for relative in GRADER_MATERIAL_DIRS:
         target = fixture_root / relative
         if target.is_symlink():
             raise EvalError(f"refusing grader-material symlink: {target}")
         if target.exists():
-            shutil.rmtree(target)
+            remove_tree(target)
     for relative in GRADER_ROUTE_FILES:
         target = fixture_root / relative
         if not target.is_file():
@@ -1956,7 +1978,7 @@ def reset_fixture_history(
     if git_dir.is_symlink():
         raise EvalError("refusing symlinked fixture .git")
     if git_dir.exists():
-        shutil.rmtree(git_dir)
+        remove_tree(git_dir)
     run_command(["git", "init", "-b", branch], root)
     run_command(["git", "config", "user.name", "CodeFlow Eval"], root)
     run_command(["git", "config", "user.email", "eval@codeflow.invalid"], root)
@@ -2994,7 +3016,7 @@ def configure_closeout_inventory(root: Path, codeflow: Path) -> None:
     write_fixture_file(stale, "stale-work.txt", "unfinished stale worktree change\n")
     run_command(["git", "add", "stale-work.txt"], stale)
     run_command(["git", "commit", "-m", "test: retain unmerged stale work"], stale)
-    shutil.rmtree(stale)
+    remove_tree(stale)
     a, b, c = entries
     inventory = (
         "# Worktree inventory\n\n"
@@ -7275,8 +7297,8 @@ def cleanup_run(run_root: Path, confirmation: str) -> None:
         if nested(subjects, resolved) or nested(resolved, subjects):
             raise EvalError("refusing a subjects root that overlaps the run root")
         if subjects.exists():
-            shutil.rmtree(subjects)
-    shutil.rmtree(resolved)
+            remove_tree(subjects)
+    remove_tree(resolved)
 
 
 def parser() -> argparse.ArgumentParser:
