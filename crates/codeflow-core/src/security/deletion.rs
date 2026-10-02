@@ -4587,6 +4587,13 @@ impl Reader<'_> {
     /// The real path of `path`'s longest existing prefix with the rest
     /// appended; `None` for a path the reader cannot place.
     fn real_path(&self, path: &str) -> Option<String> {
+        // On native Windows a path that starts with `/` names no fixed
+        // place (`canonical_operand`): it is judged as written. Resolving
+        // it against the current drive gives `\\?\C:\/…`, which reads as
+        // no place at all and refused scratch space below a temp root.
+        if cfg!(windows) && path.starts_with('/') {
+            return None;
+        }
         real_prefix(&self.absolute(path)?)
     }
 
