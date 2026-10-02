@@ -248,6 +248,7 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
         "scripts/release.py host-state",
         "scripts/release.py verify-host-state",
         "scripts/release.py release-notes",
+        "--repository \"$GITHUB_REPOSITORY\" --output /tmp/release-notes.md",
         "gh release create",
         "--draft",
         "github.event.inputs.tag == 'dry-run'",

@@ -40,6 +40,11 @@ IMPACT_MARKER = re.compile(
 )
 LEGACY_END = "<!-- codeflow:legacy-group-end -->"
 SOURCE_MARKER = "<!-- codeflow-release-source: {source} -->"
+# GitHub refuses a release body above this many characters (HTTP 422).
+GITHUB_RELEASE_BODY_LIMIT = 125_000
+# The longest `owner/name` GitHub allows (39 + 1 + 100): notes that fit with
+# it fit under any repository, so the tree check needs no host name.
+LONGEST_REPOSITORY = "o" * 39 + "/" + "r" * 100
 
 
 class ReleaseError(RuntimeError):
@@ -1393,6 +1398,10 @@ def check_state(args: argparse.Namespace) -> None:
         result["host"] = HOST_UNCHECKED
     else:
         result = validate_release_tree(args.ref, config, get_host_state(args), cwd=args.root)
+    if result["pending"]:
+        # Render the notes as the release authority will, so a pending section
+        # GitHub would refuse fails on its pull request, not at dispatch.
+        release_notes(args.root, args.ref, f"v{result['version']}", "0" * 40, LONGEST_REPOSITORY)
     print(json.dumps({"status": "ok", **result}, sort_keys=True))
 
 
@@ -1560,7 +1569,10 @@ def show_host_state(args: argparse.Namespace) -> None:
     print(json.dumps(get_host_state(args), sort_keys=True))
 
 
-def release_notes(root: Path, ref: str, tag: str, source: str) -> str:
+def release_notes(root: Path, ref: str, tag: str, source: str, repository: str) -> str:
+    """The release body: the curated section when it fits GitHub's limit,
+    else the same section with each entry cut to its label and a link to the
+    full entries at the source commit. Fails closed when neither fits."""
     text = file_at_ref(ref, "CHANGELOG.md", cwd=root).decode()
     section = next(
         (item for item in changelog_sections(text) if item.version == tag.removeprefix("v")),
@@ -1575,7 +1587,63 @@ def release_notes(root: Path, ref: str, tag: str, source: str) -> str:
     body = merge_subsections(body)
     if re.search(r"<!--\s*codeflow:", body) or "staging evidence" in body.lower():
         fail(f"{tag} release notes would publish an internal marker or staging note")
-    return f"{body}\n\n{SOURCE_MARKER.format(source=source)}\n"
+    marker = SOURCE_MARKER.format(source=source)
+    notes = f"{body}\n\n{marker}\n"
+    if body_size(notes) <= GITHUB_RELEASE_BODY_LIMIT:
+        return notes
+    link = f"https://github.com/{repository}/blob/{source}/CHANGELOG.md"
+    notes = (
+        f"The full entries are in [CHANGELOG.md]({link}) at this release's source "
+        f"commit. GitHub limits a release description to "
+        f"{GITHUB_RELEASE_BODY_LIMIT:,} characters, so this one lists each entry "
+        f"by its label.\n\n{entry_labels(body)}\n\n{marker}\n"
+    )
+    if body_size(notes) > GITHUB_RELEASE_BODY_LIMIT:
+        fail(
+            f"{tag} release notes need {body_size(notes):,} characters even with each "
+            f"entry cut to its label; GitHub accepts {GITHUB_RELEASE_BODY_LIMIT:,}"
+        )
+    return notes
+
+
+def body_size(text: str) -> int:
+    """UTF-8 bytes: never fewer than the characters or UTF-16 units GitHub may count."""
+    return len(text.encode("utf-8"))
+
+
+def entry_labels(body: str) -> str:
+    """`body` with each labelled top-level entry cut to its bold label.
+    Headings, prose, quoted notes and unlabelled bullets stay as they are."""
+    out: list[str] = []
+    entry: list[str] = []
+    labelled = False  # whether the last block written is a cut entry
+
+    def close() -> bool:
+        match = ENTRY_LABEL.match("\n".join(entry))
+        out.append(f"- **{' '.join(match.group(1).split())}**" if match else "\n".join(entry))
+        if not entry[-1].strip():
+            out.append("")
+        return match is not None
+
+    for line in body.splitlines():
+        # An entry runs on through blank and indented lines.
+        if entry and (not line.strip() or line[0].isspace()):
+            entry.append(line)
+            continue
+        if entry:
+            labelled = close()
+            entry = []
+        if line.startswith("- "):
+            # Consecutive cut entries form one tight list.
+            if labelled and out[-1] == "" and line.startswith("- **"):
+                out.pop()
+            entry = [line]
+        else:
+            out.append(line)
+            labelled = False
+    if entry:
+        close()
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
 def merge_subsections(body: str) -> str:
@@ -1592,7 +1660,8 @@ def merge_subsections(body: str) -> str:
 
 def write_release_notes(args: argparse.Namespace) -> None:
     args.output.write_text(
-        release_notes(args.root, args.ref, args.tag, args.source), encoding="utf-8"
+        release_notes(args.root, args.ref, args.tag, args.source, args.repository),
+        encoding="utf-8",
     )
     print(json.dumps({"status": "prepared", "output": str(args.output)}))
 
@@ -1917,6 +1986,7 @@ def parser() -> argparse.ArgumentParser:
     notes.add_argument("--ref", default="HEAD")
     notes.add_argument("--source", required=True)
     notes.add_argument("--tag", required=True)
+    notes.add_argument("--repository", required=True)
     notes.add_argument("--output", type=Path, required=True)
     notes.set_defaults(func=write_release_notes)
 

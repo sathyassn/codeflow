@@ -87,7 +87,8 @@ jobs:
             --host-state /tmp/release-host-state.json
           test "$PLAN_TAG" = "$REQUESTED_TAG"
           python3 scripts/release.py release-notes --ref "$GITHUB_SHA" \
-            --source "$GITHUB_SHA" --tag "$REQUESTED_TAG" --output /tmp/release-notes.md
+            --source "$GITHUB_SHA" --tag "$REQUESTED_TAG" \
+            --repository "$GITHUB_REPOSITORY" --output /tmp/release-notes.md
 
           disposition=$(python3 scripts/release.py verify-host-state \
             --state /tmp/release-host-state.json --source "$GITHUB_SHA" \
