@@ -28,18 +28,12 @@ hooks, harness integration, CI requirements, and remote rules.
 
 ## Install
 
-From 3.0.0 on, each release publishes archives for macOS (arm64 and x64),
-Linux x64 and Windows x64, each with a `.sha256` file, plus a shell installer
-and a PowerShell installer. Install the latest release on macOS or Linux:
+Release 3.0.0 publishes archives for macOS (arm64 and x64) and Linux x64,
+each with a `.sha256` file, plus a shell installer. Install the latest release
+on macOS or Linux:
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
-```
-
-On native Windows, in PowerShell (Git for Windows is required):
-
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex"
 ```
 
 Or build from a checkout, with a Rust toolchain:
@@ -48,8 +42,10 @@ Or build from a checkout, with a Rust toolchain:
 cargo install --path crates/codeflow-cli
 ```
 
-WSL2 uses the Linux installer and is the preferred Windows route for
-Linux-native tooling or Claude sandboxing. See
+Native Windows is not supported in 3.0.0: there is no Windows archive,
+PowerShell installer or `codeflow.exe`. Native Windows support is planned for
+3.0.1. On Windows, use WSL2, which runs the Linux installer; WSL2 has not been
+separately qualified for 3.0.0. See
 [platform assurance](docs/harness-posture.md#platform-assurance) in the harness
 posture guide before high-blast-radius work.
 

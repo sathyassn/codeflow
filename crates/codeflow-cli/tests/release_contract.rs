@@ -26,17 +26,17 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         .iter()
         .map(|value| value.as_str().expect("target must be a string"))
         .collect::<Vec<_>>();
-    for required in [
-        "aarch64-apple-darwin",
-        "x86_64-apple-darwin",
-        "x86_64-unknown-linux-gnu",
-        "x86_64-pc-windows-msvc",
-    ] {
-        assert!(
-            targets.contains(&required),
-            "missing release target: {required}"
-        );
-    }
+    // 3.0.0 publishes macOS and Linux only (operator decision 2026-10-01).
+    // TSK-197 restores `x86_64-pc-windows-msvc` and the PowerShell installer.
+    assert_eq!(
+        targets,
+        [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+        ],
+        "release targets must be exactly the platforms this release supports"
+    );
 
     let installers = dist
         .get("installers")
@@ -45,8 +45,7 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         .iter()
         .map(|value| value.as_str().expect("installer must be a string"))
         .collect::<Vec<_>>();
-    assert!(installers.contains(&"shell"));
-    assert!(installers.contains(&"powershell"));
+    assert_eq!(installers, ["shell"]);
 
     assert_eq!(
         dist.get("dispatch-releases").and_then(toml::Value::as_bool),

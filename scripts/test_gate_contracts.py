@@ -2,6 +2,7 @@
 """Targeted structural checks for the candidate gate and CI trust boundaries."""
 import json
 import os
+import re
 from pathlib import Path
 import unittest
 
@@ -10,10 +11,25 @@ def read(path):
     return (ROOT / path).read_text()
 
 class GateContracts(unittest.TestCase):
-    def test_publication_requires_the_five_existing_floors(self):
+    def test_publication_requires_the_four_existing_floors(self):
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
-        self.assertEqual(set(checks), {'codeflow gates', 'windows (build + test + clippy)', 'secret scan', 'security review', 'release state'})
-        self.assertEqual(len(checks), 5)
+        self.assertEqual(set(checks), {'codeflow gates', 'secret scan', 'security review', 'release state'})
+        self.assertEqual(len(checks), 4)
+
+    def test_windows_job_is_advisory_until_tsk_197(self):
+        # 3.0.0 ships without native Windows: the job keeps running, cannot
+        # fail the workflow run, and is not a publication check.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        job = re.split(r'\n  [A-Za-z0-9_-]+:\n', workflow.split('\n  windows:\n', 1)[1], maxsplit=1)[0]
+        self.assertIn('journey-gate.py', job)
+        self.assertIn('runs-on: windows-latest', job)
+        self.assertIn('continue-on-error: true', job)
+        name = job.split('name: ', 1)[1].split('\n', 1)[0]
+        self.assertIn('advisory', name)
+        self.assertIn('TSK-197', name)
+        checks = json.loads(read('.release/config.json'))['required_publication_checks']
+        self.assertNotIn(name, checks)
+        self.assertFalse(any('windows' in check for check in checks))
 
     def test_one_target_source_build_judges_policy_and_registry_without_cancellation(self):
         workflow = read('.github/workflows/codeflow-policy.yml')

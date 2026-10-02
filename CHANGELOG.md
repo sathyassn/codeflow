@@ -54,8 +54,13 @@ publication date._
 >   taking the required step. Three trials were invalid because of kit
 >   gaps, fixed in this release. The full suite on the Claude, Codex and
 >   Grok seats follows in a patch release.
-> - The release gate ran on macOS. The native Linux, Windows and WSL2
->   rows of the release qualification were not run.
+> - The release gate ran on macOS. The native Linux and WSL2 rows of the
+>   release qualification were not run. WSL2 uses the Linux archive.
+> - Native Windows is not supported. This release publishes no Windows
+>   archive, PowerShell installer or `codeflow.exe`. The hosted Windows
+>   test job found real defects, among them a git guard that misreads
+>   Windows paths and refuses ordinary work. Native Windows support is
+>   planned for 3.0.1; until then, use WSL2.
 
 ### Fixed
 
@@ -1802,6 +1807,16 @@ publication date._
   resolve` refuses on an older tree. After the update, the check reports
   a standing warning on every scaffold until each designated version has a
   full-suite qualification record at high effort on each of its harnesses.
+
+<!-- codeflow:release-impact none -->
+- **No native Windows build in 3.0.0.** This release publishes archives for
+  macOS (arm64 and x86-64) and Linux x86-64, the shell installer and the
+  source archive. It publishes no Windows archive, PowerShell installer or
+  `codeflow.exe`, although a pre-policy entry below says CodeFlow adds them.
+  2.1.0 had no Windows asset either, so no published asset is removed. The
+  Windows CI job keeps running as an advisory check and does not gate the
+  release. Native Windows support is planned for 3.0.1; until then, use the
+  Linux build in WSL2.
 
 <!-- codeflow:release-impact none -->
 - **Reading the pre-policy entries below.** They are kept exactly as
