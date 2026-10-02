@@ -269,3 +269,31 @@ opinion remains advisory. The managed catalog applies the epic's broader
 rule: its independent alternatives are the Grok, Codex and Claude seats in
 that order, filtered by opposite lineage, so for Claude-authored work with
 Grok excluded the Codex seat fills the gap.
+
+## Note (2026-10-02)
+
+The operator set the roster for the 3.0.x line on 2026-10-02. Opus 5.5
+stays the preferred Claude primary. Sonnet 5.5 is added for execution and
+routine work where Opus is not needed. Fable 5.1 is for design,
+architecture, technical planning and consultation. GPT-6 Astra stays,
+GPT-6.1 Sol is the Sol version to use, GPT-6 Luna serves low-level tasks,
+and Grok 4.7 is unchanged. TSK-204 applies it to the managed catalog as a
+data change:
+
+| Family | Line | Version and pinned id | Lifecycle | Seat use and designation |
+|---|---|---|---|---|
+| Claude | `sonnet` | Sonnet 5.5, `claude-sonnet-5-5` | active | worker line, medium and high; first Claude alternative for `bounded-execution`, `evidence-collection` and the Claude fallback of `engineering-implementation`, ahead of Opus; none |
+| Codex | `sol` | GPT-6.1 Sol, `gpt-6.1-sol` | active | adopted; `codex-primary` second line; designated 2026-10-02 |
+| Codex | `sol` | GPT-6 Sol, `gpt-6-sol` | fallback-only | `codex-primary` fallback; designated 2026-09-23 |
+
+The other rows of the roster table stand. Sonnet holds no seat, design,
+review or orchestration duty. Every new version's qualification field is
+empty.
+
+Fable as the owner of the `design` duty is not applied. "Launch identity
+and design authority" above gives design to the design owner's first line,
+and the engine enforces it: the `design` duty accepts only the design owner
+seat as a target and resolves that seat to its first line. Moving design to
+Fable while Opus keeps orchestration needs a change to that section and to
+the engine, which is a separate decision. Until then the Fable row above
+stands.
