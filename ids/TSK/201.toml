@@ -1,0 +1,11 @@
+id = "TSK-201"
+uid = "b0c002d6-35f9-43b4-8913-4dadad7d06fe"
+kind = "TSK"
+title = "Keep tests independent of the CI event environment"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-02T01:04:16Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
