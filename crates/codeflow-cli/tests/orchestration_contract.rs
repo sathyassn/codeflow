@@ -88,8 +88,9 @@ mod fixture_data;
 
 const CATALOG: &str =
     "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json";
-/// The operator's seat designation of the managed roster (EPC-018 Q2).
-const OPERATOR_DESIGNATION: &str = "2026-09-23";
+/// The operator's seat designations of the managed roster: EPC-018 Q2 and
+/// the 2026-10-02 roster refresh (ADR-0069 Note, TSK-204).
+const OPERATOR_DESIGNATIONS: [&str; 2] = ["2026-09-23", "2026-10-02"];
 const AUTHORS: [Option<&str>; 4] = [None, Some("claude"), Some("codex"), Some("grok")];
 
 fn managed_catalog() -> Catalog {
@@ -274,13 +275,12 @@ fn designations_match_seat_lines(catalog: &Catalog) -> Result<(), String> {
                 .map(|d| d.seat.as_str())
                 .collect();
             if actual != expected
-                || version
-                    .designations
-                    .iter()
-                    .any(|d| d.date != OPERATOR_DESIGNATION || d.record.trim().is_empty())
+                || version.designations.iter().any(|d| {
+                    !OPERATOR_DESIGNATIONS.contains(&d.date.as_str()) || d.record.trim().is_empty()
+                })
             {
                 return Err(format!(
-                    "{} designated {actual:?}, expected {expected:?} dated {OPERATOR_DESIGNATION}",
+                    "{} designated {actual:?}, expected {expected:?} dated one of {OPERATOR_DESIGNATIONS:?}",
                     version.id
                 ));
             }
@@ -319,7 +319,7 @@ fn managed_catalog_passes_every_structural_check() {
 #[test]
 fn each_structural_check_fails_on_a_catalog_that_breaks_it() {
     type Break = fn(&mut Catalog);
-    let breaks: [(&str, Break); 8] = [
+    let breaks: [(&str, Break); 9] = [
         ("seat lines", |c| {
             c.lines[1].versions[0].designations.clear();
         }),
@@ -359,6 +359,10 @@ fn each_structural_check_fails_on_a_catalog_that_breaks_it() {
                 .find(|l| l.id == "quartz-worker")
                 .unwrap();
             line.versions[0].designations = designations;
+        }),
+        ("designations", |c| {
+            // A designation dated outside the operator's recorded decisions.
+            c.lines[2].versions[0].designations[0].date = "2026-09-30".into();
         }),
         ("designations", |c| {
             let mut retired = c.lines[2].versions[0].clone();
